@@ -365,12 +365,7 @@ impl AgentFsm {
                 self.handle_stream_tool_call(id, name, input)
             }
 
-            (
-                AgentState::Turn {
-                    stream: StreamPhase::Streaming { .. },
-                },
-                Event::SuggestCommand { id, input },
-            ) => {
+            (AgentState::Turn { .. }, Event::SuggestCommand { id, input }) => {
                 self.commit_streaming_text();
                 // Push the suggest_command as a ToolCall event (protocol requirement)
                 self.ctx.events.push(ConversationEvent::ToolCall {
