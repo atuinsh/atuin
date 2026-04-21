@@ -78,7 +78,7 @@ impl Cmd {
                 let shell = env::var("SHELL").unwrap_or_else(|_| String::from("NO_SHELL"));
 
                 if xonsh_histfile.to_lowercase().ends_with(".json") {
-                    println!("Detected Xonsh",);
+                    println!("Detected Xonsh");
                     import::<Xonsh, DB>(db).await
                 } else if xonsh_histfile.to_lowercase().ends_with(".sqlite") {
                     println!("Detected Xonsh (SQLite backend)");

@@ -196,11 +196,9 @@ fn parse_markdown<'a>(source: &'a str, styles: &'a MarkdownStyles) -> Text<'stat
             Event::End(TagEnd::Item) => {
                 in_list_item = false;
             }
-            Event::Start(Tag::List(_)) => {
-                if current_line > 0 || !lines[0].is_empty() {
-                    current_line += 1;
-                    lines.push(Vec::new());
-                }
+            Event::Start(Tag::List(_)) if current_line > 0 || !lines[0].is_empty() => {
+                current_line += 1;
+                lines.push(Vec::new());
             }
             Event::End(TagEnd::List(_)) => {}
             _ => {}

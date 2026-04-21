@@ -183,7 +183,7 @@ fn sort_duration_over_time(durations: &[(String, i64)]) -> Vec<(String, i64)> {
         })
         .collect();
 
-    durations.sort_by(|a, b| a.0.cmp(&b.0));
+    durations.sort_by_key(|a| a.0);
 
     durations
         .iter()

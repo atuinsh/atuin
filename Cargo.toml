@@ -11,7 +11,7 @@ exclude = ["ui/backend", "crates/atuin-nucleo/matcher/fuzz"]
 [workspace.package]
 version = "18.15.2"
 authors = ["Ellie Huxtable <ellie@atuin.sh>"]
-rust-version = "1.94.0"
+rust-version = "1.95.0"
 license = "MIT"
 homepage = "https://atuin.sh"
 repository = "https://github.com/atuinsh/atuin"

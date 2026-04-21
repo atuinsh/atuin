@@ -255,8 +255,7 @@ impl SyncInfo {
                 .await
                 .ok()
                 .flatten()
-                .filter(|t| t.starts_with("atapi_"))
-                .is_some(),
+                .is_some_and(|t| t.starts_with("atapi_")),
             None => false,
         };
         let has_cli_token = match &meta {

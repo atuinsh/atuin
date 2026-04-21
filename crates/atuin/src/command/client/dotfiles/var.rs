@@ -111,10 +111,10 @@ impl Cmd {
         // Apply sorting
         match sort_by {
             SortBy::Name => {
-                vars.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+                vars.sort_by_key(|a| a.name.to_lowercase());
             }
             SortBy::Value => {
-                vars.sort_by(|a, b| a.value.to_lowercase().cmp(&b.value.to_lowercase()));
+                vars.sort_by_key(|a| a.value.to_lowercase());
             }
         }
 
