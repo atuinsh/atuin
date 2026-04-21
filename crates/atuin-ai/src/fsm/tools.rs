@@ -4,8 +4,6 @@
 //! tracks all tools in the current turn and provides the "all resolved"
 //! check that gates turn completion.
 
-use std::path::PathBuf;
-
 use crate::diff::{EditPreview, WritePreview};
 use crate::tools::ClientToolCall;
 
@@ -53,12 +51,6 @@ impl TrackedTool {
     /// Whether this tool has reached a terminal state.
     pub fn is_resolved(&self) -> bool {
         matches!(self.state, ToolState::Completed | ToolState::Denied)
-    }
-
-    /// The resolved file path for this tool, if file-based.
-    #[expect(dead_code)]
-    pub fn file_path(&self) -> Option<PathBuf> {
-        self.tool.resolved_file_path()
     }
 
     /// Extract shell preview data (for TurnBuilder compatibility).
@@ -140,12 +132,6 @@ impl ToolManager {
         self.tools.is_empty()
     }
 
-    /// True if any tool is currently executing.
-    #[expect(dead_code)]
-    pub fn has_executing(&self) -> bool {
-        self.tools.iter().any(|t| t.state == ToolState::Executing)
-    }
-
     /// Find the first tool awaiting user permission.
     pub fn awaiting_permission(&self) -> Option<&TrackedTool> {
         self.tools
@@ -169,18 +155,6 @@ impl ToolManager {
             .filter(|t| t.state == ToolState::Executing)
             .map(|t| t.id.clone())
             .collect()
-    }
-
-    /// Iterate over all tracked tools.
-    #[expect(dead_code)]
-    pub fn iter(&self) -> impl Iterator<Item = &TrackedTool> {
-        self.tools.iter()
-    }
-
-    /// Clear all tools (for session reset).
-    #[expect(dead_code)]
-    pub fn clear(&mut self) {
-        self.tools.clear();
     }
 
     /// True if any tool has a shell preview with live output.

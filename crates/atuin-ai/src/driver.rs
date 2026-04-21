@@ -77,8 +77,6 @@ pub(crate) struct ViewState {
     pub is_resumed: bool,
     pub last_event_time: Option<chrono::DateTime<chrono::Utc>>,
     pub in_git_project: bool,
-    #[expect(dead_code, reason = "will be used for request tracking")]
-    pub invocation_id: String,
 
     // ─── View-only ──────────────────────────────────────────────
     pub archived_events: Vec<ConversationEvent>,
@@ -636,10 +634,6 @@ fn execute_effect(
                 tokio::time::sleep(duration).await;
                 let _ = tx.send(DriverEvent::Fsm(Event::ConfirmationTimeout { timeout_id }));
             });
-        }
-
-        Effect::CancelTimeout { timeout_id: _ } => {
-            // Implicit: FSM checks timeout_id and ignores mismatches.
         }
 
         Effect::ExitApp(action) => {

@@ -336,7 +336,6 @@ fn build_view_state(fsm: &AgentFsm, in_git_project: bool) -> ViewState {
         is_resumed: fsm.ctx.is_resumed,
         last_event_time: fsm.ctx.last_event_time,
         in_git_project,
-        invocation_id: fsm.ctx.invocation_id.clone(),
         archived_events: fsm.ctx.archived_events.clone(),
         is_input_blank: true,
         slash_command_input: None,

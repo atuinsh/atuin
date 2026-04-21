@@ -205,12 +205,7 @@ impl AgentFsm {
                     confirmation: Some(_),
                 },
                 Event::UserSubmit(msg),
-            ) => {
-                let timeout_id = self.state_confirmation().unwrap().timeout_id;
-                let mut effects = vec![Effect::CancelTimeout { timeout_id }];
-                effects.extend(self.start_turn(msg));
-                effects
-            }
+            ) => self.start_turn(msg),
 
             (AgentState::Idle { confirmation: None }, Event::ExecuteCommand) => {
                 let cmd = self.current_command();
@@ -242,12 +237,7 @@ impl AgentFsm {
             ) => {
                 let confirm = self.state_confirmation().unwrap().clone();
                 self.state = AgentState::Idle { confirmation: None };
-                vec![
-                    Effect::CancelTimeout {
-                        timeout_id: confirm.timeout_id,
-                    },
-                    Effect::ExitApp(ExitAction::Execute(confirm.command)),
-                ]
+                vec![Effect::ExitApp(ExitAction::Execute(confirm.command))]
             }
 
             (AgentState::Idle { .. }, Event::InsertCommand) => {
@@ -264,9 +254,8 @@ impl AgentFsm {
                 },
                 Event::Cancel,
             ) => {
-                let timeout_id = self.state_confirmation().unwrap().timeout_id;
                 self.state = AgentState::Idle { confirmation: None };
-                vec![Effect::CancelTimeout { timeout_id }]
+                vec![]
             }
 
             (AgentState::Idle { confirmation: None }, Event::Cancel) => {

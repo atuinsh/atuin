@@ -67,11 +67,6 @@ pub(crate) enum Effect {
     // ─── Timers ─────────────────────────────────────────────────
     /// Schedule a timer that will fire ConfirmationTimeout after delay.
     ScheduleTimeout { timeout_id: u64, duration: Duration },
-    /// Cancel a previously scheduled timer.
-    CancelTimeout {
-        #[expect(dead_code, reason = "timeout cancellation is implicit for now")]
-        timeout_id: u64,
-    },
 
     // ─── Exit ───────────────────────────────────────────────────
     /// Exit the application with the given action.
