@@ -529,6 +529,16 @@ impl AgentFsm {
             // ================================================================
             // Fallthrough — ignore events with no valid transition
             // ================================================================
+
+            // StreamDone can arrive after SuggestCommand (which already moved to Idle).
+            // We still need to capture the session_id from it.
+            (_, Event::StreamDone { session_id }) => {
+                if !session_id.is_empty() {
+                    self.ctx.session_id = Some(session_id);
+                }
+                vec![]
+            }
+
             (_, Event::SlashCommand { command, content }) => {
                 self.handle_slash_command(&command, &content);
                 vec![]

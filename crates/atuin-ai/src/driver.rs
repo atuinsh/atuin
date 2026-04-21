@@ -823,10 +823,10 @@ async fn run_stream_bridge(
         };
 
         if let Some(event) = event {
-            let is_terminal = matches!(
-                event,
-                Event::StreamDone { .. } | Event::StreamError(_) | Event::SuggestCommand { .. }
-            );
+            // StreamDone and StreamError are terminal — the server won't send more.
+            // SuggestCommand is NOT terminal: the server sends StreamDone after it
+            // with the session_id we need to capture.
+            let is_terminal = matches!(event, Event::StreamDone { .. } | Event::StreamError(_));
             if tx.send(DriverEvent::Fsm(event)).is_err() {
                 break;
             }
