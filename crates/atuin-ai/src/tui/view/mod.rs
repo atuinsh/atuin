@@ -114,7 +114,7 @@ fn input_view(state: &ViewState) -> Elements {
             #(tool_call_view(tc, in_git_project))
         })
 
-        #(if asking_tool.is_none() {
+        #(if true {
             View(key: "input-box", padding_top: Cells::from(1)) {
                 InputBox(
                     key: "input",

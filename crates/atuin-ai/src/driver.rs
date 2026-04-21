@@ -191,6 +191,12 @@ pub(crate) fn run_driver(
                 }
                 execute_effect(effect, &fsm, &mut io, &handle, &tx, &exiting);
             }
+
+            // Final sync after effects — ensures the render thread sees
+            // the absolute final state even if effects modified anything.
+            if !effects.is_empty() {
+                sync_view_state(&handle, &fsm, in_git_project);
+            }
         } else {
             // Event was handled directly (e.g. InputUpdated) — just sync
             sync_view_state(&handle, &fsm, in_git_project);
