@@ -474,6 +474,12 @@ pub(crate) struct Session {
     pub slash_registry: SlashCommandRegistry,
     /// The unique ID for this invocation
     pub invocation_id: String,
+    /// Tracks which files have been read, for freshness checking before edits.
+    pub file_tracker: crate::file_tracker::FileReadTracker,
+    /// Session-scoped edit permission grants (per-file, time-limited).
+    pub edit_permissions: crate::edit_permissions::EditPermissionCache,
+    /// Backs up files before the first edit in a session.
+    pub snapshot_store: Option<crate::snapshots::SnapshotStore>,
 }
 
 impl Session {
@@ -491,6 +497,9 @@ impl Session {
             archived_view_events: Vec::new(),
             slash_registry: Default::default(),
             invocation_id: invocation_id.unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
+            file_tracker: Default::default(),
+            edit_permissions: Default::default(),
+            snapshot_store: None,
         }
     }
 

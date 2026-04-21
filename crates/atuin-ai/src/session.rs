@@ -51,6 +51,9 @@ pub(crate) trait SessionService: Send + Sync {
     ) -> Result<()>;
 
     async fn archive(&self, session_id: &str) -> Result<()>;
+
+    async fn get_metadata(&self, session_id: &str, key: &str) -> Result<Option<String>>;
+    async fn set_metadata(&self, session_id: &str, key: &str, value: &str) -> Result<()>;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +130,14 @@ impl SessionService for LocalSessionService {
 
     async fn archive(&self, session_id: &str) -> Result<()> {
         self.store.archive_session(session_id).await
+    }
+
+    async fn get_metadata(&self, session_id: &str, key: &str) -> Result<Option<String>> {
+        self.store.get_metadata(session_id, key).await
+    }
+
+    async fn set_metadata(&self, session_id: &str, key: &str, value: &str) -> Result<()> {
+        self.store.set_metadata(session_id, key, value).await
     }
 }
 
@@ -309,6 +320,22 @@ impl SessionManager {
     #[allow(dead_code)] // used in tests; part of public API for dispatch/daemon
     pub fn invocation_id(&self) -> &str {
         &self.invocation_id
+    }
+
+    /// Read a metadata value for the current session.
+    pub async fn get_metadata(&self, key: &str) -> Result<Option<String>> {
+        if !self.persisted_to_db {
+            return Ok(None);
+        }
+        self.service.get_metadata(&self.session_id, key).await
+    }
+
+    /// Write a metadata value for the current session.
+    pub async fn set_metadata(&mut self, key: &str, value: &str) -> Result<()> {
+        self.ensure_persisted().await?;
+        self.service
+            .set_metadata(&self.session_id, key, value)
+            .await
     }
 }
 

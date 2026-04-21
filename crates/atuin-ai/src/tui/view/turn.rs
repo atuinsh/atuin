@@ -1,5 +1,7 @@
+use std::path::PathBuf;
+
 use crate::tools::descriptor;
-use crate::tools::{ToolPreview, ToolTracker};
+use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview, ToolTracker};
 use crate::tui::ConversationEvent;
 
 /// Server-sent danger level for a suggested command
@@ -80,11 +82,91 @@ impl From<(&String, &String)> for ConfidenceLevel {
 
 #[derive(Debug)]
 pub(crate) enum UiEvent {
-    Text { content: String },
+    Text {
+        content: String,
+    },
     ToolCall(ToolCallDetails),
+    /// Consecutive client-side tool calls of the same groupable kind, collapsed
+    /// into one unit so the view can render a shared status line + a list of
+    /// individual entries.
+    ToolGroup(ToolGroup),
     ToolSummary(ToolSummary),
     SuggestedCommand(SuggestedCommandDetails),
     OutOfBandOutput(OutOfBandOutputDetails),
+}
+
+/// A run of consecutive client-side tool calls of the same groupable kind.
+#[derive(Debug)]
+pub(crate) struct ToolGroup {
+    pub(crate) kind: ToolGroupKind,
+    pub(crate) calls: Vec<ToolCallDetails>,
+}
+
+impl ToolGroup {
+    /// True if any call in the group is still pending.
+    pub(crate) fn any_pending(&self) -> bool {
+        self.calls
+            .iter()
+            .any(|c| c.status == ToolResultStatus::Pending)
+    }
+}
+
+/// Which kind of client-side tools this group holds.
+///
+/// Only tool types that benefit from grouped presentation appear here.
+/// Shell (needs its own viewport) and FileWrite (wants diffs/contents) are
+/// intentionally absent — those render as individual `UiEvent::ToolCall`s.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum ToolGroupKind {
+    FileRead,
+    HistorySearch,
+}
+
+/// Tool-type-specific data for rendering in the view layer.
+///
+/// Each variant carries the data a per-tool renderer component needs.
+/// Built by TurnBuilder from ToolTracker + ConversationEvent data.
+#[derive(Debug)]
+pub(crate) enum ToolRenderData {
+    /// Shell command with live/cached VT100 output preview.
+    Shell {
+        command: String,
+        preview: Option<ToolPreview>,
+    },
+    /// File read operation.
+    FileRead { path: PathBuf },
+    /// File edit (str_replace) operation.
+    FileEdit {
+        path: PathBuf,
+        preview: Option<crate::diff::EditPreview>,
+    },
+    /// File write/create operation.
+    FileWrite { path: PathBuf },
+    /// Atuin history search.
+    HistorySearch {
+        query: String,
+        filter_modes: Vec<HistorySearchFilterMode>,
+    },
+    /// Server-side tool — no client rendering data available.
+    Remote,
+}
+
+impl ToolRenderData {
+    pub(crate) fn is_remote(&self) -> bool {
+        matches!(self, ToolRenderData::Remote)
+    }
+
+    /// The group kind this tool should collapse into, if any.
+    ///
+    /// Returns `None` for tools that render as individual `UiEvent::ToolCall`s
+    /// (shell, file writes, remote).
+    pub(crate) fn group_kind(&self) -> Option<ToolGroupKind> {
+        match self {
+            ToolRenderData::FileRead { .. } => Some(ToolGroupKind::FileRead),
+            ToolRenderData::HistorySearch { .. } => Some(ToolGroupKind::HistorySearch),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -92,8 +174,7 @@ pub(crate) struct ToolCallDetails {
     pub(crate) tool_use_id: String,
     pub(crate) name: String,
     pub(crate) status: ToolResultStatus,
-    pub(crate) is_client: bool,
-    pub(crate) preview: Option<ToolPreview>,
+    pub(crate) render_data: ToolRenderData,
 }
 
 #[derive(Debug)]
@@ -101,7 +182,6 @@ pub(crate) struct SuggestedCommandDetails {
     pub(crate) command: String,
     pub(crate) danger_level: DangerLevel,
     pub(crate) confidence_level: ConfidenceLevel,
-    pub(crate) first_event_in_turn: bool,
 }
 
 #[derive(Debug)]
@@ -179,33 +259,49 @@ impl<'a> TurnBuilder<'a> {
     pub(crate) fn build(&mut self) -> Vec<UiTurn> {
         self.commit_turn();
 
-        // Collapse consecutive tool calls within each agent turn into ToolSummary
+        // Within each agent turn:
+        // - Consecutive remote tool calls collapse into a ToolSummary
+        // - Consecutive client-side tool calls of the same group kind collapse
+        //   into a ToolGroup (e.g. N file reads → one group)
+        // - All other events pass through unchanged
         for turn in &mut self.turns {
             if let UiTurn::Agent { events } = turn {
                 let mut new_events: Vec<UiEvent> = Vec::new();
-                let mut pending_tools: Vec<ToolCallDetails> = Vec::new();
+                let mut pending_remote: Vec<ToolCallDetails> = Vec::new();
+                let mut pending_group: Option<(ToolGroupKind, Vec<ToolCallDetails>)> = None;
 
                 for event in events.drain(..) {
                     match event {
-                        UiEvent::ToolCall(details) if !details.is_client => {
-                            pending_tools.push(details);
+                        UiEvent::ToolCall(details) if details.render_data.is_remote() => {
+                            flush_group(&mut pending_group, &mut new_events);
+                            pending_remote.push(details);
+                        }
+                        UiEvent::ToolCall(details)
+                            if details.render_data.group_kind().is_some() =>
+                        {
+                            flush_remote(&mut pending_remote, &mut new_events);
+
+                            let kind = details.render_data.group_kind().unwrap();
+                            match pending_group.as_mut() {
+                                Some((current_kind, calls)) if *current_kind == kind => {
+                                    calls.push(details);
+                                }
+                                _ => {
+                                    flush_group(&mut pending_group, &mut new_events);
+                                    pending_group = Some((kind, vec![details]));
+                                }
+                            }
                         }
                         other => {
-                            if !pending_tools.is_empty() {
-                                new_events.push(UiEvent::ToolSummary(ToolSummary {
-                                    tool_calls: std::mem::take(&mut pending_tools),
-                                }));
-                            }
+                            flush_remote(&mut pending_remote, &mut new_events);
+                            flush_group(&mut pending_group, &mut new_events);
                             new_events.push(other);
                         }
                     }
                 }
 
-                if !pending_tools.is_empty() {
-                    new_events.push(UiEvent::ToolSummary(ToolSummary {
-                        tool_calls: pending_tools,
-                    }));
-                }
+                flush_remote(&mut pending_remote, &mut new_events);
+                flush_group(&mut pending_group, &mut new_events);
 
                 *events = new_events;
             }
@@ -255,6 +351,9 @@ impl<'a> TurnBuilder<'a> {
     }
 
     fn add_agent_text(&mut self, content: &str) {
+        if content.trim().is_empty() {
+            return;
+        }
         self.start_agent_turn();
         if let UiTurn::Agent { events } = self.turn_mut_unsafe() {
             events.push(UiEvent::Text {
@@ -303,8 +402,6 @@ impl<'a> TurnBuilder<'a> {
             let danger = DangerLevel::from((&danger_level, &danger_notes));
             let confidence = ConfidenceLevel::from((&confidence_level, &confidence_notes));
 
-            let first_event_in_turn = events.is_empty();
-
             events.push(UiEvent::SuggestedCommand(SuggestedCommandDetails {
                 command: input
                     .get("command")
@@ -313,14 +410,12 @@ impl<'a> TurnBuilder<'a> {
                     .to_string(),
                 danger_level: danger,
                 confidence_level: confidence,
-                first_event_in_turn,
             }));
         }
     }
 
     fn add_tool_call(&mut self, id: &str, name: &str, _input: &serde_json::Value) {
-        let is_client = descriptor::by_name(name).is_some_and(|d| d.is_client);
-        let preview = self.tracker.preview_for(id);
+        let render_data = self.build_render_data(id, name);
 
         self.start_agent_turn();
         if let UiTurn::Agent { events } = self.turn_mut_unsafe() {
@@ -328,9 +423,41 @@ impl<'a> TurnBuilder<'a> {
                 tool_use_id: id.to_string(),
                 name: name.to_string(),
                 status: ToolResultStatus::Pending,
-                is_client,
-                preview,
+                render_data,
             }));
+        }
+    }
+
+    /// Build tool-type-specific render data from the ToolTracker.
+    ///
+    /// For client-side tools, the tracker holds the typed `ClientToolCall` and
+    /// any live/cached preview data. For server-side (or unknown) tools, we
+    /// fall back to `ToolRenderData::Remote`.
+    fn build_render_data(&self, id: &str, _name: &str) -> ToolRenderData {
+        if let Some(tracked) = self.tracker.get(id) {
+            match &tracked.tool {
+                ClientToolCall::Shell(shell) => ToolRenderData::Shell {
+                    command: shell.command.clone(),
+                    preview: tracked.preview(),
+                },
+                ClientToolCall::Read(read) => ToolRenderData::FileRead {
+                    path: read.path.clone(),
+                },
+                ClientToolCall::Edit(edit) => ToolRenderData::FileEdit {
+                    path: edit.path.clone(),
+                    preview: tracked.edit_preview.clone(),
+                },
+                ClientToolCall::Write(write) => ToolRenderData::FileWrite {
+                    path: write.path.clone(),
+                },
+                ClientToolCall::AtuinHistory(history) => ToolRenderData::HistorySearch {
+                    query: history.query.clone(),
+                    filter_modes: history.filter_modes.clone(),
+                },
+            }
+        } else {
+            // Not in tracker → server-side tool
+            ToolRenderData::Remote
         }
     }
 
@@ -361,6 +488,25 @@ impl<'a> TurnBuilder<'a> {
                 content: content.to_string(),
             }));
         }
+    }
+}
+
+/// Drain pending remote tool calls into a `ToolSummary`.
+fn flush_remote(pending: &mut Vec<ToolCallDetails>, out: &mut Vec<UiEvent>) {
+    if !pending.is_empty() {
+        out.push(UiEvent::ToolSummary(ToolSummary {
+            tool_calls: std::mem::take(pending),
+        }));
+    }
+}
+
+/// Drain a pending client-side tool group into a `ToolGroup`.
+fn flush_group(
+    pending: &mut Option<(ToolGroupKind, Vec<ToolCallDetails>)>,
+    out: &mut Vec<UiEvent>,
+) {
+    if let Some((kind, calls)) = pending.take() {
+        out.push(UiEvent::ToolGroup(ToolGroup { kind, calls }));
     }
 }
 

@@ -175,7 +175,7 @@ async fn run_inline_tui(
         .find_resumable(cwd.as_deref(), git_root_str.as_deref(), max_age_secs)
         .await?;
 
-    let (mut session_mgr, initial_state) = if let Some(stored) = resumable {
+    let (mut session_mgr, mut initial_state) = if let Some(stored) = resumable {
         debug!(session_id = %stored.id, "resuming AI session");
         let (mgr, events, server_sid, last_event_ts, invocation_id) =
             SessionManager::resume(Box::new(service), &stored).await?;
@@ -199,6 +199,23 @@ async fn run_inline_tui(
             session.is_resumed = true;
             session.last_event_time =
                 last_event_ts.and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
+
+            // Restore file read tracker from session metadata
+            if let Ok(Some(json)) = mgr.get_metadata(crate::file_tracker::METADATA_KEY).await
+                && let Ok(tracker) = crate::file_tracker::FileReadTracker::from_json(&json)
+            {
+                session.file_tracker = tracker;
+            }
+
+            // Restore edit permission grants from session metadata
+            if let Ok(Some(json)) = mgr
+                .get_metadata(crate::edit_permissions::METADATA_KEY)
+                .await
+                && let Ok(cache) = crate::edit_permissions::EditPermissionCache::from_json(&json)
+            {
+                session.edit_permissions = cache;
+            }
+
             (mgr, session)
         } else {
             // No meaningful content — treat as a fresh session
@@ -214,6 +231,16 @@ async fn run_inline_tui(
             SessionManager::create_new(Box::new(service), cwd.as_deref(), git_root_str.as_deref());
         (mgr, Session::new(ctx.git_root.is_some(), None))
     };
+
+    // Initialize the snapshot store now that we know the session ID.
+    let snapshot_dir = atuin_common::utils::data_dir()
+        .join("ai")
+        .join("snapshots")
+        .join(session_mgr.session_id());
+    match crate::snapshots::SnapshotStore::open(snapshot_dir) {
+        Ok(store) => initial_state.snapshot_store = Some(store),
+        Err(e) => tracing::warn!("failed to open snapshot store: {e}"),
+    }
 
     let (tx, rx) = mpsc::channel::<AiTuiEvent>();
 

@@ -74,6 +74,14 @@ impl ChatRequest {
         if capabilities.enable_history_search.unwrap_or(true) {
             caps.push("client_v1_atuin_history".to_string());
         }
+        if capabilities.enable_file_tools.unwrap_or(true) {
+            caps.push("client_v1_read_file".to_string());
+            caps.push("client_v1_edit_file".to_string());
+            caps.push("client_v1_write_file".to_string());
+        }
+        if capabilities.enable_command_execution.unwrap_or(true) {
+            caps.push("client_v1_execute_shell_command".to_string());
+        }
         if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
             caps.extend(
                 extra

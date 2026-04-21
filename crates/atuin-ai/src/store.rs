@@ -299,6 +299,38 @@ impl AiSessionStore {
             .await?;
         Ok(())
     }
+
+    // ── Session metadata (key-value per session) ──
+
+    /// Read a metadata value for a session. Returns `None` if the key doesn't
+    /// exist or the session hasn't been persisted yet.
+    pub async fn get_metadata(&self, session_id: &str, key: &str) -> Result<Option<String>> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT value FROM session_metadata WHERE session_id = ?1 AND key = ?2")
+                .bind(session_id)
+                .bind(key)
+                .fetch_optional(&self.pool)
+                .await?;
+
+        Ok(row.map(|(v,)| v))
+    }
+
+    /// Write a metadata value for a session (upsert).
+    pub async fn set_metadata(&self, session_id: &str, key: &str, value: &str) -> Result<()> {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        sqlx::query(
+            "INSERT INTO session_metadata (session_id, key, value, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (session_id, key) DO UPDATE SET value = ?3, updated_at = ?4",
+        )
+        .bind(session_id)
+        .bind(key)
+        .bind(value)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
