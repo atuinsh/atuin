@@ -211,10 +211,12 @@ pub(crate) fn run_driver(
 fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<Event> {
     match event {
         AiTuiEvent::SubmitInput(input) => {
-            // Clear slash command state on any submit
+            // Clear slash state and reset is_input_blank (the InputBox clears
+            // its text on submit but doesn't fire InputUpdated for the clear).
             handle.update(|vs| {
                 vs.slash_command_input = None;
                 vs.slash_command_search_results.clear();
+                vs.is_input_blank = true;
             });
 
             let input = input.trim().to_string();
