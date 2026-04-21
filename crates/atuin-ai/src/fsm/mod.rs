@@ -834,7 +834,7 @@ impl AgentFsm {
 
         // If the FSM tagged this tool with an interrupt reason (user or timeout),
         // use it; otherwise derive from the outcome's interrupted flag.
-        let reason = tracked.interrupt_reason.take().or_else(|| {
+        let reason = tracked.interrupt_reason.take().or({
             if let crate::tools::ToolOutcome::Structured {
                 interrupted: true, ..
             } = &outcome
