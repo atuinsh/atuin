@@ -141,7 +141,10 @@ pub(crate) enum ToolRenderData {
         preview: Option<crate::diff::EditPreview>,
     },
     /// File write/create operation.
-    FileWrite { path: PathBuf },
+    FileWrite {
+        path: PathBuf,
+        preview: Option<crate::diff::WritePreview>,
+    },
     /// Atuin history search.
     HistorySearch {
         query: String,
@@ -449,6 +452,7 @@ impl<'a> TurnBuilder<'a> {
                 },
                 ClientToolCall::Write(write) => ToolRenderData::FileWrite {
                     path: write.path.clone(),
+                    preview: tracked.write_preview.clone(),
                 },
                 ClientToolCall::AtuinHistory(history) => ToolRenderData::HistorySearch {
                     query: history.query.clone(),
