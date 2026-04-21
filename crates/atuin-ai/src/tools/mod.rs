@@ -331,23 +331,33 @@ impl ReadToolCall {
         };
         let reader = std::io::BufReader::new(file);
 
-        let relevent_lines = reader
+        let raw_lines = reader
             .lines()
             .skip(self.offset as usize)
             .take(self.limit as usize)
             .collect::<Result<Vec<_>, _>>();
 
-        match relevent_lines {
+        match raw_lines {
             Ok(lines) => {
-                let joined = lines.join("\n");
-                if joined.len() > 100_000 {
+                let first_line_no = self.offset as usize + 1;
+                let last_line_no = first_line_no + lines.len().saturating_sub(1);
+                let width = last_line_no.max(1).ilog10() as usize + 1;
+
+                let numbered: String = lines
+                    .iter()
+                    .enumerate()
+                    .map(|(i, line)| format!("{:>width$}\t{line}", first_line_no + i))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                if numbered.len() > 100_000 {
                     ToolOutcome::Error(format!(
                         "Error: file is too large to read ({} bytes in {} lines); use view_range to read a subset of the file",
-                        joined.len(),
+                        numbered.len(),
                         lines.len()
                     ))
                 } else {
-                    ToolOutcome::Success(joined)
+                    ToolOutcome::Success(numbered)
                 }
             }
             Err(e) => ToolOutcome::Error(format!("Error reading file: {e}")),
