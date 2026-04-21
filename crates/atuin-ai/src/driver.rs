@@ -694,13 +694,23 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
         Effect::ScheduleTimeout {
             timeout_id,
             duration,
+            kind,
         } => {
             let timeout_id = *timeout_id;
             let duration = *duration;
+            let kind = kind.clone();
             let tx = tx.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(duration).await;
-                let _ = tx.send(DriverEvent::Fsm(Event::ConfirmationTimeout { timeout_id }));
+                use crate::fsm::effects::TimeoutKind;
+                let event = match kind {
+                    TimeoutKind::Confirmation => Event::ConfirmationTimeout { timeout_id },
+                    TimeoutKind::ToolExecution { tool_id } => Event::ToolExecutionTimeout {
+                        timeout_id,
+                        tool_id,
+                    },
+                };
+                let _ = tx.send(DriverEvent::Fsm(event));
             });
         }
 

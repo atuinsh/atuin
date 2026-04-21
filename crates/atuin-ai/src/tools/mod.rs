@@ -695,6 +695,8 @@ pub(crate) struct ShellToolCall {
     pub dir: Option<PathBuf>,
     pub command: String,
     pub shell: String,
+    /// Maximum execution time in seconds (from LLM). Clamped to 1..=600, default 30.
+    pub timeout_secs: u64,
     // allow dead code here; this will be tied into o11y and user-facing descriptions
     #[expect(dead_code)]
     pub description: Option<String>,
@@ -717,6 +719,12 @@ impl TryFrom<&serde_json::Value> for ShellToolCall {
             .unwrap_or("bash")
             .to_string();
 
+        let timeout_secs = value
+            .get("timeout")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(30)
+            .clamp(1, 600);
+
         let description = value
             .get("description")
             .and_then(|v| v.as_str())
@@ -726,6 +734,7 @@ impl TryFrom<&serde_json::Value> for ShellToolCall {
             dir: dir.map(expand_path),
             command: command.to_string(),
             shell,
+            timeout_secs,
             description,
         })
     }
