@@ -6,8 +6,7 @@ use eye_declare::{
 use ratatui_core::style::{Color, Modifier, Style};
 
 use crate::driver::ViewState;
-use crate::fsm::tools::TrackedTool;
-use crate::fsm::{AgentState, PendingConfirmation, StreamPhase};
+use crate::fsm::{AgentState, StreamPhase};
 use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview};
 use crate::tui::components::select::SelectOption;
 use crate::tui::components::session_continue::SessionContinue;

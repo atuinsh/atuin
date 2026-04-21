@@ -158,22 +158,16 @@ pub(crate) fn run_driver(
     in_git_project: bool,
 ) {
     while let Ok(driver_event) = rx.recv() {
-        // Translate DriverEvent to FSM Event (or handle directly)
+        // Log and translate DriverEvent to FSM Event (or handle directly)
         let fsm_event = match driver_event {
-            DriverEvent::Fsm(ref event) => {
+            DriverEvent::Fsm(event) => {
                 tracing::trace!(?event, state = ?fsm.state, "FSM event");
                 Some(event)
             }
-            DriverEvent::Tui(ref tui_event) => {
+            DriverEvent::Tui(tui_event) => {
                 tracing::trace!(?tui_event, state = ?fsm.state, "TUI event");
-                None
+                translate_tui_event(tui_event, &handle)
             }
-        };
-
-        // For TUI events, translate (may handle directly and return None)
-        let fsm_event = match driver_event {
-            DriverEvent::Fsm(event) => Some(event),
-            DriverEvent::Tui(tui_event) => translate_tui_event(tui_event, &handle),
         };
 
         if let Some(event) = fsm_event {
