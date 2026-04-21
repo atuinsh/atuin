@@ -506,20 +506,20 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
                         )
                         .await;
 
-                        let preview = if let crate::tools::ToolOutcome::Structured {
-                            exit_code,
-                            interrupted,
-                            ..
-                        } = &outcome
-                        {
-                            Some(ToolPreviewData::Shell {
-                                lines: vec![],
-                                exit_code: *exit_code,
-                                interrupted: *interrupted,
-                            })
-                        } else {
-                            None
-                        };
+                        let preview =
+                            if let crate::tools::ToolOutcome::Structured { exit_code, .. } =
+                                &outcome
+                            {
+                                Some(ToolPreviewData::Shell {
+                                    lines: vec![],
+                                    exit_code: *exit_code,
+                                    // Reason is set by the FSM in handle_tool_done
+                                    // based on whether it was a user interrupt or timeout.
+                                    interrupted: None,
+                                })
+                            } else {
+                                None
+                            };
 
                         let _ = tx.send(DriverEvent::Fsm(Event::ToolExecutionDone {
                             tool_id,
@@ -694,13 +694,23 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
         Effect::ScheduleTimeout {
             timeout_id,
             duration,
+            kind,
         } => {
             let timeout_id = *timeout_id;
             let duration = *duration;
+            let kind = kind.clone();
             let tx = tx.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(duration).await;
-                let _ = tx.send(DriverEvent::Fsm(Event::ConfirmationTimeout { timeout_id }));
+                use crate::fsm::effects::TimeoutKind;
+                let event = match kind {
+                    TimeoutKind::Confirmation => Event::ConfirmationTimeout { timeout_id },
+                    TimeoutKind::ToolExecution { tool_id } => Event::ToolExecutionTimeout {
+                        timeout_id,
+                        tool_id,
+                    },
+                };
+                let _ = tx.send(DriverEvent::Fsm(event));
             });
         }
 

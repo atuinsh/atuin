@@ -539,3 +539,352 @@ fn permission_deny_completes_turn_and_continues() {
         ConversationEvent::ToolResult { tool_use_id, is_error: true, .. } if tool_use_id == "t1"
     )));
 }
+
+// ============================================================================
+// Shell execution timeouts
+// ============================================================================
+
+fn fsm_with_shell() -> AgentFsm {
+    AgentFsm::new(
+        vec![
+            "client_v1_read_file".to_string(),
+            "client_v1_execute_shell_command".to_string(),
+        ],
+        "test-inv".to_string(),
+    )
+}
+
+fn shell_tool_call_event(id: &str) -> Event {
+    Event::StreamToolCall {
+        id: id.into(),
+        name: "execute_shell_command".into(),
+        input: json!({
+            "command": "sleep 999",
+            "shell": "bash",
+            "timeout": 60,
+            "description": "test"
+        }),
+    }
+}
+
+#[test]
+fn shell_tool_schedules_execution_timeout() {
+    let mut fsm = fsm_with_shell();
+    fsm.handle(Event::UserSubmit("run something".into()));
+    fsm.handle(Event::StreamStarted);
+    fsm.handle(shell_tool_call_event("t1"));
+
+    let effects = fsm.handle(Event::PermissionResolved {
+        tool_id: "t1".into(),
+        response: PermissionResponse::Allowed,
+    });
+
+    // Should have ExecuteTool + ScheduleTimeout
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::ExecuteTool { .. }))
+    );
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::ScheduleTimeout { kind: effects::TimeoutKind::ToolExecution { tool_id }, .. }
+            if tool_id == "t1"
+    )));
+    assert!(!fsm.ctx.tool_timeout_ids.is_empty());
+}
+
+#[test]
+fn read_tool_does_not_schedule_timeout() {
+    let mut fsm = new_fsm();
+    fsm.handle(Event::UserSubmit("read".into()));
+    fsm.handle(Event::StreamStarted);
+    fsm.handle(Event::StreamToolCall {
+        id: "t1".into(),
+        name: "read_file".into(),
+        input: json!({"file_path": "/tmp/test.txt"}),
+    });
+
+    let effects = fsm.handle(Event::PermissionResolved {
+        tool_id: "t1".into(),
+        response: PermissionResponse::Allowed,
+    });
+
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::ExecuteTool { .. }))
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::ScheduleTimeout { .. }))
+    );
+    assert!(fsm.ctx.tool_timeout_ids.is_empty());
+}
+
+#[test]
+fn tool_completion_clears_timeout_mapping() {
+    let mut fsm = fsm_with_shell();
+    fsm.handle(Event::UserSubmit("run".into()));
+    fsm.handle(Event::StreamStarted);
+    fsm.handle(shell_tool_call_event("t1"));
+    fsm.handle(Event::PermissionResolved {
+        tool_id: "t1".into(),
+        response: PermissionResponse::Allowed,
+    });
+    fsm.handle(Event::StreamDone {
+        session_id: "s1".into(),
+    });
+
+    assert!(!fsm.ctx.tool_timeout_ids.is_empty());
+
+    // Tool completes naturally
+    fsm.handle(Event::ToolExecutionDone {
+        tool_id: "t1".into(),
+        outcome: crate::tools::ToolOutcome::Success("done".into()),
+        preview: None,
+    });
+
+    assert!(fsm.ctx.tool_timeout_ids.is_empty());
+}
+
+#[test]
+fn stale_timeout_after_natural_completion_is_ignored() {
+    let mut fsm = fsm_with_shell();
+    fsm.handle(Event::UserSubmit("run".into()));
+    fsm.handle(Event::StreamStarted);
+    fsm.handle(shell_tool_call_event("t1"));
+    fsm.handle(Event::PermissionResolved {
+        tool_id: "t1".into(),
+        response: PermissionResponse::Allowed,
+    });
+    fsm.handle(Event::StreamDone {
+        session_id: "s1".into(),
+    });
+
+    // Tool completes naturally
+    fsm.handle(Event::ToolExecutionDone {
+        tool_id: "t1".into(),
+        outcome: crate::tools::ToolOutcome::Success("done".into()),
+        preview: None,
+    });
+
+    // Stale timeout fires — should be no-op
+    let effects = fsm.handle(Event::ToolExecutionTimeout {
+        timeout_id: 0,
+        tool_id: "t1".into(),
+    });
+
+    assert!(effects.is_empty());
+}
+
+#[test]
+fn timeout_fires_before_completion_emits_abort() {
+    let mut fsm = fsm_with_shell();
+    fsm.handle(Event::UserSubmit("run".into()));
+    fsm.handle(Event::StreamStarted);
+    fsm.handle(shell_tool_call_event("t1"));
+    fsm.handle(Event::PermissionResolved {
+        tool_id: "t1".into(),
+        response: PermissionResponse::Allowed,
+    });
+    fsm.handle(Event::StreamDone {
+        session_id: "s1".into(),
+    });
+
+    // Timeout fires while tool is still executing
+    let effects = fsm.handle(Event::ToolExecutionTimeout {
+        timeout_id: 0,
+        tool_id: "t1".into(),
+    });
+
+    assert_eq!(effects.len(), 1);
+    assert!(matches!(
+        effects[0],
+        Effect::AbortTool { ref tool_id } if tool_id == "t1"
+    ));
+    // Timeout mapping cleaned up
+    assert!(fsm.ctx.tool_timeout_ids.is_empty());
+}
+
+#[test]
+fn timeout_respects_llm_specified_duration() {
+    let mut fsm = fsm_with_shell();
+    fsm.handle(Event::UserSubmit("run".into()));
+    fsm.handle(Event::StreamStarted);
+
+    // Tool call with timeout: 120
+    fsm.handle(Event::StreamToolCall {
+        id: "t1".into(),
+        name: "execute_shell_command".into(),
+        input: json!({
+            "command": "cargo build",
+            "shell": "bash",
+            "timeout": 120,
+            "description": "build"
+        }),
+    });
+
+    let effects = fsm.handle(Event::PermissionResolved {
+        tool_id: "t1".into(),
+        response: PermissionResponse::Allowed,
+    });
+
+    let timeout_effect = effects
+        .iter()
+        .find(|e| matches!(e, Effect::ScheduleTimeout { .. }));
+    assert!(matches!(
+        timeout_effect,
+        Some(Effect::ScheduleTimeout { duration, .. }) if *duration == std::time::Duration::from_secs(120)
+    ));
+}
+
+#[test]
+fn cancel_clears_timeout_mappings() {
+    let mut fsm = fsm_with_shell();
+    fsm.handle(Event::UserSubmit("run".into()));
+    fsm.handle(Event::StreamStarted);
+    fsm.handle(shell_tool_call_event("t1"));
+    fsm.handle(Event::PermissionResolved {
+        tool_id: "t1".into(),
+        response: PermissionResponse::Allowed,
+    });
+
+    assert!(!fsm.ctx.tool_timeout_ids.is_empty());
+
+    fsm.handle(Event::Cancel);
+
+    assert!(fsm.ctx.tool_timeout_ids.is_empty());
+}
+
+#[test]
+fn timeout_abort_propagates_timeout_reason_to_preview_and_llm() {
+    use super::tools::InterruptReason;
+
+    let mut fsm = fsm_with_shell();
+    fsm.handle(Event::UserSubmit("run".into()));
+    fsm.handle(Event::StreamStarted);
+    fsm.handle(shell_tool_call_event("t1"));
+    fsm.handle(Event::PermissionResolved {
+        tool_id: "t1".into(),
+        response: PermissionResponse::Allowed,
+    });
+    fsm.handle(Event::StreamDone {
+        session_id: "s1".into(),
+    });
+
+    // Timeout fires
+    fsm.handle(Event::ToolExecutionTimeout {
+        timeout_id: 0,
+        tool_id: "t1".into(),
+    });
+
+    // Tool completes after abort (interrupted: true from execute_shell_command_streaming)
+    fsm.handle(Event::ToolExecutionDone {
+        tool_id: "t1".into(),
+        outcome: crate::tools::ToolOutcome::Structured {
+            stdout: "partial output".into(),
+            stderr: String::new(),
+            exit_code: None,
+            duration_ms: 60000,
+            interrupted: true,
+        },
+        preview: Some(super::tools::ToolPreviewData::Shell {
+            lines: vec!["partial output".into()],
+            exit_code: None,
+            interrupted: None, // FSM overrides this with the reason
+        }),
+    });
+
+    // Preview should carry Timeout reason
+    let tracked = fsm.ctx.tools.get("t1").unwrap();
+    let preview = tracked.shell_preview().unwrap();
+    assert_eq!(preview.interrupted, Some(InterruptReason::Timeout(60)));
+
+    // LLM content should say "Timed out" not "Interrupted by user"
+    let tool_result = fsm.ctx.events.iter().find(
+        |e| matches!(e, ConversationEvent::ToolResult { tool_use_id, .. } if tool_use_id == "t1"),
+    );
+    if let Some(ConversationEvent::ToolResult { content, .. }) = tool_result {
+        assert!(
+            content.contains("[Timed out after 60s]"),
+            "Expected timeout message, got: {content}"
+        );
+        assert!(!content.contains("[Interrupted by user]"));
+    } else {
+        panic!("No ToolResult found for t1");
+    }
+}
+
+#[test]
+fn user_interrupt_propagates_user_reason_to_preview_and_llm() {
+    use super::tools::InterruptReason;
+
+    let mut fsm = fsm_with_shell();
+    fsm.handle(Event::UserSubmit("run".into()));
+    fsm.handle(Event::StreamStarted);
+    fsm.handle(shell_tool_call_event("t1"));
+    fsm.handle(Event::PermissionResolved {
+        tool_id: "t1".into(),
+        response: PermissionResponse::Allowed,
+    });
+    fsm.handle(Event::StreamDone {
+        session_id: "s1".into(),
+    });
+
+    // User interrupts
+    fsm.handle(Event::InterruptTools);
+
+    // Tool completes after abort
+    fsm.handle(Event::ToolExecutionDone {
+        tool_id: "t1".into(),
+        outcome: crate::tools::ToolOutcome::Structured {
+            stdout: "partial".into(),
+            stderr: String::new(),
+            exit_code: None,
+            duration_ms: 5000,
+            interrupted: true,
+        },
+        preview: Some(super::tools::ToolPreviewData::Shell {
+            lines: vec!["partial".into()],
+            exit_code: None,
+            interrupted: None, // FSM overrides this with the reason
+        }),
+    });
+
+    // Preview should carry User reason
+    let tracked = fsm.ctx.tools.get("t1").unwrap();
+    let preview = tracked.shell_preview().unwrap();
+    assert_eq!(preview.interrupted, Some(InterruptReason::User));
+
+    // LLM content should say "Interrupted by user"
+    let tool_result = fsm.ctx.events.iter().find(
+        |e| matches!(e, ConversationEvent::ToolResult { tool_use_id, .. } if tool_use_id == "t1"),
+    );
+    if let Some(ConversationEvent::ToolResult { content, .. }) = tool_result {
+        assert!(
+            content.contains("[Interrupted by user]"),
+            "Expected user interrupt message, got: {content}"
+        );
+    } else {
+        panic!("No ToolResult found for t1");
+    }
+}
+
+#[test]
+fn user_interrupt_clears_timeout_mappings_for_aborted_tools() {
+    let mut fsm = fsm_with_shell();
+    fsm.handle(Event::UserSubmit("run".into()));
+    fsm.handle(Event::StreamStarted);
+    fsm.handle(shell_tool_call_event("t1"));
+    fsm.handle(Event::PermissionResolved {
+        tool_id: "t1".into(),
+        response: PermissionResponse::Allowed,
+    });
+
+    assert!(!fsm.ctx.tool_timeout_ids.is_empty());
+
+    fsm.handle(Event::InterruptTools);
+
+    assert!(fsm.ctx.tool_timeout_ids.is_empty());
+}

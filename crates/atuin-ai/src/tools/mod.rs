@@ -76,7 +76,13 @@ pub(crate) enum ToolOutcome {
 
 impl ToolOutcome {
     /// Format this outcome as a string for the tool result sent to the LLM.
-    pub fn format_for_llm(&self) -> String {
+    ///
+    /// The optional `interrupt_reason` overrides the generic interrupted message
+    /// with a specific one (user interrupt vs timeout).
+    pub fn format_for_llm(
+        &self,
+        interrupt_reason: Option<&crate::fsm::tools::InterruptReason>,
+    ) -> String {
         match self {
             ToolOutcome::Success(s) => s.clone(),
             ToolOutcome::Error(e) => e.clone(),
@@ -108,7 +114,14 @@ impl ToolOutcome {
                 }
 
                 if *interrupted {
-                    parts.push("[Interrupted by user]".to_string());
+                    use crate::fsm::tools::InterruptReason;
+                    let msg = match interrupt_reason {
+                        Some(InterruptReason::Timeout(secs)) => {
+                            format!("[Timed out after {secs}s]")
+                        }
+                        _ => "[Interrupted by user]".to_string(),
+                    };
+                    parts.push(msg);
                 }
 
                 parts.join("\n\n")
@@ -134,7 +147,7 @@ impl ToolOutcome {
 pub(crate) struct ToolPreview {
     pub lines: Vec<String>,
     pub exit_code: Option<i32>,
-    pub interrupted: bool,
+    pub interrupted: Option<crate::fsm::tools::InterruptReason>,
 }
 
 /// A tool call from the server, with parsed input parameters.
@@ -695,6 +708,8 @@ pub(crate) struct ShellToolCall {
     pub dir: Option<PathBuf>,
     pub command: String,
     pub shell: String,
+    /// Maximum execution time in seconds (from LLM). Clamped to 1..=600, default 30.
+    pub timeout_secs: u64,
     // allow dead code here; this will be tied into o11y and user-facing descriptions
     #[expect(dead_code)]
     pub description: Option<String>,
@@ -717,6 +732,13 @@ impl TryFrom<&serde_json::Value> for ShellToolCall {
             .unwrap_or("bash")
             .to_string();
 
+        let timeout_secs = value
+            .get("timeout")
+            .and_then(|v| v.as_u64())
+            .filter(|&v| v > 0)
+            .unwrap_or(30)
+            .min(600);
+
         let description = value
             .get("description")
             .and_then(|v| v.as_str())
@@ -726,6 +748,7 @@ impl TryFrom<&serde_json::Value> for ShellToolCall {
             dir: dir.map(expand_path),
             command: command.to_string(),
             shell,
+            timeout_secs,
             description,
         })
     }

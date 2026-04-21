@@ -7,6 +7,15 @@
 use crate::diff::{EditPreview, WritePreview};
 use crate::tools::ClientToolCall;
 
+/// Why a tool execution was interrupted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InterruptReason {
+    /// User pressed Ctrl+C or Esc during execution.
+    User,
+    /// The LLM-specified execution timeout expired.
+    Timeout(u64),
+}
+
 /// Per-tool lifecycle state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ToolState {
@@ -29,7 +38,7 @@ pub(crate) enum ToolPreviewData {
     Shell {
         lines: Vec<String>,
         exit_code: Option<i32>,
-        interrupted: bool,
+        interrupted: Option<InterruptReason>,
     },
     /// File edit diff preview.
     Edit(EditPreview),
@@ -45,6 +54,9 @@ pub(crate) struct TrackedTool {
     pub state: ToolState,
     /// Cached preview data for rendering (populated during/after execution).
     pub preview: Option<ToolPreviewData>,
+    /// Set by the FSM when it emits AbortTool, so that ToolExecutionDone
+    /// can distinguish user interrupts from timeouts.
+    pub interrupt_reason: Option<InterruptReason>,
 }
 
 impl TrackedTool {
@@ -63,7 +75,7 @@ impl TrackedTool {
             }) => Some(crate::tools::ToolPreview {
                 lines: lines.clone(),
                 exit_code: *exit_code,
-                interrupted: *interrupted,
+                interrupted: interrupted.clone(),
             }),
             _ => None,
         }
@@ -109,6 +121,7 @@ impl ToolManager {
             tool,
             state: ToolState::CheckingPermission,
             preview: None,
+            interrupt_reason: None,
         });
     }
 

@@ -61,12 +61,25 @@ pub(crate) enum Effect {
     ArchiveSession,
 
     // ─── Timers ─────────────────────────────────────────────────
-    /// Schedule a timer that will fire ConfirmationTimeout after delay.
-    ScheduleTimeout { timeout_id: u64, duration: Duration },
+    /// Schedule a timer that fires an event after the given delay.
+    ScheduleTimeout {
+        timeout_id: u64,
+        duration: Duration,
+        kind: TimeoutKind,
+    },
 
     // ─── Exit ───────────────────────────────────────────────────
     /// Exit the application with the given action.
     ExitApp(ExitAction),
+}
+
+/// What kind of timeout was scheduled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TimeoutKind {
+    /// Dangerous command confirmation dialog auto-dismiss.
+    Confirmation,
+    /// Shell tool execution timeout — abort the tool if it's still running.
+    ToolExecution { tool_id: String },
 }
 
 /// What to do when exiting the TUI.

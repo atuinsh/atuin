@@ -80,6 +80,8 @@ pub(crate) enum Event {
     // ─── Timers ─────────────────────────────────────────────────
     /// Confirmation timeout expired.
     ConfirmationTimeout { timeout_id: u64 },
+    /// Shell tool execution timeout expired.
+    ToolExecutionTimeout { timeout_id: u64, tool_id: String },
 
     // ─── Session management ─────────────────────────────────────
     /// User ran /new to start a fresh session.

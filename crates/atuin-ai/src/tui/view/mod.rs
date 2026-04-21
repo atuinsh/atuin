@@ -431,7 +431,7 @@ const MAX_SHELL_PREVIEW_LINES: u16 = 5;
 
 /// Render a shell command execution with live VT100 output viewport.
 fn shell_tool_view(tool_key: &str, command: &str, preview: Option<&ToolPreview>) -> Elements {
-    let preview_done = preview.is_some_and(|p| p.exit_code.is_some() || p.interrupted);
+    let preview_done = preview.is_some_and(|p| p.exit_code.is_some() || p.interrupted.is_some());
 
     element! {
         #(if let Some(preview) = preview {
@@ -468,10 +468,16 @@ fn shell_tool_view(tool_key: &str, command: &str, preview: Option<&ToolPreview>)
 }
 
 fn shell_tool_footer(preview: &ToolPreview, preview_done: bool) -> Elements {
-    if preview.interrupted {
+    use crate::fsm::tools::InterruptReason;
+
+    if let Some(reason) = &preview.interrupted {
+        let text = match reason {
+            InterruptReason::User => "Interrupted".to_string(),
+            InterruptReason::Timeout(secs) => format!("Timed out ({secs}s)"),
+        };
         return element! {
             Text {
-                Span(text: "Interrupted", style: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                Span(text: text, style: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
             }
         };
     }
