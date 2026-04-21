@@ -157,6 +157,12 @@ pub(crate) fn run_driver(
     exiting: Arc<AtomicBool>,
     in_git_project: bool,
 ) {
+    // Dropping the sender cancels the stream (receiver sees Err on changed()).
+    let mut stream_cancel_tx: Option<tokio::sync::watch::Sender<()>> = None;
+    // Per-tool interrupt senders for shell commands.
+    let mut tool_abort_txs: std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>> =
+        std::collections::HashMap::new();
+
     while let Ok(driver_event) = rx.recv() {
         // Log and translate DriverEvent to FSM Event (or handle directly)
         let fsm_event = match driver_event {
@@ -183,7 +189,16 @@ pub(crate) fn run_driver(
                 if matches!(effect, Effect::Persist) {
                     persist(&fsm, &mut io);
                 }
-                execute_effect(effect, &fsm, &mut io, &handle, &tx, &exiting);
+                execute_effect(
+                    effect,
+                    &fsm,
+                    &mut io,
+                    &handle,
+                    &tx,
+                    &exiting,
+                    &mut stream_cancel_tx,
+                    &mut tool_abort_txs,
+                );
             }
 
             // Final sync after effects — ensures the render thread sees
@@ -365,12 +380,20 @@ fn execute_effect(
     handle: &Handle<ViewState>,
     tx: &mpsc::Sender<DriverEvent>,
     exiting: &Arc<AtomicBool>,
+    stream_cancel_tx: &mut Option<tokio::sync::watch::Sender<()>>,
+    tool_abort_txs: &mut std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>,
 ) {
     match effect {
         Effect::StartStream {
             messages,
             session_id,
         } => {
+            // Cancel any existing stream before starting a new one
+            stream_cancel_tx.take();
+
+            let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(());
+            *stream_cancel_tx = Some(cancel_tx);
+
             let tx = tx.clone();
             let app = io.app_ctx.clone();
             let cc = io.client_ctx.clone();
@@ -381,13 +404,14 @@ fn execute_effect(
                 fsm.ctx.invocation_id.clone(),
             );
             tokio::spawn(async move {
-                run_stream_bridge(request, app, cc, tx).await;
+                run_stream_bridge(request, app, cc, tx, cancel_rx).await;
             });
         }
 
         Effect::AbortStream => {
-            // Stream tasks stop naturally when the FSM ignores stale events.
-            // TODO: Add JoinHandle tracking for immediate abort if latency matters.
+            // Drop the sender — the bridge's cancel_rx.changed() will error,
+            // breaking the stream loop and dropping the HTTP connection.
+            stream_cancel_tx.take();
         }
 
         Effect::CheckPermission { tool_id, tool } => {
@@ -446,10 +470,13 @@ fn execute_effect(
                     let tx_preview = tx.clone();
                     let tool_id_for_preview = tool_id.clone();
 
+                    // Create interrupt channel and store the sender for AbortTool
+                    let (interrupt_tx, interrupt_rx) = tokio::sync::oneshot::channel();
+                    tool_abort_txs.insert(tool_id.clone(), interrupt_tx);
+
                     tokio::spawn(async move {
                         let (output_tx, mut output_rx) =
                             tokio::sync::mpsc::channel::<Vec<String>>(16);
-                        let (_interrupt_tx, interrupt_rx) = tokio::sync::oneshot::channel();
 
                         let preview_id = tool_id_for_preview;
                         let tx_fwd = tx_preview;
@@ -612,8 +639,10 @@ fn execute_effect(
             }
         }
 
-        Effect::AbortTool { tool_id: _ } => {
-            // TODO: Track interrupt senders per tool and send abort signal.
+        Effect::AbortTool { tool_id } => {
+            if let Some(abort_tx) = tool_abort_txs.remove(tool_id) {
+                let _ = abort_tx.send(());
+            }
         }
 
         Effect::Persist => {
@@ -726,6 +755,7 @@ async fn run_stream_bridge(
     app_ctx: AppContext,
     client_ctx: ClientContext,
     tx: mpsc::Sender<DriverEvent>,
+    mut cancel_rx: tokio::sync::watch::Receiver<()>,
 ) {
     use crate::stream::{StreamContent, StreamControl, StreamFrame, create_chat_stream};
     use futures::StreamExt;
@@ -742,7 +772,19 @@ async fn run_stream_bridge(
 
     let _ = tx.send(DriverEvent::Fsm(Event::StreamStarted));
 
-    while let Some(frame) = stream.next().await {
+    loop {
+        // Select between the next stream frame and cancellation.
+        // When the driver drops the cancel sender, changed() returns Err
+        // and we break — dropping the HTTP stream and cancelling the request.
+        let frame = tokio::select! {
+            biased;
+            _ = cancel_rx.changed() => break,
+            frame = stream.next() => match frame {
+                Some(frame) => frame,
+                None => break,
+            },
+        };
+
         let event = match frame {
             Ok(StreamFrame::Content(content)) => match content {
                 StreamContent::TextChunk(text) => Some(Event::StreamChunk(text)),

@@ -44,10 +44,7 @@ pub(crate) enum Effect {
         tool: ClientToolCall,
     },
     /// Kill a running tool (send interrupt to shell command).
-    AbortTool {
-        #[expect(dead_code, reason = "will be used when abort tracking is implemented")]
-        tool_id: String,
-    },
+    AbortTool { tool_id: String },
 
     // ─── Persistence ────────────────────────────────────────────
     /// Persist current conversation state to disk.

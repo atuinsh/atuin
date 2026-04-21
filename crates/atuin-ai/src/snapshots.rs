@@ -94,7 +94,7 @@ impl SnapshotStore {
     }
 
     /// Whether a file has already been snapshotted in this session.
-    #[expect(dead_code)]
+    #[cfg(test)]
     pub fn has_snapshot(&self, canonical_path: &Path) -> bool {
         let filename = sanitize_path(canonical_path);
         self.manifest.files.contains_key(&filename)

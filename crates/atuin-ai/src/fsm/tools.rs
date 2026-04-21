@@ -122,14 +122,12 @@ impl ToolManager {
         self.tools.iter_mut().find(|t| t.id == id)
     }
 
-    /// True if all tools have reached a terminal state.
-    pub fn all_resolved(&self) -> bool {
-        !self.tools.is_empty() && self.tools.iter().all(|t| t.is_resolved())
-    }
-
-    /// True if there are no tools at all (empty turn).
-    pub fn is_empty(&self) -> bool {
-        self.tools.is_empty()
+    /// True if all tools from the given set of IDs have reached a terminal state.
+    /// Returns true for an empty set (vacuously — no tools to wait for).
+    pub fn all_resolved(&self, tool_ids: &[String]) -> bool {
+        tool_ids
+            .iter()
+            .all(|id| self.get(id).is_some_and(|t| t.is_resolved()))
     }
 
     /// Find the first tool awaiting user permission.

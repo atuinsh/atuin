@@ -809,8 +809,8 @@ impl AgentFsm {
             return vec![];
         }
 
-        // All tools must be resolved (empty = vacuously true)
-        if !self.ctx.tools.is_empty() && !self.ctx.tools.all_resolved() {
+        // All current-turn tools must be resolved before the turn can complete
+        if !self.ctx.tools.all_resolved(&self.ctx.current_turn_tool_ids) {
             return vec![];
         }
 
