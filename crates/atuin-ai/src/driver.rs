@@ -309,6 +309,7 @@ fn sync_view_state(handle: &Handle<ViewState>, fsm: &AgentFsm, in_git_project: b
         });
     }
 
+    tracing::trace!(?state, "sync_view_state pushing to handle");
     handle.update(move |vs| {
         vs.agent_state = state;
         vs.visible_events = visible_events;
