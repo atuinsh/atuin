@@ -422,6 +422,7 @@ impl AgentFsm {
                     .into_iter()
                     .map(|tool_id| Effect::AbortTool { tool_id })
                     .collect();
+                self.ctx.tool_timeout_ids.clear();
                 self.state = AgentState::Error(e);
                 abort_effects
             }
@@ -483,6 +484,8 @@ impl AgentFsm {
                     if let Some(tracked) = self.ctx.tools.get_mut(id) {
                         tracked.interrupt_reason = Some(tools::InterruptReason::User);
                     }
+                    // Clear any pending execution timeout for this tool
+                    self.ctx.tool_timeout_ids.retain(|_, tid| tid != id);
                 }
                 ids.into_iter()
                     .map(|tool_id| Effect::AbortTool { tool_id })
@@ -879,15 +882,7 @@ impl AgentFsm {
         // Clean up any pending execution timeout for this tool
         self.ctx.tool_timeout_ids.retain(|_, tid| tid != &tool_id);
 
-        // Format LLM content — override the generic "[Interrupted by user]" with
-        // a specific message when the FSM knows the reason.
-        let mut content = outcome.format_for_llm();
-        if let Some(tools::InterruptReason::Timeout(secs)) = &reason {
-            content = content.replace(
-                "[Interrupted by user]",
-                &format!("[Timed out after {secs}s]"),
-            );
-        }
+        let content = outcome.format_for_llm(reason.as_ref());
         let is_error = outcome.is_error();
         self.ctx.events.push(ConversationEvent::ToolResult {
             tool_use_id: tool_id,
@@ -915,10 +910,11 @@ impl AgentFsm {
             return vec![];
         }
 
-        // Tag the tool so handle_tool_done can distinguish timeout from user interrupt
+        // Tag the tool so handle_tool_done can distinguish timeout from user interrupt.
+        // Only shell tools have entries in tool_timeout_ids, so this is always Shell.
         let timeout_secs = match &tracked.tool {
             crate::tools::ClientToolCall::Shell(s) => s.timeout_secs,
-            _ => 0,
+            _ => unreachable!("only shell tools have execution timeouts"),
         };
         tracked.interrupt_reason = Some(tools::InterruptReason::Timeout(timeout_secs));
 

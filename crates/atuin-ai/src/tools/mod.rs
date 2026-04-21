@@ -76,7 +76,13 @@ pub(crate) enum ToolOutcome {
 
 impl ToolOutcome {
     /// Format this outcome as a string for the tool result sent to the LLM.
-    pub fn format_for_llm(&self) -> String {
+    ///
+    /// The optional `interrupt_reason` overrides the generic interrupted message
+    /// with a specific one (user interrupt vs timeout).
+    pub fn format_for_llm(
+        &self,
+        interrupt_reason: Option<&crate::fsm::tools::InterruptReason>,
+    ) -> String {
         match self {
             ToolOutcome::Success(s) => s.clone(),
             ToolOutcome::Error(e) => e.clone(),
@@ -108,7 +114,14 @@ impl ToolOutcome {
                 }
 
                 if *interrupted {
-                    parts.push("[Interrupted by user]".to_string());
+                    use crate::fsm::tools::InterruptReason;
+                    let msg = match interrupt_reason {
+                        Some(InterruptReason::Timeout(secs)) => {
+                            format!("[Timed out after {secs}s]")
+                        }
+                        _ => "[Interrupted by user]".to_string(),
+                    };
+                    parts.push(msg);
                 }
 
                 parts.join("\n\n")
@@ -722,8 +735,9 @@ impl TryFrom<&serde_json::Value> for ShellToolCall {
         let timeout_secs = value
             .get("timeout")
             .and_then(|v| v.as_u64())
+            .filter(|&v| v > 0)
             .unwrap_or(30)
-            .clamp(1, 600);
+            .min(600);
 
         let description = value
             .get("description")
