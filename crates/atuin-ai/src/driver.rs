@@ -77,6 +77,7 @@ pub(crate) struct ViewState {
     pub is_resumed: bool,
     pub last_event_time: Option<chrono::DateTime<chrono::Utc>>,
     pub in_git_project: bool,
+    #[expect(dead_code, reason = "will be used for request tracking")]
     pub invocation_id: String,
 
     // ─── View-only ──────────────────────────────────────────────
@@ -277,9 +278,6 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
             };
             Some(Event::PermissionUserChoice { tool_id, choice })
         }
-        // These were internal signals in the old system — no longer needed
-        AiTuiEvent::CheckToolCallPermission(_) => None,
-        AiTuiEvent::ContinueAfterTools => None,
         AiTuiEvent::SlashCommand(cmd) => Some(Event::SlashCommand(cmd)),
     }
 }

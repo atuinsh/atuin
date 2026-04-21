@@ -36,6 +36,10 @@ impl SlashCommandRegistry {
         self.commands.push(command);
     }
 
+    #[expect(
+        dead_code,
+        reason = "used by /help command rendering which isn't fully wired yet"
+    )]
     pub fn get_commands(&self) -> &[SlashCommand] {
         &self.commands
     }

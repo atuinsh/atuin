@@ -44,7 +44,10 @@ pub(crate) enum Effect {
         tool: ClientToolCall,
     },
     /// Kill a running tool (send interrupt to shell command).
-    AbortTool { tool_id: String },
+    AbortTool {
+        #[expect(dead_code, reason = "will be used when abort tracking is implemented")]
+        tool_id: String,
+    },
 
     // ─── Persistence ────────────────────────────────────────────
     /// Persist current conversation state to disk.
@@ -65,7 +68,10 @@ pub(crate) enum Effect {
     /// Schedule a timer that will fire ConfirmationTimeout after delay.
     ScheduleTimeout { timeout_id: u64, duration: Duration },
     /// Cancel a previously scheduled timer.
-    CancelTimeout { timeout_id: u64 },
+    CancelTimeout {
+        #[expect(dead_code, reason = "timeout cancellation is implicit for now")]
+        timeout_id: u64,
+    },
 
     // ─── Exit ───────────────────────────────────────────────────
     /// Exit the application with the given action.

@@ -1,8 +1,3 @@
-// The FSM + driver architecture replaces the old dispatch/state system.
-// Dead code from the old system (dispatch.rs, parts of state.rs, stream.rs,
-// and tools/mod.rs) will be removed in a follow-up cleanup PR.
-#![allow(dead_code)]
-
 pub mod commands;
 pub(crate) mod context;
 pub(crate) mod context_window;

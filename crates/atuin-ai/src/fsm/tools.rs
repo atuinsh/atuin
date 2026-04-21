@@ -56,6 +56,7 @@ impl TrackedTool {
     }
 
     /// The resolved file path for this tool, if file-based.
+    #[expect(dead_code)]
     pub fn file_path(&self) -> Option<PathBuf> {
         self.tool.resolved_file_path()
     }
@@ -140,6 +141,7 @@ impl ToolManager {
     }
 
     /// True if any tool is currently executing.
+    #[expect(dead_code)]
     pub fn has_executing(&self) -> bool {
         self.tools.iter().any(|t| t.state == ToolState::Executing)
     }
@@ -170,11 +172,13 @@ impl ToolManager {
     }
 
     /// Iterate over all tracked tools.
+    #[expect(dead_code)]
     pub fn iter(&self) -> impl Iterator<Item = &TrackedTool> {
         self.tools.iter()
     }
 
     /// Clear all tools (for session reset).
+    #[expect(dead_code)]
     pub fn clear(&mut self) {
         self.tools.clear();
     }
