@@ -191,6 +191,53 @@ fn tool_done_after_stream_done_continues_conversation() {
 }
 
 #[test]
+fn continuation_turn_without_new_tools_goes_idle() {
+    let mut fsm = new_fsm();
+    fsm.handle(Event::UserSubmit("read".into()));
+    fsm.handle(Event::StreamStarted);
+    fsm.handle(Event::StreamToolCall {
+        id: "t1".into(),
+        name: "read_file".into(),
+        input: json!({"file_path": "/tmp/test.txt"}),
+    });
+    fsm.handle(Event::StreamDone {
+        session_id: "".into(),
+    });
+    fsm.handle(Event::PermissionResolved {
+        tool_id: "t1".into(),
+        response: PermissionResponse::Allowed,
+    });
+    // Tool completes → continuation starts
+    fsm.handle(Event::ToolExecutionDone {
+        tool_id: "t1".into(),
+        outcome: crate::tools::ToolOutcome::Success("contents".into()),
+        preview: None,
+    });
+    assert!(matches!(
+        fsm.state,
+        AgentState::Turn {
+            stream: StreamPhase::Connecting
+        }
+    ));
+
+    // Continuation stream: text only, no new tools
+    fsm.handle(Event::StreamStarted);
+    fsm.handle(Event::StreamChunk("Here's the file.".into()));
+    let effects = fsm.handle(Event::StreamDone {
+        session_id: "".into(),
+    });
+
+    // Should go Idle, NOT start another continuation
+    assert_eq!(fsm.state, AgentState::Idle { confirmation: None });
+    assert!(effects.iter().any(|e| matches!(e, Effect::Persist)));
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::StartStream { .. }))
+    );
+}
+
+#[test]
 fn tool_done_before_stream_done_stays_in_turn() {
     let mut fsm = new_fsm();
     fsm.handle(Event::UserSubmit("read".into()));

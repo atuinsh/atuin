@@ -141,17 +141,6 @@ impl ViewState {
 }
 
 // ============================================================================
-// Driver metadata (immutable-ish session context)
-// ============================================================================
-
-pub(crate) struct DriverMeta {
-    pub view_start_index: usize,
-    pub is_resumed: bool,
-    pub last_event_time: Option<chrono::DateTime<chrono::Utc>>,
-    pub in_git_project: bool,
-}
-
-// ============================================================================
 // Main driver loop
 // ============================================================================
 
@@ -166,13 +155,8 @@ pub(crate) fn run_driver(
     rx: mpsc::Receiver<DriverEvent>,
     tx: mpsc::Sender<DriverEvent>,
     exiting: Arc<AtomicBool>,
-    meta: DriverMeta,
+    in_git_project: bool,
 ) {
-    let mut view_start_index = meta.view_start_index;
-    let is_resumed = meta.is_resumed;
-    let last_event_time = meta.last_event_time;
-    let in_git_project = meta.in_git_project;
-
     while let Ok(driver_event) = rx.recv() {
         // Translate DriverEvent to FSM Event (or handle directly)
         let fsm_event = match driver_event {
@@ -184,21 +168,11 @@ pub(crate) fn run_driver(
             // Feed event to FSM
             let effects = fsm.handle(event);
 
-            // Sync ViewState to Handle
-            sync_view_state(
-                &handle,
-                &fsm,
-                view_start_index,
-                is_resumed,
-                last_event_time,
-                in_git_project,
-            );
+            // Sync ViewState to Handle (FSM owns all state now)
+            sync_view_state(&handle, &fsm, in_git_project);
 
             // Execute effects (only persist when FSM says to)
             for effect in &effects {
-                if matches!(effect, Effect::ArchiveSession) {
-                    view_start_index = 0;
-                }
                 if matches!(effect, Effect::Persist) {
                     persist(&fsm, &mut io);
                 }
@@ -206,14 +180,7 @@ pub(crate) fn run_driver(
             }
         } else {
             // Event was handled directly (e.g. InputUpdated) — just sync
-            sync_view_state(
-                &handle,
-                &fsm,
-                view_start_index,
-                is_resumed,
-                last_event_time,
-                in_git_project,
-            );
+            sync_view_state(&handle, &fsm, in_git_project);
         }
 
         if exiting.load(Ordering::Acquire) {
@@ -307,23 +274,20 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
 // ViewState sync
 // ============================================================================
 
-fn sync_view_state(
-    handle: &Handle<ViewState>,
-    fsm: &AgentFsm,
-    view_start_index: usize,
-    is_resumed: bool,
-    last_event_time: Option<chrono::DateTime<chrono::Utc>>,
-    in_git_project: bool,
-) {
+fn sync_view_state(handle: &Handle<ViewState>, fsm: &AgentFsm, in_git_project: bool) {
     let state = fsm.state.clone();
-    let safe_start = view_start_index.min(fsm.ctx.events.len());
+    let safe_start = fsm.ctx.view_start_index.min(fsm.ctx.events.len());
     let mut visible_events = fsm.ctx.events[safe_start..].to_vec();
     let all_events = fsm.ctx.events.clone();
     let tools = fsm.ctx.tools.clone();
     let current_response = fsm.ctx.current_response.clone();
     let session_id = fsm.ctx.session_id.clone();
+    let is_resumed = fsm.ctx.is_resumed;
+    let last_event_time = fsm.ctx.last_event_time;
+    let archived_events = fsm.ctx.archived_events.clone();
 
-    // Lesson 3: inject streaming text as a synthetic event for live rendering
+    // Inject streaming text as a synthetic event for live rendering.
+    // The FSM commits text to events on stream end; this makes it visible during streaming.
     let trimmed = current_response.trim_start();
     if !trimmed.is_empty() {
         visible_events.push(ConversationEvent::Text {
@@ -341,6 +305,7 @@ fn sync_view_state(
         vs.is_resumed = is_resumed;
         vs.last_event_time = last_event_time;
         vs.in_git_project = in_git_project;
+        vs.archived_events = archived_events;
     });
 }
 

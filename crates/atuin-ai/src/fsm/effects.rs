@@ -58,6 +58,7 @@ pub(crate) enum Effect {
     /// Cache a session-scoped file permission grant.
     CacheSessionGrant { path: PathBuf },
     /// Archive current session and start fresh (for /new).
+    /// Archive current session and start fresh (IO only — state already updated by FSM).
     ArchiveSession,
 
     // ─── Timers ─────────────────────────────────────────────────

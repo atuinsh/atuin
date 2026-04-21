@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 
 use crate::context::{AppContext, ClientContext};
-use crate::driver::{DriverEvent, DriverMeta, IoContext, ViewState, run_driver};
+use crate::driver::{DriverEvent, IoContext, ViewState, run_driver};
 use crate::fsm::AgentFsm;
 use crate::fsm::effects::ExitAction;
 use crate::session::{LocalSessionService, SessionManager, SessionService};
@@ -178,15 +178,7 @@ async fn run_inline_tui(
         .await?;
 
     // ─── Build FSM ───────────────────────────────────────────────
-    let (
-        session_mgr,
-        fsm,
-        is_resumed,
-        last_event_time,
-        view_start_index,
-        file_tracker,
-        edit_permissions,
-    ) = if let Some(stored) = resumable {
+    let (session_mgr, fsm, file_tracker, edit_permissions) = if let Some(stored) = resumable {
         debug!(session_id = %stored.id, "resuming AI session");
         let (mgr, mut events, server_sid, last_event_ts, invocation_id) =
             SessionManager::resume(Box::new(service), &stored).await?;
@@ -220,21 +212,21 @@ async fn run_inline_tui(
             };
 
             let caps = ctx.capabilities_as_strings();
-            let fsm = AgentFsm::from_session(events, server_sid, caps, invocation_id);
-            (mgr, fsm, true, last_time, view_start, ft, ep)
+            let fsm = AgentFsm::from_session(
+                events,
+                server_sid,
+                caps,
+                invocation_id,
+                view_start,
+                true,
+                last_time,
+            );
+            (mgr, fsm, ft, ep)
         } else {
             debug!("resumable session has no API-visible content, starting fresh");
             let caps = ctx.capabilities_as_strings();
             let fsm = AgentFsm::new(caps, invocation_id);
-            (
-                mgr,
-                fsm,
-                false,
-                None,
-                0,
-                Default::default(),
-                Default::default(),
-            )
+            (mgr, fsm, Default::default(), Default::default())
         }
     } else {
         debug!("creating new AI session");
@@ -243,15 +235,7 @@ async fn run_inline_tui(
         let invocation_id = uuid::Uuid::now_v7().to_string();
         let caps = ctx.capabilities_as_strings();
         let fsm = AgentFsm::new(caps, invocation_id);
-        (
-            mgr,
-            fsm,
-            false,
-            None,
-            0,
-            Default::default(),
-            Default::default(),
-        )
+        (mgr, fsm, Default::default(), Default::default())
     };
 
     // ─── Snapshot store ─────────────────────────────────────────
@@ -263,25 +247,8 @@ async fn run_inline_tui(
 
     let in_git_project = ctx.git_root.is_some();
 
-    // ─── Build initial ViewState ────────────────────────────────
-    let initial_view = ViewState {
-        agent_state: fsm.state.clone(),
-        visible_events: fsm.ctx.events[view_start_index..].to_vec(),
-        all_events: fsm.ctx.events.clone(),
-        session_id: fsm.ctx.session_id.clone(),
-        tools: fsm.ctx.tools.clone(),
-        current_response: String::new(),
-        is_resumed,
-        last_event_time,
-        in_git_project,
-        invocation_id: fsm.ctx.invocation_id.clone(),
-        archived_events: Vec::new(),
-        is_input_blank: true,
-        slash_command_input: None,
-        slash_command_search_results: Vec::new(),
-        exit_action: None,
-        slash_registry: Default::default(),
-    };
+    // ─── Build initial ViewState from FSM ───────────────────────
+    let initial_view = build_view_state(&fsm, in_git_project);
 
     // ─── Build IoContext ────────────────────────────────────────
     let io = IoContext {
@@ -324,20 +291,7 @@ async fn run_inline_tui(
     let exiting = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let exiting_clone = exiting.clone();
     let dispatch_handle = tokio::task::spawn_blocking(move || {
-        run_driver(
-            fsm,
-            io,
-            h,
-            rx,
-            tx,
-            exiting_clone,
-            DriverMeta {
-                view_start_index,
-                is_resumed,
-                last_event_time,
-                in_git_project,
-            },
-        );
+        run_driver(fsm, io, h, rx, tx, exiting_clone, in_git_project);
     });
 
     let run_result = app.run_loop().await;
@@ -365,6 +319,30 @@ impl DriverEventSender {
         self.0
             .send(DriverEvent::Tui(event))
             .map_err(|_| mpsc::SendError(AiTuiEvent::Exit))
+    }
+}
+
+/// Build a ViewState snapshot from FSM state. Used for the initial view
+/// and by the driver for ongoing sync.
+fn build_view_state(fsm: &AgentFsm, in_git_project: bool) -> ViewState {
+    let safe_start = fsm.ctx.view_start_index.min(fsm.ctx.events.len());
+    ViewState {
+        agent_state: fsm.state.clone(),
+        visible_events: fsm.ctx.events[safe_start..].to_vec(),
+        all_events: fsm.ctx.events.clone(),
+        session_id: fsm.ctx.session_id.clone(),
+        tools: fsm.ctx.tools.clone(),
+        current_response: fsm.ctx.current_response.clone(),
+        is_resumed: fsm.ctx.is_resumed,
+        last_event_time: fsm.ctx.last_event_time,
+        in_git_project,
+        invocation_id: fsm.ctx.invocation_id.clone(),
+        archived_events: fsm.ctx.archived_events.clone(),
+        is_input_blank: true,
+        slash_command_input: None,
+        slash_command_search_results: Vec::new(),
+        exit_action: None,
+        slash_registry: Default::default(),
     }
 }
 

@@ -95,14 +95,26 @@ pub(crate) struct AgentContext {
     /// Per-tool lifecycle state and cached render data.
     /// Tools persist across turns for rendering history.
     pub tools: ToolManager,
-    /// Whether the current turn had any client tool calls (gates continuation).
-    pub turn_has_tools: bool,
+    /// Tool IDs that belong to the current turn. Cleared on continuation start.
+    /// Used to determine whether a turn needs continuation (has unprocessed results).
+    current_turn_tool_ids: Vec<String>,
     /// Counter for generating unique timeout IDs.
     next_timeout_id: u64,
     /// Capabilities advertised to the server.
     pub capabilities: Vec<String>,
     /// Unique invocation ID for this CLI invocation.
     pub invocation_id: String,
+
+    // ─── View state (owned by FSM for atomic transitions) ───────
+    /// Index into events where the current TUI invocation starts.
+    /// Events before this are context for the API but not rendered.
+    pub view_start_index: usize,
+    /// Whether this session was resumed from a prior invocation.
+    pub is_resumed: bool,
+    /// Time of the last event from a previous invocation.
+    pub last_event_time: Option<chrono::DateTime<chrono::Utc>>,
+    /// Events from archived sessions (/new) still rendered on screen.
+    pub archived_events: Vec<ConversationEvent>,
 }
 
 impl AgentContext {
@@ -137,10 +149,14 @@ impl AgentFsm {
                 session_id: None,
                 current_response: String::new(),
                 tools: ToolManager::new(),
-                turn_has_tools: false,
+                current_turn_tool_ids: Vec::new(),
                 next_timeout_id: 0,
                 capabilities,
                 invocation_id,
+                view_start_index: 0,
+                is_resumed: false,
+                last_event_time: None,
+                archived_events: Vec::new(),
             },
         }
     }
@@ -151,6 +167,9 @@ impl AgentFsm {
         session_id: Option<String>,
         capabilities: Vec<String>,
         invocation_id: String,
+        view_start_index: usize,
+        is_resumed: bool,
+        last_event_time: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Self {
         Self {
             state: AgentState::Idle { confirmation: None },
@@ -159,10 +178,14 @@ impl AgentFsm {
                 session_id,
                 current_response: String::new(),
                 tools: ToolManager::new(),
-                turn_has_tools: false,
+                current_turn_tool_ids: Vec::new(),
                 next_timeout_id: 0,
                 capabilities,
                 invocation_id,
+                view_start_index,
+                is_resumed,
+                last_event_time,
+                archived_events: Vec::new(),
             },
         }
     }
@@ -261,11 +284,24 @@ impl AgentFsm {
             }
 
             (AgentState::Idle { .. }, Event::NewSession) => {
-                // Don't clear tools — archived events still reference them
-                // for rendering. The driver handles archiving visible events.
+                // Archive visible events so they remain on screen but aren't
+                // sent to the API. Tools persist for rendering.
+                let visible = self.ctx.events[self.ctx.view_start_index..].to_vec();
+                self.ctx.archived_events.extend(visible);
+
                 self.ctx.events.clear();
                 self.ctx.session_id = None;
-                self.ctx.turn_has_tools = false;
+                self.ctx.current_turn_tool_ids.clear();
+                self.ctx.view_start_index = 0;
+                self.ctx.is_resumed = false;
+
+                // Add OOB indicator for the new session
+                self.ctx.events.push(ConversationEvent::OutOfBandOutput {
+                    name: "System".to_string(),
+                    command: Some("/new".to_string()),
+                    content: "Started a new session.".to_string(),
+                });
+
                 self.state = AgentState::Idle { confirmation: None };
                 vec![Effect::ArchiveSession, Effect::Persist]
             }
@@ -529,7 +565,7 @@ impl AgentFsm {
         // Don't clear tools — completed tools persist for rendering history.
         // Tools are only cleared on /new (session reset).
         self.ctx.current_response.clear();
-        self.ctx.turn_has_tools = false;
+        self.ctx.current_turn_tool_ids.clear();
 
         let messages = self.build_messages();
         let session_id = self.ctx.session_id.clone();
@@ -607,7 +643,7 @@ impl AgentFsm {
         // Track the tool and push ToolCall event
         let tool_for_effect = tool.clone();
         self.ctx.tools.insert(id.clone(), tool);
-        self.ctx.turn_has_tools = true;
+        self.ctx.current_turn_tool_ids.push(id.clone());
         self.ctx.events.push(ConversationEvent::ToolCall {
             id: id.clone(),
             name,
@@ -796,9 +832,11 @@ impl AgentFsm {
         // Turn is complete. Check if we need to continue (tool results to send back).
         // We continue if this turn had any client tool calls (the LLM needs to see
         // the results and respond).
-        if self.ctx.turn_has_tools {
+        if !self.ctx.current_turn_tool_ids.is_empty() {
             // Continue conversation with tool results.
             // Don't clear tools — they persist for rendering history.
+            // Clear turn IDs so the continuation turn doesn't loop.
+            self.ctx.current_turn_tool_ids.clear();
             let messages = self.build_messages();
             let session_id = self.ctx.session_id.clone();
             self.ctx.current_response.clear();
