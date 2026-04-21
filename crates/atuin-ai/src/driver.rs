@@ -199,6 +199,7 @@ pub(crate) fn run_driver(
         if exiting.load(Ordering::Acquire) {
             break;
         }
+        tracing::trace!(state = ?fsm.state, "driver loop iteration complete, waiting for next event");
     }
 }
 
@@ -608,6 +609,7 @@ fn execute_effect(
 // ============================================================================
 
 fn persist(fsm: &AgentFsm, io: &mut IoContext) {
+    let start = std::time::Instant::now();
     let rt = tokio::runtime::Handle::current();
 
     if let Err(e) = rt.block_on(io.session_mgr.persist_events(&fsm.ctx.events)) {
@@ -634,6 +636,7 @@ fn persist(fsm: &AgentFsm, io: &mut IoContext) {
             tracing::warn!("Failed to persist edit permissions: {e}");
         }
     }
+    tracing::trace!(elapsed_ms = start.elapsed().as_millis(), "persist complete");
 }
 
 // ============================================================================
