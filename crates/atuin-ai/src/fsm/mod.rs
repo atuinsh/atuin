@@ -536,7 +536,7 @@ impl AgentFsm {
                 if !session_id.is_empty() {
                     self.ctx.session_id = Some(session_id);
                 }
-                vec![]
+                vec![Effect::Persist]
             }
 
             (_, Event::SlashCommand { command, content }) => {
