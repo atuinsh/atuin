@@ -661,6 +661,12 @@ impl AgentFsm {
             return vec![];
         };
 
+        // If already resolved (e.g. cancelled while permission check was in flight),
+        // ignore the stale result to avoid re-executing a cancelled tool.
+        if tracked.is_resolved() {
+            return vec![];
+        }
+
         match response {
             PermissionResponse::Allowed | PermissionResponse::SessionGranted => {
                 tracked.state = ToolState::Executing;
@@ -694,6 +700,10 @@ impl AgentFsm {
         let Some(tracked) = self.ctx.tools.get_mut(&tool_id) else {
             return vec![];
         };
+
+        if tracked.is_resolved() {
+            return vec![];
+        }
 
         match choice {
             PermissionChoice::Allow => {

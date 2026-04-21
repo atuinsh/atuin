@@ -293,6 +293,33 @@ fn cancel_during_streaming_goes_idle() {
 }
 
 #[test]
+fn stale_permission_resolved_after_cancel_is_ignored() {
+    let mut fsm = new_fsm();
+    fsm.handle(Event::UserSubmit("read".into()));
+    fsm.handle(Event::StreamStarted);
+    fsm.handle(Event::StreamToolCall {
+        id: "t1".into(),
+        name: "read_file".into(),
+        input: json!({"file_path": "/tmp/test.txt"}),
+    });
+    fsm.handle(Event::StreamDone {
+        session_id: "".into(),
+    });
+    // Tool is in CheckingPermission, cancel happens before permission resolves
+    fsm.handle(Event::Cancel);
+    assert_eq!(fsm.state, AgentState::Idle { confirmation: None });
+
+    // Stale permission result arrives — tool is already Completed (cancelled)
+    let effects = fsm.handle(Event::PermissionResolved {
+        tool_id: "t1".into(),
+        response: PermissionResponse::Allowed,
+    });
+
+    // Should NOT emit ExecuteTool — the tool was cancelled
+    assert!(effects.is_empty());
+}
+
+#[test]
 fn cancel_during_turn_with_pending_tools() {
     let mut fsm = new_fsm();
     fsm.handle(Event::UserSubmit("hello".into()));
