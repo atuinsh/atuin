@@ -152,7 +152,9 @@ allow = [
 
     Note the difference between `ls *` (with a space) and `ls*` (without). The space-separated form uses **word-boundary** matching — `ls *` matches `ls` and `ls -a` but _not_ `lsof`. The attached form uses **prefix** matching — `ls*` matches all of those, including `lsof`.
 
-    A pattern without any wildcard (e.g. `git commit`) is an **exact match** — it only matches when the command words are identical. Use `git commit *` if you want to allow `git commit` with any arguments.
+    For `allow` and `ask` rules, a pattern without any wildcard (e.g. `git commit`) is an **exact match** — it only matches when the command words are identical. Use `git commit *` if you want to allow `git commit` with any arguments.
+
+    For `deny` rules, a pattern without any wildcard (e.g. `rm`) is a **prefix match** — it matches any command that starts with that prefix. This means that a `deny` rule of `rm` would deny `rm`, `rm -rf /`, and `rm ./README.md` so be careful when writing `deny` rules without explicit wildcards.
 
 !!! warning "Compound Commands"
 
