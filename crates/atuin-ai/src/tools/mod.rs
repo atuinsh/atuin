@@ -787,7 +787,8 @@ impl PermissableToolCall for ShellToolCall {
 
         let shell_kind = crate::permissions::shell::ShellKind::from_shell_name(&self.shell);
         let parsed = crate::permissions::shell::parse_shell_command(&self.command, shell_kind);
-        crate::permissions::shell::any_subcommand_matches(&parsed.subcommands, scope)
+        // Deny/ask path: prefix_bare = true so `deny = ["Shell(rm)"]` blocks `rm -rf /`
+        crate::permissions::shell::any_subcommand_matches(&parsed.subcommands, true, scope)
     }
 
     /// For compound shell commands, every subcommand must be individually
@@ -808,9 +809,13 @@ impl PermissableToolCall for ShellToolCall {
                     }
                     match rule.scope.as_deref() {
                         None | Some("*") => true,
-                        Some(scope) => {
-                            shell::any_subcommand_matches(std::slice::from_ref(subcmd), scope)
-                        }
+                        // Allow path: prefix_bare = false so `Shell(git commit)`
+                        // only allows exactly `git commit`, not `git commit --amend`
+                        Some(scope) => shell::any_subcommand_matches(
+                            std::slice::from_ref(subcmd),
+                            false,
+                            scope,
+                        ),
                     }
                 })
             })
@@ -1345,6 +1350,18 @@ mod tests {
         // matches_rule (used for deny/ask) still triggers on any subcommand
         let rule = shell_rule(Some("rm *"));
         assert!(shell_tool("git add . && rm -rf /").matches_rule(&rule));
+    }
+
+    #[test]
+    fn bare_pattern_asymmetry() {
+        // Deny (matches_rule, prefix_bare=true): bare "rm" blocks "rm -rf /"
+        let deny_rule = shell_rule(Some("rm"));
+        assert!(shell_tool("rm -rf /").matches_rule(&deny_rule));
+
+        // Allow (all_covered_by, prefix_bare=false): bare "rm" only allows exactly "rm"
+        let allow_rules = vec![shell_rule(Some("rm"))];
+        assert!(shell_tool("rm").all_covered_by(&allow_rules));
+        assert!(!shell_tool("rm -rf /").all_covered_by(&allow_rules));
     }
 
     // ── Unix-specific tests (absolute paths with forward slashes) ──
