@@ -373,11 +373,11 @@ pub(crate) fn any_subcommand_matches(subcommands: &[ShellCommand], scope: &str) 
             .any(|cmd| scope_matches_words(scope, cmd.full.split_whitespace().collect()));
     }
 
-    // No wildcard: word-boundary prefix match
+    // No wildcard: exact word match
     let scope_words: Vec<&str> = scope.split_whitespace().collect();
     subcommands.iter().any(|cmd| {
         let cmd_words: Vec<&str> = cmd.full.split_whitespace().collect();
-        cmd_words.len() >= scope_words.len() && cmd_words[..scope_words.len()] == scope_words[..]
+        cmd_words == scope_words
     })
 }
 
@@ -558,10 +558,13 @@ mod tests {
             },
         ];
         assert!(any_subcommand_matches(&commands, "git commit *"));
-        assert!(any_subcommand_matches(&commands, "git commit"));
+        // Bare "git commit" is exact — does not match "git commit -m msg"
+        assert!(!any_subcommand_matches(&commands, "git commit"));
         assert!(!any_subcommand_matches(&commands, "git push *"));
         assert!(!any_subcommand_matches(&commands, "git push"));
         assert!(any_subcommand_matches(&commands, "npm *"));
+        // Exact match works when the command has no extra args
+        assert!(any_subcommand_matches(&commands, "npm test"));
     }
 
     #[test]
