@@ -341,7 +341,6 @@ fn push_segment(segment: &mut String, commands: &mut Vec<ShellCommand>) {
 /// - `ls*` (no space before `*`) — matches `lsof`, `ls`, `ls -a` (prefix/glob)
 /// - `rm` (no wildcard) — matches exactly `rm`
 /// - `git * amend` — matches `git commit amend` (middle wildcard matches zero+ words)
-/// Check if any of the extracted subcommands match the given scope pattern.
 ///
 /// When `prefix_bare` is true, a bare pattern without wildcards (e.g. `rm`)
 /// uses word-boundary prefix matching — `rm` matches `rm -rf /`.  When false,
