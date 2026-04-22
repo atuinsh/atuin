@@ -341,10 +341,22 @@ fn push_segment(segment: &mut String, commands: &mut Vec<ShellCommand>) {
 /// - `ls*` (no space before `*`) — matches `lsof`, `ls`, `ls -a` (prefix/glob)
 /// - `rm` (no wildcard) — matches exactly `rm`
 /// - `git * amend` — matches `git commit amend` (middle wildcard matches zero+ words)
-pub(crate) fn any_subcommand_matches(subcommands: &[ShellCommand], scope: &str) -> bool {
+///
+/// When `prefix_bare` is true, a bare pattern without wildcards (e.g. `rm`)
+/// uses word-boundary prefix matching — `rm` matches `rm -rf /`.  When false,
+/// bare patterns require an exact match — `rm` only matches `rm`.
+///
+/// Allow rules should pass `prefix_bare: false` (strict), while deny/ask rules
+/// should pass `prefix_bare: true` (broad) so that denying `rm` also blocks
+/// `rm -rf /`.
+pub(crate) fn any_subcommand_matches(
+    subcommands: &[ShellCommand],
+    prefix_bare: bool,
+    scope: &str,
+) -> bool {
     let scope = scope.trim();
 
-    if scope == "*" {
+    if scope.is_empty() || scope == "*" {
         return true;
     }
 
@@ -373,11 +385,16 @@ pub(crate) fn any_subcommand_matches(subcommands: &[ShellCommand], scope: &str) 
             .any(|cmd| scope_matches_words(scope, cmd.full.split_whitespace().collect()));
     }
 
-    // No wildcard: word-boundary prefix match
+    // No wildcard: exact or prefix depending on context
     let scope_words: Vec<&str> = scope.split_whitespace().collect();
     subcommands.iter().any(|cmd| {
         let cmd_words: Vec<&str> = cmd.full.split_whitespace().collect();
-        cmd_words.len() >= scope_words.len() && cmd_words[..scope_words.len()] == scope_words[..]
+        if prefix_bare {
+            cmd_words.len() >= scope_words.len()
+                && cmd_words[..scope_words.len()] == scope_words[..]
+        } else {
+            cmd_words == scope_words
+        }
     })
 }
 
@@ -542,7 +559,7 @@ mod tests {
                 full: "npm test".into(),
             },
         ];
-        assert!(any_subcommand_matches(&commands, "*"));
+        assert!(any_subcommand_matches(&commands, true, "*"));
     }
 
     #[test]
@@ -557,11 +574,18 @@ mod tests {
                 full: "npm test".into(),
             },
         ];
-        assert!(any_subcommand_matches(&commands, "git commit *"));
-        assert!(any_subcommand_matches(&commands, "git commit"));
-        assert!(!any_subcommand_matches(&commands, "git push *"));
-        assert!(!any_subcommand_matches(&commands, "git push"));
-        assert!(any_subcommand_matches(&commands, "npm *"));
+        assert!(any_subcommand_matches(&commands, true, "git commit *"));
+        assert!(!any_subcommand_matches(&commands, true, "git push *"));
+        assert!(!any_subcommand_matches(&commands, true, "git push"));
+        assert!(any_subcommand_matches(&commands, true, "npm *"));
+        assert!(any_subcommand_matches(&commands, true, "npm test"));
+
+        // prefix_bare=true: bare "git commit" prefix-matches "git commit -m msg" (deny/ask)
+        assert!(any_subcommand_matches(&commands, true, "git commit"));
+        // prefix_bare=false: bare "git commit" does NOT match "git commit -m msg" (allow)
+        assert!(!any_subcommand_matches(&commands, false, "git commit"));
+        // Exact match works in both modes when command has no extra args
+        assert!(any_subcommand_matches(&commands, false, "npm test"));
     }
 
     #[test]
@@ -577,12 +601,12 @@ mod tests {
             },
         ];
         // `ls *` — word boundary: matches `ls -a` but not `lsof`
-        assert!(any_subcommand_matches(&commands, "ls *"));
-        assert!(!any_subcommand_matches(&commands, "cat *"));
-        assert!(any_subcommand_matches(&commands, "lsof *"));
+        assert!(any_subcommand_matches(&commands, true, "ls *"));
+        assert!(!any_subcommand_matches(&commands, true, "cat *"));
+        assert!(any_subcommand_matches(&commands, true, "lsof *"));
 
         // `ls*` — glob/prefix: matches both `ls -a` and `lsof`
-        assert!(any_subcommand_matches(&commands, "ls*"));
+        assert!(any_subcommand_matches(&commands, true, "ls*"));
     }
 
     #[test]
@@ -591,8 +615,8 @@ mod tests {
             name: "ls".into(),
             full: "ls".into(),
         }];
-        assert!(any_subcommand_matches(&commands, "ls"));
-        assert!(!any_subcommand_matches(&commands, "cat"));
+        assert!(any_subcommand_matches(&commands, true, "ls"));
+        assert!(!any_subcommand_matches(&commands, true, "cat"));
     }
 
     #[cfg(feature = "tree-sitter")]
@@ -678,9 +702,13 @@ mod tests {
             name: "git".into(),
             full: "git commit -m amend".into(),
         }];
-        assert!(any_subcommand_matches(&commands, "git * amend"));
-        assert!(any_subcommand_matches(&commands, "git commit * amend"));
-        assert!(!any_subcommand_matches(&commands, "git push * amend"));
+        assert!(any_subcommand_matches(&commands, true, "git * amend"));
+        assert!(any_subcommand_matches(
+            &commands,
+            true,
+            "git commit * amend"
+        ));
+        assert!(!any_subcommand_matches(&commands, true, "git push * amend"));
     }
 
     #[test]
@@ -690,7 +718,7 @@ mod tests {
             full: "git commit".into(),
         }];
         // `*` matches zero words, so `git * commit` should match `git commit`
-        assert!(any_subcommand_matches(&commands, "git * commit"));
+        assert!(any_subcommand_matches(&commands, true, "git * commit"));
     }
 
     #[test]
@@ -699,8 +727,8 @@ mod tests {
             name: "docker".into(),
             full: "docker run --rm alpine".into(),
         }];
-        assert!(any_subcommand_matches(&commands, "* alpine"));
-        assert!(!any_subcommand_matches(&commands, "* ubuntu"));
+        assert!(any_subcommand_matches(&commands, true, "* alpine"));
+        assert!(!any_subcommand_matches(&commands, true, "* ubuntu"));
     }
 
     #[test]
@@ -709,8 +737,12 @@ mod tests {
             name: "git".into(),
             full: "git rebase -i HEAD~5".into(),
         }];
-        assert!(any_subcommand_matches(&commands, "git * -i * HEAD~5"));
-        assert!(!any_subcommand_matches(&commands, "git * -i * HEAD~10"));
+        assert!(any_subcommand_matches(&commands, true, "git * -i * HEAD~5"));
+        assert!(!any_subcommand_matches(
+            &commands,
+            true,
+            "git * -i * HEAD~10"
+        ));
     }
 }
 
@@ -1232,7 +1264,7 @@ mod adversarial {
             full: "ls".into(),
         }];
         // Empty scope matches everything (nothing to constrain)
-        assert!(any_subcommand_matches(&commands, ""));
+        assert!(any_subcommand_matches(&commands, true, ""));
     }
 
     #[test]
@@ -1242,7 +1274,7 @@ mod adversarial {
             full: "ls".into(),
         }];
         // " *" with empty prefix = match anything
-        assert!(any_subcommand_matches(&commands, " *"));
+        assert!(any_subcommand_matches(&commands, true, " *"));
     }
 
     #[test]
@@ -1252,7 +1284,7 @@ mod adversarial {
             full: "ls".into(),
         }];
         // `ls*` matches `ls` (prefix match with nothing after)
-        assert!(any_subcommand_matches(&commands, "ls*"));
+        assert!(any_subcommand_matches(&commands, true, "ls*"));
     }
 
     #[test]
@@ -1262,7 +1294,7 @@ mod adversarial {
             name: "git".into(),
             full: "git commit".into(),
         }];
-        assert!(any_subcommand_matches(&commands, "git * commit"));
+        assert!(any_subcommand_matches(&commands, true, "git * commit"));
     }
 
     #[test]
@@ -1272,7 +1304,7 @@ mod adversarial {
             name: "git".into(),
             full: "git commit".into(),
         }];
-        assert!(any_subcommand_matches(&commands, "git ** commit"));
+        assert!(any_subcommand_matches(&commands, true, "git ** commit"));
     }
 
     #[test]
@@ -1281,8 +1313,14 @@ mod adversarial {
             name: "LS".into(),
             full: "LS -la".into(),
         }];
-        assert!(!any_subcommand_matches(&commands, "ls"));
-        assert!(any_subcommand_matches(&commands, "LS"));
+        // Wildcard: case matters
+        assert!(!any_subcommand_matches(&commands, true, "ls *"));
+        assert!(any_subcommand_matches(&commands, true, "LS *"));
+        // prefix_bare=true: bare "LS" prefix-matches "LS -la"
+        assert!(!any_subcommand_matches(&commands, true, "ls"));
+        assert!(any_subcommand_matches(&commands, true, "LS"));
+        // prefix_bare=false: bare "LS" does NOT match "LS -la"
+        assert!(!any_subcommand_matches(&commands, false, "LS"));
     }
 
     #[test]
@@ -1292,6 +1330,6 @@ mod adversarial {
             name: "git".into(),
             full: "git commit-amend".into(),
         }];
-        assert!(!any_subcommand_matches(&commands, "git commit"));
+        assert!(!any_subcommand_matches(&commands, true, "git commit"));
     }
 }

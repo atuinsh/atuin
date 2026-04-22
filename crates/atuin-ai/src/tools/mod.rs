@@ -248,6 +248,15 @@ impl ClientToolCall {
 pub(crate) trait PermissableToolCall {
     /// Checks if this tool call matches the given permission rule.
     fn matches_rule(&self, rule: &Rule) -> bool;
+
+    /// Check if every part of this tool call is covered by at least one rule in
+    /// the set.  For compound operations (e.g. shell pipelines), each sub-part
+    /// must be individually covered.  The default treats the call as atomic —
+    /// any single matching rule is sufficient.
+    fn all_covered_by(&self, rules: &[Rule]) -> bool {
+        rules.iter().any(|r| self.matches_rule(r))
+    }
+
     /// Returns the target directory of this tool call, if applicable, for checking against directory-based rules.
     fn target_dir(&self) -> Option<&Path> {
         None
@@ -257,6 +266,13 @@ pub(crate) trait PermissableToolCall {
 impl PermissableToolCall for ClientToolCall {
     fn matches_rule(&self, rule: &Rule) -> bool {
         self.matches_rule(rule)
+    }
+
+    fn all_covered_by(&self, rules: &[Rule]) -> bool {
+        match self {
+            ClientToolCall::Shell(tool) => tool.all_covered_by(rules),
+            _ => rules.iter().any(|r| self.matches_rule(r)),
+        }
     }
 
     fn target_dir(&self) -> Option<&Path> {
@@ -771,7 +787,38 @@ impl PermissableToolCall for ShellToolCall {
 
         let shell_kind = crate::permissions::shell::ShellKind::from_shell_name(&self.shell);
         let parsed = crate::permissions::shell::parse_shell_command(&self.command, shell_kind);
-        crate::permissions::shell::any_subcommand_matches(&parsed.subcommands, scope)
+        // Deny/ask path: prefix_bare = true so `deny = ["Shell(rm)"]` blocks `rm -rf /`
+        crate::permissions::shell::any_subcommand_matches(&parsed.subcommands, true, scope)
+    }
+
+    /// For compound shell commands, every subcommand must be individually
+    /// covered by at least one rule.  This ensures that `allow = ["Shell(git *)"]`
+    /// does not silently permit `git add . && rm -rf /`.
+    fn all_covered_by(&self, rules: &[Rule]) -> bool {
+        use crate::permissions::shell;
+
+        let shell_kind = shell::ShellKind::from_shell_name(&self.shell);
+        let parsed = shell::parse_shell_command(&self.command, shell_kind);
+
+        // If parsing yields nothing, don't vacuously allow — fall through to ask.
+        !parsed.subcommands.is_empty()
+            && parsed.subcommands.iter().all(|subcmd| {
+                rules.iter().any(|rule| {
+                    if rule.tool != "Shell" {
+                        return false;
+                    }
+                    match rule.scope.as_deref() {
+                        None | Some("*") => true,
+                        // Allow path: prefix_bare = false so `Shell(git commit)`
+                        // only allows exactly `git commit`, not `git commit --amend`
+                        Some(scope) => shell::any_subcommand_matches(
+                            std::slice::from_ref(subcmd),
+                            false,
+                            scope,
+                        ),
+                    }
+                })
+            })
     }
 }
 
@@ -1235,6 +1282,90 @@ mod tests {
         let tool = read_tool(abs.to_str().unwrap());
         assert!(tool.matches_rule(&read_rule(Some("crates/**/*.rs"))));
         assert!(!tool.matches_rule(&read_rule(Some("crates/**/*.py"))));
+    }
+
+    // ── all_covered_by tests (compound shell command semantics) ──
+
+    fn shell_rule(scope: Option<&str>) -> Rule {
+        Rule {
+            tool: "Shell".to_string(),
+            scope: scope.map(String::from),
+        }
+    }
+
+    fn shell_tool(command: &str) -> ShellToolCall {
+        ShellToolCall {
+            dir: None,
+            command: command.to_string(),
+            shell: "bash".to_string(),
+            timeout_secs: 30,
+            description: None,
+        }
+    }
+
+    #[test]
+    fn all_covered_by_simple_command() {
+        let rules = vec![shell_rule(Some("git *"))];
+        assert!(shell_tool("git add .").all_covered_by(&rules));
+        assert!(!shell_tool("npm test").all_covered_by(&rules));
+    }
+
+    #[test]
+    fn all_covered_by_compound_all_covered() {
+        let rules = vec![shell_rule(Some("git *")), shell_rule(Some("npm *"))];
+        assert!(shell_tool("git add . && npm test").all_covered_by(&rules));
+    }
+
+    #[test]
+    fn all_covered_by_compound_partially_covered() {
+        // Only git is allowed — npm subcommand is not covered, so the
+        // compound command must not be auto-allowed.
+        let rules = vec![shell_rule(Some("git *"))];
+        assert!(!shell_tool("git add . && npm test").all_covered_by(&rules));
+    }
+
+    #[test]
+    fn all_covered_by_unscoped_shell_rule() {
+        // Shell without scope covers everything
+        let rules = vec![shell_rule(None)];
+        assert!(shell_tool("git add . && rm -rf /").all_covered_by(&rules));
+    }
+
+    #[test]
+    fn all_covered_by_wildcard_shell_rule() {
+        let rules = vec![shell_rule(Some("*"))];
+        assert!(shell_tool("git add . && npm test").all_covered_by(&rules));
+    }
+
+    #[test]
+    fn all_covered_by_non_shell_tool_unchanged() {
+        // Non-shell tools use the default (any single rule matches)
+        let rules = vec![read_rule(Some("*.md"))];
+        assert!(read_tool("notes.md").all_covered_by(&rules));
+        assert!(!read_tool("notes.txt").all_covered_by(&rules));
+    }
+
+    #[test]
+    fn matches_rule_still_uses_any_semantics() {
+        // matches_rule (used for deny/ask) still triggers on any subcommand
+        let rule = shell_rule(Some("rm *"));
+        assert!(shell_tool("git add . && rm -rf /").matches_rule(&rule));
+    }
+
+    #[test]
+    fn bare_pattern_asymmetry() {
+        // Deny (matches_rule, prefix_bare=true): bare "rm" blocks "rm -rf /"
+        let deny_rule = shell_rule(Some("rm"));
+        assert!(shell_tool("rm -rf /").matches_rule(&deny_rule));
+
+        // Allow (all_covered_by, prefix_bare=false): bare "rm" only allows exactly "rm"
+        let allow_rules = vec![shell_rule(Some("rm"))];
+        assert!(shell_tool("rm").all_covered_by(&allow_rules));
+        assert!(!shell_tool("rm -rf /").all_covered_by(&allow_rules));
+
+        // Bare prefix match is word-boundary, not substring — "rm" must not match "rmbackup"
+        assert!(!shell_tool("rmbackup").matches_rule(&deny_rule));
+        assert!(!shell_tool("rmbackup /tmp").matches_rule(&deny_rule));
     }
 
     // ── Unix-specific tests (absolute paths with forward slashes) ──

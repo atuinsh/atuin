@@ -57,15 +57,12 @@ impl PermissionChecker {
                 }
             }
 
-            for rule in &file.content.permissions.allow {
-                if request.call.matches_rule(rule) {
-                    tracing::debug!(
-                        "Permission 'ALLOW' by rule: {} in file: {}",
-                        rule,
-                        file.path.display()
-                    );
-                    return Ok(PermissionResponse::Allowed);
-                }
+            if request.call.all_covered_by(&file.content.permissions.allow) {
+                tracing::debug!(
+                    "Permission 'ALLOW' by rules in file: {}",
+                    file.path.display()
+                );
+                return Ok(PermissionResponse::Allowed);
             }
         }
 
