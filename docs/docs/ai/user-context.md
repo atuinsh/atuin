@@ -6,6 +6,8 @@ Atuin AI allows you to send additional context to the LLM beyond just your promp
 
 Atuin AI looks for additional context in `.atuin/ai-context.md` files in the current directory and its parent directories. It also checks `ai-context.md` in your Atuin config directory (`~/.config/atuin/ai-context.md` by default). If it finds any of these files, it sends their contents as additional context to the LLM.
 
+Atuin AI will send at maximum 10 additional context files, prioritizing files found globally first and then other files in order of filesystem depth, shallowest to deepest, and each file is limited to 10,000 characters.
+
 ## Dynamic Content
 
 You can send dynamic content by using shell substitution in your `ai-context.md` file:
