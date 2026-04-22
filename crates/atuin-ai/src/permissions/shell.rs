@@ -344,7 +344,7 @@ fn push_segment(segment: &mut String, commands: &mut Vec<ShellCommand>) {
 pub(crate) fn any_subcommand_matches(subcommands: &[ShellCommand], scope: &str) -> bool {
     let scope = scope.trim();
 
-    if scope == "*" {
+    if scope.is_empty() || scope == "*" {
         return true;
     }
 
