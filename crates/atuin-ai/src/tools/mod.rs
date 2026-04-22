@@ -1362,6 +1362,10 @@ mod tests {
         let allow_rules = vec![shell_rule(Some("rm"))];
         assert!(shell_tool("rm").all_covered_by(&allow_rules));
         assert!(!shell_tool("rm -rf /").all_covered_by(&allow_rules));
+
+        // Bare prefix match is word-boundary, not substring — "rm" must not match "rmbackup"
+        assert!(!shell_tool("rmbackup").matches_rule(&deny_rule));
+        assert!(!shell_tool("rmbackup /tmp").matches_rule(&deny_rule));
     }
 
     // ── Unix-specific tests (absolute paths with forward slashes) ──
