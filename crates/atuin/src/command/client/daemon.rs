@@ -16,7 +16,7 @@ use clap::Subcommand;
 use daemonize::Daemonize;
 use eyre::{Result, WrapErr, bail, eyre};
 use fs4::fs_std::FileExt;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 
 #[derive(clap::Args, Debug)]
 pub struct Cmd {
@@ -232,15 +232,20 @@ async fn probe(settings: &Settings) -> Probe {
         Err(err) => return Probe::Unreachable(err),
     };
 
-    match client.status().await {
-        Ok(status) => {
+    let cap = rpc_timeout(settings);
+    match timeout(cap, client.status()).await {
+        Ok(Ok(status)) => {
             if daemon_matches_expected(&status.version, status.protocol) {
                 Probe::Ready(client)
             } else {
                 Probe::NeedsRestart(daemon_mismatch_message(&status.version, status.protocol))
             }
         }
-        Err(err) => Probe::Unreachable(err),
+        Ok(Err(err)) => Probe::Unreachable(err),
+        Err(_elapsed) => Probe::Unreachable(eyre!(
+            "daemon status request timed out after {}ms",
+            cap.as_millis()
+        )),
     }
 }
 
@@ -270,6 +275,15 @@ fn spawn_daemon_process() -> Result<()> {
 
 fn startup_timeout(settings: &Settings) -> Duration {
     Duration::from_secs_f64(settings.local_timeout.max(0.5) + 2.0)
+}
+
+// A daemon that accepts the socket but never responds (crash loop mid-boot,
+// systemd StartLimitBurst while the socket stays held) wedges gRPC with no
+// built-in deadline. Bound each shell-blocking RPC with the same cap the rest
+// of the client uses for local IO so the hook either gets an answer or fails
+// fast enough for the shell to continue.
+fn rpc_timeout(settings: &Settings) -> Duration {
+    Duration::from_secs_f64(settings.local_timeout.max(0.5))
 }
 
 #[cfg(unix)]
@@ -406,15 +420,17 @@ fn ensure_reply_compatible(settings: &Settings, version: &str, protocol: u32) ->
 }
 
 pub async fn start_history(settings: &Settings, history: History) -> Result<String> {
-    match async {
+    let cap = rpc_timeout(settings);
+    let attempt = timeout(cap, async {
         connect_client(settings)
             .await?
             .start_history(history.clone())
             .await
-    }
-    .await
-    {
-        Ok(resp) => {
+    })
+    .await;
+
+    match attempt {
+        Ok(Ok(resp)) => {
             if daemon_matches_expected(&resp.version, resp.protocol) {
                 return Ok(resp.id);
             }
@@ -426,29 +442,48 @@ pub async fn start_history(settings: &Settings, history: History) -> Result<Stri
                 ));
             }
         }
-        Err(err) if !settings.daemon.autostart => return Err(err),
-        Err(err) if !should_retry_after_error(&err) => return Err(err),
-        Err(_) => {}
+        Ok(Err(err)) if !settings.daemon.autostart => return Err(err),
+        Ok(Err(err)) if !should_retry_after_error(&err) => return Err(err),
+        Ok(Err(_)) => {}
+        Err(_elapsed) if !settings.daemon.autostart => {
+            return Err(eyre!(
+                "daemon start_history timed out after {}ms",
+                cap.as_millis()
+            ));
+        }
+        Err(_elapsed) => {
+            tracing::debug!(
+                "daemon start_history exceeded {}ms, restarting",
+                cap.as_millis()
+            );
+        }
     }
 
-    let resp = restart_daemon(settings)
-        .await?
-        .start_history(history)
-        .await?;
+    let mut client = restart_daemon(settings).await?;
+    let resp = timeout(cap, client.start_history(history))
+        .await
+        .map_err(|_| {
+            eyre!(
+                "daemon start_history timed out after {}ms following restart",
+                cap.as_millis()
+            )
+        })??;
     ensure_reply_compatible(settings, &resp.version, resp.protocol)?;
     Ok(resp.id)
 }
 
 pub async fn end_history(settings: &Settings, id: String, duration: u64, exit: i64) -> Result<()> {
-    match async {
+    let cap = rpc_timeout(settings);
+    let attempt = timeout(cap, async {
         connect_client(settings)
             .await?
             .end_history(id.clone(), duration, exit)
             .await
-    }
-    .await
-    {
-        Ok(resp) => {
+    })
+    .await;
+
+    match attempt {
+        Ok(Ok(resp)) => {
             if daemon_matches_expected(&resp.version, resp.protocol) {
                 return Ok(());
             }
@@ -465,15 +500,32 @@ pub async fn end_history(settings: &Settings, id: String, duration: u64, exit: i
             let _ = restart_daemon(settings).await;
             return Ok(());
         }
-        Err(err) if !settings.daemon.autostart => return Err(err),
-        Err(err) if !should_retry_after_error(&err) => return Err(err),
-        Err(_) => {}
+        Ok(Err(err)) if !settings.daemon.autostart => return Err(err),
+        Ok(Err(err)) if !should_retry_after_error(&err) => return Err(err),
+        Ok(Err(_)) => {}
+        Err(_elapsed) if !settings.daemon.autostart => {
+            return Err(eyre!(
+                "daemon end_history timed out after {}ms",
+                cap.as_millis()
+            ));
+        }
+        Err(_elapsed) => {
+            tracing::debug!(
+                "daemon end_history exceeded {}ms, restarting",
+                cap.as_millis()
+            );
+        }
     }
 
-    let resp = restart_daemon(settings)
-        .await?
-        .end_history(id, duration, exit)
-        .await?;
+    let mut client = restart_daemon(settings).await?;
+    let resp = timeout(cap, client.end_history(id, duration, exit))
+        .await
+        .map_err(|_| {
+            eyre!(
+                "daemon end_history timed out after {}ms following restart",
+                cap.as_millis()
+            )
+        })??;
     ensure_reply_compatible(settings, &resp.version, resp.protocol)?;
     Ok(())
 }
