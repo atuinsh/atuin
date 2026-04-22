@@ -875,7 +875,7 @@ Which preview strategy is used to calculate the preview height. It respects `max
 By using `auto` a preview is shown, if the command is longer than the width of the terminal.
 
 ```toml
-strategy = auto
+strategy = "auto"
 ```
 
 ## Daemon
