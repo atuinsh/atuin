@@ -79,7 +79,7 @@ allow = ["AtuinHistory"]
 
 ### Read
 
-The `Read` tool allows Atuin AI to read files on your system. Atuin AI might ask to use this tool when you ask it to analyze the contents of a file, when you ask for edits to the contents of a file, or when you ask a question that is most easily asnwered by consulting the contents of a file.
+The `Read` tool allows Atuin AI to read files on your system. Atuin AI might ask to use this tool when you ask it to analyze the contents of a file, when you ask for edits to the contents of a file, or when you ask a question that is most easily answered by consulting the contents of a file.
 
 ![Example of Atuin FS Tools](../images/tool_fs.png)
 
