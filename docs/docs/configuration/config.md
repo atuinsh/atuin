@@ -224,6 +224,9 @@ With workspace filtering enabled, Atuin will filter for commands executed in any
 within a git repository tree.
 
 Filter modes can still be toggled via ctrl-r.
+```toml
+workspaces = false
+```
 
 ### `style`
 
@@ -240,6 +243,10 @@ Which style to use. Possible values: `auto`, `full` and `compact`.
 ![full](https://user-images.githubusercontent.com/1710904/161623547-42afbfa7-a3ef-4820-bacd-fcaf1e324969.png)
 
 This means that Atuin will automatically switch to `compact` mode when the terminal window is too short for `full` to display properly.
+
+```toml
+style = "compact"
+```
 
 ### `invert`
 
@@ -261,6 +268,10 @@ Set the maximum number of lines Atuin's interface should take up.
 
 If set to `0`, Atuin will always take up as many lines as available (full screen).
 
+```toml
+inline_height = 40
+```
+
 ### `show_preview`
 
 Default: `true`
@@ -268,6 +279,10 @@ Default: `true`
 Configure whether or not to show a preview of the selected command.
 
 Useful when the command is longer than the terminal width and is cut off.
+
+```toml
+show_preview = true
+```
 
 ### `max_preview_height`
 
@@ -279,6 +294,10 @@ Configure the maximum height of the preview to show.
 
 Useful when you have long scripts in your history that you want to distinguish by more than the first few lines.
 
+```toml
+max_preview_height = 4
+```
+
 ### `show_help`
 
 Atuin version: >= 17.0
@@ -287,6 +306,10 @@ Default: `true`
 
 Configure whether or not to show the help row, which includes the current Atuin version (and whether an update is available), a keymap hint, and the total amount of commands in your history.
 
+```toml
+show_help = true
+```
+
 ### `show_tabs`
 
 Atuin version: >= 18.0
@@ -294,6 +317,9 @@ Atuin version: >= 18.0
 Default: `true`
 
 Configure whether or not to show tabs for search and inspect.
+```toml
+show_tabs = true
+```
 
 ### `auto_hide_height`
 
@@ -304,6 +330,10 @@ Default: `8`
 Set Atuin to hide lines when a minimum number of rows is subceeded. This has no effect except
 when `compact` style is being used (see `style` above), and currently applies to only the
 interactive search and inspector. It can be turned off entirely by setting to `0`.
+
+```toml
+auto_hide_height = 8
+```
 
 ### `exit_mode`
 
@@ -417,6 +447,10 @@ Default: `true`
 
 Whether to show numeric shortcuts (1..9) beside list items in the TUI. Set this to `false` to hide the moving numbers if you find them distracting.
 
+```toml
+show_numeric_shortcuts = true
+```
+
 ### `network_timeout`
 
 Atuin version: >= 18.0
@@ -427,6 +461,10 @@ The max amount of time (in seconds) to wait for a network request. If any
 operations with a sync server take longer than this, the code will fail -
 rather than wait indefinitely.
 
+```toml
+network_timeout = 30
+```
+
 ### `network_connect_timeout`
 
 Atuin version: >= 18.0
@@ -436,6 +474,10 @@ Default: `5`
 The max time (in seconds) we wait for a connection to become established with a
 remote sync server. Any longer than this and the request will fail.
 
+```toml
+network_connect_timeout = 5
+``` 
+
 ### `local_timeout`
 
 Atuin version: >= 18.0
@@ -444,6 +486,10 @@ Default: `5`
 
 Timeout (in seconds) for acquiring a local database connection (sqlite).
 
+```toml
+local_timeout = 5
+```
+
 ### `command_chaining`
 
 Atuin version: >= 18.8
@@ -451,6 +497,10 @@ Atuin version: >= 18.8
 Default: `false`
 
 Allows building a command chain with the `&&` or `||` operator. When enabled, opening atuin will search for the next command in the chain, and append to the current buffer.
+
+```toml
+command_chaining = false
+```
 
 ### `enter_accept`
 
@@ -465,6 +515,10 @@ shell and give the user a chance to edit.
 This technically defaults to true for new users, but false for existing. We
 have set `enter_accept = true` in the default config file. This is likely to
 change to be the default for everyone in a later release.
+
+```toml
+enter_accept = false
+```
 
 ### `keymap_mode`
 
@@ -518,6 +572,10 @@ Enable this, and Atuin will reduce motion in the TUI as much as possible. Users
 with motion sensitivity can find the live-updating timestamps distracting.
 
 Alternatively, set env var NO_MOTION
+
+```toml
+prefers_reduced_motion = false
+```
 
 ## search
 
@@ -747,6 +805,10 @@ Default: `true`
 
 Exits the TUI when scrolling left while the cursor is at the start of the line.
 
+```toml
+exit_past_line_start = true
+```
+
 ### `accept_past_line_end`
 
 Atuin version: >= 18.5
@@ -755,6 +817,10 @@ Default: `true`
 
 The right arrow key performs the same functionality as Tab and copies the selected line to the command line to be
 modified.
+
+```toml
+accept_past_line_end = true
+```
 
 ### `accept_past_line_start`
 
@@ -765,6 +831,10 @@ Default: `false`
 The left arrow key performs the same functionality as Tab and copies the selected line to the command line to be
 modified.
 
+```toml
+accept_past_line_start = true
+```
+
 ### `accept_with_backspace`
 
 Atuin version: >= 18.9
@@ -774,12 +844,16 @@ Default: `false`
 The backspace key performs the same functionality as Tab and copies the selected line to the command line to be
 modified.
 
+```toml
+accept_with_backspace = false
+```
+
 ## preview
 
 This section of the client config is specifically for configuring preview-related settings.
 (In the future the other 2 preview settings will be moved here.)
 
-```
+```toml
 [preview]
 strategy = [...]
 ```
@@ -799,6 +873,10 @@ Which preview strategy is used to calculate the preview height. It respects `max
 | fixed          | use `max_preview_height` as fixed value             |
 
 By using `auto` a preview is shown, if the command is longer than the width of the terminal.
+
+```toml
+strategy = auto
+```
 
 ## Daemon
 
@@ -886,6 +964,14 @@ tcp_port = 8889
 Atuin version: >= 18.13
 
 Behavior of log files.
+
+```toml
+[logs]
+enabled = true
+dir = "~/.atuin/logs"
+level = "info"
+retention = 4
+```
 
 ### enabled
 
