@@ -1284,8 +1284,12 @@ mod adversarial {
             name: "LS".into(),
             full: "LS -la".into(),
         }];
+        // Case matters
+        assert!(!any_subcommand_matches(&commands, "ls *"));
+        assert!(any_subcommand_matches(&commands, "LS *"));
+        // Bare exact match is case-sensitive too
         assert!(!any_subcommand_matches(&commands, "ls"));
-        assert!(any_subcommand_matches(&commands, "LS"));
+        assert!(!any_subcommand_matches(&commands, "LS")); // "LS" != "LS -la"
     }
 
     #[test]
