@@ -105,7 +105,6 @@ spec:
     spec:
       containers:
         - args:
-            - server
             - start
           env:
             - name: ATUIN_DB_URI

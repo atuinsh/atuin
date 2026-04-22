@@ -1,5 +1,11 @@
 # Systemd
 
+!!! note
+    These instructions assume the `atuin-server` binary is on your `PATH`. Since
+    v18.12.0, the server is distributed as a separate binary — install it from
+    the [releases page](https://github.com/atuinsh/atuin/releases) (see [Server
+    setup](./server-setup.md) for the installer).
+
 First, create the service unit file
 [`atuin-server.service`](https://github.com/atuinsh/atuin/raw/main/systemd/atuin-server.service) at
 `/etc/systemd/system/atuin-server.service` with contents like this:
@@ -11,7 +17,7 @@ After=network-online.target
 Wants=network-online.target systemd-networkd-wait-online.service
 
 [Service]
-ExecStart=atuin server start
+ExecStart=atuin-server start
 Restart=on-failure
 User=atuin
 Group=atuin
