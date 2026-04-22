@@ -57,7 +57,7 @@ pub(crate) async fn walk(start: &Path, global_path: Option<&Path>) -> Result<Vec
     // Sort shallowest-first (highest depth index = shallowest ancestor).
     // The global file has the highest depth index so it sorts last... but we
     // actually want global first, then root → cwd. Reverse the depth ordering.
-    found.sort_by(|a, b| b.depth.cmp(&a.depth));
+    found.sort_by_key(|b| std::cmp::Reverse(b.depth));
 
     Ok(found.into_iter().map(|f| f.file).collect())
 }

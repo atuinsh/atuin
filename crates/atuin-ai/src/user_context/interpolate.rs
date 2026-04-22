@@ -147,7 +147,7 @@ async fn run_command(shell: &str, body: &str) -> String {
     match result {
         Ok(Ok(output)) => {
             if output.status.success() {
-                let stdout = if output.stdout.len() > MAX_OUTPUT_BYTES {
+                if output.stdout.len() > MAX_OUTPUT_BYTES {
                     let truncated = String::from_utf8_lossy(&output.stdout[..MAX_OUTPUT_BYTES]);
                     format!(
                         "{}\n[output truncated at {}KB]",
@@ -156,8 +156,7 @@ async fn run_command(shell: &str, body: &str) -> String {
                     )
                 } else {
                     String::from_utf8_lossy(&output.stdout).trim().to_string()
-                };
-                stdout
+                }
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
                 let code = output.status.code().unwrap_or(-1);
