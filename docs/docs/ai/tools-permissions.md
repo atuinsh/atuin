@@ -2,9 +2,6 @@
 
 Atuin AI has a number of tools that it can use to interact with your system, given your permission. The AI can use these tools to help answer questions and perform actions on your behalf.
 
-!!! note "More tools coming soon"
-We will be expanding the list of tools that Atuin AI can use over time.
-
 ## Permission System
 
 By default, Atuin AI asks your permission before using any client-side tool. You can change these defaults using a _permission file_.
@@ -43,7 +40,7 @@ Most rules can be scoped to a particular path or other context. For example, you
 
 ### Example Config
 
-Here's an example of a permission file that allows Atuin AI to read and write any markdown files in the current project, but denies it access to any `.env` files. Attempts to read or write any _other_ files will result in Atuin AI requesting permission before proceeding.
+Here's an example of a permission file that allows Atuin AI to read and write any markdown files in the current project (because Write implies Read — see below), but denies it access to any `.env` files. Attempts to read or write any _other_ files will result in Atuin AI requesting permission before proceeding.
 
 ```toml
 [permissions]
