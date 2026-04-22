@@ -832,7 +832,7 @@ The left arrow key performs the same functionality as Tab and copies the selecte
 modified.
 
 ```toml
-accept_past_line_start = true
+accept_past_line_start = false
 ```
 
 ### `accept_with_backspace`
