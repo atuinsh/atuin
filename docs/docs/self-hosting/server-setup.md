@@ -6,17 +6,25 @@ The requirements to do so are pretty minimal! You need to be able to run a binar
 
 Atuin also supports sqlite 3 and above.
 
-Any host with the `atuin` binary may also run a server, by running
+The server is distributed as a separate binary, `atuin-server`. Prebuilt binaries and an installer are published with every release on the [GitHub releases page](https://github.com/atuinsh/atuin/releases). For example, to install the latest release:
 
 ```shell
-atuin server start
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/atuinsh/atuin/releases/latest/download/atuin-server-installer.sh | sh
 ```
+
+Once installed, start the server with:
+
+```shell
+atuin-server start
+```
+
+!!! note
+    Prior to v18.12.0, the server was bundled into the main `atuin` binary and started with `atuin server start`. If you are upgrading from an older release, you will need to install the new `atuin-server` binary and update any service files (systemd, docker, k8s) to invoke `atuin-server` instead of `atuin server`. See the [release notes](https://github.com/atuinsh/atuin/releases) for details.
 
 ## Configuration
 
-The config for the server is kept separate from the config for the client, even
-though they are the same binary. Server config can be found at
-`~/.config/atuin/server.toml`.
+The server's config lives at `~/.config/atuin/server.toml`, separate from the
+client's config.
 
 It looks something like this for PostgreSQL:
 

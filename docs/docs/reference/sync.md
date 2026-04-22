@@ -4,7 +4,7 @@ Atuin can back up your history to a server, and use this to ensure multiple
 machines have the same shell history. This is all encrypted end-to-end, so the
 server operator can _never_ see your data!
 
-Anyone can host a server (try `atuin server start`, more docs to follow), but I
+Anyone can host a server (see the [self-hosting docs](../self-hosting/server-setup.md)), but I
 host one at https://api.atuin.sh. This is the default server address, which can
 be changed in the [config](../configuration/config.md#sync_address). Again, I _cannot_ see your data, and
 do not want to.
