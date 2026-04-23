@@ -775,6 +775,13 @@ async fn run_stream_bridge(
     use crate::stream::{StreamContent, StreamControl, StreamFrame, create_chat_stream};
     use futures::StreamExt;
 
+    // Gather user context files (TERMINAL.md) and interpolate commands.
+    let shell = client_ctx.shell.as_deref().unwrap_or("sh");
+    let start_dir = std::env::current_dir().unwrap_or_default();
+    let global_ctx_path = crate::user_context::global_context_path();
+    let user_contexts =
+        crate::user_context::gather(&start_dir, Some(&global_ctx_path), shell).await;
+
     let stream = create_chat_stream(
         app_ctx.endpoint.clone(),
         app_ctx.token.clone(),
@@ -782,6 +789,7 @@ async fn run_stream_bridge(
         client_ctx,
         app_ctx.send_cwd,
         app_ctx.last_command.clone(),
+        user_contexts,
     );
     futures::pin_mut!(stream);
 

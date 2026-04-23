@@ -100,6 +100,7 @@ pub(crate) fn create_chat_stream(
     client_ctx: ClientContext,
     send_cwd: bool,
     last_command: Option<String>,
+    user_contexts: Vec<crate::user_context::UserContext>,
 ) -> std::pin::Pin<Box<dyn futures::Stream<Item = Result<StreamFrame>> + Send>> {
     Box::pin(async_stream::stream! {
         ensure_crypto_provider();
@@ -115,10 +116,18 @@ pub(crate) fn create_chat_stream(
 
         let context = client_ctx.to_json(send_cwd, last_command.as_deref());
 
+        let mut config = serde_json::json!({
+            "capabilities": request.capabilities,
+        });
+
+        if !user_contexts.is_empty() {
+            config["user_contexts"] = serde_json::json!(user_contexts);
+        }
+
         let mut request_body = serde_json::json!({
             "messages": request.messages,
             "context": context,
-            "capabilities": request.capabilities,
+            "config": config,
             "invocation_id": request.invocation_id
         });
 
