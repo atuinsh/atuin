@@ -73,7 +73,7 @@ pub(crate) fn ai_view(state: &ViewState) -> Elements {
                         user_turn_view(events, index == 0)
                     }
                     turn::UiTurn::Agent { events } => {
-                        agent_turn_view(events, busy && index == last_index)
+                        agent_turn_view(events, busy && index == last_index, state.tools.awaiting_permission().is_some())
                     }
                     turn::UiTurn::OutOfBand { events } => {
                         out_of_band_turn_view(events)
@@ -85,7 +85,7 @@ pub(crate) fn ai_view(state: &ViewState) -> Elements {
                 let needs_pending_banner = busy && !matches!(turns.last(), Some(turn::UiTurn::Agent { .. }));
                 if needs_pending_banner {
                     let empty: &[turn::UiEvent] = &[];
-                    agent_turn_view(empty, true)
+                    agent_turn_view(empty, true, false)
                 } else {
                     element! {}
                 }
@@ -170,6 +170,7 @@ fn tool_call_view(tool_call: &crate::fsm::tools::TrackedTool, in_git_project: bo
         ClientToolCall::Write(tool) => tool.path.display().to_string(),
         ClientToolCall::Shell(tool) => tool.command.clone(),
         ClientToolCall::AtuinHistory(tool) => tool.query.clone(),
+        ClientToolCall::LoadSkill(tool) => format!("skill: {}", tool.name),
     };
 
     let select_options = permission_options_for_tool(&tool_call.tool, in_git_project);
@@ -273,21 +274,16 @@ fn user_turn_view(events: &[turn::UiEvent], first_turn: bool) -> Elements {
     }
 }
 
-fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
+fn agent_turn_view(events: &[turn::UiEvent], busy: bool, showing_ui: bool) -> Elements {
     let label_style = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
 
     element! {
         View {
-            Spinner(
-                label: " Atuin AI ",
-                label_style: label_style.reversed(),
-                done_label_style: label_style.reversed(),
-                hide_checkmark: true,
-                label_first: true,
-                done: !busy,
-            )
+            Text {
+                Span(text: " Atuin AI ", style: label_style.reversed())
+            }
             #(for (i, event) in events.iter().enumerate() {
                 #(if i > 0 {
                     Text { Span(text: "") }
@@ -325,7 +321,8 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
                                         tool_status_view(&details.name, &details.status)
                                     },
                                     turn::ToolRenderData::FileRead { .. }
-                                    | turn::ToolRenderData::HistorySearch { .. } => {
+                                    | turn::ToolRenderData::HistorySearch { .. }
+                                    | turn::ToolRenderData::SkillLoad { .. } => {
                                         element!{}
                                     },
                                 })
@@ -349,6 +346,15 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
                     }
                     _ => element!{}
                 })
+            })
+
+            #(if busy && !showing_ui {
+                View(key: "agent-working-spinner", padding_left: Cells::from(2), padding_top: Cells::from(1)) {
+                    Spinner(
+                        label: "",
+                        spinner_style: Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    )
+                }
             })
         }
     }

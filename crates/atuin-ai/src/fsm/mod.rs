@@ -309,6 +309,33 @@ impl AgentFsm {
                 vec![]
             }
 
+            (
+                AgentState::Idle { .. },
+                Event::SkillLoaded {
+                    name,
+                    arguments,
+                    content,
+                },
+            ) => {
+                self.ctx.events.push(ConversationEvent::SkillInvocation {
+                    name,
+                    arguments,
+                    content,
+                });
+                self.ctx.current_response.clear();
+                self.ctx.current_turn_tool_ids.clear();
+
+                let messages = self.build_messages();
+                let session_id = self.ctx.session_id.clone();
+                self.state = AgentState::Turn {
+                    stream: StreamPhase::Connecting,
+                };
+                vec![Effect::StartStream {
+                    messages,
+                    session_id,
+                }]
+            }
+
             // ================================================================
             // Turn — stream lifecycle
             // ================================================================
@@ -581,6 +608,29 @@ impl AgentFsm {
 
             (_, Event::SlashCommand { command, content }) => {
                 self.handle_slash_command(&command, &content);
+                vec![]
+            }
+
+            // RequestSkillLoad during non-idle: still emit the effect
+            (_, Event::RequestSkillLoad { name, arguments }) => {
+                vec![Effect::LoadSkill { name, arguments }]
+            }
+
+            // SkillLoaded during non-idle: queue so it's visible
+            // in context for the next turn.
+            (
+                _,
+                Event::SkillLoaded {
+                    name,
+                    arguments,
+                    content,
+                },
+            ) => {
+                self.ctx.events.push(ConversationEvent::SkillInvocation {
+                    name,
+                    arguments,
+                    content,
+                });
                 vec![]
             }
 

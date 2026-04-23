@@ -101,6 +101,7 @@ nav:
       - Introduction: ai/introduction.md
       - Settings: ai/settings.md
       - "User-Defined Context": ai/user-context.md
+      - Skills: ai/skills.md
       - "Tools & Permissions": ai/tools-permissions.md
   - Known Issues: known-issues.md
   - Integrations: integrations.md

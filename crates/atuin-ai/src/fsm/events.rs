@@ -92,6 +92,23 @@ pub(crate) enum Event {
     /// The driver resolves known commands (like /help) and passes the
     /// rendered content; the FSM just pushes an OOB event.
     SlashCommand { command: String, content: String },
+
+    // ─── Skills ────────────────────────────────────────────────
+    /// User invoked a skill via /skill-name. FSM emits a LoadSkill
+    /// effect; the driver loads the content asynchronously and sends
+    /// SkillLoaded when ready.
+    RequestSkillLoad {
+        name: String,
+        arguments: Option<String>,
+    },
+    /// A skill's content has been loaded and interpolated.
+    /// Pushes skill content as OOB context and starts a turn so the
+    /// LLM sees the skill and acts on it.
+    SkillLoaded {
+        name: String,
+        arguments: Option<String>,
+        content: String,
+    },
 }
 
 /// Result of the permission resolver check.

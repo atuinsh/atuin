@@ -63,6 +63,7 @@ shellexpand = { workspace = true }
 imara-diff = { workspace = true }
 xxhash-rust = { workspace = true }
 vt100 = { workspace = true }
+yaml-rust2 = "0.11"
 tempfile = { workspace = true }
 chrono = "0.4"
 chrono-humanize = "0.2"

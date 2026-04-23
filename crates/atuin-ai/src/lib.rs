@@ -9,6 +9,7 @@ pub(crate) mod file_tracker;
 pub(crate) mod fsm;
 pub(crate) mod permissions;
 pub(crate) mod session;
+pub(crate) mod skills;
 pub(crate) mod snapshots;
 pub(crate) mod store;
 pub(crate) mod stream;

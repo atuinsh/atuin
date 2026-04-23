@@ -158,6 +158,7 @@ pub(crate) enum ClientToolCall {
     Write(WriteToolCall),
     Shell(ShellToolCall),
     AtuinHistory(AtuinHistoryToolCall),
+    LoadSkill(LoadSkillToolCall),
 }
 
 impl TryFrom<(&str, &serde_json::Value)> for ClientToolCall {
@@ -172,6 +173,9 @@ impl TryFrom<(&str, &serde_json::Value)> for ClientToolCall {
             "atuin_history" => Ok(ClientToolCall::AtuinHistory(
                 AtuinHistoryToolCall::try_from(input)?,
             )),
+            "load_skill" => Ok(ClientToolCall::LoadSkill(LoadSkillToolCall::try_from(
+                input,
+            )?)),
             _ => Err(eyre::eyre!("Unknown tool call: {name}")),
         }
     }
@@ -185,6 +189,7 @@ impl ClientToolCall {
             ClientToolCall::Write(_) => descriptor::WRITE,
             ClientToolCall::Shell(_) => descriptor::SHELL,
             ClientToolCall::AtuinHistory(_) => descriptor::ATUIN_HISTORY,
+            ClientToolCall::LoadSkill(_) => descriptor::LOAD_SKILL,
         }
     }
 
@@ -200,6 +205,7 @@ impl ClientToolCall {
             ClientToolCall::Write(_) => "Write",
             ClientToolCall::Shell(_) => "Shell",
             ClientToolCall::AtuinHistory(_) => "AtuinHistory",
+            ClientToolCall::LoadSkill(_) => "LoadSkill",
         }
     }
 
@@ -210,7 +216,9 @@ impl ClientToolCall {
             ClientToolCall::Read(tool) => Some(tool.resolved_path()),
             ClientToolCall::Edit(tool) => Some(tool.resolved_path()),
             ClientToolCall::Write(tool) => Some(tool.resolved_path()),
-            _ => None,
+            ClientToolCall::Shell(_)
+            | ClientToolCall::AtuinHistory(_)
+            | ClientToolCall::LoadSkill(_) => None,
         }
     }
 
@@ -221,6 +229,7 @@ impl ClientToolCall {
             ClientToolCall::Write(tool) => tool.matches_rule(rule),
             ClientToolCall::Shell(tool) => tool.matches_rule(rule),
             ClientToolCall::AtuinHistory(tool) => tool.matches_rule(rule),
+            ClientToolCall::LoadSkill(tool) => tool.matches_rule(rule),
         }
     }
 
@@ -231,6 +240,7 @@ impl ClientToolCall {
             ClientToolCall::Write(tool) => tool.target_dir(),
             ClientToolCall::Shell(tool) => tool.target_dir(),
             ClientToolCall::AtuinHistory(tool) => tool.target_dir(),
+            ClientToolCall::LoadSkill(tool) => tool.target_dir(),
         }
     }
 
@@ -239,6 +249,10 @@ impl ClientToolCall {
         match self {
             ClientToolCall::Read(tool) => tool.execute(),
             ClientToolCall::AtuinHistory(tool) => tool.execute(db).await,
+            // LoadSkill is handled separately by the driver (needs registry access)
+            ClientToolCall::LoadSkill(_) => {
+                ToolOutcome::Error("LoadSkill must be executed via the driver".to_string())
+            }
             _ => ToolOutcome::Error("Client-side tool execution not yet implemented".to_string()),
         }
     }
@@ -271,12 +285,20 @@ impl PermissableToolCall for ClientToolCall {
     fn all_covered_by(&self, rules: &[Rule]) -> bool {
         match self {
             ClientToolCall::Shell(tool) => tool.all_covered_by(rules),
+            // LoadSkill is always auto-approved, but support rules for completeness
             _ => rules.iter().any(|r| self.matches_rule(r)),
         }
     }
 
     fn target_dir(&self) -> Option<&Path> {
         self.target_dir()
+    }
+}
+
+/// Returns true if this tool call should bypass the permission system entirely.
+impl ClientToolCall {
+    pub(crate) fn is_auto_approved(&self) -> bool {
+        matches!(self, ClientToolCall::LoadSkill(_))
     }
 }
 
@@ -1194,6 +1216,36 @@ impl AtuinHistoryToolCall {
             .collect();
 
         ToolOutcome::Success(formatted.join("\n"))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LoadSkillToolCall {
+    pub name: String,
+}
+
+impl TryFrom<&serde_json::Value> for LoadSkillToolCall {
+    type Error = eyre::Error;
+
+    fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
+        let name = value
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or(eyre::eyre!("Missing skill name"))?;
+
+        Ok(LoadSkillToolCall {
+            name: name.to_string(),
+        })
+    }
+}
+
+impl PermissableToolCall for LoadSkillToolCall {
+    fn target_dir(&self) -> Option<&Path> {
+        None
+    }
+
+    fn matches_rule(&self, rule: &Rule) -> bool {
+        rule.tool == "LoadSkill"
     }
 }
 

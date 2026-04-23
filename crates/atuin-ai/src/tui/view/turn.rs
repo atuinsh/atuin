@@ -151,6 +151,8 @@ pub(crate) enum ToolRenderData {
         query: String,
         filter_modes: Vec<HistorySearchFilterMode>,
     },
+    /// Skill loading — read-only, auto-approved.
+    SkillLoad { _name: String },
     /// Server-side tool — no client rendering data available.
     Remote,
 }
@@ -256,6 +258,15 @@ impl<'a> TurnBuilder<'a> {
             }
             ConversationEvent::SystemContext { .. } => {
                 // Not rendered in the TUI — only sent to the API
+            }
+            ConversationEvent::SkillInvocation {
+                name, arguments, ..
+            } => {
+                let display = match arguments {
+                    Some(args) => format!("/{name} {args}"),
+                    None => format!("/{name}"),
+                };
+                self.add_user_message(&display);
             }
         }
     }
@@ -458,6 +469,9 @@ impl<'a> TurnBuilder<'a> {
                 ClientToolCall::AtuinHistory(history) => ToolRenderData::HistorySearch {
                     query: history.query.clone(),
                     filter_modes: history.filter_modes.clone(),
+                },
+                ClientToolCall::LoadSkill(skill) => ToolRenderData::SkillLoad {
+                    _name: skill.name.clone(),
                 },
             }
         } else {

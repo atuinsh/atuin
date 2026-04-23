@@ -5,7 +5,7 @@
 //! by walking the filesystem, commands are executed, and the interpolated
 //! content is sent to the server as `config.user_contexts`.
 
-mod interpolate;
+pub(crate) mod interpolate;
 mod walker;
 
 use std::path::Path;

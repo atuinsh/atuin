@@ -37,6 +37,14 @@ pub(crate) enum ConversationEvent {
     /// Context injected for the LLM that is not rendered in the TUI.
     /// Converted to a user message in the API protocol.
     SystemContext { content: String },
+    /// A skill was loaded and its content injected into the conversation.
+    /// Serialized as a full user message for the API but rendered compactly
+    /// in the TUI (just the `/name args` invocation line).
+    SkillInvocation {
+        name: String,
+        arguments: Option<String>,
+        content: String,
+    },
 }
 
 impl ConversationEvent {
@@ -49,6 +57,7 @@ impl ConversationEvent {
             ConversationEvent::ToolResult { .. } => true,
             ConversationEvent::OutOfBandOutput { .. } => false,
             ConversationEvent::SystemContext { .. } => false,
+            ConversationEvent::SkillInvocation { .. } => true,
         }
     }
 
@@ -203,6 +212,21 @@ pub(crate) fn events_to_messages(events: &[ConversationEvent]) -> Vec<serde_json
                 messages.push(serde_json::json!({
                     "role": "user",
                     "content": content
+                }));
+                i += 1;
+            }
+            ConversationEvent::SkillInvocation {
+                name,
+                arguments,
+                content,
+            } => {
+                let header = match arguments {
+                    Some(args) => format!("[Loaded skill: {name}]\n[Arguments: {args}]"),
+                    None => format!("[Loaded skill: {name}]"),
+                };
+                messages.push(serde_json::json!({
+                    "role": "user",
+                    "content": format!("{header}\n\n{content}")
                 }));
                 i += 1;
             }

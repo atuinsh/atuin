@@ -1,12 +1,17 @@
 # Sending Additional Context in Atuin AI
 
-Atuin AI allows you to send additional context to the LLM beyond just your prompt, similar to `AGENTS.md`.
+Atuin AI allows you to send additional context to the LLM beyond just your prompt, similar to `CLAUDE.md` or `AGENTS.md`.
 
 ## Additional Context Search Paths
 
 Atuin AI looks for additional context in `TERMINAL.md` and `.atuin/TERMINAL.md` files in the current directory and its parent directories. It also checks `TERMINAL.md` in your Atuin config directory (`~/.config/atuin/TERMINAL.md` by default). If it finds any of these files, it sends their contents as additional context to the LLM.
 
-Atuin AI will send at maximum 10 additional context files, prioritizing files found globally first and then other files in order of filesystem depth, shallowest to deepest, and each file is limited to 10,000 characters.
+- `.atuin/TERMINAL.md` — scoped inside the `.atuin` dotdir
+- `TERMINAL.md` — at the directory root (e.g. project root)
+
+It also checks `TERMINAL.md` in your Atuin config directory (`~/.config/atuin/TERMINAL.md` by default).
+
+If it finds any of these files, it sends their contents as additional context to the LLM. Atuin AI will send at maximum 10 additional context files, prioritizing files found globally first and then other files in order of filesystem depth, shallowest to deepest, and each file is limited to 10,000 characters.
 
 ## Dynamic Content
 

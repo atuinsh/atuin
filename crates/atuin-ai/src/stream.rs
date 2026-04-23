@@ -63,7 +63,10 @@ impl ChatRequest {
         capabilities: &AiCapabilities,
         invocation_id: String,
     ) -> Self {
-        let mut caps = vec!["client_invocations".to_string()];
+        let mut caps = vec![
+            "client_invocations".to_string(),
+            "client_v1_load_skill".to_string(),
+        ];
         if capabilities.enable_history_search.unwrap_or(true) {
             caps.push("client_v1_atuin_history".to_string());
         }
@@ -93,6 +96,7 @@ impl ChatRequest {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_chat_stream(
     hub_address: String,
     token: String,
@@ -101,6 +105,8 @@ pub(crate) fn create_chat_stream(
     send_cwd: bool,
     last_command: Option<String>,
     user_contexts: Vec<crate::user_context::UserContext>,
+    skill_summaries: Vec<crate::skills::SkillSummary>,
+    skill_overflow: Option<String>,
 ) -> std::pin::Pin<Box<dyn futures::Stream<Item = Result<StreamFrame>> + Send>> {
     Box::pin(async_stream::stream! {
         ensure_crypto_provider();
@@ -122,6 +128,13 @@ pub(crate) fn create_chat_stream(
 
         if !user_contexts.is_empty() {
             config["user_contexts"] = serde_json::json!(user_contexts);
+        }
+
+        if !skill_summaries.is_empty() {
+            config["skills"] = serde_json::json!(skill_summaries);
+            if let Some(ref overflow) = skill_overflow {
+                config["skills_overflow"] = serde_json::json!(overflow);
+            }
         }
 
         let mut request_body = serde_json::json!({
