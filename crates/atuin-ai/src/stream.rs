@@ -63,7 +63,10 @@ impl ChatRequest {
         capabilities: &AiCapabilities,
         invocation_id: String,
     ) -> Self {
-        let mut caps = vec!["client_invocations".to_string()];
+        let mut caps = vec![
+            "client_invocations".to_string(),
+            "client_v1_load_skill".to_string(),
+        ];
         if capabilities.enable_history_search.unwrap_or(true) {
             caps.push("client_v1_atuin_history".to_string());
         }
