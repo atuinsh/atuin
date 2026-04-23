@@ -255,8 +255,11 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
             } else if input == "/new" {
                 Some(Event::NewSession)
             } else if input.starts_with('/') {
-                if let Some(skill_name) = resolve_skill_name(&input, handle) {
-                    Some(Event::RequestSkillLoad { name: skill_name })
+                if let Some((skill_name, arguments)) = resolve_skill_name(&input, handle) {
+                    Some(Event::RequestSkillLoad {
+                        name: skill_name,
+                        arguments,
+                    })
                 } else {
                     let content = resolve_slash_command(&input, handle);
                     Some(Event::SlashCommand {
@@ -315,8 +318,11 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
             Some(Event::PermissionUserChoice { tool_id, choice })
         }
         AiTuiEvent::SlashCommand(cmd) => {
-            if let Some(skill_name) = resolve_skill_name(&cmd, handle) {
-                Some(Event::RequestSkillLoad { name: skill_name })
+            if let Some((skill_name, arguments)) = resolve_skill_name(&cmd, handle) {
+                Some(Event::RequestSkillLoad {
+                    name: skill_name,
+                    arguments,
+                })
             } else {
                 let content = resolve_slash_command(&cmd, handle);
                 Some(Event::SlashCommand {
@@ -330,13 +336,10 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
 
 /// Resolve a slash command to its output content.
 /// If the input starts with `/`, check whether the command name matches a
-/// registered skill. Returns `Some(skill_name)` if it does.
-fn resolve_skill_name(input: &str, handle: &Handle<ViewState>) -> Option<String> {
-    let cmd_name = input
-        .trim_start_matches('/')
-        .split_whitespace()
-        .next()?
-        .to_string();
+/// registered skill. Returns `Some((skill_name, arguments))` if it does.
+fn resolve_skill_name(input: &str, handle: &Handle<ViewState>) -> Option<(String, Option<String>)> {
+    let after_slash = input.trim_start_matches('/');
+    let cmd_name = after_slash.split_whitespace().next()?.to_string();
 
     let is_skill = handle
         .fetch({
@@ -346,7 +349,17 @@ fn resolve_skill_name(input: &str, handle: &Handle<ViewState>) -> Option<String>
         .blocking_recv()
         .unwrap_or(false);
 
-    is_skill.then_some(cmd_name)
+    if !is_skill {
+        return None;
+    }
+
+    let args = after_slash
+        .strip_prefix(&cmd_name)
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    Some((cmd_name, args))
 }
 
 fn resolve_slash_command(command: &str, handle: &Handle<ViewState>) -> String {
@@ -703,7 +716,8 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
                         .unwrap_or_else(|| "sh".to_string());
 
                     tokio::spawn(async move {
-                        let content = load_skill_content(&registry, &skill_name, &shell).await;
+                        let content =
+                            load_skill_content(&registry, &skill_name, &shell, None).await;
                         let outcome = crate::tools::ToolOutcome::Success(content);
                         let _ = tx.send(DriverEvent::Fsm(Event::ToolExecutionDone {
                             tool_id,
@@ -715,8 +729,9 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
             }
         }
 
-        Effect::LoadSkill { name } => {
+        Effect::LoadSkill { name, arguments } => {
             let name = name.clone();
+            let arguments = arguments.clone();
             let registry = io.skill_registry.clone();
             let shell = io
                 .client_ctx
@@ -725,7 +740,8 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
                 .unwrap_or_else(|| "sh".to_string());
             let tx = tx.clone();
             tokio::spawn(async move {
-                let content = load_skill_content(&registry, &name, &shell).await;
+                let content =
+                    load_skill_content(&registry, &name, &shell, arguments.as_deref()).await;
                 let _ = tx.send(DriverEvent::Fsm(Event::SkillLoaded { name, content }));
             });
         }
@@ -855,8 +871,9 @@ async fn load_skill_content(
     registry: &crate::skills::SkillRegistry,
     name: &str,
     shell: &str,
+    arguments: Option<&str>,
 ) -> String {
-    match registry.load(name, shell).await {
+    match registry.load(name, shell, arguments).await {
         Ok(body) => body,
         Err(e) => format!("Failed to load skill '{name}': {e}"),
     }

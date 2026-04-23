@@ -46,7 +46,10 @@ pub(crate) enum Effect {
     /// Kill a running tool (send interrupt to shell command).
     AbortTool { tool_id: String },
     /// Load a skill's content asynchronously (read + interpolate).
-    LoadSkill { name: String },
+    LoadSkill {
+        name: String,
+        arguments: Option<String>,
+    },
 
     // ─── Persistence ────────────────────────────────────────────
     /// Persist current conversation state to disk.

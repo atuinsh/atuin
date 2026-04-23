@@ -97,7 +97,10 @@ pub(crate) enum Event {
     /// User invoked a skill via /skill-name. FSM emits a LoadSkill
     /// effect; the driver loads the content asynchronously and sends
     /// SkillLoaded when ready.
-    RequestSkillLoad { name: String },
+    RequestSkillLoad {
+        name: String,
+        arguments: Option<String>,
+    },
     /// A skill's content has been loaded and interpolated.
     /// Pushes skill content as OOB context and starts a turn so the
     /// LLM sees the skill and acts on it.

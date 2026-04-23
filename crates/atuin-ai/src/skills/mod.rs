@@ -160,8 +160,13 @@ impl SkillRegistry {
         (summaries, overflow)
     }
 
-    /// Load a skill's full body content, with `!`` interpolation applied.
-    pub async fn load(&self, name: &str, shell: &str) -> Result<String> {
+    /// Load a skill's full body content, with argument substitution and
+    /// `!`` interpolation applied.
+    ///
+    /// `$ARGUMENTS` in the body is replaced with the provided arguments before
+    /// shell interpolation runs. If `$ARGUMENTS` does not appear in the body
+    /// and arguments were provided, they are appended as `ARGUMENTS: <value>`.
+    pub async fn load(&self, name: &str, shell: &str, arguments: Option<&str>) -> Result<String> {
         let skill = self
             .get(name)
             .ok_or_else(|| eyre!("Unknown skill: {name}"))?;
@@ -174,8 +179,29 @@ impl SkillRegistry {
             return Ok(format!("(Skill '{name}' has no body content)"));
         }
 
+        let body = substitute_arguments(&body, arguments);
+
         Ok(interpolate::interpolate(&body, shell).await)
     }
+}
+
+/// Replace `$ARGUMENTS` placeholders in skill body text.
+///
+/// If `$ARGUMENTS` appears in the body, all occurrences are replaced with the
+/// argument string (or empty string if none). If `$ARGUMENTS` does not appear
+/// and arguments were provided, they are appended on a new line.
+fn substitute_arguments(body: &str, arguments: Option<&str>) -> String {
+    let args = arguments.unwrap_or("");
+
+    if body.contains("$ARGUMENTS") {
+        return body.replace("$ARGUMENTS", args);
+    }
+
+    if !args.is_empty() {
+        return format!("{body}\n\nARGUMENTS: {args}");
+    }
+
+    body.to_string()
 }
 
 /// Sanitize a directory name into a valid skill name.
@@ -250,6 +276,44 @@ mod tests {
     #[test]
     fn truncate_description_short() {
         assert_eq!(truncate_description("short", 100), "short");
+    }
+
+    #[test]
+    fn substitute_arguments_replaces_placeholder() {
+        let body = "Deploy $ARGUMENTS to production.";
+        assert_eq!(
+            substitute_arguments(body, Some("patch")),
+            "Deploy patch to production."
+        );
+    }
+
+    #[test]
+    fn substitute_arguments_multiple_occurrences() {
+        let body = "Run $ARGUMENTS then verify $ARGUMENTS worked.";
+        assert_eq!(
+            substitute_arguments(body, Some("migrate")),
+            "Run migrate then verify migrate worked."
+        );
+    }
+
+    #[test]
+    fn substitute_arguments_appends_when_no_placeholder() {
+        let body = "Do the thing.";
+        let result = substitute_arguments(body, Some("extra context"));
+        assert!(result.starts_with("Do the thing."));
+        assert!(result.contains("ARGUMENTS: extra context"));
+    }
+
+    #[test]
+    fn substitute_arguments_no_args_no_placeholder() {
+        let body = "Just a body.";
+        assert_eq!(substitute_arguments(body, None), "Just a body.");
+    }
+
+    #[test]
+    fn substitute_arguments_no_args_clears_placeholder() {
+        let body = "Deploy $ARGUMENTS to production.";
+        assert_eq!(substitute_arguments(body, None), "Deploy  to production.");
     }
 
     #[test]

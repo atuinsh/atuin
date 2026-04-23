@@ -589,8 +589,8 @@ impl AgentFsm {
             }
 
             // RequestSkillLoad during non-idle: still emit the effect
-            (_, Event::RequestSkillLoad { name }) => {
-                vec![Effect::LoadSkill { name }]
+            (_, Event::RequestSkillLoad { name, arguments }) => {
+                vec![Effect::LoadSkill { name, arguments }]
             }
 
             // SkillLoaded during non-idle: queue as OOB so it's
