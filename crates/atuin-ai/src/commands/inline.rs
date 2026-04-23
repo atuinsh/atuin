@@ -364,14 +364,22 @@ fn build_view_state(
     let visible_events = fsm.ctx.events[safe_start..].to_vec();
     let archived_events = fsm.ctx.archived_events.clone();
 
-    let mut turn_builder = crate::tui::view::turn::TurnBuilder::new(&tools);
+    let mut archived_builder = crate::tui::view::turn::TurnBuilder::new(&tools);
     for event in &archived_events {
-        turn_builder.add_event(event);
+        archived_builder.add_event(event);
     }
+    let archived_turns = archived_builder.build();
+    let archived_turn_count = archived_turns.len();
+
+    let mut visible_builder =
+        crate::tui::view::turn::TurnBuilder::new_starting_at(&tools, archived_turn_count);
     for event in &visible_events {
-        turn_builder.add_event(event);
+        visible_builder.add_event(event);
     }
-    let turns = turn_builder.build();
+    let visible_turns = visible_builder.build();
+
+    let mut turns = archived_turns;
+    turns.extend(visible_turns);
 
     let has_command = visible_events.iter().any(|e| {
         matches!(e, ConversationEvent::ToolCall { name, input, .. }
@@ -393,6 +401,7 @@ fn build_view_state(
         turns,
         has_command,
         committed_turn_count: 0,
+        archived_turn_count,
         is_input_blank: true,
         slash_command_input: None,
         slash_command_search_results: Vec::new(),

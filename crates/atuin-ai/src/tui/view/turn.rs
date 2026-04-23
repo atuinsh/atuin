@@ -234,6 +234,15 @@ impl<'a> TurnBuilder<'a> {
         }
     }
 
+    pub(crate) fn new_starting_at(tracker: &'a ToolManager, start_id: usize) -> Self {
+        Self {
+            turns: Vec::new(),
+            current_turn: None,
+            tracker,
+            next_id: start_id,
+        }
+    }
+
     pub(crate) fn add_event(&mut self, event: &ConversationEvent) {
         match event {
             ConversationEvent::UserMessage { content } => {

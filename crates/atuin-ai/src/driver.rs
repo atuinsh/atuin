@@ -87,6 +87,7 @@ pub(crate) struct ViewState {
     pub turns: Vec<turn::UiTurn>,
     pub has_command: bool,
     pub committed_turn_count: usize,
+    pub archived_turn_count: usize,
 
     // ─── Ephemeral interaction state ────────────────────────────
     pub is_input_blank: bool,
@@ -287,11 +288,11 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
                     vs.slash_command_input = Some(query);
                     vs.slash_command_search_results = results;
                 } else {
-                    if vs.read().slash_command_input != None {
+                    if vs.read().slash_command_input.is_some() {
                         vs.slash_command_input = None;
                     }
 
-                    if vs.read().slash_command_search_results.len() > 0 {
+                    if !vs.read().slash_command_search_results.is_empty() {
                         vs.slash_command_search_results.clear();
                     }
                 }
@@ -415,14 +416,21 @@ fn sync_view_state(handle: &Handle<ViewState>, fsm: &AgentFsm, in_git_project: b
 
     // Pre-compute turns and has_command on the driver thread so the
     // render-thread view function doesn't redo O(n) work every frame.
-    let mut turn_builder = turn::TurnBuilder::new(&tools);
-    // for event in &archived_events {
-    //     turn_builder.add_event(event);
-    // }
-    for event in &visible_events {
-        turn_builder.add_event(event);
+    let mut archived_builder = turn::TurnBuilder::new(&tools);
+    for event in &archived_events {
+        archived_builder.add_event(event);
     }
-    let turns = turn_builder.build();
+    let archived_turns = archived_builder.build();
+    let archived_turn_count = archived_turns.len();
+
+    let mut visible_builder = turn::TurnBuilder::new_starting_at(&tools, archived_turn_count);
+    for event in &visible_events {
+        visible_builder.add_event(event);
+    }
+    let visible_turns = visible_builder.build();
+
+    let mut turns = archived_turns;
+    turns.extend(visible_turns);
 
     let has_command = visible_events.iter().any(|e| {
         if let ConversationEvent::ToolCall { name, input, .. } = e {
@@ -446,6 +454,7 @@ fn sync_view_state(handle: &Handle<ViewState>, fsm: &AgentFsm, in_git_project: b
         vs.archived_events = archived_events;
         vs.turns = turns;
         vs.has_command = has_command;
+        vs.archived_turn_count = archived_turn_count;
     });
 }
 
