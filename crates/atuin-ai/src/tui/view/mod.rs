@@ -170,6 +170,7 @@ fn tool_call_view(tool_call: &crate::fsm::tools::TrackedTool, in_git_project: bo
         ClientToolCall::Write(tool) => tool.path.display().to_string(),
         ClientToolCall::Shell(tool) => tool.command.clone(),
         ClientToolCall::AtuinHistory(tool) => tool.query.clone(),
+        ClientToolCall::LoadSkill(tool) => format!("skill: {}", tool.name),
     };
 
     let select_options = permission_options_for_tool(&tool_call.tool, in_git_project);
@@ -325,7 +326,8 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
                                         tool_status_view(&details.name, &details.status)
                                     },
                                     turn::ToolRenderData::FileRead { .. }
-                                    | turn::ToolRenderData::HistorySearch { .. } => {
+                                    | turn::ToolRenderData::HistorySearch { .. }
+                                    | turn::ToolRenderData::SkillLoad { .. } => {
                                         element!{}
                                     },
                                 })

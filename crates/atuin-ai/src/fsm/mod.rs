@@ -309,6 +309,10 @@ impl AgentFsm {
                 vec![]
             }
 
+            (AgentState::Idle { .. }, Event::SkillLoaded { name, content }) => {
+                self.start_turn(format!("[Loaded skill: {name}]\n\n{content}"))
+            }
+
             // ================================================================
             // Turn — stream lifecycle
             // ================================================================
@@ -581,6 +585,22 @@ impl AgentFsm {
 
             (_, Event::SlashCommand { command, content }) => {
                 self.handle_slash_command(&command, &content);
+                vec![]
+            }
+
+            // RequestSkillLoad during non-idle: still emit the effect
+            (_, Event::RequestSkillLoad { name }) => {
+                vec![Effect::LoadSkill { name }]
+            }
+
+            // SkillLoaded during non-idle: queue as OOB so it's
+            // visible in context for the next turn.
+            (_, Event::SkillLoaded { name, content }) => {
+                self.ctx.events.push(ConversationEvent::OutOfBandOutput {
+                    name: "Skill".to_string(),
+                    command: Some(format!("/{name}")),
+                    content: format!("[Loaded skill: {name}]\n\n{content}"),
+                });
                 vec![]
             }
 

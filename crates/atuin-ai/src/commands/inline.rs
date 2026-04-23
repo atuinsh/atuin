@@ -247,8 +247,15 @@ async fn run_inline_tui(
 
     let in_git_project = ctx.git_root.is_some();
 
+    // ─── Discover skills ───────────────────────────────────────
+    let project_root = ctx
+        .git_root
+        .clone()
+        .or_else(|| std::env::current_dir().ok());
+    let skill_registry = crate::skills::SkillRegistry::discover(project_root.as_deref()).await;
+
     // ─── Build initial ViewState from FSM ───────────────────────
-    let initial_view = build_view_state(&fsm, in_git_project);
+    let initial_view = build_view_state(&fsm, in_git_project, &skill_registry);
 
     // ─── Build IoContext ────────────────────────────────────────
     let io = IoContext {
@@ -258,6 +265,7 @@ async fn run_inline_tui(
         file_tracker,
         edit_permissions,
         snapshot_store,
+        skill_registry,
     };
 
     // ─── Channel + Application ──────────────────────────────────
@@ -324,8 +332,23 @@ impl DriverEventSender {
 
 /// Build a ViewState snapshot from FSM state. Used for the initial view
 /// and by the driver for ongoing sync.
-fn build_view_state(fsm: &AgentFsm, in_git_project: bool) -> ViewState {
+fn build_view_state(
+    fsm: &AgentFsm,
+    in_git_project: bool,
+    skill_registry: &crate::skills::SkillRegistry,
+) -> ViewState {
     let safe_start = fsm.ctx.view_start_index.min(fsm.ctx.events.len());
+
+    let mut slash_registry = crate::tui::slash::SlashCommandRegistry::default();
+    let mut skill_names = std::collections::HashSet::new();
+    for skill in skill_registry.all() {
+        slash_registry.register(crate::tui::slash::SlashCommand::new(
+            &skill.name,
+            &skill.description,
+        ));
+        skill_names.insert(skill.name.clone());
+    }
+
     ViewState {
         agent_state: fsm.state.clone(),
         visible_events: fsm.ctx.events[safe_start..].to_vec(),
@@ -341,7 +364,8 @@ fn build_view_state(fsm: &AgentFsm, in_git_project: bool) -> ViewState {
         slash_command_input: None,
         slash_command_search_results: Vec::new(),
         exit_action: None,
-        slash_registry: Default::default(),
+        slash_registry,
+        skill_names,
     }
 }
 
