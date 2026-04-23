@@ -1,14 +1,17 @@
-//! Filesystem traversal for `.atuin/ai-context.md` files.
+//! Filesystem traversal for `TERMINAL.md` context files.
 //!
-//! Walks from the starting directory up to the filesystem root, then checks the
-//! global config directory. Returns files ordered from shallowest (global/root)
-//! to deepest (most project-specific), so that context layers naturally from
+//! Walks from the starting directory up to the filesystem root, checking for
+//! `.atuin/TERMINAL.md` and `TERMINAL.md` at each level. Then checks the global
+//! config directory. Returns files ordered from shallowest (global/root) to
+//! deepest (most project-specific), so that context layers naturally from
 //! general to specific.
 
 use std::path::{Path, PathBuf};
 
 use eyre::Result;
 use tokio::task::JoinSet;
+
+const CONTEXT_FILENAME: &str = "TERMINAL.md";
 
 /// A context file found on disk, before interpolation.
 #[derive(Debug)]
@@ -22,8 +25,12 @@ struct FoundFile {
     file: RawContextFile,
 }
 
-/// Walk from `start` up to the filesystem root collecting `.atuin/ai-context.md`
-/// files, then check the global path. Returns files shallowest-first.
+/// Walk from `start` up to the filesystem root collecting `TERMINAL.md`
+/// context files, then check the global path. Returns files shallowest-first.
+///
+/// At each ancestor directory, checks two locations:
+/// - `.atuin/TERMINAL.md` (dotdir-scoped)
+/// - `TERMINAL.md` (project root)
 pub(crate) async fn walk(start: &Path, global_path: Option<&Path>) -> Result<Vec<RawContextFile>> {
     let dirs: Vec<PathBuf> = start.ancestors().map(PathBuf::from).collect();
     let dir_count = dirs.len();
@@ -31,10 +38,11 @@ pub(crate) async fn walk(start: &Path, global_path: Option<&Path>) -> Result<Vec
     let mut set: JoinSet<Result<Option<FoundFile>>> = JoinSet::new();
 
     for (index, dir) in dirs.into_iter().enumerate() {
+        let dir2 = dir.clone();
         set.spawn(async move {
-            let file_path = dir.join(".atuin").join("ai-context.md");
-            load_context_file(&file_path, index).await
+            load_context_file(&dir.join(".atuin").join(CONTEXT_FILENAME), index).await
         });
+        set.spawn(async move { load_context_file(&dir2.join(CONTEXT_FILENAME), index).await });
     }
 
     if let Some(global) = global_path {
@@ -62,9 +70,9 @@ pub(crate) async fn walk(start: &Path, global_path: Option<&Path>) -> Result<Vec
     Ok(found.into_iter().map(|f| f.file).collect())
 }
 
-/// The default global context file path (`~/.config/atuin/ai-context.md`).
+/// The default global context file path (`~/.config/atuin/TERMINAL.md`).
 pub(crate) fn global_context_path() -> PathBuf {
-    atuin_common::utils::config_dir().join("ai-context.md")
+    atuin_common::utils::config_dir().join(CONTEXT_FILENAME)
 }
 
 async fn load_context_file(path: &Path, depth: usize) -> Result<Option<FoundFile>> {

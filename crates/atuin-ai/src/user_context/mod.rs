@@ -1,9 +1,9 @@
-//! User-authored context files (`.atuin/ai-context.md`).
+//! User-authored context files (`TERMINAL.md`).
 //!
 //! Context files are markdown documents that can embed shell commands for
 //! dynamic content. Before each API request, context files are discovered
-//! by walking the filesystem (like permission files), commands are executed,
-//! and the interpolated content is sent to the server as `config.user_contexts`.
+//! by walking the filesystem, commands are executed, and the interpolated
+//! content is sent to the server as `config.user_contexts`.
 
 mod interpolate;
 mod walker;
