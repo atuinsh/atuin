@@ -259,6 +259,15 @@ impl<'a> TurnBuilder<'a> {
             ConversationEvent::SystemContext { .. } => {
                 // Not rendered in the TUI — only sent to the API
             }
+            ConversationEvent::SkillInvocation {
+                name, arguments, ..
+            } => {
+                let display = match arguments {
+                    Some(args) => format!("/{name} {args}"),
+                    None => format!("/{name}"),
+                };
+                self.add_user_message(&display);
+            }
         }
     }
 

@@ -309,8 +309,31 @@ impl AgentFsm {
                 vec![]
             }
 
-            (AgentState::Idle { .. }, Event::SkillLoaded { name, content }) => {
-                self.start_turn(format!("[Loaded skill: {name}]\n\n{content}"))
+            (
+                AgentState::Idle { .. },
+                Event::SkillLoaded {
+                    name,
+                    arguments,
+                    content,
+                },
+            ) => {
+                self.ctx.events.push(ConversationEvent::SkillInvocation {
+                    name,
+                    arguments,
+                    content,
+                });
+                self.ctx.current_response.clear();
+                self.ctx.current_turn_tool_ids.clear();
+
+                let messages = self.build_messages();
+                let session_id = self.ctx.session_id.clone();
+                self.state = AgentState::Turn {
+                    stream: StreamPhase::Connecting,
+                };
+                vec![Effect::StartStream {
+                    messages,
+                    session_id,
+                }]
             }
 
             // ================================================================
@@ -593,13 +616,20 @@ impl AgentFsm {
                 vec![Effect::LoadSkill { name, arguments }]
             }
 
-            // SkillLoaded during non-idle: queue as OOB so it's
-            // visible in context for the next turn.
-            (_, Event::SkillLoaded { name, content }) => {
-                self.ctx.events.push(ConversationEvent::OutOfBandOutput {
-                    name: "Skill".to_string(),
-                    command: Some(format!("/{name}")),
-                    content: format!("[Loaded skill: {name}]\n\n{content}"),
+            // SkillLoaded during non-idle: queue so it's visible
+            // in context for the next turn.
+            (
+                _,
+                Event::SkillLoaded {
+                    name,
+                    arguments,
+                    content,
+                },
+            ) => {
+                self.ctx.events.push(ConversationEvent::SkillInvocation {
+                    name,
+                    arguments,
+                    content,
                 });
                 vec![]
             }

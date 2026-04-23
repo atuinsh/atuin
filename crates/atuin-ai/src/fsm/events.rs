@@ -104,7 +104,11 @@ pub(crate) enum Event {
     /// A skill's content has been loaded and interpolated.
     /// Pushes skill content as OOB context and starts a turn so the
     /// LLM sees the skill and acts on it.
-    SkillLoaded { name: String, content: String },
+    SkillLoaded {
+        name: String,
+        arguments: Option<String>,
+        content: String,
+    },
 }
 
 /// Result of the permission resolver check.

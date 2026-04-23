@@ -64,6 +64,19 @@ pub(crate) fn serialize_event(event: &ConversationEvent) -> (String, String) {
             "system_context".to_string(),
             serde_json::json!({ "content": content }).to_string(),
         ),
+        ConversationEvent::SkillInvocation {
+            name,
+            arguments,
+            content,
+        } => (
+            "skill_invocation".to_string(),
+            serde_json::json!({
+                "name": name,
+                "arguments": arguments,
+                "content": content,
+            })
+            .to_string(),
+        ),
     }
 }
 
@@ -110,6 +123,14 @@ pub(crate) fn deserialize_event(event_type: &str, event_data: &str) -> Result<Co
             content: json_string(&data, "content")?,
         }),
         "system_context" => Ok(ConversationEvent::SystemContext {
+            content: json_string(&data, "content")?,
+        }),
+        "skill_invocation" => Ok(ConversationEvent::SkillInvocation {
+            name: json_string(&data, "name")?,
+            arguments: data
+                .get("arguments")
+                .and_then(|v| if v.is_null() { None } else { v.as_str() })
+                .map(String::from),
             content: json_string(&data, "content")?,
         }),
         other => Err(eyre!("unknown event type: {other}")),

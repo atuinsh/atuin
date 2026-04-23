@@ -742,7 +742,11 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
             tokio::spawn(async move {
                 let content =
                     load_skill_content(&registry, &name, &shell, arguments.as_deref()).await;
-                let _ = tx.send(DriverEvent::Fsm(Event::SkillLoaded { name, content }));
+                let _ = tx.send(DriverEvent::Fsm(Event::SkillLoaded {
+                    name,
+                    arguments,
+                    content,
+                }));
             });
         }
 
