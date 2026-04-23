@@ -14,10 +14,10 @@ use eyre::{Result, eyre};
 use crate::user_context::interpolate;
 
 /// Per-skill description truncation limit (before budget calculation).
-const MAX_DESCRIPTION_LEN: usize = 512;
+const MAX_DESCRIPTION_LEN: usize = 1024;
 
 /// Default total character budget for skill descriptions sent to the server.
-const DEFAULT_DESCRIPTION_BUDGET: usize = 4096;
+const DEFAULT_DESCRIPTION_BUDGET: usize = 9992;
 
 /// JSON overhead per skill entry: `{"name":"","description":""},` ≈ 30 chars.
 const PER_ENTRY_OVERHEAD: usize = 30;
@@ -92,7 +92,7 @@ impl SkillRegistry {
     }
 
     /// Create an empty registry.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn empty() -> Self {
         Self { skills: Vec::new() }
     }
@@ -108,7 +108,7 @@ impl SkillRegistry {
     }
 
     /// Whether any non-disabled skills exist (determines capability advertisement).
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn has_server_visible_skills(&self) -> bool {
         self.skills.iter().any(|s| !s.disable_model_invocation)
     }
