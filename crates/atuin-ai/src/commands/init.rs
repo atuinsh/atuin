@@ -176,7 +176,7 @@ function _atuin_ai_question_mark
         else
             commandline -f repaint
         end
-    else
+    else if not contains -- "$fish_key_bindings" fish_vi_key_bindings fish_hybrid_key_bindings
         # Not at empty prompt, just insert the question mark
         commandline -i "?"
     end

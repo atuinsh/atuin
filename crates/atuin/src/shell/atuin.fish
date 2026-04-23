@@ -67,7 +67,7 @@ end
 function _atuin_search
     set -l keymap_mode
     switch $fish_key_bindings
-        case fish_vi_key_bindings
+        case fish_vi_key_bindings fish_hybrid_key_bindings
             switch $fish_bind_mode
                 case default
                     set keymap_mode vim-normal
