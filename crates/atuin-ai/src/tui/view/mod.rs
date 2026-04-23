@@ -18,7 +18,7 @@ use super::components::markdown::Markdown;
 use super::components::select::Select;
 use super::state::AppMode;
 
-mod turn;
+pub(crate) mod turn;
 
 impl From<&AgentState> for AppMode {
     fn from(state: &AgentState) -> Self {
@@ -42,50 +42,48 @@ impl From<&AgentState> for AppMode {
 /// - Spacer
 /// - Input box (bordered, with contextual keybindings)
 pub(crate) fn ai_view(state: &ViewState) -> Elements {
-    let mut turn_builder = turn::TurnBuilder::new(&state.tools);
-
-    for event in &state.archived_events {
-        turn_builder.add_event(event);
-    }
-    for event in &state.visible_events {
-        turn_builder.add_event(event);
-    }
-    let turns = turn_builder.build();
-
+    let committed = state.committed_turn_count;
+    let turns: Vec<&turn::UiTurn> = state.turns.iter().filter(|t| t.id >= committed).collect();
     let busy = state.is_busy();
     let last_index = turns.len().saturating_sub(1);
 
+    // Turns are direct children of the root VStack so that eye_declare's
+    // on_commit can detect them scrolling into terminal scrollback and
+    // prune them from the tree. AtuinAi wraps only the interactive footer
+    // (input box, error display, pending banner) so its event capture/bubble
+    // handlers still fire for keyboard events.
     element! {
+        #(if state.is_resumed && (!state.is_exiting() || !turns.is_empty()) {
+            SessionContinue(key: "continuation-notice", continued_at: state.last_event_time)
+        })
+
+        #(for (index, turn) in turns.iter().enumerate() {
+            #(match &turn.kind {
+                turn::UiTurnKind::User { events } => {
+                    user_turn_view(events, index == 0, turn.id)
+                }
+                turn::UiTurnKind::Agent { events } => {
+                    agent_turn_view(events, busy && index == last_index, state.tools.awaiting_permission().is_some(), turn.id)
+                }
+                turn::UiTurnKind::OutOfBand { events } => {
+                    out_of_band_turn_view(events, turn.id)
+                }
+            })
+        })
+
         AtuinAi(
+            key: "footer",
             mode: AppMode::from(&state.agent_state),
-            has_command: state.has_command(),
+            has_command: state.has_command,
             is_input_blank: state.is_input_blank,
             pending_confirmation: state.has_confirmation(),
             has_executing_preview: state.tools.has_executing_preview(),
         ) {
-            #(if state.is_resumed && (!state.is_exiting() || !turns.is_empty()) {
-                SessionContinue(key: "continuation-notice", continued_at: state.last_event_time)
-            })
-
-            #(for (index, turn) in turns.iter().enumerate() {
-                #(match turn {
-                    turn::UiTurn::User { events } => {
-                        user_turn_view(events, index == 0)
-                    }
-                    turn::UiTurn::Agent { events } => {
-                        agent_turn_view(events, busy && index == last_index, state.tools.awaiting_permission().is_some())
-                    }
-                    turn::UiTurn::OutOfBand { events } => {
-                        out_of_band_turn_view(events)
-                    }
-                })
-            })
-
             #({
-                let needs_pending_banner = busy && !matches!(turns.last(), Some(turn::UiTurn::Agent { .. }));
+                let needs_pending_banner = busy && !matches!(turns.last(), Some(turn::UiTurn { kind: turn::UiTurnKind::Agent { .. }, .. }));
                 if needs_pending_banner {
                     let empty: &[turn::UiEvent] = &[];
-                    agent_turn_view(empty, true, false)
+                    agent_turn_view(empty, true, false, usize::MAX)
                 } else {
                     element! {}
                 }
@@ -133,7 +131,7 @@ fn input_view(state: &ViewState) -> Elements {
                     slash_suggestion: first_slash_result.cloned()
                 )
 
-                #(if state.is_input_blank && state.has_command() && state.is_input_active() {
+                #(if state.is_input_blank && state.has_command && state.is_input_active() {
                     #(if state.has_confirmation() {
                         Text { Span(text: "[Enter] Confirm dangerous command  [Esc] Cancel", style: Style::default().fg(Color::Gray)) }
                     } else {
@@ -244,7 +242,7 @@ fn permission_options_for_tool(tool: &ClientToolCall, in_git_project: bool) -> V
     }
 }
 
-fn user_turn_view(events: &[turn::UiEvent], first_turn: bool) -> Elements {
+fn user_turn_view(events: &[turn::UiEvent], first_turn: bool, turn_id: usize) -> Elements {
     let label_style = Style::default()
         .fg(Color::Cyan)
         .add_modifier(Modifier::BOLD);
@@ -252,7 +250,7 @@ fn user_turn_view(events: &[turn::UiEvent], first_turn: bool) -> Elements {
     let padding = if first_turn { 0 } else { 1 };
 
     element! {
-        View(padding_top: Cells::from(padding)) {
+        View(key: format!("turn-{turn_id}"), padding_top: Cells::from(padding)) {
             Text {
                 Span(text: " You ", style: label_style.reversed())
             }
@@ -274,13 +272,18 @@ fn user_turn_view(events: &[turn::UiEvent], first_turn: bool) -> Elements {
     }
 }
 
-fn agent_turn_view(events: &[turn::UiEvent], busy: bool, showing_ui: bool) -> Elements {
+fn agent_turn_view(
+    events: &[turn::UiEvent],
+    busy: bool,
+    showing_ui: bool,
+    turn_id: usize,
+) -> Elements {
     let label_style = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
 
     element! {
-        View {
+        View(key: format!("turn-{turn_id}")) {
             Text {
                 Span(text: " Atuin AI ", style: label_style.reversed())
             }
@@ -360,9 +363,9 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool, showing_ui: bool) -> El
     }
 }
 
-fn out_of_band_turn_view(events: &[turn::UiEvent]) -> Elements {
+fn out_of_band_turn_view(events: &[turn::UiEvent], turn_id: usize) -> Elements {
     element! {
-        View {
+        View(key: format!("turn-{turn_id}")) {
             Text {
                 Span(text: " System ", style: Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD).add_modifier(Modifier::REVERSED))
             }

@@ -292,6 +292,17 @@ async fn run_inline_tui(
         .bracketed_paste(true)
         .with_context(tui_tx)
         .extra_newlines_at_exit(1)
+        .on_commit(|committed, state| {
+            if let Some(key) = &committed.key
+                && let Some(id_str) = key.strip_prefix("turn-")
+                && let Ok(id) = id_str.parse::<usize>()
+            {
+                let new_count = id + 1;
+                if new_count > state.committed_turn_count {
+                    state.committed_turn_count = new_count;
+                }
+            }
+        })
         .build()?;
 
     // ─── Driver loop ────────────────────────────────────────────
@@ -349,17 +360,39 @@ fn build_view_state(
         skill_names.insert(skill.name.clone());
     }
 
+    let tools = fsm.ctx.tools.clone();
+    let visible_events = fsm.ctx.events[safe_start..].to_vec();
+    let archived_events = fsm.ctx.archived_events.clone();
+
+    let mut turn_builder = crate::tui::view::turn::TurnBuilder::new(&tools);
+    for event in &archived_events {
+        turn_builder.add_event(event);
+    }
+    for event in &visible_events {
+        turn_builder.add_event(event);
+    }
+    let turns = turn_builder.build();
+
+    let has_command = visible_events.iter().any(|e| {
+        matches!(e, ConversationEvent::ToolCall { name, input, .. }
+            if name == "suggest_command"
+                && input.get("command").and_then(|v| v.as_str()).is_some())
+    });
+
     ViewState {
         agent_state: fsm.state.clone(),
-        visible_events: fsm.ctx.events[safe_start..].to_vec(),
+        visible_events,
         all_events: fsm.ctx.events.clone(),
         session_id: fsm.ctx.session_id.clone(),
-        tools: fsm.ctx.tools.clone(),
+        tools,
         current_response: fsm.ctx.current_response.clone(),
         is_resumed: fsm.ctx.is_resumed,
         last_event_time: fsm.ctx.last_event_time,
         in_git_project,
-        archived_events: fsm.ctx.archived_events.clone(),
+        archived_events,
+        turns,
+        has_command,
+        committed_turn_count: 0,
         is_input_blank: true,
         slash_command_input: None,
         slash_command_search_results: Vec::new(),
