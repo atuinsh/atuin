@@ -34,12 +34,12 @@ pub(crate) async fn discover(
 
     // Project skills first (higher priority)
     if let Some(dir) = project_skills_dir.filter(|d| d.is_dir()) {
-        scan_dir(dir, true, &mut files);
+        scan_dir(dir, true, &mut files).await;
     }
 
     // Global skills second
     if global_skills_dir.is_dir() {
-        scan_dir(global_skills_dir, false, &mut files);
+        scan_dir(global_skills_dir, false, &mut files).await;
     }
 
     files
@@ -56,8 +56,8 @@ pub(crate) fn project_skills_dir(project_root: &Path) -> PathBuf {
 }
 
 /// Recursively scan a directory for `SKILL.md` files.
-fn scan_dir(dir: &Path, is_project: bool, out: &mut Vec<RawSkillFile>) {
-    let entries = match std::fs::read_dir(dir) {
+async fn scan_dir(dir: &Path, is_project: bool, out: &mut Vec<RawSkillFile>) {
+    let mut entries = match tokio::fs::read_dir(dir).await {
         Ok(entries) => entries,
         Err(e) => {
             tracing::debug!("Could not read skills directory {}: {e}", dir.display());
@@ -65,7 +65,9 @@ fn scan_dir(dir: &Path, is_project: bool, out: &mut Vec<RawSkillFile>) {
         }
     };
 
-    for entry in entries.flatten() {
+    let mut subdirs = Vec::new();
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
 
         if path.is_dir() {
@@ -78,7 +80,7 @@ fn scan_dir(dir: &Path, is_project: bool, out: &mut Vec<RawSkillFile>) {
                     .unwrap_or("unknown")
                     .to_string();
 
-                match std::fs::read_to_string(&skill_path) {
+                match tokio::fs::read_to_string(&skill_path).await {
                     Ok(content) => {
                         out.push(RawSkillFile {
                             path: skill_path,
@@ -93,9 +95,13 @@ fn scan_dir(dir: &Path, is_project: bool, out: &mut Vec<RawSkillFile>) {
                 }
             }
 
-            // Recurse into subdirectories for nested organization
-            scan_dir(&path, is_project, out);
+            // Collect subdirectories for recursive scanning
+            subdirs.push(path);
         }
+    }
+
+    for subdir in subdirs {
+        Box::pin(scan_dir(&subdir, is_project, out)).await;
     }
 }
 
