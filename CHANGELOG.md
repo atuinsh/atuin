@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [unreleased]
+
+### Features
+
+- AI tool rendering overhaul + edit_file tool ([#3423](https://github.com/atuinsh/atuin/issues/3423))
+- Implement write_file tool with overwrite safety ([#3432](https://github.com/atuinsh/atuin/issues/3432))
+- Shell tool execution timeouts ([#3437](https://github.com/atuinsh/atuin/issues/3437))
+- Send user-defined context with `TERMINAL.md` ([#3443](https://github.com/atuinsh/atuin/issues/3443))
+- Add skill discovery, loading, and invocation ([#3444](https://github.com/atuinsh/atuin/issues/3444))
+
+
+### Bug Fixes
+
+- Shell tool preview stuck as Running after completion ([#3436](https://github.com/atuinsh/atuin/issues/3436))
+- Require all subcommands covered for shell allow rules ([#3440](https://github.com/atuinsh/atuin/issues/3440))
+- Minor issues with fish's vim mode(s) ([#3362](https://github.com/atuinsh/atuin/issues/3362))
+
+
+### Documentation
+
+- Document show_numeric_shortcuts ([#3433](https://github.com/atuinsh/atuin/issues/3433))
+- Update for new server binary ([#3439](https://github.com/atuinsh/atuin/issues/3439))
+
+
+### Miscellaneous Tasks
+
+- Update to rust 1.95 ([#3426](https://github.com/atuinsh/atuin/issues/3426))
+- Clarified note about regular expressions matching in path. ([#3427](https://github.com/atuinsh/atuin/issues/3427))
+- Use cat -n format for read_file tool ([#3435](https://github.com/atuinsh/atuin/issues/3435))
+- Update to eye_declare 0.5.1 ([#3449](https://github.com/atuinsh/atuin/issues/3449))
+
+
+### Performance
+
+- Reduce AI TUI rendering overhead for long conversations ([#3447](https://github.com/atuinsh/atuin/issues/3447))
+
+
+### Refactor
+
+- Replace ad-hoc dispatch with FSM + driver architecture ([#3434](https://github.com/atuinsh/atuin/issues/3434))
+
 ## 18.15.2
 
 ### Bug Fixes
