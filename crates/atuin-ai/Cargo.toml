@@ -45,7 +45,7 @@ async-stream = "0.3"
 uuid = { workspace = true }
 tui-textarea-2 = "0.10.2"
 unicode-width = "0.2"
-eye_declare = "0.4.3"
+eye_declare = "0.5"
 ratatui-core = "0.1"
 ratatui-widgets = "0.3"
 thiserror = { workspace = true }

@@ -27,6 +27,7 @@ use crate::stream::ChatRequest;
 use crate::tools::ClientToolCall;
 use crate::tui::events::{AiTuiEvent, PermissionResult};
 use crate::tui::state::ConversationEvent;
+use crate::tui::view::turn;
 
 // ============================================================================
 // Driver event — the unified channel type
@@ -82,6 +83,12 @@ pub(crate) struct ViewState {
     // ─── View-only ──────────────────────────────────────────────
     pub archived_events: Vec<ConversationEvent>,
 
+    // ─── Pre-computed for rendering ────────────────────────────
+    pub turns: Vec<turn::UiTurn>,
+    pub has_command: bool,
+    pub committed_turn_count: usize,
+    pub archived_turn_count: usize,
+
     // ─── Ephemeral interaction state ────────────────────────────
     pub is_input_blank: bool,
     pub slash_command_input: Option<String>,
@@ -113,21 +120,10 @@ impl ViewState {
         matches!(self.agent_state, AgentState::Idle { .. }) && !self.has_confirmation()
     }
 
-    /// Whether any command has been suggested in the current invocation.
-    pub fn has_command(&self) -> bool {
-        self.visible_events.iter().any(|e| {
-            if let ConversationEvent::ToolCall { name, input, .. } = e {
-                name == "suggest_command" && input.get("command").and_then(|v| v.as_str()).is_some()
-            } else {
-                false
-            }
-        })
-    }
-
     pub fn footer_text(&self) -> &'static str {
         match &self.agent_state {
             AgentState::Idle { confirmation: None } => {
-                if self.has_command() && self.is_input_blank {
+                if self.has_command && self.is_input_blank {
                     "[Enter] Execute suggested command  [Tab] Insert Command"
                 } else {
                     "[Enter] Send  [Shift+Enter] New line  [Esc] Exit"
@@ -220,10 +216,10 @@ pub(crate) fn run_driver(
             if !effects.is_empty() {
                 sync_view_state(&handle, &fsm, in_git_project);
             }
-        } else {
-            // Event was handled directly (e.g. InputUpdated) — just sync
-            sync_view_state(&handle, &fsm, in_git_project);
         }
+        // InputUpdated (the only event that returns None) already pushed
+        // its view-only changes via handle.update() — no FSM state changed,
+        // so skip the expensive sync_view_state that clones all events.
 
         if exiting.load(Ordering::Acquire) {
             break;
@@ -273,8 +269,14 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
         }
         AiTuiEvent::InputUpdated(text) => {
             let is_blank = text.is_empty();
-            handle.update(move |vs| {
-                vs.is_input_blank = is_blank;
+
+            // Hot path (every keystroke); uses handle.update_tracked
+            // to allow read()ing the state without marking it dirty.
+            handle.update_tracked(move |vs| {
+                if vs.read().is_input_blank != is_blank {
+                    vs.is_input_blank = is_blank;
+                }
+
                 if text.starts_with('/') {
                     let query = text.trim_start_matches('/').to_string();
                     let mut results = vs.slash_registry.search_fuzzy(&query);
@@ -286,8 +288,13 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
                     vs.slash_command_input = Some(query);
                     vs.slash_command_search_results = results;
                 } else {
-                    vs.slash_command_input = None;
-                    vs.slash_command_search_results.clear();
+                    if vs.read().slash_command_input.is_some() {
+                        vs.slash_command_input = None;
+                    }
+
+                    if !vs.read().slash_command_search_results.is_empty() {
+                        vs.slash_command_search_results.clear();
+                    }
                 }
             });
             None
@@ -407,6 +414,32 @@ fn sync_view_state(handle: &Handle<ViewState>, fsm: &AgentFsm, in_git_project: b
         });
     }
 
+    // Pre-compute turns and has_command on the driver thread so the
+    // render-thread view function doesn't redo O(n) work every frame.
+    let mut archived_builder = turn::TurnBuilder::new(&tools);
+    for event in &archived_events {
+        archived_builder.add_event(event);
+    }
+    let archived_turns = archived_builder.build();
+    let archived_turn_count = archived_turns.len();
+
+    let mut visible_builder = turn::TurnBuilder::new_starting_at(&tools, archived_turn_count);
+    for event in &visible_events {
+        visible_builder.add_event(event);
+    }
+    let visible_turns = visible_builder.build();
+
+    let mut turns = archived_turns;
+    turns.extend(visible_turns);
+
+    let has_command = visible_events.iter().any(|e| {
+        if let ConversationEvent::ToolCall { name, input, .. } = e {
+            name == "suggest_command" && input.get("command").and_then(|v| v.as_str()).is_some()
+        } else {
+            false
+        }
+    });
+
     tracing::trace!(?state, "sync_view_state pushing to handle");
     handle.update(move |vs| {
         vs.agent_state = state;
@@ -419,6 +452,9 @@ fn sync_view_state(handle: &Handle<ViewState>, fsm: &AgentFsm, in_git_project: b
         vs.last_event_time = last_event_time;
         vs.in_git_project = in_git_project;
         vs.archived_events = archived_events;
+        vs.turns = turns;
+        vs.has_command = has_command;
+        vs.archived_turn_count = archived_turn_count;
     });
 }
 
