@@ -28,6 +28,8 @@ Verify these tools are installed: `git`, `gsed`, `cargo`, `gh`, `git-cliff`.
 
 Use `command -v` for each. If any are missing, report which ones and stop.
 
+Remember to use `gsed`, or else macOS flags to regular `sed`, later in the workflow.
+
 ---
 
 ## Step 2 — Determine Version
@@ -78,8 +80,9 @@ ALL subsequent Bash commands run from `$WORKDIR`.
 
 4. Show `git diff --stat` and the version-related lines from the diff:
    ```bash
-   git diff --unified=0 -- '*.toml' | grep -E '^\+.*version' | grep -v '^\+\+\+'
+   git diff --unified=0 -- '*.toml' | grep '^\+.*version' | grep -vF '+++'
    ```
+   Remember to use macOS grep arguments on macOS systems.
 
 5. Verify the workspace version was actually updated by re-reading it
    from `Cargo.toml`.
