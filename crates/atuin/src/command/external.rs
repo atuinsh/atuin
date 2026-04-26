@@ -3,7 +3,7 @@ use std::process::Command;
 use std::{io, process};
 
 #[cfg(feature = "client")]
-use atuin_client::plugin::OfficialPluginRegistry;
+use atuin_client::plugin::{OfficialPluginRegistry, PluginContext};
 use clap::CommandFactory;
 use clap::builder::{StyledStr, Styles};
 use eyre::Result;
@@ -15,6 +15,8 @@ pub fn run(args: &[String]) -> Result<()> {
     let bin = format!("atuin-{subcommand}");
     let mut cmd = Command::new(&bin);
     cmd.args(&args[1..]);
+
+    let context = PluginContext::new(subcommand);
 
     let spawn_result = match cmd.spawn() {
         Ok(child) => Ok(child),
@@ -33,11 +35,13 @@ pub fn run(args: &[String]) -> Result<()> {
             if status.success() {
                 Ok(())
             } else {
+                drop(context);
                 process::exit(status.code().unwrap_or(1));
             }
         }
         Err(e) => {
             eprintln!("{}", e.ansi());
+            drop(context);
             process::exit(1);
         }
     }
