@@ -16,6 +16,7 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut cmd = Command::new(&bin);
     cmd.args(&args[1..]);
 
+    #[cfg(feature = "client")]
     let context = PluginContext::new(subcommand);
 
     let spawn_result = match cmd.spawn() {
@@ -35,13 +36,18 @@ pub fn run(args: &[String]) -> Result<()> {
             if status.success() {
                 Ok(())
             } else {
+                #[cfg(feature = "client")]
                 drop(context);
+
                 process::exit(status.code().unwrap_or(1));
             }
         }
         Err(e) => {
             eprintln!("{}", e.ansi());
+
+            #[cfg(feature = "client")]
             drop(context);
+
             process::exit(1);
         }
     }

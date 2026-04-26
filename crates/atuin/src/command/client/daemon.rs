@@ -331,6 +331,7 @@ async fn wait_until_ready(settings: &Settings, timeout: Duration) -> Result<Hist
     }
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn ensure_autostart_supported(settings: &Settings) -> Result<()> {
     #[cfg(unix)]
     if settings.daemon.systemd_socket {

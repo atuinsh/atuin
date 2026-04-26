@@ -82,6 +82,10 @@ impl PluginContext {
     }
 }
 
+impl Drop for PluginContext {
+    fn drop(&mut self) {}
+}
+
 #[cfg(windows)]
 struct UpdateOnWindowsContext {
     initial_exe: Option<std::path::PathBuf>,
