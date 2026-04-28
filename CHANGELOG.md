@@ -2,9 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
-## [unreleased]
+## 18.16.0
 
 ### Features
+
+This release brings full agentic workflows to Atuin AI with file read+write tools, shell command execution, skills, and more. Check out [the docs for Atuin AI](https://docs.atuin.sh/cli/ai/introduction/) for more information.
 
 - AI tool rendering overhaul + edit_file tool ([#3423](https://github.com/atuinsh/atuin/issues/3423))
 - Implement write_file tool with overwrite safety ([#3432](https://github.com/atuinsh/atuin/issues/3432))
