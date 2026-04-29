@@ -50,6 +50,10 @@ impl Init {
 }
 
 pub fn run(cmd: Option<Cmd>, opts: RunOpts) {
+    if cmd.is_some() && opts.shell.is_some() {
+        eprintln!("atuin hex: --shell only applies when no subcommand is given");
+        std::process::exit(2);
+    }
     match cmd {
         Some(Cmd::Init(init)) => {
             if let Err(err) = init.run() {
