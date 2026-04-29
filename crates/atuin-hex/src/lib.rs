@@ -107,6 +107,10 @@ fn shell_from_name(name: &str) -> Option<Shell> {
 }
 
 fn render_init(shell: Shell) -> &'static str {
+    // Each shell embeds its own interpreter path in the `--shell` argument so
+    // `atuin hex` spawns the same binary that sourced the init, rather than
+    // resolving via $PATH (which can pick the wrong installation when the
+    // user has, for instance, both /usr/bin/bash and /opt/homebrew/bin/bash).
     match shell {
         Shell::Bash | Shell::Zsh => {
             r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
@@ -116,7 +120,13 @@ fn render_init(shell: Shell) -> &'static str {
   if [[ -z "${ATUIN_HEX_ACTIVE:-}" ]] || [[ "$_atuin_hex_tmux_current" != "$_atuin_hex_tmux_previous" ]]; then
     export ATUIN_HEX_ACTIVE=1
     export ATUIN_HEX_TMUX="$_atuin_hex_tmux_current"
-    exec atuin hex
+    if [[ -n "${BASH_VERSION:-}" ]]; then
+      exec atuin hex --shell "$BASH"
+    elif [[ -n "${ZSH_VERSION:-}" ]]; then
+      # Prefer ZSH_ARGZERO (zsh 5.3+) — it preserves the path zsh was
+      # invoked with — and fall back to PATH lookup otherwise.
+      exec atuin hex --shell "${ZSH_ARGZERO:-$(command -v zsh)}"
+    fi
   fi
 
   unset _atuin_hex_tmux_current _atuin_hex_tmux_previous
@@ -138,11 +148,11 @@ fi
     if not set -q ATUIN_HEX_ACTIVE
         set -gx ATUIN_HEX_ACTIVE 1
         set -gx ATUIN_HEX_TMUX "$_atuin_hex_tmux_current"
-        exec atuin hex
+        exec atuin hex --shell (status fish-path)
     else if test "$_atuin_hex_tmux_current" != "$_atuin_hex_tmux_previous"
         set -gx ATUIN_HEX_ACTIVE 1
         set -gx ATUIN_HEX_TMUX "$_atuin_hex_tmux_current"
-        exec atuin hex
+        exec atuin hex --shell (status fish-path)
     end
 end
 "#
@@ -158,7 +168,7 @@ end
     if ($env.ATUIN_HEX_ACTIVE? | default "" | is-empty) or ($tmux_current != $tmux_previous) {
         $env.ATUIN_HEX_ACTIVE = "1"
         $env.ATUIN_HEX_TMUX = $tmux_current
-        exec atuin hex
+        exec atuin hex --shell $nu.current-exe
     }
 }
 "#
