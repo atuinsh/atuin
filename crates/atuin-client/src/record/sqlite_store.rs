@@ -115,7 +115,7 @@ impl SqliteStore {
         }
     }
 
-    async fn load_all(&self) -> Result<Vec<Record<EncryptedData>>> {
+    pub async fn load_all(&self) -> Result<Vec<Record<EncryptedData>>> {
         let res = sqlx::query("select * from store ")
             .map(Self::query_row)
             .fetch_all(&self.pool)

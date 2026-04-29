@@ -518,6 +518,33 @@ impl Database for Postgres {
     }
 
     #[instrument(skip_all)]
+    async fn repair_records(&self, user: &User, records: &[Record<EncryptedData>]) -> DbResult<()> {
+        // Replace the encrypted payload of an existing record, leaving every other
+        // column untouched. The (user_id, client_id) predicate is the security
+        // boundary: a user can only mutate rows they own.
+        let mut tx = self.pool.begin().await.map_err(fix_error)?;
+
+        for r in records {
+            sqlx::query(
+                "update store
+                 set data = $1, cek = $2
+                 where client_id = $3 and user_id = $4",
+            )
+            .bind(&r.data.data)
+            .bind(&r.data.content_encryption_key)
+            .bind(r.id)
+            .bind(user.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(fix_error)?;
+        }
+
+        tx.commit().await.map_err(fix_error)?;
+
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
     async fn next_records(
         &self,
         user: &User,
