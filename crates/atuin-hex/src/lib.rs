@@ -1,11 +1,22 @@
 pub mod osc133;
 
+use std::path::PathBuf;
+
 use clap::{Args, Subcommand, ValueEnum};
 
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
     /// Print shell code to initialize atuin-hex on shell startup
     Init(Init),
+}
+
+/// Options for the top-level `atuin hex` command (when no subcommand is given).
+#[derive(Args, Debug, Default)]
+pub struct RunOpts {
+    /// Path to the shell binary that atuin hex should spawn.
+    /// Defaults to the system login shell.
+    #[arg(long, value_name = "PATH")]
+    pub shell: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -38,7 +49,11 @@ impl Init {
     }
 }
 
-pub fn run(cmd: Option<Cmd>) {
+pub fn run(cmd: Option<Cmd>, opts: RunOpts) {
+    if cmd.is_some() && opts.shell.is_some() {
+        eprintln!("atuin hex: --shell only applies when no subcommand is given");
+        std::process::exit(2);
+    }
     match cmd {
         Some(Cmd::Init(init)) => {
             if let Err(err) = init.run() {
@@ -46,7 +61,7 @@ pub fn run(cmd: Option<Cmd>) {
                 std::process::exit(1);
             }
         }
-        None => app::main(),
+        None => app::main(opts),
     }
 }
 
@@ -92,6 +107,10 @@ fn shell_from_name(name: &str) -> Option<Shell> {
 }
 
 fn render_init(shell: Shell) -> &'static str {
+    // Each shell embeds its own interpreter path in the `--shell` argument so
+    // `atuin hex` spawns the same binary that sourced the init, rather than
+    // resolving via $PATH (which can pick the wrong installation when the
+    // user has, for instance, both /usr/bin/bash and /opt/homebrew/bin/bash).
     match shell {
         Shell::Bash | Shell::Zsh => {
             r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
@@ -101,7 +120,13 @@ fn render_init(shell: Shell) -> &'static str {
   if [[ -z "${ATUIN_HEX_ACTIVE:-}" ]] || [[ "$_atuin_hex_tmux_current" != "$_atuin_hex_tmux_previous" ]]; then
     export ATUIN_HEX_ACTIVE=1
     export ATUIN_HEX_TMUX="$_atuin_hex_tmux_current"
-    exec atuin hex
+    if [[ -n "${BASH_VERSION:-}" ]]; then
+      exec atuin hex --shell "$BASH"
+    elif [[ -n "${ZSH_VERSION:-}" ]]; then
+      # Prefer ZSH_ARGZERO (zsh 5.3+) — it preserves the path zsh was
+      # invoked with — and fall back to PATH lookup otherwise.
+      exec atuin hex --shell "${ZSH_ARGZERO:-$(command -v zsh)}"
+    fi
   fi
 
   unset _atuin_hex_tmux_current _atuin_hex_tmux_previous
@@ -123,11 +148,11 @@ fi
     if not set -q ATUIN_HEX_ACTIVE
         set -gx ATUIN_HEX_ACTIVE 1
         set -gx ATUIN_HEX_TMUX "$_atuin_hex_tmux_current"
-        exec atuin hex
+        exec atuin hex --shell (status fish-path)
     else if test "$_atuin_hex_tmux_current" != "$_atuin_hex_tmux_previous"
         set -gx ATUIN_HEX_ACTIVE 1
         set -gx ATUIN_HEX_TMUX "$_atuin_hex_tmux_current"
-        exec atuin hex
+        exec atuin hex --shell (status fish-path)
     end
 end
 "#
@@ -143,7 +168,7 @@ end
     if ($env.ATUIN_HEX_ACTIVE? | default "" | is-empty) or ($tmux_current != $tmux_previous) {
         $env.ATUIN_HEX_ACTIVE = "1"
         $env.ATUIN_HEX_TMUX = $tmux_current
-        exec atuin hex
+        exec atuin hex --shell $nu.current-exe
     }
 }
 "#
@@ -153,7 +178,7 @@ end
 
 #[cfg(not(unix))]
 mod app {
-    pub(crate) fn main() {
+    pub(crate) fn main(_opts: super::RunOpts) {
         eprintln!("atuin hex currently supports unix platforms");
         std::process::exit(1);
     }
@@ -174,8 +199,8 @@ mod app {
         ScreenRequest(mpsc::Sender<Vec<u8>>),
     }
 
-    pub(crate) fn main() {
-        if let Err(e) = run() {
+    pub(crate) fn main(opts: super::RunOpts) {
+        if let Err(e) = run(opts) {
             let _ = terminal::disable_raw_mode();
             eprintln!("atuin hex: {e:#}");
             std::process::exit(1);
@@ -229,7 +254,7 @@ mod app {
         }
     }
 
-    fn run() -> eyre::Result<()> {
+    fn run(opts: super::RunOpts) -> eyre::Result<()> {
         let (cols, rows) = terminal::size()?;
 
         let pty_system = native_pty_system();
@@ -247,7 +272,10 @@ mod app {
         // Clean up any stale socket from a previous crash
         let _ = std::fs::remove_file(&sock_path);
 
-        let mut cmd = CommandBuilder::new_default_prog();
+        let mut cmd = match opts.shell {
+            Some(path) => CommandBuilder::new(path),
+            None => CommandBuilder::new_default_prog(),
+        };
         cmd.cwd(std::env::current_dir()?);
         cmd.env("ATUIN_HEX_SOCKET", sock_path.as_os_str());
 

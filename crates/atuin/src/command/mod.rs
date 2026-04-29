@@ -26,6 +26,8 @@ pub enum AtuinCmd {
     Hex {
         #[command(subcommand)]
         cmd: Option<atuin_hex::Cmd>,
+        #[command(flatten)]
+        opts: atuin_hex::RunOpts,
     },
 
     /// Generate a UUID
@@ -55,8 +57,8 @@ impl AtuinCmd {
             Self::Client(client) => client.run(),
 
             #[cfg(feature = "hex")]
-            Self::Hex { cmd } => {
-                atuin_hex::run(cmd);
+            Self::Hex { cmd, opts } => {
+                atuin_hex::run(cmd, opts);
                 Ok(())
             }
 
