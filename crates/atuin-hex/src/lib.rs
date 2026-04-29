@@ -1,11 +1,22 @@
 pub mod osc133;
 
+use std::path::PathBuf;
+
 use clap::{Args, Subcommand, ValueEnum};
 
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
     /// Print shell code to initialize atuin-hex on shell startup
     Init(Init),
+}
+
+/// Options for the top-level `atuin hex` command (when no subcommand is given).
+#[derive(Args, Debug, Default)]
+pub struct RunOpts {
+    /// Path to the shell binary that atuin hex should spawn.
+    /// Defaults to the system login shell.
+    #[arg(long, value_name = "PATH")]
+    pub shell: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -38,7 +49,7 @@ impl Init {
     }
 }
 
-pub fn run(cmd: Option<Cmd>) {
+pub fn run(cmd: Option<Cmd>, opts: RunOpts) {
     match cmd {
         Some(Cmd::Init(init)) => {
             if let Err(err) = init.run() {
@@ -46,7 +57,7 @@ pub fn run(cmd: Option<Cmd>) {
                 std::process::exit(1);
             }
         }
-        None => app::main(),
+        None => app::main(opts),
     }
 }
 
@@ -153,7 +164,7 @@ end
 
 #[cfg(not(unix))]
 mod app {
-    pub(crate) fn main() {
+    pub(crate) fn main(_opts: super::RunOpts) {
         eprintln!("atuin hex currently supports unix platforms");
         std::process::exit(1);
     }
@@ -174,8 +185,8 @@ mod app {
         ScreenRequest(mpsc::Sender<Vec<u8>>),
     }
 
-    pub(crate) fn main() {
-        if let Err(e) = run() {
+    pub(crate) fn main(opts: super::RunOpts) {
+        if let Err(e) = run(opts) {
             let _ = terminal::disable_raw_mode();
             eprintln!("atuin hex: {e:#}");
             std::process::exit(1);
@@ -229,7 +240,7 @@ mod app {
         }
     }
 
-    fn run() -> eyre::Result<()> {
+    fn run(opts: super::RunOpts) -> eyre::Result<()> {
         let (cols, rows) = terminal::size()?;
 
         let pty_system = native_pty_system();
@@ -247,7 +258,10 @@ mod app {
         // Clean up any stale socket from a previous crash
         let _ = std::fs::remove_file(&sock_path);
 
-        let mut cmd = CommandBuilder::new_default_prog();
+        let mut cmd = match opts.shell {
+            Some(path) => CommandBuilder::new(path),
+            None => CommandBuilder::new_default_prog(),
+        };
         cmd.cwd(std::env::current_dir()?);
         cmd.env("ATUIN_HEX_SOCKET", sock_path.as_os_str());
 
