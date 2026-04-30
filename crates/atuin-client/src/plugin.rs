@@ -42,7 +42,7 @@ impl OfficialPluginRegistry {
                 "Update atuin to the latest version",
                 "The 'atuin update' command is provided by the atuin-update plugin.\n\
                  It is only installed if you used the install script\n  \
-                 If you used a package manager (brew, apt, etc), please continue to use it for updates"
+                 If you used a package manager (brew, apt, etc), please continue to use it for updates",
             ),
         );
     }
@@ -65,6 +65,59 @@ impl OfficialPluginRegistry {
 impl Default for OfficialPluginRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+pub struct PluginContext {
+    #[cfg(windows)]
+    _update_on_windows: Option<UpdateOnWindowsContext>,
+}
+
+impl PluginContext {
+    pub fn new(_subcommand: &str) -> Self {
+        PluginContext {
+            #[cfg(windows)]
+            _update_on_windows: (_subcommand == "update").then(UpdateOnWindowsContext::new),
+        }
+    }
+}
+
+impl Drop for PluginContext {
+    fn drop(&mut self) {}
+}
+
+#[cfg(windows)]
+struct UpdateOnWindowsContext {
+    initial_exe: Option<std::path::PathBuf>,
+}
+
+#[cfg(windows)]
+impl UpdateOnWindowsContext {
+    const OLD_FILE_NAME: &'static str = "atuin.old";
+
+    pub fn new() -> Self {
+        // Windows doesn't let you overwrite a running exe, but it lets you rename it,
+        // so make some room for atuin-update to install the new version.
+        let initial_exe = std::env::current_exe().ok().and_then(|exe| {
+            std::fs::rename(&exe, exe.with_file_name(Self::OLD_FILE_NAME)).ok()?;
+            Some(exe)
+        });
+
+        Self { initial_exe }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for UpdateOnWindowsContext {
+    fn drop(&mut self) {
+        if let Some(exe) = &self.initial_exe
+            && !exe.exists()
+        {
+            // The update failed, roll back the current exe to its initial name.
+            std::fs::rename(exe.with_file_name(Self::OLD_FILE_NAME), exe).unwrap_or_else(|e| {
+                eprintln!("Failed to roll back the update, you may need to reinstall Atuin: {e}");
+            });
+        }
     }
 }
 
