@@ -29,10 +29,15 @@ Atuin Hex needs to be initialized separately from your existing Atuin config. Pl
     Add
 
     ```shell
-    atuin hex init fish | source
+    source (atuin hex init fish | psub)
     ```
 
-    to your `is-interactive` block in your `~/.config/fish/config.fish` file
+    to your `is-interactive` block in your `~/.config/fish/config.fish` file.
+
+    Hex's init checks `test -t 0` before activating, so `psub` is
+    used here instead of `| source`: piping would redirect stdin to
+    the pipe for the duration of the source, the check would fail,
+    and Hex would silently skip activation.
 
 === "Nushell"
 
