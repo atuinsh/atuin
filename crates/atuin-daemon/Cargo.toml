@@ -1,0 +1,53 @@
+[package]
+name = "atuin-daemon"
+edition = "2024"
+version = { workspace = true }
+description = "The daemon crate for Atuin"
+
+authors.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+atuin-client = { path = "../atuin-client", version = "18.16.0" }
+atuin-common = { path = "../atuin-common", version = "18.16.0" }
+atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.16.0" }
+atuin-history = { path = "../atuin-history", version = "18.16.0" }
+
+time = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+eyre = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+dashmap = "6.1.0"
+lasso = { version = "0.7", features = ["multi-threaded"] }
+tonic-types = "0.14"
+tonic = "0.14"
+tonic-prost = "0.14"
+prost = "0.14"
+prost-types = "0.14"
+tokio-stream = { version = "0.1.14", features = ["net"] }
+hyper-util = "0.1"
+
+rand.workspace = true
+atuin-nucleo = { workspace = true }
+
+
+[target.'cfg(target_os = "linux")'.dependencies]
+listenfd = "1.0.1"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[build-dependencies]
+protox = "0.9"
+tonic-build = "0.14"
+tonic-prost-build = "0.14"

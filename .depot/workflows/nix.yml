@@ -1,0 +1,33 @@
+# Depot CI Migration
+# Source: .github/workflows/nix.yml
+#
+# No changes were necessary.
+
+# Verify the Nix build is working
+# Failures will usually occur due to an out of date Rust version
+# That can be updated to the latest version in nixpkgs-unstable with `nix flake update`
+name: Nix
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'ui/**'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - 'ui/**'
+jobs:
+  check:
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/install-nix-action@v31
+      - name: Run nix flake check
+        run: nix flake check --print-build-logs
+  build-test:
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/install-nix-action@v31
+      - name: Run nix build
+        run: nix build --print-build-logs

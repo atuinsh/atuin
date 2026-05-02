@@ -1,0 +1,84 @@
+body:
+  - type: input
+    attributes:
+      label: Operating System
+      description: What operating system are you using?
+      placeholder: "Example: macOS Big Sur"
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: Shell
+      description: What shell are you using?
+      placeholder: "Example: zsh 5.8.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    attributes:
+      label: Version
+      description: What version of atuin are you running?
+      multiple: false
+      options: # how often will I forget to update this? a lot.
+        - v17.0.0 (Default)
+        - v16.0.0
+        - v15.0.0
+        - v14.0.1
+        - v14.0.0
+        - v13.0.1
+        - v13.0.0
+        - v12.0.0
+        - v11.0.0
+        - v0.10.0
+        - v0.9.1
+        - v0.9.0
+        - v0.8.1
+        - v0.8.0
+        - v0.7.2
+        - v0.7.1
+        - v0.7.0
+        - v0.6.4
+        - v0.6.3
+      default: 0
+    validations:
+      required: true
+
+  - type: checkboxes
+    attributes:
+      label: Self hosted
+      description: Are you self hosting atuin server?
+      options:
+        - label: I am self hosting atuin server
+
+  - type: checkboxes
+    attributes:
+      label: Search the issues
+      description: Did you search the issues and discussions for your problem?
+      options:
+        - label: I checked that someone hasn't already asked about the same issue
+          required: true
+
+  - type: textarea
+    attributes:
+      label: Behaviour
+      description: "Please describe the issue - what you expected to happen, what actually happened"
+      
+  - type: textarea
+    attributes:
+      label: Logs
+      description: "If possible, please include logs from atuin, especially if you self host the server - ATUIN_LOG=debug"
+
+  - type: textarea
+    attributes:
+      label: Extra information
+      description: "Anything else you'd like to add?"
+
+  - type: checkboxes
+    attributes:
+      label: Code of Conduct
+      description: The Code of Conduct helps create a safe space for everyone. We require
+        that everyone agrees to it.
+      options:
+        - label: I agree to follow this project's [Code of Conduct](https://github.com/atuinsh/atuin/blob/main/CODE_OF_CONDUCT.md)
+          required: true

@@ -1,0 +1,10 @@
+[package]
+name = "atuin-nucleo-bench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+atuin-nucleo = { version = "*", path = "../" }
+brunch = "0.5.0"
+fuzzy-matcher = "0.3.7"
+walkdir = "2"

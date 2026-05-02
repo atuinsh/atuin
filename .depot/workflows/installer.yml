@@ -1,0 +1,36 @@
+# Depot CI Migration
+# Source: .github/workflows/installer.yml
+#
+# No changes were necessary.
+
+name: Install
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: .github/workflows/installer.yml
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  install:
+    strategy:
+      matrix:
+        os: [depot-ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install zsh for ubuntu
+        if: matrix.os == 'depot-ubuntu-24.04'
+        run: |
+          sudo apt install zsh
+      - name: Test install script on bash
+        run: |
+          /bin/bash -c "$(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)"
+          [ -d "$HOME/.atuin" ] && source $HOME/.atuin/bin/env
+          atuin --help
+      - name: Test install script on zsh
+        shell: zsh {0}
+        run: |
+          /bin/bash -c "$(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)"
+          [ -d "$HOME/.atuin" ] && source $HOME/.atuin/bin/env
+          atuin --help

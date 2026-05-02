@@ -1,0 +1,4 @@
+reorder_imports = true
+# uncomment once stable
+#imports_granularity = "crate"
+#group_imports = "StdExternalCrate"

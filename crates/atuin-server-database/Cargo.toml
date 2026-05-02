@@ -1,0 +1,20 @@
+[package]
+name = "atuin-server-database"
+edition = "2024"
+description = "server database library for atuin"
+
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+[dependencies]
+atuin-common = { path = "../atuin-common", version = "18.16.0" }
+
+tracing = { workspace = true }
+time = { workspace = true }
+eyre = { workspace = true }
+serde = { workspace = true }
+async-trait = { workspace = true }
+url = "2.5.2"
