@@ -179,7 +179,7 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
         });
 
     for (command, count) in stats.top {
-        let gray = SetForegroundColor(match theme.as_style(Meaning::Muted).foreground_color {
+        let gray = SetForegroundColor(match theme.as_style(Meaning::Muted).fg {
             Some(color) => color,
             None => Color::Grey,
         });
@@ -190,7 +190,7 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
         print!("[");
         print!(
             "{}",
-            SetForegroundColor(match theme.get_error().foreground_color {
+            SetForegroundColor(match theme.get_error().fg {
                 Some(color) => color,
                 None => Color::Red,
             })
@@ -200,7 +200,7 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
             if i == 2 {
                 print!(
                     "{}",
-                    SetForegroundColor(match theme.get_warning().foreground_color {
+                    SetForegroundColor(match theme.get_warning().fg {
                         Some(color) => color,
                         None => Color::Yellow,
                     })
@@ -210,7 +210,7 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
             if i == 5 {
                 print!(
                     "{}",
-                    SetForegroundColor(match theme.get_info().foreground_color {
+                    SetForegroundColor(match theme.get_info().fg {
                         Some(color) => color,
                         None => Color::Green,
                     })

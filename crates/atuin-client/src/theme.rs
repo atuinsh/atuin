@@ -98,12 +98,7 @@ pub struct ThemeDefinitionConfigBlock {
 }
 
 use ratatui::{
-    backend::FromCrossterm,
-    buffer::Buffer,
-    crossterm::style,
-    layout::Rect,
-    style::{Modifier, Style, Color},
-    widgets::{Block, StatefulWidget, Widget},
+    style::{Modifier, Style, Color}
 };
 
 // For now, a theme is loaded as a mapping of meanings to colors, but it may be desirable to
