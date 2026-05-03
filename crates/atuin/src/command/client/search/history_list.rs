@@ -250,7 +250,7 @@ impl DrawState<'_> {
     }
 
     fn duration(&mut self, h: &History, width: u16) {
-        let status = self.theme.as_style(if h.success() {
+        let style = self.theme.as_style(if h.success() {
             Meaning::Success
         } else {
             Meaning::Failure
