@@ -1,3 +1,4 @@
+import os
 import subprocess
 
 from prompt_toolkit.application.current import get_app
@@ -13,7 +14,7 @@ if "ATUIN_SESSION" not in ${...} or ${...}.get("ATUIN_SHLVL", "") != ${...}.get(
 def _atuin_precommand(cmd: str):
     cmd = cmd.rstrip("\n")
     try:
-        $ATUIN_HISTORY_ID = $(atuin history start -- @(cmd) 2>/dev/null).rstrip("\n")
+        $ATUIN_HISTORY_ID = $(atuin history start -- @(cmd) 2>@(os.devnull)).rstrip("\n")
     except:
         $ATUIN_HISTORY_ID = ""
 
@@ -31,7 +32,7 @@ def _atuin_postcommand(cmd: str, rtn: int, out, ts):
         # This happens when using a subshell and using output redirection at the same time
         # For more details, see https://github.com/xonsh/xonsh/issues/5224
         # (atuin history end --exit @(rtn) -- $ATUIN_HISTORY_ID &) > /dev/null 2>&1
-        atuin history end --exit @(rtn) --duration @(nanos) -- $ATUIN_HISTORY_ID > /dev/null 2>&1
+        atuin history end --exit @(rtn) --duration @(nanos) -- $ATUIN_HISTORY_ID > @(os.devnull) 2>&1
     del $ATUIN_HISTORY_ID
 
 
