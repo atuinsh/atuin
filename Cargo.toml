@@ -62,6 +62,7 @@ rustix = { version = "1.1.4", features = ["process", "fs"] }
 tower = "0.5"
 tracing = "0.1"
 ratatui = "0.30.0"
+ratatui-crossterm = "0.1.0"
 sql-builder = "3"
 tempfile = { version = "3.19" }
 minijinja = "2.9.0"

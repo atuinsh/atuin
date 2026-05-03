@@ -467,6 +467,7 @@ dependencies = [
  "crossterm 0.29.0",
  "divan",
  "rand 0.8.5",
+ "ratatui-crossterm",
  "serde",
  "time",
  "unicode-segmentation",
