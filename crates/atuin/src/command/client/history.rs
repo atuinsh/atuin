@@ -197,7 +197,9 @@ pub fn print_list(
     tz: Timezone,
 ) {
     if matches!(list_mode, ListMode::Human | ListMode::Regular)
-        && format.map(str::trim).is_some_and(|f| f.eq_ignore_ascii_case("json"))
+        && format
+            .map(str::trim)
+            .is_some_and(|f| f.eq_ignore_ascii_case("json"))
     {
         print_json_list(h, print0, reverse, tz);
         return;
