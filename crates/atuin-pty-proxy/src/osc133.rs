@@ -38,6 +38,20 @@ pub enum Event {
     },
 }
 
+/// An OSC 133 event with its position in the most recent input chunk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocatedEvent {
+    /// The OSC 133 event that was parsed.
+    pub event: Event,
+    /// Offset immediately after this marker's terminator in the current chunk.
+    ///
+    /// If a marker spans multiple [`Parser::push_located`] calls, this is still
+    /// the offset in the chunk that completed the marker.
+    pub offset: usize,
+    /// The semantic zone after applying this event.
+    pub zone: Zone,
+}
+
 /// The current semantic zone as determined by the most recent OSC 133 marker.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -130,7 +144,18 @@ impl Parser {
     /// caller — this method only *observes* the stream.
     #[inline]
     pub fn push(&mut self, data: &[u8], mut on_event: impl FnMut(Event)) {
-        for &byte in data {
+        self.push_located(data, |located| on_event(located.event));
+    }
+
+    /// Process a chunk of bytes, calling `on_event` for every OSC 133 marker
+    /// found with its byte offset in this chunk.
+    ///
+    /// The offset points to the first byte after the marker terminator, making
+    /// it suitable for callers that need to split the original chunk at marker
+    /// boundaries.
+    #[inline]
+    pub fn push_located(&mut self, data: &[u8], mut on_event: impl FnMut(LocatedEvent)) {
+        for (offset, &byte) in data.iter().enumerate() {
             match self.state {
                 State::Ground => {
                     if byte == ESC {
@@ -147,7 +172,7 @@ impl Parser {
                 }
                 State::OscParam => {
                     if byte == BEL {
-                        self.dispatch(&mut on_event);
+                        self.dispatch(offset + 1, &mut on_event);
                         self.state = State::Ground;
                     } else if byte == ESC {
                         self.state = State::OscEsc;
@@ -160,7 +185,7 @@ impl Parser {
                 }
                 State::OscEsc => {
                     if byte == BACKSLASH {
-                        self.dispatch(&mut on_event);
+                        self.dispatch(offset + 1, &mut on_event);
                     }
                     // Whether we got a valid ST or not, return to ground.
                     // (A new ESC ] would restart accumulation via the Ground
@@ -174,7 +199,7 @@ impl Parser {
     /// Inspect the accumulated parameter buffer.  If it holds an OSC 133
     /// payload, emit the corresponding [`Event`] and update the zone.
     #[inline]
-    fn dispatch(&mut self, on_event: &mut impl FnMut(Event)) {
+    fn dispatch(&mut self, offset: usize, on_event: &mut impl FnMut(LocatedEvent)) {
         let params = &self.param_buf[..self.param_len];
 
         // Must start with "133;"
@@ -210,7 +235,11 @@ impl Parser {
             _ => return,
         };
 
-        on_event(event);
+        on_event(LocatedEvent {
+            event,
+            offset,
+            zone: self.zone,
+        });
     }
 }
 
@@ -586,6 +615,46 @@ mod tests {
                 Event::CommandExecuted,
                 Event::CommandFinished { exit_code: Some(1) },
             ]
+        );
+    }
+
+    // -- Located event offsets ------------------------------------------------
+
+    #[test]
+    fn located_event_reports_offset_after_marker() {
+        let data = b"before\x1b]133;A\x07prompt";
+        let mut parser = Parser::new();
+        let mut events = Vec::new();
+
+        parser.push_located(data, |e| events.push(e));
+
+        assert_eq!(
+            events,
+            vec![LocatedEvent {
+                event: Event::PromptStart,
+                offset: b"before\x1b]133;A\x07".len(),
+                zone: Zone::Prompt,
+            }]
+        );
+    }
+
+    #[test]
+    fn located_event_offset_is_relative_to_completing_chunk() {
+        let mut parser = Parser::new();
+        let mut events = Vec::new();
+
+        parser.push_located(b"\x1b]133;", |e| events.push(e));
+        parser.push_located(b"D;42\x07after", |e| events.push(e));
+
+        assert_eq!(
+            events,
+            vec![LocatedEvent {
+                event: Event::CommandFinished {
+                    exit_code: Some(42)
+                },
+                offset: b"D;42\x07".len(),
+                zone: Zone::Unknown,
+            }]
         );
     }
 

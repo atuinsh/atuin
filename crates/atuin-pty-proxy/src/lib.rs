@@ -2,6 +2,16 @@ pub mod osc133;
 
 use clap::{Args, Subcommand, ValueEnum};
 
+#[derive(Args, Debug)]
+pub struct Hex {
+    /// Highlight OSC 133 prompt, input, output, and exit-code regions
+    #[arg(long)]
+    debug_osc133: bool,
+
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
     /// Print shell code to initialize atuin pty-proxy on shell startup
@@ -38,16 +48,38 @@ impl Init {
     }
 }
 
-pub fn run(cmd: Option<Cmd>) {
-    match cmd {
+pub fn run(hex: Hex) {
+    match hex.cmd {
         Some(Cmd::Init(init)) => {
             if let Err(err) = init.run() {
                 eprintln!("atuin pty-proxy: {err}");
                 std::process::exit(1);
             }
         }
-        None => app::main(),
+        None => app::main(RuntimeOptions::from(hex)),
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RuntimeOptions {
+    debug_osc133: bool,
+}
+
+impl From<Hex> for RuntimeOptions {
+    fn from(hex: Hex) -> Self {
+        Self {
+            debug_osc133: hex.debug_osc133 || env_flag("ATUIN_HEX_DEBUG"),
+        }
+    }
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 fn detect_shell(cli_shell: Option<Shell>) -> Result<Shell, String> {
@@ -155,7 +187,7 @@ end
 
 #[cfg(not(unix))]
 mod app {
-    pub(crate) fn main() {
+    pub(crate) fn main(_options: super::RuntimeOptions) {
         eprintln!("atuin pty-proxy currently supports unix platforms");
         std::process::exit(1);
     }
@@ -170,14 +202,81 @@ mod app {
     use crossterm::terminal;
     use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
+    use crate::osc133::{Event, Parser, Zone};
+
+    const RESET: &[u8] = b"\x1b[0m";
+
     enum ParserMsg {
         Data(Vec<u8>),
         Resize { rows: u16, cols: u16 },
         ScreenRequest(mpsc::Sender<Vec<u8>>),
     }
 
-    pub(crate) fn main() {
-        if let Err(e) = run() {
+    struct Osc133DebugHighlighter {
+        parser: Parser,
+    }
+
+    impl Osc133DebugHighlighter {
+        fn new() -> Self {
+            Self {
+                parser: Parser::new(),
+            }
+        }
+
+        fn render(&mut self, data: &[u8]) -> Vec<u8> {
+            let mut events = Vec::new();
+            self.parser
+                .push_located(data, |located| events.push(located));
+
+            if events.is_empty() {
+                return data.to_vec();
+            }
+
+            let mut rendered = Vec::with_capacity(data.len() + (events.len() * 64));
+            let mut start = 0;
+
+            for located in events {
+                let offset = located.offset.min(data.len());
+                if offset > start {
+                    rendered.extend_from_slice(&data[start..offset]);
+                }
+
+                rendered.extend_from_slice(event_label(&located.event));
+                rendered.extend_from_slice(RESET);
+                start = offset;
+            }
+
+            rendered.extend_from_slice(&data[start..]);
+            rendered
+        }
+    }
+
+    fn event_label(event: &Event) -> &'static [u8] {
+        match event {
+            Event::PromptStart => b"\x1b[1;37;45m[OSC133:A prompt]\x1b[0m",
+            Event::CommandStart => b"\x1b[1;30;43m[OSC133:B input]\x1b[0m",
+            Event::CommandExecuted => b"\x1b[1;30;46m[OSC133:C output]\x1b[0m",
+            Event::CommandFinished { exit_code: Some(0) } => {
+                b"\x1b[1;37;42m[OSC133:D exit=0]\x1b[0m"
+            }
+            Event::CommandFinished { exit_code: Some(_) } => {
+                b"\x1b[1;37;41m[OSC133:D exit!=0]\x1b[0m"
+            }
+            Event::CommandFinished { exit_code: None } => b"\x1b[1;37;44m[OSC133:D exit=?]\x1b[0m",
+        }
+    }
+
+    // fn zone_style(zone: Zone) -> &'static [u8] {
+    //     match zone {
+    //         Zone::Unknown => RESET,
+    //         Zone::Prompt => b"\x1b[38;5;213m",
+    //         Zone::Input => b"\x1b[38;5;220m",
+    //         Zone::Output => b"\x1b[38;5;81m",
+    //     }
+    // }
+
+    pub(crate) fn main(options: super::RuntimeOptions) {
+        if let Err(e) = run(options) {
             let _ = terminal::disable_raw_mode();
             eprintln!("atuin pty-proxy: {e:#}");
             std::process::exit(1);
@@ -231,7 +330,7 @@ mod app {
         }
     }
 
-    fn run() -> eyre::Result<()> {
+    fn run(options: super::RuntimeOptions) -> eyre::Result<()> {
         let (cols, rows) = terminal::size()?;
 
         let pty_system = native_pty_system();
@@ -359,28 +458,39 @@ mod app {
         // PTY -> stdout (with OSC 133 parsing + buffer feed)
         let stdout_thread = std::thread::spawn(move || {
             let mut stdout = std::io::stdout();
-            let mut parser = crate::osc133::Parser::new();
+            let mut highlighter = options.debug_osc133.then(Osc133DebugHighlighter::new);
             let mut buf = [0u8; 8192];
             loop {
                 match pty_reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        parser.push(&buf[..n], |_event| {
-                            // Zone transitions are tracked inside the parser.
-                            // Callers can query parser.zone() after push.
-                        });
+                        if let Some(highlighter) = highlighter.as_mut() {
+                            let rendered = highlighter.render(&buf[..n]);
+                            // Feed the same bytes that are written to stdout so
+                            // debug labels are represented in screen snapshots.
+                            let _ = msg_tx.try_send(ParserMsg::Data(rendered.clone()));
 
-                        // Feed bytes to the shadow parser. Drops on backpressure —
-                        // the screen snapshot may be stale during bursts, but
-                        // self-corrects once output settles.
-                        let _ = msg_tx.try_send(ParserMsg::Data(buf[..n].to_vec()));
+                            if stdout.write_all(&rendered).is_err() {
+                                break;
+                            }
+                        } else {
+                            // Feed bytes to the shadow parser. Drops on backpressure —
+                            // the screen snapshot may be stale during bursts, but
+                            // self-corrects once output settles.
+                            let _ = msg_tx.try_send(ParserMsg::Data(buf[..n].to_vec()));
 
-                        if stdout.write_all(&buf[..n]).is_err() {
-                            break;
+                            if stdout.write_all(&buf[..n]).is_err() {
+                                break;
+                            }
                         }
                         let _ = stdout.flush();
                     }
                 }
+            }
+
+            if highlighter.is_some() {
+                let _ = stdout.write_all(RESET);
+                let _ = stdout.flush();
             }
         });
 
