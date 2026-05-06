@@ -301,7 +301,7 @@ fn check_for_write_errors(write: Result<(), io::Error>) {
 /// rendered the way the default template does.
 #[derive(Serialize)]
 struct JsonHistory<'a> {
-    id: &'a str,
+    timestamp_unix_ns: i64,
     timestamp: String,
     timestamp_unix_ns: i128,
     command: &'a str,
