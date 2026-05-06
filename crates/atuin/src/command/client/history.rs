@@ -14,7 +14,6 @@ use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 use super::daemon as daemon_cmd;
 #[cfg(feature = "daemon")]
 use colored::Colorize;
-#[cfg(feature = "daemon")]
 use serde::Serialize;
 
 #[cfg(feature = "daemon")]
@@ -110,6 +109,10 @@ pub enum Cmd {
 
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {author}, {intent}, {exit}, {time}, {session}, and {uuid}
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
+        ///
+        /// Pass --format json to emit one JSON object per line (NDJSON) with all
+        /// fields included, suitable for piping into jq or saving to a file for
+        /// backup or migration.
         #[arg(long, short)]
         format: Option<String>,
     },
@@ -133,6 +136,9 @@ pub enum Cmd {
 
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {author}, {intent}, {time}, {session}, {uuid} and {relativetime}.
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
+        ///
+        /// Pass --format json to emit a single JSON object per line (NDJSON)
+        /// containing every field.
         #[arg(long, short)]
         format: Option<String>,
     },
@@ -190,6 +196,13 @@ pub fn print_list(
     reverse: bool,
     tz: Timezone,
 ) {
+    if matches!(list_mode, ListMode::Human | ListMode::Regular)
+        && format.map(str::trim).is_some_and(|f| f.eq_ignore_ascii_case("json"))
+    {
+        print_json_list(h, print0, reverse, tz);
+        return;
+    }
+
     let w = std::io::stdout();
     let mut w = w.lock();
 
@@ -274,6 +287,133 @@ fn check_for_write_errors(write: Result<(), io::Error>) {
             eprintln!("ERROR: History output failed with the following error: {err}");
             std::process::exit(1);
         }
+    }
+}
+
+/// JSON representation of a single history entry, used by `--format json`.
+///
+/// Field names mirror the variables exposed to the template formatter so
+/// downstream tools that already key off `{command}`, `{directory}` etc. don't
+/// have to learn a second vocabulary. `duration` is reported in nanoseconds to
+/// match the on-disk representation; `duration_human` is the same value
+/// rendered the way the default template does.
+#[derive(Serialize)]
+struct JsonHistory<'a> {
+    id: &'a str,
+    timestamp: String,
+    timestamp_unix_ns: i128,
+    command: &'a str,
+    directory: &'a str,
+    session: &'a str,
+    hostname: &'a str,
+    host: &'a str,
+    user: &'a str,
+    author: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    intent: Option<&'a str>,
+    exit: i64,
+    duration: i64,
+    duration_human: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deleted_at: Option<String>,
+}
+
+impl<'a> JsonHistory<'a> {
+    fn from_entry(history: &'a History, tz: Timezone) -> Self {
+        let (host, user) = history
+            .hostname
+            .split_once(':')
+            .map_or((history.hostname.as_str(), ""), |(h, u)| (h, u));
+
+        let timestamp = history
+            .timestamp
+            .to_offset(tz.0)
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_else(|_| history.timestamp.to_string());
+
+        let duration = std::cmp::max(history.duration, 0);
+        let duration_human = json_format_duration_ns(duration);
+
+        let deleted_at = history.deleted_at.and_then(|t| {
+            t.to_offset(tz.0)
+                .format(&time::format_description::well_known::Rfc3339)
+                .ok()
+        });
+
+        Self {
+            id: &history.id.0,
+            timestamp,
+            timestamp_unix_ns: history.timestamp.unix_timestamp_nanos(),
+            command: &history.command,
+            directory: &history.cwd,
+            session: &history.session,
+            hostname: &history.hostname,
+            host,
+            user,
+            author: &history.author,
+            intent: history.intent.as_deref(),
+            exit: history.exit,
+            duration,
+            duration_human,
+            deleted_at,
+        }
+    }
+}
+
+fn json_format_duration_ns(duration_ns: i64) -> String {
+    struct F(Duration);
+    impl Display for F {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            format_duration_into(self.0, f)
+        }
+    }
+
+    F(Duration::from_nanos(duration_ns.max(0).cast_unsigned())).to_string()
+}
+
+#[allow(clippy::cast_sign_loss)]
+fn print_json_list(h: &[History], print0: bool, reverse: bool, tz: Timezone) {
+    let w = std::io::stdout();
+    let mut w = w.lock();
+
+    let iterator = if reverse {
+        Box::new(h.iter().rev()) as Box<dyn Iterator<Item = &History>>
+    } else {
+        Box::new(h.iter()) as Box<dyn Iterator<Item = &History>>
+    };
+
+    let entry_terminator = if print0 { b"\0" as &[u8] } else { b"\n" };
+    let flush_each_line = print0;
+
+    for history in iterator {
+        let payload = JsonHistory::from_entry(history, tz);
+        let line = match serde_json::to_string(&payload) {
+            Ok(line) => line,
+            Err(err) => {
+                eprintln!("ERROR: Failed to serialize history entry as JSON: {err}");
+                std::process::exit(1);
+            }
+        };
+
+        let write_result = w
+            .write_all(line.as_bytes())
+            .and_then(|()| w.write_all(entry_terminator));
+
+        if let Err(err) = write_result {
+            if err.kind() == io::ErrorKind::BrokenPipe {
+                return;
+            }
+            eprintln!("ERROR: Failed to write history output: {err}");
+            std::process::exit(1);
+        }
+
+        if flush_each_line {
+            check_for_write_errors(w.flush());
+        }
+    }
+
+    if !flush_each_line {
+        check_for_write_errors(w.flush());
     }
 }
 
@@ -1350,5 +1490,77 @@ mod tests {
         assert!(plain.contains("pending"));
         assert!(plain.contains("duration:"));
         assert!(plain.contains("running"));
+    }
+
+    fn sample_history() -> History {
+        History {
+            id: "history-id".to_owned().into(),
+            timestamp: time::macros::datetime!(2026-04-09 17:18:19 UTC),
+            duration: 12_345_678,
+            exit: 0,
+            command: "git status".to_owned(),
+            cwd: "/tmp/repo".to_owned(),
+            session: "session-id".to_owned(),
+            hostname: "host:ellie".to_owned(),
+            author: "ellie".to_owned(),
+            intent: Some("inspect repository state".to_owned()),
+            deleted_at: None,
+        }
+    }
+
+    #[test]
+    fn json_history_serializes_all_fields() {
+        let entry = sample_history();
+        let payload = JsonHistory::from_entry(&entry, Timezone(time::UtcOffset::UTC));
+        let json = serde_json::to_string(&payload).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(value["id"], "history-id");
+        assert_eq!(value["command"], "git status");
+        assert_eq!(value["directory"], "/tmp/repo");
+        assert_eq!(value["session"], "session-id");
+        assert_eq!(value["hostname"], "host:ellie");
+        assert_eq!(value["host"], "host");
+        assert_eq!(value["user"], "ellie");
+        assert_eq!(value["author"], "ellie");
+        assert_eq!(value["intent"], "inspect repository state");
+        assert_eq!(value["exit"], 0);
+        assert_eq!(value["duration"], 12_345_678);
+        assert_eq!(value["timestamp"], "2026-04-09T17:18:19Z");
+        assert!(value.get("deleted_at").is_none());
+        assert!(value["timestamp_unix_ns"].is_number());
+        assert!(value["duration_human"].is_string());
+    }
+
+    #[test]
+    fn json_history_omits_intent_when_absent() {
+        let mut entry = sample_history();
+        entry.intent = None;
+        let payload = JsonHistory::from_entry(&entry, Timezone(time::UtcOffset::UTC));
+        let value: serde_json::Value = serde_json::to_value(&payload).unwrap();
+
+        assert!(value.get("intent").is_none());
+    }
+
+    #[test]
+    fn json_history_includes_deleted_at_when_set() {
+        let mut entry = sample_history();
+        entry.deleted_at = Some(time::macros::datetime!(2026-04-10 09:00:00 UTC));
+        let payload = JsonHistory::from_entry(&entry, Timezone(time::UtcOffset::UTC));
+        let value: serde_json::Value = serde_json::to_value(&payload).unwrap();
+
+        assert_eq!(value["deleted_at"], "2026-04-10T09:00:00Z");
+    }
+
+    #[test]
+    fn json_history_handles_hostname_without_user() {
+        let mut entry = sample_history();
+        entry.hostname = "lonely-host".to_owned();
+        let payload = JsonHistory::from_entry(&entry, Timezone(time::UtcOffset::UTC));
+        let value: serde_json::Value = serde_json::to_value(&payload).unwrap();
+
+        assert_eq!(value["hostname"], "lonely-host");
+        assert_eq!(value["host"], "lonely-host");
+        assert_eq!(value["user"], "");
     }
 }
