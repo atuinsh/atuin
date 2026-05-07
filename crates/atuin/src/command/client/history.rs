@@ -301,9 +301,9 @@ fn check_for_write_errors(write: Result<(), io::Error>) {
 /// rendered the way the default template does.
 #[derive(Serialize)]
 struct JsonHistory<'a> {
-    timestamp_unix_ns: i64,
+    id: &'a str,
     timestamp: String,
-    timestamp_unix_ns: i128,
+    timestamp_unix_ns: i64,
     command: &'a str,
     directory: &'a str,
     session: &'a str,
@@ -345,7 +345,11 @@ impl<'a> JsonHistory<'a> {
         Self {
             id: &history.id.0,
             timestamp,
-            timestamp_unix_ns: history.timestamp.unix_timestamp_nanos(),
+            timestamp_unix_ns: history
+                .timestamp
+                .unix_timestamp_nanos()
+                .try_into()
+                .unwrap_or(i64::MAX),
             command: &history.command,
             directory: &history.cwd,
             session: &history.session,
