@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crossterm::style::{Color, ResetColor, SetAttribute, SetForegroundColor};
+use ratatui_crossterm::IntoCrossterm;
+
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -179,8 +181,8 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
         });
 
     for (command, count) in stats.top {
-        let gray = SetForegroundColor(match theme.as_style(Meaning::Muted).foreground_color {
-            Some(color) => color,
+        let gray = SetForegroundColor(match theme.as_style(Meaning::Muted).fg {
+            Some(color) => color.into_crossterm(),
             None => Color::Grey,
         });
         let bold = SetAttribute(crossterm::style::Attribute::Bold);
@@ -190,8 +192,8 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
         print!("[");
         print!(
             "{}",
-            SetForegroundColor(match theme.get_error().foreground_color {
-                Some(color) => color,
+            SetForegroundColor(match theme.get_error().fg {
+                Some(color) => color.into_crossterm(),
                 None => Color::Red,
             })
         );
@@ -200,8 +202,8 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
             if i == 2 {
                 print!(
                     "{}",
-                    SetForegroundColor(match theme.get_warning().foreground_color {
-                        Some(color) => color,
+                    SetForegroundColor(match theme.get_warning().fg {
+                        Some(color) => color.into_crossterm(),
                         None => Color::Yellow,
                     })
                 );
@@ -210,8 +212,8 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
             if i == 5 {
                 print!(
                     "{}",
-                    SetForegroundColor(match theme.get_info().foreground_color {
-                        Some(color) => color,
+                    SetForegroundColor(match theme.get_info().fg {
+                        Some(color) => color.into_crossterm(),
                         None => Color::Green,
                     })
                 );

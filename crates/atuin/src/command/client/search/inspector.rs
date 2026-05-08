@@ -7,7 +7,6 @@ use atuin_client::{
 };
 use ratatui::{
     Frame,
-    backend::FromCrossterm,
     layout::Rect,
     prelude::{Constraint, Direction, Layout},
     style::Style,
@@ -56,16 +55,16 @@ pub fn draw_commands(
 
     let command = Paragraph::new(Text::from(Span::styled(
         history.command.clone(),
-        Style::from_crossterm(theme.as_style(Meaning::Important)),
+        theme.as_style(Meaning::Important),
     )))
     .block(if compact {
         Block::new()
             .borders(Borders::NONE)
-            .style(Style::from_crossterm(theme.as_style(Meaning::Base)))
+            .style(theme.as_style(Meaning::Base))
     } else {
         Block::new()
             .borders(Borders::ALL)
-            .style(Style::from_crossterm(theme.as_style(Meaning::Base)))
+            .style(theme.as_style(Meaning::Base))
             .title("Command")
             .padding(Padding::horizontal(1))
     });
@@ -79,11 +78,11 @@ pub fn draw_commands(
     .block(if compact {
         Block::new()
             .borders(Borders::NONE)
-            .style(Style::from_crossterm(theme.as_style(Meaning::Annotation)))
+            .style(theme.as_style(Meaning::Annotation))
     } else {
         Block::new()
             .borders(Borders::ALL)
-            .style(Style::from_crossterm(theme.as_style(Meaning::Annotation)))
+            .style(theme.as_style(Meaning::Annotation))
             .title("Previous command")
             .padding(Padding::horizontal(1))
     });
@@ -99,13 +98,13 @@ pub fn draw_commands(
     .block(if compact {
         Block::new()
             .borders(Borders::NONE)
-            .style(Style::from_crossterm(theme.as_style(Meaning::Annotation)))
+            .style(theme.as_style(Meaning::Annotation))
     } else {
         Block::new()
             .borders(Borders::ALL)
             .title("Next command")
             .padding(Padding::horizontal(1))
-            .style(Style::from_crossterm(theme.as_style(Meaning::Annotation)))
+            .style(theme.as_style(Meaning::Annotation))
     });
 
     f.render_widget(previous, commands[0]);
@@ -149,7 +148,7 @@ pub fn draw_stats_table(
         Block::default()
             .title("Command stats")
             .borders(Borders::ALL)
-            .style(Style::from_crossterm(theme.as_style(Meaning::Base)))
+            .style(theme.as_style(Meaning::Base))
             .padding(Padding::vertical(1)),
     );
 
@@ -211,7 +210,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, them
         .block(
             Block::default()
                 .title("Exit code distribution")
-                .style(Style::from_crossterm(theme.as_style(Meaning::Base)))
+                .style(theme.as_style(Meaning::Base))
                 .borders(Borders::ALL),
         )
         .bar_width(3)
@@ -235,7 +234,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, them
         .block(
             Block::default()
                 .title("Runs per day")
-                .style(Style::from_crossterm(theme.as_style(Meaning::Base)))
+                .style(theme.as_style(Meaning::Base))
                 .borders(Borders::ALL),
         )
         .bar_width(3)
@@ -261,7 +260,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, them
         .block(
             Block::default()
                 .title("Duration over time")
-                .style(Style::from_crossterm(theme.as_style(Meaning::Base)))
+                .style(theme.as_style(Meaning::Base))
                 .borders(Borders::ALL),
         )
         .bar_width(5)

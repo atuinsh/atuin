@@ -34,7 +34,7 @@ use crate::{VERSION, command::client::search::engines};
 
 use ratatui::{
     Frame, Terminal, TerminalOptions, Viewport,
-    backend::{CrosstermBackend, FromCrossterm},
+    backend::CrosstermBackend,
     crossterm::{
         cursor::SetCursorStyle,
         event::{self, Event, KeyEvent, MouseEvent},
@@ -905,10 +905,14 @@ impl State {
 
         if show_tabs {
             let tabs = Tabs::new(titles)
-                .block(Block::default().borders(Borders::NONE))
+                .block(
+                    Block::default()
+                        .borders(Borders::NONE)
+                        .style(theme.as_style(Meaning::Base)),
+                )
                 .select(self.tab_index)
-                .style(Style::default())
-                .highlight_style(Style::from_crossterm(theme.as_style(Meaning::Important)));
+                .style(theme.as_style(Meaning::Base))
+                .highlight_style(theme.as_style(Meaning::Important));
 
             f.render_widget(tabs, tabs_chunk);
         }
@@ -987,6 +991,7 @@ impl State {
                                 .title(Line::from(" Info ".to_string()))
                                 .title_alignment(Alignment::Center)
                                 .borders(Borders::ALL)
+                                .style(theme.as_style(Meaning::Base))
                                 .padding(Padding::vertical(2)),
                         )
                         .alignment(Alignment::Center);
@@ -1011,7 +1016,7 @@ impl State {
                 // sub-widget for search + for inspector
                 let feedback = Paragraph::new(
                     "The inspector is new - please give feedback (good, or bad) at https://forum.atuin.sh",
-                );
+                ).style(theme.as_style(Meaning::Footnote));
                 f.render_widget(feedback, input_chunk);
 
                 return;
@@ -1053,6 +1058,7 @@ impl State {
                 preview_chunk,
                 preview,
                 std::cmp::max(prefix_width, min_prefix_width),
+                theme,
             );
         }
     }
@@ -1067,8 +1073,9 @@ impl State {
         preview_chunk: Rect,
         preview: Paragraph,
         prefix_width: u16,
+        theme: &Theme,
     ) {
-        let input = self.build_input(style, prefix_width);
+        let input = self.build_input(style, prefix_width, theme);
         f.render_widget(input, input_chunk);
 
         f.render_widget(preview, preview_chunk);
@@ -1088,13 +1095,13 @@ impl State {
 
     fn build_title(&self, theme: &Theme) -> Paragraph<'_> {
         let title = if self.update_needed.is_some() {
-            let error_style: Style = Style::from_crossterm(theme.get_error());
+            let error_style: Style = theme.get_error();
             Paragraph::new(Text::from(Span::styled(
                 format!("Atuin v{VERSION} - UPDATE"),
                 error_style.add_modifier(Modifier::BOLD),
             )))
         } else {
-            let style: Style = Style::from_crossterm(theme.as_style(Meaning::Base));
+            let style: Style = theme.as_style(Meaning::Base);
             Paragraph::new(Text::from(Span::styled(
                 format!("Atuin v{VERSION}"),
                 style.add_modifier(Modifier::BOLD),
@@ -1138,7 +1145,7 @@ impl State {
 
             _ => unreachable!("invalid tab index"),
         }
-        .style(Style::from_crossterm(theme.as_style(Meaning::Annotation)))
+        .style(theme.as_style(Meaning::Annotation))
         .alignment(Alignment::Center)
     }
 
@@ -1147,7 +1154,7 @@ impl State {
             "history count: {}",
             self.history_count,
         ))))
-        .style(Style::from_crossterm(theme.as_style(Meaning::Annotation)))
+        .style(theme.as_style(Meaning::Annotation))
         .alignment(Alignment::Right)
     }
 
@@ -1181,6 +1188,7 @@ impl State {
                     results_list.block(
                         Block::default()
                             .borders(Borders::LEFT | Borders::RIGHT)
+                            .style(theme.as_style(Meaning::Base))
                             .border_type(BorderType::Rounded)
                             .title(format!("{:─>width$}", "", width = style.inner_width - 2)),
                     )
@@ -1188,6 +1196,7 @@ impl State {
                     results_list.block(
                         Block::default()
                             .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+                            .style(theme.as_style(Meaning::Base))
                             .border_type(BorderType::Rounded),
                     )
                 }
@@ -1196,7 +1205,7 @@ impl State {
         }
     }
 
-    fn build_input(&self, style: StyleState, prefix_width: u16) -> Paragraph<'_> {
+    fn build_input(&self, style: StyleState, prefix_width: u16, theme: &Theme) -> Paragraph<'_> {
         let (pref, mode) = if self.switched_search_mode {
             (" SRCH:", self.search_mode.as_str())
         } else if self.search.custom_context.is_some() {
@@ -1209,19 +1218,21 @@ impl State {
         // sanity check to ensure we don't exceed the layout limits
         debug_assert!(mode_width >= mode.len(), "mode name '{mode}' is too long!");
         let input = format!("[{pref}{mode:^mode_width$}] {}", self.search.input.as_str());
-        let input = Paragraph::new(input);
+        let input = Paragraph::new(input).style(theme.as_style(Meaning::Base));
         match style.compactness {
             Compactness::Full => {
                 if style.invert {
                     input.block(
                         Block::default()
                             .borders(Borders::LEFT | Borders::RIGHT | Borders::TOP)
+                            .style(theme.as_style(Meaning::Base))
                             .border_type(BorderType::Rounded),
                     )
                 } else {
                     input.block(
                         Block::default()
                             .borders(Borders::LEFT | Borders::RIGHT)
+                            .style(theme.as_style(Meaning::Base))
                             .border_type(BorderType::Rounded)
                             .title(format!("{:─>width$}", "", width = style.inner_width - 2)),
                     )
@@ -1270,11 +1281,11 @@ impl State {
             Compactness::Full => Paragraph::new(command).block(
                 Block::default()
                     .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
+                    .style(theme.as_style(Meaning::Base))
                     .border_type(BorderType::Rounded)
                     .title(format!("{:─>width$}", "", width = chunk_width - 2)),
             ),
-            _ => Paragraph::new(command)
-                .style(Style::from_crossterm(theme.as_style(Meaning::Annotation))),
+            _ => Paragraph::new(command).style(theme.as_style(Meaning::Annotation)),
         }
     }
 }

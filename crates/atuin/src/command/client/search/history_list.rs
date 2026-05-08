@@ -10,9 +10,7 @@ use atuin_client::{
 use atuin_common::utils::Escapable as _;
 use itertools::Itertools;
 use ratatui::{
-    backend::FromCrossterm,
     buffer::Buffer,
-    crossterm::style,
     layout::Rect,
     style::{Modifier, Style},
     widgets::{Block, StatefulWidget, Widget},
@@ -207,7 +205,7 @@ impl DrawState<'_> {
         // Render each configured column
         for (idx, column) in self.columns.iter().enumerate() {
             if idx != 0 {
-                self.draw(" ", Style::from_crossterm(style));
+                self.draw(" ", style);
             }
             let width = if column.expand {
                 expand_width
@@ -232,7 +230,7 @@ impl DrawState<'_> {
             let i = self.y as usize + self.state.offset;
             let is_selected = i == self.state.selected();
             let prompt: &str = if is_selected { self.indicator } else { "   " };
-            self.draw(prompt, Style::default());
+            self.draw(prompt, self.theme.as_style(Meaning::Base));
             return;
         }
 
@@ -247,21 +245,21 @@ impl DrawState<'_> {
         } else {
             &SLICES[i..i + 3]
         };
-        self.draw(prompt, Style::default());
+        self.draw(prompt, self.theme.as_style(Meaning::Base));
     }
 
     fn duration(&mut self, h: &History, width: u16) {
         let style = self.theme.as_style(if h.success() {
-            Meaning::AlertInfo
+            Meaning::Success
         } else {
-            Meaning::AlertError
+            Meaning::Failure
         });
         let duration = Duration::from_nanos(u64::try_from(h.duration).unwrap_or(0));
         let formatted = format_duration(duration);
         let w = width as usize;
         // Right-align duration within its column width, plus trailing space
         let display = format!("{formatted:>w$}");
-        self.draw(&display, Style::from_crossterm(style));
+        self.draw(&display, style);
     }
 
     fn time(&mut self, h: &History, width: u16) {
@@ -280,7 +278,7 @@ impl DrawState<'_> {
         let time_str = format!("{time} ago");
 
         let display = format!("{time_str:>w$}");
-        self.draw(&display, Style::from_crossterm(style));
+        self.draw(&display, style);
     }
 
     fn command(&mut self, h: &History) {
@@ -290,8 +288,7 @@ impl DrawState<'_> {
         {
             row_highlighted = true;
             // if not applying alternative highlighting to the whole row, color the command
-            style = self.theme.as_style(Meaning::AlertError);
-            style.attributes.set(style::Attribute::Bold);
+            style = self.theme.as_style(Meaning::Selection);
         }
 
         let highlight_indices = self.history_highlighter.get_highlight_indices(
@@ -305,7 +302,7 @@ impl DrawState<'_> {
         let mut pos = 0;
         for section in h.command.escape_control().split_ascii_whitespace() {
             if pos != 0 {
-                self.draw(" ", Style::from_crossterm(style));
+                self.draw(" ", style);
             }
             for ch in section.chars() {
                 if self.x > self.list_area.width {
@@ -318,12 +315,13 @@ impl DrawState<'_> {
                     if row_highlighted {
                         // if the row is highlighted bold is not enough as the whole row is bold
                         // change the color too
-                        style = self.theme.as_style(Meaning::AlertWarn);
+                        style = self.theme.as_style(Meaning::Highlight);
+                    } else {
+                        style = self.theme.as_style(Meaning::Match);
                     }
-                    style.attributes.set(style::Attribute::Bold);
                 }
                 let s = ch.to_string();
-                self.draw(&s, Style::from_crossterm(style));
+                self.draw(&s, style);
                 pos += s.len();
             }
             pos += 1;
@@ -343,7 +341,7 @@ impl DrawState<'_> {
             .unwrap_or_else(|_| "????-??-?? ??:??".to_string());
         let w = width as usize;
         let display = format!("{formatted:w$}");
-        self.draw(&display, Style::from_crossterm(style));
+        self.draw(&display, style);
     }
 
     /// Render the directory column (working directory, truncated)
@@ -360,7 +358,7 @@ impl DrawState<'_> {
         } else {
             format!("{cwd:w$}")
         };
-        self.draw(&display, Style::from_crossterm(style));
+        self.draw(&display, style);
     }
 
     /// Render the host column (just the hostname)
@@ -377,7 +375,7 @@ impl DrawState<'_> {
         } else {
             format!("{host:w$}")
         };
-        self.draw(&display, Style::from_crossterm(style));
+        self.draw(&display, style);
     }
 
     /// Render the user column
@@ -394,7 +392,7 @@ impl DrawState<'_> {
         } else {
             format!("{user:w$}")
         };
-        self.draw(&display, Style::from_crossterm(style));
+        self.draw(&display, style);
     }
 
     /// Render the exit code column
@@ -406,7 +404,7 @@ impl DrawState<'_> {
         };
         let w = width as usize;
         let display = format!("{:>w$}", h.exit);
-        self.draw(&display, Style::from_crossterm(style));
+        self.draw(&display, style);
     }
 
     fn draw(&mut self, s: &str, mut style: Style) {
