@@ -43,6 +43,64 @@ plugins:
       paths: ["mkdocs.yml", "docs/index.md", "docs/stylesheets/*"]
       yml_file: mkdocs.yml
       branch: mkt/docs-migration
+  - llmstxt:
+      base_url: https://docs.atuin.sh/cli
+      full_output: llms-full.txt
+      markdown_description: |
+        Atuin replaces your shell's built-in history with a SQLite database, adding context
+        (cwd, exit code, duration, hostname) and optionally syncing across machines with
+        end-to-end encryption. These docs cover the CLI tool - installation, configuration,
+        usage, self-hosting, and AI features.
+      sections:
+        Overview:
+          - index.md: Getting started with Atuin - quickstart, supported shells, and links.
+        Guide:
+          - guide/getting-started.md: First steps - install, import history, and start using Atuin.
+          - guide/installation.md: Install via script, Homebrew, WinGet, Cargo, Nix, or from source.
+          - guide/sync.md: Register an account and set up end-to-end encrypted history sync.
+          - guide/import.md: Import existing shell history from bash, zsh, fish, and others.
+          - guide/basic-usage.md: What Atuin records, how to use the TUI, and common config tweaks.
+          - guide/advanced-usage.md: Filter modes (global, host, session, directory, workspace) and search modes (fuzzy, full-text, skim).
+          - guide/shell-integration.md: How shell hooks work, environment variables, embedded terminals, and excluding commands.
+          - guide/agent-hooks.md: Capture commands from AI coding agents (Claude Code, Codex, pi) and filter by author.
+          - guide/delete-history.md: Delete single entries, bulk delete by query, remove duplicates, or wipe everything.
+          - guide/dotfiles.md: Sync shell aliases and environment variables across machines.
+          - guide/theming.md: Customize the TUI with color themes.
+        Configuration:
+          - configuration/config.md: Complete reference for ~/.config/atuin/config.toml - all settings with defaults and examples.
+          - configuration/key-binding.md: Custom up-arrow filter mode, disable up-arrow or ctrl-r, vim mode.
+          - configuration/advanced-key-binding.md: Full keymap customization with emacs, vim-normal, vim-insert, and inspector modes.
+        Reference:
+          - reference/config.md: The `atuin config` command - get, set, list, and resolve configuration values.
+          - reference/daemon.md: Background daemon for faster writes, auto-sync, and in-memory fuzzy search.
+          - reference/doctor.md: Diagnose common problems and dump system info for bug reports.
+          - reference/gen-completions.md: Generate shell completions for bash, fish, zsh, nushell, powershell, elvish.
+          - reference/hex.md: Experimental PTY proxy with popup rendering over existing terminal output.
+          - reference/import.md: Import history from bash, fish, zsh, replxx, mcfly, resh, and xonsh.
+          - reference/info.md: Show config file paths, env vars, and version info.
+          - reference/list.md: List history entries with formatting, filtering by cwd/session, and custom output templates.
+          - reference/prune.md: Delete entries matching history_filter config (useful after updating filters).
+          - reference/search.md: Search history with wildcards, filters (cwd, exit code, before/after), and delete mode.
+          - reference/stats.md: Compute stats for a time period - most used command, command count, unique commands.
+          - reference/sync.md: Sync commands - register, login, manual sync, and account management.
+        Self Hosting:
+          - self-hosting/server-setup.md: Run your own Atuin sync server with PostgreSQL or SQLite.
+          - self-hosting/usage.md: Configure the client to use a self-hosted server.
+          - self-hosting/docker.md: Deploy with Docker or Docker Compose.
+          - self-hosting/kubernetes.md: Full Kubernetes deployment with Postgres, secrets, and ingress.
+          - self-hosting/systemd.md: Systemd service unit with hardening options.
+        AI:
+          - ai/introduction.md: Atuin AI - command generation and lookup via LLM from your terminal.
+          - ai/settings.md: AI configuration in config.toml - enabled, endpoint, session timeout.
+          - ai/user-context.md: Send additional context to the LLM via TERMINAL.md files and dynamic shell substitution.
+          - ai/skills.md: Reusable instruction sets (skills) for Atuin AI - playbooks, conventions, workflows.
+          - ai/tools-permissions.md: Tools the AI can use (shell, filesystem) and permission files to control access.
+        Misc:
+          - known-issues.md: Known issues with ZFS and network filesystems.
+          - integrations.md: Integrations with zsh-autosuggestions, zsh-vi-mode, ble.sh, and mcfly.
+          - faq.md: Frequently asked questions - IDE terminals, history filtering, up-arrow, uninstalling.
+          - uninstall.md: How to uninstall Atuin and remove all data.
+          - sync-v2.md: Upgrading from sync v1 to v2 - faster, more reliable, less bandwidth.
 
 markdown_extensions:
   - pymdownx.highlight:
