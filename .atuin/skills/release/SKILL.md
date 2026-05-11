@@ -187,7 +187,7 @@ hasn't indexed a freshly-published dependency yet):
 atuin-common, atuin-client, atuin-ai, atuin-dotfiles, atuin-history,
 atuin-nucleo/matcher, atuin-nucleo, atuin-daemon, atuin-kv,
 atuin-scripts, atuin-server-database, atuin-server-postgres,
-atuin-server-sqlite, atuin-server, atuin-hex, atuin
+atuin-server-sqlite, atuin-server, atuin-pty-proxy, atuin
 ```
 
 For each crate, run from `crates/<name>`:

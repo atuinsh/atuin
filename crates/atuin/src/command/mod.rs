@@ -21,11 +21,12 @@ pub enum AtuinCmd {
     #[command(flatten)]
     Client(client::Cmd),
 
-    /// Terminal emulator for atuin
-    #[cfg(feature = "hex")]
-    Hex {
+    /// PTY proxy for atuin
+    #[cfg(feature = "pty-proxy")]
+    #[command(alias = "hex")]
+    PtyProxy {
         #[command(subcommand)]
-        cmd: Option<atuin_hex::Cmd>,
+        cmd: Option<atuin_pty_proxy::Cmd>,
     },
 
     /// Generate a UUID
@@ -54,9 +55,9 @@ impl AtuinCmd {
             #[cfg(feature = "client")]
             Self::Client(client) => client.run(),
 
-            #[cfg(feature = "hex")]
-            Self::Hex { cmd } => {
-                atuin_hex::run(cmd);
+            #[cfg(feature = "pty-proxy")]
+            Self::PtyProxy { cmd } => {
+                atuin_pty_proxy::run(cmd);
                 Ok(())
             }
 

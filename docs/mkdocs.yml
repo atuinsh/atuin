@@ -75,7 +75,7 @@ plugins:
           - reference/daemon.md: Background daemon for faster writes, auto-sync, and in-memory fuzzy search.
           - reference/doctor.md: Diagnose common problems and dump system info for bug reports.
           - reference/gen-completions.md: Generate shell completions for bash, fish, zsh, nushell, powershell, elvish.
-          - reference/hex.md: Experimental PTY proxy with popup rendering over existing terminal output.
+          - reference/pty-proxy.md: Experimental PTY proxy with popup rendering over existing terminal output.
           - reference/import.md: Import history from bash, fish, zsh, replxx, mcfly, resh, and xonsh.
           - reference/info.md: Show config file paths, env vars, and version info.
           - reference/list.md: List history entries with formatting, filtering by cwd/session, and custom output templates.
@@ -141,7 +141,7 @@ nav:
       - daemon: reference/daemon.md
       - doctor: reference/doctor.md
       - gen-completions: reference/gen-completions.md
-      - hex: reference/hex.md
+      - pty-proxy: reference/pty-proxy.md
       - import: reference/import.md
       - info: reference/info.md
       - history list: reference/list.md

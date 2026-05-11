@@ -460,7 +460,7 @@ publish_crates() {
         atuin-server-postgres
         atuin-server-sqlite
         atuin-server
-        atuin-hex
+        atuin-pty-proxy
         atuin
     )
 

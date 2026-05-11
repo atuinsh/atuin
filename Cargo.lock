@@ -223,10 +223,10 @@ dependencies = [
  "atuin-common",
  "atuin-daemon",
  "atuin-dotfiles",
- "atuin-hex",
  "atuin-history",
  "atuin-kv",
  "atuin-nucleo-matcher",
+ "atuin-pty-proxy",
  "atuin-scripts",
  "atuin-server",
  "atuin-server-database",
@@ -447,18 +447,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "atuin-hex"
-version = "18.16.0"
-dependencies = [
- "clap",
- "crossterm",
- "eyre",
- "portable-pty",
- "signal-hook",
- "vt100",
-]
-
-[[package]]
 name = "atuin-history"
 version = "18.16.0"
 dependencies = [
@@ -512,6 +500,18 @@ version = "0.3.1"
 dependencies = [
  "memchr",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "atuin-pty-proxy"
+version = "18.16.0"
+dependencies = [
+ "clap",
+ "crossterm",
+ "eyre",
+ "portable-pty",
+ "signal-hook",
+ "vt100",
 ]
 
 [[package]]

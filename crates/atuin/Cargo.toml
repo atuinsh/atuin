@@ -33,12 +33,13 @@ buildflags = ["--release"]
 atuin = { path = "/usr/bin/atuin" }
 
 [features]
-default = ["client", "sync", "clipboard", "check-update", "daemon", "ai", "hex"]
+default = ["client", "sync", "clipboard", "check-update", "daemon", "ai", "pty-proxy"]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
 daemon = ["atuin-client/daemon", "atuin-daemon"]
 ai = ["atuin-ai"]
-hex = ["atuin-hex"]
+pty-proxy = ["dep:atuin-pty-proxy"]
+hex = ["pty-proxy"]
 clipboard = ["arboard"]
 check-update = ["atuin-client/check-update"]
 
@@ -49,7 +50,7 @@ atuin-common = { workspace = true }
 atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }
 atuin-daemon = { path = "../atuin-daemon", version = "18.16.0", optional = true, default-features = false }
-atuin-hex = { path = "../atuin-hex", version = "18.16.0", optional = true, default-features = false }
+atuin-pty-proxy = { path = "../atuin-pty-proxy", version = "18.16.0", optional = true, default-features = false }
 atuin-scripts = { workspace = true }
 atuin-kv = { workspace = true }
 

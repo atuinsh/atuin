@@ -4,7 +4,7 @@ use clap::{Args, Subcommand, ValueEnum};
 
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
-    /// Print shell code to initialize atuin-hex on shell startup
+    /// Print shell code to initialize atuin pty-proxy on shell startup
     Init(Init),
 }
 
@@ -42,7 +42,7 @@ pub fn run(cmd: Option<Cmd>) {
     match cmd {
         Some(Cmd::Init(init)) => {
             if let Err(err) = init.run() {
-                eprintln!("atuin hex: {err}");
+                eprintln!("atuin pty-proxy: {err}");
                 std::process::exit(1);
             }
         }
@@ -95,55 +95,57 @@ fn render_init(shell: Shell) -> &'static str {
     match shell {
         Shell::Bash | Shell::Zsh => {
             r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
-  _atuin_hex_tmux_current="${TMUX:-}"
-  _atuin_hex_tmux_previous="${ATUIN_HEX_TMUX:-}"
+  _atuin_pty_proxy_tmux_current="${TMUX:-}"
+  _atuin_pty_proxy_tmux_previous="${ATUIN_PTY_PROXY_TMUX:-${ATUIN_HEX_TMUX:-}}"
 
-  if [[ -z "${ATUIN_HEX_ACTIVE:-}" ]] || [[ "$_atuin_hex_tmux_current" != "$_atuin_hex_tmux_previous" ]]; then
-    export ATUIN_HEX_ACTIVE=1
-    export ATUIN_HEX_TMUX="$_atuin_hex_tmux_current"
-    exec atuin hex
+  if [[ -z "${ATUIN_PTY_PROXY_ACTIVE:-${ATUIN_HEX_ACTIVE:-}}" ]] || [[ "$_atuin_pty_proxy_tmux_current" != "$_atuin_pty_proxy_tmux_previous" ]]; then
+    export ATUIN_PTY_PROXY_ACTIVE=1
+    export ATUIN_PTY_PROXY_TMUX="$_atuin_pty_proxy_tmux_current"
+    exec atuin pty-proxy
   fi
 
-  unset _atuin_hex_tmux_current _atuin_hex_tmux_previous
+  unset _atuin_pty_proxy_tmux_current _atuin_pty_proxy_tmux_previous
 fi
 "#
         }
         Shell::Fish => {
             r#"if status is-interactive; and test -t 0; and test -t 1
-    set -l _atuin_hex_tmux_current ""
+    set -l _atuin_pty_proxy_tmux_current ""
     if set -q TMUX
-        set _atuin_hex_tmux_current "$TMUX"
+        set _atuin_pty_proxy_tmux_current "$TMUX"
     end
 
-    set -l _atuin_hex_tmux_previous ""
-    if set -q ATUIN_HEX_TMUX
-        set _atuin_hex_tmux_previous "$ATUIN_HEX_TMUX"
+    set -l _atuin_pty_proxy_tmux_previous ""
+    if set -q ATUIN_PTY_PROXY_TMUX
+        set _atuin_pty_proxy_tmux_previous "$ATUIN_PTY_PROXY_TMUX"
+    else if set -q ATUIN_HEX_TMUX
+        set _atuin_pty_proxy_tmux_previous "$ATUIN_HEX_TMUX"
     end
 
-    if not set -q ATUIN_HEX_ACTIVE
-        set -gx ATUIN_HEX_ACTIVE 1
-        set -gx ATUIN_HEX_TMUX "$_atuin_hex_tmux_current"
-        exec atuin hex
-    else if test "$_atuin_hex_tmux_current" != "$_atuin_hex_tmux_previous"
-        set -gx ATUIN_HEX_ACTIVE 1
-        set -gx ATUIN_HEX_TMUX "$_atuin_hex_tmux_current"
-        exec atuin hex
+    if not set -q ATUIN_PTY_PROXY_ACTIVE; and not set -q ATUIN_HEX_ACTIVE
+        set -gx ATUIN_PTY_PROXY_ACTIVE 1
+        set -gx ATUIN_PTY_PROXY_TMUX "$_atuin_pty_proxy_tmux_current"
+        exec atuin pty-proxy
+    else if test "$_atuin_pty_proxy_tmux_current" != "$_atuin_pty_proxy_tmux_previous"
+        set -gx ATUIN_PTY_PROXY_ACTIVE 1
+        set -gx ATUIN_PTY_PROXY_TMUX "$_atuin_pty_proxy_tmux_current"
+        exec atuin pty-proxy
     end
 end
 "#
         }
         // Nushell cannot dynamically source the output of `atuin init nu`,
-        // so we only output the hex preamble here. Users must also set up
+        // so we only output the pty-proxy preamble here. Users must also set up
         // `atuin init nu` separately.
         Shell::Nu => {
             r#"if (is-terminal --stdin) and (is-terminal --stdout) {
     let tmux_current = ($env.TMUX? | default "")
-    let tmux_previous = ($env.ATUIN_HEX_TMUX? | default "")
+    let tmux_previous = ($env.ATUIN_PTY_PROXY_TMUX? | default ($env.ATUIN_HEX_TMUX? | default ""))
 
-    if ($env.ATUIN_HEX_ACTIVE? | default "" | is-empty) or ($tmux_current != $tmux_previous) {
-        $env.ATUIN_HEX_ACTIVE = "1"
-        $env.ATUIN_HEX_TMUX = $tmux_current
-        exec atuin hex
+    if (($env.ATUIN_PTY_PROXY_ACTIVE? | default ($env.ATUIN_HEX_ACTIVE? | default "")) | is-empty) or ($tmux_current != $tmux_previous) {
+        $env.ATUIN_PTY_PROXY_ACTIVE = "1"
+        $env.ATUIN_PTY_PROXY_TMUX = $tmux_current
+        exec atuin pty-proxy
     }
 }
 "#
@@ -154,7 +156,7 @@ end
 #[cfg(not(unix))]
 mod app {
     pub(crate) fn main() {
-        eprintln!("atuin hex currently supports unix platforms");
+        eprintln!("atuin pty-proxy currently supports unix platforms");
         std::process::exit(1);
     }
 }
@@ -177,14 +179,14 @@ mod app {
     pub(crate) fn main() {
         if let Err(e) = run() {
             let _ = terminal::disable_raw_mode();
-            eprintln!("atuin hex: {e:#}");
+            eprintln!("atuin pty-proxy: {e:#}");
             std::process::exit(1);
         }
     }
 
     fn socket_path() -> std::path::PathBuf {
         let dir = std::env::temp_dir();
-        dir.join(format!("atuin-hex-{}.sock", std::process::id()))
+        dir.join(format!("atuin-pty-proxy-{}.sock", std::process::id()))
     }
 
     /// Wire format written to the Unix socket:
@@ -249,6 +251,7 @@ mod app {
 
         let mut cmd = CommandBuilder::new_default_prog();
         cmd.cwd(std::env::current_dir()?);
+        cmd.env("ATUIN_PTY_PROXY_SOCKET", sock_path.as_os_str());
         cmd.env("ATUIN_HEX_SOCKET", sock_path.as_os_str());
 
         let mut child = pair
@@ -304,7 +307,7 @@ mod app {
                 let listener = match UnixListener::bind(&sock_path_clone) {
                     Ok(l) => l,
                     Err(e) => {
-                        eprintln!("atuin hex: failed to bind socket: {e}");
+                        eprintln!("atuin pty-proxy: failed to bind socket: {e}");
                         return;
                     }
                 };
@@ -445,8 +448,8 @@ mod tests {
     #[test]
     fn posix_init_uses_exec_and_tmux_guard() {
         let script = render_init(Shell::Bash);
-        assert!(script.contains("exec atuin hex"));
-        assert!(script.contains("ATUIN_HEX_TMUX"));
+        assert!(script.contains("exec atuin pty-proxy"));
+        assert!(script.contains("ATUIN_PTY_PROXY_TMUX"));
         assert!(!script.contains("eval \"$(atuin init bash)\""));
     }
 
@@ -459,17 +462,17 @@ mod tests {
     #[test]
     fn fish_init_uses_source() {
         let script = render_init(Shell::Fish);
-        assert!(script.contains("exec atuin hex"));
+        assert!(script.contains("exec atuin pty-proxy"));
         assert!(!script.contains("atuin init fish | source"));
     }
 
     #[test]
     fn nu_init_uses_exec_and_tty_guard() {
         let script = render_init(Shell::Nu);
-        assert!(script.contains("exec atuin hex"));
-        assert!(script.contains("ATUIN_HEX_TMUX"));
+        assert!(script.contains("exec atuin pty-proxy"));
+        assert!(script.contains("ATUIN_PTY_PROXY_TMUX"));
         assert!(script.contains("is-terminal --stdin"));
         assert!(script.contains("is-terminal --stdout"));
-        assert!(script.contains("ATUIN_HEX_ACTIVE"));
+        assert!(script.contains("ATUIN_PTY_PROXY_ACTIVE"));
     }
 }
