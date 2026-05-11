@@ -1,0 +1,17 @@
+syntax = "proto3";
+package semantic;
+
+service Semantic {
+  rpc RecordCommands(stream CommandCapture) returns (RecordCommandsReply);
+}
+
+message CommandCapture {
+  string prompt = 1;
+  string command = 2;
+  string output = 3;
+  optional int32 exit_code = 4;
+}
+
+message RecordCommandsReply {
+  uint64 accepted = 1;
+}

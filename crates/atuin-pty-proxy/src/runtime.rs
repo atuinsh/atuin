@@ -5,6 +5,7 @@ use crossterm::terminal;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::RuntimeOptions;
+use crate::capture::CommandCaptureTracker;
 use crate::debug::{Osc133DebugHighlighter, RESET};
 use crate::screen::{self, Msg};
 
@@ -64,12 +65,23 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     let stdout_thread = std::thread::spawn(move || {
         let mut stdout = std::io::stdout();
         let mut highlighter = options.debug_osc133.then(Osc133DebugHighlighter::new);
+        let mut capture_tracker = options
+            .command_capture_sink
+            .as_ref()
+            .map(|_| CommandCaptureTracker::new());
         let mut buf = [0u8; 8192];
 
         loop {
             match pty_reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
+                    if let (Some(tracker), Some(sink)) = (
+                        capture_tracker.as_mut(),
+                        options.command_capture_sink.as_ref(),
+                    ) {
+                        tracker.push(&buf[..n], sink);
+                    }
+
                     if let Some(highlighter) = highlighter.as_mut() {
                         let rendered = highlighter.render(&buf[..n]);
                         let _ = msg_tx.try_send(Msg::Data(rendered.clone()));

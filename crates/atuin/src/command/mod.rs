@@ -54,7 +54,12 @@ impl AtuinCmd {
 
             #[cfg(feature = "pty-proxy")]
             Self::PtyProxy(hex) => {
+                #[cfg(all(feature = "daemon", feature = "pty-proxy"))]
+                atuin_pty_proxy::run_with_capture_sink(hex, semantic_command_capture_sink());
+
+                #[cfg(not(all(feature = "daemon", feature = "pty-proxy")))]
                 atuin_pty_proxy::run(hex);
+
                 Ok(())
             }
 
@@ -69,5 +74,62 @@ impl AtuinCmd {
             Self::GenCompletions(gen_completions) => gen_completions.run(),
             Self::External(args) => external::run(&args),
         }
+    }
+}
+
+#[cfg(all(feature = "daemon", feature = "pty-proxy"))]
+fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink> {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let settings = atuin_client::settings::Settings::new().ok()?;
+    let (tx, rx) = mpsc::sync_channel::<atuin_pty_proxy::CommandCapture>(128);
+
+    std::thread::spawn(move || {
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        else {
+            return;
+        };
+
+        while let Ok(first) = rx.recv() {
+            let mut batch = vec![first];
+
+            while batch.len() < 64 {
+                match rx.recv_timeout(Duration::from_millis(25)) {
+                    Ok(capture) => batch.push(capture),
+                    Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {
+                        break;
+                    }
+                }
+            }
+
+            runtime.block_on(send_semantic_command_captures(&settings, batch));
+        }
+    });
+
+    Some(Box::new(move |capture| {
+        let _ = tx.try_send(capture);
+    }))
+}
+
+#[cfg(all(feature = "daemon", feature = "pty-proxy"))]
+async fn send_semantic_command_captures(
+    settings: &atuin_client::settings::Settings,
+    batch: Vec<atuin_pty_proxy::CommandCapture>,
+) {
+    let captures = batch
+        .into_iter()
+        .map(|capture| atuin_daemon::semantic::CommandCapture {
+            prompt: capture.prompt,
+            command: capture.command,
+            output: capture.output,
+            exit_code: capture.exit_code,
+        })
+        .collect();
+
+    if let Ok(mut client) = atuin_daemon::SemanticClient::from_settings(settings).await {
+        let _ = client.record_commands(captures).await;
     }
 }
