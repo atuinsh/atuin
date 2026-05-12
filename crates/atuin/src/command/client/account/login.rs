@@ -295,11 +295,14 @@ async fn verify_key_against_remote(settings: &Settings) -> Result<()> {
                 let _ = meta.delete_session().await;
                 let _ = meta.delete_hub_session().await;
             }
-            bail!(
-                "The provided encryption key does not match the data on the server. \
-                 You have been logged out — please run `atuin login` again with the correct key. \
-                 Find it by running `atuin key` on a machine that already syncs successfully."
+            crate::print_error::print_error(
+                "Wrong encryption key",
+                "The encryption key on this machine does not match the data on the server. \
+                 You have been logged out.\n\n\
+                 To fix this, find your existing key by running `atuin key` on a machine that \
+                 already syncs successfully, then run `atuin login` again here with that key.",
             );
+            std::process::exit(1);
         }
         Err(e) => {
             // Non-key error (e.g. transient network issue). Don't fail the

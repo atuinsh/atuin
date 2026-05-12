@@ -65,7 +65,9 @@ impl Push {
         // Skip on --force: that path intentionally replaces remote with local.
         if !self.force {
             let key: [u8; 32] = load_key(settings)?.into();
-            sync::check_encryption_key(&client, &remote_index, &key).await?;
+            sync::check_encryption_key(&client, &remote_index, &key)
+                .await
+                .map_err(crate::print_error::format_sync_error)?;
         }
 
         let operations = sync::operations(diff, &store).await?;
