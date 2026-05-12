@@ -24,7 +24,7 @@ pub enum AtuinCmd {
     /// PTY proxy for atuin
     #[cfg(feature = "pty-proxy")]
     #[command(alias = "hex")]
-    PtyProxy(atuin_pty_proxy::Hex),
+    PtyProxy(atuin_pty_proxy::PtyProxy),
 
     /// Generate a UUID
     Uuid,
@@ -53,12 +53,12 @@ impl AtuinCmd {
             Self::Client(client) => client.run(),
 
             #[cfg(feature = "pty-proxy")]
-            Self::PtyProxy(hex) => {
+            Self::PtyProxy(proxy) => {
                 #[cfg(all(feature = "daemon", feature = "pty-proxy"))]
-                atuin_pty_proxy::run_with_capture_sink(hex, semantic_command_capture_sink());
+                atuin_pty_proxy::run_with_capture_sink(proxy, semantic_command_capture_sink());
 
                 #[cfg(not(all(feature = "daemon", feature = "pty-proxy")))]
-                atuin_pty_proxy::run(hex);
+                atuin_pty_proxy::run(proxy);
 
                 Ok(())
             }

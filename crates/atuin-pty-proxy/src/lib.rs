@@ -12,7 +12,7 @@ use clap::{Args, Subcommand, ValueEnum};
 pub use capture::{CommandCapture, CommandCaptureSink};
 
 #[derive(Args, Debug)]
-pub struct Hex {
+pub struct PtyProxy {
     /// Highlight OSC 133 prompt, input, output, and exit-code regions
     #[arg(long)]
     debug_osc133: bool,
@@ -57,19 +57,19 @@ impl Init {
     }
 }
 
-pub fn run(hex: Hex) {
-    run_with_capture_sink(hex, None);
+pub fn run(proxy: PtyProxy) {
+    run_with_capture_sink(proxy, None);
 }
 
-pub fn run_with_capture_sink(hex: Hex, command_capture_sink: Option<CommandCaptureSink>) {
-    match hex.cmd {
+pub fn run_with_capture_sink(proxy: PtyProxy, command_capture_sink: Option<CommandCaptureSink>) {
+    match proxy.cmd {
         Some(Cmd::Init(init)) => {
             if let Err(err) = init.run() {
                 eprintln!("atuin pty-proxy: {err}");
                 std::process::exit(1);
             }
         }
-        None => runtime::main(RuntimeOptions::new(hex, command_capture_sink)),
+        None => runtime::main(RuntimeOptions::new(proxy, command_capture_sink)),
     }
 }
 
@@ -79,9 +79,9 @@ pub(crate) struct RuntimeOptions {
 }
 
 impl RuntimeOptions {
-    fn new(hex: Hex, command_capture_sink: Option<CommandCaptureSink>) -> Self {
+    fn new(proxy: PtyProxy, command_capture_sink: Option<CommandCaptureSink>) -> Self {
         Self {
-            debug_osc133: hex.debug_osc133 || env_flag("ATUIN_HEX_DEBUG"),
+            debug_osc133: proxy.debug_osc133 || env_flag("ATUIN_HEX_DEBUG"),
             command_capture_sink,
         }
     }

@@ -1,7 +1,7 @@
 //! Semantic command capture component.
 //!
 //! This is a prototype in-memory store for completed command captures emitted
-//! by atuin-hex. It associates captures with regular history lifecycle events
+//! by atuin-pty-proxy. It associates captures with regular history lifecycle events
 //! when possible, then logs the joined record.
 
 use std::collections::VecDeque;
