@@ -88,7 +88,7 @@ async fn run(
         let host_id = Settings::host_id().await?;
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
-        let (uploaded, downloaded) = sync::sync(settings, &store).await?;
+        let (uploaded, downloaded) = sync::sync(settings, &store, &encryption_key).await?;
 
         crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
 
@@ -111,7 +111,7 @@ async fn run(
             println!("Re-running sync due to new records locally");
 
             // we'll want to run sync once more, as there will now be stuff to upload
-            let (uploaded, downloaded) = sync::sync(settings, &store).await?;
+            let (uploaded, downloaded) = sync::sync(settings, &store, &encryption_key).await?;
 
             crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
 

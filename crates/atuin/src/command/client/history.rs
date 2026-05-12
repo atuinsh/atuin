@@ -531,7 +531,8 @@ async fn handle_end(
         #[cfg(feature = "sync")]
         {
             if settings.sync.records {
-                let (_, downloaded) = record::sync::sync(settings, &store).await?;
+                let (_, downloaded) =
+                    record::sync::sync(settings, &store, &history_store.encryption_key).await?;
                 Settings::save_sync_time().await?;
 
                 crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
