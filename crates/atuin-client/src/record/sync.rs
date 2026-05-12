@@ -340,7 +340,7 @@ async fn check_encryption_key(
     let sample = remote_index
         .hosts
         .iter()
-        .flat_map(|(host, tags)| tags.iter().map(move |(tag, _)| (*host, tag.clone())))
+        .flat_map(|(host, tags)| tags.keys().map(move |tag| (*host, tag.clone())))
         .next();
 
     let Some((host, tag)) = sample else {
