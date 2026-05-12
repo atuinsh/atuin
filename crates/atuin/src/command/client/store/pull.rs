@@ -3,6 +3,7 @@ use eyre::Result;
 
 use atuin_client::{
     database::Database,
+    encryption::load_key,
     record::store::Store,
     record::sync::Operation,
     record::{sqlite_store::SqliteStore, sync},
@@ -47,7 +48,14 @@ impl Pull {
         //  a) are they a download op?
         //  b) are they for the host/tag we are pushing here?
         let client = sync::build_client(settings).await?;
-        let (diff, _) = sync::diff(&client, &store).await?;
+        let (diff, remote_index) = sync::diff(&client, &store).await?;
+
+        // Skip on --force: local was already wiped above, mismatch is the user's call.
+        if !self.force {
+            let key: [u8; 32] = load_key(settings)?.into();
+            sync::check_encryption_key(&client, &remote_index, &key).await?;
+        }
+
         let operations = sync::operations(diff, &store).await?;
 
         let operations = operations
