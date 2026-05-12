@@ -58,7 +58,8 @@ impl Push {
         // 3. Filter operations by
         //  a) are they an upload op?
         //  b) are they for the host/tag we are pushing here?
-        let (diff, _) = sync::diff(settings, &store).await?;
+        let client = sync::build_client(settings).await?;
+        let (diff, _) = sync::diff(&client, &store).await?;
         let operations = sync::operations(diff, &store).await?;
 
         let operations = operations
@@ -92,7 +93,7 @@ impl Push {
             })
             .collect();
 
-        let (uploaded, _) = sync::sync_remote(operations, &store, settings, self.page).await?;
+        let (uploaded, _) = sync::sync_remote(&client, operations, &store, self.page).await?;
 
         println!("Uploaded {uploaded} records");
 

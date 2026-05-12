@@ -277,7 +277,16 @@ async fn verify_key_against_remote(settings: &Settings) -> Result<()> {
         .context("could not load encryption key for verification")?
         .into();
 
-    match sync::check_encryption_key(settings, &key).await {
+    let client = sync::build_client(settings).await?;
+    let remote_index = match client.record_status().await {
+        Ok(idx) => idx,
+        Err(e) => {
+            tracing::warn!("could not fetch remote status to verify key: {e}");
+            return Ok(());
+        }
+    };
+
+    match sync::check_encryption_key(&client, &remote_index, &key).await {
         Ok(()) => Ok(()),
         Err(SyncError::WrongKey) => {
             // Roll back the saved session so the user is not left in a

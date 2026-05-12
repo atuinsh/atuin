@@ -57,7 +57,7 @@ pub enum Operation {
     },
 }
 
-async fn build_client(settings: &Settings) -> Result<Client<'_>, SyncError> {
+pub async fn build_client(settings: &Settings) -> Result<Client<'_>, SyncError> {
     Client::new(
         &settings.sync_address,
         settings
@@ -70,7 +70,7 @@ async fn build_client(settings: &Settings) -> Result<Client<'_>, SyncError> {
     .map_err(|e| SyncError::OperationalError { msg: e.to_string() })
 }
 
-async fn diff_inner(
+pub async fn diff(
     client: &Client<'_>,
     store: &impl Store,
 ) -> Result<(Vec<Diff>, RecordStatus), SyncError> {
@@ -87,14 +87,6 @@ async fn diff_inner(
     let diff = local_index.diff(&remote_index);
 
     Ok((diff, remote_index))
-}
-
-pub async fn diff(
-    settings: &Settings,
-    store: &impl Store,
-) -> Result<(Vec<Diff>, RecordStatus), SyncError> {
-    let client = build_client(settings).await?;
-    diff_inner(&client, store).await
 }
 
 // Take a diff, along with a local store, and resolve it into a set of operations.
@@ -290,7 +282,7 @@ async fn sync_download(
     Ok(ret)
 }
 
-async fn sync_remote_inner(
+pub async fn sync_remote(
     client: &Client<'_>,
     operations: Vec<Operation>,
     local_store: &impl Store,
@@ -319,8 +311,7 @@ async fn sync_remote_inner(
                 remote,
             } => {
                 let mut d =
-                    sync_download(local_store, client, host, tag, local, remote, page_size)
-                        .await?;
+                    sync_download(local_store, client, host, tag, local, remote, page_size).await?;
                 downloaded.append(&mut d)
             }
 
@@ -331,17 +322,7 @@ async fn sync_remote_inner(
     Ok((uploaded, downloaded))
 }
 
-pub async fn sync_remote(
-    operations: Vec<Operation>,
-    local_store: &impl Store,
-    settings: &Settings,
-    page_size: u64,
-) -> Result<(i64, Vec<RecordId>), SyncError> {
-    let client = build_client(settings).await?;
-    sync_remote_inner(&client, operations, local_store, page_size).await
-}
-
-async fn check_encryption_key_inner(
+pub async fn check_encryption_key(
     client: &Client<'_>,
     remote_index: &RecordStatus,
     encryption_key: &[u8; 32],
@@ -372,31 +353,19 @@ async fn check_encryption_key_inner(
     Ok(())
 }
 
-pub async fn check_encryption_key(
-    settings: &Settings,
-    encryption_key: &[u8; 32],
-) -> Result<(), SyncError> {
-    let client = build_client(settings).await?;
-    let remote_index = client
-        .record_status()
-        .await
-        .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
-    check_encryption_key_inner(&client, &remote_index, encryption_key).await
-}
-
 pub async fn sync(
     settings: &Settings,
     store: &impl Store,
     encryption_key: &[u8; 32],
 ) -> Result<(i64, Vec<RecordId>), SyncError> {
     let client = build_client(settings).await?;
-    let (diff, remote_index) = diff_inner(&client, store).await?;
+    let (diff, remote_index) = diff(&client, store).await?;
 
     // Bail before mutating either side if the local key can't read the remote.
-    check_encryption_key_inner(&client, &remote_index, encryption_key).await?;
+    check_encryption_key(&client, &remote_index, encryption_key).await?;
 
     let operations = operations(diff, store).await?;
-    let (uploaded, downloaded) = sync_remote_inner(&client, operations, store, 100).await?;
+    let (uploaded, downloaded) = sync_remote(&client, operations, store, 100).await?;
 
     Ok((uploaded, downloaded))
 }
