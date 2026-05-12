@@ -332,21 +332,10 @@ pub async fn sync_remote(
     Ok((uploaded, downloaded))
 }
 
-async fn check_encryption_key(
+pub async fn check_encryption_key(
     settings: &Settings,
-    remote_index: &RecordStatus,
     encryption_key: &[u8; 32],
 ) -> Result<(), SyncError> {
-    let sample = remote_index
-        .hosts
-        .iter()
-        .flat_map(|(host, tags)| tags.keys().map(move |tag| (*host, tag.clone())))
-        .next();
-
-    let Some((host, tag)) = sample else {
-        return Ok(());
-    };
-
     let client = Client::new(
         &settings.sync_address,
         settings
@@ -357,6 +346,21 @@ async fn check_encryption_key(
         settings.network_timeout,
     )
     .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?;
+
+    let remote_index = client
+        .record_status()
+        .await
+        .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
+
+    let sample = remote_index
+        .hosts
+        .iter()
+        .flat_map(|(host, tags)| tags.keys().map(move |tag| (*host, tag.clone())))
+        .next();
+
+    let Some((host, tag)) = sample else {
+        return Ok(());
+    };
 
     let records = client
         .next_records(host, tag, 0, 1)
@@ -379,11 +383,10 @@ pub async fn sync(
     store: &impl Store,
     encryption_key: &[u8; 32],
 ) -> Result<(i64, Vec<RecordId>), SyncError> {
-    let (diff, remote_index) = diff(settings, store).await?;
-
     // Bail before mutating either side if the local key can't read the remote.
-    check_encryption_key(settings, &remote_index, encryption_key).await?;
+    check_encryption_key(settings, encryption_key).await?;
 
+    let (diff, _) = diff(settings, store).await?;
     let operations = operations(diff, store).await?;
     let (uploaded, downloaded) = sync_remote(operations, store, settings, 100).await?;
 

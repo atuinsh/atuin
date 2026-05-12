@@ -9,6 +9,7 @@ use atuin_client::{
     encryption::{Key, decode_key, encode_key, load_key},
     record::sqlite_store::SqliteStore,
     record::store::Store,
+    record::sync::{self, SyncError},
     settings::{Settings, SyncAuth},
 };
 use rpassword::prompt_password;
@@ -62,10 +63,12 @@ impl Cmd {
         }
 
         if settings.is_hub_sync() {
-            self.run_hub_login(settings, store).await
+            self.run_hub_login(settings, store).await?;
         } else {
-            self.run_legacy_login(settings, store).await
+            self.run_legacy_login(settings, store).await?;
         }
+
+        verify_key_against_remote(settings).await
     }
 
     /// Hub login: use the browser flow unless the username was provided for headless use.
@@ -266,6 +269,36 @@ impl Cmd {
         }
 
         Ok(())
+    }
+}
+
+async fn verify_key_against_remote(settings: &Settings) -> Result<()> {
+    let key: [u8; 32] = load_key(settings)
+        .context("could not load encryption key for verification")?
+        .into();
+
+    match sync::check_encryption_key(settings, &key).await {
+        Ok(()) => Ok(()),
+        Err(SyncError::WrongKey) => {
+            // Roll back the saved session so the user is not left in a
+            // half-authenticated state with a key that can't read the data.
+            if let Ok(meta) = Settings::meta_store().await {
+                let _ = meta.delete_session().await;
+                let _ = meta.delete_hub_session().await;
+            }
+            bail!(
+                "The provided encryption key does not match the data on the server. \
+                 You have been logged out — please run `atuin login` again with the correct key. \
+                 Find it by running `atuin key` on a machine that already syncs successfully."
+            );
+        }
+        Err(e) => {
+            // Non-key error (e.g. transient network issue). Don't fail the
+            // login — the user is authenticated and can sync later when the
+            // network recovers.
+            tracing::warn!("could not verify encryption key against remote: {e}");
+            Ok(())
+        }
     }
 }
 
