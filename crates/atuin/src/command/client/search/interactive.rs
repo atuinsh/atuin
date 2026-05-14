@@ -779,19 +779,21 @@ impl State {
             && settings.preview.strategy == PreviewStrategy::Static
             && tab_index == 0
         {
+            fn compute_render_height(v: &str, preview_width: u16, border_size: u16) -> u16 {
+                v.split('\n')
+                    .map(|line| {
+                        (line.len() as u16 + preview_width - 1 - border_size)
+                            / (preview_width - border_size)
+                    })
+                    .sum()
+            }
             let longest_command = results
                 .iter()
-                .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
+                .max_by_key(|x| compute_render_height(&x.command, preview_width, border_size));
             longest_command.map_or(0, |v| {
                 std::cmp::min(
                     settings.max_preview_height,
-                    v.command
-                        .split('\n')
-                        .map(|line| {
-                            (line.len() as u16 + preview_width - 1 - border_size)
-                                / (preview_width - border_size)
-                        })
-                        .sum(),
+                    compute_render_height(&v.command, preview_width, border_size),
                 )
             }) + border_size * 2
         } else if settings.show_preview && settings.preview.strategy == PreviewStrategy::Fixed {
@@ -2106,7 +2108,7 @@ mod tests {
             20,
         );
         let border_space = 2;
-        assert_eq!(preview_multiline, 4 + border_space);
+        assert_eq!(preview_multiline, 6 + border_space);
     }
 
     #[test]
