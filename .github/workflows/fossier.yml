@@ -2,8 +2,11 @@ name: Fossier PR Check
 on:
   pull_request_target:
     types: [opened, synchronize]
+  issue_comment:
+    types: [created]
 
 permissions:
+  contents: write
   pull-requests: write
   issues: write
 
