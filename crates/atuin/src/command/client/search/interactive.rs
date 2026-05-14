@@ -2074,6 +2074,43 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
+    fn calc_preview_height_multiline_test() {
+        let settings_preview_multi = Settings {
+            preview: Preview {
+                strategy: PreviewStrategy::Static,
+            },
+            show_preview: true,
+            max_preview_height: 10,
+            ..Settings::utc()
+        };
+        let cmd_91: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("curl https://veryverylongwebsite.com/about/getcount/testingmultipledifferentverylongcontent")
+            .cwd("/")
+            .build()
+            .into();
+        let cmd_62: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("echo 'international'\necho 'international'\necho 'international'")
+            .cwd("/")
+            .build()
+            .into();
+        let results: Vec<History> = vec![cmd_91, cmd_62];
+        let preview_multiline = State::calc_preview_height(
+            &settings_preview_multi,
+            &results,
+            1_usize,
+            0_usize,
+            Compactness::Full,
+            1,
+            20,
+        );
+        let border_space = 2;
+        assert_eq!(preview_multiline, 4 + border_space);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
     fn calc_preview_height_test() {
         let settings_preview_auto = Settings {
             preview: Preview {
