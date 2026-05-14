@@ -28,7 +28,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install fossier
-        run: uv pip install --system .
+        run: uv tool install git+https://github.com/pthorpe92/fossier.git
 
       - name: Restore DB cache
         uses: actions/cache@v4
