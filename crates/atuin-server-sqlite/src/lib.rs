@@ -3,7 +3,7 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 use atuin_server_database::{
-    Database, DbError, DbResult, DbSettings,
+    Database, DbError, DbResult, DbSettings, into_utc,
     models::{History, NewHistory, NewSession, NewUser, Session, User},
 };
 use futures_util::TryStreamExt;
@@ -12,7 +12,6 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
     types::Uuid,
 };
-use time::{OffsetDateTime, PrimitiveDateTime, UtcOffset};
 use tracing::instrument;
 use wrappers::{DbHistory, DbRecord, DbSession, DbUser};
 
@@ -428,9 +427,4 @@ impl Database for Sqlite {
         .map_err(Into::into)
         .map(|DbHistory(h)| h)
     }
-}
-
-fn into_utc(x: OffsetDateTime) -> PrimitiveDateTime {
-    let x = x.to_offset(UtcOffset::UTC);
-    PrimitiveDateTime::new(x.date(), x.time())
 }
