@@ -4,6 +4,8 @@ Atuin AI is a subcommand that enables shell command generation and other informa
 
 Atuin AI requires an account on [Atuin Hub](https://hub.atuin.sh/), and you'll be prompted to login upon first use of the binary.
 
+Usage of Atuin AI is currently free.
+
 ## Getting Started
 
 Atuin AI currently supports zsh, bash, and fish shells. Your shell's usual `atuin init` call will automatically bind the question mark key to the Atuin AI UI (only when the prompt is empty).

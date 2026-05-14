@@ -144,6 +144,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arraydeque"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
+
+[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -208,7 +214,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "atuin"
-version = "18.15.2"
+version = "18.16.1"
 dependencies = [
  "arboard",
  "async-trait",
@@ -217,10 +223,10 @@ dependencies = [
  "atuin-common",
  "atuin-daemon",
  "atuin-dotfiles",
- "atuin-hex",
  "atuin-history",
  "atuin-kv",
  "atuin-nucleo-matcher",
+ "atuin-pty-proxy",
  "atuin-scripts",
  "atuin-server",
  "atuin-server-database",
@@ -268,7 +274,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-ai"
-version = "18.15.2"
+version = "18.16.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -315,11 +321,12 @@ dependencies = [
  "uuid",
  "vt100",
  "xxhash-rust",
+ "yaml-rust2",
 ]
 
 [[package]]
 name = "atuin-client"
-version = "18.15.2"
+version = "18.16.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -374,7 +381,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "18.15.2"
+version = "18.16.1"
 dependencies = [
  "base64",
  "directories",
@@ -394,7 +401,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-daemon"
-version = "18.15.2"
+version = "18.16.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -427,7 +434,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-dotfiles"
-version = "18.15.2"
+version = "18.16.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -440,20 +447,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "atuin-hex"
-version = "18.15.2"
-dependencies = [
- "clap",
- "crossterm",
- "eyre",
- "portable-pty",
- "signal-hook",
- "vt100",
-]
-
-[[package]]
 name = "atuin-history"
-version = "18.15.2"
+version = "18.16.1"
 dependencies = [
  "atuin-client",
  "crossterm",
@@ -466,7 +461,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-kv"
-version = "18.15.2"
+version = "18.16.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -508,8 +503,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "atuin-pty-proxy"
+version = "18.16.1"
+dependencies = [
+ "clap",
+ "crossterm",
+ "eyre",
+ "portable-pty",
+ "signal-hook",
+ "vt100",
+]
+
+[[package]]
 name = "atuin-scripts"
-version = "18.15.2"
+version = "18.16.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -531,7 +538,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server"
-version = "18.15.2"
+version = "18.16.1"
 dependencies = [
  "argon2",
  "atuin-common",
@@ -560,7 +567,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-database"
-version = "18.15.2"
+version = "18.16.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -573,7 +580,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-postgres"
-version = "18.15.2"
+version = "18.16.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -591,7 +598,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-sqlite"
-version = "18.15.2"
+version = "18.16.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -1470,6 +1477,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
 
 [[package]]
+name = "encoding_rs"
+version = "0.8.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1535,9 +1551,9 @@ dependencies = [
 
 [[package]]
 name = "eye_declare"
-version = "0.4.3"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa99f9efa03c7fae32abd0b2e77d22dac5c2a137d1267c3496b44a711d139bd6"
+checksum = "1e4caff9f5574315258489ecb2d27aad2cc057521f4b0bc6819a1cd82a648f40"
 dependencies = [
  "crossterm",
  "eye_declare_macros",
@@ -1551,9 +1567,9 @@ dependencies = [
 
 [[package]]
 name = "eye_declare_macros"
-version = "0.4.3"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a285ad61e123dad4c505e2d96818b0378d9facecdee074a02c525719a1db2f9b"
+checksum = "cb8ac27b19f79b61a8afc0a55a3148eb2dafc2aaec66c1103432e3e76e7c25af"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1955,6 +1971,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
 dependencies = [
  "hashbrown 0.15.5",
+]
+
+[[package]]
+name = "hashlink"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea0b22561a9c04a7cb1a302c013e0259cd3b4bb619f145b32f72b8b4bcbed230"
+dependencies = [
+ "hashbrown 0.16.1",
 ]
 
 [[package]]
@@ -4626,7 +4651,7 @@ dependencies = [
  "futures-io",
  "futures-util",
  "hashbrown 0.15.5",
- "hashlink",
+ "hashlink 0.10.0",
  "indexmap 2.13.0",
  "log",
  "memchr",
@@ -6728,6 +6753,17 @@ name = "xxhash-rust"
 version = "0.8.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fdd20c5420375476fbd4394763288da7eb0cc0b8c11deed431a91562af7335d3"
+
+[[package]]
+name = "yaml-rust2"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "631a50d867fafb7093e709d75aaee9e0e0d5deb934021fcea25ac2fe09edc51e"
+dependencies = [
+ "arraydeque",
+ "encoding_rs",
+ "hashlink 0.11.0",
+]
 
 [[package]]
 name = "yansi"

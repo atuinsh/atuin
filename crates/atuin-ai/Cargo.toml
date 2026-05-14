@@ -45,7 +45,7 @@ async-stream = "0.3"
 uuid = { workspace = true }
 tui-textarea-2 = "0.10.2"
 unicode-width = "0.2"
-eye_declare = "0.4.3"
+eye_declare = "0.5.1"
 ratatui-core = "0.1"
 ratatui-widgets = "0.3"
 thiserror = { workspace = true }
@@ -63,6 +63,7 @@ shellexpand = { workspace = true }
 imara-diff = { workspace = true }
 xxhash-rust = { workspace = true }
 vt100 = { workspace = true }
+yaml-rust2 = "0.11"
 tempfile = { workspace = true }
 chrono = "0.4"
 chrono-humanize = "0.2"

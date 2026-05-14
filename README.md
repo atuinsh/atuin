@@ -118,6 +118,13 @@ Then restart your shell!
 
 If you find any security issues, we'd appreciate it if you could alert <ellie@atuin.sh>
 
+# Related projects
+- [Catpuccin for Atuin](https://github.com/catppuccin/atuin)
+- [eshell-atuin](https://github.com/SqrtMinusOne/eshell-atuin)
+- [mob (tiny creatures in your terminal)](https://github.com/bboynton97/mob)
+
+Please open a PR for any others!
+
 # Contributors
 
 <a href="https://github.com/atuinsh/atuin/graphs/contributors">

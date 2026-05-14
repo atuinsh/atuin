@@ -33,6 +33,7 @@ impl AppContext {
         if self.capabilities.enable_command_execution.unwrap_or(true) {
             caps.push("client_v1_execute_shell_command".to_string());
         }
+        caps.push("client_v1_load_skill".to_string());
         if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
             caps.extend(
                 extra

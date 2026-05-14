@@ -1,7 +1,7 @@
 [package]
-name = "atuin-hex"
+name = "atuin-pty-proxy"
 edition = "2024"
-description = "a terminal emulator for atuin"
+description = "a PTY proxy for atuin"
 
 version = { workspace = true }
 authors = { workspace = true }

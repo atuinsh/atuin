@@ -67,6 +67,15 @@ pub(crate) const ATUIN_HISTORY: &ToolDescriptor = &ToolDescriptor {
     is_client: true,
 };
 
+pub(crate) const LOAD_SKILL: &ToolDescriptor = &ToolDescriptor {
+    canonical_names: &["load_skill"],
+    capability: Some("client_v1_load_skill"),
+    display_verb: "load skill",
+    progressive_verb: "Loading skill...",
+    past_verb: "Loaded skill",
+    is_client: true,
+};
+
 // ── Server-side tool descriptors ──
 // These appear in tool summaries but aren't client-side tools.
 
@@ -95,6 +104,7 @@ const ALL_DESCRIPTORS: &[&ToolDescriptor] = &[
     WRITE,
     SHELL,
     ATUIN_HISTORY,
+    LOAD_SKILL,
     SERVER_SEARCH,
     SERVER_SCRAPE,
 ];
