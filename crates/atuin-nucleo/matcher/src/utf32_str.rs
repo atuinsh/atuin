@@ -82,7 +82,7 @@ fn has_ascii_graphemes(string: &str) -> bool {
 /// encoded variant for rendering. In the (dominant) case of ASCII-only text
 /// we don't require a copy. Furthermore fuzzy matching usually is applied while
 /// the user is typing on the fly so the same item is potentially matched many
-/// times (making the the up-front cost more worth it). That means that its
+/// times (making the up-front cost more worth it). That means that its
 /// basically always worth it to pre-segment the string.
 ///
 /// For usecases that only match (a lot of) strings once its possible to keep
