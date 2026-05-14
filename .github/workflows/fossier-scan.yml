@@ -1,0 +1,51 @@
+name: Fossier Scan All PRs
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Dry run - evaluate but don't take actions"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install fossier
+        run: uv pip install --system .
+
+      - name: Restore DB cache
+        uses: actions/cache@v4
+        with:
+          path: .fossier.db
+          key: fossier-db-${{ github.repository }}
+          restore-keys: |
+            fossier-db-${{ github.repository }}
+
+      - name: Scan open PRs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FLAGS="--format table"
+          if [ "${{ inputs.dry-run }}" = "true" ]; then
+            FLAGS="$FLAGS --dry-run"
+          else
+            FLAGS="$FLAGS --execute"
+          fi
+          fossier scan $FLAGS

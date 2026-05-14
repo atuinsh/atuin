@@ -1,0 +1,26 @@
+name: Fossier PR Check
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: PThorpe92/fossier@main
+        id: fossier
+        with:
+          contact-url: "https://discord.gg/Fq8bJSKPHh"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Optional: connect to the global spam registry
+          # registry-api-key: ${{ secrets.FOSSIER_REGISTRY_API_KEY }}
+
+      - name: Handle result
+        if: steps.fossier.outputs.outcome == 'deny'
+        run: echo "PR denied with score ${{ steps.fossier.outputs.score }}"
