@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{IsTerminal as _, Write, stderr, stdout};
 
@@ -86,9 +87,6 @@ pub struct Cmd {
     #[arg(long)]
     human: bool,
 
-    #[arg(allow_hyphen_values = true)]
-    query: Option<Vec<String>>,
-
     /// Show only the text of the command
     #[arg(long)]
     cmd_only: bool,
@@ -143,12 +141,40 @@ pub struct Cmd {
     /// File name to write the result to (hidden from help as this is meant to be used from a script)
     #[arg(long = "result-file", hide = true)]
     result_file: Option<String>,
+
+    #[arg(allow_hyphen_values = true)]
+    query: Option<Vec<String>>,
 }
 
 impl Cmd {
     /// Returns true if this search command will run in interactive (TUI) mode
     pub fn is_interactive(&self) -> bool {
         self.interactive
+    }
+
+    fn explicit_query_and_delete(&self) -> (Option<Vec<String>>, bool) {
+        self.explicit_query_and_delete_for_args(std::env::args_os())
+    }
+
+    fn explicit_query_and_delete_for_args<I, S>(&self, args: I) -> (Option<Vec<String>>, bool)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let mut query = self.query.clone().unwrap_or_default();
+        let mut delete = self.delete;
+        let literal_delete = literal_delete_after_delimiter(args);
+
+        if !delete
+            && !literal_delete
+            && query.len() > 1
+            && query.last().is_some_and(|value| value == "--delete")
+        {
+            query.pop();
+            delete = true;
+        }
+
+        ((!query.is_empty()).then_some(query), delete)
     }
 
     // clippy: please write this instead
@@ -162,7 +188,8 @@ impl Cmd {
         store: SqliteStore,
         theme: &Theme,
     ) -> Result<()> {
-        let query = self.query.unwrap_or_else(|| {
+        let (explicit_query, delete) = self.explicit_query_and_delete();
+        let query = explicit_query.unwrap_or_else(|| {
             std::env::var("ATUIN_QUERY").map_or_else(
                 |_| vec![],
                 |query| {
@@ -174,7 +201,7 @@ impl Cmd {
             )
         });
 
-        if (self.delete_it_all || self.delete) && self.limit.is_some() {
+        if (self.delete_it_all || delete) && self.limit.is_some() {
             // Because of how deletion is implemented, it will always delete all matches
             // and disregard the limit option. It is also not clear what deletion with a
             // limit would even mean. Deleting the LIMIT most recent entries that match
@@ -186,14 +213,16 @@ impl Cmd {
             return Ok(());
         }
 
-        if self.delete && query.is_empty() {
+        let query_is_empty = query.iter().all(String::is_empty);
+
+        if delete && query_is_empty {
             eprintln!(
                 "Please specify a query to match the items you wish to delete. If you wish to delete all history, pass --delete-it-all"
             );
             return Ok(());
         }
 
-        if self.delete_it_all && !query.is_empty() {
+        if self.delete_it_all && !query_is_empty {
             eprintln!(
                 "--delete-it-all will delete ALL of your history! It does not require a query."
             );
@@ -264,7 +293,7 @@ impl Cmd {
             }
 
             // if we aren't deleting, print it all
-            if self.delete || self.delete_it_all {
+            if delete || self.delete_it_all {
                 // delete it
                 // it only took me _years_ to add this
                 // sorry
@@ -301,6 +330,26 @@ impl Cmd {
         }
         Ok(())
     }
+}
+
+fn literal_delete_after_delimiter<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut after_delimiter = false;
+
+    for arg in args {
+        let arg = arg.as_ref();
+
+        if arg == OsStr::new("--") {
+            after_delimiter = true;
+        } else if after_delimiter && arg == OsStr::new("--delete") {
+            return true;
+        }
+    }
+
+    false
 }
 
 // This is supposed to more-or-less mirror the command line version, so ofc
@@ -351,7 +400,9 @@ mod tests {
         let cmd = Cmd::try_parse_from(["search", "---"]);
         assert!(cmd.is_ok(), "Failed to parse '---' as a query: {cmd:?}");
         let cmd = cmd.unwrap();
-        assert_eq!(cmd.query, Some(vec!["---".to_string()]));
+        let (query, delete) = cmd.explicit_query_and_delete_for_args(["search", "---"]);
+        assert!(!delete);
+        assert_eq!(query, Some(vec!["---".to_string()]));
     }
 
     #[test]
@@ -361,6 +412,60 @@ mod tests {
         assert!(cmd.is_ok());
         let cmd = cmd.unwrap();
         assert_eq!(cmd.query, Some(vec!["--foo".to_string()]));
+    }
+
+    #[test]
+    fn search_delete_flag_can_follow_query() {
+        let cmd = Cmd::try_parse_from([
+            "search",
+            "--exclude-exit=0",
+            "--after",
+            "2026-02-16",
+            "--human",
+            "cargo",
+            "--delete",
+        ])
+        .unwrap();
+
+        let (query, delete) = cmd.explicit_query_and_delete_for_args([
+            "search",
+            "--exclude-exit=0",
+            "--after",
+            "2026-02-16",
+            "--human",
+            "cargo",
+            "--delete",
+        ]);
+        assert!(delete);
+        assert_eq!(query, Some(vec!["cargo".to_string()]));
+    }
+
+    #[test]
+    fn search_literal_delete_flag_remains_query_after_delimiter() {
+        let cmd = Cmd::try_parse_from(["search", "--", "--delete"]).unwrap();
+        let (query, delete) = cmd.explicit_query_and_delete_for_args(["search", "--", "--delete"]);
+
+        assert!(!delete);
+        assert_eq!(query, Some(vec!["--delete".to_string()]));
+    }
+
+    #[test]
+    fn search_literal_trailing_delete_remains_query_after_delimiter() {
+        let cmd = Cmd::try_parse_from(["search", "--", "foo", "--delete"]).unwrap();
+        let (query, delete) =
+            cmd.explicit_query_and_delete_for_args(["search", "--", "foo", "--delete"]);
+
+        assert!(!delete);
+        assert_eq!(query, Some(vec!["foo".to_string(), "--delete".to_string()]));
+    }
+
+    #[test]
+    fn search_empty_query_with_delete_stays_empty_query() {
+        let cmd = Cmd::try_parse_from(["search", "", "--delete"]).unwrap();
+        let (query, delete) = cmd.explicit_query_and_delete_for_args(["search", "", "--delete"]);
+
+        assert!(delete);
+        assert_eq!(query, Some(vec!["".to_string()]));
     }
 
     #[test]
