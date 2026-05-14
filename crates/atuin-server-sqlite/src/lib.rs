@@ -23,25 +23,14 @@ pub struct Sqlite {
     pool: sqlx::Pool<sqlx::sqlite::Sqlite>,
 }
 
-fn fix_error(error: sqlx::Error) -> DbError {
-    match error {
-        sqlx::Error::RowNotFound => DbError::NotFound,
-        error => DbError::Other(error.into()),
-    }
-}
-
 #[async_trait]
 impl Database for Sqlite {
     async fn new(settings: &DbSettings) -> DbResult<Self> {
-        let opts = SqliteConnectOptions::from_str(&settings.db_uri)
-            .map_err(fix_error)?
+        let opts = SqliteConnectOptions::from_str(&settings.db_uri)?
             .journal_mode(SqliteJournalMode::Wal)
             .create_if_missing(true);
 
-        let pool = SqlitePoolOptions::new()
-            .connect_with(opts)
-            .await
-            .map_err(fix_error)?;
+        let pool = SqlitePoolOptions::new().connect_with(opts).await?;
 
         sqlx::migrate!("./migrations")
             .run(&pool)
@@ -57,7 +46,7 @@ impl Database for Sqlite {
             .bind(token)
             .fetch_one(&self.pool)
             .await
-            .map_err(fix_error)
+            .map_err(Into::into)
             .map(|DbSession(session)| session)
     }
 
@@ -72,7 +61,7 @@ impl Database for Sqlite {
         .bind(token)
         .fetch_one(&self.pool)
         .await
-        .map_err(fix_error)
+        .map_err(Into::into)
         .map(|DbUser(user)| user)
     }
 
@@ -88,8 +77,7 @@ impl Database for Sqlite {
         .bind(session.user_id)
         .bind(token)
         .execute(&self.pool)
-        .await
-        .map_err(fix_error)?;
+        .await?;
 
         Ok(())
     }
@@ -100,7 +88,7 @@ impl Database for Sqlite {
             .bind(username)
             .fetch_one(&self.pool)
             .await
-            .map_err(fix_error)
+            .map_err(Into::into)
             .map(|DbUser(user)| user)
     }
 
@@ -110,7 +98,7 @@ impl Database for Sqlite {
             .bind(u.id)
             .fetch_one(&self.pool)
             .await
-            .map_err(fix_error)
+            .map_err(Into::into)
             .map(|DbSession(session)| session)
     }
 
@@ -130,8 +118,7 @@ impl Database for Sqlite {
         .bind(email)
         .bind(password)
         .fetch_one(&self.pool)
-        .await
-        .map_err(fix_error)?;
+        .await?;
 
         Ok(res.0)
     }
@@ -146,8 +133,7 @@ impl Database for Sqlite {
         .bind(&user.password)
         .bind(user.id)
         .execute(&self.pool)
-        .await
-        .map_err(fix_error)?;
+        .await?;
 
         Ok(())
     }
@@ -164,8 +150,7 @@ impl Database for Sqlite {
         )
         .bind(user.id)
         .fetch_one(&self.pool)
-        .await
-        .map_err(fix_error)?;
+        .await?;
 
         Ok(res.0)
     }
@@ -180,20 +165,17 @@ impl Database for Sqlite {
         sqlx::query("delete from sessions where user_id = $1")
             .bind(u.id)
             .execute(&self.pool)
-            .await
-            .map_err(fix_error)?;
+            .await?;
 
         sqlx::query("delete from users where id = $1")
             .bind(u.id)
             .execute(&self.pool)
-            .await
-            .map_err(fix_error)?;
+            .await?;
 
         sqlx::query("delete from history where user_id = $1")
             .bind(u.id)
             .execute(&self.pool)
-            .await
-            .map_err(fix_error)?;
+            .await?;
 
         Ok(())
     }
@@ -210,8 +192,7 @@ impl Database for Sqlite {
         .bind(id)
         .bind(time::OffsetDateTime::now_utc())
         .fetch_all(&self.pool)
-        .await
-        .map_err(fix_error)?;
+        .await?;
 
         Ok(())
     }
@@ -229,8 +210,7 @@ impl Database for Sqlite {
         )
         .bind(user.id)
         .fetch_all(&self.pool)
-        .await
-        .map_err(fix_error)?;
+        .await?;
 
         let res = res.iter().map(|row| row.get("client_id")).collect();
 
@@ -244,15 +224,14 @@ impl Database for Sqlite {
         )
         .bind(user.id)
         .execute(&self.pool)
-        .await
-        .map_err(fix_error)?;
+        .await?;
 
         Ok(())
     }
 
     #[instrument(skip_all)]
     async fn add_records(&self, user: &User, records: &[Record<EncryptedData>]) -> DbResult<()> {
-        let mut tx = self.pool.begin().await.map_err(fix_error)?;
+        let mut tx = self.pool.begin().await?;
 
         for i in records {
             let id = atuin_common::utils::uuid_v7();
@@ -275,11 +254,10 @@ impl Database for Sqlite {
             .bind(&i.data.content_encryption_key)
             .bind(user.id)
             .execute(&mut *tx)
-            .await
-            .map_err(fix_error)?;
+            .await?;
         }
 
-        tx.commit().await.map_err(fix_error)?;
+        tx.commit().await?;
 
         Ok(())
     }
@@ -312,7 +290,7 @@ impl Database for Sqlite {
         .bind(count as i64)
         .fetch_all(&self.pool)
         .await
-        .map_err(fix_error);
+        .map_err(Into::into);
 
         let ret = match records {
             Ok(records) => {
@@ -343,8 +321,7 @@ impl Database for Sqlite {
         let res: Vec<(Uuid, String, i64)> = sqlx::query_as(STATUS_SQL)
             .bind(user.id)
             .fetch_all(&self.pool)
-            .await
-            .map_err(fix_error)?;
+            .await?;
 
         let mut status = RecordStatus::new();
 
@@ -371,8 +348,7 @@ impl Database for Sqlite {
         .bind(into_utc(range.start))
         .bind(into_utc(range.end))
         .fetch_one(&self.pool)
-        .await
-        .map_err(fix_error)?;
+        .await?;
 
         Ok(res.0)
     }
@@ -403,15 +379,14 @@ impl Database for Sqlite {
         .fetch(&self.pool)
         .map_ok(|DbHistory(h)| h)
         .try_collect()
-        .await
-        .map_err(fix_error)?;
+        .await?;
 
         Ok(res)
     }
 
     #[instrument(skip_all)]
     async fn add_history(&self, history: &[NewHistory]) -> DbResult<()> {
-        let mut tx = self.pool.begin().await.map_err(fix_error)?;
+        let mut tx = self.pool.begin().await?;
 
         for i in history {
             let client_id: &str = &i.client_id;
@@ -431,11 +406,10 @@ impl Database for Sqlite {
             .bind(i.timestamp)
             .bind(data)
             .execute(&mut *tx)
-            .await
-            .map_err(fix_error)?;
+            .await?;
         }
 
-        tx.commit().await.map_err(fix_error)?;
+        tx.commit().await?;
 
         Ok(())
     }
@@ -451,7 +425,7 @@ impl Database for Sqlite {
         .bind(user.id)
         .fetch_one(&self.pool)
         .await
-        .map_err(fix_error)
+        .map_err(Into::into)
         .map(|DbHistory(h)| h)
     }
 }

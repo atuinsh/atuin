@@ -31,9 +31,24 @@ impl Display for DbError {
     }
 }
 
-impl<T: std::error::Error + Into<time::error::Error>> From<T> for DbError {
-    fn from(value: T) -> Self {
-        DbError::Other(value.into().into())
+impl From<time::error::ComponentRange> for DbError {
+    fn from(error: time::error::ComponentRange) -> Self {
+        DbError::Other(error.into())
+    }
+}
+
+impl From<time::error::Error> for DbError {
+    fn from(error: time::error::Error) -> Self {
+        DbError::Other(error.into())
+    }
+}
+
+impl From<sqlx::Error> for DbError {
+    fn from(error: sqlx::Error) -> Self {
+        match error {
+            sqlx::Error::RowNotFound => DbError::NotFound,
+            error => DbError::Other(error.into()),
+        }
     }
 }
 
