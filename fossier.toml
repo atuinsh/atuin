@@ -1,0 +1,17 @@
+[repo]
+owner = "atuinsh"
+name = "atuin"
+
+[thresholds]
+allow_score = 70.0
+deny_score = 40.0
+min_confidence = 0.5
+
+[actions.deny]
+close_pr = true
+comment = true
+label = "fossier:spam-likely"
+
+[actions.review]
+comment = true
+label = "fossier:needs-review"

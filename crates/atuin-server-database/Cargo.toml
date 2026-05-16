@@ -12,9 +12,10 @@ repository = { workspace = true }
 [dependencies]
 atuin-common = { path = "../atuin-common", version = "18.16.1" }
 
-tracing = { workspace = true }
-time = { workspace = true }
+async-trait = { workspace = true }
 eyre = { workspace = true }
 serde = { workspace = true }
-async-trait = { workspace = true }
+sqlx = { workspace = true }
+time = { workspace = true }
+tracing = { workspace = true }
 url = "2.5.2"
