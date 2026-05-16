@@ -779,21 +779,33 @@ impl State {
             && settings.preview.strategy == PreviewStrategy::Static
             && tab_index == 0
         {
-            fn compute_render_height(v: &str, preview_width: u16, border_size: u16) -> u16 {
-                v.split('\n')
-                    .map(|line| {
-                        (line.len() as u16 + preview_width - 1 - border_size)
-                            / (preview_width - border_size)
-                    })
-                    .sum()
+            fn compute_render_height(s: &str, preview_width: u16) -> u16 {
+                let mut count: u16 = 0;
+                for line in s.split('\n') {
+                    let line = line.escape_control();
+                    let mut width = 0;
+                    for ch in line.chars() {
+                        let w = ch.width().unwrap_or(0);
+                        if width + w > preview_width.into() {
+                            count += 1;
+                            width = w;
+                        } else {
+                            width += w;
+                        }
+                    }
+                    if width != 0 {
+                        count += 1;
+                    }
+                }
+                count
             }
             let longest_command = results
                 .iter()
-                .max_by_key(|x| compute_render_height(&x.command, preview_width, border_size));
+                .max_by_key(|x| compute_render_height(&x.command, preview_width));
             longest_command.map_or(0, |v| {
                 std::cmp::min(
                     settings.max_preview_height,
-                    compute_render_height(&v.command, preview_width, border_size),
+                    compute_render_height(&v.command, preview_width),
                 )
             }) + border_size * 2
         } else if settings.show_preview && settings.preview.strategy == PreviewStrategy::Fixed {
@@ -2076,6 +2088,43 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
+    fn calc_preview_height_escape_characters_test() {
+        let settings_preview_escape = Settings {
+            preview: Preview {
+                strategy: PreviewStrategy::Static,
+            },
+            show_preview: true,
+            max_preview_height: 10,
+            ..Settings::utc()
+        };
+        let cmd_22: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("echo 'test'\t;echo 'hi'") //tab converrts to ^I which is 2 chars
+            .cwd("/")
+            .build()
+            .into();
+        let cmd_11: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("echo 'test'")
+            .cwd("/")
+            .build()
+            .into();
+        let results: Vec<History> = vec![cmd_11, cmd_22];
+        let preview_escape_characters = State::calc_preview_height(
+            &settings_preview_escape,
+            &results,
+            1_usize,
+            0_usize,
+            Compactness::Full,
+            1,
+            22,
+        );
+        let border_space = 2;
+        assert_eq!(preview_escape_characters, border_space + 2); //should be 2 if tab properly converts to ^I, tipping it to 23, which then wraps twice over 22
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
     fn calc_preview_height_multiline_test() {
         let settings_preview_multi = Settings {
             preview: Preview {
@@ -2091,13 +2140,13 @@ mod tests {
             .cwd("/")
             .build()
             .into();
-        let cmd_62: History = History::capture()
+        let cmd_47: History = History::capture()
             .timestamp(time::OffsetDateTime::now_utc())
-            .command("echo 'international'\necho 'international'\necho 'international'")
+            .command("echo 'test'\necho 'test'\necho 'test'\necho 'test'")
             .cwd("/")
             .build()
             .into();
-        let results: Vec<History> = vec![cmd_91, cmd_62];
+        let results: Vec<History> = vec![cmd_91, cmd_47];
         let preview_multiline = State::calc_preview_height(
             &settings_preview_multi,
             &results,
@@ -2105,10 +2154,10 @@ mod tests {
             0_usize,
             Compactness::Full,
             1,
-            20,
+            40,
         );
         let border_space = 2;
-        assert_eq!(preview_multiline, 6 + border_space);
+        assert_eq!(preview_multiline, border_space + 4);
     }
 
     #[test]
