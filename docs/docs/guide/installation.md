@@ -128,7 +128,7 @@ If you don't wish to use the installer, the manual installation steps are as fol
     # line 2: setup at clone(create init.zsh, completion)
     # line 3: pull behavior same as clone, source init.zsh
     zinit ice wait lucid as"command" from"gh-r" bpick"atuin-*.tar.gz~*server*" mv"atuin*/atuin -> atuin" \
-        atclone"./atuin init zsh > init.zsh; ./atuin gen-completions --shell zsh > _atuin" \
+        atclone"./atuin init zsh > init.zsh && zcompile init.zsh && ./atuin gen-completions --shell zsh > _atuin" \
         atpull"%atclone" src"init.zsh"
     zinit light atuinsh/atuin
     ```
