@@ -573,6 +573,7 @@ dependencies = [
  "atuin-common",
  "eyre",
  "serde",
+ "sqlx",
  "time",
  "tracing",
  "url",
