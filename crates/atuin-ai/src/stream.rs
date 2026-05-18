@@ -138,8 +138,8 @@ pub(crate) fn create_chat_stream(
         }
 
         if let Ok(model) = std::env::var("ATUIN_AI__MODEL")
-            && !model.is_empty() {
-                config["model"] = serde_json::json!(model);
+            && !model.trim().is_empty() {
+                config["model"] = serde_json::json!(model.trim());
 
         }
 
