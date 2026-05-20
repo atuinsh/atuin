@@ -18,6 +18,7 @@ The available modes are:
 | directory        | Search history from the current directory                                            |
 | workspace        | Search history from the current git repository                                       |
 | session-preload  | Search from the current session and the global history from before the session start |
+| agent            | Search commands authored by known agents                                             |
 
 See the [`filter_mode` config reference](../configuration/config.md#filter_mode) for more details.
 

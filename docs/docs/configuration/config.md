@@ -166,6 +166,7 @@ The default filter to use when searching
 | directory        | Search history from the current directory                                            |
 | workspace        | Search history from the current git repository                                       |
 | session-preload  | Search from the current session and the global history from before the session start |
+| agent            | Search commands authored by known agents                                             |
 
 Filter modes can still be toggled via ctrl-r
 

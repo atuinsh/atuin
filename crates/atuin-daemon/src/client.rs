@@ -238,6 +238,7 @@ impl From<FilterMode> for RpcFilterMode {
             FilterMode::Directory => RpcFilterMode::Directory,
             FilterMode::Workspace => RpcFilterMode::Workspace,
             FilterMode::SessionPreload => RpcFilterMode::SessionPreload,
+            FilterMode::Agent => RpcFilterMode::Global,
         }
     }
 }

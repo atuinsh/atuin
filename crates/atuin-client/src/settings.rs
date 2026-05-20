@@ -114,6 +114,9 @@ pub enum FilterMode {
 
     #[serde(rename = "session-preload")]
     SessionPreload = 5,
+
+    #[serde(rename = "agent")]
+    Agent = 6,
 }
 
 impl FilterMode {
@@ -125,6 +128,7 @@ impl FilterMode {
             FilterMode::Directory => "DIRECTORY",
             FilterMode::Workspace => "WORKSPACE",
             FilterMode::SessionPreload => "SESSION+",
+            FilterMode::Agent => "AGENT",
         }
     }
 }
@@ -849,6 +853,7 @@ impl Default for Search {
                 FilterMode::SessionPreload,
                 FilterMode::Workspace,
                 FilterMode::Directory,
+                FilterMode::Agent,
             ],
 
             recency_score_multiplier: 1.0,

@@ -404,6 +404,7 @@ impl Database for Sqlite {
                 }
                 FilterMode::Directory => query.and_where_eq("cwd", quote(&context.cwd)),
                 FilterMode::Workspace => query.and_where_like_left("cwd", &git_root),
+                FilterMode::Agent => &mut query,
             };
         }
 
@@ -535,6 +536,7 @@ impl Database for Sqlite {
             }
             FilterMode::Directory => sql.and_where_eq("cwd", quote(&context.cwd)),
             FilterMode::Workspace => sql.and_where_like_left("cwd", git_root),
+            FilterMode::Agent => &mut sql,
         };
 
         let orig_query = query;

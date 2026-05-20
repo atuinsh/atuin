@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use atuin_client::{
     database::{Context, Database, OptFilters},
-    history::{AUTHOR_FILTER_ALL_USER, History, HistoryId},
+    history::{History, HistoryId},
     settings::{FilterMode, SearchMode, Settings},
 };
 use eyre::Result;
@@ -55,7 +55,9 @@ impl SearchState {
 
     fn filter_mode_available(&self, mode: FilterMode, settings: &Settings) -> bool {
         match mode {
-            FilterMode::Global | FilterMode::SessionPreload => self.custom_context.is_none(),
+            FilterMode::Global | FilterMode::SessionPreload | FilterMode::Agent => {
+                self.custom_context.is_none()
+            }
             FilterMode::Workspace => settings.workspaces && self.context.git_root.is_some(),
             _ => true,
         }
@@ -80,7 +82,7 @@ pub trait SearchEngine: Send + Sync + 'static {
                     "",
                     OptFilters {
                         limit: Some(200),
-                        authors: vec![AUTHOR_FILTER_ALL_USER.to_string()],
+                        authors: db::authors_for_filter_mode(state.filter_mode),
                         ..Default::default()
                     },
                 )

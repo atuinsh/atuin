@@ -25,6 +25,7 @@ While searching in the TUI, you can adjust the "filter mode" by repeatedly press
 2. Just your local machine
 3. The current directory only
 4. The current shell session only
+5. Commands authored by known agents
 
 See the [advanced usage](advanced-usage.md) page for more options.
 

@@ -4,8 +4,8 @@ use atuin_client::{
     database::Database,
     database::OptFilters,
     database::{QueryToken, QueryTokenizer},
-    history::{AUTHOR_FILTER_ALL_USER, History},
-    settings::SearchMode,
+    history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, History},
+    settings::{FilterMode, SearchMode},
 };
 use eyre::Result;
 use norm::Metric;
@@ -31,7 +31,7 @@ impl SearchEngine for Search {
                 state.input.as_str(),
                 OptFilters {
                     limit: Some(200),
-                    authors: vec![AUTHOR_FILTER_ALL_USER.to_string()],
+                    authors: authors_for_filter_mode(state.filter_mode),
                     ..Default::default()
                 },
             )
@@ -56,6 +56,14 @@ impl SearchEngine for Search {
 
         // convert ranges to all indices
         ranges.into_iter().flatten().collect()
+    }
+}
+
+pub(crate) fn authors_for_filter_mode(filter_mode: FilterMode) -> Vec<String> {
+    if filter_mode == FilterMode::Agent {
+        vec![AUTHOR_FILTER_ALL_AGENT.to_string()]
+    } else {
+        vec![AUTHOR_FILTER_ALL_USER.to_string()]
     }
 }
 
