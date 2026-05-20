@@ -508,7 +508,7 @@ async fn handle_end(
         return Ok(());
     }
 
-    if !settings.store_failed && exit > 0 {
+    if !settings.store_failed && exit != 0 {
         debug!("history has non-zero exit code, and store_failed is false");
 
         // the history has already been inserted half complete. remove it
@@ -1283,6 +1283,136 @@ mod tests {
             .pop()
             .unwrap();
         assert_eq!(history.command, "ls   \t");
+    }
+
+    async fn make_history_stores() -> (SqliteStore, HistoryStore, tempfile::TempDir) {
+        use atuin_common::record::HostId;
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SqliteStore::new(tmp.path().join("records.db"), 2.0)
+            .await
+            .unwrap();
+        let history_store =
+            HistoryStore::new(store.clone(), HostId(uuid::Uuid::new_v4()), [0u8; 32]);
+        (store, history_store, tmp)
+    }
+
+    async fn insert_running_history(db: &Sqlite, command: &str) -> String {
+        let h: History = History::capture()
+            .timestamp(OffsetDateTime::now_utc())
+            .command(command)
+            .cwd("/tmp")
+            .build()
+            .into();
+        let id = h.id.0.clone();
+        db.save(&h).await.unwrap();
+        id
+    }
+
+    fn test_settings(store_failed: bool) -> Settings {
+        Settings {
+            store_failed,
+            auto_sync: false,
+            ..Settings::utc()
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_end_drops_failed_command_when_store_failed_disabled() {
+        let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
+        let (store, history_store, _tmp) = make_history_stores().await;
+
+        let id = insert_running_history(&db, "false").await;
+
+        handle_end(
+            &db,
+            store,
+            history_store,
+            &test_settings(false),
+            &id,
+            1,
+            Some(1_000),
+        )
+        .await
+        .unwrap();
+
+        let row = db.load(&id).await.unwrap().expect("row stays soft-deleted");
+        assert!(row.deleted_at.is_some(), "failed command should be deleted");
+    }
+
+    #[tokio::test]
+    async fn handle_end_drops_signal_killed_command_when_store_failed_disabled() {
+        // Negative exit codes occur when commands are killed by signals
+        // (see PR #821). They must also be dropped when store_failed=false.
+        let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
+        let (store, history_store, _tmp) = make_history_stores().await;
+
+        let id = insert_running_history(&db, "sleep 60").await;
+
+        handle_end(
+            &db,
+            store,
+            history_store,
+            &test_settings(false),
+            &id,
+            -1,
+            Some(1_000),
+        )
+        .await
+        .unwrap();
+
+        let row = db.load(&id).await.unwrap().expect("row stays soft-deleted");
+        assert!(
+            row.deleted_at.is_some(),
+            "signal-killed command should be deleted"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_end_keeps_successful_command_when_store_failed_disabled() {
+        let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
+        let (store, history_store, _tmp) = make_history_stores().await;
+
+        let id = insert_running_history(&db, "true").await;
+
+        handle_end(
+            &db,
+            store,
+            history_store,
+            &test_settings(false),
+            &id,
+            0,
+            Some(1_000),
+        )
+        .await
+        .unwrap();
+
+        let saved = db.load(&id).await.unwrap().expect("history should exist");
+        assert_eq!(saved.exit, 0);
+        assert!(saved.deleted_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn handle_end_keeps_failed_command_when_store_failed_enabled() {
+        let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
+        let (store, history_store, _tmp) = make_history_stores().await;
+
+        let id = insert_running_history(&db, "false").await;
+
+        handle_end(
+            &db,
+            store,
+            history_store,
+            &test_settings(true),
+            &id,
+            1,
+            Some(1_000),
+        )
+        .await
+        .unwrap();
+
+        let saved = db.load(&id).await.unwrap().expect("history should exist");
+        assert_eq!(saved.exit, 1);
+        assert!(saved.deleted_at.is_none());
     }
 
     #[test]
