@@ -214,6 +214,10 @@ impl SearchClient {
         filter_mode: FilterMode,
         context: Option<Context>,
     ) -> Result<tonic::Streaming<SearchResponse>> {
+        eyre::ensure!(
+            filter_mode != FilterMode::Agent,
+            "daemon search does not support agent history; use database search instead"
+        );
         let request = SearchRequest {
             query,
             query_id,

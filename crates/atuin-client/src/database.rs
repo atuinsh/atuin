@@ -404,7 +404,10 @@ impl Database for Sqlite {
                 }
                 FilterMode::Directory => query.and_where_eq("cwd", quote(&context.cwd)),
                 FilterMode::Workspace => query.and_where_like_left("cwd", &git_root),
-                FilterMode::Agent => &mut query,
+                FilterMode::Agent => {
+                    apply_author_filter(&mut query, &[AUTHOR_FILTER_ALL_AGENT.to_string()]);
+                    &mut query
+                }
             };
         }
 
@@ -536,7 +539,10 @@ impl Database for Sqlite {
             }
             FilterMode::Directory => sql.and_where_eq("cwd", quote(&context.cwd)),
             FilterMode::Workspace => sql.and_where_like_left("cwd", git_root),
-            FilterMode::Agent => &mut sql,
+            FilterMode::Agent => {
+                apply_author_filter(&mut sql, &[AUTHOR_FILTER_ALL_AGENT.to_string()]);
+                &mut sql
+            }
         };
 
         let orig_query = query;
@@ -670,7 +676,7 @@ impl Database for Sqlite {
                 "exit",
                 "command",
                 "deleted_at",
-                "null as author",
+                "group_concat(CASE WHEN author IS NULL OR trim(author) = '' THEN CASE WHEN instr(hostname, ':') > 0 THEN substr(hostname, instr(hostname, ':') + 1) ELSE hostname END ELSE author END, ',') as author",
                 "null as intent",
                 "group_concat(cwd, ':') as cwd",
                 "group_concat(session) as session",

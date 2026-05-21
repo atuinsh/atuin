@@ -76,7 +76,7 @@ async fn fuzzy_search(
         if i % 256 == 0 {
             yield_now().await;
         }
-        let is_agent = is_known_agent(&history.author);
+        let is_agent = history.author.split(',').any(is_known_agent);
         if state.filter_mode == FilterMode::Agent {
             if !is_agent {
                 continue;

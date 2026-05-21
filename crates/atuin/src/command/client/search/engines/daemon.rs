@@ -86,7 +86,7 @@ impl Search {
     ) -> Result<Vec<History>> {
         let results = db
             .search(
-                SearchMode::FullText,
+                SearchMode::Fuzzy,
                 state.filter_mode,
                 &state.context,
                 state.input.as_str(),
