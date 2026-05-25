@@ -1,26 +1,53 @@
 use clap::Parser;
 use eyre::{Result, bail};
 
-use super::login::or_user_input;
+use super::login::{env_secret, or_user_input, read_secret_from_stdin};
 use atuin_client::{
     auth::{self, AuthResponse},
     record::sqlite_store::SqliteStore,
     settings::{Settings, SyncAuth},
 };
 
+const PASSWORD_ENV: &str = "ATUIN_PASSWORD";
+
 #[derive(Parser, Debug)]
 pub struct Cmd {
     #[clap(long, short)]
     pub username: Option<String>,
 
-    #[clap(long, short)]
+    /// Account password. Falls back to the `ATUIN_PASSWORD` environment
+    /// variable, or `--password-stdin`, before prompting interactively.
+    #[clap(long, short, conflicts_with = "password_stdin")]
     pub password: Option<String>,
+
+    /// Read the account password from standard input. Mutually exclusive
+    /// with `--password`.
+    #[clap(long, conflicts_with = "password")]
+    pub password_stdin: bool,
 
     #[clap(long, short)]
     pub email: Option<String>,
 }
 
 impl Cmd {
+    /// Resolve the account password from, in order: the `--password` flag,
+    /// `--password-stdin`, or the `ATUIN_PASSWORD` environment variable.
+    /// Returns `None` if no source was provided — callers decide whether
+    /// to prompt interactively or fall through to a different flow.
+    ///
+    /// # Errors
+    /// Returns an error if `--password-stdin` was set and stdin could not be
+    /// read.
+    fn resolve_password(&self) -> Result<Option<String>> {
+        if let Some(p) = &self.password {
+            return Ok(Some(p.clone()));
+        }
+        if self.password_stdin {
+            return Ok(Some(read_secret_from_stdin()?));
+        }
+        Ok(env_secret(PASSWORD_ENV))
+    }
+
     #[allow(clippy::too_many_lines)]
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         match settings.resolve_sync_auth().await {
@@ -45,12 +72,14 @@ impl Cmd {
             SyncAuth::NotLoggedIn { .. } => {}
         }
 
+        let resolved_password = self.resolve_password()?;
+
         if settings.is_hub_sync() {
             let required_for_headless = 3;
             let provided = [
                 self.username.is_some(),
                 self.email.is_some(),
-                self.password.is_some(),
+                resolved_password.is_some(),
             ]
             .iter()
             .filter(|&b| *b)
@@ -62,7 +91,7 @@ impl Cmd {
             }
 
             if let (Some(username), Some(email), Some(password)) =
-                (&self.username, &self.email, &self.password)
+                (&self.username, &self.email, &resolved_password)
             {
                 // Headless registration via v0 API (for CI / scripting).
                 let client = auth::auth_client(settings).await;
@@ -112,6 +141,7 @@ impl Cmd {
                 super::login::Cmd {
                     username: None,
                     password: None,
+                    password_stdin: false,
                     key: None,
                     totp_code: None,
                     from_registration: true,
@@ -125,10 +155,7 @@ impl Cmd {
 
             let username = or_user_input(self.username.clone(), "username");
             let email = or_user_input(self.email.clone(), "email");
-            let password = self
-                .password
-                .clone()
-                .unwrap_or_else(super::login::read_user_password);
+            let password = resolved_password.unwrap_or_else(super::login::read_user_password);
 
             if password.is_empty() {
                 bail!("please provide a password");
