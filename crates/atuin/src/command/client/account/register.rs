@@ -72,7 +72,19 @@ impl Cmd {
             SyncAuth::NotLoggedIn { .. } => {}
         }
 
-        let resolved_password = self.resolve_password()?;
+        // For Hub sync, only resolve the password (which may read stdin) once
+        // we know the headless path is reachable; otherwise a piped secret
+        // would be silently consumed before falling through to OAuth.
+        let resolved_password = if settings.is_hub_sync() {
+            if self.username.is_some() && self.email.is_some() {
+                self.resolve_password()?
+            } else {
+                None
+            }
+        } else {
+            // Legacy registration always needs the password.
+            self.resolve_password()?
+        };
 
         if settings.is_hub_sync() {
             let required_for_headless = 3;

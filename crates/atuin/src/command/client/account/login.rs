@@ -18,7 +18,7 @@ use atuin_client::{
 use rpassword::prompt_password;
 
 const PASSWORD_ENV: &str = "ATUIN_PASSWORD";
-const KEY_ENV: &str = "ATUIN_KEY";
+const KEY_ENV: &str = "ATUIN_ENCRYPTION_KEY";
 
 #[derive(Parser, Debug)]
 pub struct Cmd {
@@ -37,8 +37,11 @@ pub struct Cmd {
     #[clap(long, conflicts_with = "password")]
     pub password_stdin: bool,
 
-    /// The encryption key for your account. Falls back to the `ATUIN_KEY`
-    /// environment variable before prompting interactively.
+    /// The encryption key for your account. Falls back to the
+    /// `ATUIN_ENCRYPTION_KEY` environment variable before prompting
+    /// interactively. (Distinct from the existing `key_path`/`ATUIN_KEY`
+    /// concept, which is a path to a key file — this variable holds the
+    /// key contents.)
     #[clap(long, short)]
     pub key: Option<String>,
 
