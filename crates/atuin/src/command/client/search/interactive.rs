@@ -1532,17 +1532,17 @@ impl Stdout {
 impl Drop for Stdout {
     fn drop(&mut self) {
         #[cfg(not(target_os = "windows"))]
-        execute!(self.writer, PopKeyboardEnhancementFlags).unwrap();
+        let _ = execute!(self.writer, PopKeyboardEnhancementFlags);
 
         if !self.inline_mode {
-            execute!(self.writer, terminal::LeaveAlternateScreen).unwrap();
+            let _ = execute!(self.writer, terminal::LeaveAlternateScreen);
         }
         if !self.no_mouse {
-            execute!(self.writer, event::DisableMouseCapture).unwrap();
+            let _ = execute!(self.writer, event::DisableMouseCapture);
         }
-        execute!(self.writer, event::DisableBracketedPaste).unwrap();
+        let _ = execute!(self.writer, event::DisableBracketedPaste);
 
-        terminal::disable_raw_mode().unwrap();
+        let _ = terminal::disable_raw_mode();
     }
 }
 
