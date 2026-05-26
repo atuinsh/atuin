@@ -1532,17 +1532,29 @@ impl Stdout {
 impl Drop for Stdout {
     fn drop(&mut self) {
         #[cfg(not(target_os = "windows"))]
-        let _ = execute!(self.writer, PopKeyboardEnhancementFlags);
+        if let Err(e) = execute!(self.writer, PopKeyboardEnhancementFlags) {
+            tracing::error!(?e, "Failed to pop keyboard enhancement flags");
+        }
 
         if !self.inline_mode {
-            let _ = execute!(self.writer, terminal::LeaveAlternateScreen);
+            if let Err(e) = execute!(self.writer, terminal::LeaveAlternateScreen) {
+                tracing::error!(?e, "Failed to leave alt screen mode");
+            }
         }
-        if !self.no_mouse {
-            let _ = execute!(self.writer, event::DisableMouseCapture);
-        }
-        let _ = execute!(self.writer, event::DisableBracketedPaste);
 
-        let _ = terminal::disable_raw_mode();
+        if !self.no_mouse {
+            if let Err(e) = execute!(self.writer, event::DisableMouseCapture) {
+                tracing::error!(?e, "Failed to disable mouse capture");
+            }
+        }
+
+        if let Err(e) = execute!(self.writer, event::DisableBracketedPaste) {
+            tracing::error!(?e, "Failed to disable bracketed paste");
+        }
+
+        if let Err(e) = terminal::disable_raw_mode() {
+            tracing::error!(?e, "Failed to disable raw mode");
+        }
     }
 }
 
