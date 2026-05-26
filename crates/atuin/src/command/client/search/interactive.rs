@@ -1536,16 +1536,16 @@ impl Drop for Stdout {
             tracing::error!(?e, "Failed to pop keyboard enhancement flags");
         }
 
-        if !self.inline_mode {
-            if let Err(e) = execute!(self.writer, terminal::LeaveAlternateScreen) {
-                tracing::error!(?e, "Failed to leave alt screen mode");
-            }
+        if !self.inline_mode
+            && let Err(e) = execute!(self.writer, terminal::LeaveAlternateScreen)
+        {
+            tracing::error!(?e, "Failed to leave alt screen mode");
         }
 
-        if !self.no_mouse {
-            if let Err(e) = execute!(self.writer, event::DisableMouseCapture) {
-                tracing::error!(?e, "Failed to disable mouse capture");
-            }
+        if !self.no_mouse
+            && let Err(e) = execute!(self.writer, event::DisableMouseCapture)
+        {
+            tracing::error!(?e, "Failed to disable mouse capture");
         }
 
         if let Err(e) = execute!(self.writer, event::DisableBracketedPaste) {
