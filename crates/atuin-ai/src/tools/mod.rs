@@ -259,7 +259,7 @@ impl ClientToolCall {
 }
 
 /// A trait for tool calls that can be checked against permission rules.
-pub(crate) trait PermissableToolCall {
+pub(crate) trait PermissibleToolCall {
     /// Checks if this tool call matches the given permission rule.
     fn matches_rule(&self, rule: &Rule) -> bool;
 
@@ -277,7 +277,7 @@ pub(crate) trait PermissableToolCall {
     }
 }
 
-impl PermissableToolCall for ClientToolCall {
+impl PermissibleToolCall for ClientToolCall {
     fn matches_rule(&self, rule: &Rule) -> bool {
         self.matches_rule(rule)
     }
@@ -416,7 +416,7 @@ impl ReadToolCall {
     }
 }
 
-impl PermissableToolCall for ReadToolCall {
+impl PermissibleToolCall for ReadToolCall {
     fn target_dir(&self) -> Option<&Path> {
         Some(&self.path)
     }
@@ -616,7 +616,7 @@ impl EditToolCall {
     }
 }
 
-impl PermissableToolCall for EditToolCall {
+impl PermissibleToolCall for EditToolCall {
     fn target_dir(&self) -> Option<&Path> {
         Some(&self.path)
     }
@@ -724,7 +724,7 @@ impl WriteToolCall {
     }
 }
 
-impl PermissableToolCall for WriteToolCall {
+impl PermissibleToolCall for WriteToolCall {
     fn target_dir(&self) -> Option<&Path> {
         Some(&self.path)
     }
@@ -792,7 +792,7 @@ impl TryFrom<&serde_json::Value> for ShellToolCall {
     }
 }
 
-impl PermissableToolCall for ShellToolCall {
+impl PermissibleToolCall for ShellToolCall {
     fn target_dir(&self) -> Option<&Path> {
         self.dir.as_deref()
     }
@@ -1134,7 +1134,7 @@ impl TryFrom<&serde_json::Value> for AtuinHistoryToolCall {
     }
 }
 
-impl PermissableToolCall for AtuinHistoryToolCall {
+impl PermissibleToolCall for AtuinHistoryToolCall {
     fn target_dir(&self) -> Option<&Path> {
         None
     }
@@ -1239,7 +1239,7 @@ impl TryFrom<&serde_json::Value> for LoadSkillToolCall {
     }
 }
 
-impl PermissableToolCall for LoadSkillToolCall {
+impl PermissibleToolCall for LoadSkillToolCall {
     fn target_dir(&self) -> Option<&Path> {
         None
     }
