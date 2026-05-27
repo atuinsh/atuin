@@ -109,7 +109,7 @@ __atuin_search_cmd() {
         __atuin_tmux_popup_cleanup
         trap - EXIT HUP INT TERM
     else
-        ATUIN_SHELL=zsh ATUIN_LOG=error ATUIN_QUERY=$BUFFER atuin search "${search_args[@]}" -i 3>&1 1>&2 2>&3
+        ATUIN_SHELL=zsh ATUIN_LOG=error ATUIN_QUERY=$BUFFER atuin search "${search_args[@]}" -i 3>&1 1>&2 2>&3 3>&-
     fi
 }
 
@@ -119,14 +119,20 @@ _atuin_search() {
 
     # swap stderr and stdout, so that the tui stuff works
     # TODO: not this
-    local output
+    local output __atuin_status
     # shellcheck disable=SC2048
     output=$(__atuin_search_cmd $*)
+    __atuin_status=$?
 
     zle reset-prompt
     # re-enable bracketed paste
     # shellcheck disable=SC2154
     echo -n ${zle_bracketed_paste[1]} >/dev/tty
+
+    if (( __atuin_status != 0 )); then
+        [[ -n $output ]] && print -r -- "$output" >/dev/tty
+        return $__atuin_status
+    fi
 
     if [[ -n $output ]]; then
         RBUFFER=""
