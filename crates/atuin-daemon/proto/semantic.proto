@@ -10,6 +10,8 @@ message CommandCapture {
   string command = 2;
   string output = 3;
   optional int32 exit_code = 4;
+  optional string history_id = 5;
+  optional string session_id = 6;
 }
 
 message RecordCommandsReply {

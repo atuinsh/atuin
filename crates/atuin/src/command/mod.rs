@@ -126,6 +126,8 @@ async fn send_semantic_command_captures(
             command: capture.command,
             output: capture.output,
             exit_code: capture.exit_code,
+            history_id: capture.history_id,
+            session_id: capture.session_id,
         })
         .collect();
 

@@ -10,11 +10,25 @@ if "ATUIN_SESSION" not in ${...} or ${...}.get("ATUIN_SHLVL", "") != ${...}.get(
     $ATUIN_SESSION=$(atuin uuid).rstrip('\n')
     $ATUIN_SHLVL = ${...}.get("SHLVL", "")
 
+
+def _atuin_osc133_command_executed():
+    if ${...}.get("ATUIN_PTY_PROXY_ACTIVE") and ${...}.get("ATUIN_HISTORY_ID"):
+        print("\033]133;C\a", end="", flush=True)
+
+
+def _atuin_osc133_command_finished(rtn: int):
+    history_id = ${...}.get("ATUIN_HISTORY_ID")
+    if ${...}.get("ATUIN_PTY_PROXY_ACTIVE") and history_id:
+        session = ${...}.get("ATUIN_SESSION", "")
+        print(f"\033]133;D;{rtn};history_id={history_id};session={session}\a", end="", flush=True)
+
+
 @events.on_precommand
 def _atuin_precommand(cmd: str):
     cmd = cmd.rstrip("\n")
     try:
         $ATUIN_HISTORY_ID = $(atuin history start -- @(cmd) 2>@(os.devnull)).rstrip("\n")
+        _atuin_osc133_command_executed()
     except:
         $ATUIN_HISTORY_ID = ""
 
@@ -24,6 +38,7 @@ def _atuin_postcommand(cmd: str, rtn: int, out, ts):
     if "ATUIN_HISTORY_ID" not in ${...}:
         return
 
+    _atuin_osc133_command_finished(rtn)
     duration = ts[1] - ts[0]
     # Duration is float representing seconds, but atuin expects integer of nanoseconds
     nanos = round(duration * 10 ** 9)

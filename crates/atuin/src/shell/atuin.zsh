@@ -31,10 +31,25 @@ if [[ -z "${ATUIN_SESSION:-}" || "${ATUIN_SHLVL:-}" != "$SHLVL" ]]; then
 fi
 ATUIN_HISTORY_ID=""
 
+__atuin_osc133_command_executed() {
+    [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
+    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return
+
+    printf '\033]133;C\a'
+}
+
+__atuin_osc133_command_finished() {
+    [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
+    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return
+
+    printf '\033]133;D;%s;history_id=%s;session=%s\a' "$1" "$ATUIN_HISTORY_ID" "${ATUIN_SESSION:-}"
+}
+
 _atuin_preexec() {
     local id
     id=$(atuin history start -- "$1" 2>/dev/null)
     export ATUIN_HISTORY_ID="$id"
+    __atuin_osc133_command_executed
     __atuin_preexec_time=${EPOCHREALTIME-}
 }
 
@@ -48,6 +63,7 @@ _atuin_precmd() {
         printf -v duration %.0f $(((__atuin_precmd_time - __atuin_preexec_time) * 1000000000))
     fi
 
+    __atuin_osc133_command_finished "$EXIT"
     (ATUIN_LOG=error atuin history end --exit $EXIT ${duration:+--duration=$duration} -- $ATUIN_HISTORY_ID &) >/dev/null 2>&1
     export ATUIN_HISTORY_ID=""
 }

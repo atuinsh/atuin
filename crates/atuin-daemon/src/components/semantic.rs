@@ -101,7 +101,7 @@ impl Component for SemanticComponent {
 impl SemanticComponentInner {
     async fn record_capture(&self, capture: CommandCapture) {
         let mut state = self.state.lock().await;
-        let history = take_matching_history(&mut state.pending_histories, &capture.command);
+        let history = take_matching_history(&mut state.pending_histories, &capture);
         let record = SemanticCommandRecord { capture, history };
 
         log_record(&record, "recorded semantic command capture");
@@ -113,7 +113,7 @@ impl SemanticComponentInner {
         let mut state = self.state.lock().await;
 
         if let Some(record) = state.records.iter_mut().rev().find(|record| {
-            record.history.is_none() && commands_match(&record.capture.command, &history.command)
+            record.history.is_none() && history_matches_capture(&history, &record.capture)
         }) {
             record.history = Some(history);
             log_record(record, "associated semantic command capture with history");
@@ -153,15 +153,26 @@ impl SemanticSvc for SemanticGrpcService {
     }
 }
 
-fn take_matching_history(histories: &mut VecDeque<History>, command: &str) -> Option<History> {
+fn take_matching_history(
+    histories: &mut VecDeque<History>,
+    capture: &CommandCapture,
+) -> Option<History> {
     let index = histories
         .iter()
-        .position(|history| commands_match(command, &history.command))?;
+        .position(|history| history_matches_capture(history, capture))?;
     histories.remove(index)
 }
 
+fn history_matches_capture(history: &History, capture: &CommandCapture) -> bool {
+    if let Some(history_id) = capture.history_id.as_deref() {
+        return history.id.0 == history_id;
+    }
+
+    commands_match(&capture.command, &history.command)
+}
+
 fn commands_match(left: &str, right: &str) -> bool {
-    normalize_command(left) == normalize_command(right)
+    !left.is_empty() && normalize_command(left) == normalize_command(right)
 }
 
 fn normalize_command(command: &str) -> &str {
@@ -186,9 +197,13 @@ fn log_record(record: &SemanticCommandRecord, message: &'static str) {
         .history
         .as_ref()
         .map(|history| history.author.as_str());
+    let capture_history_id = record.capture.history_id.as_deref();
+    let session_id = record.capture.session_id.as_deref();
 
     tracing::info!(
         history_id = %history_id,
+        capture_history_id = ?capture_history_id,
+        session_id = ?session_id,
         command = %record.capture.command,
         prompt_bytes = record.capture.prompt.len(),
         output_bytes = record.capture.output.len(),
@@ -198,4 +213,61 @@ fn log_record(record: &SemanticCommandRecord, message: &'static str) {
         author = ?author,
         "{message}"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use atuin_client::history::HistoryId;
+    use time::OffsetDateTime;
+
+    fn history(id: &str, command: &str) -> History {
+        History {
+            id: HistoryId(id.to_string()),
+            timestamp: OffsetDateTime::UNIX_EPOCH,
+            duration: 0,
+            exit: 0,
+            command: command.to_string(),
+            cwd: String::new(),
+            session: String::new(),
+            hostname: String::new(),
+            author: String::new(),
+            intent: None,
+            deleted_at: None,
+        }
+    }
+
+    fn capture(history_id: Option<&str>, command: &str) -> CommandCapture {
+        CommandCapture {
+            prompt: String::new(),
+            command: command.to_string(),
+            output: String::new(),
+            exit_code: None,
+            history_id: history_id.map(str::to_string),
+            session_id: None,
+        }
+    }
+
+    #[test]
+    fn history_id_match_takes_precedence_over_command_text() {
+        let history = history("id-1", "cargo test");
+        let capture = capture(Some("id-1"), "different command");
+
+        assert!(history_matches_capture(&history, &capture));
+    }
+
+    #[test]
+    fn command_match_is_fallback_only_when_capture_has_no_history_id() {
+        let history = history("id-1", "cargo test");
+
+        assert!(history_matches_capture(
+            &history,
+            &capture(None, "cargo test\n")
+        ));
+        assert!(!history_matches_capture(
+            &history,
+            &capture(Some("id-2"), "cargo test")
+        ));
+        assert!(!history_matches_capture(&history, &capture(None, "")));
+    }
 }

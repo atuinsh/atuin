@@ -20,6 +20,20 @@ fi
 ATUIN_STTY=$(stty -g)
 ATUIN_HISTORY_ID=""
 
+__atuin_osc133_command_executed() {
+    [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
+    [[ -n "${ATUIN_HISTORY_ID:-}" && "$ATUIN_HISTORY_ID" != "__bash_preexec_failure__" ]] || return
+
+    printf '\033]133;C\a'
+}
+
+__atuin_osc133_command_finished() {
+    [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
+    [[ -n "${ATUIN_HISTORY_ID:-}" && "$ATUIN_HISTORY_ID" != "__bash_preexec_failure__" ]] || return
+
+    printf '\033]133;D;%s;history_id=%s;session=%s\a' "$1" "$ATUIN_HISTORY_ID" "${ATUIN_SESSION:-}"
+}
+
 export ATUIN_PREEXEC_BACKEND=$SHLVL:none
 __atuin_update_preexec_backend() {
     if [[ ${BLE_ATTACHED-} ]]; then
@@ -59,6 +73,7 @@ __atuin_preexec() {
     local id
     id=$(atuin history start -- "$1" 2>/dev/null)
     export ATUIN_HISTORY_ID=$id
+    __atuin_osc133_command_executed
     __atuin_preexec_time=${EPOCHREALTIME-}
 }
 
@@ -106,6 +121,7 @@ __atuin_precmd() {
         fi
     fi
 
+    __atuin_osc133_command_finished "$EXIT"
     (ATUIN_LOG=error atuin history end --exit "$EXIT" ${duration:+"--duration=$duration"} -- "$ATUIN_HISTORY_ID" &) >/dev/null 2>&1
     export ATUIN_HISTORY_ID=""
 }
