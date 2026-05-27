@@ -9,7 +9,7 @@ resolver = "2"
 exclude = ["ui/backend", "crates/atuin-nucleo/matcher/fuzz"]
 
 [workspace.package]
-version = "18.16.0"
+version = "18.16.1"
 authors = ["Ellie Huxtable <ellie@atuin.sh>"]
 rust-version = "1.95.0"
 license = "MIT"
@@ -19,17 +19,17 @@ readme = "README.md"
 
 [workspace.dependencies]
 async-trait = "0.1.58"
-atuin-client = { path = "crates/atuin-client", version = "18.16.0" }
-atuin-common = { path = "crates/atuin-common", version = "18.16.0" }
-atuin-daemon = { path = "crates/atuin-daemon", version = "18.16.0" }
-atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.16.0" }
-atuin-history = { path = "crates/atuin-history", version = "18.16.0" }
-atuin-kv = { path = "crates/atuin-kv", version = "18.16.0" }
-atuin-scripts = { path = "crates/atuin-scripts", version = "18.16.0" }
-atuin-server = { path = "crates/atuin-server", version = "18.16.0" }
-atuin-server-database = { path = "crates/atuin-server-database", version = "18.16.0" }
-atuin-server-postgres = { path = "crates/atuin-server-postgres", version = "18.16.0" }
-atuin-server-sqlite = { path = "crates/atuin-server-sqlite", version = "18.16.0" }
+atuin-client = { path = "crates/atuin-client", version = "18.16.1" }
+atuin-common = { path = "crates/atuin-common", version = "18.16.1" }
+atuin-daemon = { path = "crates/atuin-daemon", version = "18.16.1" }
+atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.16.1" }
+atuin-history = { path = "crates/atuin-history", version = "18.16.1" }
+atuin-kv = { path = "crates/atuin-kv", version = "18.16.1" }
+atuin-scripts = { path = "crates/atuin-scripts", version = "18.16.1" }
+atuin-server = { path = "crates/atuin-server", version = "18.16.1" }
+atuin-server-database = { path = "crates/atuin-server-database", version = "18.16.1" }
+atuin-server-postgres = { path = "crates/atuin-server-postgres", version = "18.16.1" }
+atuin-server-sqlite = { path = "crates/atuin-server-sqlite", version = "18.16.1" }
 atuin-nucleo = { path = "crates/atuin-nucleo", version = "0.6.0" }
 atuin-nucleo-matcher = { path = "crates/atuin-nucleo/matcher", version = "0.3.1" }
 base64 = "0.22"

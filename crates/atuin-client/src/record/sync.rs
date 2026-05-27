@@ -4,7 +4,7 @@ use std::{cmp::Ordering, fmt::Write};
 use eyre::Result;
 use thiserror::Error;
 
-use super::store::Store;
+use super::{encryption::PASETO_V4, store::Store};
 use crate::{api_client::Client, settings::Settings};
 
 use atuin_common::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus};
@@ -26,6 +26,14 @@ pub enum SyncError {
 
     #[error("a request to the sync server failed: {msg:?}")]
     RemoteRequestError { msg: String },
+
+    #[error(
+        "the encryption key on this machine does not match the data on the server. \
+         this usually means a new machine was set up without copying the existing key. \
+         to fix: run `atuin key` on a machine that already syncs correctly, then run \
+         `atuin store rekey <key>` on this machine with the value from the other machine"
+    )]
+    WrongKey,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -49,11 +57,8 @@ pub enum Operation {
     },
 }
 
-pub async fn diff(
-    settings: &Settings,
-    store: &impl Store,
-) -> Result<(Vec<Diff>, RecordStatus), SyncError> {
-    let client = Client::new(
+pub async fn build_client(settings: &Settings) -> Result<Client<'_>, SyncError> {
+    Client::new(
         &settings.sync_address,
         settings
             .sync_auth_token()
@@ -62,8 +67,13 @@ pub async fn diff(
         settings.network_connect_timeout,
         settings.network_timeout,
     )
-    .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?;
+    .map_err(|e| SyncError::OperationalError { msg: e.to_string() })
+}
 
+pub async fn diff(
+    client: &Client<'_>,
+    store: &impl Store,
+) -> Result<(Vec<Diff>, RecordStatus), SyncError> {
     let local_index = store
         .status()
         .await
@@ -273,22 +283,11 @@ async fn sync_download(
 }
 
 pub async fn sync_remote(
+    client: &Client<'_>,
     operations: Vec<Operation>,
     local_store: &impl Store,
-    settings: &Settings,
     page_size: u64,
 ) -> Result<(i64, Vec<RecordId>), SyncError> {
-    let client = Client::new(
-        &settings.sync_address,
-        settings
-            .sync_auth_token()
-            .await
-            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?,
-        settings.network_connect_timeout,
-        settings.network_timeout,
-    )
-    .expect("failed to create client");
-
     let mut uploaded = 0;
     let mut downloaded = Vec::new();
 
@@ -302,7 +301,7 @@ pub async fn sync_remote(
                 remote,
             } => {
                 uploaded +=
-                    sync_upload(local_store, &client, host, tag, local, remote, page_size).await?
+                    sync_upload(local_store, client, host, tag, local, remote, page_size).await?
             }
 
             Operation::Download {
@@ -312,8 +311,7 @@ pub async fn sync_remote(
                 remote,
             } => {
                 let mut d =
-                    sync_download(local_store, &client, host, tag, local, remote, page_size)
-                        .await?;
+                    sync_download(local_store, client, host, tag, local, remote, page_size).await?;
                 downloaded.append(&mut d)
             }
 
@@ -324,13 +322,50 @@ pub async fn sync_remote(
     Ok((uploaded, downloaded))
 }
 
+pub async fn check_encryption_key(
+    client: &Client<'_>,
+    remote_index: &RecordStatus,
+    encryption_key: &[u8; 32],
+) -> Result<(), SyncError> {
+    let sample = remote_index
+        .hosts
+        .iter()
+        .flat_map(|(host, tags)| tags.keys().map(move |tag| (*host, tag.clone())))
+        .next();
+
+    let Some((host, tag)) = sample else {
+        return Ok(());
+    };
+
+    let records = client
+        .next_records(host, tag, 0, 1)
+        .await
+        .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
+
+    let Some(record) = records.into_iter().next() else {
+        return Ok(());
+    };
+
+    record
+        .decrypt::<PASETO_V4>(encryption_key)
+        .map_err(|_| SyncError::WrongKey)?;
+
+    Ok(())
+}
+
 pub async fn sync(
     settings: &Settings,
     store: &impl Store,
+    encryption_key: &[u8; 32],
 ) -> Result<(i64, Vec<RecordId>), SyncError> {
-    let (diff, _) = diff(settings, store).await?;
+    let client = build_client(settings).await?;
+    let (diff, remote_index) = diff(&client, store).await?;
+
+    // Bail before mutating either side if the local key can't read the remote.
+    check_encryption_key(&client, &remote_index, encryption_key).await?;
+
     let operations = operations(diff, store).await?;
-    let (uploaded, downloaded) = sync_remote(operations, store, settings, 100).await?;
+    let (uploaded, downloaded) = sync_remote(&client, operations, store, 100).await?;
 
     Ok((uploaded, downloaded))
 }

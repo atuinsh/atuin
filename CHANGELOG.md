@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.16.1
+
+### Bug Fixes
+
+- *(shell/xonsh)* Use os.devnull instead of hard-coded /dev/null ([#3464](https://github.com/atuinsh/atuin/issues/3464))
+- Atuin update on windows ([#3453](https://github.com/atuinsh/atuin/issues/3453))
+- Ensure local key matches remote data before syncing ([#3474](https://github.com/atuinsh/atuin/issues/3474))
+
+
+### Documentation
+
+- Add related projects section to README
+
+
+### Features
+
+- *(ui)* Prominent banner for wrong-key errors at login/sync ([#3475](https://github.com/atuinsh/atuin/issues/3475))
+
+
+### Miscellaneous Tasks
+
+- Generate LLM-optimized docs ([#3468](https://github.com/atuinsh/atuin/issues/3468))
+- Rename 'atuin hex' to 'atuin pty-proxy' ([#3473](https://github.com/atuinsh/atuin/issues/3473))
+
 ## 18.16.0
 
 ### Features

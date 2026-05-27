@@ -15,11 +15,11 @@ While you work, Atuin records:
 
 ## Opening and using the TUI
 
-At any time, you can open the TUI with the default keybindings of the up arrow, or ctrl-r.
+At any time, you can open the TUI with the default keybindings of the up arrow, or `ctrl-r`.
 
 Once in the TUI, press enter to immediately execute a command, or press tab to insert it into your shell for editing.
 
-While searching in the TUI, you can adjust the "filter mode" by repeatedly pressing ctrl-r. Atuin can filter by:
+While searching in the TUI, you can adjust the "filter mode" by repeatedly pressing `ctrl-r`. Atuin can filter by:
 
 1. All hosts
 2. Just your local machine

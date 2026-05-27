@@ -11,6 +11,8 @@ use command::AtuinCmd;
 mod command;
 
 #[cfg(feature = "sync")]
+mod print_error;
+#[cfg(feature = "sync")]
 mod sync;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");

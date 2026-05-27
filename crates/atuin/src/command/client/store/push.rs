@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use atuin_client::{
     api_client::Client,
+    encryption::load_key,
     record::sync::Operation,
     record::{sqlite_store::SqliteStore, sync},
     settings::Settings,
@@ -58,7 +59,17 @@ impl Push {
         // 3. Filter operations by
         //  a) are they an upload op?
         //  b) are they for the host/tag we are pushing here?
-        let (diff, _) = sync::diff(settings, &store).await?;
+        let client = sync::build_client(settings).await?;
+        let (diff, remote_index) = sync::diff(&client, &store).await?;
+
+        // Skip on --force: that path intentionally replaces remote with local.
+        if !self.force {
+            let key: [u8; 32] = load_key(settings)?.into();
+            sync::check_encryption_key(&client, &remote_index, &key)
+                .await
+                .map_err(crate::print_error::format_sync_error)?;
+        }
+
         let operations = sync::operations(diff, &store).await?;
 
         let operations = operations
@@ -92,7 +103,7 @@ impl Push {
             })
             .collect();
 
-        let (uploaded, _) = sync::sync_remote(operations, &store, settings, self.page).await?;
+        let (uploaded, _) = sync::sync_remote(&client, operations, &store, self.page).await?;
 
         println!("Uploaded {uploaded} records");
 

@@ -44,13 +44,13 @@ clipboard = ["arboard"]
 check-update = ["atuin-client/check-update"]
 
 [dependencies]
-atuin-ai = { path = "../atuin-ai", version = "18.16.0", optional = true, default-features = false }
-atuin-client = { path = "../atuin-client", version = "18.16.0", optional = true, default-features = false }
+atuin-ai = { path = "../atuin-ai", version = "18.16.1", optional = true, default-features = false }
+atuin-client = { path = "../atuin-client", version = "18.16.1", optional = true, default-features = false }
 atuin-common = { workspace = true }
 atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }
-atuin-daemon = { path = "../atuin-daemon", version = "18.16.0", optional = true, default-features = false }
-atuin-pty-proxy = { path = "../atuin-pty-proxy", version = "18.16.0", optional = true, default-features = false }
+atuin-daemon = { path = "../atuin-daemon", version = "18.16.1", optional = true, default-features = false }
+atuin-pty-proxy = { path = "../atuin-pty-proxy", version = "18.16.1", optional = true, default-features = false }
 atuin-scripts = { workspace = true }
 atuin-kv = { workspace = true }
 
@@ -110,7 +110,7 @@ daemonize = "0.5.0"
 # compiles cleanly. tree-sitter 0.26's portable/endian.h fails on illumos,
 # Windows cross-compiles, and potentially other exotic targets.
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
-atuin-ai = { path = "../atuin-ai", version = "18.16.0", optional = true, default-features = false, features = ["tree-sitter"] }
+atuin-ai = { path = "../atuin-ai", version = "18.16.1", optional = true, default-features = false, features = ["tree-sitter"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_System_Console"] }
