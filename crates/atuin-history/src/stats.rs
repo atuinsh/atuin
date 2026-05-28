@@ -281,14 +281,18 @@ pub fn compute(
         }
 
         total_unignored += 1;
+        commands.insert(command.clone());
 
         split_at_pipe(&command)
             .iter()
             .map(|l| {
-                let command = l.trim();
-                commands.insert(command.to_string());
+                let command = resolve_alias(&alias_keys, l.trim());
+                commands.insert(command.clone());
                 command
             })
+            .collect::<Vec<_>>()
+            .iter()
+            .map(|s| s.as_str())
             .collect::<Vec<_>>()
             .windows(ngram_size)
             .for_each(|w| {
