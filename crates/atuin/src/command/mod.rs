@@ -53,7 +53,10 @@ impl AtuinCmd {
             Self::Client(client) => client.run(),
 
             #[cfg(feature = "pty-proxy")]
-            Self::PtyProxy(proxy) => run_pty_proxy(proxy),
+            Self::PtyProxy(proxy) => {
+                run_pty_proxy(proxy);
+                Ok(())
+            }
 
             Self::Contributors => {
                 contributors::run();
@@ -70,18 +73,16 @@ impl AtuinCmd {
 }
 
 #[cfg(all(feature = "pty-proxy", unix))]
-fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy) -> Result<()> {
+fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy) {
     #[cfg(feature = "daemon")]
     proxy.run(semantic_command_capture_sink());
 
     #[cfg(not(feature = "daemon"))]
     proxy.run(None);
-
-    Ok(())
 }
 
 #[cfg(all(feature = "pty-proxy", not(unix)))]
-fn run_pty_proxy(_proxy: atuin_pty_proxy::PtyProxy) -> Result<()> {
+fn run_pty_proxy(_proxy: atuin_pty_proxy::PtyProxy) {
     eprintln!("atuin pty-proxy currently supports unix platforms");
     std::process::exit(1);
 }
