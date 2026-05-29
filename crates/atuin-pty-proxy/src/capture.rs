@@ -98,11 +98,11 @@ impl CommandCaptureTracker {
     fn finish_capture(&mut self) -> Option<CommandCapture> {
         let buffers = std::mem::take(&mut self.buffers);
         let cols = self.cols.load(Ordering::Relaxed).max(1);
-        let prompt = clean_text(&buffers.prompt, cols);
-        let command = clean_command_text(&buffers.command, cols)
+        let prompt = render_plain_text(&buffers.prompt, cols);
+        let command = render_plain_text(&buffers.command, cols)
             .trim_matches(|c| c == '\r' || c == '\n')
             .to_string();
-        let output = clean_text(&buffers.output, cols);
+        let output = render_plain_text(&buffers.output, cols);
         let exit_code = buffers.exit_code;
         let history_id = buffers.history_id;
         let session_id = buffers.session_id;
@@ -123,14 +123,6 @@ impl CommandCaptureTracker {
 }
 
 const CLEAN_TEXT_MAX_ROWS: usize = 10_000;
-
-fn clean_text(bytes: &[u8], cols: u16) -> String {
-    render_plain_text(bytes, cols)
-}
-
-fn clean_command_text(bytes: &[u8], cols: u16) -> String {
-    render_plain_text(bytes, cols)
-}
 
 fn render_plain_text(bytes: &[u8], cols: u16) -> String {
     if bytes.is_empty() {
@@ -179,20 +171,20 @@ mod tests {
 
     #[test]
     fn command_text_collapses_terminal_echo_edits() {
-        assert_eq!(clean_command_text(b"e\x08echo hi", 80), "echo hi");
+        assert_eq!(render_plain_text(b"e\x08echo hi", 80), "echo hi");
         assert_eq!(
-            clean_command_text(
+            render_plain_text(
                 b"e\x08echo\x08 \x08\x08 \x08\x08\x08e \x08\x08 \x08e\x08echo hi",
                 80
             ),
             "echo hi"
         );
-        assert_eq!(clean_command_text(b"echo hi", 80), "echo hi");
+        assert_eq!(render_plain_text(b"echo hi", 80), "echo hi");
     }
 
     #[test]
     fn text_cleaning_strips_ansi_and_terminal_controls() {
-        let text = clean_text(
+        let text = render_plain_text(
             b"\x1b[32mhi\x1b[0m\r\n%                                    \r \r",
             80,
         );
@@ -203,7 +195,7 @@ mod tests {
 
     #[test]
     fn text_cleaning_preserves_valid_utf8_after_backspace() {
-        let text = clean_text("🦀x\x08 \x08 crab".as_bytes(), 80);
+        let text = render_plain_text("🦀x\x08 \x08 crab".as_bytes(), 80);
 
         assert_eq!(text, "🦀 crab");
         assert_no_terminal_controls(&text);
