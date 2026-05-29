@@ -297,7 +297,7 @@ __atuin_search_cmd() {
         __atuin_tmux_popup_cleanup
         trap - EXIT HUP INT TERM
     else
-        ATUIN_SHELL=bash ATUIN_LOG=error ATUIN_QUERY=$READLINE_LINE atuin search "${search_args[@]}" -i 3>&1 1>&2 2>&3
+        ATUIN_SHELL=bash ATUIN_LOG=error ATUIN_QUERY=$READLINE_LINE atuin search "${search_args[@]}" -i 3>&1 1>&2 2>&3 3>&-
     fi
 }
 
@@ -329,7 +329,10 @@ __atuin_history() {
         READLINE_LINE="" READLINE_POINT=0
 
     local __atuin_output
-    __atuin_output=$(__atuin_search_cmd "$@")
+    if ! __atuin_output=$(__atuin_search_cmd "$@"); then
+        [[ $__atuin_output ]] && printf '%s\n' "$__atuin_output" >&2
+        return 1
+    fi
 
     # We do nothing when the search is canceled.
     [[ $__atuin_output ]] || return 0
