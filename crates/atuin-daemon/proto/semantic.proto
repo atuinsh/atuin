@@ -3,6 +3,7 @@ package semantic;
 
 service Semantic {
   rpc RecordCommands(stream CommandCapture) returns (RecordCommandsReply);
+  rpc CommandOutput(CommandOutputRequest) returns (CommandOutputReply);
 }
 
 message CommandCapture {
@@ -16,4 +17,27 @@ message CommandCapture {
 
 message RecordCommandsReply {
   uint64 accepted = 1;
+}
+
+message CommandOutputRequest {
+  string history_id = 1;
+  repeated OutputRange ranges = 2;
+}
+
+message OutputRange {
+  int64 start = 1;
+  int64 end = 2;
+}
+
+message OutputLine {
+  uint64 line_number = 1;
+  string content = 2;
+}
+
+message CommandOutputReply {
+  bool found = 1;
+  string output = 2;
+  uint64 total_bytes = 3;
+  uint64 total_lines = 4;
+  repeated OutputLine lines = 5;
 }

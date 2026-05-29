@@ -17,6 +17,11 @@ pub(crate) struct AppContext {
     /// Resolves through worktrees to the main repo root.
     pub git_root: Option<PathBuf>,
     pub capabilities: AiCapabilities,
+    pub daemon_enabled: bool,
+}
+
+pub(crate) fn history_output_capability_available(daemon_enabled: bool) -> bool {
+    cfg!(feature = "daemon") && daemon_enabled
 }
 
 impl AppContext {
@@ -32,6 +37,11 @@ impl AppContext {
         }
         if self.capabilities.enable_command_execution.unwrap_or(true) {
             caps.push("client_v1_execute_shell_command".to_string());
+        }
+        if history_output_capability_available(self.daemon_enabled)
+            && self.capabilities.enable_history_output.unwrap_or(true)
+        {
+            caps.push("client_v1_atuin_output".to_string());
         }
         caps.push("client_v1_load_skill".to_string());
         if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {

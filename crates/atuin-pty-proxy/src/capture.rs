@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
+
 use crate::osc133::{Event, Params, Parser, Zone};
 
 const HISTORY_ID_PARAM: &str = "history_id";
@@ -30,14 +33,16 @@ pub(crate) struct CommandCaptureTracker {
     parser: Parser,
     zone: Zone,
     buffers: CaptureBuffers,
+    cols: Arc<AtomicU16>,
 }
 
 impl CommandCaptureTracker {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(cols: Arc<AtomicU16>) -> Self {
         Self {
             parser: Parser::new(),
             zone: Zone::Unknown,
             buffers: CaptureBuffers::default(),
+            cols,
         }
     }
 
@@ -92,11 +97,12 @@ impl CommandCaptureTracker {
 
     fn finish_capture(&mut self) -> Option<CommandCapture> {
         let buffers = std::mem::take(&mut self.buffers);
-        let prompt = clean_text(&buffers.prompt);
-        let command = clean_text(&buffers.command)
+        let cols = self.cols.load(Ordering::Relaxed).max(1);
+        let prompt = clean_text(&buffers.prompt, cols);
+        let command = clean_command_text(&buffers.command, cols)
             .trim_matches(|c| c == '\r' || c == '\n')
             .to_string();
-        let output = clean_text(&buffers.output);
+        let output = clean_text(&buffers.output, cols);
         let exit_code = buffers.exit_code;
         let history_id = buffers.history_id;
         let session_id = buffers.session_id;
@@ -116,67 +122,112 @@ impl CommandCaptureTracker {
     }
 }
 
-fn clean_text(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(&strip_ansi_sequences(bytes)).to_string()
+const CLEAN_TEXT_MAX_ROWS: usize = 10_000;
+
+fn clean_text(bytes: &[u8], cols: u16) -> String {
+    render_plain_text(bytes, cols)
 }
 
-fn strip_ansi_sequences(bytes: &[u8]) -> Vec<u8> {
-    #[derive(Clone, Copy)]
-    enum State {
-        Ground,
-        Esc,
-        Csi,
-        Osc,
-        OscEsc,
+fn clean_command_text(bytes: &[u8], cols: u16) -> String {
+    render_plain_text(bytes, cols)
+}
+
+fn render_plain_text(bytes: &[u8], cols: u16) -> String {
+    if bytes.is_empty() {
+        return String::new();
     }
 
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut state = State::Ground;
+    let cols = cols.max(1);
+    let mut parser = vt100::Parser::new(estimated_rows(bytes, cols), cols, 0);
+    parser.process(bytes);
+    normalize_screen_contents(&parser.screen().contents())
+}
 
-    for &byte in bytes {
-        match state {
-            State::Ground => {
-                if byte == 0x1b {
-                    state = State::Esc;
-                } else {
-                    out.push(byte);
-                }
-            }
-            State::Esc => match byte {
-                b'[' => state = State::Csi,
-                b']' => state = State::Osc,
-                _ => state = State::Ground,
-            },
-            State::Csi => {
-                if (0x40..=0x7e).contains(&byte) {
-                    state = State::Ground;
-                }
-            }
-            State::Osc => match byte {
-                0x07 => state = State::Ground,
-                0x1b => state = State::OscEsc,
-                _ => {}
-            },
-            State::OscEsc => {
-                if byte == b'\\' {
-                    state = State::Ground;
-                } else {
-                    state = State::Osc;
-                }
-            }
-        }
+fn normalize_screen_contents(contents: &str) -> String {
+    let mut lines = contents.lines().map(str::trim_end).collect::<Vec<_>>();
+    while lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
     }
+    lines.join("\n")
+}
 
-    out
+fn estimated_rows(bytes: &[u8], cols: u16) -> u16 {
+    let newline_rows = bytes.iter().filter(|byte| **byte == b'\n').count() + 1;
+    let wrapped_rows = bytes.len() / cols as usize;
+    newline_rows
+        .saturating_add(wrapped_rows)
+        .saturating_add(1)
+        .clamp(1, CLEAN_TEXT_MAX_ROWS) as u16
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn tracker(cols: u16) -> CommandCaptureTracker {
+        CommandCaptureTracker::new(Arc::new(AtomicU16::new(cols)))
+    }
+
+    fn assert_no_terminal_controls(text: &str) {
+        assert!(
+            !text
+                .chars()
+                .any(|ch| ch.is_control() && ch != '\n' && ch != '\t'),
+            "text still contains terminal controls: {text:?}"
+        );
+    }
+
+    #[test]
+    fn command_text_collapses_terminal_echo_edits() {
+        assert_eq!(clean_command_text(b"e\x08echo hi", 80), "echo hi");
+        assert_eq!(
+            clean_command_text(
+                b"e\x08echo\x08 \x08\x08 \x08\x08\x08e \x08\x08 \x08e\x08echo hi",
+                80
+            ),
+            "echo hi"
+        );
+        assert_eq!(clean_command_text(b"echo hi", 80), "echo hi");
+    }
+
+    #[test]
+    fn text_cleaning_strips_ansi_and_terminal_controls() {
+        let text = clean_text(
+            b"\x1b[32mhi\x1b[0m\r\n%                                    \r \r",
+            80,
+        );
+
+        assert_eq!(text, "hi");
+        assert_no_terminal_controls(&text);
+    }
+
+    #[test]
+    fn text_cleaning_preserves_valid_utf8_after_backspace() {
+        let text = clean_text("🦀x\x08 \x08 crab".as_bytes(), 80);
+
+        assert_eq!(text, "🦀 crab");
+        assert_no_terminal_controls(&text);
+    }
+
+    #[test]
+    fn command_text_replays_backspaces() {
+        let mut tracker = tracker(80);
+        let mut captures = Vec::new();
+
+        let input =
+            b"\x1b]133;A\x07$ \x1b]133;B\x07e\x08echo hi\r\n\x1b]133;C\x07hi\r\n\x1b]133;D;0\x07";
+        tracker.push(input, |capture| captures.push(capture));
+
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].command, "echo hi");
+        assert_eq!(captures[0].output, "hi");
+        assert_no_terminal_controls(&captures[0].command);
+        assert_no_terminal_controls(&captures[0].output);
+    }
+
     #[test]
     fn captures_complete_command() {
-        let mut tracker = CommandCaptureTracker::new();
+        let mut tracker = tracker(80);
         let mut captures = Vec::new();
 
         tracker.push(
@@ -187,9 +238,9 @@ mod tests {
         assert_eq!(
             captures,
             vec![CommandCapture {
-                prompt: "$ ".to_string(),
+                prompt: "$".to_string(),
                 command: "echo hi".to_string(),
-                output: "hi\r\n".to_string(),
+                output: "hi".to_string(),
                 exit_code: Some(0),
                 history_id: None,
                 session_id: None,
@@ -199,7 +250,7 @@ mod tests {
 
     #[test]
     fn strips_ansi_and_split_markers() {
-        let mut tracker = CommandCaptureTracker::new();
+        let mut tracker = tracker(80);
         let mut captures = Vec::new();
 
         tracker.push(b"\x1b]133;A\x07\x1b[32m%\x1b[0m ", |_| {});
@@ -211,9 +262,9 @@ mod tests {
         assert_eq!(
             captures,
             vec![CommandCapture {
-                prompt: "% ".to_string(),
+                prompt: "%".to_string(),
                 command: "ls".to_string(),
-                output: "file\r\n".to_string(),
+                output: "file".to_string(),
                 exit_code: Some(1),
                 history_id: None,
                 session_id: None,
@@ -223,7 +274,7 @@ mod tests {
 
     #[test]
     fn captures_output_with_history_metadata_from_d_marker() {
-        let mut tracker = CommandCaptureTracker::new();
+        let mut tracker = tracker(80);
         let mut captures = Vec::new();
 
         tracker.push(
@@ -236,7 +287,7 @@ mod tests {
             vec![CommandCapture {
                 prompt: String::new(),
                 command: String::new(),
-                output: "line one\r\n".to_string(),
+                output: "line one".to_string(),
                 exit_code: Some(0),
                 history_id: Some("018f".to_string()),
                 session_id: Some("abcd".to_string()),
@@ -246,7 +297,7 @@ mod tests {
 
     #[test]
     fn resets_buffers_between_c_d_only_captures() {
-        let mut tracker = CommandCaptureTracker::new();
+        let mut tracker = tracker(80);
         let mut captures = Vec::new();
 
         tracker.push(
@@ -255,9 +306,9 @@ mod tests {
         );
 
         assert_eq!(captures.len(), 2);
-        assert_eq!(captures[0].output, "first\r\n");
+        assert_eq!(captures[0].output, "first");
         assert_eq!(captures[0].history_id.as_deref(), Some("one"));
-        assert_eq!(captures[1].output, "second\r\n");
+        assert_eq!(captures[1].output, "second");
         assert_eq!(captures[1].history_id.as_deref(), Some("two"));
     }
 }

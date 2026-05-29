@@ -31,7 +31,8 @@ use crate::search::{
     search_client::SearchClient as SearchServiceClient,
 };
 use crate::semantic::{
-    CommandCapture, RecordCommandsReply, semantic_client::SemanticClient as SemanticServiceClient,
+    CommandCapture, CommandOutputReply, CommandOutputRequest, OutputRange, RecordCommandsReply,
+    semantic_client::SemanticClient as SemanticServiceClient,
 };
 
 pub struct HistoryClient {
@@ -326,6 +327,22 @@ impl SemanticClient {
     ) -> Result<RecordCommandsReply> {
         let stream = tokio_stream::iter(captures);
         Ok(self.client.record_commands(stream).await?.into_inner())
+    }
+
+    pub async fn command_output(
+        &mut self,
+        history_id: String,
+        ranges: Vec<(i64, i64)>,
+    ) -> Result<CommandOutputReply> {
+        let request = CommandOutputRequest {
+            history_id,
+            ranges: ranges
+                .into_iter()
+                .map(|(start, end)| OutputRange { start, end })
+                .collect(),
+        };
+
+        Ok(self.client.command_output(request).await?.into_inner())
     }
 }
 

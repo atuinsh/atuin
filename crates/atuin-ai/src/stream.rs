@@ -3,6 +3,8 @@
 // ───────────────────────────────────────────────────────────────────
 
 use atuin_client::settings::AiCapabilities;
+
+use crate::context::history_output_capability_available;
 use atuin_common::tls::ensure_crypto_provider;
 
 use eventsource_stream::Eventsource;
@@ -61,6 +63,7 @@ impl ChatRequest {
         messages: Vec<serde_json::Value>,
         session_id: Option<String>,
         capabilities: &AiCapabilities,
+        history_output_available: bool,
         invocation_id: String,
     ) -> Self {
         let mut caps = vec![
@@ -77,6 +80,11 @@ impl ChatRequest {
         }
         if capabilities.enable_command_execution.unwrap_or(true) {
             caps.push("client_v1_execute_shell_command".to_string());
+        }
+        if history_output_capability_available(history_output_available)
+            && capabilities.enable_history_output.unwrap_or(true)
+        {
+            caps.push("client_v1_atuin_output".to_string());
         }
         if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
             caps.extend(

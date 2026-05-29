@@ -14,12 +14,14 @@ repository = { workspace = true }
 
 [features]
 default = []
+daemon = []
 tree-sitter = ["dep:tree-sitter-lib", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
 
 [dependencies]
 async-trait = { workspace = true }
 atuin-client = { workspace = true }
 atuin-common = { workspace = true }
+atuin-daemon = { workspace = true }
 tokio = { workspace = true }
 eyre = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }

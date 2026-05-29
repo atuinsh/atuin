@@ -1,4 +1,6 @@
 use std::io::{Read, Write};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::mpsc;
 
 use crossterm::terminal;
@@ -37,6 +39,7 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     cmd.cwd(std::env::current_dir()?);
     cmd.env("ATUIN_PTY_PROXY_SOCKET", sock_path.as_os_str());
     cmd.env("ATUIN_HEX_SOCKET", sock_path.as_os_str());
+    cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
 
     let mut child = pair
         .slave
@@ -55,10 +58,11 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
         .map_err(|e| eyre::eyre!("{e:#}"))?;
 
     let (msg_tx, msg_rx) = mpsc::sync_channel::<Msg>(64);
+    let current_cols = Arc::new(AtomicU16::new(cols.max(1)));
 
     screen::spawn_parser_thread(rows, cols, msg_rx);
     screen::spawn_socket_server(sock_path.clone(), msg_tx.clone());
-    spawn_resize_handler(pair.master, msg_tx.clone())?;
+    spawn_resize_handler(pair.master, msg_tx.clone(), current_cols.clone())?;
 
     terminal::enable_raw_mode()?;
 
@@ -68,7 +72,7 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
         let mut capture_tracker = options
             .command_capture_sink
             .as_ref()
-            .map(|_| CommandCaptureTracker::new());
+            .map(|_| CommandCaptureTracker::new(current_cols));
         let mut buf = [0u8; 8192];
 
         loop {
@@ -134,6 +138,7 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
 fn spawn_resize_handler(
     master: Box<dyn portable_pty::MasterPty + Send>,
     resize_tx: mpsc::SyncSender<Msg>,
+    current_cols: Arc<AtomicU16>,
 ) -> eyre::Result<()> {
     use signal_hook::consts::SIGWINCH;
     use signal_hook::iterator::Signals;
@@ -143,6 +148,7 @@ fn spawn_resize_handler(
     std::thread::spawn(move || {
         for _ in signals.forever() {
             if let Ok((cols, rows)) = terminal::size() {
+                current_cols.store(cols.max(1), Ordering::Relaxed);
                 let _ = master.resize(PtySize {
                     rows,
                     cols,

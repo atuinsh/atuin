@@ -84,6 +84,7 @@ pub(crate) async fn run(
         history_db: std::sync::Arc::new(history_db),
         git_root,
         capabilities: settings.ai.capabilities.clone(),
+        daemon_enabled: settings.daemon.enabled,
     };
 
     let action = run_inline_tui(ctx, initial_command, settings).await?;

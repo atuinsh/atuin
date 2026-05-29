@@ -492,6 +492,7 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
                 messages.clone(),
                 session_id.clone(),
                 &app.capabilities,
+                app.daemon_enabled,
                 fsm.ctx.invocation_id.clone(),
             );
             tokio::spawn(async move {
@@ -570,7 +571,6 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
 
         Effect::ExecuteTool { tool_id, tool } => {
             let tool_id = tool_id.clone();
-            let tool = tool.clone();
             let tx = tx.clone();
             let db = io.app_ctx.history_db.clone();
 
@@ -731,10 +731,22 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
                         preview: None,
                     }));
                 }
-                ClientToolCall::AtuinHistory(_) => {
+                ClientToolCall::AtuinHistory(tool) => {
                     // History search needs async DB access
+                    let tool = tool.clone();
                     tokio::spawn(async move {
                         let outcome = tool.execute(&db).await;
+                        let _ = tx.send(DriverEvent::Fsm(Event::ToolExecutionDone {
+                            tool_id,
+                            outcome,
+                            preview: None,
+                        }));
+                    });
+                }
+                ClientToolCall::AtuinOutput(tool) => {
+                    let tool = tool.clone();
+                    tokio::spawn(async move {
+                        let outcome = tool.execute().await;
                         let _ = tx.send(DriverEvent::Fsm(Event::ToolExecutionDone {
                             tool_id,
                             outcome,
