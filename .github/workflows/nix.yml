@@ -4,13 +4,13 @@
 name: Nix
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths-ignore:
-      - 'ui/**'
+      - "ui/**"
   pull_request:
-    branches: [ main ]
+    branches: [main]
     paths-ignore:
-      - 'ui/**'
+      - "ui/**"
 
 jobs:
   check:
@@ -19,6 +19,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: cachix/install-nix-action@v31
+      - uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'Cargo.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
 
       - name: Run nix flake check
         run: nix flake check --print-build-logs
@@ -29,6 +33,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: cachix/install-nix-action@v31
+      - uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'Cargo.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
 
       - name: Run nix build
         run: nix build --print-build-logs
