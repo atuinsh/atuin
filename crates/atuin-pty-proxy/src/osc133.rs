@@ -46,13 +46,8 @@ pub struct Params {
 }
 
 impl Params {
-    /// Return true when the marker had no metadata parameters.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-
     /// Iterate over all marker parameters in order.
+    #[cfg(test)]
     #[inline]
     pub fn iter(&self) -> impl Iterator<Item = &Param> {
         self.items.iter()
@@ -186,6 +181,7 @@ impl Parser {
     ///
     /// All bytes in `data` should still be forwarded to the terminal by the
     /// caller — this method only *observes* the stream.
+    #[cfg(test)]
     #[inline]
     pub fn push(&mut self, data: &[u8], mut on_event: impl FnMut(Event)) {
         self.push_located(data, |located| on_event(located.event));
@@ -641,7 +637,7 @@ mod tests {
     fn very_long_osc_does_not_panic() {
         let mut data = Vec::new();
         data.extend_from_slice(b"\x1b]");
-        data.extend(std::iter::repeat(b'x').take(1000));
+        data.extend(std::iter::repeat_n(b'x', 1000));
         data.push(BEL);
         // Should not panic and should produce no event.
         assert!(parse_events(&data).is_empty());

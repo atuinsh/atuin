@@ -6,9 +6,9 @@ use std::sync::mpsc;
 use crossterm::terminal;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
-use crate::RuntimeOptions;
 use crate::capture::CommandCaptureTracker;
 use crate::debug::{Osc133DebugHighlighter, RESET};
+use crate::pty_proxy::RuntimeOptions;
 use crate::screen::{self, Msg};
 
 pub(crate) fn main(options: RuntimeOptions) {

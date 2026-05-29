@@ -53,15 +53,7 @@ impl AtuinCmd {
             Self::Client(client) => client.run(),
 
             #[cfg(feature = "pty-proxy")]
-            Self::PtyProxy(proxy) => {
-                #[cfg(all(feature = "daemon", feature = "pty-proxy"))]
-                atuin_pty_proxy::run_with_capture_sink(proxy, semantic_command_capture_sink());
-
-                #[cfg(not(all(feature = "daemon", feature = "pty-proxy")))]
-                atuin_pty_proxy::run(proxy);
-
-                Ok(())
-            }
+            Self::PtyProxy(proxy) => run_pty_proxy(proxy),
 
             Self::Contributors => {
                 contributors::run();
@@ -77,7 +69,24 @@ impl AtuinCmd {
     }
 }
 
-#[cfg(all(feature = "daemon", feature = "pty-proxy"))]
+#[cfg(all(feature = "pty-proxy", unix))]
+fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy) -> Result<()> {
+    #[cfg(feature = "daemon")]
+    proxy.run(semantic_command_capture_sink());
+
+    #[cfg(not(feature = "daemon"))]
+    proxy.run(None);
+
+    Ok(())
+}
+
+#[cfg(all(feature = "pty-proxy", not(unix)))]
+fn run_pty_proxy(_proxy: atuin_pty_proxy::PtyProxy) -> Result<()> {
+    eprintln!("atuin pty-proxy currently supports unix platforms");
+    std::process::exit(1);
+}
+
+#[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]
 fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink> {
     use std::sync::mpsc;
     use std::time::Duration;
@@ -114,7 +123,7 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
     }))
 }
 
-#[cfg(all(feature = "daemon", feature = "pty-proxy"))]
+#[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]
 async fn send_semantic_command_captures(
     settings: &atuin_client::settings::Settings,
     batch: Vec<atuin_pty_proxy::CommandCapture>,
