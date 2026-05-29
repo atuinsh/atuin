@@ -1,74 +1,73 @@
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
-    flake-compat = {
-      url = "github:edolstra/flake-compat";
-      flake = false;
-    };
+    flake-parts.url = "github:hercules-ci/flake-parts";
     fenix = {
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
   outputs =
-    { self
-    , nixpkgs
-    , flake-utils
-    , fenix
-    , ...
-    }:
-    flake-utils.lib.eachDefaultSystem
-      (system:
-      let
-        pkgs = nixpkgs.outputs.legacyPackages.${system};
-      in
-      {
-        packages.atuin = pkgs.callPackage ./atuin.nix {
-          rustPlatform =
-            let
-              toolchain =
-                fenix.packages.${system}.fromToolchainFile
-                  {
-                    file = ./rust-toolchain.toml;
-                    sha256 = "sha256-mvUGEOHYJpn3ikC5hckneuGixaC+yGrkMM/liDIDgoU=";
-                  };
-            in
-            pkgs.makeRustPlatform {
+    inputs@{ flake-parts, fenix, ... }:
+    flake-parts.lib.mkFlake { inherit inputs; } {
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
+      perSystem =
+        { pkgs, system, ... }:
+        let
+          toolchain = fenix.packages.${system}.fromToolchainFile {
+            file = ./rust-toolchain.toml;
+            sha256 = "sha256-mvUGEOHYJpn3ikC5hckneuGixaC+yGrkMM/liDIDgoU";
+          };
+          atuin = pkgs.callPackage ./atuin.nix {
+            rustPlatform = pkgs.makeRustPlatform {
               cargo = toolchain;
               rustc = toolchain;
             };
+          };
+        in
+        {
+          packages = {
+            inherit atuin;
+            default = atuin;
+          };
+
+          formatter = pkgs.nixfmt;
+
+          devShells.default = pkgs.mkShell {
+            inputsFrom = [ atuin ];
+
+            nativeBuildInputs =
+              (with pkgs; [
+                cargo-edit
+                rust-analyzer
+              ])
+              ++ [ toolchain ];
+
+            RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
+
+            shellHook = ''
+              echo >&2 "Setting development database path"
+              export ATUIN_DB_PATH="/tmp/atuin_dev.db"
+              export ATUIN_RECORD_STORE_PATH="/tmp/atuin_records.db"
+
+              if [ -e "''${ATUIN_DB_PATH}" ]; then
+                echo >&2 "''${ATUIN_DB_PATH} already exists, you might want to double-check that"
+              fi
+
+              if [ -e "''${ATUIN_RECORD_STORE_PATH}" ]; then
+                echo >&2 "''${ATUIN_RECORD_STORE_PATH} already exists, you might want to double-check that"
+              fi
+            '';
+          };
         };
-        packages.default = self.outputs.packages.${system}.atuin;
 
-        devShells.default = self.packages.${system}.default.overrideAttrs (super: {
-          nativeBuildInputs = with pkgs;
-            super.nativeBuildInputs
-            ++ [
-              cargo-edit
-              clippy
-              rustfmt
-            ];
-          RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
-
-          shellHook = ''
-            echo >&2 "Setting development database path"
-            export ATUIN_DB_PATH="/tmp/atuin_dev.db"
-            export ATUIN_RECORD_STORE_PATH="/tmp/atuin_records.db"
-
-            if [ -e "''${ATUIN_DB_PATH}" ]; then
-              echo >&2 "''${ATUIN_DB_PATH} already exists, you might want to double-check that"
-            fi
-
-            if [ -e "''${ATUIN_RECORD_STORE_PATH}" ]; then
-              echo >&2 "''${ATUIN_RECORD_STORE_PATH} already exists, you might want to double-check that"
-            fi
-          '';
-        });
-      })
-    // {
-      overlays.default = final: prev: {
-        inherit (self.packages.${final.stdenv.hostPlatform.system}) atuin;
+      flake.overlays.default = final: _: {
+        inherit (inputs.self.packages.${final.stdenv.hostPlatform.system}) atuin;
       };
     };
 }
