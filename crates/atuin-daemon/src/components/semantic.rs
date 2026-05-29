@@ -121,8 +121,8 @@ impl SemanticComponentInner {
         }
 
         tracing::debug!(
-            command = %history.command,
             id = %history.id,
+            command_bytes = history.command.len(),
             "history ended before semantic capture arrived"
         );
         state.pending_histories.push_back(history);
@@ -313,7 +313,7 @@ fn log_record(record: &SemanticCommandRecord, message: &'static str) {
         history_id = %history_id,
         capture_history_id = ?capture_history_id,
         session_id = ?session_id,
-        command = %record.capture.command,
+        command_bytes = record.capture.command.len(),
         prompt_bytes = record.capture.prompt.len(),
         output_bytes = record.capture.output.len(),
         capture_exit_code = ?record.capture.exit_code,

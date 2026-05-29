@@ -73,7 +73,7 @@ __atuin_preexec() {
     local id
     id=$(atuin history start -- "$1" 2>/dev/null)
     export ATUIN_HISTORY_ID=$id
-    __atuin_osc133_command_executed
+    [[ -n ${__atuin_skip_osc133:-} ]] || __atuin_osc133_command_executed
     __atuin_preexec_time=${EPOCHREALTIME-}
 }
 
@@ -83,6 +83,7 @@ __atuin_precmd() {
     [[ ! $ATUIN_HISTORY_ID ]] && return
 
     # If the previous preexec hook failed, we manually call __atuin_preexec
+    local __atuin_skip_osc133=""
     if [[ $ATUIN_HISTORY_ID == __bash_preexec_failure__ ]]; then
         # This is the command extraction code taken from bash-preexec
         local previous_command
@@ -90,6 +91,7 @@ __atuin_precmd() {
             export LC_ALL=C HISTTIMEFORMAT=''
             builtin history 1 | sed '1 s/^ *[0-9][0-9]*[* ] //'
         )
+        __atuin_skip_osc133=1
         __atuin_preexec "$previous_command"
     fi
 
@@ -121,7 +123,7 @@ __atuin_precmd() {
         fi
     fi
 
-    __atuin_osc133_command_finished "$EXIT"
+    [[ -n ${__atuin_skip_osc133:-} ]] || __atuin_osc133_command_finished "$EXIT"
     (ATUIN_LOG=error atuin history end --exit "$EXIT" ${duration:+"--duration=$duration"} -- "$ATUIN_HISTORY_ID" &) >/dev/null 2>&1
     export ATUIN_HISTORY_ID=""
 }
