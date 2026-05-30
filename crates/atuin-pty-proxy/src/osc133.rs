@@ -176,6 +176,12 @@ impl Parser {
         self.zone
     }
 
+    /// Whether the most recent input ended while parsing an escape sequence.
+    #[inline]
+    pub(crate) fn has_incomplete_sequence(&self) -> bool {
+        self.state != State::Ground
+    }
+
     /// Process a chunk of bytes, calling `on_event` for every OSC 133 marker
     /// found.
     ///

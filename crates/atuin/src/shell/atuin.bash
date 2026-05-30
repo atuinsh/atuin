@@ -34,6 +34,21 @@ __atuin_osc133_command_finished() {
     printf '\033]133;D;%s;history_id=%s;session=%s\a' "$1" "$ATUIN_HISTORY_ID" "${ATUIN_SESSION:-}"
 }
 
+__atuin_osc133_prompt_start=$'\001\033]133;A;cl=line\a\002'
+__atuin_osc133_prompt_end=$'\001\033]133;B\a\002'
+
+__atuin_osc133_wrap_prompt() {
+    local __atuin_prompt="${PS1-}"
+    __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_start/}"
+    __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_end/}"
+
+    if [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]]; then
+        PS1="${__atuin_osc133_prompt_start}${__atuin_prompt}${__atuin_osc133_prompt_end}"
+    else
+        PS1="$__atuin_prompt"
+    fi
+}
+
 export ATUIN_PREEXEC_BACKEND=$SHLVL:none
 __atuin_update_preexec_backend() {
     if [[ ${BLE_ATTACHED-} ]]; then
@@ -79,6 +94,8 @@ __atuin_preexec() {
 
 __atuin_precmd() {
     local EXIT=$? __atuin_precmd_time=${EPOCHREALTIME-}
+
+    __atuin_osc133_wrap_prompt
 
     [[ ! $ATUIN_HISTORY_ID ]] && return
 

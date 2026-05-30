@@ -45,6 +45,26 @@ __atuin_osc133_command_finished() {
     printf '\033]133;D;%s;history_id=%s;session=%s\a' "$1" "$ATUIN_HISTORY_ID" "${ATUIN_SESSION:-}"
 }
 
+__atuin_osc133_prompt_start=$'%{\033]133;A;cl=line\a%}'
+__atuin_osc133_prompt_end=$'%{\033]133;B\a%}'
+
+__atuin_osc133_wrap_prompt() {
+    local __atuin_prompt="${PROMPT-}"
+    __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_start/}"
+    __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_end/}"
+
+    if [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]]; then
+        PROMPT="${__atuin_osc133_prompt_start}${__atuin_prompt}"
+    else
+        PROMPT="$__atuin_prompt"
+    fi
+}
+
+__atuin_osc133_zle_line_init() {
+    [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
+    printf '\033]133;B\a'
+}
+
 _atuin_preexec() {
     local id
     id=$(atuin history start -- "$1" 2>/dev/null)
@@ -55,6 +75,8 @@ _atuin_preexec() {
 
 _atuin_precmd() {
     local EXIT="$?" __atuin_precmd_time=${EPOCHREALTIME-}
+
+    __atuin_osc133_wrap_prompt
 
     [[ -z "${ATUIN_HISTORY_ID:-}" ]] && return
 
@@ -179,6 +201,10 @@ _atuin_up_search_viins() {
 
 add-zsh-hook preexec _atuin_preexec
 add-zsh-hook precmd _atuin_precmd
+
+if autoload -Uz add-zle-hook-widget 2>/dev/null; then
+    add-zle-hook-widget line-init __atuin_osc133_zle_line_init 2>/dev/null || true
+fi
 
 zle -N atuin-search _atuin_search
 zle -N atuin-search-vicmd _atuin_search_vicmd
