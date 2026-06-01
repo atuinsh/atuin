@@ -138,6 +138,8 @@ async fn send_semantic_command_captures(
             exit_code: capture.exit_code,
             history_id: capture.history_id,
             session_id: capture.session_id,
+            output_truncated: capture.output_truncated,
+            output_observed_bytes: capture.output_observed_bytes,
         })
         .collect();
 

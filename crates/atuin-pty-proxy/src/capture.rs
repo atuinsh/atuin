@@ -6,6 +6,7 @@ use crate::osc133::{Event, Params, Parser, Zone};
 const HISTORY_ID_PARAM: &str = "history_id";
 const SESSION_PARAM: &str = "session";
 const SESSION_ID_PARAM: &str = "session_id";
+const MAX_OUTPUT_CAPTURE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandCapture {
@@ -15,6 +16,8 @@ pub struct CommandCapture {
     pub exit_code: Option<i32>,
     pub history_id: Option<String>,
     pub session_id: Option<String>,
+    pub output_truncated: bool,
+    pub output_observed_bytes: u64,
 }
 
 pub type CommandCaptureSink = Box<dyn Fn(CommandCapture) + Send + 'static>;
@@ -24,6 +27,8 @@ struct CaptureBuffers {
     prompt: Vec<u8>,
     command: Vec<u8>,
     output: Vec<u8>,
+    output_observed_bytes: u64,
+    output_truncated: bool,
     exit_code: Option<i32>,
     history_id: Option<String>,
     session_id: Option<String>,
@@ -55,18 +60,25 @@ impl CommandCaptureTracker {
 
         let mut start = 0;
         for located in events {
+            let marker_start = located.start_offset.min(data.len()).max(start);
             let offset = located.offset.min(data.len());
-            self.append(&data[start..offset]);
+            self.append(&data[start..marker_start]);
             self.handle_event(located.event, &located.params, &mut on_capture);
             self.zone = located.zone;
             start = offset;
         }
 
-        if start < data.len() {
+        let append_end = self
+            .parser
+            .incomplete_osc_sequence_start()
+            .map_or(data.len(), |sequence_start| {
+                sequence_start.min(data.len()).max(start)
+            });
+        if start < append_end {
             if self.pending_finish && !self.parser.has_incomplete_sequence() {
                 self.finish_pending_capture(&mut on_capture);
             }
-            self.append(&data[start..]);
+            self.append(&data[start..append_end]);
         }
     }
 
@@ -74,8 +86,27 @@ impl CommandCaptureTracker {
         match self.zone {
             Zone::Prompt => self.buffers.prompt.extend_from_slice(data),
             Zone::Input => self.buffers.command.extend_from_slice(data),
-            Zone::Output => self.buffers.output.extend_from_slice(data),
+            Zone::Output => self.append_output(data),
             Zone::Unknown => {}
+        }
+    }
+
+    fn append_output(&mut self, data: &[u8]) {
+        self.buffers.output_observed_bytes = self
+            .buffers
+            .output_observed_bytes
+            .saturating_add(data.len() as u64);
+
+        if self.buffers.output_truncated {
+            return;
+        }
+
+        let remaining = MAX_OUTPUT_CAPTURE_BYTES.saturating_sub(self.buffers.output.len());
+        let retained = data.len().min(remaining);
+        self.buffers.output_truncated = retained < data.len();
+
+        if retained > 0 {
+            self.buffers.output.extend_from_slice(&data[..retained]);
         }
     }
 
@@ -152,6 +183,8 @@ impl CommandCaptureTracker {
             .trim_matches(|c| c == '\r' || c == '\n')
             .to_string();
         let output = render_plain_text(&buffers.output, cols);
+        let output_truncated = buffers.output_truncated;
+        let output_observed_bytes = buffers.output_observed_bytes;
         let exit_code = buffers.exit_code;
         let history_id = buffers.history_id;
         let session_id = buffers.session_id;
@@ -167,6 +200,8 @@ impl CommandCaptureTracker {
             exit_code,
             history_id,
             session_id,
+            output_truncated,
+            output_observed_bytes,
         })
     }
 }
@@ -285,6 +320,8 @@ mod tests {
                 exit_code: Some(0),
                 history_id: None,
                 session_id: None,
+                output_truncated: false,
+                output_observed_bytes: 4,
             }]
         );
     }
@@ -312,6 +349,8 @@ mod tests {
                 exit_code: Some(1),
                 history_id: None,
                 session_id: None,
+                output_truncated: false,
+                output_observed_bytes: 15,
             }]
         );
     }
@@ -370,6 +409,8 @@ mod tests {
                 exit_code: Some(0),
                 history_id: Some("018f".to_string()),
                 session_id: Some("abcd".to_string()),
+                output_truncated: false,
+                output_observed_bytes: 10,
             }]
         );
     }
@@ -398,6 +439,26 @@ mod tests {
     }
 
     #[test]
+    fn split_finish_marker_is_not_counted_as_output() {
+        let mut tracker = tracker(80);
+        let mut captures = Vec::new();
+
+        tracker.push(
+            b"\x1b]133;C\x07line one\r\n\x1b]133;D;0;history_id=018f",
+            |capture| {
+                captures.push(capture);
+            },
+        );
+        assert!(captures.is_empty());
+
+        tracker.push(b";session=abcd\x07", |capture| captures.push(capture));
+
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].output, "line one");
+        assert_eq!(captures[0].output_observed_bytes, 10);
+    }
+
+    #[test]
     fn captures_output_with_history_metadata_from_d_marker() {
         let mut tracker = tracker(80);
         let mut captures = Vec::new();
@@ -416,7 +477,27 @@ mod tests {
                 exit_code: Some(0),
                 history_id: Some("018f".to_string()),
                 session_id: Some("abcd".to_string()),
+                output_truncated: false,
+                output_observed_bytes: 10,
             }]
+        );
+    }
+
+    #[test]
+    fn output_capture_is_capped_and_reports_observed_bytes() {
+        let mut tracker = tracker(80);
+        let mut captures = Vec::new();
+        let mut input = b"\x1b]133;C\x07".to_vec();
+        input.extend(std::iter::repeat_n(b'x', MAX_OUTPUT_CAPTURE_BYTES + 10));
+        input.extend_from_slice(b"\x1b]133;D;0;history_id=big;session=session-1\x07");
+
+        tracker.push(&input, |capture| captures.push(capture));
+
+        assert_eq!(captures.len(), 1);
+        assert!(captures[0].output_truncated);
+        assert_eq!(
+            captures[0].output_observed_bytes,
+            (MAX_OUTPUT_CAPTURE_BYTES + 10) as u64
         );
     }
 

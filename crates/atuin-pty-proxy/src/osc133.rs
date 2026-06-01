@@ -80,6 +80,11 @@ pub enum Param {
 pub struct LocatedEvent {
     /// The OSC 133 event that was parsed.
     pub event: Event,
+    /// Offset where this marker starts in the current chunk.
+    ///
+    /// If a marker started in an earlier [`Parser::push_located`] call, this is
+    /// `0` in the chunk that completed the marker.
+    pub start_offset: usize,
     /// Offset immediately after this marker's terminator in the current chunk.
     ///
     /// If a marker spans multiple [`Parser::push_located`] calls, this is still
@@ -147,6 +152,7 @@ enum State {
 pub struct Parser {
     state: State,
     zone: Zone,
+    sequence_start: Option<usize>,
     param_buf: [u8; PARAM_BUF_CAP],
     param_len: usize,
 }
@@ -164,6 +170,7 @@ impl Parser {
         Self {
             state: State::Ground,
             zone: Zone::Unknown,
+            sequence_start: None,
             param_buf: [0u8; PARAM_BUF_CAP],
             param_len: 0,
         }
@@ -180,6 +187,13 @@ impl Parser {
     #[inline]
     pub(crate) fn has_incomplete_sequence(&self) -> bool {
         self.state != State::Ground
+    }
+
+    /// Start offset of an incomplete OSC sequence in the most recent chunk.
+    #[inline]
+    pub(crate) fn incomplete_osc_sequence_start(&self) -> Option<usize> {
+        matches!(self.state, State::OscParam | State::OscEsc)
+            .then(|| self.sequence_start.unwrap_or(0))
     }
 
     /// Process a chunk of bytes, calling `on_event` for every OSC 133 marker
@@ -201,11 +215,14 @@ impl Parser {
     /// boundaries.
     #[inline]
     pub fn push_located(&mut self, data: &[u8], mut on_event: impl FnMut(LocatedEvent)) {
+        self.sequence_start = (self.state != State::Ground).then_some(0);
+
         for (offset, &byte) in data.iter().enumerate() {
             match self.state {
                 State::Ground => {
                     if byte == ESC {
                         self.state = State::Esc;
+                        self.sequence_start = Some(offset);
                     }
                 }
                 State::Esc => {
@@ -214,12 +231,14 @@ impl Parser {
                         self.param_len = 0;
                     } else {
                         self.state = State::Ground;
+                        self.sequence_start = None;
                     }
                 }
                 State::OscParam => {
                     if byte == BEL || byte == C1_ST {
                         self.dispatch(offset + 1, &mut on_event);
                         self.state = State::Ground;
+                        self.sequence_start = None;
                     } else if byte == ESC {
                         self.state = State::OscEsc;
                     } else if self.param_len < PARAM_BUF_CAP {
@@ -237,6 +256,7 @@ impl Parser {
                     // (A new ESC ] would restart accumulation via the Ground
                     // -> Esc -> OscParam path on the *next* byte.)
                     self.state = State::Ground;
+                    self.sequence_start = None;
                 }
             }
         }
@@ -281,6 +301,7 @@ impl Parser {
 
         on_event(LocatedEvent {
             event,
+            start_offset: self.sequence_start.unwrap_or(0),
             offset,
             zone: self.zone,
             params,
@@ -743,6 +764,7 @@ mod tests {
             events,
             vec![LocatedEvent {
                 event: Event::PromptStart,
+                start_offset: b"before".len(),
                 offset: b"before\x1b]133;A\x07".len(),
                 zone: Zone::Prompt,
                 params: Params::default(),
@@ -764,6 +786,7 @@ mod tests {
                 event: Event::CommandFinished {
                     exit_code: Some(42)
                 },
+                start_offset: 0,
                 offset: b"D;42\x07".len(),
                 zone: Zone::Unknown,
                 params: Params::default(),

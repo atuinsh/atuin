@@ -13,6 +13,8 @@ message CommandCapture {
   optional int32 exit_code = 4;
   optional string history_id = 5;
   optional string session_id = 6;
+  bool output_truncated = 7;
+  uint64 output_observed_bytes = 8;
 }
 
 message RecordCommandsReply {
@@ -40,4 +42,6 @@ message CommandOutputReply {
   uint64 total_bytes = 3;
   uint64 total_lines = 4;
   repeated OutputLine lines = 5;
+  bool output_truncated = 6;
+  uint64 output_observed_bytes = 7;
 }

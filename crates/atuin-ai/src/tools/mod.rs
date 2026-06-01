@@ -1316,9 +1316,20 @@ impl AtuinOutputToolCall {
             ));
         }
 
+        let total_output = if response.output_truncated {
+            format!(
+                "{} bytes captured, {} bytes observed before truncation, {} lines",
+                response.total_bytes, response.output_observed_bytes, response.total_lines
+            )
+        } else {
+            format!(
+                "{} bytes, {} lines",
+                response.total_bytes, response.total_lines
+            )
+        };
+
         ToolOutcome::Success(format!(
-            "History ID: {history_id}\nTotal output: {} bytes, {} lines\nSelected output:\n{}",
-            response.total_bytes, response.total_lines, output
+            "History ID: {history_id}\nTotal output: {total_output}\nSelected output:\n{output}"
         ))
     }
 }
