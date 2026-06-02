@@ -92,6 +92,10 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
     use std::sync::mpsc;
     use std::time::Duration;
 
+    if is_truthy_env("ATUIN_TERMINAL") {
+        return None;
+    }
+
     let settings = atuin_client::settings::Settings::new().ok()?;
     let (tx, rx) = mpsc::sync_channel::<atuin_pty_proxy::CommandCapture>(128);
 
@@ -125,6 +129,14 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
 }
 
 #[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]
+#[inline]
+fn is_truthy_env(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty() && value.trim() != "false")
+        .is_some()
+}
+
 async fn send_semantic_command_captures(
     settings: &atuin_client::settings::Settings,
     batch: Vec<atuin_pty_proxy::CommandCapture>,
