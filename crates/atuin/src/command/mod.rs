@@ -137,6 +137,7 @@ fn is_truthy_env(name: &str) -> bool {
         .is_some_and(|value| !value.trim().is_empty() && value.trim() != "false")
 }
 
+#[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]
 async fn send_semantic_command_captures(
     settings: &atuin_client::settings::Settings,
     batch: Vec<atuin_pty_proxy::CommandCapture>,
