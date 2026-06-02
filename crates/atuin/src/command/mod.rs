@@ -133,8 +133,8 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
 fn is_truthy_env(name: &str) -> bool {
     std::env::var(name)
         .ok()
-        .filter(|value| !value.trim().is_empty() && value.trim() != "false")
-        .is_some()
+        .as_ref()
+        .is_some_and(|value| !value.trim().is_empty() && value.trim() != "false")
 }
 
 async fn send_semantic_command_captures(
