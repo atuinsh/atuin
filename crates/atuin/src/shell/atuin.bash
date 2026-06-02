@@ -31,7 +31,7 @@ __atuin_osc133_command_finished() {
     [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
     [[ -n "${ATUIN_HISTORY_ID:-}" && "$ATUIN_HISTORY_ID" != "__bash_preexec_failure__" ]] || return
 
-    printf '\033]133;D;%s;history_id=%s;session=%s\a' "$1" "$ATUIN_HISTORY_ID" "${ATUIN_SESSION:-}"
+    printf '\033]133;D;%s;history_id=%s;session_id=%s\a' "$1" "$ATUIN_HISTORY_ID" "${ATUIN_SESSION:-}"
 }
 
 __atuin_osc133_prompt_start=$'\001\033]133;A;cl=line\a\002'

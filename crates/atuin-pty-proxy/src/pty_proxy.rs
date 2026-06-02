@@ -47,7 +47,7 @@ pub(crate) struct RuntimeOptions {
 impl RuntimeOptions {
     fn new(debug_osc133: bool, command_capture_sink: Option<CommandCaptureSink>) -> Self {
         Self {
-            debug_osc133: debug_osc133 || env_flag("ATUIN_HEX_DEBUG"),
+            debug_osc133: debug_osc133 || env_flag("ATUIN_PTY_PROXY_DEBUG"),
             command_capture_sink,
         }
     }
@@ -131,9 +131,9 @@ fn render_init(shell: Shell) -> &'static str {
         Shell::Bash | Shell::Zsh => {
             r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
   _atuin_pty_proxy_tmux_current="${TMUX:-}"
-  _atuin_pty_proxy_tmux_previous="${ATUIN_PTY_PROXY_TMUX:-${ATUIN_HEX_TMUX:-}}"
+  _atuin_pty_proxy_tmux_previous="${ATUIN_PTY_PROXY_TMUX:-}"
 
-  if [[ -z "${ATUIN_PTY_PROXY_ACTIVE:-${ATUIN_HEX_ACTIVE:-}}" ]] || [[ "$_atuin_pty_proxy_tmux_current" != "$_atuin_pty_proxy_tmux_previous" ]]; then
+  if [[ -z "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || [[ "$_atuin_pty_proxy_tmux_current" != "$_atuin_pty_proxy_tmux_previous" ]]; then
     export ATUIN_PTY_PROXY_ACTIVE=1
     export ATUIN_PTY_PROXY_TMUX="$_atuin_pty_proxy_tmux_current"
     exec atuin pty-proxy
@@ -153,11 +153,9 @@ fi
     set -l _atuin_pty_proxy_tmux_previous ""
     if set -q ATUIN_PTY_PROXY_TMUX
         set _atuin_pty_proxy_tmux_previous "$ATUIN_PTY_PROXY_TMUX"
-    else if set -q ATUIN_HEX_TMUX
-        set _atuin_pty_proxy_tmux_previous "$ATUIN_HEX_TMUX"
     end
 
-    if not set -q ATUIN_PTY_PROXY_ACTIVE; and not set -q ATUIN_HEX_ACTIVE
+    if not set -q ATUIN_PTY_PROXY_ACTIVE
         set -gx ATUIN_PTY_PROXY_ACTIVE 1
         set -gx ATUIN_PTY_PROXY_TMUX "$_atuin_pty_proxy_tmux_current"
         exec atuin pty-proxy
@@ -175,9 +173,9 @@ end
         Shell::Nu => {
             r#"if (is-terminal --stdin) and (is-terminal --stdout) {
     let tmux_current = ($env.TMUX? | default "")
-    let tmux_previous = ($env.ATUIN_PTY_PROXY_TMUX? | default ($env.ATUIN_HEX_TMUX? | default ""))
+    let tmux_previous = ($env.ATUIN_PTY_PROXY_TMUX? | default "")
 
-    if (($env.ATUIN_PTY_PROXY_ACTIVE? | default ($env.ATUIN_HEX_ACTIVE? | default "")) | is-empty) or ($tmux_current != $tmux_previous) {
+    if (($env.ATUIN_PTY_PROXY_ACTIVE? | default "") | is-empty) or ($tmux_current != $tmux_previous) {
         $env.ATUIN_PTY_PROXY_ACTIVE = "1"
         $env.ATUIN_PTY_PROXY_TMUX = $tmux_current
         exec atuin pty-proxy

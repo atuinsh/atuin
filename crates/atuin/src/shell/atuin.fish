@@ -15,7 +15,7 @@ function _atuin_osc133_command_finished --argument-names exit_code
     set -q ATUIN_PTY_PROXY_ACTIVE; or return
     test -n "$ATUIN_HISTORY_ID"; or return
 
-    printf '\033]133;D;%s;history_id=%s;session=%s\a' "$exit_code" "$ATUIN_HISTORY_ID" "$ATUIN_SESSION"
+    printf '\033]133;D;%s;history_id=%s;session_id=%s\a' "$exit_code" "$ATUIN_HISTORY_ID" "$ATUIN_SESSION"
 end
 
 function _atuin_preexec --on-event fish_preexec

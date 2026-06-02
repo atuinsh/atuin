@@ -38,24 +38,6 @@ New-Module -Name Atuin -ScriptBlock {
     $script:atuinHistoryId = $null
     $script:previousPSConsoleHostReadLine = $Function:PSConsoleHostReadLine
 
-    function Write-AtuinOsc133CommandExecuted {
-        if (-not $env:ATUIN_PTY_PROXY_ACTIVE -or -not $script:atuinHistoryId) {
-            return
-        }
-
-        [Console]::Write("$([char]27)]133;C$([char]7)")
-    }
-
-    function Write-AtuinOsc133CommandFinished {
-        param([int]$ExitCode)
-
-        if (-not $env:ATUIN_PTY_PROXY_ACTIVE -or -not $script:atuinHistoryId) {
-            return
-        }
-
-        [Console]::Write("$([char]27)]133;D;$ExitCode;history_id=$script:atuinHistoryId;session=$env:ATUIN_SESSION$([char]7)")
-    }
-
     # The ReadLine overloads changed with breaking changes over time, make sure the one we expect is available.
     $script:hasExpectedReadLineOverload = ([Microsoft.PowerShell.PSConsoleReadLine]::ReadLine).OverloadDefinitions.Contains("static string ReadLine(runspace runspace, System.Management.Automation.EngineIntrinsics engineIntrinsics, System.Threading.CancellationToken cancellationToken, System.Nullable[bool] lastRunStatus)")
 
@@ -88,7 +70,6 @@ New-Module -Name Atuin -ScriptBlock {
 
         if ($script:atuinHistoryId) {
             try {
-                Write-AtuinOsc133CommandFinished -ExitCode $exitCode
                 # The duration is not recorded in old PowerShell versions, let Atuin handle it. $null arguments are ignored.
                 $duration = (Get-History -Count 1).Duration.Ticks * 100
                 $durationArg = if ($duration) { "--duration=$duration" } else { $null }
@@ -137,7 +118,6 @@ New-Module -Name Atuin -ScriptBlock {
         try {
             $env:ATUIN_COMMAND_LINE = $line
             $script:atuinHistoryId = atuin history start --command-from-env
-            Write-AtuinOsc133CommandExecuted
         }
         catch {
             # Ignore errors to avoid breaking the shell, see above.

@@ -38,7 +38,6 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     let mut cmd = CommandBuilder::new_default_prog();
     cmd.cwd(std::env::current_dir()?);
     cmd.env("ATUIN_PTY_PROXY_SOCKET", sock_path.as_os_str());
-    cmd.env("ATUIN_HEX_SOCKET", sock_path.as_os_str());
     cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
 
     let mut child = pair

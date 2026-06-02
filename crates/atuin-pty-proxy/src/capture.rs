@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use crate::osc133::{Event, Params, Parser, Zone};
 
 const HISTORY_ID_PARAM: &str = "history_id";
-const SESSION_PARAM: &str = "session";
 const SESSION_ID_PARAM: &str = "session_id";
 const MAX_OUTPUT_CAPTURE_BYTES: usize = 1024 * 1024;
 
@@ -38,7 +37,6 @@ pub(crate) struct CommandCaptureTracker {
     parser: Parser,
     zone: Zone,
     buffers: CaptureBuffers,
-    pending_finish: bool,
     cols: Arc<AtomicU16>,
 }
 
@@ -48,7 +46,6 @@ impl CommandCaptureTracker {
             parser: Parser::new(),
             zone: Zone::Unknown,
             buffers: CaptureBuffers::default(),
-            pending_finish: false,
             cols,
         }
     }
@@ -75,9 +72,6 @@ impl CommandCaptureTracker {
                 sequence_start.min(data.len()).max(start)
             });
         if start < append_end {
-            if self.pending_finish && !self.parser.has_incomplete_sequence() {
-                self.finish_pending_capture(&mut on_capture);
-            }
             self.append(&data[start..append_end]);
         }
     }
@@ -118,60 +112,26 @@ impl CommandCaptureTracker {
     ) {
         match event {
             Event::PromptStart => {
-                self.finish_pending_capture(on_capture);
                 if self.zone != Zone::Prompt {
                     self.buffers = CaptureBuffers::default();
                 }
             }
-            Event::CommandStart | Event::CommandExecuted => {
-                self.finish_pending_capture(on_capture);
-            }
+            Event::CommandStart | Event::CommandExecuted => {}
             Event::CommandFinished { exit_code } => {
-                self.handle_command_finished(exit_code, params, on_capture);
+                let Some(history_id) = params.get(HISTORY_ID_PARAM).map(str::to_owned) else {
+                    return;
+                };
+
+                if exit_code.is_some() || self.buffers.exit_code.is_none() {
+                    self.buffers.exit_code = exit_code;
+                }
+                self.buffers.history_id = Some(history_id);
+                self.buffers.session_id = params.get(SESSION_ID_PARAM).map(str::to_owned);
+
+                if let Some(capture) = self.finish_capture() {
+                    on_capture(capture);
+                }
             }
-        }
-    }
-
-    fn handle_command_finished(
-        &mut self,
-        exit_code: Option<i32>,
-        params: &Params,
-        on_capture: &mut impl FnMut(CommandCapture),
-    ) {
-        let history_id = params.get(HISTORY_ID_PARAM).map(str::to_owned);
-        let session_id = params
-            .get(SESSION_PARAM)
-            .or_else(|| params.get(SESSION_ID_PARAM))
-            .map(str::to_owned);
-
-        let Some(history_id) = history_id else {
-            if exit_code.is_some() || self.buffers.exit_code.is_none() {
-                self.buffers.exit_code = exit_code;
-            }
-            self.pending_finish = true;
-            return;
-        };
-
-        if exit_code.is_some() || self.buffers.exit_code.is_none() {
-            self.buffers.exit_code = exit_code;
-        }
-        self.buffers.history_id = Some(history_id);
-        self.buffers.session_id = session_id;
-        self.pending_finish = false;
-
-        if let Some(capture) = self.finish_capture() {
-            on_capture(capture);
-        }
-    }
-
-    fn finish_pending_capture(&mut self, on_capture: &mut impl FnMut(CommandCapture)) {
-        if !self.pending_finish {
-            return;
-        }
-
-        self.pending_finish = false;
-        if let Some(capture) = self.finish_capture() {
-            on_capture(capture);
         }
     }
 
@@ -291,7 +251,7 @@ mod tests {
         let mut captures = Vec::new();
 
         let input =
-            b"\x1b]133;A\x07$ \x1b]133;B\x07e\x08echo hi\r\n\x1b]133;C\x07hi\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ ";
+            b"\x1b]133;A\x07$ \x1b]133;B\x07e\x08echo hi\r\n\x1b]133;C\x07hi\r\n\x1b]133;D;0;history_id=hist;session_id=sess\x07\x1b]133;A\x07$ ";
         tracker.push(input, |capture| captures.push(capture));
 
         assert_eq!(captures.len(), 1);
@@ -307,7 +267,7 @@ mod tests {
         let mut captures = Vec::new();
 
         tracker.push(
-            b"\x1b]133;A\x07$ \x1b]133;B\x07echo hi\r\n\x1b]133;C\x07hi\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ ",
+            b"\x1b]133;A\x07$ \x1b]133;B\x07echo hi\r\n\x1b]133;C\x07hi\r\n\x1b]133;D;0;history_id=hist;session_id=sess\x07\x1b]133;A\x07$ ",
             |capture| captures.push(capture),
         );
 
@@ -318,8 +278,8 @@ mod tests {
                 command: "echo hi".to_string(),
                 output: "hi".to_string(),
                 exit_code: Some(0),
-                history_id: None,
-                session_id: None,
+                history_id: Some("hist".to_string()),
+                session_id: Some("sess".to_string()),
                 output_truncated: false,
                 output_observed_bytes: 4,
             }]
@@ -334,7 +294,7 @@ mod tests {
         tracker.push(b"\x1b]133;A\x07\x1b[32m%\x1b[0m ", |_| {});
         tracker.push(b"\x1b]133;B\x07ls\x1b]133;C", |_| {});
         tracker.push(
-            b"\x07\x1b[31mfile\x1b[0m\r\n\x1b]133;D;1\x07\x1b]133;A\x07% ",
+            b"\x07\x1b[31mfile\x1b[0m\r\n\x1b]133;D;1;history_id=hist;session_id=sess\x07\x1b]133;A\x07% ",
             |capture| {
                 captures.push(capture);
             },
@@ -347,8 +307,8 @@ mod tests {
                 command: "ls".to_string(),
                 output: "file".to_string(),
                 exit_code: Some(1),
-                history_id: None,
-                session_id: None,
+                history_id: Some("hist".to_string()),
+                session_id: Some("sess".to_string()),
                 output_truncated: false,
                 output_observed_bytes: 15,
             }]
@@ -361,7 +321,7 @@ mod tests {
         let mut captures = Vec::new();
 
         tracker.push(
-            b"\x1b]133;A\x07$ \x1b]133;A\x07continued \x1b]133;B\x07echo hi\r\n\x1b]133;C\x07hi\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ ",
+            b"\x1b]133;A\x07$ \x1b]133;A\x07continued \x1b]133;B\x07echo hi\r\n\x1b]133;C\x07hi\r\n\x1b]133;D;0;history_id=hist;session_id=sess\x07\x1b]133;A\x07$ ",
             |capture| captures.push(capture),
         );
 
@@ -372,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn bare_finish_waits_for_possible_metadata_finish() {
+    fn bare_finish_without_metadata_is_ignored() {
         let mut tracker = tracker(80);
         let mut captures = Vec::new();
 
@@ -380,56 +340,43 @@ mod tests {
             captures.push(capture);
         });
 
-        assert!(captures.is_empty());
-
         tracker.push(b"\x1b]133;A\x07$ ", |capture| captures.push(capture));
 
-        assert_eq!(captures.len(), 1);
-        assert_eq!(captures[0].output, "line one");
-        assert_eq!(captures[0].exit_code, Some(0));
-        assert_eq!(captures[0].history_id, None);
+        assert!(captures.is_empty());
     }
 
     #[test]
-    fn metadata_finish_replaces_pending_bare_finish() {
+    fn bare_finish_before_metadata_in_same_push_ignored() {
         let mut tracker = tracker(80);
         let mut captures = Vec::new();
 
         tracker.push(
-            b"\x1b]133;C\x07line one\r\n\x1b]133;D;1\x07\x1b]133;D;0;history_id=018f;session=abcd\x07",
+            b"\x1b]133;C\x07line one\r\n\x1b]133;D;1\x07\x1b]133;D;0;history_id=018f;session_id=abcd\x07",
             |capture| captures.push(capture),
         );
 
-        assert_eq!(
-            captures,
-            vec![CommandCapture {
-                prompt: String::new(),
-                command: String::new(),
-                output: "line one".to_string(),
-                exit_code: Some(0),
-                history_id: Some("018f".to_string()),
-                session_id: Some("abcd".to_string()),
-                output_truncated: false,
-                output_observed_bytes: 10,
-            }]
-        );
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].output, "line one");
+        assert_eq!(captures[0].exit_code, Some(0));
+        assert_eq!(captures[0].history_id.as_deref(), Some("018f"));
+        assert_eq!(captures[0].session_id.as_deref(), Some("abcd"));
     }
 
     #[test]
-    fn split_metadata_finish_replaces_pending_bare_finish() {
+    fn metadata_arriving_after_bare_finish_across_pushes() {
         let mut tracker = tracker(80);
         let mut captures = Vec::new();
 
         tracker.push(b"\x1b]133;C\x07line one\r\n\x1b]133;D;0\x07", |capture| {
             captures.push(capture);
         });
-        tracker.push(b"\x1b]133;D;history_id=018f", |capture| {
+        tracker.push(b"\x1b]133;D;0;history_id=018f", |capture| {
             captures.push(capture)
         });
 
         assert!(captures.is_empty());
 
-        tracker.push(b";session=abcd\x07", |capture| captures.push(capture));
+        tracker.push(b";session_id=abcd\x07", |capture| captures.push(capture));
 
         assert_eq!(captures.len(), 1);
         assert_eq!(captures[0].output, "line one");
@@ -451,7 +398,7 @@ mod tests {
         );
         assert!(captures.is_empty());
 
-        tracker.push(b";session=abcd\x07", |capture| captures.push(capture));
+        tracker.push(b";session_id=abcd\x07", |capture| captures.push(capture));
 
         assert_eq!(captures.len(), 1);
         assert_eq!(captures[0].output, "line one");
@@ -464,7 +411,7 @@ mod tests {
         let mut captures = Vec::new();
 
         tracker.push(
-            b"\x1b]133;C\x07line one\r\n\x1b]133;D;0;history_id=018f;session=abcd\x07",
+            b"\x1b]133;C\x07line one\r\n\x1b]133;D;0;history_id=018f;session_id=abcd\x07",
             |capture| captures.push(capture),
         );
 
@@ -489,7 +436,7 @@ mod tests {
         let mut captures = Vec::new();
         let mut input = b"\x1b]133;C\x07".to_vec();
         input.extend(std::iter::repeat_n(b'x', MAX_OUTPUT_CAPTURE_BYTES + 10));
-        input.extend_from_slice(b"\x1b]133;D;0;history_id=big;session=session-1\x07");
+        input.extend_from_slice(b"\x1b]133;D;0;history_id=big;session_id=session-1\x07");
 
         tracker.push(&input, |capture| captures.push(capture));
 

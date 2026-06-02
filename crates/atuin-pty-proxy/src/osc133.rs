@@ -183,12 +183,6 @@ impl Parser {
         self.zone
     }
 
-    /// Whether the most recent input ended while parsing an escape sequence.
-    #[inline]
-    pub(crate) fn has_incomplete_sequence(&self) -> bool {
-        self.state != State::Ground
-    }
-
     /// Start offset of an incomplete OSC sequence in the most recent chunk.
     #[inline]
     pub(crate) fn incomplete_osc_sequence_start(&self) -> Option<usize> {
@@ -800,7 +794,7 @@ mod tests {
         let mut events = Vec::new();
 
         parser.push_located(
-            b"\x1b]133;D;127;history_id=018f;session=abcd;flag\x07",
+            b"\x1b]133;D;127;history_id=018f;session_id=abcd;flag\x07",
             |event| events.push(event),
         );
 
@@ -813,7 +807,7 @@ mod tests {
             }
         );
         assert_eq!(event.params.get("history_id"), Some("018f"));
-        assert_eq!(event.params.get("session"), Some("abcd"));
+        assert_eq!(event.params.get("session_id"), Some("abcd"));
         assert!(
             event
                 .params
@@ -827,7 +821,7 @@ mod tests {
         let mut parser = Parser::new();
         let mut events = Vec::new();
 
-        parser.push_located(b"\x1b]133;D;history_id=018f;session=abcd\x07", |event| {
+        parser.push_located(b"\x1b]133;D;history_id=018f;session_id=abcd\x07", |event| {
             events.push(event);
         });
 
@@ -835,7 +829,7 @@ mod tests {
         let event = &events[0];
         assert_eq!(event.event, Event::CommandFinished { exit_code: None });
         assert_eq!(event.params.get("history_id"), Some("018f"));
-        assert_eq!(event.params.get("session"), Some("abcd"));
+        assert_eq!(event.params.get("session_id"), Some("abcd"));
     }
 
     // -- Default trait --------------------------------------------------------
