@@ -50,19 +50,20 @@ __atuin_osc133_prompt_end=$'%{\033]133;B\a%}'
 
 __atuin_osc133_wrap_prompt() {
     local __atuin_prompt="${PROMPT-}"
+    local __atuin_rprompt="${RPROMPT-}"
+
     __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_start/}"
     __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_end/}"
+    __atuin_rprompt="${__atuin_rprompt//$__atuin_osc133_prompt_start/}"
+    __atuin_rprompt="${__atuin_rprompt//$__atuin_osc133_prompt_end/}"
 
     if [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]]; then
         PROMPT="${__atuin_osc133_prompt_start}${__atuin_prompt}"
+        RPROMPT="${__atuin_rprompt}${__atuin_osc133_prompt_end}"
     else
         PROMPT="$__atuin_prompt"
+        RPROMPT="$__atuin_rprompt"
     fi
-}
-
-__atuin_osc133_zle_line_init() {
-    [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
-    printf '\033]133;B\a'
 }
 
 _atuin_preexec() {
@@ -201,10 +202,6 @@ _atuin_up_search_viins() {
 
 add-zsh-hook preexec _atuin_preexec
 add-zsh-hook precmd _atuin_precmd
-
-if autoload -Uz add-zle-hook-widget 2>/dev/null; then
-    add-zle-hook-widget line-init __atuin_osc133_zle_line_init 2>/dev/null || true
-fi
 
 zle -N atuin-search _atuin_search
 zle -N atuin-search-vicmd _atuin_search_vicmd
