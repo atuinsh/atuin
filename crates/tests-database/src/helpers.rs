@@ -61,7 +61,7 @@ mod tests {
     #[test]
     fn test_settings_none() -> eyre::Result<()> {
         let settings = get_settings(None)?;
-        let re = Regex::new(r"sqlite://.*/atuin_test_db_\d+").unwrap();
+        let re = Regex::new(r"sqlite://.*[\\/]atuin_test_db_\d+").unwrap();
         assert!(re.is_match(&settings.db_uri), "{}", &settings.db_uri);
         Ok(())
     }
