@@ -5110,12 +5110,14 @@ dependencies = [
  "fake",
  "futures-util",
  "metrics",
+ "regex",
  "serde",
  "snowflake_uid",
  "sqlx",
  "time",
  "tokio",
  "tracing",
+ "url",
  "uuid",
 ]
 

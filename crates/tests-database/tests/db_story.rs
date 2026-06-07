@@ -1,5 +1,3 @@
-use std::env;
-
 use atuin_common::{
     record::{EncryptedData, Host, HostId, Record, RecordIdx},
     utils::{crypto_random_string, uuid_v7},
@@ -10,59 +8,15 @@ use atuin_server_database::{
 };
 use atuin_server_postgres::Postgres;
 use atuin_server_sqlite::Sqlite;
-use snowflake_uid::{Config, Generator};
-use sqlx::migrate::MigrateDatabase;
+use tests_database::helpers::{create_test_db, destroy_test_db};
 use time::OffsetDateTime;
 use uuid::Uuid;
-
-/// Create a test database. You need to supply a database URL from the environment variable
-/// ATUIN_TEST_DB_URI.  It will default to `sqlite::memory:` if not specified
-/// If specified, a snowflake UUID will be added to the end of the URL so the test is unieuq
-/// it so `test_atuin_` will become `test_ation_<numbers>`
-/// postgres://user:pass@host/test_atuin_
-/// The DB user must have permissions to create a database
-async fn create_test_db_settings() -> eyre::Result<DbSettings> {
-    let db_uri = env::var("ATUIN_TEST_DB_URI")
-        .map(|uri| {
-            let cfg = Config::default();
-            let mut generator = Generator::from(cfg, 0);
-            let uid = generator.get();
-            format!("{uri}{uid}")
-        })
-        .unwrap_or_else(|_| "sqlite::memory:".to_owned());
-
-    let settings = DbSettings {
-        db_uri,
-        read_db_uri: None,
-    };
-
-    match settings.db_type() {
-        DbType::Postgres => sqlx::Postgres::create_database(&settings.db_uri).await?,
-        DbType::Sqlite => (),
-        DbType::Unknown => unimplemented!(),
-    }
-
-    Ok(settings)
-}
-
-/// This will destroy the database unless ATUIN_TEST_DB_NO_DESTROY is set
-async fn destroy_test_db(settings: &DbSettings) -> eyre::Result<()> {
-    if env::var("ATUIN_TEST_DB_NO_DESTROY").is_ok() {
-        // var is set so bail early
-        return Ok(());
-    }
-    match settings.db_type() {
-        DbType::Postgres => Ok(sqlx::Postgres::drop_database(&settings.db_uri).await?),
-        DbType::Sqlite => Ok(sqlx::Sqlite::drop_database(&settings.db_uri).await?),
-        DbType::Unknown => Ok(()),
-    }
-}
 
 /// This test runs through a story of using the database. The goal is to fully exercise all DB code
 /// in a single repeatable manner.
 #[tokio::test]
 async fn test_full_db_story() -> eyre::Result<()> {
-    let settings = create_test_db_settings().await?;
+    let settings = create_test_db().await?;
 
     let result = match settings.db_type() {
         DbType::Postgres => run_the_test::<Postgres>(&settings).await,

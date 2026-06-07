@@ -1,11 +1,11 @@
 # Database Integration Tests
 
-tl;dr Run `cargo test` to exercise the SQLite database using a memory database
+tl;dr Run `cargo test` to exercise the SQLite database using a file in the temp directory
 
 This is an integration test suite that runs through a simple "story" of creating a user, adding some history, adding some records and doing some deleting.  The idea is to ensure that a database implementation does the right thing.
 
 ## `ATUIN_TEST_DB_URI`
-Setting this will create a database at that URI and then run through the tests.  Leaving it unset will use `sqlite::memory:` as the database.
+Setting this will create a database at that URI and then run through the tests.  Leaving it unset will create a sqlite db in $TMP
 
 There will be a [snowflake_uid](https://docs.rs/snowflake_uid/latest/snowflake_uid/) appended to the end of the URL so the DB will be unique for the test
 
