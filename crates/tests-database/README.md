@@ -42,7 +42,7 @@ postgres@127.0.0.1:postgres> \l
 ```
 
 ## Design Decision
-This is intentionally not an integration test in `atuin-server-database` because it calls into the database implementation crates and I did not want to introduce a circular depdendency
+This is intentionally not an integration test in `atuin-server-database` because it calls into the database implementation crates and I did not want to introduce a circular dependency
 
 ## Glossary
 
