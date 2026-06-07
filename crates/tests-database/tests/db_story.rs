@@ -12,19 +12,47 @@ use tests_database::helpers::{create_test_db, destroy_test_db};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+struct TestDb {
+    settings: DbSettings,
+}
+
+impl TestDb {
+    async fn new() -> eyre::Result<Self> {
+        let settings = create_test_db().await?;
+        Ok(Self { settings })
+    }
+}
+
+impl Drop for TestDb {
+    fn drop(&mut self) {
+        let settings = self.settings.clone();
+        let _ = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async {
+                if let Err(e) = destroy_test_db(&settings).await {
+                    eprintln!("Failed to destroy test db: {:?}", e);
+                }
+            });
+        })
+        .join();
+    }
+}
+
 /// This test runs through a story of using the database. The goal is to fully exercise all DB code
 /// in a single repeatable manner.
 #[tokio::test]
 async fn test_full_db_story() -> eyre::Result<()> {
-    let settings = create_test_db().await?;
+    let test_db = TestDb::new().await?;
+    let settings = &test_db.settings;
 
-    let result = match settings.db_type() {
-        DbType::Postgres => run_the_test::<Postgres>(&settings).await,
-        DbType::Sqlite => run_the_test::<Sqlite>(&settings).await,
+    match settings.db_type() {
+        DbType::Postgres => run_the_test::<Postgres>(settings).await,
+        DbType::Sqlite => run_the_test::<Sqlite>(settings).await,
         DbType::Unknown => todo!(),
-    };
-    destroy_test_db(&settings).await?;
-    result
+    }
 }
 
 async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
