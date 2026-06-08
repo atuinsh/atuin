@@ -31,15 +31,53 @@ if [[ -z "${ATUIN_SESSION:-}" || "${ATUIN_SHLVL:-}" != "$SHLVL" ]]; then
 fi
 ATUIN_HISTORY_ID=""
 
+__atuin_osc133_command_executed() {
+    [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
+    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return
+
+    printf '\033]133;C\a'
+}
+
+__atuin_osc133_command_finished() {
+    [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
+    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return
+
+    printf '\033]133;D;%s;history_id=%s;session_id=%s\a' "$1" "$ATUIN_HISTORY_ID" "${ATUIN_SESSION:-}"
+}
+
+__atuin_osc133_prompt_start=$'%{\033]133;A;cl=line\a%}'
+__atuin_osc133_prompt_end=$'%{\033]133;B\a%}'
+
+__atuin_osc133_wrap_prompt() {
+    local __atuin_prompt="${PROMPT-}"
+    local __atuin_rprompt="${RPROMPT-}"
+
+    __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_start/}"
+    __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_end/}"
+    __atuin_rprompt="${__atuin_rprompt//$__atuin_osc133_prompt_start/}"
+    __atuin_rprompt="${__atuin_rprompt//$__atuin_osc133_prompt_end/}"
+
+    if [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]]; then
+        PROMPT="${__atuin_osc133_prompt_start}${__atuin_prompt}"
+        RPROMPT="${__atuin_rprompt}${__atuin_osc133_prompt_end}"
+    else
+        PROMPT="$__atuin_prompt"
+        RPROMPT="$__atuin_rprompt"
+    fi
+}
+
 _atuin_preexec() {
     local id
     id=$(atuin history start -- "$1" 2>/dev/null)
     export ATUIN_HISTORY_ID="$id"
+    __atuin_osc133_command_executed
     __atuin_preexec_time=${EPOCHREALTIME-}
 }
 
 _atuin_precmd() {
     local EXIT="$?" __atuin_precmd_time=${EPOCHREALTIME-}
+
+    __atuin_osc133_wrap_prompt
 
     [[ -z "${ATUIN_HISTORY_ID:-}" ]] && return
 
@@ -48,6 +86,7 @@ _atuin_precmd() {
         printf -v duration %.0f $(((__atuin_precmd_time - __atuin_preexec_time) * 1000000000))
     fi
 
+    __atuin_osc133_command_finished "$EXIT"
     (ATUIN_LOG=error atuin history end --exit $EXIT ${duration:+--duration=$duration} -- $ATUIN_HISTORY_ID &) >/dev/null 2>&1
     export ATUIN_HISTORY_ID=""
 }

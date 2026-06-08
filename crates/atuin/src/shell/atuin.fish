@@ -4,9 +4,24 @@ if not set -q ATUIN_SESSION; or test "$ATUIN_SHLVL" != "$SHLVL"
 end
 set --erase ATUIN_HISTORY_ID
 
+function _atuin_osc133_command_executed
+    set -q ATUIN_PTY_PROXY_ACTIVE; or return
+    test -n "$ATUIN_HISTORY_ID"; or return
+
+    printf '\033]133;C\a'
+end
+
+function _atuin_osc133_command_finished --argument-names exit_code
+    set -q ATUIN_PTY_PROXY_ACTIVE; or return
+    test -n "$ATUIN_HISTORY_ID"; or return
+
+    printf '\033]133;D;%s;history_id=%s;session_id=%s\a' "$exit_code" "$ATUIN_HISTORY_ID" "$ATUIN_SESSION"
+end
+
 function _atuin_preexec --on-event fish_preexec
     if not test -n "$fish_private_mode"
         set -g ATUIN_HISTORY_ID (atuin history start -- "$argv[1]" 2>/dev/null)
+        _atuin_osc133_command_executed
     end
 end
 
@@ -14,6 +29,7 @@ function _atuin_postexec --on-event fish_postexec
     set -l s $status
 
     if test -n "$ATUIN_HISTORY_ID"
+        _atuin_osc133_command_finished $s
         ATUIN_LOG=error atuin history end --exit $s -- $ATUIN_HISTORY_ID &>/dev/null &
         disown
     end

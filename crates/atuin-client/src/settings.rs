@@ -687,6 +687,8 @@ pub struct Ai {
 pub struct AiCapabilities {
     /// Whether the AI can request to search Atuin history. `None` = unset (defaults to enabled, and the ai will ask for permission).
     pub enable_history_search: Option<bool>,
+    /// Whether the AI can request to view the stored output, if any, for Atuin history entries. `None` = unset (defaults to enabled, and the ai will ask for permission).
+    pub enable_history_output: Option<bool>,
     /// Whether the AI can request to read and write files. `None` = unset (defaults to enabled, and the ai will ask for permission).
     pub enable_file_tools: Option<bool>,
     /// Whether the AI can request to execute bash commands. `None` = unset (defaults to enabled, and the ai will ask for permission).

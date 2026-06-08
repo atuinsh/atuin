@@ -67,7 +67,7 @@ pub(crate) async fn run(
         settings.ai.opening.send_cwd.unwrap_or(false) || settings.ai.send_cwd.unwrap_or(false);
 
     let last_command = if settings.ai.opening.send_last_command.unwrap_or(false) {
-        history_db.last().await.ok().flatten().map(|h| h.command)
+        history_db.last().await.ok().flatten()
     } else {
         None
     };
@@ -84,6 +84,7 @@ pub(crate) async fn run(
         history_db: std::sync::Arc::new(history_db),
         git_root,
         capabilities: settings.ai.capabilities.clone(),
+        daemon_enabled: settings.daemon.enabled,
     };
 
     let action = run_inline_tui(ctx, initial_command, settings).await?;

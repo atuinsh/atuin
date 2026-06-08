@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use atuin_client::distro::detect_linux_distribution;
+use atuin_client::history::History;
 use atuin_client::settings::AiCapabilities;
 
 /// Session-scoped context for the AI chat session.
@@ -11,12 +12,17 @@ pub(crate) struct AppContext {
     pub endpoint: String,
     pub token: String,
     pub send_cwd: bool,
-    pub last_command: Option<String>,
+    pub last_command: Option<History>,
     pub history_db: Arc<atuin_client::database::Sqlite>,
     /// Git root of the current working directory, if inside a git repo.
     /// Resolves through worktrees to the main repo root.
     pub git_root: Option<PathBuf>,
     pub capabilities: AiCapabilities,
+    pub daemon_enabled: bool,
+}
+
+pub(crate) fn history_output_capability_available(daemon_enabled: bool) -> bool {
+    cfg!(feature = "daemon") && daemon_enabled
 }
 
 impl AppContext {
@@ -32,6 +38,11 @@ impl AppContext {
         }
         if self.capabilities.enable_command_execution.unwrap_or(true) {
             caps.push("client_v1_execute_shell_command".to_string());
+        }
+        if history_output_capability_available(self.daemon_enabled)
+            && self.capabilities.enable_history_output.unwrap_or(true)
+        {
+            caps.push("client_v1_atuin_output".to_string());
         }
         caps.push("client_v1_load_skill".to_string());
         if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
@@ -69,7 +80,11 @@ impl ClientContext {
     /// Serialize to the JSON format the API expects for the "context" field.
     /// The `pwd` field is always dynamic (current working directory), so it's
     /// computed fresh on each call if `send_cwd` is true.
-    pub(crate) fn to_json(&self, send_cwd: bool, last_command: Option<&str>) -> serde_json::Value {
+    pub(crate) fn to_json(
+        &self,
+        send_cwd: bool,
+        last_command: Option<&History>,
+    ) -> serde_json::Value {
         let mut ctx = serde_json::json!({
             "os": self.os,
             "shell": self.shell,
@@ -78,8 +93,14 @@ impl ClientContext {
             } else {
                 None
             },
-            "last_command": last_command,
         });
+
+        if let Some(history) = last_command {
+            ctx["last_command"] = serde_json::json!(crate::history_format::format_last_command(
+                history,
+                crate::history_format::current_local_offset(),
+            ));
+        }
 
         if let Some(ref distro) = self.distro {
             ctx["distro"] = serde_json::json!(distro);

@@ -67,6 +67,15 @@ pub(crate) const ATUIN_HISTORY: &ToolDescriptor = &ToolDescriptor {
     is_client: true,
 };
 
+pub(crate) const ATUIN_OUTPUT: &ToolDescriptor = &ToolDescriptor {
+    canonical_names: &["atuin_output"],
+    capability: Some("client_v1_atuin_output"),
+    display_verb: "view the output for command",
+    progressive_verb: "Viewing output...",
+    past_verb: "Viewed output",
+    is_client: true,
+};
+
 pub(crate) const LOAD_SKILL: &ToolDescriptor = &ToolDescriptor {
     canonical_names: &["load_skill"],
     capability: Some("client_v1_load_skill"),
@@ -104,6 +113,7 @@ const ALL_DESCRIPTORS: &[&ToolDescriptor] = &[
     WRITE,
     SHELL,
     ATUIN_HISTORY,
+    ATUIN_OUTPUT,
     LOAD_SKILL,
     SERVER_SEARCH,
     SERVER_SCRAPE,

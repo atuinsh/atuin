@@ -67,8 +67,11 @@ pub static SECRET_PATTERNS: &[(&str, &str, TestValue)] = &[
     ),
     (
         "GitHub App Installation Access Token",
-        "ghs_[A-Za-z0-9]{36}",
-        TestValue::Single("ghs_1234567890abcdefghijklmnopqrstuvwx000"), // not a real token
+        "ghs_[A-Za-z0-9._-]{36,}",
+        TestValue::Multiple(&[
+            "ghs_1234567890abcdefghijklmnopqrstuvwx000", // not a real token
+            "ghs_abc-def.ghi_jklMNOP0123456789qrstuv-wxyzABCD", // new token format, fake data
+        ]),
     ),
     (
         "GitHub Refresh Token",
@@ -158,6 +161,30 @@ mod tests {
                         assert!(
                             re.is_match(test_str),
                             "{name} test with value \"{test_str}\" failed!"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_secrets_embedded() {
+        for (name, regex, test) in SECRET_PATTERNS {
+            let re =
+                Regex::new(regex).unwrap_or_else(|_| panic!("Failed to compile regex for {name}"));
+
+            match test {
+                TestValue::Single(test) => {
+                    let embedded = format!("some random text {test} some more random text");
+                    assert!(re.is_match(&embedded), "{name} embedded test failed!");
+                }
+                TestValue::Multiple(tests) => {
+                    for test_str in tests.iter() {
+                        let embedded = format!("some random text {test_str} some more random text");
+                        assert!(
+                            re.is_match(&embedded),
+                            "{name} embedded test with value \"{test_str}\" failed!"
                         );
                     }
                 }

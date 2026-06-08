@@ -9,18 +9,19 @@
 //! | C      | Command submitted — output begins     |
 //! | D[;n]  | Command finished with exit code *n*   |
 //!
-//! The wire format is `ESC ] 133 ; <cmd> [; <params>] ST` where ST is either
-//! BEL (0x07) or ESC \ (0x1B 0x5C).
+//! The wire format is `ESC ] 133 ; <cmd> [; <params>] ST` where ST is BEL
+//! (0x07), ESC \ (0x1B 0x5C), or C1 ST (0x9C).
 //!
 //! # Design goals
 //!
-//! * **Zero-copy** — the parser observes the byte stream without buffering or
-//!   modifying it.
-//! * **Zero-alloc** — after construction no heap allocation occurs.
+//! * **Transparent** — the parser observes the byte stream without modifying it;
+//!   the caller remains responsible for forwarding bytes to their destination.
+//! * **Bounded** — OSC parameter buffering is capped so malformed output cannot
+//!   grow memory without limit.
 //! * **Non-blocking** — [`Parser::push`] processes whatever bytes are available
 //!   and returns immediately.
-//! * **Transparent** — the caller is responsible for forwarding bytes to their
-//!   destination; the parser only emits [`Event`]s through a callback.
+//! * **Extensible** — marker parameters are preserved so Atuin-specific metadata
+//!   can ride alongside standard OSC 133 markers.
 
 /// Events emitted when an OSC 133 marker is detected.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +37,63 @@ pub enum Event {
         /// The exit code reported after the `;`, if present and valid.
         exit_code: Option<i32>,
     },
+}
+
+/// Parameters attached to an OSC 133 marker.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Params {
+    items: Vec<Param>,
+}
+
+impl Params {
+    /// Iterate over all marker parameters in order.
+    #[cfg(test)]
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = &Param> {
+        self.items.iter()
+    }
+
+    /// Return the value for the first `key=value` parameter with this key.
+    #[inline]
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.items.iter().find_map(|item| match item {
+            Param::KeyValue {
+                key: item_key,
+                value,
+            } if item_key == key => Some(value.as_str()),
+            Param::Value(_) | Param::KeyValue { .. } => None,
+        })
+    }
+}
+
+/// A single OSC 133 marker parameter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Param {
+    /// A positional parameter without an equals sign.
+    Value(String),
+    /// A `key=value` parameter.
+    KeyValue { key: String, value: String },
+}
+
+/// An OSC 133 event with its position in the most recent input chunk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocatedEvent {
+    /// The OSC 133 event that was parsed.
+    pub event: Event,
+    /// Offset where this marker starts in the current chunk.
+    ///
+    /// If a marker started in an earlier [`Parser::push_located`] call, this is
+    /// `0` in the chunk that completed the marker.
+    pub start_offset: usize,
+    /// Offset immediately after this marker's terminator in the current chunk.
+    ///
+    /// If a marker spans multiple [`Parser::push_located`] calls, this is still
+    /// the offset in the chunk that completed the marker.
+    pub offset: usize,
+    /// The semantic zone after applying this event.
+    pub zone: Zone,
+    /// Metadata parameters attached to this marker.
+    pub params: Params,
 }
 
 /// The current semantic zone as determined by the most recent OSC 133 marker.
@@ -59,14 +117,14 @@ pub enum Zone {
 
 const ESC: u8 = 0x1B;
 const BEL: u8 = 0x07;
+const C1_ST: u8 = 0x9C;
 const BACKSLASH: u8 = b'\\';
 const RIGHT_BRACKET: u8 = b']';
 
-/// Maximum bytes we'll buffer for the OSC parameter string. 32 bytes is far
-/// more than any valid OSC 133 payload needs (e.g. `133;D;127` is 9 bytes).
-/// Longer (non-133) OSC sequences simply stop accumulating once the buffer is
-/// full — the dispatch logic will harmlessly ignore them.
-const PARAM_BUF_CAP: usize = 32;
+/// Maximum bytes we'll buffer for the OSC parameter string. This is large enough
+/// for Atuin metadata such as history/session IDs while still bounding malformed
+/// OSC sequences.
+const PARAM_BUF_CAP: usize = 512;
 
 // ---------------------------------------------------------------------------
 // State machine
@@ -94,6 +152,7 @@ enum State {
 pub struct Parser {
     state: State,
     zone: Zone,
+    sequence_start: Option<usize>,
     param_buf: [u8; PARAM_BUF_CAP],
     param_len: usize,
 }
@@ -111,6 +170,7 @@ impl Parser {
         Self {
             state: State::Ground,
             zone: Zone::Unknown,
+            sequence_start: None,
             param_buf: [0u8; PARAM_BUF_CAP],
             param_len: 0,
         }
@@ -123,18 +183,40 @@ impl Parser {
         self.zone
     }
 
+    /// Start offset of an incomplete OSC sequence in the most recent chunk.
+    #[inline]
+    pub(crate) fn incomplete_osc_sequence_start(&self) -> Option<usize> {
+        matches!(self.state, State::OscParam | State::OscEsc)
+            .then(|| self.sequence_start.unwrap_or(0))
+    }
+
     /// Process a chunk of bytes, calling `on_event` for every OSC 133 marker
     /// found.
     ///
     /// All bytes in `data` should still be forwarded to the terminal by the
     /// caller — this method only *observes* the stream.
+    #[cfg(test)]
     #[inline]
     pub fn push(&mut self, data: &[u8], mut on_event: impl FnMut(Event)) {
-        for &byte in data {
+        self.push_located(data, |located| on_event(located.event));
+    }
+
+    /// Process a chunk of bytes, calling `on_event` for every OSC 133 marker
+    /// found with its byte offset in this chunk.
+    ///
+    /// The offset points to the first byte after the marker terminator, making
+    /// it suitable for callers that need to split the original chunk at marker
+    /// boundaries.
+    #[inline]
+    pub fn push_located(&mut self, data: &[u8], mut on_event: impl FnMut(LocatedEvent)) {
+        self.sequence_start = (self.state != State::Ground).then_some(0);
+
+        for (offset, &byte) in data.iter().enumerate() {
             match self.state {
                 State::Ground => {
                     if byte == ESC {
                         self.state = State::Esc;
+                        self.sequence_start = Some(offset);
                     }
                 }
                 State::Esc => {
@@ -143,12 +225,14 @@ impl Parser {
                         self.param_len = 0;
                     } else {
                         self.state = State::Ground;
+                        self.sequence_start = None;
                     }
                 }
                 State::OscParam => {
-                    if byte == BEL {
-                        self.dispatch(&mut on_event);
+                    if byte == BEL || byte == C1_ST {
+                        self.dispatch(offset + 1, &mut on_event);
                         self.state = State::Ground;
+                        self.sequence_start = None;
                     } else if byte == ESC {
                         self.state = State::OscEsc;
                     } else if self.param_len < PARAM_BUF_CAP {
@@ -160,12 +244,13 @@ impl Parser {
                 }
                 State::OscEsc => {
                     if byte == BACKSLASH {
-                        self.dispatch(&mut on_event);
+                        self.dispatch(offset + 1, &mut on_event);
                     }
                     // Whether we got a valid ST or not, return to ground.
                     // (A new ESC ] would restart accumulation via the Ground
                     // -> Esc -> OscParam path on the *next* byte.)
                     self.state = State::Ground;
+                    self.sequence_start = None;
                 }
             }
         }
@@ -174,44 +259,102 @@ impl Parser {
     /// Inspect the accumulated parameter buffer.  If it holds an OSC 133
     /// payload, emit the corresponding [`Event`] and update the zone.
     #[inline]
-    fn dispatch(&mut self, on_event: &mut impl FnMut(Event)) {
-        let params = &self.param_buf[..self.param_len];
+    fn dispatch(&mut self, offset: usize, on_event: &mut impl FnMut(LocatedEvent)) {
+        let payload = &self.param_buf[..self.param_len];
 
-        // Must start with "133;"
-        if params.len() < 5 || &params[..4] != b"133;" {
+        if payload.len() < 5 || &payload[..4] != b"133;" {
             return;
         }
 
-        let cmd = params[4];
-        let event = match cmd {
+        if payload.len() > 5 && payload[5] != b';' {
+            return;
+        }
+
+        let metadata = payload.get(6..).unwrap_or_default();
+        let cmd = payload[4];
+        let (event, params) = match cmd {
             b'A' => {
                 self.zone = Zone::Prompt;
-                Event::PromptStart
+                (Event::PromptStart, parse_params(metadata))
             }
             b'B' => {
                 self.zone = Zone::Input;
-                Event::CommandStart
+                (Event::CommandStart, parse_params(metadata))
             }
             b'C' => {
                 self.zone = Zone::Output;
-                Event::CommandExecuted
+                (Event::CommandExecuted, parse_params(metadata))
             }
             b'D' => {
-                let exit_code = if params.len() > 6 && params[5] == b';' {
-                    std::str::from_utf8(&params[6..])
-                        .ok()
-                        .and_then(|s| s.parse::<i32>().ok())
-                } else {
-                    None
-                };
+                let (exit_code, params) = parse_command_finished_params(metadata);
                 self.zone = Zone::Unknown;
-                Event::CommandFinished { exit_code }
+                (Event::CommandFinished { exit_code }, params)
             }
             _ => return,
         };
 
-        on_event(event);
+        on_event(LocatedEvent {
+            event,
+            start_offset: self.sequence_start.unwrap_or(0),
+            offset,
+            zone: self.zone,
+            params,
+        });
     }
+}
+
+fn parse_command_finished_params(metadata: &[u8]) -> (Option<i32>, Params) {
+    if metadata.is_empty() {
+        return (None, Params::default());
+    }
+
+    let Some(separator) = metadata.iter().position(|byte| *byte == b';') else {
+        return parse_exit_code(metadata).map_or_else(
+            || (None, parse_params(metadata)),
+            |exit_code| (Some(exit_code), Params::default()),
+        );
+    };
+
+    let (first, rest) = metadata.split_at(separator);
+    let rest = &rest[1..];
+
+    parse_exit_code(first).map_or_else(
+        || (None, parse_params(metadata)),
+        |exit_code| (Some(exit_code), parse_params(rest)),
+    )
+}
+
+fn parse_exit_code(code: &[u8]) -> Option<i32> {
+    if code.is_empty() {
+        return None;
+    }
+
+    std::str::from_utf8(code)
+        .ok()
+        .and_then(|code| code.parse::<i32>().ok())
+}
+
+fn parse_params(metadata: &[u8]) -> Params {
+    let items = metadata
+        .split(|byte| *byte == b';')
+        .filter(|part| !part.is_empty())
+        .map(parse_param)
+        .collect();
+
+    Params { items }
+}
+
+fn parse_param(param: &[u8]) -> Param {
+    let param = String::from_utf8_lossy(param);
+
+    if let Some((key, value)) = param.split_once('=') {
+        return Param::KeyValue {
+            key: key.to_string(),
+            value: value.to_string(),
+        };
+    }
+
+    Param::Value(param.into_owned())
 }
 
 // ---------------------------------------------------------------------------
@@ -468,6 +611,12 @@ mod tests {
         assert!(parse_events(data).is_empty());
     }
 
+    #[test]
+    fn marker_with_unexpected_trailing_bytes_ignored() {
+        let data = b"\x1b]133;ABC\x07";
+        assert!(parse_events(data).is_empty());
+    }
+
     // -- Malformed sequences --------------------------------------------------
 
     #[test]
@@ -509,7 +658,7 @@ mod tests {
     fn very_long_osc_does_not_panic() {
         let mut data = Vec::new();
         data.extend_from_slice(b"\x1b]");
-        data.extend(std::iter::repeat(b'x').take(1000));
+        data.extend(std::iter::repeat_n(b'x', 1000));
         data.push(BEL);
         // Should not panic and should produce no event.
         assert!(parse_events(&data).is_empty());
@@ -587,6 +736,100 @@ mod tests {
                 Event::CommandFinished { exit_code: Some(1) },
             ]
         );
+    }
+
+    #[test]
+    fn detects_c1_st_terminator() {
+        let data = b"\x1b]133;A\x9c";
+        assert_eq!(parse_events(data), vec![Event::PromptStart]);
+    }
+
+    // -- Located event offsets ------------------------------------------------
+
+    #[test]
+    fn located_event_reports_offset_after_marker() {
+        let data = b"before\x1b]133;A\x07prompt";
+        let mut parser = Parser::new();
+        let mut events = Vec::new();
+
+        parser.push_located(data, |e| events.push(e));
+
+        assert_eq!(
+            events,
+            vec![LocatedEvent {
+                event: Event::PromptStart,
+                start_offset: b"before".len(),
+                offset: b"before\x1b]133;A\x07".len(),
+                zone: Zone::Prompt,
+                params: Params::default(),
+            }]
+        );
+    }
+
+    #[test]
+    fn located_event_offset_is_relative_to_completing_chunk() {
+        let mut parser = Parser::new();
+        let mut events = Vec::new();
+
+        parser.push_located(b"\x1b]133;", |e| events.push(e));
+        parser.push_located(b"D;42\x07after", |e| events.push(e));
+
+        assert_eq!(
+            events,
+            vec![LocatedEvent {
+                event: Event::CommandFinished {
+                    exit_code: Some(42)
+                },
+                start_offset: 0,
+                offset: b"D;42\x07".len(),
+                zone: Zone::Unknown,
+                params: Params::default(),
+            }]
+        );
+    }
+
+    #[test]
+    fn located_event_preserves_metadata_params() {
+        let mut parser = Parser::new();
+        let mut events = Vec::new();
+
+        parser.push_located(
+            b"\x1b]133;D;127;history_id=018f;session_id=abcd;flag\x07",
+            |event| events.push(event),
+        );
+
+        assert_eq!(events.len(), 1);
+        let event = &events[0];
+        assert_eq!(
+            event.event,
+            Event::CommandFinished {
+                exit_code: Some(127)
+            }
+        );
+        assert_eq!(event.params.get("history_id"), Some("018f"));
+        assert_eq!(event.params.get("session_id"), Some("abcd"));
+        assert!(
+            event
+                .params
+                .iter()
+                .any(|param| param == &Param::Value("flag".to_string()))
+        );
+    }
+
+    #[test]
+    fn command_finished_metadata_without_exit_code_is_preserved() {
+        let mut parser = Parser::new();
+        let mut events = Vec::new();
+
+        parser.push_located(b"\x1b]133;D;history_id=018f;session_id=abcd\x07", |event| {
+            events.push(event);
+        });
+
+        assert_eq!(events.len(), 1);
+        let event = &events[0];
+        assert_eq!(event.event, Event::CommandFinished { exit_code: None });
+        assert_eq!(event.params.get("history_id"), Some("018f"));
+        assert_eq!(event.params.get("session_id"), Some("abcd"));
     }
 
     // -- Default trait --------------------------------------------------------
