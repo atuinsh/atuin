@@ -30,6 +30,10 @@ use crate::search::{
     FilterMode as RpcFilterMode, SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
     search_client::SearchClient as SearchServiceClient,
 };
+use crate::semantic::{
+    CommandCapture, CommandOutputReply, CommandOutputRequest, OutputRange, RecordCommandsReply,
+    semantic_client::SemanticClient as SemanticServiceClient,
+};
 
 pub struct HistoryClient {
     client: HistoryServiceClient<Channel>,
@@ -253,6 +257,92 @@ impl From<Context> for RpcSearchContext {
                 .git_root
                 .map(|path| path.to_string_lossy().to_string()),
         }
+    }
+}
+
+pub struct SemanticClient {
+    client: SemanticServiceClient<Channel>,
+}
+
+impl SemanticClient {
+    #[cfg(unix)]
+    pub async fn new(path: String) -> Result<Self> {
+        let log_path = path.clone();
+        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
+            .connect_with_connector(service_fn(move |_: Uri| {
+                let path = path.clone();
+
+                async move {
+                    Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path.clone()).await?))
+                }
+            }))
+            .await
+            .wrap_err_with(|| {
+                format!(
+                    "failed to connect to local atuin daemon at {}. Is it running?",
+                    &log_path
+                )
+            })?;
+
+        let client = SemanticServiceClient::new(channel);
+
+        Ok(SemanticClient { client })
+    }
+
+    #[cfg(not(unix))]
+    pub async fn new(port: u64) -> Result<Self> {
+        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
+            .connect_with_connector(service_fn(move |_: Uri| {
+                let url = format!("127.0.0.1:{port}");
+
+                async move {
+                    Ok::<_, std::io::Error>(TokioIo::new(TcpStream::connect(url.clone()).await?))
+                }
+            }))
+            .await
+            .wrap_err_with(|| {
+                format!(
+                    "failed to connect to local atuin daemon at 127.0.0.1:{port}. Is it running?"
+                )
+            })?;
+
+        let client = SemanticServiceClient::new(channel);
+
+        Ok(SemanticClient { client })
+    }
+
+    #[cfg(unix)]
+    pub async fn from_settings(settings: &Settings) -> Result<Self> {
+        Self::new(settings.daemon.socket_path.clone()).await
+    }
+
+    #[cfg(not(unix))]
+    pub async fn from_settings(settings: &Settings) -> Result<Self> {
+        Self::new(settings.daemon.tcp_port).await
+    }
+
+    pub async fn record_commands(
+        &mut self,
+        captures: Vec<CommandCapture>,
+    ) -> Result<RecordCommandsReply> {
+        let stream = tokio_stream::iter(captures);
+        Ok(self.client.record_commands(stream).await?.into_inner())
+    }
+
+    pub async fn command_output(
+        &mut self,
+        history_id: String,
+        ranges: Vec<(i64, i64)>,
+    ) -> Result<CommandOutputReply> {
+        let request = CommandOutputRequest {
+            history_id,
+            ranges: ranges
+                .into_iter()
+                .map(|(start, end)| OutputRange { start, end })
+                .collect(),
+        };
+
+        Ok(self.client.command_output(request).await?.into_inner())
     }
 }
 

@@ -7,6 +7,7 @@ pub(crate) mod edit_permissions;
 pub(crate) mod event_serde;
 pub(crate) mod file_tracker;
 pub(crate) mod fsm;
+pub(crate) mod history_format;
 pub(crate) mod permissions;
 pub(crate) mod session;
 pub(crate) mod skills;

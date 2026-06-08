@@ -168,6 +168,7 @@ fn tool_call_view(tool_call: &crate::fsm::tools::TrackedTool, in_git_project: bo
         ClientToolCall::Write(tool) => tool.path.display().to_string(),
         ClientToolCall::Shell(tool) => tool.command.clone(),
         ClientToolCall::AtuinHistory(tool) => tool.query.clone(),
+        ClientToolCall::AtuinOutput(tool) => tool.history_id.to_string(),
         ClientToolCall::LoadSkill(tool) => format!("skill: {}", tool.name),
     };
 
