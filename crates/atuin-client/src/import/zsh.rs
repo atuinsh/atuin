@@ -198,6 +198,19 @@ mod test {
     }
 
     #[tokio::test]
+    async fn test_count_entries_multilines() {
+        let bytes = r"ls
+    pwd
+    date
+    export ATUIN_RECORD_STORE_PATH=/tmp/atuin_records.db # path to primary record store \
+    export ATUIN_META__DB_PATH=/tmp/atuin_meta.db        # path to meta database
+    "
+        .as_bytes()
+        .to_owned();
+        let mut zsh = Zsh { bytes };
+        assert_eq!(zsh.entries().await.unwrap(), 4);
+    }
+    #[tokio::test]
     async fn test_parse_file() {
         let bytes = r": 1613322469:0;cargo install atuin
 : 1613322469:10;cargo install atuin; \\
