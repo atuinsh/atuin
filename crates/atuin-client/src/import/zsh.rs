@@ -199,12 +199,12 @@ mod test {
 
     #[tokio::test]
     async fn test_count_entries_multilines() {
-        let bytes = r"ls
-    pwd
-    date
-    export ATUIN_RECORD_STORE_PATH=/tmp/atuin_records.db # path to primary record store \
-    export ATUIN_META__DB_PATH=/tmp/atuin_meta.db        # path to meta database
-    "
+        let bytes = "ls
+pwd
+date
+export FOO=bar \\
+export BAZ=qux
+"
         .as_bytes()
         .to_owned();
         let mut zsh = Zsh { bytes };
