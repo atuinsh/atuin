@@ -280,6 +280,7 @@ dependencies = [
  "async-trait",
  "atuin-client",
  "atuin-common",
+ "atuin-daemon",
  "chrono",
  "chrono-humanize",
  "clap",

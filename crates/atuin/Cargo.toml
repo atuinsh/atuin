@@ -36,7 +36,7 @@ atuin = { path = "/usr/bin/atuin" }
 default = ["client", "sync", "clipboard", "check-update", "daemon", "ai", "pty-proxy"]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
-daemon = ["atuin-client/daemon", "atuin-daemon"]
+daemon = ["atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
 ai = ["atuin-ai"]
 pty-proxy = ["dep:atuin-pty-proxy"]
 hex = ["pty-proxy"]
