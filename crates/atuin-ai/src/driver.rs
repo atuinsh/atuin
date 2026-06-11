@@ -349,6 +349,7 @@ fn translate_tui_event(
 /// Resolve a slash command to its output content.
 /// If the input starts with `/`, check whether the command name matches a
 /// registered skill. Returns `Some((skill_name, arguments))` if it does.
+/// Built-in slash commands take precedence: a skill can't shadow them.
 fn resolve_skill_name(input: &str, handle: &Handle<ViewState>) -> Option<(String, Option<String>)> {
     let after_slash = input.trim_start_matches('/');
     let cmd_name = after_slash.split_whitespace().next()?.to_string();
@@ -356,7 +357,7 @@ fn resolve_skill_name(input: &str, handle: &Handle<ViewState>) -> Option<(String
     let is_skill = handle
         .fetch({
             let cmd_name = cmd_name.clone();
-            move |vs| vs.skill_names.contains(&cmd_name)
+            move |vs| vs.skill_names.contains(&cmd_name) && !vs.slash_registry.contains(&cmd_name)
         })
         .blocking_recv()
         .unwrap_or(false);

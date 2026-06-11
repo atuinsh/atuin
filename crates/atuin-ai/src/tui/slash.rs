@@ -40,6 +40,10 @@ impl SlashCommandRegistry {
         &self.commands
     }
 
+    pub fn contains(&self, name: &str) -> bool {
+        self.commands.iter().any(|c| c.name == name)
+    }
+
     pub fn search_fuzzy(&self, query: &str) -> Vec<SlashCommandSearchResult> {
         let query_lower = query.to_lowercase();
 
