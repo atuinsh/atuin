@@ -1,14 +1,17 @@
 //! User-authored context files (`TERMINAL.md`).
 //!
 //! Context files are markdown documents that can embed shell commands for
-//! dynamic content. Before each API request, context files are discovered
-//! by walking the filesystem, commands are executed, and the interpolated
-//! content is sent to the server as `config.user_contexts`.
+//! dynamic content. On the first API request of an invocation, context files
+//! are discovered by walking the filesystem, commands are executed, and the
+//! interpolated content is sent to the server as `config.user_contexts`.
+//! The result is cached for the rest of the invocation; `/reload` clears
+//! the cache so the next request re-gathers.
 
 pub(crate) mod interpolate;
 mod walker;
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 pub(crate) use walker::global_context_path;
 
@@ -19,6 +22,50 @@ pub(crate) struct UserContext {
     pub path: String,
     /// The interpolated content.
     pub data: String,
+}
+
+/// Process-lifetime cache of gathered user contexts.
+///
+/// Context files are walked and interpolated once per invocation; subsequent
+/// requests reuse the cached result. `/reload` invalidates the cache so the
+/// next request re-gathers.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct UserContextCache {
+    inner: Arc<Mutex<Option<Vec<UserContext>>>>,
+}
+
+impl UserContextCache {
+    /// Return the cached contexts, gathering them first if the cache is empty.
+    pub async fn get_or_gather(
+        &self,
+        start: &Path,
+        global_path: Option<&Path>,
+        shell: &str,
+    ) -> Vec<UserContext> {
+        if let Some(contexts) = self.lock().clone() {
+            return contexts;
+        }
+
+        // Concurrent callers may both gather here; streams run one at a
+        // time so this stays simpler than holding a lock across .await.
+        let contexts = gather(start, global_path, shell).await;
+        *self.lock() = Some(contexts.clone());
+        contexts
+    }
+
+    /// Drop the cached contexts so the next request re-gathers them.
+    pub fn invalidate(&self) {
+        self.lock().take();
+    }
+
+    /// A poisoned lock means another thread panicked while holding it, but
+    /// the cached value is only ever replaced wholesale — it can't be torn.
+    /// Recover with the inner value rather than propagating the panic.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Vec<UserContext>>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 /// Discover context files and interpolate embedded commands.
@@ -65,4 +112,36 @@ pub(crate) async fn gather(
     }
 
     contexts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn find<'a>(contexts: &'a [UserContext], path: &Path) -> Option<&'a UserContext> {
+        let path = path.to_string_lossy();
+        contexts.iter().find(|c| c.path == path)
+    }
+
+    #[tokio::test]
+    async fn cache_serves_stale_until_invalidated() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("TERMINAL.md");
+        tokio::fs::write(&file, "version one").await.unwrap();
+
+        let cache = UserContextCache::default();
+
+        let contexts = cache.get_or_gather(dir.path(), None, "sh").await;
+        assert_eq!(find(&contexts, &file).unwrap().data, "version one");
+
+        tokio::fs::write(&file, "version two").await.unwrap();
+
+        let contexts = cache.get_or_gather(dir.path(), None, "sh").await;
+        assert_eq!(find(&contexts, &file).unwrap().data, "version one");
+
+        cache.invalidate();
+
+        let contexts = cache.get_or_gather(dir.path(), None, "sh").await;
+        assert_eq!(find(&contexts, &file).unwrap().data, "version two");
+    }
 }

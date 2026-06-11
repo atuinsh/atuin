@@ -73,6 +73,10 @@ impl Default for SlashCommandRegistry {
             "new",
             "Start a new conversation, archiving the current one",
         ));
+        registry.register(SlashCommand::new(
+            "reload",
+            "Reload context files (TERMINAL.md) on the next request",
+        ));
 
         registry
     }
