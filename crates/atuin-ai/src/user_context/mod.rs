@@ -64,9 +64,10 @@ impl UserContextCache {
 
         // If `/reload` arrived mid-gather, this result predates it: return
         // it for the in-flight request but leave the cache empty so the
-        // next request re-gathers.
+        // next request re-gathers. Likewise, never overwrite a result a
+        // concurrent gather stored first — ours may be the older read.
         let mut slot = self.lock();
-        if slot.epoch == epoch {
+        if slot.epoch == epoch && slot.contexts.is_none() {
             slot.contexts = Some(contexts.clone());
         }
         contexts
@@ -195,6 +196,39 @@ mod tests {
 
         // ...but it must not repopulate the cache: the next request
         // re-gathers and sees the new content.
+        let contexts = cache.get_or_gather(dir.path(), None, "sh").await;
+        assert_eq!(find(&contexts, &file).unwrap().data.trim(), "two");
+    }
+
+    #[tokio::test]
+    async fn slow_gather_does_not_overwrite_concurrent_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("TERMINAL.md");
+        tokio::fs::write(&file, "!`sleep 0.5 && echo one`")
+            .await
+            .unwrap();
+
+        let cache = UserContextCache::default();
+
+        // First gather reads the old file and is held open by the sleep.
+        let slow = tokio::spawn({
+            let cache = cache.clone();
+            let start = dir.path().to_path_buf();
+            async move { cache.get_or_gather(&start, None, "sh").await }
+        });
+
+        // While it runs, the file changes and a second request gathers
+        // and caches the new content.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        tokio::fs::write(&file, "!`echo two`").await.unwrap();
+        let contexts = cache.get_or_gather(dir.path(), None, "sh").await;
+        assert_eq!(find(&contexts, &file).unwrap().data.trim(), "two");
+
+        // The slow gather finishes last with its older read...
+        let contexts = slow.await.unwrap();
+        assert_eq!(find(&contexts, &file).unwrap().data.trim(), "one");
+
+        // ...but must not replace the newer cached result.
         let contexts = cache.get_or_gather(dir.path(), None, "sh").await;
         assert_eq!(find(&contexts, &file).unwrap().data.trim(), "two");
     }

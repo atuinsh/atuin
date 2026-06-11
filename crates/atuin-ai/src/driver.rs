@@ -963,12 +963,18 @@ async fn run_stream_bridge(
 
     // User context files (TERMINAL.md) are gathered and interpolated on the
     // first request, then served from the cache until `/reload`.
+    //
+    // Watch for cancellation during the gather: interpolation commands can
+    // be slow, and a cancelled (or replaced) bridge must not populate the
+    // cache — its result may predate a gather a newer bridge already stored.
     let shell = client_ctx.shell.as_deref().unwrap_or("sh");
     let start_dir = std::env::current_dir().unwrap_or_default();
     let global_ctx_path = crate::user_context::global_context_path();
-    let user_contexts = user_context_cache
-        .get_or_gather(&start_dir, Some(&global_ctx_path), shell)
-        .await;
+    let user_contexts = tokio::select! {
+        biased;
+        _ = cancel_rx.changed() => return,
+        contexts = user_context_cache.get_or_gather(&start_dir, Some(&global_ctx_path), shell) => contexts,
+    };
 
     let stream = create_chat_stream(
         app_ctx.endpoint.clone(),
