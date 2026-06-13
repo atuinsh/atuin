@@ -656,6 +656,7 @@ mod tests {
             hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
             author: "conrad.ludgate".to_owned(),
             intent: None,
+            shell: None,
             deleted_at: None,
         };
 
@@ -684,6 +685,7 @@ mod tests {
             hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
             author: "conrad.ludgate".to_owned(),
             intent: None,
+            shell: None,
             deleted_at: Some(datetime!(2023-11-19 20:18 +00:00)),
         };
 
@@ -708,6 +710,7 @@ mod tests {
             hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
             author: "claude".to_owned(),
             intent: Some("check repository status".to_owned()),
+            shell: None,
             deleted_at: None,
         };
 
@@ -750,6 +753,7 @@ mod tests {
             hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
             author: "conrad.ludgate".to_owned(),
             intent: None,
+            shell: None,
             deleted_at: None,
         };
 

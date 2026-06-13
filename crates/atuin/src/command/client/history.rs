@@ -697,6 +697,7 @@ impl TailEvent {
                 hostname: history.hostname,
                 author: history.author,
                 intent: normalize_optional_field(&history.intent),
+                shell: None,
                 deleted_at: None,
             },
         })
@@ -1338,6 +1339,7 @@ mod tests {
                 hostname: "host:ellie".to_owned(),
                 author: "claude".to_owned(),
                 intent: Some("inspect repository state".to_owned()),
+                shell: None,
                 deleted_at: None,
             },
         }

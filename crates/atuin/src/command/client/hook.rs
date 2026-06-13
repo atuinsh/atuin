@@ -211,6 +211,7 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
             if let Some(history_id) = history::start_history_entry(
                 settings,
                 &command,
+                None,
                 Some(agent.actor_name()),
                 intent.as_deref(),
             )

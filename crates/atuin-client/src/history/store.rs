@@ -20,6 +20,7 @@ pub struct HistoryStore {
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum HistoryRecord {
     Create(History),   // Create a history record
     Delete(HistoryId), // Delete a history record, identified by ID

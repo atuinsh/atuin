@@ -639,6 +639,7 @@ mod tests {
             hostname: String::new(),
             author: String::new(),
             intent: None,
+            shell: None,
             deleted_at: None,
         }
     }
