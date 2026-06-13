@@ -392,6 +392,7 @@ mod tests {
             hostname: "boop:ellie".to_owned(),
             author: "ellie".to_owned(),
             intent: None,
+            shell: None,
             deleted_at: None,
         };
 

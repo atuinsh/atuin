@@ -357,6 +357,7 @@ mod tests {
             hostname: "hostn".to_string(),
             author: "hostn".to_string(),
             intent: None,
+            shell: None,
             deleted_at: None,
         };
         let next = History {
@@ -370,6 +371,7 @@ mod tests {
             hostname: "hostn".to_string(),
             author: "hostn".to_string(),
             intent: None,
+            shell: None,
             deleted_at: None,
         };
         let prev = History {
@@ -383,6 +385,7 @@ mod tests {
             hostname: "hostn".to_string(),
             author: "hostn".to_string(),
             intent: None,
+            shell: None,
             deleted_at: None,
         };
         let stats = HistoryStats {
