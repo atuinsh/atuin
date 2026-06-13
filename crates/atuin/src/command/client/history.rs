@@ -51,6 +51,10 @@ pub enum Cmd {
         #[arg(long = "command-from-env", hide = true)]
         cmd_env: bool,
 
+        /// The shell in which this command was run (e.g. bash, zsh, fish)
+        #[arg(long)]
+        shell: Option<String>,
+
         /// Author of this command, eg `ellie`, `claude`, or `copilot`
         #[arg(long)]
         author: Option<String>,
@@ -374,7 +378,16 @@ fn parse_fmt(format: &str) -> ParsedFmt<'_> {
     }
 }
 
-fn apply_start_metadata(history: &mut History, author: Option<&str>, intent: Option<&str>) {
+fn apply_start_metadata(
+    history: &mut History,
+    shell: Option<&str>,
+    author: Option<&str>,
+    intent: Option<&str>,
+) {
+    if let Some(shell) = shell.map(str::trim).filter(|s| !s.is_empty()) {
+        history.shell = Some(shell.to_owned());
+    }
+
     if let Some(author) = author.map(str::trim).filter(|author| !author.is_empty()) {
         author.clone_into(&mut history.author);
     }
@@ -414,6 +427,7 @@ async fn handle_start(
     db: &impl Database,
     settings: &Settings,
     command: &str,
+    shell: Option<&str>,
     author: Option<&str>,
     intent: Option<&str>,
 ) -> Result<Option<String>> {
@@ -428,7 +442,7 @@ async fn handle_start(
         .cwd(cwd)
         .build()
         .into();
-    apply_start_metadata(&mut h, author, intent);
+    apply_start_metadata(&mut h, shell, author, intent);
 
     if !h.should_save(settings) {
         return Ok(None);
@@ -449,6 +463,7 @@ async fn handle_start(
 async fn handle_daemon_start(
     settings: &Settings,
     command: &str,
+    shell: Option<&str>,
     author: Option<&str>,
     intent: Option<&str>,
 ) -> Result<Option<String>> {
@@ -463,7 +478,7 @@ async fn handle_daemon_start(
         .cwd(cwd)
         .build()
         .into();
-    apply_start_metadata(&mut h, author, intent);
+    apply_start_metadata(&mut h, shell, author, intent);
 
     if !h.should_save(settings) {
         return Ok(None);
@@ -565,17 +580,18 @@ async fn handle_daemon_end(
 pub(super) async fn start_history_entry(
     settings: &Settings,
     command: &str,
+    shell: Option<&str>,
     author: Option<&str>,
     intent: Option<&str>,
 ) -> Result<Option<String>> {
     #[cfg(feature = "daemon")]
     if settings.daemon.enabled {
-        return handle_daemon_start(settings, command, author, intent).await;
+        return handle_daemon_start(settings, command, shell, author, intent).await;
     }
 
     let db_path = PathBuf::from(settings.db_path.as_str());
     let db = Sqlite::new(db_path, settings.local_timeout).await?;
-    handle_start(&db, settings, command, author, intent).await
+    handle_start(&db, settings, command, shell, author, intent).await
 }
 
 pub(super) async fn end_history_entry(
@@ -1097,6 +1113,7 @@ impl Cmd {
         match self {
             Self::Start {
                 cmd_env,
+                shell,
                 author,
                 intent,
                 command,
@@ -1107,9 +1124,14 @@ impl Cmd {
                     command.join(" ")
                 };
 
-                if let Some(id) =
-                    start_history_entry(settings, &command, author.as_deref(), intent.as_deref())
-                        .await?
+                if let Some(id) = start_history_entry(
+                    settings,
+                    &command,
+                    shell.as_deref(),
+                    author.as_deref(),
+                    intent.as_deref(),
+                )
+                .await?
                 {
                     println!("{id}");
                 }
@@ -1251,7 +1273,7 @@ mod tests {
         let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
         let settings = Settings::utc();
 
-        handle_start(&db, &settings, "ls   \t", None, None)
+        handle_start(&db, &settings, "ls   \t", None, None, None)
             .await
             .unwrap();
 
@@ -1272,7 +1294,7 @@ mod tests {
             ..Settings::utc()
         };
 
-        handle_start(&db, &settings, "ls   \t", None, None)
+        handle_start(&db, &settings, "ls   \t", None, None, None)
             .await
             .unwrap();
 

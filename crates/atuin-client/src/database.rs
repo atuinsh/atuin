@@ -239,8 +239,8 @@ impl Sqlite {
 
     async fn save_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, h: &History) -> Result<()> {
         sqlx::query(
-            "insert or ignore into history(id, timestamp, duration, exit, command, cwd, session, hostname, author, intent, deleted_at)
-                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "insert or ignore into history(id, timestamp, duration, exit, command, cwd, session, hostname, shell, author, intent, deleted_at)
+                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         )
         .bind(h.id.0.as_str())
         .bind(h.timestamp.unix_timestamp_nanos() as i64)
@@ -250,6 +250,7 @@ impl Sqlite {
         .bind(h.cwd.as_str())
         .bind(h.session.as_str())
         .bind(h.hostname.as_str())
+        .bind(h.shell.as_deref())
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
         .bind(h.deleted_at.map(|t|t.unix_timestamp_nanos() as i64))
@@ -274,6 +275,8 @@ impl Sqlite {
     fn query_history(row: SqliteRow) -> History {
         let deleted_at: Option<i64> = row.get("deleted_at");
         let hostname: String = row.get("hostname");
+        let shell: Option<String> = row.try_get("shell").ok().flatten();
+        let shell = shell.filter(|s| !s.trim().is_empty());
         let author: Option<String> = row.try_get("author").ok().flatten();
         let author = author
             .filter(|author| !author.trim().is_empty())
@@ -293,6 +296,7 @@ impl Sqlite {
             .cwd(row.get("cwd"))
             .session(row.get("session"))
             .hostname(hostname)
+            .shell(shell)
             .author(author)
             .intent(intent)
             .deleted_at(
@@ -345,7 +349,7 @@ impl Database for Sqlite {
 
         sqlx::query(
             "update history
-                set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = ?7, hostname = ?8, author = ?9, intent = ?10, deleted_at = ?11
+                set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = ?7, hostname = ?8, shell = ?9, author = ?10, intent = ?11, deleted_at = ?12
                 where id = ?1",
         )
         .bind(h.id.0.as_str())
@@ -356,6 +360,7 @@ impl Database for Sqlite {
         .bind(h.cwd.as_str())
         .bind(h.session.as_str())
         .bind(h.hostname.as_str())
+        .bind(h.shell.as_deref())
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
         .bind(h.deleted_at.map(|t|t.unix_timestamp_nanos() as i64))

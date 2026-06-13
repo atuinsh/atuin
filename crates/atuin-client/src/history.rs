@@ -93,6 +93,8 @@ pub struct History {
     pub session: String,
     /// The hostname of the machine the command was run on.
     pub hostname: String,
+    /// The shell in which the command was run (e.g. "bash", "zsh", "fish").
+    pub shell: Option<String>,
     /// Who wrote this command (human user or automation/agent identity).
     pub author: String,
     /// Optional rationale for why the command was executed.
@@ -148,6 +150,7 @@ impl History {
         duration: i64,
         session: Option<String>,
         hostname: Option<String>,
+        shell: Option<String>,
         author: Option<String>,
         intent: Option<String>,
         deleted_at: Option<OffsetDateTime>,
@@ -156,6 +159,7 @@ impl History {
             .or_else(|| env::var("ATUIN_SESSION").ok())
             .unwrap_or_else(|| uuid_v7().as_simple().to_string());
         let hostname = hostname.unwrap_or_else(get_host_user);
+        let shell = Self::normalize_optional_field(shell);
         let author = Self::normalize_optional_field(author)
             .or_else(|| Self::normalize_optional_field(env::var(HISTORY_AUTHOR_ENV).ok()))
             .unwrap_or_else(|| Self::author_from_hostname(hostname.as_str()));
@@ -171,6 +175,7 @@ impl History {
             duration,
             session,
             hostname,
+            shell,
             author,
             intent,
             deleted_at,
@@ -287,6 +292,7 @@ impl History {
             cwd: cwd.to_owned(),
             session: session.to_owned(),
             hostname: hostname.to_owned(),
+            shell: None,
             author: Self::author_from_hostname(hostname),
             intent: None,
             deleted_at: deleted_at
@@ -358,6 +364,7 @@ impl History {
             cwd: cwd.to_owned(),
             session: session.to_owned(),
             hostname: hostname.to_owned(),
+            shell: None,
             author: author.unwrap_or_else(|| Self::author_from_hostname(hostname)),
             intent,
             deleted_at: deleted_at

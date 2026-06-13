@@ -21,6 +21,8 @@ pub struct HistoryImported {
     #[builder(default, setter(strip_option, into))]
     hostname: Option<String>,
     #[builder(default, setter(strip_option, into))]
+    shell: Option<String>,
+    #[builder(default, setter(strip_option, into))]
     author: Option<String>,
     #[builder(default, setter(strip_option, into))]
     intent: Option<String>,
@@ -36,6 +38,7 @@ impl From<HistoryImported> for History {
             imported.duration,
             imported.session,
             imported.hostname,
+            imported.shell,
             imported.author,
             imported.intent,
             None,
@@ -56,6 +59,8 @@ pub struct HistoryCaptured {
     #[builder(setter(into))]
     cwd: String,
     #[builder(default, setter(strip_option, into))]
+    shell: Option<String>,
+    #[builder(default, setter(strip_option, into))]
     author: Option<String>,
     #[builder(default, setter(strip_option, into))]
     intent: Option<String>,
@@ -71,6 +76,7 @@ impl From<HistoryCaptured> for History {
             -1,
             None,
             None,
+            captured.shell,
             captured.author,
             captured.intent,
             None,
@@ -91,6 +97,8 @@ pub struct HistoryFromDb {
     duration: i64,
     session: String,
     hostname: String,
+    #[builder(default)]
+    shell: Option<String>,
     author: String,
     intent: Option<String>,
     deleted_at: Option<time::OffsetDateTime>,
@@ -107,6 +115,7 @@ impl From<HistoryFromDb> for History {
             duration: from_db.duration,
             session: from_db.session,
             hostname: from_db.hostname,
+            shell: from_db.shell,
             author: from_db.author,
             intent: from_db.intent,
             deleted_at: from_db.deleted_at,
@@ -131,6 +140,8 @@ pub struct HistoryDaemonCapture {
     #[builder(setter(into))]
     hostname: String,
     #[builder(default, setter(strip_option, into))]
+    shell: Option<String>,
+    #[builder(default, setter(strip_option, into))]
     author: Option<String>,
     #[builder(default, setter(strip_option, into))]
     intent: Option<String>,
@@ -146,6 +157,7 @@ impl From<HistoryDaemonCapture> for History {
             -1,
             Some(captured.session),
             Some(captured.hostname),
+            captured.shell,
             captured.author,
             captured.intent,
             None,
