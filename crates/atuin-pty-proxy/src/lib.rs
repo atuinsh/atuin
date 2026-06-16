@@ -27,6 +27,11 @@ mod unsupported {
         #[arg(long)]
         debug_osc133: bool,
 
+        /// Path to the shell binary that atuin pty-proxy should spawn.
+        /// Defaults to the system login shell. Only valid when no subcommand is given.
+        #[arg(long, value_name = "PATH")]
+        shell: Option<std::path::PathBuf>,
+
         #[command(subcommand)]
         cmd: Option<Cmd>,
     }
