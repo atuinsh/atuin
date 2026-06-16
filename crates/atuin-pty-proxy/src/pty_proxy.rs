@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Args, Subcommand, ValueEnum};
 
 use crate::{CommandCaptureSink, runtime};
@@ -7,6 +9,11 @@ pub struct PtyProxy {
     /// Highlight OSC 133 prompt, input, output, and exit-code regions
     #[arg(long)]
     debug_osc133: bool,
+
+    /// Path to the shell binary that atuin pty-proxy should spawn.
+    /// Defaults to the system login shell. Only valid when no subcommand is given.
+    #[arg(long, value_name = "PATH")]
+    shell: Option<PathBuf>,
 
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -41,13 +48,19 @@ enum Shell {
 
 pub(crate) struct RuntimeOptions {
     pub(crate) debug_osc133: bool,
+    pub(crate) shell: Option<PathBuf>,
     pub(crate) command_capture_sink: Option<CommandCaptureSink>,
 }
 
 impl RuntimeOptions {
-    fn new(debug_osc133: bool, command_capture_sink: Option<CommandCaptureSink>) -> Self {
+    fn new(
+        debug_osc133: bool,
+        shell: Option<PathBuf>,
+        command_capture_sink: Option<CommandCaptureSink>,
+    ) -> Self {
         Self {
             debug_osc133: debug_osc133 || env_flag("ATUIN_PTY_PROXY_DEBUG"),
+            shell,
             command_capture_sink,
         }
     }
@@ -55,6 +68,10 @@ impl RuntimeOptions {
 
 impl PtyProxy {
     pub fn run(self, command_capture_sink: Option<CommandCaptureSink>) {
+        if self.cmd.is_some() && self.shell.is_some() {
+            eprintln!("atuin pty-proxy: --shell only applies when no subcommand is given");
+            std::process::exit(2);
+        }
         match self.cmd {
             Some(Cmd::Init(init)) => {
                 if let Err(err) = init.run() {
@@ -62,7 +79,11 @@ impl PtyProxy {
                     std::process::exit(1);
                 }
             }
-            None => runtime::main(RuntimeOptions::new(self.debug_osc133, command_capture_sink)),
+            None => runtime::main(RuntimeOptions::new(
+                self.debug_osc133,
+                self.shell,
+                command_capture_sink,
+            )),
         }
     }
 }
@@ -127,6 +148,10 @@ fn env_flag(name: &str) -> bool {
 }
 
 fn render_init(shell: Shell) -> &'static str {
+    // Each shell embeds its own interpreter path in the `--shell` argument so
+    // `atuin pty-proxy` spawns the same binary that sourced the init, rather
+    // than resolving via $PATH (which can pick the wrong installation when the
+    // user has, for instance, both /usr/bin/bash and /opt/homebrew/bin/bash).
     match shell {
         Shell::Bash | Shell::Zsh => {
             r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
@@ -136,7 +161,18 @@ fn render_init(shell: Shell) -> &'static str {
   if [[ -z "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || [[ "$_atuin_pty_proxy_tmux_current" != "$_atuin_pty_proxy_tmux_previous" ]]; then
     export ATUIN_PTY_PROXY_ACTIVE=1
     export ATUIN_PTY_PROXY_TMUX="$_atuin_pty_proxy_tmux_current"
-    exec atuin pty-proxy
+    if [[ -n "${BASH_VERSION:-}" ]]; then
+      exec atuin pty-proxy --shell "$BASH"
+    elif [[ -n "${ZSH_VERSION:-}" ]]; then
+      # Prefer ZSH_ARGZERO (zsh 5.3+) — it preserves the path zsh was
+      # invoked with — and fall back to PATH lookup otherwise. Login shells
+      # set argv[0] to "-zsh", and ZSH_ARGZERO keeps that leading dash, so
+      # strip it (${var#-}) before passing the path along.
+      _atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}"
+      exec atuin pty-proxy --shell "${_atuin_pty_proxy_zsh#-}"
+    else
+      exec atuin pty-proxy
+    fi
   fi
 
   unset _atuin_pty_proxy_tmux_current _atuin_pty_proxy_tmux_previous
@@ -158,11 +194,11 @@ fi
     if not set -q ATUIN_PTY_PROXY_ACTIVE
         set -gx ATUIN_PTY_PROXY_ACTIVE 1
         set -gx ATUIN_PTY_PROXY_TMUX "$_atuin_pty_proxy_tmux_current"
-        exec atuin pty-proxy
+        exec atuin pty-proxy --shell (status fish-path)
     else if test "$_atuin_pty_proxy_tmux_current" != "$_atuin_pty_proxy_tmux_previous"
         set -gx ATUIN_PTY_PROXY_ACTIVE 1
         set -gx ATUIN_PTY_PROXY_TMUX "$_atuin_pty_proxy_tmux_current"
-        exec atuin pty-proxy
+        exec atuin pty-proxy --shell (status fish-path)
     end
 end
 "#
@@ -178,7 +214,7 @@ end
     if (($env.ATUIN_PTY_PROXY_ACTIVE? | default "") | is-empty) or ($tmux_current != $tmux_previous) {
         $env.ATUIN_PTY_PROXY_ACTIVE = "1"
         $env.ATUIN_PTY_PROXY_TMUX = $tmux_current
-        exec atuin pty-proxy
+        exec atuin pty-proxy --shell $nu.current-exe
     }
 }
 "#
@@ -210,6 +246,22 @@ mod tests {
     fn posix_init_has_no_double_braces() {
         let script = render_init(Shell::Bash);
         assert!(!script.contains("${{"), "double braces in bash init script");
+    }
+
+    #[test]
+    fn init_scripts_forward_shell_path() {
+        let posix = render_init(Shell::Bash);
+        assert!(posix.contains(r#"exec atuin pty-proxy --shell "$BASH""#));
+        // zsh: capture ZSH_ARGZERO (with PATH fallback), then strip the
+        // leading dash present on login shells before forwarding the path.
+        assert!(posix.contains(r#"_atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}""#));
+        assert!(posix.contains(r#"exec atuin pty-proxy --shell "${_atuin_pty_proxy_zsh#-}""#));
+
+        let fish = render_init(Shell::Fish);
+        assert!(fish.contains("exec atuin pty-proxy --shell (status fish-path)"));
+
+        let nu = render_init(Shell::Nu);
+        assert!(nu.contains("exec atuin pty-proxy --shell $nu.current-exe"));
     }
 
     #[test]

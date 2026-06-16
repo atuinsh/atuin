@@ -35,7 +35,10 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     let sock_path = screen::socket_path();
     let _ = std::fs::remove_file(&sock_path);
 
-    let mut cmd = CommandBuilder::new_default_prog();
+    let mut cmd = match options.shell {
+        Some(ref path) => CommandBuilder::new(path),
+        None => CommandBuilder::new_default_prog(),
+    };
     cmd.cwd(std::env::current_dir()?);
     cmd.env("ATUIN_PTY_PROXY_SOCKET", sock_path.as_os_str());
     cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
