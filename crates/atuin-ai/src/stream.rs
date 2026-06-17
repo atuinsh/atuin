@@ -47,6 +47,7 @@ pub(crate) enum StreamContent {
 /// A frame from the SSE stream, classified as control or content.
 #[derive(Debug, Clone)]
 pub(crate) enum StreamFrame {
+    SessionIdentity(String),
     Content(StreamContent),
     Control(StreamControl),
 }
@@ -195,6 +196,13 @@ pub(crate) fn create_chat_stream(
             yield Err(eyre::eyre!("SSE request failed ({}): {}", status, body));
             return;
         }
+
+        if let Some(sess_id) = response
+            .headers()
+            .get("x-atuin-ai-session-id")
+            .and_then(|v| v.to_str().ok()) {
+                yield Ok(StreamFrame::SessionIdentity(sess_id.to_string()));
+            }
 
         let byte_stream = response.bytes_stream();
         let mut stream = byte_stream.eventsource();

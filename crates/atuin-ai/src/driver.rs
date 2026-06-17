@@ -1033,6 +1033,9 @@ async fn run_stream_bridge(
                 StreamControl::Done { session_id } => Some(Event::StreamDone { session_id }),
                 StreamControl::Error(msg) => Some(Event::StreamError(msg)),
             },
+            Ok(StreamFrame::SessionIdentity(session_id)) => {
+                Some(Event::SessionIdReceived(session_id))
+            }
             Err(e) => Some(Event::StreamError(e.to_string())),
         };
 
