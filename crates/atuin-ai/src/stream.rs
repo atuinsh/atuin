@@ -200,7 +200,8 @@ pub(crate) fn create_chat_stream(
         if let Some(sess_id) = response
             .headers()
             .get("x-atuin-ai-session-id")
-            .and_then(|v| v.to_str().ok()) {
+            .and_then(|v| v.to_str().ok())
+            .filter(|s| !s.is_empty()) {
                 yield Ok(StreamFrame::SessionIdentity(sess_id.to_string()));
             }
 
