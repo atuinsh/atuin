@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 
 use atuin_server::{Settings, example_config, launch, launch_metrics_server};
 use atuin_server_database::DbType;
+use atuin_server_mysql::MySql;
 use atuin_server_postgres::Postgres;
 use atuin_server_sqlite::Sqlite;
 
@@ -62,6 +63,7 @@ async fn main() -> Result<()> {
             match settings.db_settings.db_type() {
                 DbType::Postgres => launch::<Postgres>(settings, addr).await,
                 DbType::Sqlite => launch::<Sqlite>(settings, addr).await,
+                DbType::MySql => launch::<MySql>(settings, addr).await,
                 DbType::Unknown => Err(eyre!("db_uri must start with postgres:// or sqlite://")),
             }
         }

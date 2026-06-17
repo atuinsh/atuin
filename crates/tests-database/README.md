@@ -23,6 +23,20 @@ If you want to quickly and easily run a postgres instance
 podman run --name atuin-pg-test -e POSTGRES_PASSWORD=pg -p 5432:5432 postgres
 ```
 
+## MySQL
+
+```shell
+ATUIN_TEST_DB_URI=mysql://root:pass@localhost/atuin_test_ cargo test
+```
+
+Will create a database and run the tests on it.
+
+If you want to quickly and easily run a MySQL instance 
+
+```shell
+podman run --name atuin-mysql-test -e MYSQL_ROOT_PASSWORD=pass -p 3306:3306 mysql
+```
+
 ## Help, I want to see what was left over
 
 Set the environment variable `ATUIN_TEST_DB_NO_DESTROY` to anything and run the tests, e.g.

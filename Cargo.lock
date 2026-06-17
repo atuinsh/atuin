@@ -544,6 +544,7 @@ dependencies = [
  "argon2",
  "atuin-common",
  "atuin-server-database",
+ "atuin-server-mysql",
  "atuin-server-postgres",
  "atuin-server-sqlite",
  "axum",
@@ -578,6 +579,24 @@ dependencies = [
  "time",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "atuin-server-mysql"
+version = "18.16.1"
+dependencies = [
+ "async-trait",
+ "atuin-common",
+ "atuin-server-database",
+ "eyre",
+ "futures-util",
+ "metrics",
+ "rand 0.8.5",
+ "serde",
+ "sqlx",
+ "time",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -5105,6 +5124,7 @@ dependencies = [
  "async-trait",
  "atuin-common",
  "atuin-server-database",
+ "atuin-server-mysql",
  "atuin-server-postgres",
  "atuin-server-sqlite",
  "eyre",
