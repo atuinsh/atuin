@@ -7,7 +7,7 @@ use eyre::Result;
 
 use atuin_client::{
     database::Database,
-    database::{OptFilters, current_context},
+    database::{Context, OptFilters, current_context},
     encryption,
     history::{History, store::HistoryStore},
     record::sqlite_store::SqliteStore,
@@ -69,6 +69,12 @@ pub struct Cmd {
     /// Allow overriding filter mode over config
     #[arg(long = "filter-mode")]
     filter_mode: Option<FilterMode>,
+
+    /// Ordered list of filter modes to search. With `--limit`, results from each mode are
+    /// appended (higher-priority modes first) until the limit is reached or the modes are
+    /// exhausted. Without `--limit`, searching stops at the first mode that returns a result.
+    #[arg(long = "filter-modes", value_delimiter = ',')]
+    filter_modes: Option<Vec<FilterMode>>,
 
     /// Allow overriding search mode over config
     #[arg(long = "search-mode")]
@@ -256,8 +262,11 @@ impl Cmd {
                 authors: self.author.clone().unwrap_or_default(),
             };
 
+            let filter_modes = self.filter_modes.as_deref();
+
             let mut entries =
-                run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
+                run_non_interactive(settings, opt_filter.clone(), filter_modes, &query, &db)
+                    .await?;
 
             if entries.is_empty() {
                 std::process::exit(1)
@@ -276,8 +285,14 @@ impl Cmd {
                     let ids = history_store.delete_entries(entries).await?;
                     history_store.incremental_build(&db, &ids).await?;
 
-                    entries =
-                        run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
+                    entries = run_non_interactive(
+                        settings,
+                        opt_filter.clone(),
+                        filter_modes,
+                        &query,
+                        &db,
+                    )
+                    .await?;
                 }
             } else {
                 let format = match self.format {
@@ -305,10 +320,15 @@ impl Cmd {
 
 // This is supposed to more-or-less mirror the command line version, so ofc
 // it is going to have a lot of args
-#[allow(clippy::too_many_arguments, clippy::cast_possible_truncation)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap
+)]
 async fn run_non_interactive(
     settings: &Settings,
     filter_options: OptFilters,
+    filter_modes: Option<&[FilterMode]>,
     query: &[String],
     db: &impl Database,
 ) -> Result<Vec<History>> {
@@ -325,17 +345,105 @@ async fn run_non_interactive(
         ..filter_options
     };
 
-    let filter_mode = settings.default_filter_mode(context.git_root.is_some());
+    // Search the requested modes in priority order, falling back to the single
+    // configured default when no explicit list is given.
+    let modes = match filter_modes {
+        Some(modes) if !modes.is_empty() => modes.to_vec(),
+        _ => vec![settings.default_filter_mode(context.git_root.is_some())],
+    };
 
-    let results = db
-        .search(
-            settings.search_mode,
-            filter_mode,
-            &context,
-            query.join(" ").as_str(),
-            opt_filter,
-        )
-        .await?;
+    search_filter_modes(
+        db,
+        settings.search_mode,
+        &context,
+        &modes,
+        query.join(" ").as_str(),
+        &opt_filter,
+    )
+    .await
+}
+
+/// Search an ordered list of filter modes, highest priority first.
+///
+/// Without a limit, the results of the first mode that returns any match are used.
+/// With a limit, unique commands are accumulated across modes (de-duplicated, earlier
+/// mode wins) until the limit is filled or all modes are exhausted, paging deeper into a
+/// mode when de-duplication leaves it short.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
+async fn search_filter_modes(
+    db: &impl Database,
+    search_mode: SearchMode,
+    context: &Context,
+    modes: &[FilterMode],
+    query: &str,
+    opt_filter: &OptFilters,
+) -> Result<Vec<History>> {
+    let mut results = Vec::new();
+    // Commands already contributed by a higher-priority mode, so each appears only once.
+    let mut seen = std::collections::HashSet::new();
+
+    for &filter_mode in modes {
+        let Some(limit) = opt_filter.limit else {
+            // Without a limit, take the first mode that returns any results.
+            let mut found = db
+                .search(search_mode, filter_mode, context, query, opt_filter.clone())
+                .await?;
+            let had_results = !found.is_empty();
+            results.append(&mut found);
+            if had_results {
+                break;
+            }
+            continue;
+        };
+
+        // With a limit, accumulate unique commands across modes, higher-priority first.
+        // Page through this mode (advancing the offset) until we've filled the limit or
+        // exhausted its results. Over-fetch by the number of already-seen commands - the
+        // most this mode could collide with - so a single query usually suffices.
+        let base_offset = opt_filter.offset.unwrap_or(0);
+        let mut page_offset = 0;
+        loop {
+            let remaining = limit - results.len() as i64;
+            if remaining <= 0 {
+                break;
+            }
+
+            let fetch = remaining + seen.len() as i64;
+            let mut found = db
+                .search(
+                    search_mode,
+                    filter_mode,
+                    context,
+                    query,
+                    OptFilters {
+                        limit: Some(fetch),
+                        offset: Some(base_offset + page_offset),
+                        ..opt_filter.clone()
+                    },
+                )
+                .await?;
+
+            let fetched = found.len() as i64;
+            found.retain(|h| seen.insert(h.command.clone()));
+            results.append(&mut found);
+            // Over-fetching can push us past the limit; never return more than asked.
+            results.truncate(limit as usize);
+
+            // A short page means this mode has no more results to page through.
+            if fetched < fetch {
+                break;
+            }
+            page_offset += fetched;
+        }
+
+        if results.len() as i64 >= limit {
+            break;
+        }
+    }
 
     Ok(results)
 }
@@ -364,6 +472,22 @@ mod tests {
     }
 
     #[test]
+    fn search_filter_modes_cli_flag() {
+        use atuin_client::settings::FilterMode;
+
+        let cmd =
+            Cmd::try_parse_from(["search", "--filter-modes", "session,directory,global"]).unwrap();
+        assert_eq!(
+            cmd.filter_modes,
+            Some(vec![
+                FilterMode::Session,
+                FilterMode::Directory,
+                FilterMode::Global
+            ])
+        );
+    }
+
+    #[test]
     fn search_author_cli_flag() {
         let cmd =
             Cmd::try_parse_from(["search", "--author", "codex", "--author", "ellie"]).unwrap();
@@ -371,5 +495,72 @@ mod tests {
             cmd.author,
             Some(vec!["codex".to_string(), "ellie".to_string()])
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn filter_modes_dedup_accumulation() {
+        use atuin_client::database::{Context, Database, OptFilters, Sqlite};
+        use atuin_client::history::History;
+        use atuin_client::settings::{FilterMode, SearchMode};
+        use std::collections::HashSet;
+        use time::OffsetDateTime;
+
+        let db = Sqlite::new("sqlite::memory:", 1.0).await.unwrap();
+
+        // (command, session, hostname, cwd) chosen so the modes below overlap: each
+        // command should appear in the final result exactly once despite matching
+        // several modes.
+        let rows = [
+            ("a", "S", "H", "/dir"),   // session, host, directory, global
+            ("b", "S", "H", "/other"), // session, host, global
+            ("c", "X", "H", "/dir"),   // host, directory, global
+            ("d", "X", "O", "/other"), // global only
+        ];
+        for (cmd, session, hostname, cwd) in rows {
+            let mut h: History = History::capture()
+                .timestamp(OffsetDateTime::now_utc())
+                .command(cmd)
+                .cwd(cwd)
+                .build()
+                .into();
+            h.session = session.to_string();
+            h.hostname = hostname.to_string();
+            db.save(&h).await.unwrap();
+        }
+
+        let context = Context {
+            session: "S".into(),
+            hostname: "H".into(),
+            cwd: "/dir".into(),
+            host_id: "host".into(),
+            git_root: None,
+        };
+
+        let modes = [
+            FilterMode::Session,
+            FilterMode::Directory,
+            FilterMode::Host,
+            FilterMode::Global,
+        ];
+        let opt_filter = OptFilters {
+            limit: Some(10),
+            ..Default::default()
+        };
+
+        let results =
+            super::search_filter_modes(&db, SearchMode::Prefix, &context, &modes, "", &opt_filter)
+                .await
+                .unwrap();
+
+        let commands: Vec<&str> = results.iter().map(|h| h.command.as_str()).collect();
+        let unique: HashSet<&str> = commands.iter().copied().collect();
+
+        // No command is repeated across modes, and every unique command is collected.
+        assert_eq!(
+            commands.len(),
+            unique.len(),
+            "results contain duplicates: {commands:?}"
+        );
+        assert_eq!(unique, HashSet::from(["a", "b", "c", "d"]));
     }
 }
