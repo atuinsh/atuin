@@ -199,6 +199,15 @@ impl AgentFsm {
 
     /// Handle an event, returning effects to execute.
     pub fn handle(&mut self, event: Event) -> Vec<Effect> {
+        // From all states: if the session ID arrives and isn't set, set it, then continue as normal.
+        // This event fires from the stream response headers, rather than having to wait until the end
+        // of a turn when StreamDone arrives, which can be lost for cancelled turns.
+        if let Event::SessionIdReceived(session_id) = &event {
+            self.ctx
+                .session_id
+                .get_or_insert_with(|| session_id.clone());
+        }
+
         match (&self.state, event) {
             // ================================================================
             // Idle state
