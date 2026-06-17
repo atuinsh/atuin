@@ -19,7 +19,7 @@ mod builder;
 pub mod store;
 
 /// Known AI agent author values. Used to expand `$all-agent` and `$all-user` filters.
-pub const KNOWN_AGENTS: &[&str] = &["claude-code", "codex", "copilot", "pi"];
+pub const KNOWN_AGENTS: &[&str] = &["claude-code", "codex", "copilot", "opencode", "pi"];
 pub const AUTHOR_FILTER_ALL_USER: &str = "$all-user";
 pub const AUTHOR_FILTER_ALL_AGENT: &str = "$all-agent";
 
