@@ -281,6 +281,7 @@ arg-search-limit = How many entries to return at most
 arg-search-offset = Offset from the start of the results
 arg-search-interactive = Open interactive search UI
 arg-search-filter-mode = Allow overriding filter mode over config
+arg-search-filter-modes = Ordered list of filter modes to search. With `--limit`, results from each mode are appended (higher-priority modes first) until the limit is reached or the modes are exhausted. Without `--limit`, searching stops at the first mode that returns a result.
 arg-search-search-mode = Allow overriding search mode over config
     .long = 
         Allow overriding search mode over config
