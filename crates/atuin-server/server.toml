@@ -36,3 +36,9 @@
 ## Enable legacy sync v1 routes (history-based sync)
 ## Set to false to disable and use only the newer record-based sync
 # sync_v1_enabled = true
+
+## Enable a database connectivity check in the /healthz endpoint.
+## When true, /healthz returns HTTP 503 (and {"status":"unhealthy"}) if the
+## database is unreachable, instead of always reporting healthy.
+## Equivalent env var: ATUIN_DB_HEALTH_CHECK=true
+# db_health_check = false
