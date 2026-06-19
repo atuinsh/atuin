@@ -7,6 +7,7 @@ use atuin_server_database::DbType;
 use atuin_server_postgres::Postgres;
 use atuin_server_sqlite::Sqlite;
 
+use atuin_common::tls::ensure_crypto_provider;
 use clap::Parser;
 use eyre::{Context, Result, eyre};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
@@ -32,6 +33,18 @@ enum Cmd {
 
     /// Print server example configuration
     DefaultConfig,
+
+    /// Check server health over HTTP and exit 0 (healthy) or 1 (unhealthy).
+    /// Intended as a Docker HEALTHCHECK command — needs no curl in the image.
+    Health {
+        /// The host to query (defaults to the configured host)
+        #[clap(long)]
+        host: Option<String>,
+
+        /// The port to query (defaults to the configured port)
+        #[clap(long, short)]
+        port: Option<u16>,
+    },
 }
 
 #[tokio::main]
@@ -68,6 +81,32 @@ async fn main() -> Result<()> {
         Cmd::DefaultConfig => {
             println!("{}", example_config());
             Ok(())
+        }
+        Cmd::Health { host, port } => {
+            let settings = Settings::new().wrap_err("could not load server settings")?;
+            let host = host.as_ref().unwrap_or(&settings.host).clone();
+            let port = port.unwrap_or(settings.port);
+            let url = format!("http://{host}:{port}/healthz");
+
+            ensure_crypto_provider();
+            let client = reqwest::Client::new();
+            match client.get(&url).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    let body = resp.text().await.unwrap_or_default();
+                    println!("healthy: {body}");
+                    Ok(())
+                }
+                Ok(resp) => {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    eprintln!("unhealthy: HTTP {status}: {body}");
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    eprintln!("unhealthy: could not reach {url}: {e}");
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }
