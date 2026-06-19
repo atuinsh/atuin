@@ -118,6 +118,11 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
     async fn get_session_user(&self, token: &str) -> DbResult<User>;
     async fn add_session(&self, session: &NewSession) -> DbResult<()>;
 
+    /// Check that the database is reachable by running a trivial query
+    /// against the existing connection pool. Returns Ok(()) if the database
+    /// responds, Err otherwise. Used by the /healthz endpoint.
+    async fn health_check(&self) -> DbResult<()>;
+
     async fn get_user(&self, username: &str) -> DbResult<User>;
     async fn get_user_session(&self, u: &User) -> DbResult<Session>;
     async fn add_user(&self, user: &NewUser) -> DbResult<i64>;
