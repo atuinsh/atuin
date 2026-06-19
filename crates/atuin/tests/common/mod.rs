@@ -31,6 +31,7 @@ pub async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandl
         port: 0,
         path: path.to_owned(),
         sync_v1_enabled: true,
+        db_health_check: false,
         open_registration: true,
         max_history_length: 8192,
         max_record_size: 1024 * 1024 * 1024,

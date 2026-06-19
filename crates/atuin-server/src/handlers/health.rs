@@ -36,25 +36,21 @@ pub async fn health_check<DB: Database>(state: State<AppState<DB>>) -> impl Into
     }
 
     // Run the DB check against the existing pool, with a fail-fast timeout.
-    let db_healthy = match tokio::time::timeout(
-        DB_HEALTH_CHECK_TIMEOUT,
-        state.database.health_check(),
-    )
-    .await
-    {
-        Ok(Ok(())) => true,
-        Ok(Err(e)) => {
-            tracing::error!(error = ?e, "healthz: database check failed");
-            false
-        }
-        Err(_) => {
-            tracing::warn!(
-                timeout = ?DB_HEALTH_CHECK_TIMEOUT,
-                "healthz: database check timed out"
-            );
-            false
-        }
-    };
+    let db_healthy =
+        match tokio::time::timeout(DB_HEALTH_CHECK_TIMEOUT, state.database.health_check()).await {
+            Ok(Ok(())) => true,
+            Ok(Err(e)) => {
+                tracing::error!(error = ?e, "healthz: database check failed");
+                false
+            }
+            Err(_) => {
+                tracing::warn!(
+                    timeout = ?DB_HEALTH_CHECK_TIMEOUT,
+                    "healthz: database check timed out"
+                );
+                false
+            }
+        };
 
     if db_healthy {
         (
