@@ -50,6 +50,13 @@ pub struct Settings {
     /// notifying users when the server runs something that is not a stable release.
     pub fake_version: Option<String>,
 
+    /// Enable a database connectivity check in the /healthz endpoint.
+    /// When false (default), /healthz only confirms the HTTP server is alive.
+    /// When true, /healthz returns 503 if the database is unreachable.
+    /// Env var: ATUIN_DB_HEALTH_CHECK=true
+    #[serde(alias = "db_healthcheck")]
+    pub db_health_check: bool,
+
     #[serde(flatten)]
     pub db_settings: DbSettings,
 }
@@ -81,6 +88,7 @@ impl Settings {
             .set_default("metrics.host", "127.0.0.1")?
             .set_default("metrics.port", 9001)?
             .set_default("sync_v1_enabled", true)?
+            .set_default("db_health_check", false)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")
