@@ -4641,12 +4641,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "snowflake_uid"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "167e0bc9777318b7b2168046f75fa9cdd1211c37cc5079847f3fec58088a0853"
-
-[[package]]
 name = "socket2"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5113,7 +5107,6 @@ dependencies = [
  "metrics",
  "regex",
  "serde",
- "snowflake_uid",
  "sqlx",
  "time",
  "tokio",

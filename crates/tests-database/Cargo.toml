@@ -27,7 +27,6 @@ metrics = "0.24"
 futures-util = "0.3"
 
 fake = { version = "5", features = ["time"] }
-snowflake_uid = { version = "0.1.1" }
 
 regex.workspace = true
 url = "2.5.8"

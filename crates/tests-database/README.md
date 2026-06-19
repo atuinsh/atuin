@@ -7,7 +7,7 @@ This is an integration test suite that runs through a simple "story" of creating
 ## `ATUIN_TEST_DB_URI`
 Setting this will create a database at that URI and then run through the tests.  Leaving it unset will create a sqlite db in $TMP
 
-There will be a [snowflake_uid](https://docs.rs/snowflake_uid/latest/snowflake_uid/) appended to the end of the URL so the DB will be unique for the test
+A random UUID is appended to the end of the URL so the DB is unique for each test, even when tests run concurrently.
 
 ## Postgres
 
