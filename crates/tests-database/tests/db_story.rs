@@ -211,3 +211,22 @@ fn generate_record(host: &Host, idx: RecordIdx) -> Record<EncryptedData> {
         .data(data)
         .build()
 }
+
+/// A live database must report healthy via Database::health_check.
+#[tokio::test]
+async fn health_check_reports_ok_on_live_db() -> eyre::Result<()> {
+    let test_db = TestDb::new().await?;
+    let settings = &test_db.settings;
+
+    match settings.db_type() {
+        DbType::Postgres => run_health_check::<Postgres>(settings).await,
+        DbType::Sqlite => run_health_check::<Sqlite>(settings).await,
+        DbType::Unknown => todo!(),
+    }
+}
+
+async fn run_health_check<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
+    let db = DB::new(settings).await?;
+    db.health_check().await?; // Ok(()) = reachable; `?` fails the test otherwise
+    Ok(())
+}
