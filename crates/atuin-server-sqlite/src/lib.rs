@@ -40,6 +40,15 @@ impl Database for Sqlite {
     }
 
     #[instrument(skip_all)]
+    async fn health_check(&self) -> DbResult<()> {
+        sqlx::query("SELECT 1")
+            .fetch_one(&self.pool)
+            .await
+            .map(|_| ())
+            .map_err(Into::into)
+    }
+
+    #[instrument(skip_all)]
     async fn get_session(&self, token: &str) -> DbResult<Session> {
         sqlx::query_as("select id, user_id, token from sessions where token = $1")
             .bind(token)
