@@ -99,11 +99,24 @@ impl Database for Postgres {
 
     #[instrument(skip_all)]
     async fn health_check(&self) -> DbResult<()> {
+        // Always check the primary pool.
         sqlx::query("SELECT 1")
             .fetch_one(&self.pool)
             .await
-            .map(|_| ())
-            .map_err(Into::into)
+            .map_err(DbError::from)?;
+
+        // When a read replica is configured, client reads go through it, so an
+        // unreachable replica must also fail the check. Only ping it when it
+        // actually exists (read_pool() would otherwise fall back to the primary
+        // and double-check it).
+        if let Some(read_pool) = &self.read_pool {
+            sqlx::query("SELECT 1")
+                .fetch_one(read_pool)
+                .await
+                .map_err(DbError::from)?;
+        }
+
+        Ok(())
     }
 
     #[instrument(skip_all)]

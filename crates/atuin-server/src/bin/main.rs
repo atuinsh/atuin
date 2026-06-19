@@ -84,9 +84,17 @@ async fn main() -> Result<()> {
         }
         Cmd::Health { host, port } => {
             let settings = Settings::new().wrap_err("could not load server settings")?;
-            let host = host.as_ref().unwrap_or(&settings.host).clone();
+
+            // Probe loopback by default rather than the configured bind host: the
+            // server commonly binds 0.0.0.0, which is not a valid client target.
+            // --host still overrides for the rare case the probe runs off-box.
+            let host = host.clone().unwrap_or_else(|| "127.0.0.1".to_owned());
             let port = port.unwrap_or(settings.port);
-            let url = format!("http://{host}:{port}/healthz");
+
+            // Routes are nested under settings.path when it is set (e.g. "/atuin"),
+            // so /healthz becomes /atuin/healthz. Mirror that here.
+            let path = settings.path.trim_end_matches('/');
+            let url = format!("http://{host}:{port}{path}/healthz");
 
             ensure_crypto_provider();
             let client = reqwest::Client::new();

@@ -35,7 +35,9 @@ ENV ATUIN_CONFIG_DIR=/config
 COPY --from=builder /app/target/release/atuin-server /usr/local/bin
 
 # Self-contained healthcheck — uses the atuin-server binary, no curl needed.
-# Honors ATUIN_HOST/ATUIN_PORT; checks the DB too when ATUIN_DB_HEALTH_CHECK=true.
+# Probes loopback on ATUIN_PORT under the configured ATUIN_PATH (it ignores
+# ATUIN_HOST, which is often 0.0.0.0 and not a valid client target). Checks the
+# database too when ATUIN_DB_HEALTH_CHECK=true.
 # Note: podman defaults to OCI format, which silently drops HEALTHCHECK. Build
 # with `podman build --format docker` (docker/compose builds honor it natively).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
