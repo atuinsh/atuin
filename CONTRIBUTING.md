@@ -6,7 +6,7 @@ Thank you so much for considering contributing to Atuin! We really appreciate it
 
 While we are very happy for you to use AI to build your contribution, it is essential that any pull requests you open are reviewed, understood, and tested by you. Pull requests with giant, AI-written descriptions imply the opposite. Please take the time to write a PR body that outlines your intent, understanding and summary of the change.
 
-Development dependencies
+## Development dependencies
 
 1. A rust toolchain ([rustup](https://rustup.rs) recommended)
 
