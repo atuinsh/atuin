@@ -123,7 +123,7 @@ This is useful when one machine ends up with local records that were encrypted w
     `atuin store purge` only affects the local record store on the current machine. It does not wipe your history, delete your sync account, or reset other machines.
 
 !!! danger
-    `atuin store purge` permanently deletes the records it cannot decrypt. Run `atuin store verify` first so you know whether you are cleaning up a real key mismatch and not just deleting data blindly.
+    `atuin store purge` permanently deletes the records it cannot decrypt. Before running it, make sure Atuin is using the key you intend to keep, and back up the local store if the records may still be recoverable. Run `atuin store verify` first so you know whether you are cleaning up a real key mismatch and not just deleting data blindly.
 
 ## Deduplicating history
 
