@@ -40,6 +40,13 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
         None => CommandBuilder::new_default_prog(),
     };
     cmd.cwd(std::env::current_dir()?);
+    // Reflect the shell we actually spawn in `$SHELL` so the child — and
+    // anything it execs via `$SHELL -c` (e.g. fzf's `become`) — sees the
+    // shell the user asked for instead of a stale value inherited from the
+    // parent environment.
+    if let Some(ref path) = options.shell {
+        cmd.env("SHELL", path);
+    }
     cmd.env("ATUIN_PTY_PROXY_SOCKET", sock_path.as_os_str());
     cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
 
