@@ -72,6 +72,7 @@ pub trait SearchEngine: Send + Sync + 'static {
 
     async fn query(&mut self, state: &SearchState, db: &mut dyn Database) -> Result<Vec<History>> {
         if state.input.as_str().is_empty() {
+            let mut seen = std::collections::HashSet::new();
             Ok(db
                 .search(
                     SearchMode::FullText,
@@ -80,13 +81,15 @@ pub trait SearchEngine: Send + Sync + 'static {
                     "",
                     OptFilters {
                         limit: Some(200),
+                        include_duplicates: true,
                         authors: vec![AUTHOR_FILTER_ALL_USER.to_string()],
                         ..Default::default()
                     },
                 )
                 .await?
                 .into_iter()
-                .collect::<Vec<_>>())
+                .filter(|h| seen.insert(h.command.clone()))
+                .collect())
         } else {
             self.full_query(state, db).await
         }
