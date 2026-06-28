@@ -1,6 +1,6 @@
 # AI Settings
 
-All the settings that control the behavior of [Atuin AI](./introduction.md) are specified in an `[ai]` section in your `config.toml`. See [the configuration documentation](../../configuration/config/) for more detailed information about Atuin's configuration system.
+All the settings that control the behavior of [Atuin AI](./introduction.md) are specified in an `[ai]` section in your `config.toml`. See [the configuration documentation](../configuration/config.md) for more detailed information about Atuin's configuration system.
 
 ### enabled
 
@@ -41,6 +41,12 @@ Settings that control what capabilities are sent to the LLM, which the LLM uses 
 Default: `true`
 
 Whether or not to include the "history search" capability in the context sent to the LLM. This allows the AI to request to search your Atuin history for relevant commands when generating suggestions or answering questions.
+
+### enable_history_output
+
+Default: `true`
+
+Whether or not to include the "history output" capability in the context sent to the LLM. This allows the AI to request to view the output of previous commands. This requires the [pty-proxy](../reference/pty-proxy.md) and [daemon](../reference/daemon.md) to be enabled and running in order for Atuin to capture commands' outputs.
 
 ### enable_file_tools
 

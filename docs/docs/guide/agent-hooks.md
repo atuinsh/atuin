@@ -70,7 +70,7 @@ atuin search -- ''
 atuin search --author '$all-agent' -- ''
 ```
 
-Currently recognized agent names are: `claude-code`, `codex`, `copilot`, and `pi`.
+Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `opencode`, and `pi`.
 
 ## Supported Agents
 

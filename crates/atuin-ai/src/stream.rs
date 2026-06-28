@@ -2,7 +2,10 @@
 // SSE streaming
 // ───────────────────────────────────────────────────────────────────
 
+use atuin_client::history::History;
 use atuin_client::settings::AiCapabilities;
+
+use crate::context::history_output_capability_available;
 use atuin_common::tls::ensure_crypto_provider;
 
 use eventsource_stream::Eventsource;
@@ -44,6 +47,7 @@ pub(crate) enum StreamContent {
 /// A frame from the SSE stream, classified as control or content.
 #[derive(Debug, Clone)]
 pub(crate) enum StreamFrame {
+    SessionIdentity(String),
     Content(StreamContent),
     Control(StreamControl),
 }
@@ -61,6 +65,7 @@ impl ChatRequest {
         messages: Vec<serde_json::Value>,
         session_id: Option<String>,
         capabilities: &AiCapabilities,
+        history_output_available: bool,
         invocation_id: String,
     ) -> Self {
         let mut caps = vec![
@@ -77,6 +82,11 @@ impl ChatRequest {
         }
         if capabilities.enable_command_execution.unwrap_or(true) {
             caps.push("client_v1_execute_shell_command".to_string());
+        }
+        if history_output_capability_available(history_output_available)
+            && capabilities.enable_history_output.unwrap_or(true)
+        {
+            caps.push("client_v1_atuin_output".to_string());
         }
         if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
             caps.extend(
@@ -103,7 +113,7 @@ pub(crate) fn create_chat_stream(
     request: ChatRequest,
     client_ctx: ClientContext,
     send_cwd: bool,
-    last_command: Option<String>,
+    last_command: Option<History>,
     user_contexts: Vec<crate::user_context::UserContext>,
     skill_summaries: Vec<crate::skills::SkillSummary>,
     skill_overflow: Option<String>,
@@ -120,7 +130,7 @@ pub(crate) fn create_chat_stream(
 
         tracing::debug!("Sending SSE request to {endpoint}");
 
-        let context = client_ctx.to_json(send_cwd, last_command.as_deref());
+        let context = client_ctx.to_json(send_cwd, last_command.as_ref());
 
         let mut config = serde_json::json!({
             "capabilities": request.capabilities,
@@ -186,6 +196,14 @@ pub(crate) fn create_chat_stream(
             yield Err(eyre::eyre!("SSE request failed ({}): {}", status, body));
             return;
         }
+
+        if let Some(sess_id) = response
+            .headers()
+            .get("x-atuin-ai-session-id")
+            .and_then(|v| v.to_str().ok())
+            .filter(|s| !s.is_empty()) {
+                yield Ok(StreamFrame::SessionIdentity(sess_id.to_string()));
+            }
 
         let byte_stream = response.bytes_stream();
         let mut stream = byte_stream.eventsource();

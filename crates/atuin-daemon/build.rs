@@ -7,6 +7,7 @@ fn main() -> std::io::Result<()> {
         "proto/history.proto",
         "proto/search.proto",
         "proto/control.proto",
+        "proto/semantic.proto",
     ];
     let proto_include_dirs = ["proto"];
 
