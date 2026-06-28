@@ -492,25 +492,11 @@ impl Database for Sqlite {
         query: &str,
         filter_options: OptFilters,
     ) -> Result<Vec<History>> {
+        // Build the inner query holding all of the user's filters (filter mode,
+        // fuzzy/regex command matches, exit/cwd/date filters, author, deleted_at).
+        // Deduplication, ordering and limiting are applied by the outer query
+        // built below, so that the timestamp-ordered scan can early-terminate.
         let mut sql = SqlBuilder::select_from("history");
-
-        if !filter_options.include_duplicates {
-            sql.group_by("command").having("max(timestamp)");
-        }
-
-        if let Some(limit) = filter_options.limit {
-            sql.limit(limit);
-        }
-
-        if let Some(offset) = filter_options.offset {
-            sql.offset(offset);
-        }
-
-        if filter_options.reverse {
-            sql.order_asc("timestamp");
-        } else {
-            sql.order_desc("timestamp");
-        }
 
         let git_root = if let Some(git_root) = context.git_root.clone() {
             git_root.to_str().unwrap_or("/").to_string()
@@ -636,7 +622,45 @@ impl Database for Sqlite {
 
         sql.and_where_is_null("deleted_at");
 
-        let query = sql.sql().expect("bug in search query. please report");
+        // sql_builder inlines every bound value, so the inner query carries no
+        // positional parameters and is safe to embed (twice) as a derived table.
+        let inner = sql.sql().expect("bug in search query. please report");
+        let inner = inner.trim().trim_end_matches(';');
+
+        let order = if filter_options.reverse {
+            "ASC"
+        } else {
+            "DESC"
+        };
+
+        let tail = match (filter_options.limit, filter_options.offset) {
+            (Some(limit), Some(offset)) => format!(" LIMIT {limit} OFFSET {offset}"),
+            (Some(limit), None) => format!(" LIMIT {limit}"),
+            // SQLite requires a LIMIT before OFFSET; -1 means "no limit".
+            (None, Some(offset)) => format!(" LIMIT -1 OFFSET {offset}"),
+            (None, None) => String::new(),
+        };
+
+        // Deduplicate by keeping, for each command, only its most recent entry
+        // within the filtered set. Expressed as a correlated NOT EXISTS rather
+        // than GROUP BY so that the timestamp-ordered scan can stop as soon as
+        // `limit` distinct commands have been emitted, instead of aggregating
+        // the entire table on every keystroke. The `(timestamp, id)` row-value
+        // comparison both breaks timestamp ties (one row per command) and stays
+        // a sargable range scan on the (command, timestamp) index.
+        let query = if filter_options.include_duplicates {
+            format!("SELECT * FROM ({inner}) f ORDER BY f.timestamp {order}{tail}")
+        } else {
+            format!(
+                "SELECT * FROM ({inner}) f \
+                 WHERE NOT EXISTS ( \
+                     SELECT 1 FROM ({inner}) f2 \
+                     WHERE f2.command = f.command \
+                       AND (f2.timestamp, f2.id) > (f.timestamp, f.id) \
+                 ) \
+                 ORDER BY f.timestamp {order}{tail}"
+            )
+        };
 
         let res = sqlx::query(&query)
             .map(Self::query_history)
