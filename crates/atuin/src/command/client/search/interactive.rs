@@ -1,5 +1,7 @@
 use std::{
+    fs,
     io::{IsTerminal, Write, stdout},
+    process::Command,
     time::Duration,
 };
 
@@ -10,6 +12,7 @@ use atuin_common::{shell::Shell, utils::Escapable as _};
 use eyre::Result;
 use futures_util::FutureExt;
 use semver::Version;
+use tempfile::NamedTempFile;
 use time::OffsetDateTime;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -60,6 +63,7 @@ const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
 pub enum InputAction {
     Accept(usize),
     AcceptInspecting,
+    EditAccept(usize),
     Copy(usize),
     Delete(usize),
     DeleteAllMatching(usize),
@@ -150,6 +154,77 @@ struct StyleState {
     compactness: Compactness,
     invert: bool,
     inner_width: usize,
+}
+
+fn get_visual_editor() -> Result<String> {
+    // FCEDIT is the fc-specific override; $VISUAL is for full-screen editors,
+    // $EDITOR is the fallback for any editor.
+    for var in ["FCEDIT", "VISUAL", "EDITOR"] {
+        if let Ok(val) = std::env::var(var)
+            && !val.is_empty()
+        {
+            return Ok(val);
+        }
+    }
+
+    // On Debian/Ubuntu, /usr/bin/editor is an update-alternatives symlink to
+    // the system-preferred editor, independent of $EDITOR.
+    if std::path::Path::new("/usr/bin/editor").exists() {
+        return Ok("/usr/bin/editor".to_string());
+    }
+
+    // Fall back to vim or vi if present in PATH.
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    for name in ["vim", "vi"] {
+        if std::env::split_paths(&path_var).any(|dir| dir.join(name).is_file()) {
+            return Ok(name.to_string());
+        }
+    }
+
+    Err(eyre::eyre!(
+        "No editor found; set $VISUAL, $EDITOR, or $FCEDIT"
+    ))
+}
+
+fn visual_edit_command(original_command: &str) -> Result<String> {
+    // Write the command to a temp file, then close the write fd before the
+    // editor opens it (same pattern as scripts.rs open_editor).
+    let temp_file = NamedTempFile::new()?;
+    fs::write(temp_file.path(), format!("{original_command}\n"))?;
+    let temp_path = temp_file.into_temp_path();
+
+    let editor = get_visual_editor()?;
+    let parts = shlex::split(&editor)
+        .ok_or_else(|| eyre::eyre!("Failed to parse editor command: {editor}"))?;
+    let (program, args) = parts
+        .split_first()
+        .ok_or_else(|| eyre::eyre!("Editor command is empty"))?;
+
+    let mut cmd = Command::new(program);
+    cmd.args(args).arg(&temp_path);
+
+    // The shell integration runs atuin inside $() command substitution with an
+    // fd-swap so atuin's stderr is a pipe back to the shell. Editors that use
+    // ncurses (nano, etc.) inherit those fds and may get confused — arrow keys
+    // break and terminal cleanup sequences end up captured in the shell output.
+    // Open /dev/tty directly so the editor always gets a clean terminal.
+    #[cfg(unix)]
+    if let Ok(tty) = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        && let (Ok(tty_out), Ok(tty_err)) = (tty.try_clone(), tty.try_clone())
+    {
+        cmd.stdin(tty).stdout(tty_out).stderr(tty_err);
+    }
+
+    let status = cmd.status()?;
+
+    if !status.success() {
+        return Ok(original_command.to_string());
+    }
+
+    Ok(fs::read_to_string(&temp_path)?.trim_end().to_string())
 }
 
 impl State {
@@ -645,6 +720,10 @@ impl State {
             Action::Copy => InputAction::Copy(self.results_state.selected()),
             Action::Delete => InputAction::Delete(self.results_state.selected()),
             Action::DeleteAll => InputAction::DeleteAllMatching(self.results_state.selected()),
+            Action::EditAccept => {
+                self.accept = true;
+                InputAction::EditAccept(self.results_state.selected())
+            }
             Action::ReturnOriginal => InputAction::ReturnOriginal,
             Action::ReturnQuery => InputAction::ReturnQuery,
             Action::Exit => Self::handle_key_exit(settings),
@@ -2001,6 +2080,11 @@ pub async fn history(
 
     let accept_prefix = "__atuin_accept__:";
 
+    // Restore the terminal before any operation that needs a clean tty (e.g.
+    // launching an external editor). For all other arms this is a no-op — the
+    // Drop would have run on function exit anyway.
+    drop(terminal);
+
     match result {
         InputAction::AcceptInspecting => {
             match inspecting {
@@ -2029,13 +2113,20 @@ pub async fn history(
             // index is in bounds so we return that entry
             Ok(command)
         }
+        InputAction::EditAccept(index) if index < results.len() => {
+            let mut command = visual_edit_command(&results[index].command)?;
+            if accept && !command.is_empty() {
+                command = String::from(accept_prefix) + &command;
+            }
+            Ok(command)
+        }
         InputAction::ReturnOriginal => Ok(String::new()),
         InputAction::Copy(index) => {
             let cmd = results.swap_remove(index).command;
             set_clipboard(cmd);
             Ok(String::new())
         }
-        InputAction::ReturnQuery | InputAction::Accept(_) => {
+        InputAction::ReturnQuery | InputAction::Accept(_) | InputAction::EditAccept(_) => {
             // Either:
             // * index == RETURN_QUERY, in which case we should return the input
             // * out of bounds -> usually implies no selected entry so we return the input
