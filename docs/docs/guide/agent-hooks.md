@@ -106,10 +106,10 @@ After installing hooks and restarting your agent, run a command through the agen
 
 ```shell
 # Show all history including agent commands
-atuin search --authors '' -- ''
+atuin search --author '' -- ''
 
 # Show only agent commands
-atuin search --authors '$all-agent' -- ''
+atuin search --author '$all-agent' -- ''
 ```
 
 You can also check the agent's config file directly to confirm the hooks are registered:
