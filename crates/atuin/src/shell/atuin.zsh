@@ -25,18 +25,59 @@ else
     ZSH_AUTOSUGGEST_STRATEGY=("atuin")
 fi
 
-export ATUIN_SESSION=$(atuin uuid)
+if [[ -z "${ATUIN_SESSION:-}" || "${ATUIN_SHLVL:-}" != "$SHLVL" ]]; then
+    export ATUIN_SESSION=$(atuin uuid)
+    export ATUIN_SHLVL=$SHLVL
+fi
 ATUIN_HISTORY_ID=""
+
+__atuin_osc133_command_executed() {
+    [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
+    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return
+
+    printf '\033]133;C\a'
+}
+
+__atuin_osc133_command_finished() {
+    [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
+    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return
+
+    printf '\033]133;D;%s;history_id=%s;session_id=%s\a' "$1" "$ATUIN_HISTORY_ID" "${ATUIN_SESSION:-}"
+}
+
+__atuin_osc133_prompt_start=$'%{\033]133;A;cl=line\a%}'
+__atuin_osc133_prompt_end=$'%{\033]133;B\a%}'
+
+__atuin_osc133_wrap_prompt() {
+    local __atuin_prompt="${PROMPT-}"
+    local __atuin_rprompt="${RPROMPT-}"
+
+    __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_start/}"
+    __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_end/}"
+    __atuin_rprompt="${__atuin_rprompt//$__atuin_osc133_prompt_start/}"
+    __atuin_rprompt="${__atuin_rprompt//$__atuin_osc133_prompt_end/}"
+
+    if [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]]; then
+        PROMPT="${__atuin_osc133_prompt_start}${__atuin_prompt}"
+        RPROMPT="${__atuin_rprompt}${__atuin_osc133_prompt_end}"
+    else
+        PROMPT="$__atuin_prompt"
+        RPROMPT="$__atuin_rprompt"
+    fi
+}
 
 _atuin_preexec() {
     local id
-    id=$(atuin history start -- "$1")
+    id=$(atuin history start -- "$1" 2>/dev/null)
     export ATUIN_HISTORY_ID="$id"
+    __atuin_osc133_command_executed
     __atuin_preexec_time=${EPOCHREALTIME-}
 }
 
 _atuin_precmd() {
     local EXIT="$?" __atuin_precmd_time=${EPOCHREALTIME-}
+
+    __atuin_osc133_wrap_prompt
 
     [[ -z "${ATUIN_HISTORY_ID:-}" ]] && return
 
@@ -45,8 +86,70 @@ _atuin_precmd() {
         printf -v duration %.0f $(((__atuin_precmd_time - __atuin_preexec_time) * 1000000000))
     fi
 
+    __atuin_osc133_command_finished "$EXIT"
     (ATUIN_LOG=error atuin history end --exit $EXIT ${duration:+--duration=$duration} -- $ATUIN_HISTORY_ID &) >/dev/null 2>&1
     export ATUIN_HISTORY_ID=""
+}
+
+# Check if tmux popup is available (tmux >= 3.2)
+__atuin_tmux_popup_check() {
+    [[ -n "${TMUX-}" ]] || return 1
+    [[ "${ATUIN_TMUX_POPUP:-true}" != "false" ]] || return 1
+
+    # https://github.com/tmux/tmux/wiki/FAQ#how-often-is-tmux-released-what-is-the-version-number-scheme
+    local tmux_version
+    tmux_version=$(tmux -V 2>/dev/null | sed -n 's/^[^0-9]*\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p') # Could have used grep...
+    [[ -z "$tmux_version" ]] && return 1
+
+    local m1 m2
+    m1=${tmux_version%%.*}
+    m2=${tmux_version#*.}
+    m2=${m2%%.*}
+    [[ "$m1" =~ ^[0-9]+$ ]] || return 1
+    [[ "$m2" =~ ^[0-9]+$ ]] || m2=0
+    (( m1 > 3 || (m1 == 3 && m2 >= 2) ))
+}
+
+# Use global variable to fix scope issues with traps
+__atuin_popup_tmpdir=""
+__atuin_tmux_popup_cleanup() {
+    [[ -n "$__atuin_popup_tmpdir" && -d "$__atuin_popup_tmpdir" ]] && command rm -rf "$__atuin_popup_tmpdir"
+    __atuin_popup_tmpdir=""
+}
+
+__atuin_search_cmd() {
+    local -a search_args=("$@")
+
+    if __atuin_tmux_popup_check; then
+        __atuin_popup_tmpdir=$(mktemp -d) || return 1
+        local result_file="$__atuin_popup_tmpdir/result"
+
+        trap '__atuin_tmux_popup_cleanup' EXIT HUP INT TERM
+
+        local escaped_query escaped_args
+        escaped_query=$(printf '%s' "$BUFFER" | sed "s/'/'\\\\''/g")
+        escaped_args=""
+        for arg in "${search_args[@]}"; do
+            escaped_args+=" '$(printf '%s' "$arg" | sed "s/'/'\\\\''/g")'"
+        done
+
+        # In the popup, atuin goes to terminal, stderr goes to file
+        local cdir popup_width popup_height
+        cdir=$(pwd)
+        popup_width="${ATUIN_TMUX_POPUP_WIDTH:-80%}" # Keep default value anyways
+        popup_height="${ATUIN_TMUX_POPUP_HEIGHT:-60%}"
+        tmux display-popup -d "$cdir" -w "$popup_width" -h "$popup_height" -E -E -- \
+            sh -c "PATH='$PATH' ATUIN_SESSION='$ATUIN_SESSION' ATUIN_SHELL=zsh ATUIN_LOG=error ATUIN_QUERY='$escaped_query' atuin search $escaped_args -i 2>'$result_file'"
+
+        if [[ -f "$result_file" ]]; then
+            cat "$result_file"
+        fi
+
+        __atuin_tmux_popup_cleanup
+        trap - EXIT HUP INT TERM
+    else
+        ATUIN_SHELL=zsh ATUIN_LOG=error ATUIN_QUERY=$BUFFER atuin search "${search_args[@]}" -i 3>&1 1>&2 2>&3 3>&-
+    fi
 }
 
 _atuin_search() {
@@ -55,14 +158,20 @@ _atuin_search() {
 
     # swap stderr and stdout, so that the tui stuff works
     # TODO: not this
-    local output
+    local output __atuin_status
     # shellcheck disable=SC2048
-    output=$(ATUIN_SHELL_ZSH=t ATUIN_LOG=error ATUIN_QUERY=$BUFFER atuin search $* -i 3>&1 1>&2 2>&3)
+    output=$(__atuin_search_cmd $*)
+    __atuin_status=$?
 
     zle reset-prompt
     # re-enable bracketed paste
     # shellcheck disable=SC2154
     echo -n ${zle_bracketed_paste[1]} >/dev/tty
+
+    if (( __atuin_status != 0 )); then
+        [[ -n $output ]] && print -r -- "$output" >/dev/tty
+        return $__atuin_status
+    fi
 
     if [[ -n $output ]]; then
         RBUFFER=""

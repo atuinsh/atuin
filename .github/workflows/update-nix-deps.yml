@@ -6,11 +6,11 @@ on:
 
 jobs:
   lockfile:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     if: github.repository == 'atuinsh/atuin'
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
       - name: Update flake.lock

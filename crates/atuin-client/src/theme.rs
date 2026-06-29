@@ -1,5 +1,4 @@
 use config::{Config, File as ConfigFile, FileFormat};
-use lazy_static::lazy_static;
 use log;
 use palette::named;
 use serde::{Deserialize, Serialize};
@@ -8,6 +7,7 @@ use std::collections::HashMap;
 use std::error;
 use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use strum_macros;
 
 static DEFAULT_MAX_DEPTH: u8 = 10;
@@ -51,7 +51,7 @@ pub struct ThemeDefinitionConfigBlock {
     pub parent: Option<String>,
 }
 
-use crossterm::style::{Color, ContentStyle};
+use crossterm::style::{Attribute, Attributes, Color, ContentStyle};
 
 // For now, a theme is loaded as a mapping of meanings to colors, but it may be desirable to
 // expand that in the future to general styles, so we populate a Meaning->ContentStyle hashmap.
@@ -133,12 +133,7 @@ impl Theme {
                     *name,
                     StyleFactory::from_fg_string(color).unwrap_or_else(|err| {
                         if debug {
-                            log::warn!(
-                                "Tried to load string as a color unsuccessfully: ({}={}) {}",
-                                name,
-                                color,
-                                err
-                            );
+                            log::warn!("Tried to load string as a color unsuccessfully: ({name}={color}) {err}");
                         }
                         ContentStyle::default()
                     }),
@@ -198,7 +193,7 @@ fn from_string(name: &str) -> Result<Color, String> {
             // For full flexibility, we need to use serde_json, given
             // crossterm's approach.
             serde_json::from_str::<Color>(format!("\"{}\"", &name[1..]).as_str())
-                .map_err(|_| format!("Could not convert color name {} to Crossterm color", name))
+                .map_err(|_| format!("Could not convert color name {name} to Crossterm color"))
         }
         _ => {
             let srgb = named::from_str(name).ok_or("No such color in palette")?;
@@ -233,111 +228,136 @@ impl StyleFactory {
             ..ContentStyle::default()
         }
     }
+
+    fn from_fg_color_and_attributes(color: Color, attributes: Attributes) -> ContentStyle {
+        ContentStyle {
+            foreground_color: Some(color),
+            attributes,
+            ..ContentStyle::default()
+        }
+    }
 }
 
 // Built-in themes. Rather than having extra files added before any theming
 // is available, this gives a couple of basic options, demonstrating the use
 // of themes: autumn and marine
-lazy_static! {
-    static ref ALERT_TYPES: HashMap<log::Level, Meaning> = {
+static ALERT_TYPES: LazyLock<HashMap<log::Level, Meaning>> = LazyLock::new(|| {
+    HashMap::from([
+        (log::Level::Info, Meaning::AlertInfo),
+        (log::Level::Warn, Meaning::AlertWarn),
+        (log::Level::Error, Meaning::AlertError),
+    ])
+});
+
+static MEANING_FALLBACKS: LazyLock<HashMap<Meaning, Meaning>> = LazyLock::new(|| {
+    HashMap::from([
+        (Meaning::Guidance, Meaning::AlertInfo),
+        (Meaning::Annotation, Meaning::AlertInfo),
+        (Meaning::Title, Meaning::Important),
+    ])
+});
+
+static DEFAULT_THEME: LazyLock<Theme> = LazyLock::new(|| {
+    Theme::new(
+        "default".to_string(),
+        None,
         HashMap::from([
-            (log::Level::Info, Meaning::AlertInfo),
-            (log::Level::Warn, Meaning::AlertWarn),
-            (log::Level::Error, Meaning::AlertError),
-        ])
-    };
-    static ref MEANING_FALLBACKS: HashMap<Meaning, Meaning> = {
-        HashMap::from([
-            (Meaning::Guidance, Meaning::AlertInfo),
-            (Meaning::Annotation, Meaning::AlertInfo),
-            (Meaning::Title, Meaning::Important),
-        ])
-    };
-    static ref DEFAULT_THEME: Theme = {
-        Theme::new(
-            "default".to_string(),
-            None,
+            (
+                Meaning::AlertError,
+                StyleFactory::from_fg_color(Color::DarkRed),
+            ),
+            (
+                Meaning::AlertWarn,
+                StyleFactory::from_fg_color(Color::DarkYellow),
+            ),
+            (
+                Meaning::AlertInfo,
+                StyleFactory::from_fg_color(Color::DarkGreen),
+            ),
+            (
+                Meaning::Annotation,
+                StyleFactory::from_fg_color(Color::DarkGrey),
+            ),
+            (
+                Meaning::Guidance,
+                StyleFactory::from_fg_color(Color::DarkBlue),
+            ),
+            (
+                Meaning::Important,
+                StyleFactory::from_fg_color_and_attributes(
+                    Color::White,
+                    Attributes::from(Attribute::Bold),
+                ),
+            ),
+            (Meaning::Muted, StyleFactory::from_fg_color(Color::Grey)),
+            (Meaning::Base, ContentStyle::default()),
+        ]),
+    )
+});
+
+static BUILTIN_THEMES: LazyLock<HashMap<&'static str, Theme>> = LazyLock::new(|| {
+    HashMap::from([
+        ("default", HashMap::new()),
+        (
+            "(none)",
+            HashMap::from([
+                (Meaning::AlertError, ContentStyle::default()),
+                (Meaning::AlertWarn, ContentStyle::default()),
+                (Meaning::AlertInfo, ContentStyle::default()),
+                (Meaning::Annotation, ContentStyle::default()),
+                (Meaning::Guidance, ContentStyle::default()),
+                (Meaning::Important, ContentStyle::default()),
+                (Meaning::Muted, ContentStyle::default()),
+                (Meaning::Base, ContentStyle::default()),
+            ]),
+        ),
+        (
+            "autumn",
             HashMap::from([
                 (
                     Meaning::AlertError,
-                    StyleFactory::from_fg_color(Color::DarkRed),
+                    StyleFactory::known_fg_string("saddlebrown"),
                 ),
                 (
                     Meaning::AlertWarn,
-                    StyleFactory::from_fg_color(Color::DarkYellow),
+                    StyleFactory::known_fg_string("darkorange"),
                 ),
-                (
-                    Meaning::AlertInfo,
-                    StyleFactory::from_fg_color(Color::DarkGreen),
-                ),
+                (Meaning::AlertInfo, StyleFactory::known_fg_string("gold")),
                 (
                     Meaning::Annotation,
                     StyleFactory::from_fg_color(Color::DarkGrey),
                 ),
-                (
-                    Meaning::Guidance,
-                    StyleFactory::from_fg_color(Color::DarkBlue),
-                ),
-                (
-                    Meaning::Important,
-                    StyleFactory::from_fg_color(Color::White),
-                ),
-                (Meaning::Muted, StyleFactory::from_fg_color(Color::Grey)),
-                (Meaning::Base, ContentStyle::default()),
+                (Meaning::Guidance, StyleFactory::known_fg_string("brown")),
             ]),
-        )
-    };
-    static ref BUILTIN_THEMES: HashMap<&'static str, Theme> = {
-        HashMap::from([
-            ("default", HashMap::new()),
-            (
-                "autumn",
-                HashMap::from([
-                    (
-                        Meaning::AlertError,
-                        StyleFactory::known_fg_string("saddlebrown"),
-                    ),
-                    (
-                        Meaning::AlertWarn,
-                        StyleFactory::known_fg_string("darkorange"),
-                    ),
-                    (Meaning::AlertInfo, StyleFactory::known_fg_string("gold")),
-                    (
-                        Meaning::Annotation,
-                        StyleFactory::from_fg_color(Color::DarkGrey),
-                    ),
-                    (Meaning::Guidance, StyleFactory::known_fg_string("brown")),
-                ]),
-            ),
-            (
-                "marine",
-                HashMap::from([
-                    (
-                        Meaning::AlertError,
-                        StyleFactory::known_fg_string("yellowgreen"),
-                    ),
-                    (Meaning::AlertWarn, StyleFactory::known_fg_string("cyan")),
-                    (
-                        Meaning::AlertInfo,
-                        StyleFactory::known_fg_string("turquoise"),
-                    ),
-                    (
-                        Meaning::Annotation,
-                        StyleFactory::known_fg_string("steelblue"),
-                    ),
-                    (
-                        Meaning::Base,
-                        StyleFactory::known_fg_string("lightsteelblue"),
-                    ),
-                    (Meaning::Guidance, StyleFactory::known_fg_string("teal")),
-                ]),
-            ),
-        ])
-        .iter()
-        .map(|(name, theme)| (*name, Theme::from_map(name.to_string(), None, theme)))
-        .collect()
-    };
-}
+        ),
+        (
+            "marine",
+            HashMap::from([
+                (
+                    Meaning::AlertError,
+                    StyleFactory::known_fg_string("yellowgreen"),
+                ),
+                (Meaning::AlertWarn, StyleFactory::known_fg_string("cyan")),
+                (
+                    Meaning::AlertInfo,
+                    StyleFactory::known_fg_string("turquoise"),
+                ),
+                (
+                    Meaning::Annotation,
+                    StyleFactory::known_fg_string("steelblue"),
+                ),
+                (
+                    Meaning::Base,
+                    StyleFactory::known_fg_string("lightsteelblue"),
+                ),
+                (Meaning::Guidance, StyleFactory::known_fg_string("teal")),
+            ]),
+        ),
+    ])
+    .iter()
+    .map(|(name, theme)| (*name, Theme::from_map(name.to_string(), None, theme)))
+    .collect()
+});
 
 // To avoid themes being repeatedly loaded, we store them in a theme manager
 pub struct ThemeManager {
@@ -376,13 +396,18 @@ impl ThemeManager {
             PathBuf::from(p)
         } else {
             let config_dir = atuin_common::utils::config_dir();
-            let mut theme_file = PathBuf::new();
-            theme_file.push(config_dir);
+            let mut theme_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
+                PathBuf::from(p)
+            } else {
+                let mut theme_file = PathBuf::new();
+                theme_file.push(config_dir);
+                theme_file
+            };
             theme_file.push("themes");
             theme_file
         };
 
-        let theme_toml = format!["{}.toml", name];
+        let theme_toml = format!["{name}.toml"];
         theme_file.push(theme_toml);
 
         let mut config_builder = Config::builder();
@@ -430,7 +455,7 @@ impl ThemeManager {
                 }
                 Some(self.load_theme(parent_name.as_str(), Some(max_depth - 1)))
             }
-            None => None,
+            None => Some(self.load_theme("default", Some(max_depth - 1))),
         };
 
         if debug && name != theme_config.theme.name {
@@ -460,8 +485,8 @@ impl ThemeManager {
             None => match self.load_theme_from_file(name, max_depth.unwrap_or(DEFAULT_MAX_DEPTH)) {
                 Ok(theme) => theme,
                 Err(err) => {
-                    log::warn!("Could not load theme {}: {}", name, err);
-                    built_ins.get("default").unwrap()
+                    log::warn!("Could not load theme {name}: {err}");
+                    built_ins.get("(none)").unwrap()
                 }
             },
         }
@@ -669,7 +694,8 @@ mod theme_tests {
 
         testing_logger::validate(|captured_logs| assert_eq!(captured_logs.len(), 0));
 
-        // If the parent is not found, we end up with the base theme colors
+        // If the parent is not found, we end up with the no theme colors or styling
+        // as this is considered a (soft) error state.
         let nunsolarized = Config::builder()
             .add_source(ConfigFile::from_str(
                 "
@@ -692,7 +718,7 @@ mod theme_tests {
             nunsolarized_theme
                 .as_style(Meaning::Guidance)
                 .foreground_color,
-            Some(Color::DarkBlue)
+            None
         );
 
         testing_logger::validate(|captured_logs| {
@@ -797,8 +823,7 @@ mod theme_tests {
                 assert_eq!(
                     from_string(inp),
                     Err(format!(
-                        "Could not convert color name {} to Crossterm color",
-                        inp
+                        "Could not convert color name {inp} to Crossterm color"
                     ))
                 );
             });

@@ -1,7 +1,6 @@
 use crate::store::script::Script;
 use eyre::Result;
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::process::Stdio;
 use tempfile::NamedTempFile;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
@@ -13,11 +12,11 @@ use tracing::debug;
 pub fn build_executable_script(script: String, shebang: String) -> String {
     if shebang.is_empty() {
         // Default to bash if no shebang is provided
-        format!("#!/usr/bin/env bash\n{}", script)
+        format!("#!/usr/bin/env bash\n{script}")
     } else if script.starts_with("#!") {
-        format!("{}\n{}", shebang, script)
+        format!("{shebang}\n{script}")
     } else {
-        format!("#!{}\n{}", shebang, script)
+        format!("#!{shebang}\n{script}")
     }
 }
 
@@ -41,7 +40,7 @@ impl ScriptSession {
     }
 }
 
-fn setup_template(script: &Script) -> Result<minijinja::Environment> {
+fn setup_template(script: &Script) -> Result<minijinja::Environment<'_>> {
     let mut env = minijinja::Environment::new();
     env.set_trim_blocks(true);
     env.add_template("script", script.script.as_str())?;
@@ -98,9 +97,9 @@ pub async fn execute_script_interactive(
     {
         debug!("making script executable");
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&temp_path)?.permissions();
+        let mut perms = std::fs::metadata(&temp_path)?.permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&temp_path, perms)?;
+        std::fs::set_permissions(&temp_path, perms)?;
     }
 
     // Store the temp_file to prevent it from being dropped
@@ -149,7 +148,7 @@ pub async fn execute_script_interactive(
     let mut child = match child_result {
         Ok(child) => child,
         Err(e) => {
-            return Err(format!("Failed to execute script: {}", e).into());
+            return Err(format!("Failed to execute script: {e}").into());
         }
     };
 
@@ -176,11 +175,11 @@ pub async fn execute_script_interactive(
     tokio::spawn(async move {
         while let Some(input) = stdin_rx.recv().await {
             if let Err(e) = stdin.write_all(input.as_bytes()).await {
-                eprintln!("Error writing to stdin: {}", e);
+                eprintln!("Error writing to stdin: {e}");
                 break;
             }
             if let Err(e) = stdin.flush().await {
-                eprintln!("Error flushing stdin: {}", e);
+                eprintln!("Error flushing stdin: {e}");
                 break;
             }
         }
@@ -199,16 +198,16 @@ pub async fn execute_script_interactive(
                 Ok(0) => break, // End of stdout
                 Ok(n) => {
                     if let Err(e) = stdout_writer.write_all(&buffer[0..n]).await {
-                        eprintln!("Error writing to stdout: {}", e);
+                        eprintln!("Error writing to stdout: {e}");
                         break;
                     }
                     if let Err(e) = stdout_writer.flush().await {
-                        eprintln!("Error flushing stdout: {}", e);
+                        eprintln!("Error flushing stdout: {e}");
                         break;
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error reading from process stdout: {}", e);
+                    eprintln!("Error reading from process stdout: {e}");
                     break;
                 }
             }
@@ -227,16 +226,16 @@ pub async fn execute_script_interactive(
                 Ok(0) => break, // End of stderr
                 Ok(n) => {
                     if let Err(e) = stderr_writer.write_all(&buffer[0..n]).await {
-                        eprintln!("Error writing to stderr: {}", e);
+                        eprintln!("Error writing to stderr: {e}");
                         break;
                     }
                     if let Err(e) = stderr_writer.flush().await {
-                        eprintln!("Error flushing stderr: {}", e);
+                        eprintln!("Error flushing stderr: {e}");
                         break;
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error reading from process stderr: {}", e);
+                    eprintln!("Error reading from process stderr: {e}");
                     break;
                 }
             }
@@ -257,7 +256,7 @@ pub async fn execute_script_interactive(
                 status
             }
             Err(e) => {
-                eprintln!("Error waiting for child process: {}", e);
+                eprintln!("Error waiting for child process: {e}");
                 // Send a default error code
                 let _ = exit_code_tx.send(-1).await;
                 return;
@@ -266,11 +265,11 @@ pub async fn execute_script_interactive(
 
         // Wait for stdout/stderr tasks to complete
         if let Err(e) = stdout_handle.await {
-            eprintln!("Error joining stdout task: {}", e);
+            eprintln!("Error joining stdout task: {e}");
         }
 
         if let Err(e) = stderr_handle.await {
-            eprintln!("Error joining stderr task: {}", e);
+            eprintln!("Error joining stderr task: {e}");
         }
 
         // Send the exit code

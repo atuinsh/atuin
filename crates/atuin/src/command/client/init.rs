@@ -1,12 +1,17 @@
 use std::path::PathBuf;
 
-use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_client::{
+    encryption,
+    record::sqlite_store::SqliteStore,
+    settings::{Settings, Tmux},
+};
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
 use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr};
 
 mod bash;
 mod fish;
+mod powershell;
 mod xonsh;
 mod zsh;
 
@@ -21,9 +26,15 @@ pub struct Cmd {
     /// Disable the binding of the Up Arrow key to atuin
     #[clap(long)]
     disable_up_arrow: bool,
+
+    /// Disable the binding of ? to Atuin AI
+    #[clap(long)]
+    disable_ai: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum, Debug)]
+#[value(rename_all = "lower")]
+#[allow(clippy::enum_variant_names, clippy::doc_markdown)]
 pub enum Shell {
     /// Zsh setup
     Zsh,
@@ -35,11 +46,15 @@ pub enum Shell {
     Nu,
     /// Xonsh setup
     Xonsh,
+    /// PowerShell setup
+    PowerShell,
 }
 
 impl Cmd {
-    fn init_nu(&self) {
+    fn init_nu(&self, _tmux: &Tmux) {
         let full = include_str!("../../shell/atuin.nu");
+
+        // TODO: tmux popup for Nu
         println!("{full}");
 
         if std::env::var("ATUIN_NOBIND").is_err() {
@@ -83,22 +98,29 @@ $env.config = (
         }
     }
 
-    fn static_init(&self) {
+    fn static_init(&self, settings: &Settings) {
+        let tmux = &settings.tmux;
+
+        let disable_ai = self.disable_ai || matches!(settings.ai.enabled, Some(false));
+
         match self.shell {
             Shell::Zsh => {
-                zsh::init_static(self.disable_up_arrow, self.disable_ctrl_r);
+                zsh::init_static(self.disable_up_arrow, self.disable_ctrl_r, disable_ai, tmux);
             }
             Shell::Bash => {
-                bash::init_static(self.disable_up_arrow, self.disable_ctrl_r);
+                bash::init_static(self.disable_up_arrow, self.disable_ctrl_r, disable_ai, tmux);
             }
             Shell::Fish => {
-                fish::init_static(self.disable_up_arrow, self.disable_ctrl_r);
+                fish::init_static(self.disable_up_arrow, self.disable_ctrl_r, disable_ai, tmux);
             }
             Shell::Nu => {
-                self.init_nu();
+                self.init_nu(tmux);
             }
             Shell::Xonsh => {
-                xonsh::init_static(self.disable_up_arrow, self.disable_ctrl_r);
+                xonsh::init_static(self.disable_up_arrow, self.disable_ctrl_r, tmux);
+            }
+            Shell::PowerShell => {
+                powershell::init_static(self.disable_up_arrow, self.disable_ctrl_r, tmux);
             }
         }
     }
@@ -110,10 +132,12 @@ $env.config = (
         let encryption_key: [u8; 32] = encryption::load_key(settings)
             .context("could not load encryption key")?
             .into();
-        let host_id = Settings::host_id().expect("failed to get host_id");
+        let host_id = Settings::host_id().await?;
 
         let alias_store = AliasStore::new(sqlite_store.clone(), host_id, encryption_key);
         let var_store = VarStore::new(sqlite_store.clone(), host_id, encryption_key);
+
+        let disable_ai = self.disable_ai || matches!(settings.ai.enabled, Some(false));
 
         match self.shell {
             Shell::Zsh => {
@@ -122,6 +146,8 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    disable_ai,
+                    &settings.tmux,
                 )
                 .await?;
             }
@@ -131,6 +157,8 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    disable_ai,
+                    &settings.tmux,
                 )
                 .await?;
             }
@@ -140,16 +168,29 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    disable_ai,
+                    &settings.tmux,
                 )
                 .await?;
             }
-            Shell::Nu => self.init_nu(),
+            Shell::Nu => self.init_nu(&settings.tmux),
             Shell::Xonsh => {
                 xonsh::init(
                     alias_store,
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    &settings.tmux,
+                )
+                .await?;
+            }
+            Shell::PowerShell => {
+                powershell::init(
+                    alias_store,
+                    var_store,
+                    self.disable_up_arrow,
+                    self.disable_ctrl_r,
+                    &settings.tmux,
                 )
                 .await?;
             }
@@ -169,7 +210,7 @@ $env.config = (
         if settings.dotfiles.enabled {
             self.dotfiles_init(settings).await?;
         } else {
-            self.static_init();
+            self.static_init(settings);
         }
 
         Ok(())

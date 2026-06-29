@@ -1,3 +1,5 @@
+use std::io::{self, IsTerminal, Read};
+
 use clap::Subcommand;
 use eyre::{Context, Result, eyre};
 
@@ -13,8 +15,8 @@ pub enum Cmd {
         #[arg(long, short)]
         key: String,
 
-        /// Value to store
-        value: String,
+        /// Value to store (reads from stdin if not provided)
+        value: Option<String>,
 
         /// Namespace for the key-value pair
         #[arg(long, short, default_value = "default")]
@@ -65,7 +67,7 @@ impl Cmd {
             .context("could not load encryption key")?
             .into();
 
-        let host_id = Settings::host_id().expect("failed to get host_id");
+        let host_id = Settings::host_id().await?;
 
         let kv_db = atuin_kv::database::Database::new(settings.kv.db_path.clone(), 1.0).await?;
         let kv_store = KvStore::new(store.clone(), kv_db, host_id, encryption_key);
@@ -80,7 +82,21 @@ impl Cmd {
                     return Err(eyre!("namespace cannot be empty"));
                 }
 
-                kv_store.set(namespace, key, value).await
+                let value = if let Some(v) = value {
+                    v.clone()
+                } else if !io::stdin().is_terminal() {
+                    let mut buf = String::new();
+                    io::stdin()
+                        .read_to_string(&mut buf)
+                        .context("failed to read value from stdin")?;
+                    buf
+                } else {
+                    return Err(eyre!(
+                        "no value provided. Pass as an argument or pipe via stdin"
+                    ));
+                };
+
+                kv_store.set(namespace, key, &value).await
             }
 
             Self::Delete { keys, namespace } => kv_store.delete(namespace, keys).await,

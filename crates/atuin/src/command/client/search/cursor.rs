@@ -151,6 +151,68 @@ impl Cursor {
         self.index = word_jumper.get_prev_word_pos(&self.source, self.index);
     }
 
+    /// Move cursor to the end of the current/next word (vim `e` motion).
+    ///
+    /// If cursor is in the middle of a word, moves to the end of that word.
+    /// If cursor is at the end of a word (or on whitespace), moves to the
+    /// end of the next word.
+    pub fn word_end(&mut self, word_chars: &str) {
+        let len = self.source.len();
+        if self.index >= len {
+            return;
+        }
+
+        let chars: Vec<char> = self.source.chars().collect();
+        let mut char_idx = self.source[..self.index].chars().count();
+
+        if char_idx >= chars.len() {
+            return;
+        }
+
+        let current = chars[char_idx];
+
+        // Check if we're at a word boundary (end of current word or on whitespace)
+        let at_word_boundary = current.is_whitespace() || char_idx + 1 >= chars.len() || {
+            let next = chars[char_idx + 1];
+            next.is_whitespace() || (word_chars.contains(current) != word_chars.contains(next))
+        };
+
+        // If at word boundary, advance past it and skip whitespace to find next word
+        if at_word_boundary {
+            char_idx += 1;
+            while char_idx < chars.len() && chars[char_idx].is_whitespace() {
+                char_idx += 1;
+            }
+        }
+
+        // If we've gone past end, go to end of string
+        if char_idx >= chars.len() {
+            self.index = len;
+            return;
+        }
+
+        // Find end of word: advance until next char is whitespace or different word type
+        let in_word_chars = word_chars.contains(chars[char_idx]);
+        while char_idx < chars.len() {
+            let next_idx = char_idx + 1;
+            if next_idx >= chars.len() {
+                // At last char, move past it
+                char_idx = next_idx;
+                break;
+            }
+            let next_c = chars[next_idx];
+            if next_c.is_whitespace() || (word_chars.contains(next_c) != in_word_chars) {
+                // Next char is start of new word/whitespace, so current char is end
+                char_idx = next_idx;
+                break;
+            }
+            char_idx += 1;
+        }
+
+        // Convert char index back to byte index
+        self.index = chars.iter().take(char_idx).map(|c| c.len_utf8()).sum();
+    }
+
     pub fn insert(&mut self, c: char) {
         self.source.insert(self.index, c);
         self.index += c.len_utf8();
@@ -190,6 +252,16 @@ impl Cursor {
     pub fn clear(&mut self) {
         self.source.clear();
         self.index = 0;
+    }
+
+    pub fn clear_to_start(&mut self) {
+        self.source.replace_range(..self.index, "");
+        self.index = 0;
+    }
+
+    pub fn clear_to_end(&mut self) {
+        self.source.replace_range(self.index.., "");
+        self.index = self.source.len();
     }
 
     pub fn end(&mut self) {

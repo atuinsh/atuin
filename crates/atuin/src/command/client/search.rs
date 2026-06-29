@@ -1,4 +1,5 @@
-use std::io::{IsTerminal as _, stderr};
+use std::fs::File;
+use std::io::{IsTerminal as _, Write, stderr, stdout};
 
 use atuin_common::utils::{self, Escapable as _};
 use clap::Parser;
@@ -22,6 +23,7 @@ mod engines;
 mod history_list;
 mod inspector;
 mod interactive;
+pub mod keybindings;
 
 pub use duration::format_duration_into;
 
@@ -84,6 +86,7 @@ pub struct Cmd {
     #[arg(long)]
     human: bool,
 
+    #[arg(allow_hyphen_values = true)]
     query: Option<Vec<String>>,
 
     /// Show only the text of the command
@@ -128,12 +131,26 @@ pub struct Cmd {
     #[arg(long = "inline-height")]
     inline_height: Option<u16>,
 
+    /// Filter by author. Supports $all-user (non-agents), $all-agent, or literal names.
+    /// Can be specified multiple times.
+    #[arg(long)]
+    author: Option<Vec<String>>,
+
     /// Include duplicate commands in the output (non-interactive only)
     #[arg(long)]
     include_duplicates: bool,
+
+    /// File name to write the result to (hidden from help as this is meant to be used from a script)
+    #[arg(long = "result-file", hide = true)]
+    result_file: Option<String>,
 }
 
 impl Cmd {
+    /// Returns true if this search command will run in interactive (TUI) mode
+    pub fn is_interactive(&self) -> bool {
+        self.interactive
+    }
+
     // clippy: please write this instead
     // clippy: now it has too many lines
     // me: I'll do it later OKAY
@@ -145,20 +162,17 @@ impl Cmd {
         store: SqliteStore,
         theme: &Theme,
     ) -> Result<()> {
-        let query = self.query.map_or_else(
-            || {
-                std::env::var("ATUIN_QUERY").map_or_else(
-                    |_| vec![],
-                    |query| {
-                        query
-                            .split(' ')
-                            .map(std::string::ToString::to_string)
-                            .collect()
-                    },
-                )
-            },
-            |query| query,
-        );
+        let query = self.query.unwrap_or_else(|| {
+            std::env::var("ATUIN_QUERY").map_or_else(
+                |_| vec![],
+                |query| {
+                    query
+                        .split(' ')
+                        .map(std::string::ToString::to_string)
+                        .collect()
+                },
+            )
+        });
 
         if (self.delete_it_all || self.delete) && self.limit.is_some() {
             // Because of how deletion is implemented, it will always delete all matches
@@ -208,12 +222,21 @@ impl Cmd {
 
         let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
 
-        let host_id = Settings::host_id().expect("failed to get host_id");
+        let host_id = Settings::host_id().await?;
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         if self.interactive {
             let item = interactive::history(&query, settings, db, &history_store, theme).await?;
-            if stderr().is_terminal() {
+
+            if let Some(result_file) = self.result_file {
+                let mut file = File::create(result_file)?;
+                write!(file, "{item}")?;
+            } else if !stdout().is_terminal() {
+                // stdout is not a terminal - likely command substitution like VAR=$(atuin search -i)
+                // Write to stdout so it gets captured. This requires some care on Windows, as the current
+                // console code page or `[Console]::OutputEncoding` on PowerShell may be different from UTF-8.
+                println!("{item}");
+            } else if stderr().is_terminal() {
                 eprintln!("{}", item.escape_control());
             } else {
                 eprintln!("{item}");
@@ -230,6 +253,7 @@ impl Cmd {
                 offset: self.offset,
                 reverse: self.reverse,
                 include_duplicates: self.include_duplicates,
+                authors: self.author.clone().unwrap_or_default(),
             };
 
             let mut entries =
@@ -247,14 +271,10 @@ impl Cmd {
                 while !entries.is_empty() {
                     for entry in &entries {
                         eprintln!("deleting {}", entry.id);
-
-                        if settings.sync.records {
-                            let (id, _) = history_store.delete(entry.id.clone()).await?;
-                            history_store.incremental_build(&db, &[id]).await?;
-                        } else {
-                            db.delete(entry.clone()).await?;
-                        }
                     }
+
+                    let ids = history_store.delete_entries(entries).await?;
+                    history_store.incremental_build(&db, &ids).await?;
 
                     entries =
                         run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
@@ -298,14 +318,14 @@ async fn run_non_interactive(
         filter_options.cwd
     };
 
-    let context = current_context();
+    let context = current_context().await?;
 
     let opt_filter = OptFilters {
         cwd: dir.clone(),
         ..filter_options
     };
 
-    let filter_mode = settings.default_filter_mode();
+    let filter_mode = settings.default_filter_mode(context.git_root.is_some());
 
     let results = db
         .search(
@@ -318,4 +338,38 @@ async fn run_non_interactive(
         .await?;
 
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cmd;
+    use clap::Parser;
+
+    #[test]
+    fn search_for_triple_dash() {
+        // Issue #3028: searching for `---` should not be treated as a CLI flag
+        let cmd = Cmd::try_parse_from(["search", "---"]);
+        assert!(cmd.is_ok(), "Failed to parse '---' as a query: {cmd:?}");
+        let cmd = cmd.unwrap();
+        assert_eq!(cmd.query, Some(vec!["---".to_string()]));
+    }
+
+    #[test]
+    fn search_for_double_dash_value() {
+        // Searching for strings starting with -- should also work
+        let cmd = Cmd::try_parse_from(["search", "--", "--foo"]);
+        assert!(cmd.is_ok());
+        let cmd = cmd.unwrap();
+        assert_eq!(cmd.query, Some(vec!["--foo".to_string()]));
+    }
+
+    #[test]
+    fn search_author_cli_flag() {
+        let cmd =
+            Cmd::try_parse_from(["search", "--author", "codex", "--author", "ellie"]).unwrap();
+        assert_eq!(
+            cmd.author,
+            Some(vec!["codex".to_string(), "ellie".to_string()])
+        );
+    }
 }

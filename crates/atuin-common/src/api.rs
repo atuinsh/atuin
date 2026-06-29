@@ -1,17 +1,15 @@
-use lazy_static::lazy_static;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::sync::LazyLock;
 use time::OffsetDateTime;
 
 // the usage of X- has been deprecated for quite along time, it turns out
 pub static ATUIN_HEADER_VERSION: &str = "Atuin-Version";
 pub static ATUIN_CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-lazy_static! {
-    pub static ref ATUIN_VERSION: Version =
-        Version::parse(ATUIN_CARGO_VERSION).expect("failed to parse self semver");
-}
+pub static ATUIN_VERSION: LazyLock<Version> =
+    LazyLock::new(|| Version::parse(ATUIN_CARGO_VERSION).expect("failed to parse self semver"));
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserResponse {
@@ -28,26 +26,14 @@ pub struct RegisterRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RegisterResponse {
     pub session: String,
+    /// Auth type: "hub" for Hub API tokens, "cli" for legacy CLI session tokens.
+    /// Old servers that don't return this field will deserialize as None.
+    #[serde(default)]
+    pub auth: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DeleteUserResponse {}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SendVerificationResponse {
-    pub email_sent: bool,
-    pub verified: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct VerificationTokenRequest {
-    pub token: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct VerificationTokenResponse {
-    pub verified: bool,
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChangePasswordRequest {
@@ -67,6 +53,10 @@ pub struct LoginRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoginResponse {
     pub session: String,
+    /// Auth type: "hub" for Hub API tokens, "cli" for legacy CLI session tokens.
+    /// Old servers that don't return this field will deserialize as None.
+    #[serde(default)]
+    pub auth: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -106,7 +96,6 @@ pub struct ErrorResponse<'a> {
 pub struct IndexResponse {
     pub homage: String,
     pub version: String,
-    pub total_history: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -135,4 +124,21 @@ pub struct MessageResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MeResponse {
     pub username: String,
+}
+
+// Hub CLI authentication types
+
+/// Response from POST /auth/cli/code - generates a code for CLI auth
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CliCodeResponse {
+    pub code: String,
+}
+
+/// Response from GET /auth/cli/verify?code=<code> - polls for authorization
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CliVerifyResponse {
+    /// Session token, present only when authorization is complete
+    pub token: Option<String>,
+    pub success: Option<bool>,
+    pub error: Option<String>,
 }

@@ -79,25 +79,19 @@ fn split_at_pipe(command: &str) -> Vec<&str> {
     while let Some((i, c)) = graphemes.next() {
         let current = i;
         match c {
-            "\"" => {
-                if command[start..current] != *"\"" {
-                    quoted = !quoted;
-                }
+            "\"" if command[start..current] != *"\"" => {
+                quoted = !quoted;
             }
-            "'" => {
-                if command[start..current] != *"'" {
-                    quoted = !quoted;
-                }
+            "'" if command[start..current] != *"'" => {
+                quoted = !quoted;
             }
-            "\\" => if graphemes.next().is_some() {},
-            "|" => {
-                if !quoted {
-                    if current > start && command[start..].starts_with('|') {
-                        start += 1;
-                    }
-                    result.push(&command[start..current]);
-                    start = current;
+            "\\" if graphemes.next().is_some() => {}
+            "|" if !quoted => {
+                if current > start && command[start..].starts_with('|') {
+                    start += 1;
                 }
+                result.push(&command[start..current]);
+                start = current;
             }
             _ => {}
         }
@@ -324,7 +318,7 @@ mod tests {
             .into();
 
         let stats = compute(&settings, &[history], 10, 1).expect("failed to compute stats");
-        assert_eq!(stats.top.get(0).unwrap().0, vec!["echo"]);
+        assert_eq!(stats.top.first().unwrap().0, vec!["echo"]);
     }
 
     #[test]

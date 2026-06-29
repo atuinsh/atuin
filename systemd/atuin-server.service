@@ -4,7 +4,7 @@ After=network-online.target
 Wants=network-online.target systemd-networkd-wait-online.service
 
 [Service]
-ExecStart=atuin server start
+ExecStart=atuin-server start
 Restart=on-failure
 User=atuin
 Group=atuin

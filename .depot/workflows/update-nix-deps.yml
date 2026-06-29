@@ -1,0 +1,25 @@
+# Depot CI Migration
+# Source: .github/workflows/update-nix-deps.yml
+#
+# No changes were necessary.
+
+name: Update Nix Deps
+on:
+  workflow_dispatch: # allows manual triggering
+  schedule:
+    - cron: '0 0 1 * *' # runs monthly on the first day of the month at 00:00
+jobs:
+  lockfile:
+    runs-on: depot-ubuntu-24.04
+    if: github.repository == 'atuinsh/atuin'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+      - name: Update flake.lock
+        uses: DeterminateSystems/update-flake-lock@main
+        with:
+          pr-title: "chore(deps): update flake.lock"
+          pr-labels: |
+            dependencies

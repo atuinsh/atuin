@@ -11,13 +11,13 @@ use reqwest::{
 use atuin_common::{
     api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION},
     record::{EncryptedData, HostId, Record, RecordIdx},
+    tls::ensure_crypto_provider,
 };
 use atuin_common::{
     api::{
         AddHistoryRequest, ChangePasswordRequest, CountResponse, DeleteHistoryRequest,
-        ErrorResponse, LoginRequest, LoginResponse, MeResponse, RegisterResponse,
-        SendVerificationResponse, StatusResponse, SyncHistoryResponse, VerificationTokenRequest,
-        VerificationTokenResponse,
+        ErrorResponse, LoginRequest, LoginResponse, MeResponse, RegisterResponse, StatusResponse,
+        SyncHistoryResponse,
     },
     record::RecordStatus,
 };
@@ -30,6 +30,32 @@ use crate::{history::History, sync::hash_str, utils::get_host_user};
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
+/// Authentication token for sync API requests.
+///
+/// The sync API supports two authentication methods:
+/// - `Bearer`: Hub API tokens (for users authenticated via Atuin Hub)
+/// - `Token`: Legacy CLI session tokens (for users registered via CLI or self-hosted)
+///
+/// When both are available, Hub tokens are preferred as they provide unified
+/// authentication across CLI and Hub features.
+#[derive(Debug, Clone)]
+pub enum AuthToken {
+    /// Hub API token, used with "Bearer {token}" header
+    Bearer(String),
+    /// Legacy CLI session token, used with "Token {token}" header
+    Token(String),
+}
+
+impl AuthToken {
+    /// Format the token as an Authorization header value
+    fn to_header_value(&self) -> String {
+        match self {
+            AuthToken::Bearer(token) => format!("Bearer {token}"),
+            AuthToken::Token(token) => format!("Token {token}"),
+        }
+    }
+}
+
 pub struct Client<'a> {
     sync_addr: &'a str,
     client: reqwest::Client,
@@ -41,7 +67,7 @@ fn make_url(address: &str, path: &str) -> Result<String> {
     let address = if address.ends_with("/") {
         address
     } else {
-        &format!("{}/", address)
+        &format!("{address}/")
     };
 
     // passing a path with a leading `/` will cause `join()` to replace the entire URL path
@@ -60,6 +86,7 @@ pub async fn register(
     email: &str,
     password: &str,
 ) -> Result<RegisterResponse> {
+    ensure_crypto_provider();
     let mut map = HashMap::new();
     map.insert("username", username);
     map.insert("email", email);
@@ -92,6 +119,7 @@ pub async fn register(
 }
 
 pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
+    ensure_crypto_provider();
     let url = make_url(address, "/login")?;
     let client = reqwest::Client::new();
 
@@ -115,6 +143,7 @@ pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
 pub async fn latest_version() -> Result<Version> {
     use atuin_common::api::IndexResponse;
 
+    ensure_crypto_provider();
     let url = "https://api.atuin.sh";
     let client = reqwest::Client::new();
 
@@ -148,8 +177,8 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
         println!(
             "Atuin version mismatch! In order to successfully sync, the server needs to run a newer version of Atuin"
         );
-        println!("Client: {}", ATUIN_CARGO_VERSION);
-        println!("Server: {}", version);
+        println!("Client: {ATUIN_CARGO_VERSION}");
+        println!("Server: {version}");
 
         return Ok(false);
     }
@@ -159,6 +188,7 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
 
 async fn handle_resp_error(resp: Response) -> Result<Response> {
     let status = resp.status();
+    let url = resp.url().to_string();
 
     if status == StatusCode::SERVICE_UNAVAILABLE {
         bail!(
@@ -175,16 +205,16 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
             let reason = error.reason;
 
             if status.is_client_error() {
-                bail!("Invalid request to the service: {status} - {reason}.")
+                bail!("Invalid request to the service at {url}, {status} - {reason}.")
             }
 
             bail!(
-                "There was an error with the atuin sync service, server error {status}: {reason}.\nIf the problem persists, contact the host"
+                "There was an error with the atuin sync service at {url}, server error {status}: {reason}.\nIf the problem persists, contact the host"
             )
         }
 
         bail!(
-            "There was an error with the atuin sync service: Status {status:?}.\nIf the problem persists, contact the host"
+            "There was an error with the atuin sync service at {url}, Status {status:?}.\nIf the problem persists, contact the host"
         )
     }
 
@@ -194,12 +224,13 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
 impl<'a> Client<'a> {
     pub fn new(
         sync_addr: &'a str,
-        session_token: &str,
+        auth: AuthToken,
         connect_timeout: u64,
         timeout: u64,
     ) -> Result<Self> {
+        ensure_crypto_provider();
         let mut headers = HeaderMap::new();
-        headers.insert(AUTHORIZATION, format!("Token {session_token}").parse()?);
+        headers.insert(AUTHORIZATION, auth.to_header_value().parse()?);
 
         // used for semver server check
         headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
@@ -346,12 +377,7 @@ impl<'a> Client<'a> {
         start: RecordIdx,
         count: u64,
     ) -> Result<Vec<Record<EncryptedData>>> {
-        debug!(
-            "fetching record/s from host {}/{}/{}",
-            host.0.to_string(),
-            tag,
-            start
-        );
+        debug!("fetching record/s from host {}/{}/{}", host.0, tag, start);
 
         let url = make_url(
             self.sync_addr,
@@ -384,7 +410,7 @@ impl<'a> Client<'a> {
 
         let index = resp.json().await?;
 
-        debug!("got remote index {:?}", index);
+        debug!("got remote index {index:?}");
 
         Ok(index)
     }
@@ -431,36 +457,5 @@ impl<'a> Client<'a> {
         } else {
             bail!("Unknown error");
         }
-    }
-
-    // Either request a verification email if token is null, or validate a token
-    pub async fn verify(&self, token: Option<String>) -> Result<(bool, bool)> {
-        // could dedupe this a bit, but it's simple at the moment
-        let (email_sent, verified) = if let Some(token) = token {
-            let url = make_url(self.sync_addr, "/api/v0/account/verify")?;
-            let url = Url::parse(url.as_str())?;
-
-            let resp = self
-                .client
-                .post(url)
-                .json(&VerificationTokenRequest { token })
-                .send()
-                .await?;
-            let resp = handle_resp_error(resp).await?;
-            let resp = resp.json::<VerificationTokenResponse>().await?;
-
-            (false, resp.verified)
-        } else {
-            let url = make_url(self.sync_addr, "/api/v0/account/send-verification")?;
-            let url = Url::parse(url.as_str())?;
-
-            let resp = self.client.post(url).send().await?;
-            let resp = handle_resp_error(resp).await?;
-            let resp = resp.json::<SendVerificationResponse>().await?;
-
-            (resp.email_sent, resp.verified)
-        };
-
-        Ok((email_sent, verified))
     }
 }

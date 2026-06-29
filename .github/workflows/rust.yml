@@ -17,18 +17,18 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [depot-ubuntu-24.04, macos-14, windows-latest]
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.86
+          toolchain: 1.96.0
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -55,16 +55,16 @@ jobs:
         #
         # warning: libelf.so.2, needed by <...>/libkvm.so, not found (try using -rpath or -rpath-link)
         target: [x86_64-unknown-illumos]
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install cross
         uses: taiki-e/install-action@v2
         with:
           tool: cross
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -88,29 +88,29 @@ jobs:
   unit-test:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [depot-ubuntu-24.04, macos-14, windows-latest]
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.86
+          toolchain: 1.96.0
 
       - uses: taiki-e/install-action@v2
         name: Install nextest
         with:
           tool: cargo-nextest
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
              ~/.cargo/git
              target
-          key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run cargo test
         run: cargo nextest run --lib --bins
@@ -118,24 +118,24 @@ jobs:
   check:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [depot-ubuntu-24.04, macos-14, windows-latest]
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.86
+          toolchain: 1.96.0
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
              ~/.cargo/git
              target
-          key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run cargo check (all features)
         run: cargo check --all-features --workspace
@@ -147,13 +147,13 @@ jobs:
         run: cargo check --no-default-features --features sync --workspace
 
       - name: Run cargo check (server)
-        run: cargo check --no-default-features --features server --workspace
+        run: cargo check -p atuin-server
 
       - name: Run cargo check (client only)
         run: cargo check --no-default-features --features client --workspace
 
   integration-test:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
 
     services:
       postgres:
@@ -166,25 +166,25 @@ jobs:
           - 5432:5432
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.86
+          toolchain: 1.96.0
 
       - uses: taiki-e/install-action@v2
         name: Install nextest
         with:
           tool: cargo-nextest
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
              ~/.cargo/git
              target
-          key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run cargo test
         run: cargo nextest run --test '*'
@@ -192,18 +192,18 @@ jobs:
           ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
 
   clippy:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install latest rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.86
+          toolchain: 1.96.0
           components: clippy
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -215,15 +215,15 @@ jobs:
         run: cargo clippy -- -D warnings -D clippy::redundant_clone
 
   format:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install latest rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.86
+          toolchain: 1.96.0
           components: rustfmt
 
       - name: Format

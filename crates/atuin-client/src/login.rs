@@ -23,24 +23,16 @@ pub async fn login(
     let key = match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
         Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
         Err(err) => {
-            match err.downcast_ref::<bip39::ErrorKind>() {
-                Some(err) => {
-                    match err {
-                        // assume they copied in the base64 key
-                        bip39::ErrorKind::InvalidWord => key,
-                        bip39::ErrorKind::InvalidChecksum => {
-                            bail!("key mnemonic was not valid")
-                        }
-                        bip39::ErrorKind::InvalidKeysize(_)
-                        | bip39::ErrorKind::InvalidWordLength(_)
-                        | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
-                            bail!("key was not the correct length")
-                        }
-                    }
+            match err {
+                // assume they copied in the base64 key
+                bip39::ErrorKind::InvalidWord(_) => key,
+                bip39::ErrorKind::InvalidChecksum => {
+                    bail!("key mnemonic was not valid")
                 }
-                _ => {
-                    // unknown error. assume they copied the base64 key
-                    key
+                bip39::ErrorKind::InvalidKeysize(_)
+                | bip39::ErrorKind::InvalidWordLength(_)
+                | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
+                    bail!("key was not the correct length")
                 }
             }
         }
@@ -54,7 +46,7 @@ pub async fn login(
             bail!("the specified key was invalid");
         }
 
-        let mut file = File::create(key_path).await?;
+        let mut file = File::create(&key_path).await?;
         file.write_all(key.as_bytes()).await?;
     } else {
         // we now know that the user has logged in specifying a key, AND that the key path
@@ -75,7 +67,7 @@ pub async fn login(
             store.re_encrypt(&current_key, &new_key).await?;
 
             println!("Writing new key");
-            let mut file = File::create(key_path).await?;
+            let mut file = File::create(&key_path).await?;
             file.write_all(encoded.as_bytes()).await?;
         }
     }
@@ -86,9 +78,10 @@ pub async fn login(
     )
     .await?;
 
-    let session_path = settings.session_path.as_str();
-    let mut file = File::create(session_path).await?;
-    file.write_all(session.session.as_bytes()).await?;
+    Settings::meta_store()
+        .await?
+        .save_session(&session.session)
+        .await?;
 
     Ok(session.session)
 }

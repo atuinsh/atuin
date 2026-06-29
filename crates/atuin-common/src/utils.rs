@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use eyre::{Result, eyre};
 
@@ -43,6 +43,38 @@ pub fn has_git_dir(path: &str) -> bool {
     gitdir.exists()
 }
 
+// in a git worktree, .git is a file containing "gitdir: <path>" pointing
+// to the main repo's .git/worktrees/<name> directory. follow the pointer
+// back to the main repo root so all worktrees share a workspace.
+fn resolve_git_worktree(path: &Path) -> Option<PathBuf> {
+    let git_path = path.join(".git");
+
+    if !git_path.is_file() {
+        return None;
+    }
+
+    let contents = std::fs::read_to_string(&git_path).ok()?;
+    let gitdir_str = contents.strip_prefix("gitdir: ")?.trim();
+
+    let gitdir = PathBuf::from(gitdir_str);
+    let gitdir = if gitdir.is_absolute() {
+        gitdir
+    } else {
+        path.join(gitdir_str)
+    };
+
+    // walk up from e.g. /repo/.git/worktrees/feature to find /repo
+    let mut candidate = gitdir.as_path();
+    while let Some(parent) = candidate.parent() {
+        if parent.join(".git").is_dir() {
+            return Some(parent.to_path_buf());
+        }
+        candidate = parent;
+    }
+
+    None
+}
+
 // detect if any parent dir has a git repo in it
 // I really don't want to bring in libgit for something simple like this
 // If we start to do anything more advanced, then perhaps
@@ -55,6 +87,10 @@ pub fn in_git_repo(path: &str) -> Option<PathBuf> {
 
     // No parent? then we hit root, finding no git
     if gitdir.parent().is_some() {
+        // if .git is a file (worktree), resolve to the main repo root
+        if let Some(main_repo) = resolve_git_worktree(&gitdir) {
+            return Some(main_repo);
+        }
         return Some(gitdir);
     }
 
@@ -65,16 +101,10 @@ pub fn in_git_repo(path: &str) -> Option<PathBuf> {
 // I don't want to use ProjectDirs, it puts config in awkward places on
 // mac. Data too. Seems to be more intended for GUI apps.
 
-#[cfg(not(target_os = "windows"))]
 pub fn home_dir() -> PathBuf {
-    let home = std::env::var("HOME").expect("$HOME not found");
-    PathBuf::from(home)
-}
-
-#[cfg(target_os = "windows")]
-pub fn home_dir() -> PathBuf {
-    let home = std::env::var("USERPROFILE").expect("%userprofile% not found");
-    PathBuf::from(home)
+    directories::BaseDirs::new()
+        .map(|d| d.home_dir().to_path_buf())
+        .expect("could not determine home directory")
 }
 
 pub fn config_dir() -> PathBuf {
@@ -92,6 +122,10 @@ pub fn data_dir() -> PathBuf {
 
 pub fn runtime_dir() -> PathBuf {
     std::env::var("XDG_RUNTIME_DIR").map_or_else(|_| data_dir(), PathBuf::from)
+}
+
+pub fn logs_dir() -> PathBuf {
+    home_dir().join(".atuin").join("logs")
 }
 
 pub fn dotfiles_cache_dir() -> PathBuf {
@@ -118,26 +152,6 @@ pub fn broken_symlink<P: Into<PathBuf>>(path: P) -> bool {
     path.is_symlink() && !path.exists()
 }
 
-pub fn is_zsh() -> bool {
-    // only set on zsh
-    env::var("ATUIN_SHELL_ZSH").is_ok()
-}
-
-pub fn is_fish() -> bool {
-    // only set on fish
-    env::var("ATUIN_SHELL_FISH").is_ok()
-}
-
-pub fn is_bash() -> bool {
-    // only set on bash
-    env::var("ATUIN_SHELL_BASH").is_ok()
-}
-
-pub fn is_xonsh() -> bool {
-    // only set on xonsh
-    env::var("ATUIN_SHELL_XONSH").is_ok()
-}
-
 /// Extension trait for anything that can behave like a string to make it easy to escape control
 /// characters.
 ///
@@ -145,7 +159,7 @@ pub fn is_xonsh() -> bool {
 /// printing history as well as to ensure the commands that appear in the interactive search
 /// reflect the actual command run rather than just the printable characters.
 pub trait Escapable: AsRef<str> {
-    fn escape_control(&self) -> Cow<str> {
+    fn escape_control(&self) -> Cow<'_, str> {
         if !self.as_ref().contains(|c: char| c.is_ascii_control()) {
             self.as_ref().into()
         } else {
@@ -200,7 +214,6 @@ mod tests {
     use pretty_assertions::assert_ne;
 
     use super::*;
-    use std::env;
 
     use std::collections::HashSet;
 
@@ -214,6 +227,7 @@ mod tests {
         test_data_dir();
     }
 
+    #[cfg(not(windows))]
     fn test_config_dir_xdg() {
         // TODO: Audit that the environment access only happens in single-threaded code.
         unsafe { env::remove_var("HOME") };
@@ -227,6 +241,7 @@ mod tests {
         unsafe { env::remove_var("XDG_CONFIG_HOME") };
     }
 
+    #[cfg(not(windows))]
     fn test_config_dir() {
         // TODO: Audit that the environment access only happens in single-threaded code.
         unsafe { env::set_var("HOME", "/home/user") };
@@ -239,6 +254,7 @@ mod tests {
         unsafe { env::remove_var("HOME") };
     }
 
+    #[cfg(not(windows))]
     fn test_data_dir_xdg() {
         // TODO: Audit that the environment access only happens in single-threaded code.
         unsafe { env::remove_var("HOME") };
@@ -249,6 +265,7 @@ mod tests {
         unsafe { env::remove_var("XDG_DATA_HOME") };
     }
 
+    #[cfg(not(windows))]
     fn test_data_dir() {
         // TODO: Audit that the environment access only happens in single-threaded code.
         unsafe { env::set_var("HOME", "/home/user") };
@@ -303,6 +320,52 @@ mod tests {
             "with \x1b[31mcontrol\x1b[0m characters".escape_control(),
             Cow::Owned(_)
         ));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn in_git_repo_regular() {
+        // regular git repo should resolve to the directory containing .git
+        let tmp = std::env::temp_dir().join("atuin-test-regular-git");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let subdir = tmp.join("src").join("deep");
+        std::fs::create_dir_all(&subdir).unwrap();
+        std::fs::create_dir_all(tmp.join(".git")).unwrap();
+
+        let result = in_git_repo(subdir.to_str().unwrap());
+        assert_eq!(result, Some(tmp.clone()));
+
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn in_git_repo_worktree_resolves_to_main_repo() {
+        // worktree .git is a file pointing back to the main repo —
+        // in_git_repo should follow it so all worktrees share a workspace
+        let tmp = std::env::temp_dir().join("atuin-test-worktree-git");
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        // main repo at tmp/main with a real .git directory
+        let main_repo = tmp.join("main");
+        let worktree_git_dir = main_repo.join(".git").join("worktrees").join("feature");
+        std::fs::create_dir_all(&worktree_git_dir).unwrap();
+
+        // worktree at tmp/worktree with a .git file
+        let worktree = tmp.join("worktree");
+        let worktree_subdir = worktree.join("src");
+        std::fs::create_dir_all(&worktree_subdir).unwrap();
+        std::fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}", worktree_git_dir.to_str().unwrap()),
+        )
+        .unwrap();
+
+        // should resolve to the main repo root, not the worktree root
+        let result = in_git_repo(worktree_subdir.to_str().unwrap());
+        assert_eq!(result, Some(main_repo.clone()));
+
+        std::fs::remove_dir_all(&tmp).unwrap();
     }
 
     #[test]

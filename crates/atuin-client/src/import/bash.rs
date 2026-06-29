@@ -111,11 +111,11 @@ impl<'a> From<&'a [u8]> for LineType<'a> {
         if line.is_empty() {
             return LineType::Empty;
         }
-        let parsed = match try_parse_line_as_timestamp(line) {
+
+        match try_parse_line_as_timestamp(line) {
             Some(time) => LineType::Timestamp(time),
             None => LineType::Command(line),
-        };
-        parsed
+        }
     }
 }
 

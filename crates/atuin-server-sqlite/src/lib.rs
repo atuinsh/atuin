@@ -1,12 +1,9 @@
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use atuin_common::{
-    record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus},
-    utils::crypto_random_string,
-};
+use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 use atuin_server_database::{
-    Database, DbError, DbResult, DbSettings,
+    Database, DbError, DbResult, DbSettings, into_utc,
     models::{History, NewHistory, NewSession, NewUser, Session, User},
 };
 use futures_util::TryStreamExt;
@@ -15,7 +12,6 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
     types::Uuid,
 };
-use time::{OffsetDateTime, PrimitiveDateTime, UtcOffset};
 use tracing::instrument;
 use wrappers::{DbHistory, DbRecord, DbSession, DbUser};
 
@@ -26,25 +22,14 @@ pub struct Sqlite {
     pool: sqlx::Pool<sqlx::sqlite::Sqlite>,
 }
 
-fn fix_error(error: sqlx::Error) -> DbError {
-    match error {
-        sqlx::Error::RowNotFound => DbError::NotFound,
-        error => DbError::Other(error.into()),
-    }
-}
-
 #[async_trait]
 impl Database for Sqlite {
     async fn new(settings: &DbSettings) -> DbResult<Self> {
-        let opts = SqliteConnectOptions::from_str(&settings.db_uri)
-            .map_err(fix_error)?
+        let opts = SqliteConnectOptions::from_str(&settings.db_uri)?
             .journal_mode(SqliteJournalMode::Wal)
             .create_if_missing(true);
 
-        let pool = SqlitePoolOptions::new()
-            .connect_with(opts)
-            .await
-            .map_err(fix_error)?;
+        let pool = SqlitePoolOptions::new().connect_with(opts).await?;
 
         sqlx::migrate!("./migrations")
             .run(&pool)
@@ -60,22 +45,22 @@ impl Database for Sqlite {
             .bind(token)
             .fetch_one(&self.pool)
             .await
-            .map_err(fix_error)
+            .map_err(Into::into)
             .map(|DbSession(session)| session)
     }
 
     #[instrument(skip_all)]
     async fn get_session_user(&self, token: &str) -> DbResult<User> {
         sqlx::query_as(
-            "select users.id, users.username, users.email, users.password, users.verified_at from users 
-            inner join sessions 
-            on users.id = sessions.user_id 
+            "select users.id, users.username, users.email, users.password from users
+            inner join sessions
+            on users.id = sessions.user_id
             and sessions.token = $1",
         )
         .bind(token)
         .fetch_one(&self.pool)
         .await
-        .map_err(fix_error)
+        .map_err(Into::into)
         .map(|DbUser(user)| user)
     }
 
@@ -91,22 +76,19 @@ impl Database for Sqlite {
         .bind(session.user_id)
         .bind(token)
         .execute(&self.pool)
-        .await
-        .map_err(fix_error)?;
+        .await?;
 
         Ok(())
     }
 
     #[instrument(skip_all)]
     async fn get_user(&self, username: &str) -> DbResult<User> {
-        sqlx::query_as(
-            "select id, username, email, password, verified_at from users where username = $1",
-        )
-        .bind(username)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(fix_error)
-        .map(|DbUser(user)| user)
+        sqlx::query_as("select id, username, email, password from users where username = $1")
+            .bind(username)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(Into::into)
+            .map(|DbUser(user)| user)
     }
 
     #[instrument(skip_all)]
@@ -115,7 +97,7 @@ impl Database for Sqlite {
             .bind(u.id)
             .fetch_one(&self.pool)
             .await
-            .map_err(fix_error)
+            .map_err(Into::into)
             .map(|DbSession(session)| session)
     }
 
@@ -135,84 +117,9 @@ impl Database for Sqlite {
         .bind(email)
         .bind(password)
         .fetch_one(&self.pool)
-        .await
-        .map_err(fix_error)?;
+        .await?;
 
         Ok(res.0)
-    }
-
-    #[instrument(skip_all)]
-    async fn user_verified(&self, id: i64) -> DbResult<bool> {
-        let res: (bool,) =
-            sqlx::query_as("select verified_at is not null from users where id = $1")
-                .bind(id)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(fix_error)?;
-
-        Ok(res.0)
-    }
-
-    #[instrument(skip_all)]
-    async fn verify_user(&self, id: i64) -> DbResult<()> {
-        sqlx::query(
-            "update users set verified_at = (current_timestamp at time zone 'utc') where id=$1",
-        )
-        .bind(id)
-        .execute(&self.pool)
-        .await
-        .map_err(fix_error)?;
-
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    async fn user_verification_token(&self, id: i64) -> DbResult<String> {
-        const TOKEN_VALID_MINUTES: i64 = 15;
-
-        // First we check if there is a verification token
-        let token: Option<(String, sqlx::types::time::OffsetDateTime)> = sqlx::query_as(
-            "select token, valid_until from user_verification_token where user_id = $1",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(fix_error)?;
-
-        let token = if let Some((token, valid_until)) = token {
-            // We have a token, AND it's still valid
-            if valid_until > time::OffsetDateTime::now_utc() {
-                token
-            } else {
-                // token has expired. generate a new one, return it
-                let token = crypto_random_string::<24>();
-
-                sqlx::query("update user_verification_token set token = $2, valid_until = $3 where user_id=$1")
-                    .bind(id)
-                    .bind(&token)
-                    .bind(time::OffsetDateTime::now_utc() + time::Duration::minutes(TOKEN_VALID_MINUTES))
-                    .execute(&self.pool)
-                    .await
-                    .map_err(fix_error)?;
-
-                token
-            }
-        } else {
-            // No token in the database! Generate one, insert it
-            let token = crypto_random_string::<24>();
-
-            sqlx::query("insert into user_verification_token (user_id, token, valid_until) values ($1, $2, $3)")
-                .bind(id)
-                .bind(&token)
-                .bind(time::OffsetDateTime::now_utc() + time::Duration::minutes(TOKEN_VALID_MINUTES))
-                .execute(&self.pool)
-                .await
-                .map_err(fix_error)?;
-
-            token
-        };
-
-        Ok(token)
     }
 
     #[instrument(skip_all)]
@@ -225,21 +132,9 @@ impl Database for Sqlite {
         .bind(&user.password)
         .bind(user.id)
         .execute(&self.pool)
-        .await
-        .map_err(fix_error)?;
+        .await?;
 
         Ok(())
-    }
-
-    #[instrument(skip_all)]
-    async fn total_history(&self) -> DbResult<i64> {
-        let res: (i64,) = sqlx::query_as("select count(1) from history")
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(fix_error)?
-            .unwrap_or((0,));
-
-        Ok(res.0)
     }
 
     #[instrument(skip_all)]
@@ -254,8 +149,7 @@ impl Database for Sqlite {
         )
         .bind(user.id)
         .fetch_one(&self.pool)
-        .await
-        .map_err(fix_error)?;
+        .await?;
 
         Ok(res.0)
     }
@@ -270,20 +164,17 @@ impl Database for Sqlite {
         sqlx::query("delete from sessions where user_id = $1")
             .bind(u.id)
             .execute(&self.pool)
-            .await
-            .map_err(fix_error)?;
+            .await?;
 
         sqlx::query("delete from users where id = $1")
             .bind(u.id)
             .execute(&self.pool)
-            .await
-            .map_err(fix_error)?;
+            .await?;
 
         sqlx::query("delete from history where user_id = $1")
             .bind(u.id)
             .execute(&self.pool)
-            .await
-            .map_err(fix_error)?;
+            .await?;
 
         Ok(())
     }
@@ -300,8 +191,7 @@ impl Database for Sqlite {
         .bind(id)
         .bind(time::OffsetDateTime::now_utc())
         .fetch_all(&self.pool)
-        .await
-        .map_err(fix_error)?;
+        .await?;
 
         Ok(())
     }
@@ -319,8 +209,7 @@ impl Database for Sqlite {
         )
         .bind(user.id)
         .fetch_all(&self.pool)
-        .await
-        .map_err(fix_error)?;
+        .await?;
 
         let res = res.iter().map(|row| row.get("client_id")).collect();
 
@@ -334,15 +223,14 @@ impl Database for Sqlite {
         )
         .bind(user.id)
         .execute(&self.pool)
-        .await
-        .map_err(fix_error)?;
+        .await?;
 
         Ok(())
     }
 
     #[instrument(skip_all)]
     async fn add_records(&self, user: &User, records: &[Record<EncryptedData>]) -> DbResult<()> {
-        let mut tx = self.pool.begin().await.map_err(fix_error)?;
+        let mut tx = self.pool.begin().await?;
 
         for i in records {
             let id = atuin_common::utils::uuid_v7();
@@ -365,11 +253,10 @@ impl Database for Sqlite {
             .bind(&i.data.content_encryption_key)
             .bind(user.id)
             .execute(&mut *tx)
-            .await
-            .map_err(fix_error)?;
+            .await?;
         }
 
-        tx.commit().await.map_err(fix_error)?;
+        tx.commit().await?;
 
         Ok(())
     }
@@ -402,7 +289,7 @@ impl Database for Sqlite {
         .bind(count as i64)
         .fetch_all(&self.pool)
         .await
-        .map_err(fix_error);
+        .map_err(Into::into);
 
         let ret = match records {
             Ok(records) => {
@@ -433,8 +320,7 @@ impl Database for Sqlite {
         let res: Vec<(Uuid, String, i64)> = sqlx::query_as(STATUS_SQL)
             .bind(user.id)
             .fetch_all(&self.pool)
-            .await
-            .map_err(fix_error)?;
+            .await?;
 
         let mut status = RecordStatus::new();
 
@@ -461,8 +347,7 @@ impl Database for Sqlite {
         .bind(into_utc(range.start))
         .bind(into_utc(range.end))
         .fetch_one(&self.pool)
-        .await
-        .map_err(fix_error)?;
+        .await?;
 
         Ok(res.0)
     }
@@ -493,15 +378,14 @@ impl Database for Sqlite {
         .fetch(&self.pool)
         .map_ok(|DbHistory(h)| h)
         .try_collect()
-        .await
-        .map_err(fix_error)?;
+        .await?;
 
         Ok(res)
     }
 
     #[instrument(skip_all)]
     async fn add_history(&self, history: &[NewHistory]) -> DbResult<()> {
-        let mut tx = self.pool.begin().await.map_err(fix_error)?;
+        let mut tx = self.pool.begin().await?;
 
         for i in history {
             let client_id: &str = &i.client_id;
@@ -521,11 +405,10 @@ impl Database for Sqlite {
             .bind(i.timestamp)
             .bind(data)
             .execute(&mut *tx)
-            .await
-            .map_err(fix_error)?;
+            .await?;
         }
 
-        tx.commit().await.map_err(fix_error)?;
+        tx.commit().await?;
 
         Ok(())
     }
@@ -541,12 +424,7 @@ impl Database for Sqlite {
         .bind(user.id)
         .fetch_one(&self.pool)
         .await
-        .map_err(fix_error)
+        .map_err(Into::into)
         .map(|DbHistory(h)| h)
     }
-}
-
-fn into_utc(x: OffsetDateTime) -> PrimitiveDateTime {
-    let x = x.to_offset(UtcOffset::UTC);
-    PrimitiveDateTime::new(x.date(), x.time())
 }

@@ -31,7 +31,7 @@ impl std::fmt::Display for Shell {
             Shell::Unknown => "unknown",
         };
 
-        write!(f, "{}", shell)
+        write!(f, "{shell}")
     }
 }
 
@@ -60,6 +60,12 @@ impl Shell {
         let shell = shell.strip_prefix('-').unwrap_or(&shell);
 
         Shell::from_string(shell.to_string())
+    }
+
+    pub fn from_env() -> Shell {
+        std::env::var("ATUIN_SHELL").map_or(Shell::Unknown, |shell| {
+            Shell::from_string(shell.trim().to_lowercase())
+        })
     }
 
     pub fn config_file(&self) -> Option<std::path::PathBuf> {

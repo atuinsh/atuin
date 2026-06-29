@@ -4,7 +4,7 @@ use std::{cmp::Ordering, fmt::Write};
 use eyre::Result;
 use thiserror::Error;
 
-use super::store::Store;
+use super::{encryption::PASETO_V4, store::Store};
 use crate::{api_client::Client, settings::Settings};
 
 use atuin_common::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus};
@@ -26,6 +26,14 @@ pub enum SyncError {
 
     #[error("a request to the sync server failed: {msg:?}")]
     RemoteRequestError { msg: String },
+
+    #[error(
+        "the encryption key on this machine does not match the data on the server. \
+         this usually means a new machine was set up without copying the existing key. \
+         to fix: run `atuin key` on a machine that already syncs correctly, then run \
+         `atuin store rekey <key>` on this machine with the value from the other machine"
+    )]
+    WrongKey,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -49,21 +57,23 @@ pub enum Operation {
     },
 }
 
-pub async fn diff(
-    settings: &Settings,
-    store: &impl Store,
-) -> Result<(Vec<Diff>, RecordStatus), SyncError> {
-    let client = Client::new(
+pub async fn build_client(settings: &Settings) -> Result<Client<'_>, SyncError> {
+    Client::new(
         &settings.sync_address,
         settings
-            .session_token()
-            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?
-            .as_str(),
+            .sync_auth_token()
+            .await
+            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?,
         settings.network_connect_timeout,
         settings.network_timeout,
     )
-    .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?;
+    .map_err(|e| SyncError::OperationalError { msg: e.to_string() })
+}
 
+pub async fn diff(
+    client: &Client<'_>,
+    store: &impl Store,
+) -> Result<(Vec<Diff>, RecordStatus), SyncError> {
     let local_index = store
         .status()
         .await
@@ -163,10 +173,10 @@ async fn sync_upload(
     tag: String,
     local: RecordIdx,
     remote: Option<RecordIdx>,
+    page_size: u64,
 ) -> Result<i64, SyncError> {
     let remote = remote.unwrap_or(0);
     let expected = local - remote;
-    let upload_page_size = 100;
     let mut progress = 0;
 
     let pb = ProgressBar::new(expected);
@@ -182,10 +192,9 @@ async fn sync_upload(
         tag
     );
 
-    // preload with the first entry if remote does not know of this store
     loop {
         let page = store
-            .next(host, tag.as_str(), remote + progress, upload_page_size)
+            .next(host, tag.as_str(), remote + progress, page_size)
             .await
             .map_err(|e| {
                 error!("failed to read upload page: {e:?}");
@@ -193,14 +202,18 @@ async fn sync_upload(
                 SyncError::LocalStoreError { msg: e.to_string() }
             })?;
 
+        if page.is_empty() {
+            break;
+        }
+
         client.post_records(&page).await.map_err(|e| {
             error!("failed to post records: {e:?}");
 
             SyncError::RemoteRequestError { msg: e.to_string() }
         })?;
 
-        pb.set_position(progress);
         progress += page.len() as u64;
+        pb.set_position(progress);
 
         if progress >= expected {
             break;
@@ -219,10 +232,10 @@ async fn sync_download(
     tag: String,
     local: Option<RecordIdx>,
     remote: RecordIdx,
+    page_size: u64,
 ) -> Result<Vec<RecordId>, SyncError> {
     let local = local.unwrap_or(0);
     let expected = remote - local;
-    let download_page_size = 100;
     let mut progress = 0;
     let mut ret = Vec::new();
 
@@ -239,12 +252,15 @@ async fn sync_download(
         .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
         .progress_chars("#>-"));
 
-    // preload with the first entry if remote does not know of this store
     loop {
         let page = client
-            .next_records(host, tag.clone(), local + progress, download_page_size)
+            .next_records(host, tag.clone(), local + progress, page_size)
             .await
             .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
+
+        if page.is_empty() {
+            break;
+        }
 
         store
             .push_batch(page.iter())
@@ -253,8 +269,8 @@ async fn sync_download(
 
         ret.extend(page.iter().map(|f| f.id));
 
-        pb.set_position(progress);
         progress += page.len() as u64;
+        pb.set_position(progress);
 
         if progress >= expected {
             break;
@@ -267,21 +283,11 @@ async fn sync_download(
 }
 
 pub async fn sync_remote(
+    client: &Client<'_>,
     operations: Vec<Operation>,
     local_store: &impl Store,
-    settings: &Settings,
+    page_size: u64,
 ) -> Result<(i64, Vec<RecordId>), SyncError> {
-    let client = Client::new(
-        &settings.sync_address,
-        settings
-            .session_token()
-            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?
-            .as_str(),
-        settings.network_connect_timeout,
-        settings.network_timeout,
-    )
-    .expect("failed to create client");
-
     let mut uploaded = 0;
     let mut downloaded = Vec::new();
 
@@ -293,7 +299,10 @@ pub async fn sync_remote(
                 tag,
                 local,
                 remote,
-            } => uploaded += sync_upload(local_store, &client, host, tag, local, remote).await?,
+            } => {
+                uploaded +=
+                    sync_upload(local_store, client, host, tag, local, remote, page_size).await?
+            }
 
             Operation::Download {
                 host,
@@ -301,7 +310,8 @@ pub async fn sync_remote(
                 local,
                 remote,
             } => {
-                let mut d = sync_download(local_store, &client, host, tag, local, remote).await?;
+                let mut d =
+                    sync_download(local_store, client, host, tag, local, remote, page_size).await?;
                 downloaded.append(&mut d)
             }
 
@@ -312,13 +322,50 @@ pub async fn sync_remote(
     Ok((uploaded, downloaded))
 }
 
+pub async fn check_encryption_key(
+    client: &Client<'_>,
+    remote_index: &RecordStatus,
+    encryption_key: &[u8; 32],
+) -> Result<(), SyncError> {
+    let sample = remote_index
+        .hosts
+        .iter()
+        .flat_map(|(host, tags)| tags.keys().map(move |tag| (*host, tag.clone())))
+        .next();
+
+    let Some((host, tag)) = sample else {
+        return Ok(());
+    };
+
+    let records = client
+        .next_records(host, tag, 0, 1)
+        .await
+        .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
+
+    let Some(record) = records.into_iter().next() else {
+        return Ok(());
+    };
+
+    record
+        .decrypt::<PASETO_V4>(encryption_key)
+        .map_err(|_| SyncError::WrongKey)?;
+
+    Ok(())
+}
+
 pub async fn sync(
     settings: &Settings,
     store: &impl Store,
+    encryption_key: &[u8; 32],
 ) -> Result<(i64, Vec<RecordId>), SyncError> {
-    let (diff, _) = diff(settings, store).await?;
+    let client = build_client(settings).await?;
+    let (diff, remote_index) = diff(&client, store).await?;
+
+    // Bail before mutating either side if the local key can't read the remote.
+    check_encryption_key(&client, &remote_index, encryption_key).await?;
+
     let operations = operations(diff, store).await?;
-    let (uploaded, downloaded) = sync_remote(operations, store, settings).await?;
+    let (uploaded, downloaded) = sync_remote(&client, operations, store, 100).await?;
 
     Ok((uploaded, downloaded))
 }

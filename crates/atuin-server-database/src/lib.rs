@@ -16,7 +16,7 @@ use self::{
 use async_trait::async_trait;
 use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 use serde::{Deserialize, Serialize};
-use time::{Date, Duration, Month, OffsetDateTime, Time, UtcOffset};
+use time::{Date, Duration, Month, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};
 use tracing::instrument;
 
 #[derive(Debug)]
@@ -31,9 +31,24 @@ impl Display for DbError {
     }
 }
 
-impl<T: std::error::Error + Into<time::error::Error>> From<T> for DbError {
-    fn from(value: T) -> Self {
-        DbError::Other(value.into().into())
+impl From<time::error::ComponentRange> for DbError {
+    fn from(error: time::error::ComponentRange) -> Self {
+        DbError::Other(error.into())
+    }
+}
+
+impl From<time::error::Error> for DbError {
+    fn from(error: time::error::Error) -> Self {
+        DbError::Other(error.into())
+    }
+}
+
+impl From<sqlx::Error> for DbError {
+    fn from(error: sqlx::Error) -> Self {
+        match error {
+            sqlx::Error::RowNotFound => DbError::NotFound,
+            error => DbError::Other(error.into()),
+        }
     }
 }
 
@@ -51,13 +66,15 @@ pub enum DbType {
 #[derive(Clone, Deserialize, Serialize)]
 pub struct DbSettings {
     pub db_uri: String,
+    /// Optional URI for read replicas. If set, read-only queries will use this connection.
+    pub read_db_uri: Option<String>,
 }
 
 impl DbSettings {
     pub fn db_type(&self) -> DbType {
-        if self.db_uri.starts_with("postgres://") {
+        if self.db_uri.starts_with("postgres://") || self.db_uri.starts_with("postgresql://") {
             DbType::Postgres
-        } else if self.db_uri.starts_with("sqlite://") {
+        } else if self.db_uri.starts_with("sqlite:") {
             DbType::Sqlite
         } else {
             DbType::Unknown
@@ -65,22 +82,29 @@ impl DbSettings {
     }
 }
 
+fn redact_db_uri(uri: &str) -> String {
+    url::Url::parse(uri)
+        .map(|mut url| {
+            let _ = url.set_password(Some("****"));
+            url.to_string()
+        })
+        .unwrap_or_else(|_| uri.to_string())
+}
+
 // Do our best to redact passwords so they're not logged in the event of an error.
 impl Debug for DbSettings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.db_type() == DbType::Postgres {
-            let redacted_uri = url::Url::parse(&self.db_uri)
-                .map(|mut url| {
-                    let _ = url.set_password(Some("****"));
-                    url.to_string()
-                })
-                .unwrap_or(self.db_uri.clone());
+            let redacted_uri = redact_db_uri(&self.db_uri);
+            let redacted_read_uri = self.read_db_uri.as_ref().map(|uri| redact_db_uri(uri));
             f.debug_struct("DbSettings")
                 .field("db_uri", &redacted_uri)
+                .field("read_db_uri", &redacted_read_uri)
                 .finish()
         } else {
             f.debug_struct("DbSettings")
                 .field("db_uri", &self.db_uri)
+                .field("read_db_uri", &self.read_db_uri)
                 .finish()
         }
     }
@@ -98,13 +122,8 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
     async fn get_user_session(&self, u: &User) -> DbResult<Session>;
     async fn add_user(&self, user: &NewUser) -> DbResult<i64>;
 
-    async fn user_verified(&self, id: i64) -> DbResult<bool>;
-    async fn verify_user(&self, id: i64) -> DbResult<()>;
-    async fn user_verification_token(&self, id: i64) -> DbResult<String>;
-
     async fn update_user_password(&self, u: &User) -> DbResult<()>;
 
-    async fn total_history(&self) -> DbResult<i64>;
     async fn count_history(&self, user: &User) -> DbResult<i64>;
     async fn count_history_cached(&self, user: &User) -> DbResult<i64>;
 
@@ -218,5 +237,32 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
         }
 
         Ok(ret)
+    }
+}
+
+pub fn into_utc(x: OffsetDateTime) -> PrimitiveDateTime {
+    let x = x.to_offset(UtcOffset::UTC);
+    PrimitiveDateTime::new(x.date(), x.time())
+}
+
+#[cfg(test)]
+mod tests {
+    use time::macros::datetime;
+
+    use crate::into_utc;
+
+    #[test]
+    fn utc() {
+        let dt = datetime!(2023-09-26 15:11:02 +05:30);
+        assert_eq!(into_utc(dt), datetime!(2023-09-26 09:41:02));
+        assert_eq!(into_utc(dt).assume_utc(), dt);
+
+        let dt = datetime!(2023-09-26 15:11:02 -07:00);
+        assert_eq!(into_utc(dt), datetime!(2023-09-26 22:11:02));
+        assert_eq!(into_utc(dt).assume_utc(), dt);
+
+        let dt = datetime!(2023-09-26 15:11:02 +00:00);
+        assert_eq!(into_utc(dt), datetime!(2023-09-26 15:11:02));
+        assert_eq!(into_utc(dt).assume_utc(), dt);
     }
 }

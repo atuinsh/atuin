@@ -3,6 +3,7 @@ use eyre::Result;
 
 use atuin_client::{
     database::Database,
+    encryption::load_key,
     record::store::Store,
     record::sync::Operation,
     record::{sqlite_store::SqliteStore, sync},
@@ -19,6 +20,11 @@ pub struct Pull {
     /// This will first wipe the local store, and then download all records from the remote
     #[arg(long, default_value = "false")]
     pub force: bool,
+
+    /// Page Size
+    /// How many records to download at once. Defaults to 100
+    #[arg(long, default_value = "100")]
+    pub page: u64,
 }
 
 impl Pull {
@@ -41,7 +47,17 @@ impl Pull {
         // 3. Filter operations by
         //  a) are they a download op?
         //  b) are they for the host/tag we are pushing here?
-        let (diff, _) = sync::diff(settings, &store).await?;
+        let client = sync::build_client(settings).await?;
+        let (diff, remote_index) = sync::diff(&client, &store).await?;
+
+        // Skip on --force: local was already wiped above, mismatch is the user's call.
+        if !self.force {
+            let key: [u8; 32] = load_key(settings)?.into();
+            sync::check_encryption_key(&client, &remote_index, &key)
+                .await
+                .map_err(crate::print_error::format_sync_error)?;
+        }
+
         let operations = sync::operations(diff, &store).await?;
 
         let operations = operations
@@ -56,10 +72,10 @@ impl Pull {
                         return true;
                     }
 
-                    if let Some(t) = self.tag.clone() {
-                        if t != *tag {
-                            return false;
-                        }
+                    if let Some(t) = self.tag.clone()
+                        && t != *tag
+                    {
+                        return false;
                     }
 
                     true
@@ -67,7 +83,7 @@ impl Pull {
             })
             .collect();
 
-        let (_, downloaded) = sync::sync_remote(operations, &store, settings).await?;
+        let (_, downloaded) = sync::sync_remote(&client, operations, &store, self.page).await?;
 
         println!("Downloaded {} records", downloaded.len());
 

@@ -1,9 +1,20 @@
+use atuin_client::settings::Tmux;
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
 use eyre::Result;
 
-pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool) {
+fn print_tmux_config(tmux: &Tmux) {
+    if tmux.enabled {
+        println!("export ATUIN_TMUX_POPUP_WIDTH='{}'", tmux.width);
+        println!("export ATUIN_TMUX_POPUP_HEIGHT='{}'", tmux.height);
+    } else {
+        println!("export ATUIN_TMUX_POPUP=false");
+    }
+}
+
+pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool, disable_ai: bool, tmux: &Tmux) {
     let base = include_str!("../../../shell/atuin.zsh");
 
+    print_tmux_config(tmux);
     println!("{base}");
 
     if std::env::var("ATUIN_NOBIND").is_err() {
@@ -25,6 +36,13 @@ bindkey -M vicmd 'k' atuin-up-search-vicmd";
         if !disable_up_arrow {
             println!("{BIND_UP_ARROW}");
         }
+
+        #[cfg(feature = "ai")]
+        if !disable_ai {
+            let bind_ai = atuin_ai::commands::init::generate_zsh_integration();
+
+            println!("{bind_ai}");
+        }
     }
 }
 
@@ -33,8 +51,10 @@ pub async fn init(
     vars: VarStore,
     disable_up_arrow: bool,
     disable_ctrl_r: bool,
+    disable_ai: bool,
+    tmux: &Tmux,
 ) -> Result<()> {
-    init_static(disable_up_arrow, disable_ctrl_r);
+    init_static(disable_up_arrow, disable_ctrl_r, disable_ai, tmux);
 
     let aliases = atuin_dotfiles::shell::zsh::alias_config(&aliases).await;
     let vars = atuin_dotfiles::shell::zsh::var_config(&vars).await;

@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use atuin_client::{
     api_client::Client,
+    encryption::load_key,
     record::sync::Operation,
     record::{sqlite_store::SqliteStore, sync},
     settings::Settings,
@@ -25,11 +26,16 @@ pub struct Push {
     /// local store
     #[arg(long, default_value = "false")]
     pub force: bool,
+
+    /// Page Size
+    /// How many records to upload at once. Defaults to 100
+    #[arg(long, default_value = "100")]
+    pub page: u64,
 }
 
 impl Push {
     pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
-        let host_id = Settings::host_id().expect("failed to get host_id");
+        let host_id = Settings::host_id().await?;
 
         if self.force {
             println!("Forcing remote store overwrite!");
@@ -37,7 +43,7 @@ impl Push {
 
             let client = Client::new(
                 &settings.sync_address,
-                settings.session_token()?.as_str(),
+                settings.sync_auth_token().await?,
                 settings.network_connect_timeout,
                 settings.network_timeout * 10, // we may be deleting a lot of data... so up the
                                                // timeout
@@ -53,7 +59,17 @@ impl Push {
         // 3. Filter operations by
         //  a) are they an upload op?
         //  b) are they for the host/tag we are pushing here?
-        let (diff, _) = sync::diff(settings, &store).await?;
+        let client = sync::build_client(settings).await?;
+        let (diff, remote_index) = sync::diff(&client, &store).await?;
+
+        // Skip on --force: that path intentionally replaces remote with local.
+        if !self.force {
+            let key: [u8; 32] = load_key(settings)?.into();
+            sync::check_encryption_key(&client, &remote_index, &key)
+                .await
+                .map_err(crate::print_error::format_sync_error)?;
+        }
+
         let operations = sync::operations(diff, &store).await?;
 
         let operations = operations
@@ -76,10 +92,10 @@ impl Push {
                         return false;
                     }
 
-                    if let Some(t) = self.tag.clone() {
-                        if t != *tag {
-                            return false;
-                        }
+                    if let Some(t) = self.tag.clone()
+                        && t != *tag
+                    {
+                        return false;
                     }
 
                     true
@@ -87,7 +103,7 @@ impl Push {
             })
             .collect();
 
-        let (uploaded, _) = sync::sync_remote(operations, &store, settings).await?;
+        let (uploaded, _) = sync::sync_remote(&client, operations, &store, self.page).await?;
 
         println!("Uploaded {uploaded} records");
 

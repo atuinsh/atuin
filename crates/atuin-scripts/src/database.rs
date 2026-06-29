@@ -31,10 +31,10 @@ impl Database {
             std::process::exit(1);
         }
 
-        if !path.exists() {
-            if let Some(dir) = path.parent() {
-                fs::create_dir_all(dir).await?;
-            }
+        if !path.exists()
+            && let Some(dir) = path.parent()
+        {
+            fs::create_dir_all(dir).await?;
         }
 
         let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
@@ -186,6 +186,19 @@ impl Database {
         }
 
         Ok(res)
+    }
+
+    pub async fn clear(&self) -> Result<()> {
+        debug!("clearing all scripts from sqlite");
+
+        sqlx::query("delete from script_tags")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("delete from scripts")
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
     }
 
     pub async fn delete(&self, id: &str) -> Result<()> {

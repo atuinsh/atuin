@@ -199,10 +199,7 @@ mod tests {
         let ns_list = store.list(None).await.unwrap();
         assert_eq!(ns_list, expected);
 
-        store
-            .delete("test", &vec!["key".to_string()])
-            .await
-            .unwrap();
+        store.delete("test", &["key".to_string()]).await.unwrap();
         let value = store.get("test", "key").await.unwrap();
         assert_eq!(value, None);
 

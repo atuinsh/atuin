@@ -10,6 +10,7 @@ use atuin_scripts::{
     store::{ScriptStore, script::Script},
 };
 use clap::{Parser, Subcommand};
+use eyre::OptionExt;
 use eyre::{Result, bail};
 use tempfile::NamedTempFile;
 
@@ -131,8 +132,16 @@ impl Cmd {
         }
 
         // Open the file in the user's preferred editor
-        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-        let status = std::process::Command::new(editor).arg(&path).status()?;
+        let editor_str = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+
+        // Use shlex to safely split the string into shell-like parts.
+        let parts = shlex::split(&editor_str).ok_or_eyre("Failed to parse editor command")?;
+        let (command, args) = parts.split_first().ok_or_eyre("No editor command found")?;
+
+        let status = std::process::Command::new(command)
+            .args(args)
+            .arg(&path)
+            .status()?;
         if !status.success() {
             bail!("failed to open editor");
         }
@@ -218,10 +227,10 @@ impl Cmd {
         let script_content = if let Some(count_opt) = new_script.last {
             // Get the last N commands from history, plus 1 to exclude the command that runs this script
             let count = count_opt.unwrap_or(1) + 1; // Add 1 to the count to exclude the current command
-            let context = atuin_client::database::current_context();
+            let context = atuin_client::database::current_context().await?;
 
             // Get the last N+1 commands, filtering by the default mode
-            let filters = [settings.default_filter_mode()];
+            let filters = [settings.default_filter_mode(context.git_root.is_some())];
 
             let mut history = history_db
                 .list(&filters, &context, Some(count), false, false)
@@ -437,6 +446,7 @@ impl Cmd {
         }
     }
 
+    #[allow(clippy::cognitive_complexity)]
     async fn handle_edit(
         _settings: &Settings,
         edit: Edit,
@@ -556,7 +566,7 @@ impl Cmd {
         store: SqliteStore,
         history_db: &impl Database,
     ) -> Result<()> {
-        let host_id = Settings::host_id().expect("failed to get host_id");
+        let host_id = Settings::host_id().await?;
         let encryption_key: [u8; 32] = atuin_client::encryption::load_key(settings)?.into();
 
         let script_store = ScriptStore::new(store, host_id, encryption_key);

@@ -1,0 +1,74 @@
+[package]
+name = "atuin-ai"
+edition = "2024"
+description = "AI integration for Atuin CLI"
+
+rust-version = { workspace = true }
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = []
+daemon = []
+tree-sitter = ["dep:tree-sitter-lib", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
+
+[dependencies]
+async-trait = { workspace = true }
+atuin-client = { workspace = true }
+atuin-common = { workspace = true }
+atuin-daemon = { workspace = true }
+tokio = { workspace = true }
+eyre = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = [
+  "ansi",
+  "fmt",
+  "registry",
+  "env-filter",
+] }
+directories = { workspace = true }
+tracing-appender = "0.2.4"
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+crossterm = { workspace = true, features = ["use-dev-tty", "event-stream"] }
+ratatui = { workspace = true }
+fs-err = { workspace = true }
+futures = "0.3"
+eventsource-stream = "0.2"
+pulldown-cmark = "0.13.0"
+async-stream = "0.3"
+uuid = { workspace = true }
+tui-textarea-2 = "0.10.2"
+unicode-width = "0.2"
+eye_declare = "0.5.1"
+ratatui-core = "0.1"
+ratatui-widgets = "0.3"
+thiserror = { workspace = true }
+glob-match = { workspace = true }
+regex = { workspace = true }
+time = { workspace = true }
+toml = "1.1"
+toml_edit = { workspace = true }
+tree-sitter-lib = { package = "tree-sitter", version = "0.26.8", optional = true }
+tree-sitter-bash = { version = "0.25.1", optional = true }
+tree-sitter-fish = { version = "3.6.0", optional = true }
+sqlx = { workspace = true, features = ["sqlite"] }
+typed-builder = { workspace = true }
+shellexpand = { workspace = true }
+imara-diff = { workspace = true }
+xxhash-rust = { workspace = true }
+vt100 = { workspace = true }
+yaml-rust2 = "0.11"
+tempfile = { workspace = true }
+chrono = "0.4"
+chrono-humanize = "0.2"
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
