@@ -19,16 +19,31 @@ pub(crate) fn main(options: RuntimeOptions) {
     }
 }
 
+/// Terminal size including pixel dimensions: `(cols, rows, pixel_width, pixel_height)`.
+///
+/// We forward the controlling terminal's pixel width/height to the child pty so
+/// programs inside (e.g. image.nvim) can derive the cell size in pixels via
+/// TIOCGWINSZ. `terminal::size()` only returns cols/rows, which would leave the
+/// child's `ws_xpixel`/`ws_ypixel` at 0 — making HiDPI terminals look like an
+/// 8x16 cell and render inline images too small. `window_size()` includes the
+/// pixels; fall back to cols/rows (pixels 0) on terminals that don't report them.
+fn query_size() -> (u16, u16, u16, u16) {
+    match terminal::window_size() {
+        Ok(ws) => (ws.columns, ws.rows, ws.width, ws.height),
+        Err(_) => terminal::size().map_or((80, 24, 0, 0), |(c, r)| (c, r, 0, 0)),
+    }
+}
+
 fn run(options: RuntimeOptions) -> eyre::Result<()> {
-    let (cols, rows) = terminal::size()?;
+    let (cols, rows, pixel_width, pixel_height) = query_size();
 
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
             rows,
             cols,
-            pixel_width: 0,
-            pixel_height: 0,
+            pixel_width,
+            pixel_height,
         })
         .map_err(|e| eyre::eyre!("{e:#}"))?;
 
@@ -156,16 +171,15 @@ fn spawn_resize_handler(
 
     std::thread::spawn(move || {
         for _ in signals.forever() {
-            if let Ok((cols, rows)) = terminal::size() {
-                current_cols.store(cols.max(1), Ordering::Relaxed);
-                let _ = master.resize(PtySize {
-                    rows,
-                    cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                });
-                let _ = resize_tx.try_send(Msg::Resize { rows, cols });
-            }
+            let (cols, rows, pixel_width, pixel_height) = query_size();
+            current_cols.store(cols.max(1), Ordering::Relaxed);
+            let _ = master.resize(PtySize {
+                rows,
+                cols,
+                pixel_width,
+                pixel_height,
+            });
+            let _ = resize_tx.try_send(Msg::Resize { rows, cols });
         }
     });
 
