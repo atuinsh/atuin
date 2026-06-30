@@ -1,4 +1,7 @@
-use std::{io, path::PathBuf};
+use std::{
+    io::{self, Read},
+    path::PathBuf,
+};
 
 use clap::Parser;
 use eyre::{Context, Result, bail};
@@ -14,15 +17,31 @@ use atuin_client::{
 };
 use rpassword::prompt_password;
 
+const PASSWORD_ENV: &str = "ATUIN_PASSWORD";
+const KEY_ENV: &str = "ATUIN_ENCRYPTION_KEY";
+
 #[derive(Parser, Debug)]
 pub struct Cmd {
     #[clap(long, short)]
     pub username: Option<String>,
 
-    #[clap(long, short)]
+    /// Account password. Falls back to the `ATUIN_PASSWORD` environment
+    /// variable, or `--password-stdin`, before prompting interactively.
+    /// Avoid `--password` in shared environments: it is visible in the
+    /// process list.
+    #[clap(long, short, conflicts_with = "password_stdin")]
     pub password: Option<String>,
 
-    /// The encryption key for your account
+    /// Read the account password from standard input. Mutually exclusive
+    /// with `--password`.
+    #[clap(long, conflicts_with = "password")]
+    pub password_stdin: bool,
+
+    /// The encryption key for your account. Falls back to the
+    /// `ATUIN_ENCRYPTION_KEY` environment variable before prompting
+    /// interactively. (Distinct from the existing `key_path`/`ATUIN_KEY`
+    /// concept, which is a path to a key file — this variable holds the
+    /// key contents.)
     #[clap(long, short)]
     pub key: Option<String>,
 
@@ -81,7 +100,7 @@ impl Cmd {
 
             self.prompt_and_store_key(settings, store).await?;
 
-            let password = self.password.clone().unwrap_or_else(read_user_password);
+            let password = self.resolve_password()?;
             let mut totp_code = self.totp_code.clone();
 
             let (session, auth_type) = loop {
@@ -136,7 +155,7 @@ impl Cmd {
     /// (or accept them via flags).
     async fn run_legacy_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         let username = or_user_input(self.username.clone(), "username");
-        let password = self.password.clone().unwrap_or_else(read_user_password);
+        let password = self.resolve_password()?;
 
         self.prompt_and_store_key(settings, store).await?;
 
@@ -178,6 +197,26 @@ impl Cmd {
         Ok(())
     }
 
+    /// Resolve the account password from, in order: the `--password` flag,
+    /// `--password-stdin`, the `ATUIN_PASSWORD` environment variable, or an
+    /// interactive prompt.
+    ///
+    /// # Errors
+    /// Returns an error if `--password-stdin` was set and stdin could not be
+    /// read.
+    fn resolve_password(&self) -> Result<String> {
+        if let Some(p) = &self.password {
+            return Ok(p.clone());
+        }
+        if self.password_stdin {
+            return read_secret_from_stdin();
+        }
+        if let Some(p) = env_secret(PASSWORD_ENV) {
+            return Ok(p);
+        }
+        Ok(read_user_password())
+    }
+
     async fn prompt_and_store_key(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         let key_path = settings.key_path.as_str();
         let key_path = PathBuf::from(key_path);
@@ -190,10 +229,11 @@ impl Cmd {
         println!("Do not share this key with anyone.");
         println!("\nRead more here: https://docs.atuin.sh/guide/sync/#login \n");
 
-        let key = or_user_input(
-            self.key.clone(),
-            "encryption key [blank to use existing key file]",
-        );
+        let key = self
+            .key
+            .clone()
+            .or_else(|| env_secret(KEY_ENV))
+            .unwrap_or_else(|| read_user_input("encryption key [blank to use existing key file]"));
 
         // if provided, the key may be EITHER base64, or a bip mnemonic
         // try to normalize on base64
@@ -328,9 +368,85 @@ fn read_user_input(name: &'static str) -> String {
     get_input().expect("Failed to read from input")
 }
 
+/// Return the value of `var` if it is set and non-empty.
+pub(super) fn env_secret(var: &str) -> Option<String> {
+    std::env::var(var).ok().filter(|s| !s.is_empty())
+}
+
+/// Read a secret from stdin, stripping a single trailing newline (CR/LF).
+///
+/// # Errors
+/// Returns an error if stdin cannot be read or does not contain valid UTF-8.
+pub(super) fn read_secret_from_stdin() -> Result<String> {
+    let mut buf = String::new();
+    io::stdin()
+        .read_to_string(&mut buf)
+        .context("failed to read secret from stdin")?;
+    Ok(buf.trim_end_matches(&['\r', '\n'][..]).to_string())
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     use atuin_client::encryption::Key;
+    use clap::Parser;
+
+    #[test]
+    fn password_and_password_stdin_are_mutually_exclusive() {
+        let result = Cmd::try_parse_from(["login", "--password", "x", "--password-stdin"]);
+        assert!(result.is_err(), "clap should reject both flags together");
+    }
+
+    #[test]
+    fn password_stdin_parses_without_password_flag() {
+        let cmd = Cmd::try_parse_from(["login", "--password-stdin"]).unwrap();
+        assert!(cmd.password_stdin);
+        assert!(cmd.password.is_none());
+    }
+
+    #[test]
+    fn defaults_leave_stdin_flag_false() {
+        let cmd = Cmd::try_parse_from(["login"]).unwrap();
+        assert!(!cmd.password_stdin);
+        assert!(cmd.password.is_none());
+    }
+
+    // The env var names in these tests carry a `_XYZZY` suffix so that no
+    // other code in the test binary (now or in the future) is expected to
+    // read them. That isolation is what makes the `unsafe` mutations sound
+    // under edition 2024's stricter env-mutation contract: no concurrent
+    // reader can observe torn state, because there is no concurrent reader.
+
+    #[test]
+    fn env_secret_returns_none_when_unset() {
+        let name = "ATUIN_TEST_ENV_SECRET_UNSET_XYZZY";
+        // SAFETY: no other test or production code reads this uniquely-named
+        // env var, so a parallel test thread cannot observe this mutation.
+        unsafe { std::env::remove_var(name) };
+        assert_eq!(env_secret(name), None);
+    }
+
+    #[test]
+    fn env_secret_returns_none_when_empty() {
+        let name = "ATUIN_TEST_ENV_SECRET_EMPTY_XYZZY";
+        // SAFETY: no other test or production code reads this uniquely-named
+        // env var, so a parallel test thread cannot observe this mutation.
+        unsafe { std::env::set_var(name, "") };
+        assert_eq!(env_secret(name), None);
+        // SAFETY: same as above.
+        unsafe { std::env::remove_var(name) };
+    }
+
+    #[test]
+    fn env_secret_returns_value_when_set() {
+        let name = "ATUIN_TEST_ENV_SECRET_SET_XYZZY";
+        // SAFETY: no other test or production code reads this uniquely-named
+        // env var, so a parallel test thread cannot observe this mutation.
+        unsafe { std::env::set_var(name, "hunter2") };
+        assert_eq!(env_secret(name), Some("hunter2".to_string()));
+        // SAFETY: same as above.
+        unsafe { std::env::remove_var(name) };
+    }
 
     #[test]
     fn mnemonic_round_trip() {
