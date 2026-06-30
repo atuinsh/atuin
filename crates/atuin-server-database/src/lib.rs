@@ -60,6 +60,7 @@ pub type DbResult<T> = Result<T, DbError>;
 pub enum DbType {
     Postgres,
     Sqlite,
+    MySql,
     Unknown,
 }
 
@@ -76,6 +77,8 @@ impl DbSettings {
             DbType::Postgres
         } else if self.db_uri.starts_with("sqlite:") {
             DbType::Sqlite
+        } else if self.db_uri.starts_with("mysql://") {
+            DbType::MySql
         } else {
             DbType::Unknown
         }

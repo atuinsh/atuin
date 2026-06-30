@@ -6,6 +6,7 @@ use atuin_server_database::{
     Database, DbSettings, DbType,
     models::{NewHistory, NewSession, NewUser, User},
 };
+use atuin_server_mysql::MySql;
 use atuin_server_postgres::Postgres;
 use atuin_server_sqlite::Sqlite;
 use tests_database::helpers::{create_test_db, destroy_test_db};
@@ -51,6 +52,7 @@ async fn test_full_db_story() -> eyre::Result<()> {
     match settings.db_type() {
         DbType::Postgres => run_the_test::<Postgres>(settings).await,
         DbType::Sqlite => run_the_test::<Sqlite>(settings).await,
+        DbType::MySql => run_the_test::<MySql>(settings).await,
         DbType::Unknown => todo!(),
     }
 }

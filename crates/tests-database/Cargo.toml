@@ -14,13 +14,14 @@ atuin-common = { workspace = true }
 atuin-server-database = { workspace = true }
 atuin-server-postgres = { workspace = true }
 atuin-server-sqlite = { workspace = true }
+atuin-server-mysql = { workspace = true }
 
 eyre = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
 serde = { workspace = true }
-sqlx = { workspace = true, features = ["sqlite", "regexp"] }
+sqlx = { workspace = true, features = ["sqlite", "regexp", "mysql"] }
 async-trait = { workspace = true }
 uuid = { workspace = true }
 metrics = "0.24"
