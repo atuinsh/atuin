@@ -54,7 +54,19 @@ impl Importer for Zsh {
     }
 
     async fn entries(&mut self) -> Result<usize> {
-        Ok(super::count_lines(&self.bytes))
+        let mut counter = 0;
+        for b in unix_byte_lines(&self.bytes) {
+            let s = match unmetafy(b) {
+                Some(s) => s,
+                _ => continue,
+            };
+
+            if s.strip_suffix('\\').is_none() {
+                counter += 1;
+            }
+        }
+
+        Ok(counter)
     }
 
     async fn load(self, h: &mut impl Loader) -> Result<()> {
@@ -186,6 +198,19 @@ mod test {
     }
 
     #[tokio::test]
+    async fn test_count_entries_multilines() {
+        let bytes = "ls
+pwd
+date
+export FOO=bar \\
+export BAZ=qux
+"
+        .as_bytes()
+        .to_owned();
+        let mut zsh = Zsh { bytes };
+        assert_eq!(zsh.entries().await.unwrap(), 4);
+    }
+    #[tokio::test]
     async fn test_parse_file() {
         let bytes = r": 1613322469:0;cargo install atuin
 : 1613322469:10;cargo install atuin; \\
@@ -196,7 +221,7 @@ cargo update
         .to_owned();
 
         let mut zsh = Zsh { bytes };
-        assert_eq!(zsh.entries().await.unwrap(), 4);
+        assert_eq!(zsh.entries().await.unwrap(), 3);
 
         let mut loader = TestLoader::default();
         zsh.load(&mut loader).await.unwrap();
