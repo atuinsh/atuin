@@ -62,7 +62,7 @@ fi
 # shellcheck disable=SC2016
 
 if ! grep -q "atuin init bash" ~/.bashrc; then
-  curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
+  curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/rcaloras/bash-preexec/0.6.0/bash-preexec.sh -o ~/.bash-preexec.sh
   printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> ~/.bashrc
   echo 'eval "$(atuin init bash)"' >> ~/.bashrc
 fi

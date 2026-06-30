@@ -200,7 +200,7 @@ zinit load ellie/atuin
 我们需要设置一些钩子（hooks）, 所以首先需要安装 bash-preexec :
 
 ```
-curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
+curl https://raw.githubusercontent.com/rcaloras/bash-preexec/0.6.0/bash-preexec.sh -o ~/.bash-preexec.sh
 echo '[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh' >> ~/.bashrc
 ```
 
