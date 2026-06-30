@@ -373,7 +373,7 @@ Default: `true`
 store_failed = true
 ```
 
-Configures whether to store commands that failed (those with non-zero exit status) or not.
+Configures whether to store commands that failed (those with a non-zero exit status) or not. Setting this to `false` drops any command that exits non-zero, including commands killed by a signal (negative exit codes), and applies whether or not the daemon is enabled.
 
 ### `secrets_filter`
 

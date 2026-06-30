@@ -205,6 +205,24 @@ impl HistorySvc for HistoryGrpcService {
                 .as_ref()
                 .ok_or_else(|| Status::internal("component not initialized"))?;
 
+            // Respect `store_failed`: if disabled and the command exited non-zero,
+            // drop the running entry without persisting it.
+            if !handle.settings().await.store_failed && history.exit != 0 {
+                tracing::debug!(
+                    id = id.0.to_string(),
+                    exit = history.exit,
+                    "store_failed=false and non-zero exit: dropping history entry"
+                );
+
+                let reply = EndHistoryReply {
+                    id: id.0.to_string(),
+                    idx: 0,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    protocol: DAEMON_PROTOCOL_VERSION,
+                };
+                return Ok(Response::new(reply));
+            }
+
             let store_guard = self.inner.history_store.read().await;
             let history_store = store_guard
                 .as_ref()
