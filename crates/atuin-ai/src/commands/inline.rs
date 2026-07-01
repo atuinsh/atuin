@@ -426,7 +426,7 @@ enum SetupChoice {
 fn prompt_ai_setup() -> Result<SetupChoice> {
     use crossterm::{
         cursor,
-        event::{self, Event, KeyCode},
+        event::{self, Event, KeyCode, KeyEventKind},
         terminal,
     };
 
@@ -460,6 +460,9 @@ fn prompt_ai_setup() -> Result<SetupChoice> {
         crossterm::execute!(stdout, cursor::MoveUp(options.len() as u16))?;
 
         if let Event::Key(key) = ev {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
             match key.code {
                 KeyCode::Up | KeyCode::Char('k') => {
                     selected = selected.saturating_sub(1);
