@@ -1,0 +1,25 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atuin
+  annotations:
+    haproxy.org/server-crt: atuin-domain-tld-cert-tls
+    cert-manager.io/cluster-issuer: some-issuer
+spec:
+  ingressClassName: haproxy
+  tls:
+    - hosts:
+        - atuin.domain.tld
+      secretName: atuin-domain-tld-cert-tls
+  rules:
+    - host: atuin.domain.tld
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: atuin
+                port:
+                  number: 8888

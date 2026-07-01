@@ -1,0 +1,52 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atuin
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: atuin
+          image: ghcr.io/atuinsh/atuin:latest
+          args:
+            - server
+            - start
+          envFrom:
+            - configMapRef:
+                name: atuin
+            - secretRef:
+                name: atuin
+          ports:
+            - containerPort: 8888
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8888
+            failureThreshold: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8888
+            initialDelaySeconds: 3
+            periodSeconds: 3
+          readinessProbe:
+            tcpSocket:
+              port: 8888
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            limits:
+              cpu: 250m
+              memory: 1Gi
+            requests:
+              cpu: 250m
+              memory: 1Gi
+          volumeMounts:
+            - mountPath: /config
+              name: atuin-data
+      volumes:
+        - name: atuin-data
+          emptyDir: {}
