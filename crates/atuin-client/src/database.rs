@@ -130,6 +130,39 @@ fn get_session_start_time(session_id: &str) -> Option<i64> {
     None
 }
 
+fn fuzzy_prefix_order(query: &str) -> Option<String> {
+    let prefix = fuzzy_prefix_query(query)?;
+    let prefix_pattern = quote(format!("{prefix}%"));
+    let contains_pattern = quote(format!("%{prefix}%"));
+
+    Some(format!(
+        "CASE WHEN command LIKE {prefix_pattern} THEN 0 WHEN command LIKE {contains_pattern} THEN 1 ELSE 2 END"
+    ))
+}
+
+fn fuzzy_prefix_query(query: &str) -> Option<String> {
+    let query = query.trim();
+    if query.is_empty() {
+        return None;
+    }
+
+    let mut parts = Vec::new();
+    for token in QueryTokenizer::new(query) {
+        match token {
+            QueryToken::Match(term, false)
+            | QueryToken::MatchStart(term, false)
+            | QueryToken::MatchFull(term, false)
+                if !term.is_empty() =>
+            {
+                parts.push(term);
+            }
+            _ => return None,
+        }
+    }
+
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
 #[async_trait]
 pub trait Database: Send + Sync + 'static {
     async fn save(&self, h: &History) -> Result<()>;
@@ -510,7 +543,16 @@ impl Database for Sqlite {
             sql.offset(offset);
         }
 
-        if filter_options.reverse {
+        if search_mode == SearchMode::Fuzzy
+            && let Some(order) = fuzzy_prefix_order(query)
+        {
+            sql.order_by(order, false);
+            if filter_options.reverse {
+                sql.order_asc("max(timestamp)");
+            } else {
+                sql.order_desc("max(timestamp)");
+            }
+        } else if filter_options.reverse {
             sql.order_asc("timestamp");
         } else {
             sql.order_desc("timestamp");
@@ -1034,8 +1076,16 @@ mod test {
     }
 
     async fn new_history_item(db: &mut impl Database, cmd: &str) -> Result<()> {
+        new_history_item_at(db, cmd, OffsetDateTime::now_utc()).await
+    }
+
+    async fn new_history_item_at(
+        db: &mut impl Database,
+        cmd: &str,
+        timestamp: OffsetDateTime,
+    ) -> Result<()> {
         let mut captured: History = History::capture()
-            .timestamp(OffsetDateTime::now_utc())
+            .timestamp(timestamp)
             .command(cmd)
             .cwd("/home/ellie")
             .build()
@@ -1282,6 +1332,77 @@ mod test {
         assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "", 2)
             .await
             .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fuzzy_prefix_order_applies_before_limit() {
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let base = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+
+        new_history_item_at(&mut db, "agl -a codex --dry-run", base)
+            .await
+            .unwrap();
+
+        for i in 0..250 {
+            new_history_item_at(
+                &mut db,
+                &format!("agent launch filler {i:03}"),
+                base + time::Duration::seconds(i + 1),
+            )
+            .await
+            .unwrap();
+        }
+
+        let context = Context {
+            hostname: "test:host".to_string(),
+            session: "beepboopiamasession".to_string(),
+            cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
+            git_root: None,
+        };
+
+        let results = db
+            .search(
+                SearchMode::Fuzzy,
+                FilterMode::Global,
+                &context,
+                "agl",
+                OptFilters {
+                    limit: Some(10),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            results.first().map(|h| h.command.as_str()),
+            Some("agl -a codex --dry-run")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fuzzy_prefix_order_tiebreaks_by_timestamp() {
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let base = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+
+        new_history_item_at(&mut db, "agl old", base).await.unwrap();
+        new_history_item_at(&mut db, "agl new", base + time::Duration::seconds(1))
+            .await
+            .unwrap();
+
+        assert_search_commands(
+            &db,
+            SearchMode::Fuzzy,
+            FilterMode::Global,
+            "agl",
+            vec!["agl new", "agl old"],
+        )
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
