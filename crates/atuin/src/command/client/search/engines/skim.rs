@@ -76,13 +76,15 @@ async fn fuzzy_search(
         if i % 256 == 0 {
             yield_now().await;
         }
-        let is_agent = history.author.split(',').any(is_known_agent);
-        if state.filter_mode == FilterMode::Agent {
-            if !is_agent {
+        if !state.include_all_authors {
+            let is_agent = history.author.split(',').any(is_known_agent);
+            if state.filter_mode == FilterMode::Agent {
+                if !is_agent {
+                    continue;
+                }
+            } else if is_agent {
                 continue;
             }
-        } else if is_agent {
-            continue;
         }
         let context = &state.context;
         let git_root = context

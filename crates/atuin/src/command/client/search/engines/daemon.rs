@@ -92,7 +92,7 @@ impl Search {
                 state.input.as_str(),
                 OptFilters {
                     limit: Some(200),
-                    authors: super::db::authors_for_filter_mode(state.filter_mode),
+                    authors: super::db::authors_for_state(state),
                     ..Default::default()
                 },
             )

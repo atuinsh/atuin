@@ -33,6 +33,7 @@ pub struct SearchState {
     pub filter_mode: FilterMode,
     pub context: Context,
     pub custom_context: Option<HistoryId>,
+    pub include_all_authors: bool,
 }
 
 impl SearchState {
@@ -82,7 +83,7 @@ pub trait SearchEngine: Send + Sync + 'static {
                     "",
                     OptFilters {
                         limit: Some(200),
-                        authors: db::authors_for_filter_mode(state.filter_mode),
+                        authors: db::authors_for_state(state),
                         ..Default::default()
                     },
                 )

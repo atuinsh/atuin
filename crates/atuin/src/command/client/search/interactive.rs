@@ -1751,7 +1751,13 @@ pub async fn history(
     let default_filter_mode = settings
         .filter_mode_shell_up_key_binding
         .filter(|_| settings.shell_up_key_binding)
-        .unwrap_or_else(|| settings.default_filter_mode(initial_context.git_root.is_some()));
+        .unwrap_or_else(|| {
+            if settings.shell_up_key_binding {
+                FilterMode::Global
+            } else {
+                settings.default_filter_mode(initial_context.git_root.is_some())
+            }
+        });
     let mut app = State {
         history_count,
         results_state: ListState::default(),
@@ -1770,6 +1776,7 @@ pub async fn history(
             filter_mode: default_filter_mode,
             context: initial_context.clone(),
             custom_context: None,
+            include_all_authors: settings.shell_up_key_binding,
         },
         engine: engines::engine(search_mode, settings),
         results_len: 0,
@@ -2261,6 +2268,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                include_all_authors: false,
             },
             engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2316,6 +2324,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                include_all_authors: false,
             },
             engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2435,6 +2444,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                include_all_authors: false,
             },
             engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2494,6 +2504,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                include_all_authors: false,
             },
             engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2549,6 +2560,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                include_all_authors: false,
             },
             engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2600,6 +2612,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                include_all_authors: false,
             },
             engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2660,6 +2673,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                include_all_authors: false,
             },
             engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2721,6 +2735,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                include_all_authors: false,
             },
             engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
@@ -3100,6 +3115,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                include_all_authors: false,
             },
             engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
