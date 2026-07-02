@@ -468,8 +468,6 @@ change to be the default for everyone in a later release.
 
 ### `enhanced_keyboard`
 
-Atuin version: >= 18.17
-
 Default: `true`
 
 Enables the [kitty keyboard enhancement
