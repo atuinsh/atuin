@@ -1133,6 +1133,7 @@ pub struct Settings {
     pub network_timeout: u64,
     pub local_timeout: f64,
     pub enter_accept: bool,
+    pub enhanced_keyboard: bool,
     pub smart_sort: bool,
     pub command_chaining: bool,
 
@@ -1531,6 +1532,7 @@ impl Settings {
             // muscle memory.
             // New users will get the new default, that is more similar to what they are used to.
             .set_default("enter_accept", false)?
+            .set_default("enhanced_keyboard", true)?
             .set_default("sync.records", true)?
             .set_default("keys.scroll_exits", true)?
             .set_default("keys.accept_past_line_end", true)?
