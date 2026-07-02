@@ -1406,6 +1406,34 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fuzzy_prefix_order_survives_final_reorder() {
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let base = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+
+        new_history_item_at(&mut db, "agl old prefix", base)
+            .await
+            .unwrap();
+        new_history_item_at(
+            &mut db,
+            "xagl newer substring",
+            base + time::Duration::seconds(1),
+        )
+        .await
+        .unwrap();
+
+        assert_search_commands(
+            &db,
+            SearchMode::Fuzzy,
+            FilterMode::Global,
+            "agl",
+            vec!["agl old prefix", "xagl newer substring"],
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_paged_basic() {
         let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
             .await
