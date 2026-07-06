@@ -245,6 +245,7 @@ impl Cmd {
             let opt_filter = OptFilters {
                 exit: self.exit,
                 exclude_exit: self.exclude_exit,
+                only_failed: false,
                 cwd: self.cwd,
                 exclude_cwd: self.exclude_cwd,
                 before: self.before,
