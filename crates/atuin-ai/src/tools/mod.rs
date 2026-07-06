@@ -1065,6 +1065,8 @@ pub(crate) struct AtuinHistoryToolCall {
     pub filter_modes: Vec<HistorySearchFilterMode>,
     pub query: String,
     pub limit: i64,
+    pub only_failed: bool,
+    pub authors: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1123,10 +1125,31 @@ impl TryFrom<&serde_json::Value> for AtuinHistoryToolCall {
             .unwrap_or(10)
             .clamp(1, 50);
 
+        let only_failed = value
+            .get("only_failed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let authors = match value.get("authors") {
+            Some(authors) => authors
+                .as_array()
+                .ok_or(eyre::eyre!("authors must be an array of strings"))?
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .map(String::from)
+                        .ok_or(eyre::eyre!("authors entries must be strings"))
+                })
+                .collect::<Result<Vec<String>>>()?,
+            None => Vec::new(),
+        };
+
         Ok(AtuinHistoryToolCall {
             filter_modes,
             query: query.to_string(),
             limit,
+            only_failed,
+            authors,
         })
     }
 }
@@ -1146,7 +1169,9 @@ impl AtuinHistoryToolCall {
         use atuin_client::database::{self, Database as _, OptFilters};
         use atuin_client::settings::SearchMode;
 
-        let context = match database::current_context().await {
+        // query_context rather than current_context: when running outside an
+        // atuin-hooked shell (e.g. as an MCP server) there is no ATUIN_SESSION.
+        let context = match database::query_context().await {
             Ok(ctx) => ctx,
             Err(e) => return ToolOutcome::Error(format!("Failed to get history context: {e}")),
         };
@@ -1157,8 +1182,23 @@ impl AtuinHistoryToolCall {
             .map(atuin_client::settings::FilterMode::from)
             .unwrap_or(atuin_client::settings::FilterMode::Global);
 
+        // An empty session would silently match nothing; error instead so a
+        // missing $ATUIN_SESSION (e.g. MCP server launched outside a hooked
+        // shell) isn't mistaken for empty history.
+        if matches!(filter_mode, atuin_client::settings::FilterMode::Session)
+            && context.session.is_empty()
+        {
+            return ToolOutcome::Error(
+                "Session-scoped search is unavailable: $ATUIN_SESSION is not set, so there is \
+                 no shell session to scope to. Use another filter mode."
+                    .to_string(),
+            );
+        }
+
         let filter_options = OptFilters {
             limit: Some(self.limit),
+            only_failed: self.only_failed,
+            authors: self.authors.clone(),
             ..Default::default()
         };
 
@@ -1399,6 +1439,29 @@ mod tests {
     }
 
     // ── Cross-platform tests ──
+
+    #[test]
+    fn atuin_history_filters_are_optional() {
+        let input = serde_json::json!({
+            "query": "cargo",
+            "filter_modes": ["global"],
+        });
+
+        let call = AtuinHistoryToolCall::try_from(&input).unwrap();
+        assert!(!call.only_failed);
+        assert!(call.authors.is_empty());
+
+        let input = serde_json::json!({
+            "query": "cargo",
+            "filter_modes": ["global"],
+            "only_failed": true,
+            "authors": ["$all-agent"],
+        });
+
+        let call = AtuinHistoryToolCall::try_from(&input).unwrap();
+        assert!(call.only_failed);
+        assert_eq!(call.authors, ["$all-agent"]);
+    }
 
     #[test]
     fn atuin_output_ranges_are_optional() {

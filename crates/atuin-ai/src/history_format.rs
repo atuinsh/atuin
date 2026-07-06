@@ -1,4 +1,4 @@
-use atuin_client::history::History;
+use atuin_client::history::{History, is_known_agent};
 use time::UtcOffset;
 
 pub(crate) fn current_local_offset() -> UtcOffset {
@@ -30,12 +30,29 @@ pub(crate) fn format_history_search_result(
 
 fn format_history_metadata(history: &History, local_offset: UtcOffset) -> String {
     format!(
-        "[{}] (in `{}`, exit {}){}",
+        "[{}] (in `{}`, exit {}){}{}",
         format_timestamp(history, local_offset),
         history.cwd,
         history.exit,
-        format_duration(history.duration)
+        format_duration(history.duration),
+        format_attribution(history)
     )
+}
+
+/// Attribution for agent-run commands: which agent, and its stated intent.
+/// A stated intent marks a command as agent-run even when the agent is not in
+/// KNOWN_AGENTS, so its author is still named. User-run commands (no intent,
+/// author not a known agent) get nothing.
+fn format_attribution(history: &History) -> String {
+    match (is_known_agent(&history.author), &history.intent) {
+        (true, Some(intent)) => format!(" — {}: {intent}", history.author),
+        (true, None) => format!(" — {}", history.author),
+        (false, Some(intent)) if !history.author.is_empty() => {
+            format!(" — {}: {intent}", history.author)
+        }
+        (false, Some(intent)) => format!(" — intent: {intent}"),
+        (false, None) => String::new(),
+    }
 }
 
 fn format_timestamp(history: &History, local_offset: UtcOffset) -> String {
@@ -116,5 +133,25 @@ mod tests {
             format_history_search_result(3, &history(0), UtcOffset::UTC),
             "## #3. (History ID: 018f011c-9a0a-7000-8000-000000000001):\n`cargo test`\n[1970-01-01 00:00:00] (in `/repo`, exit 2)\n"
         );
+    }
+
+    #[test]
+    fn formats_agent_attribution_with_intent() {
+        let mut h = history(0);
+        h.author = "claude-code".to_string();
+        h.intent = Some("Run the test suite".to_string());
+
+        assert_eq!(
+            format_history_search_result(1, &h, UtcOffset::UTC),
+            "## #1. (History ID: 018f011c-9a0a-7000-8000-000000000001):\n`cargo test`\n[1970-01-01 00:00:00] (in `/repo`, exit 2) — claude-code: Run the test suite\n"
+        );
+    }
+
+    #[test]
+    fn user_commands_have_no_attribution() {
+        let mut h = history(0);
+        h.author = "ellie".to_string();
+
+        assert!(!format_history_search_result(1, &h, UtcOffset::UTC).contains('—'));
     }
 }
