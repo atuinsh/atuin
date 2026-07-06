@@ -16,7 +16,7 @@ zmodload zsh/datetime 2>/dev/null
 # in your .zshrc
 _zsh_autosuggest_strategy_atuin() {
     # silence errors, since we don't want to spam the terminal prompt while typing.
-    suggestion=$(ATUIN_QUERY="$1" atuin search --cmd-only --limit 1 --search-mode prefix 2>/dev/null)
+    suggestion=$(ATUIN_QUERY="$1" atuin search --cmd-only --author '$all-user' --limit 1 --search-mode prefix 2>/dev/null)
 }
 
 if [ -n "${ZSH_AUTOSUGGEST_STRATEGY:-}" ]; then
