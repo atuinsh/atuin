@@ -207,19 +207,36 @@ impl HistoryStore {
         // Not ideal as that is potentially quite a lot, although history will be small.
         let records = self.store.all_tagged(HISTORY_TAG).await?;
         let mut ret = Vec::with_capacity(records.len());
+        let mut skipped = 0;
 
         for record in records.into_iter() {
-            let hist = match record.version.as_str() {
-                HISTORY_VERSION_V0 | HISTORY_VERSION => {
-                    let version = record.version.clone();
-                    let decrypted = record.decrypt::<PASETO_V4>(&self.encryption_key)?;
+            let id = record.id;
+            let version = record.version.clone();
 
-                    HistoryRecord::deserialize(&decrypted.data, version.as_str())
+            // A record we can't decrypt or decode must not block the rest of the store -
+            // skip it, and load everything else.
+            let hist = match version.as_str() {
+                HISTORY_VERSION_V0 | HISTORY_VERSION => record
+                    .decrypt::<PASETO_V4>(&self.encryption_key)
+                    .and_then(|decrypted| {
+                        HistoryRecord::deserialize(&decrypted.data, version.as_str())
+                    }),
+                version => Err(eyre!("unknown history version {version:?}")),
+            };
+
+            match hist {
+                Ok(hist) => ret.push(hist),
+                Err(e) => {
+                    warn!("failed to decode history record {}, skipping: {e}", id.0);
+                    skipped += 1;
                 }
-                version => bail!("unknown history version {version:?}"),
-            }?;
+            }
+        }
 
-            ret.push(hist);
+        if skipped > 0 {
+            eprintln!(
+                "Warning: skipped {skipped} history records that could not be decrypted or decoded.\nRun `atuin store verify` to check your store, and `atuin store purge` to remove broken records locally."
+            );
         }
 
         Ok(ret)
@@ -273,12 +290,23 @@ impl HistoryStore {
             }
 
             let version = record.version.clone();
-            let decrypted = record.decrypt::<PASETO_V4>(&self.encryption_key)?;
+
+            // Skip records we can't decrypt or decode, rather than failing the entire build.
             let record = match version.as_str() {
-                HISTORY_VERSION_V0 | HISTORY_VERSION => {
-                    HistoryRecord::deserialize(&decrypted.data, version.as_str())?
+                HISTORY_VERSION_V0 | HISTORY_VERSION => record
+                    .decrypt::<PASETO_V4>(&self.encryption_key)
+                    .and_then(|decrypted| {
+                        HistoryRecord::deserialize(&decrypted.data, version.as_str())
+                    }),
+                version => Err(eyre!("unknown history version {version:?}")),
+            };
+
+            let record = match record {
+                Ok(record) => record,
+                Err(e) => {
+                    warn!("failed to decode history record {}, skipping: {e}", id.0);
+                    continue;
                 }
-                version => bail!("unknown history version {version:?}"),
             };
 
             match record {
@@ -361,10 +389,14 @@ impl HistoryStore {
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::record::DecryptedData;
+    use atuin_common::record::{DecryptedData, Host, HostId, Record};
     use time::macros::datetime;
 
-    use crate::history::{HISTORY_VERSION, store::HistoryRecord};
+    use crate::{
+        history::{HISTORY_TAG, HISTORY_VERSION, store::HistoryRecord, store::HistoryStore},
+        record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store},
+        settings::test_local_timeout,
+    };
 
     use super::History;
 
@@ -430,5 +462,52 @@ mod tests {
             HistoryRecord::deserialize(&DecryptedData(Vec::from(bytes)), HISTORY_VERSION)
                 .expect("failed to deserialize HistoryRecord");
         assert_eq!(deserialized, record);
+    }
+
+    #[tokio::test]
+    async fn test_history_skips_corrupt_records() {
+        let store = SqliteStore::new(":memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let host_id = HostId(atuin_common::utils::uuid_v7());
+        let key = [0u8; 32];
+
+        let history_store = HistoryStore::new(store.clone(), host_id, key);
+
+        let history = History {
+            id: "018cd4fe81757cd2aee65cd7861f9c81".to_owned().into(),
+            timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00),
+            duration: 100,
+            exit: 0,
+            command: "ls".to_owned(),
+            cwd: "/".to_owned(),
+            session: "018cd4fead897597852527a31c998059".to_owned(),
+            hostname: "test:test".to_owned(),
+            author: "test".to_owned(),
+            intent: None,
+            deleted_at: None,
+        };
+
+        history_store.push(history.clone()).await.unwrap();
+
+        // a record in the history tag encrypted with a different key - the store is corrupt,
+        // or "mixed". it should be skipped, rather than breaking loading entirely.
+        let corrupt = Record::builder()
+            .host(Host::new(host_id))
+            .version(HISTORY_VERSION.to_string())
+            .tag(HISTORY_TAG.to_string())
+            .idx(1)
+            .data(DecryptedData(vec![1, 2, 3]))
+            .build();
+
+        store
+            .push(&corrupt.encrypt::<PASETO_V4>(&[1u8; 32]))
+            .await
+            .unwrap();
+
+        let records = history_store.history().await.unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0], HistoryRecord::Create(history));
     }
 }
