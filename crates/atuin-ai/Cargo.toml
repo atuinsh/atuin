@@ -69,6 +69,7 @@ yaml-rust2 = "0.11"
 tempfile = { workspace = true }
 chrono = "0.4"
 chrono-humanize = "0.2"
+rmcp = { version = "2.1.0", default-features = false, features = ["server", "transport-io"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
