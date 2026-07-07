@@ -22,7 +22,7 @@ def _atuin_osc133_command_executed [] {
         return
     }
 
-    print -n $"(char esc)]133;C(char bel)"
+    print -n $"(char -u '1b')]133;C(char bel)"
 }
 
 def _atuin_osc133_command_finished [exit_code: int] {
@@ -33,7 +33,7 @@ def _atuin_osc133_command_finished [exit_code: int] {
         return
     }
 
-    print -n $"(char esc)]133;D;($exit_code);history_id=($env.ATUIN_HISTORY_ID);session_id=($env.ATUIN_SESSION)(char bel)"
+    print -n $"(char -u '1b')]133;D;($exit_code);history_id=($env.ATUIN_HISTORY_ID);session_id=($env.ATUIN_SESSION)(char bel)"
 }
 
 # Magic token to make sure we don't record commands run by keybindings

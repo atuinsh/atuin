@@ -57,6 +57,7 @@ pub(crate) struct IoContext {
     pub edit_permissions: EditPermissionCache,
     pub snapshot_store: Option<crate::snapshots::SnapshotStore>,
     pub skill_registry: crate::skills::SkillRegistry,
+    pub user_context_cache: crate::user_context::UserContextCache,
 }
 
 // ============================================================================
@@ -180,7 +181,7 @@ pub(crate) fn run_driver(
             }
             DriverEvent::Tui(tui_event) => {
                 tracing::trace!(?tui_event, state = ?fsm.state, "TUI event");
-                translate_tui_event(tui_event, &handle)
+                translate_tui_event(tui_event, &handle, &io)
             }
         };
 
@@ -234,7 +235,11 @@ pub(crate) fn run_driver(
 
 /// Translate a TUI event into an FSM event.
 /// Returns None for events handled directly (e.g. InputUpdated).
-fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<Event> {
+fn translate_tui_event(
+    event: AiTuiEvent,
+    handle: &Handle<ViewState>,
+    io: &IoContext,
+) -> Option<Event> {
     match event {
         AiTuiEvent::SubmitInput(input) => {
             // Clear slash state and reset is_input_blank (the InputBox clears
@@ -257,7 +262,7 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
                         arguments,
                     })
                 } else {
-                    let content = resolve_slash_command(&input, handle);
+                    let content = resolve_slash_command(&input, handle, io);
                     Some(Event::SlashCommand {
                         command: input,
                         content,
@@ -331,7 +336,7 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
                     arguments,
                 })
             } else {
-                let content = resolve_slash_command(&cmd, handle);
+                let content = resolve_slash_command(&cmd, handle, io);
                 Some(Event::SlashCommand {
                     command: cmd,
                     content,
@@ -344,6 +349,7 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
 /// Resolve a slash command to its output content.
 /// If the input starts with `/`, check whether the command name matches a
 /// registered skill. Returns `Some((skill_name, arguments))` if it does.
+/// Built-in slash commands take precedence: a skill can't shadow them.
 fn resolve_skill_name(input: &str, handle: &Handle<ViewState>) -> Option<(String, Option<String>)> {
     let after_slash = input.trim_start_matches('/');
     let cmd_name = after_slash.split_whitespace().next()?.to_string();
@@ -351,7 +357,7 @@ fn resolve_skill_name(input: &str, handle: &Handle<ViewState>) -> Option<(String
     let is_skill = handle
         .fetch({
             let cmd_name = cmd_name.clone();
-            move |vs| vs.skill_names.contains(&cmd_name)
+            move |vs| vs.skill_names.contains(&cmd_name) && !vs.slash_registry.contains(&cmd_name)
         })
         .blocking_recv()
         .unwrap_or(false);
@@ -369,8 +375,12 @@ fn resolve_skill_name(input: &str, handle: &Handle<ViewState>) -> Option<(String
     Some((cmd_name, args))
 }
 
-fn resolve_slash_command(command: &str, handle: &Handle<ViewState>) -> String {
+fn resolve_slash_command(command: &str, handle: &Handle<ViewState>, io: &IoContext) -> String {
     match command.trim() {
+        "/reload" => {
+            io.user_context_cache.invalidate();
+            "Context files will be reloaded on the next request.".to_string()
+        }
         "/help" => {
             let commands = handle
                 .fetch(|vs| {
@@ -487,6 +497,7 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
             let tx = tx.clone();
             let app = io.app_ctx.clone();
             let cc = io.client_ctx.clone();
+            let user_context_cache = io.user_context_cache.clone();
             let (skill_summaries, skill_overflow) = io.skill_registry.server_skills();
             let request = ChatRequest::new(
                 messages.clone(),
@@ -504,6 +515,7 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
                     cancel_rx,
                     skill_summaries,
                     skill_overflow,
+                    user_context_cache,
                 )
                 .await;
             });
@@ -935,6 +947,7 @@ async fn load_skill_content(
 // Stream bridge
 // ============================================================================
 
+#[allow(clippy::too_many_arguments)]
 async fn run_stream_bridge(
     request: ChatRequest,
     app_ctx: AppContext,
@@ -943,16 +956,25 @@ async fn run_stream_bridge(
     mut cancel_rx: tokio::sync::watch::Receiver<()>,
     skill_summaries: Vec<crate::skills::SkillSummary>,
     skill_overflow: Option<String>,
+    user_context_cache: crate::user_context::UserContextCache,
 ) {
     use crate::stream::{StreamContent, StreamControl, StreamFrame, create_chat_stream};
     use futures::StreamExt;
 
-    // Gather user context files (TERMINAL.md) and interpolate commands.
+    // User context files (TERMINAL.md) are gathered and interpolated on the
+    // first request, then served from the cache until `/reload`.
+    //
+    // Watch for cancellation during the gather: interpolation commands can
+    // be slow, and a cancelled (or replaced) bridge must not populate the
+    // cache — its result may predate a gather a newer bridge already stored.
     let shell = client_ctx.shell.as_deref().unwrap_or("sh");
     let start_dir = std::env::current_dir().unwrap_or_default();
     let global_ctx_path = crate::user_context::global_context_path();
-    let user_contexts =
-        crate::user_context::gather(&start_dir, Some(&global_ctx_path), shell).await;
+    let user_contexts = tokio::select! {
+        biased;
+        _ = cancel_rx.changed() => return,
+        contexts = user_context_cache.get_or_gather(&start_dir, Some(&global_ctx_path), shell) => contexts,
+    };
 
     let stream = create_chat_stream(
         app_ctx.endpoint.clone(),
@@ -1011,6 +1033,9 @@ async fn run_stream_bridge(
                 StreamControl::Done { session_id } => Some(Event::StreamDone { session_id }),
                 StreamControl::Error(msg) => Some(Event::StreamError(msg)),
             },
+            Ok(StreamFrame::SessionIdentity(session_id)) => {
+                Some(Event::SessionIdReceived(session_id))
+            }
             Err(e) => Some(Event::StreamError(e.to_string())),
         };
 

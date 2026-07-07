@@ -35,8 +35,18 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     let sock_path = screen::socket_path();
     let _ = std::fs::remove_file(&sock_path);
 
-    let mut cmd = CommandBuilder::new_default_prog();
+    let mut cmd = match options.shell {
+        Some(ref path) => CommandBuilder::new(path),
+        None => CommandBuilder::new_default_prog(),
+    };
     cmd.cwd(std::env::current_dir()?);
+    // Reflect the shell we actually spawn in `$SHELL` so the child — and
+    // anything it execs via `$SHELL -c` (e.g. fzf's `become`) — sees the
+    // shell the user asked for instead of a stale value inherited from the
+    // parent environment.
+    if let Some(ref path) = options.shell {
+        cmd.env("SHELL", path);
+    }
     cmd.env("ATUIN_PTY_PROXY_SOCKET", sock_path.as_os_str());
     cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
 

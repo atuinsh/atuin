@@ -37,6 +37,10 @@ git status --short
 ```
 ````
 
+## Caching
+
+`TERMINAL.md` files are cached after they are first loaded; if you make changes to them mid-session, use the `/reload` slash command to refresh the data. This will invalidate the server cache on the next request, increasing the latency and token usage for that request.
+
 ## Why not `AGENTS.md`?
 
 Most agent files are optimized for _coding_ agents: patterns, tools, coding style, and so on. This is great for coding agents, but not as useful for general-purpose agents. By using `TERMINAL.md` instead, we can provide a more flexible way to send additional context that is not tied to coding-specific patterns. This allows users to provide any kind of context they want, without being constrained by the structure of an agent file.

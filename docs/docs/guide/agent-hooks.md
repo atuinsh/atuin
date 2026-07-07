@@ -70,7 +70,7 @@ atuin search -- ''
 atuin search --author '$all-agent' -- ''
 ```
 
-Currently recognized agent names are: `claude-code`, `codex`, `copilot`, and `pi`.
+Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `opencode`, and `pi`.
 
 ## Supported Agents
 
@@ -98,7 +98,7 @@ atuin hook install pi
 
 This writes Atuin's extension to `~/.pi/agent/extensions/atuin.ts`.
 
-Then restart pi or run `/reload`. The extension wraps pi's built-in `bash` tool and records every bash command with author `pi` by calling `atuin history start` before execution and `atuin history end` afterwards.
+Then restart pi or run `/reload`. The extension listens to pi's tool events and records every `bash` tool command with author `pi` by calling `atuin history start` before execution and `atuin history end` afterwards. Because it observes events rather than registering its own `bash` tool, it works alongside other extensions that replace pi's bash tool (such as sandboxes or RTK implementations).
 
 ## Verifying Installation
 
@@ -106,10 +106,10 @@ After installing hooks and restarting your agent, run a command through the agen
 
 ```shell
 # Show all history including agent commands
-atuin search --authors '' -- ''
+atuin search --author '' -- ''
 
 # Show only agent commands
-atuin search --authors '$all-agent' -- ''
+atuin search --author '$all-agent' -- ''
 ```
 
 You can also check the agent's config file directly to confirm the hooks are registered:
