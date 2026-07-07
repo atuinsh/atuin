@@ -13,7 +13,7 @@ use crate::database::Database;
 pub mod entry;
 pub mod record;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, derive_more::Constructor)]
 pub struct KvStore {
     pub record_store: SqliteStore,
     pub kv_db: Database,
@@ -22,20 +22,6 @@ pub struct KvStore {
 }
 
 impl KvStore {
-    pub fn new(
-        record_store: SqliteStore,
-        kv_db: Database,
-        host_id: HostId,
-        encryption_key: [u8; 32],
-    ) -> Self {
-        KvStore {
-            record_store,
-            kv_db,
-            host_id,
-            encryption_key,
-        }
-    }
-
     pub async fn set(&self, namespace: &str, key: &str, value: &str) -> Result<()> {
         let kv_record = KvRecord::builder()
             .namespace(namespace.to_string())

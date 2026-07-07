@@ -11,7 +11,7 @@ use crate::database::Database;
 pub mod record;
 pub mod script;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, derive_more::Constructor)]
 pub struct ScriptStore {
     pub store: SqliteStore,
     pub host_id: HostId,
@@ -19,14 +19,6 @@ pub struct ScriptStore {
 }
 
 impl ScriptStore {
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: [u8; 32]) -> Self {
-        ScriptStore {
-            store,
-            host_id,
-            encryption_key,
-        }
-    }
-
     async fn push_record(&self, record: ScriptRecord) -> Result<(RecordId, RecordIdx)> {
         let bytes = record.serialize()?;
         let idx = self

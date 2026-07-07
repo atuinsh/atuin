@@ -7,6 +7,7 @@ use time::PrimitiveDateTime;
 pub struct DbUser(pub User);
 pub struct DbSession(pub Session);
 pub struct DbHistory(pub History);
+#[derive(derive_more::Into)]
 pub struct DbRecord(pub Record<EncryptedData>);
 
 impl<'a> FromRow<'a, PgRow> for DbUser {
@@ -67,11 +68,5 @@ impl<'a> ::sqlx::FromRow<'a, PgRow> for DbRecord {
             tag: row.try_get("tag")?,
             data,
         }))
-    }
-}
-
-impl From<DbRecord> for Record<EncryptedData> {
-    fn from(other: DbRecord) -> Record<EncryptedData> {
-        Record { ..other.0 }
     }
 }

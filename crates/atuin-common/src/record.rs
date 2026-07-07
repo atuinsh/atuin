@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, derive_more::Deref, derive_more::From)]
 pub struct DecryptedData(pub Vec<u8>);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

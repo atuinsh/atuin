@@ -3,11 +3,7 @@
 pub mod calendar;
 pub mod models;
 
-use std::{
-    collections::HashMap,
-    fmt::{Debug, Display},
-    ops::Range,
-};
+use std::{collections::HashMap, fmt::Debug, ops::Range};
 
 use self::{
     calendar::{TimePeriod, TimePeriodInfo},
@@ -19,28 +15,13 @@ use serde::{Deserialize, Serialize};
 use time::{Date, Duration, Month, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};
 use tracing::instrument;
 
-#[derive(Debug)]
+#[derive(Debug, derive_more::Display, derive_more::From)]
+#[display("{self:?}")]
 pub enum DbError {
+    #[from(skip)]
     NotFound,
+    #[from(time::error::ComponentRange, time::error::Error)]
     Other(eyre::Report),
-}
-
-impl Display for DbError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
-impl From<time::error::ComponentRange> for DbError {
-    fn from(error: time::error::ComponentRange) -> Self {
-        DbError::Other(error.into())
-    }
-}
-
-impl From<time::error::Error> for DbError {
-    fn from(error: time::error::Error) -> Self {
-        DbError::Other(error.into())
-    }
 }
 
 impl From<sqlx::Error> for DbError {

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt, io::prelude::*, path::PathBuf, str::FromStr, sync::OnceLock};
+use std::{collections::HashMap, io::prelude::*, path::PathBuf, str::FromStr, sync::OnceLock};
 use tokio::sync::OnceCell;
 
 use atuin_common::record::HostId;
@@ -29,6 +29,8 @@ pub(crate) mod meta;
 mod scripts;
 pub mod watcher;
 
+#[derive(derive_more::AsRef)]
+#[as_ref(forward)]
 pub struct HubEndpoint(String);
 
 /// Default sync address for Atuin's hosted service
@@ -40,12 +42,6 @@ pub const DEFAULT_HUB_ENDPOINT: &str = "https://hub.atuin.sh";
 impl Default for HubEndpoint {
     fn default() -> Self {
         HubEndpoint(DEFAULT_HUB_ENDPOINT.to_string())
-    }
-}
-
-impl AsRef<str> for HubEndpoint {
-    fn as_ref(&self) -> &str {
-        &self.0
     }
 }
 
@@ -164,13 +160,11 @@ impl From<Dialect> for interim::Dialect {
 /// multithreaded runtime, otherwise it will fail on most Unix systems.
 ///
 /// See: <https://github.com/atuinsh/atuin/pull/1517#discussion_r1447516426>
-#[derive(Clone, Copy, Debug, Eq, PartialEq, DeserializeFromStr, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, DeserializeFromStr, Serialize, derive_more::Display,
+)]
+#[display("{_0}")]
 pub struct Timezone(pub UtcOffset);
-impl fmt::Display for Timezone {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
 /// format: <+|-><hour>[:<minute>[:<second>]]
 static OFFSET_FMT: &[FormatItem<'_>] = format_description!(
     "[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional [:[offset_second padding:none]]]]]"

@@ -71,8 +71,10 @@ pub struct DaemonState {
 /// // Access database
 /// let history = handle.history_db().load(id).await?;
 /// ```
-#[derive(Clone)]
+#[derive(Clone, derive_more::Debug)]
+#[debug("DaemonHandle {{ .. }}")]
 pub struct DaemonHandle {
+    #[debug(skip)]
     state: Arc<DaemonState>,
 }
 
@@ -148,12 +150,6 @@ impl DaemonHandle {
     /// Get a reference to the record store.
     pub fn store(&self) -> &SqliteStore {
         &self.state.store
-    }
-}
-
-impl std::fmt::Debug for DaemonHandle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DaemonHandle").finish_non_exhaustive()
     }
 }
 

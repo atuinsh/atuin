@@ -27,9 +27,11 @@ pub enum ConditionAtom {
 /// - `"cursor-at-start && input-empty"` (conjunction)
 /// - `"list-at-start || no-results"` (disjunction)
 /// - `"(cursor-at-start && !input-empty) || no-results"` (grouping)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, derive_more::From)]
 pub enum ConditionExpr {
+    #[from]
     Atom(ConditionAtom),
+    #[from(skip)]
     Not(Box<ConditionExpr>),
     And(Box<ConditionExpr>, Box<ConditionExpr>),
     Or(Box<ConditionExpr>, Box<ConditionExpr>),
@@ -133,12 +135,6 @@ impl ConditionExpr {
 // ---------------------------------------------------------------------------
 // ConditionExpr — ergonomic builders
 // ---------------------------------------------------------------------------
-
-impl From<ConditionAtom> for ConditionExpr {
-    fn from(atom: ConditionAtom) -> Self {
-        ConditionExpr::Atom(atom)
-    }
-}
 
 #[allow(dead_code)]
 impl ConditionExpr {

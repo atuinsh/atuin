@@ -123,7 +123,7 @@ impl AliasRecord {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, derive_more::Constructor)]
 pub struct AliasStore {
     pub store: SqliteStore,
     pub host_id: HostId,
@@ -131,15 +131,6 @@ pub struct AliasStore {
 }
 
 impl AliasStore {
-    // will want to init the actual kv store when that is done
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: [u8; 32]) -> AliasStore {
-        AliasStore {
-            store,
-            host_id,
-            encryption_key,
-        }
-    }
-
     pub async fn posix(&self) -> Result<String> {
         let aliases = self.aliases().await?;
         Ok(Self::format_posix(&aliases))

@@ -12,7 +12,7 @@ use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, Record
 
 use super::{HISTORY_TAG, HISTORY_VERSION, HISTORY_VERSION_V0, History, HistoryId};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, derive_more::Constructor)]
 pub struct HistoryStore {
     pub store: SqliteStore,
     pub host_id: HostId,
@@ -109,14 +109,6 @@ impl HistoryRecord {
 }
 
 impl HistoryStore {
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: [u8; 32]) -> Self {
-        HistoryStore {
-            store,
-            host_id,
-            encryption_key,
-        }
-    }
-
     async fn push_record(&self, record: HistoryRecord) -> Result<(RecordId, RecordIdx)> {
         let bytes = record.serialize()?;
         let idx = self

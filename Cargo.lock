@@ -237,6 +237,7 @@ dependencies = [
  "colored",
  "crossterm",
  "daemonize",
+ "derive_more",
  "eyre",
  "fs-err",
  "fs4",
@@ -336,6 +337,7 @@ dependencies = [
  "config",
  "crossterm",
  "crypto_secretbox",
+ "derive_more",
  "directories",
  "eyre",
  "fs-err",
@@ -385,6 +387,7 @@ name = "atuin-common"
 version = "18.16.1"
 dependencies = [
  "base64",
+ "derive_more",
  "directories",
  "eyre",
  "getrandom 0.2.17",
@@ -410,6 +413,7 @@ dependencies = [
  "atuin-history",
  "atuin-nucleo",
  "dashmap",
+ "derive_more",
  "eyre",
  "hyper-util",
  "lasso",
@@ -440,6 +444,7 @@ dependencies = [
  "atuin-client",
  "atuin-common",
  "crypto_secretbox",
+ "derive_more",
  "eyre",
  "rand 0.8.5",
  "rmp",
@@ -466,6 +471,7 @@ version = "18.16.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
+ "derive_more",
  "eyre",
  "pretty_assertions",
  "rmp",
@@ -521,6 +527,7 @@ version = "18.16.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
+ "derive_more",
  "eyre",
  "minijinja",
  "pretty_assertions",
@@ -572,6 +579,7 @@ version = "18.16.1"
 dependencies = [
  "async-trait",
  "atuin-common",
+ "derive_more",
  "eyre",
  "serde",
  "sqlx",
@@ -587,6 +595,7 @@ dependencies = [
  "async-trait",
  "atuin-common",
  "atuin-server-database",
+ "derive_more",
  "eyre",
  "futures-util",
  "metrics",
@@ -605,6 +614,7 @@ dependencies = [
  "async-trait",
  "atuin-common",
  "atuin-server-database",
+ "derive_more",
  "eyre",
  "futures-util",
  "metrics",
@@ -1336,6 +1346,7 @@ dependencies = [
  "quote",
  "rustc_version",
  "syn 2.0.117",
+ "unicode-xid",
 ]
 
 [[package]]
