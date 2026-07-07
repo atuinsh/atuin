@@ -1,7 +1,7 @@
 # `atuin gen-completions`
 
 [Shell completions](https://en.wikipedia.org/wiki/Command-line_completion) для Atuin
-могут бять сгенерированы путём указания каталога для вывода и желаемого shell через субкомманду `gen-completions`.
+могут быть сгенерированы путём указания каталога для вывода и желаемого shell через субкоманду `gen-completions`.
 
 ```
 $ atuin gen-completions --shell bash --out-dir $HOME
@@ -9,7 +9,7 @@ $ atuin gen-completions --shell bash --out-dir $HOME
 Shell completion for BASH is generated in "/home/user"
 ```
 
-Возможные команды для аргумента `--shell`могут быть следующими:
+Возможные команды для аргумента `--shell` могут быть следующими:
 
 - `bash`
 - `fish`
