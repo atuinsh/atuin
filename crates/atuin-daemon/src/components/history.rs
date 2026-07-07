@@ -20,9 +20,9 @@ use crate::{
     daemon::{Component, DaemonHandle},
     events::DaemonEvent,
     history::{
-        EndHistoryReply, EndHistoryRequest, HistoryEntry, HistoryEventKind, ShutdownReply,
-        ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest,
-        TailHistoryReply, TailHistoryRequest,
+        CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest, HistoryEntry,
+        HistoryEventKind, ShutdownReply, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
+        StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
         history_server::{History as HistorySvc, HistoryServer},
     },
 };
@@ -245,6 +245,25 @@ impl HistorySvc for HistoryGrpcService {
         Err(Status::not_found(format!(
             "could not find history with id: {id}"
         )))
+    }
+
+    #[instrument(skip_all, level = Level::INFO)]
+    async fn cancel_history(
+        &self,
+        request: Request<CancelHistoryRequest>,
+    ) -> Result<Response<CancelHistoryReply>, Status> {
+        let req = request.into_inner();
+        let id = HistoryId(req.id);
+        if self.inner.running.remove(&id).is_some() {
+            Ok(Response::new(CancelHistoryReply {
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                protocol: DAEMON_PROTOCOL_VERSION,
+            }))
+        } else {
+            Err(Status::not_found(format!(
+                "could not find history with id: {id}"
+            )))
+        }
     }
 
     #[instrument(skip_all, level = Level::INFO)]
