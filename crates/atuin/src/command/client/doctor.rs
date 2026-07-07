@@ -343,6 +343,8 @@ struct AtuinInfo {
 
     #[serde(skip)] // probably unnecessary to expose this
     pub setting_paths: SettingPaths,
+
+    pub daemon_enabled: bool,
 }
 
 impl AtuinInfo {
@@ -369,6 +371,7 @@ impl AtuinInfo {
             sync,
             sqlite_version,
             setting_paths: SettingPaths::new(settings),
+            daemon_enabled: cfg!(feature = "daemon") && settings.daemon.enabled,
         }
     }
 }
