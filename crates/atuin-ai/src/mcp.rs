@@ -46,14 +46,18 @@ impl ServerHandler for AtuinMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let arguments = Value::Object(request.arguments.unwrap_or_default());
         let outcome = match request.name.as_ref() {
-            "atuin_history" => AtuinHistoryToolCall::try_from(&arguments)
-                .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
-                .execute(&self.db)
-                .await,
-            "atuin_output" => AtuinOutputToolCall::try_from(&arguments)
-                .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
-                .execute()
-                .await,
+            "atuin_history" => {
+                AtuinHistoryToolCall::try_from(&arguments)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
+                    .execute(&self.db)
+                    .await
+            }
+            "atuin_output" => {
+                AtuinOutputToolCall::try_from(&arguments)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
+                    .execute()
+                    .await
+            }
             name => {
                 return Err(ErrorData::invalid_params(
                     format!("unknown tool: {name}"),
