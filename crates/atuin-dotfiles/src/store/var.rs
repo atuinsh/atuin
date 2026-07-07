@@ -98,7 +98,7 @@ impl VarRecord {
     }
 }
 
-#[derive(Debug, Clone, derive_more::Constructor)]
+#[derive(Debug, Clone)]
 pub struct VarStore {
     pub store: SqliteStore,
     pub host_id: HostId,
@@ -106,6 +106,14 @@ pub struct VarStore {
 }
 
 impl VarStore {
+    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: [u8; 32]) -> VarStore {
+        VarStore {
+            store,
+            host_id,
+            encryption_key,
+        }
+    }
+
     /// Escape a value for use in POSIX shells (bash, zsh)
     /// This adds double quotes around the value and escapes any embedded double quotes
     fn escape_posix_value(value: &str) -> String {

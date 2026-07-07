@@ -55,7 +55,6 @@ use crossterm::style::{Attribute, Attributes, Color, ContentStyle};
 
 // For now, a theme is loaded as a mapping of meanings to colors, but it may be desirable to
 // expand that in the future to general styles, so we populate a Meaning->ContentStyle hashmap.
-#[derive(derive_more::Constructor)]
 pub struct Theme {
     pub name: String,
     pub parent: Option<String>,
@@ -87,6 +86,18 @@ impl Theme {
     // or the full Meaning enum, to simplify programmatic selection of a log-level.
     pub fn get_alert(&self, severity: log::Level) -> ContentStyle {
         self.styles[ALERT_TYPES.get(&severity).unwrap()]
+    }
+
+    pub fn new(
+        name: String,
+        parent: Option<String>,
+        styles: HashMap<Meaning, ContentStyle>,
+    ) -> Theme {
+        Theme {
+            name,
+            parent,
+            styles,
+        }
     }
 
     pub fn closest_meaning<'a>(&self, meaning: &'a Meaning) -> &'a Meaning {

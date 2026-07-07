@@ -127,7 +127,7 @@ pub(crate) enum ToolGroupKind {
 ///
 /// Each variant carries the data a per-tool renderer component needs.
 /// Built by TurnBuilder from ToolTracker + ConversationEvent data.
-#[derive(Debug, derive_more::IsVariant)]
+#[derive(Debug)]
 pub(crate) enum ToolRenderData {
     /// Shell command with live/cached VT100 output preview.
     Shell {
@@ -158,6 +158,10 @@ pub(crate) enum ToolRenderData {
 }
 
 impl ToolRenderData {
+    pub(crate) fn is_remote(&self) -> bool {
+        matches!(self, ToolRenderData::Remote)
+    }
+
     /// The group kind this tool should collapse into, if any.
     ///
     /// Returns `None` for tools that render as individual `UiEvent::ToolCall`s

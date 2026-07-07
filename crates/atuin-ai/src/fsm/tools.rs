@@ -17,7 +17,7 @@ pub(crate) enum InterruptReason {
 }
 
 /// Per-tool lifecycle state.
-#[derive(Debug, Clone, PartialEq, Eq, derive_more::IsVariant)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ToolState {
     /// Permission resolver is running asynchronously.
     CheckingPermission,
@@ -62,7 +62,7 @@ pub(crate) struct TrackedTool {
 impl TrackedTool {
     /// Whether this tool has reached a terminal state.
     pub fn is_resolved(&self) -> bool {
-        self.state.is_completed() || self.state.is_denied()
+        matches!(self.state, ToolState::Completed | ToolState::Denied)
     }
 
     /// Extract shell preview data (for TurnBuilder compatibility).

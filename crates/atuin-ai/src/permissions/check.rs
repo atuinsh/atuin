@@ -2,9 +2,14 @@ use eyre::Result;
 
 use crate::{permissions::file::RuleFile, tools::PermissibleToolCall};
 
-#[derive(derive_more::Constructor)]
 pub(crate) struct PermissionRequest<'t> {
     call: &'t (dyn PermissibleToolCall + Send + Sync),
+}
+
+impl<'t> PermissionRequest<'t> {
+    pub fn new(call: &'t (dyn PermissibleToolCall + Send + Sync)) -> Self {
+        Self { call }
+    }
 }
 
 pub(crate) enum PermissionResponse {
@@ -13,12 +18,15 @@ pub(crate) enum PermissionResponse {
     Ask,
 }
 
-#[derive(derive_more::Constructor)]
 pub(crate) struct PermissionChecker {
     files: Vec<RuleFile>,
 }
 
 impl PermissionChecker {
+    pub fn new(files: Vec<RuleFile>) -> Self {
+        Self { files }
+    }
+
     pub async fn check<'t>(
         &self,
         request: &'t PermissionRequest<'t>,

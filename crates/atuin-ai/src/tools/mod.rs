@@ -152,7 +152,7 @@ pub(crate) struct ToolPreview {
 }
 
 /// A tool call from the server, with parsed input parameters.
-#[derive(Debug, Clone, derive_more::From, derive_more::IsVariant)]
+#[derive(Debug, Clone, derive_more::From)]
 pub(crate) enum ClientToolCall {
     Read(ReadToolCall),
     Edit(EditToolCall),
@@ -295,7 +295,7 @@ impl PermissibleToolCall for ClientToolCall {
 /// Returns true if this tool call should bypass the permission system entirely.
 impl ClientToolCall {
     pub(crate) fn is_auto_approved(&self) -> bool {
-        self.is_load_skill()
+        matches!(self, ClientToolCall::LoadSkill(_))
     }
 }
 

@@ -29,7 +29,7 @@ use tools::{ToolManager, ToolState};
 // ============================================================================
 
 /// The discrete states of the agent FSM.
-#[derive(Debug, Clone, PartialEq, Eq, derive_more::IsVariant)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AgentState {
     /// Waiting for user input.
     Idle {
@@ -44,7 +44,7 @@ pub(crate) enum AgentState {
 }
 
 /// Stream connection lifecycle within a Turn.
-#[derive(Debug, Clone, PartialEq, Eq, derive_more::IsVariant)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StreamPhase {
     /// Request sent, awaiting first stream frame.
     Connecting,
@@ -541,7 +541,7 @@ impl AgentFsm {
                 let mut effects = Vec::new();
 
                 // Abort stream if still active
-                if !stream.is_done() {
+                if !matches!(stream, StreamPhase::Done) {
                     effects.push(Effect::AbortStream);
                 }
 

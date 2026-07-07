@@ -18,12 +18,16 @@ use crate::{daemon::DaemonHandle, events::DaemonEvent};
 ///
 /// This service is used by external processes to inject events into the daemon.
 /// It's not a component - it's part of the daemon's core infrastructure.
-#[derive(derive_more::Constructor)]
 pub struct ControlService {
     handle: DaemonHandle,
 }
 
 impl ControlService {
+    /// Create a new control service with the given daemon handle.
+    pub fn new(handle: DaemonHandle) -> Self {
+        Self { handle }
+    }
+
     /// Get a tonic server for this service.
     pub fn into_server(self) -> ControlServer<Self> {
         ControlServer::new(self)
