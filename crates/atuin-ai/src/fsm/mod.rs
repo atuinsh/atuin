@@ -29,7 +29,7 @@ use tools::{ToolManager, ToolState};
 // ============================================================================
 
 /// The discrete states of the agent FSM.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, derive_more::IsVariant)]
 pub(crate) enum AgentState {
     /// Waiting for user input.
     Idle {

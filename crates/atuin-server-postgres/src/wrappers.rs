@@ -4,8 +4,11 @@ use atuin_server_database::models::{History, Session, User};
 use sqlx::{Row, postgres::PgRow};
 use time::PrimitiveDateTime;
 
+#[derive(derive_more::Into)]
 pub struct DbUser(pub User);
+#[derive(derive_more::Into)]
 pub struct DbSession(pub Session);
+#[derive(derive_more::Into)]
 pub struct DbHistory(pub History);
 #[derive(derive_more::Into)]
 pub struct DbRecord(pub Record<EncryptedData>);

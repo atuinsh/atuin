@@ -105,7 +105,7 @@ impl ViewState {
     }
 
     pub fn is_busy(&self) -> bool {
-        matches!(self.agent_state, AgentState::Turn { .. })
+        self.agent_state.is_turn()
     }
 
     pub fn has_confirmation(&self) -> bool {

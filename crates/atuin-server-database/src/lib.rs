@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use time::{Date, Duration, Month, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};
 use tracing::instrument;
 
-#[derive(Debug, derive_more::Display, derive_more::From)]
+#[derive(Debug, derive_more::Display, derive_more::Error, derive_more::From)]
 #[display("{self:?}")]
 pub enum DbError {
     #[from(skip)]
@@ -32,8 +32,6 @@ impl From<sqlx::Error> for DbError {
         }
     }
 }
-
-impl std::error::Error for DbError {}
 
 pub type DbResult<T> = Result<T, DbError>;
 
