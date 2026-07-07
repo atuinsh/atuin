@@ -286,6 +286,7 @@ dependencies = [
  "chrono-humanize",
  "clap",
  "crossterm",
+ "derive_more",
  "directories",
  "eventsource-stream",
  "eye_declare",
