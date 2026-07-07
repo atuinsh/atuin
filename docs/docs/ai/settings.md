@@ -8,6 +8,12 @@ Default: `false`
 
 Whether or not the AI feature are enabled. When set to `false`, the question mark keybinding will output a message with instructions to run `atuin setup` to enable the feature.
 
+### model
+
+Default: unset
+
+The Atuin AI model to use for new sessions. If unset, the default model will be used. You can see the available models by running `/model` inside the Atuin AI interface.
+
 ### db_path
 
 Default: `ai_sessions.db` in the Atuin data directory.

@@ -888,3 +888,144 @@ fn user_interrupt_clears_timeout_mappings_for_aborted_tools() {
 
     assert!(fsm.ctx.tool_timeout_ids.is_empty());
 }
+
+// ============================================================================
+// Model picker
+// ============================================================================
+
+fn model_list() -> crate::models::ModelList {
+    crate::models::ModelList {
+        default: "fast".to_string(),
+        models: vec![
+            crate::models::ModelInfo {
+                alias: "fast".to_string(),
+                name: "Comet".to_string(),
+                description: "Fastest model".to_string(),
+            },
+            crate::models::ModelInfo {
+                alias: "deep".to_string(),
+                name: "Constellation".to_string(),
+                description: "Deeper reasoning".to_string(),
+            },
+        ],
+    }
+}
+
+#[test]
+fn open_model_picker_fetches_when_uncached() {
+    let mut fsm = new_fsm();
+
+    let effects = fsm.handle(Event::OpenModelPicker);
+
+    assert_eq!(fsm.ctx.model_picker, Some(ModelPicker::Loading));
+    assert!(matches!(effects[..], [Effect::FetchModels]));
+}
+
+#[test]
+fn open_model_picker_reuses_cache_without_fetching() {
+    let mut fsm = new_fsm();
+    fsm.ctx.models_cache = Some(model_list());
+
+    let effects = fsm.handle(Event::OpenModelPicker);
+
+    assert_eq!(fsm.ctx.model_picker, Some(ModelPicker::Ready(model_list())));
+    assert!(effects.is_empty());
+}
+
+#[test]
+fn model_list_loaded_populates_picker_and_cache() {
+    let mut fsm = new_fsm();
+    fsm.handle(Event::OpenModelPicker);
+
+    let effects = fsm.handle(Event::ModelListLoaded(Ok(model_list())));
+
+    assert_eq!(fsm.ctx.models_cache, Some(model_list()));
+    assert_eq!(fsm.ctx.model_picker, Some(ModelPicker::Ready(model_list())));
+    assert!(effects.is_empty());
+}
+
+#[test]
+fn model_list_loaded_after_dismissal_caches_but_keeps_picker_closed() {
+    let mut fsm = new_fsm();
+    fsm.handle(Event::OpenModelPicker);
+    fsm.handle(Event::Cancel); // dismiss while loading
+
+    fsm.handle(Event::ModelListLoaded(Ok(model_list())));
+
+    assert_eq!(fsm.ctx.models_cache, Some(model_list()));
+    assert_eq!(fsm.ctx.model_picker, None);
+}
+
+#[test]
+fn model_list_load_failure_closes_picker_with_message() {
+    let mut fsm = new_fsm();
+    fsm.handle(Event::OpenModelPicker);
+
+    fsm.handle(Event::ModelListLoaded(Err("boom".to_string())));
+
+    assert_eq!(fsm.ctx.model_picker, None);
+    assert!(fsm.ctx.models_cache.is_none());
+    assert!(fsm.ctx.events.iter().any(|e| matches!(
+        e,
+        ConversationEvent::OutOfBandOutput { content, .. } if content.contains("boom")
+    )));
+}
+
+#[test]
+fn model_selected_sets_model_and_persists() {
+    let mut fsm = new_fsm();
+    fsm.handle(Event::OpenModelPicker);
+    fsm.handle(Event::ModelListLoaded(Ok(model_list())));
+
+    let effects = fsm.handle(Event::ModelSelected("deep".to_string()));
+
+    assert_eq!(fsm.ctx.model, Some("deep".to_string()));
+    assert_eq!(fsm.ctx.model_picker, None);
+    assert!(matches!(
+        &effects[..],
+        [Effect::SaveModelSelection { alias }] if alias == "deep"
+    ));
+    // Confirmation names the model, not just the alias
+    assert!(fsm.ctx.events.iter().any(|e| matches!(
+        e,
+        ConversationEvent::OutOfBandOutput { content, .. } if content.contains("Constellation")
+    )));
+}
+
+#[test]
+fn cancel_closes_picker_instead_of_exiting() {
+    let mut fsm = new_fsm();
+    fsm.handle(Event::OpenModelPicker);
+
+    let effects = fsm.handle(Event::Cancel);
+
+    assert_eq!(fsm.ctx.model_picker, None);
+    assert!(effects.is_empty());
+
+    // A second Cancel with no picker open exits as usual
+    let effects = fsm.handle(Event::Cancel);
+    assert!(matches!(effects[..], [Effect::ExitApp(ExitAction::Cancel)]));
+}
+
+#[test]
+fn user_submit_dismisses_loading_picker() {
+    let mut fsm = new_fsm();
+    fsm.handle(Event::OpenModelPicker);
+
+    fsm.handle(Event::UserSubmit("hello".into()));
+
+    assert_eq!(fsm.ctx.model_picker, None);
+}
+
+#[test]
+fn selected_model_survives_new_session() {
+    let mut fsm = new_fsm();
+    fsm.ctx.models_cache = Some(model_list());
+    fsm.handle(Event::OpenModelPicker);
+    fsm.handle(Event::ModelSelected("deep".to_string()));
+
+    fsm.handle(Event::NewSession);
+
+    assert_eq!(fsm.ctx.model, Some("deep".to_string()));
+    assert_eq!(fsm.ctx.models_cache, Some(model_list()));
+}

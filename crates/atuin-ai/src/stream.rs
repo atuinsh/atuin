@@ -16,7 +16,7 @@ use reqwest::header::USER_AGENT;
 
 use crate::context::ClientContext;
 
-static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"));
+pub(crate) static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"));
 
 /// Frames that alter the stream lifecycle — terminal or state-changing.
 #[derive(Debug, Clone)]
@@ -58,6 +58,9 @@ pub(crate) struct ChatRequest {
     pub session_id: Option<String>,
     pub capabilities: Vec<String>,
     pub invocation_id: String,
+    /// Model alias to request. `None` omits the key so the server default
+    /// applies (and tracks server-side default changes without a client update).
+    pub model: Option<String>,
 }
 
 impl ChatRequest {
@@ -67,6 +70,7 @@ impl ChatRequest {
         capabilities: &AiCapabilities,
         history_output_available: bool,
         invocation_id: String,
+        model: Option<String>,
     ) -> Self {
         let mut caps = vec![
             "client_invocations".to_string(),
@@ -102,6 +106,7 @@ impl ChatRequest {
             session_id,
             capabilities: caps,
             invocation_id,
+            model,
         }
     }
 }
@@ -147,12 +152,9 @@ pub(crate) fn create_chat_stream(
             }
         }
 
-        if let Ok(model) = std::env::var("ATUIN_AI__MODEL")
-            && !model.trim().is_empty() {
-                config["model"] = serde_json::json!(model.trim());
-
+        if let Some(ref model) = request.model {
+            config["model"] = serde_json::json!(model);
         }
-
 
         let mut request_body = serde_json::json!({
             "messages": request.messages,
@@ -284,7 +286,7 @@ pub(crate) fn create_chat_stream(
     })
 }
 
-fn hub_url(base: &str, path: &str) -> Result<Url> {
+pub(crate) fn hub_url(base: &str, path: &str) -> Result<Url> {
     let base_with_slash = if base.ends_with('/') {
         base.to_string()
     } else {

@@ -74,6 +74,10 @@ impl Default for SlashCommandRegistry {
         let mut registry = Self::new();
         registry.register(SlashCommand::new("help", "Show help information"));
         registry.register(SlashCommand::new(
+            "model",
+            "Select the AI model to use for this and future sessions",
+        ));
+        registry.register(SlashCommand::new(
             "new",
             "Start a new conversation, archiving the current one",
         ));

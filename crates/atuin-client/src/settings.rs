@@ -670,6 +670,9 @@ pub struct Ai {
     /// The maximum time in minutes that an AI session can be automatically resumed.
     pub session_continue_minutes: i64,
 
+    /// The AI model to use for AI chats, based on the Atuin AI model alias.
+    pub model: Option<String>,
+
     /// Deprecated: use opening.send_cwd instead. Kept for backwards compatibility.
     #[serde(default)]
     pub send_cwd: Option<bool>,

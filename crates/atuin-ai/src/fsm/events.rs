@@ -2,6 +2,7 @@
 
 use serde_json::Value;
 
+use crate::models::ModelList;
 use crate::tools::ToolOutcome;
 
 /// Events that drive state transitions in the agent FSM.
@@ -106,6 +107,14 @@ pub(crate) enum Event {
         command: String,
         content: String,
     },
+
+    // ─── Model selection ────────────────────────────────────────
+    /// User ran /model — open the model picker.
+    OpenModelPicker,
+    /// The model list fetch finished (spawned by FetchModels).
+    ModelListLoaded(Result<ModelList, String>),
+    /// User picked a model from the picker.
+    ModelSelected(String),
 
     // ─── Skills ────────────────────────────────────────────────
     /// User invoked a skill via /skill-name. FSM emits a LoadSkill
