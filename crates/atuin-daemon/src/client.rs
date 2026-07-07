@@ -22,9 +22,9 @@ use crate::control::{
 };
 use crate::events::DaemonEvent;
 use crate::history::{
-    EndHistoryReply, EndHistoryRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
-    StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
-    history_client::HistoryClient as HistoryServiceClient,
+    CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest, ShutdownRequest,
+    StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply,
+    TailHistoryRequest, history_client::HistoryClient as HistoryServiceClient,
 };
 use crate::search::{
     FilterMode as RpcFilterMode, SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
@@ -139,6 +139,12 @@ impl HistoryClient {
         let req = EndHistoryRequest { id, duration, exit };
 
         Ok(self.client.end_history(req).await?.into_inner())
+    }
+
+    pub async fn cancel_history(&mut self, id: String) -> Result<CancelHistoryReply> {
+        let req = CancelHistoryRequest { id };
+
+        Ok(self.client.cancel_history(req).await?.into_inner())
     }
 
     pub async fn status(&mut self) -> Result<StatusReply> {
