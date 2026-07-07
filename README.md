@@ -21,7 +21,7 @@
   <a href="https://twitter.com/atuinsh"><img src="https://img.shields.io/twitter/follow/atuinsh?style=social" /></a>
 </p>
 
-[English] | [简体中文]
+[English] | [简体中文] | [Srpski] | [Hrvatski] | [Bosanski] | [Crnogorski]
 
 Atuin replaces your existing shell history with a SQLite database, and records
 additional context for your commands. Additionally, it provides optional and
@@ -135,3 +135,7 @@ Made with [contrib.rocks](https://contrib.rocks).
 
 [English]: ./README.md
 [简体中文]: ./docs-i18n/zh-CN/README.md
+[Srpski]: ./docs-i18n/sr/
+[Hrvatski]: ./docs-i18n/hr/
+[Bosanski]: ./docs-i18n/bs/
+[Crnogorski]: ./docs-i18n/cnr/
