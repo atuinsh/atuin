@@ -120,12 +120,15 @@ impl KvStore {
         // only visit each KV once, inserting or deleting based on the first time we see it
         for record in tagged {
             // Skip records we can't decrypt or decode, rather than failing the entire build.
-            let kv = match record.version.as_str() {
-                "v0" | KV_VERSION => record
-                    .decrypt::<PASETO_V4>(&self.encryption_key)
-                    .and_then(|decrypted| KvRecord::deserialize(&decrypted.data, &decrypted.version)),
-                version => Err(eyre!("unknown version {version:?}")),
-            };
+            let kv =
+                match record.version.as_str() {
+                    "v0" | KV_VERSION => record
+                        .decrypt::<PASETO_V4>(&self.encryption_key)
+                        .and_then(|decrypted| {
+                            KvRecord::deserialize(&decrypted.data, &decrypted.version)
+                        }),
+                    version => Err(eyre!("unknown version {version:?}")),
+                };
 
             let kv = match kv {
                 Ok(kv) => kv,

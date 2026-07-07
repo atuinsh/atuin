@@ -78,9 +78,13 @@ impl ScriptStore {
         for record in records.into_iter() {
             // Skip records we can't decrypt or decode, rather than failing the entire build.
             let script = match record.version.as_str() {
-                SCRIPT_VERSION => record
-                    .decrypt::<PASETO_V4>(&self.encryption_key)
-                    .and_then(|decrypted| ScriptRecord::deserialize(&decrypted.data, SCRIPT_VERSION)),
+                SCRIPT_VERSION => {
+                    record
+                        .decrypt::<PASETO_V4>(&self.encryption_key)
+                        .and_then(|decrypted| {
+                            ScriptRecord::deserialize(&decrypted.data, SCRIPT_VERSION)
+                        })
+                }
                 version => Err(eyre!("unknown script version {version:?}")),
             };
 
