@@ -406,11 +406,22 @@ fn ensure_reply_compatible(settings: &Settings, version: &str, protocol: u32) ->
     bail!("{message}. Enable `daemon.autostart = true` or restart the daemon manually");
 }
 
+#[derive(Clone, Copy)]
+struct TryWithRestartOptions {
+    /// Whether to resend the command if the daemon isn't the expected version.
+    pub retry_on_version_mismatch: bool,
+}
+
 /// Try to send a request to the daemon, restarting it and retrying if necessary.
 ///
 /// `context` will be passed to the closure. Compared to capturing the needed context in the
 /// closure, this may reduce the number of required clones.
-async fn try_with_restart<C, F, R>(settings: &Settings, context: C, send_request: F) -> Result<R>
+async fn try_with_restart<C, F, R>(
+    settings: &Settings,
+    send_request: F,
+    context: C,
+    options: TryWithRestartOptions,
+) -> Result<R>
 where
     C: Clone + Sync,
     F: AsyncFn(&mut HistoryClient, C) -> Result<R> + Sync,
@@ -429,6 +440,13 @@ where
                     daemon_mismatch_message(resp.version(), resp.protocol())
                 ));
             }
+
+            if !options.retry_on_version_mismatch {
+                // We don't need to retry the request, so only restart to make subsequent hook calls
+                // target the expected version.
+                let _ = restart_daemon(settings).await;
+                return Ok(resp);
+            }
         }
         Err(err) if !settings.daemon.autostart => return Err(err),
         Err(err) if !should_retry_after_error(&err) => return Err(err),
@@ -441,25 +459,40 @@ where
 }
 
 pub async fn start_history(settings: &Settings, history: History) -> Result<String> {
-    let resp = try_with_restart(settings, history, async |client, history| {
-        client.start_history(history).await
-    })
+    let resp = try_with_restart(
+        settings,
+        async |client, history| client.start_history(history).await,
+        history,
+        TryWithRestartOptions {
+            retry_on_version_mismatch: true,
+        },
+    )
     .await?;
     Ok(resp.id)
 }
 
 pub async fn end_history(settings: &Settings, id: String, duration: u64, exit: i64) -> Result<()> {
-    try_with_restart(settings, id, async |client, id| {
-        client.end_history(id, duration, exit).await
-    })
+    try_with_restart(
+        settings,
+        async |client, id| client.end_history(id, duration, exit).await,
+        id,
+        TryWithRestartOptions {
+            retry_on_version_mismatch: false,
+        },
+    )
     .await?;
     Ok(())
 }
 
 pub async fn cancel_history(settings: &Settings, id: String) -> Result<()> {
-    try_with_restart(settings, id, async |client, id| {
-        client.cancel_history(id).await
-    })
+    try_with_restart(
+        settings,
+        async |client, id| client.cancel_history(id).await,
+        id,
+        TryWithRestartOptions {
+            retry_on_version_mismatch: false,
+        },
+    )
     .await?;
     Ok(())
 }
