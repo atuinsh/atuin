@@ -44,7 +44,7 @@ pub(crate) enum AgentState {
 }
 
 /// Stream connection lifecycle within a Turn.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, derive_more::IsVariant)]
 pub(crate) enum StreamPhase {
     /// Request sent, awaiting first stream frame.
     Connecting,
@@ -541,7 +541,7 @@ impl AgentFsm {
                 let mut effects = Vec::new();
 
                 // Abort stream if still active
-                if !matches!(stream, StreamPhase::Done) {
+                if !stream.is_done() {
                     effects.push(Effect::AbortStream);
                 }
 
