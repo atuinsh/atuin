@@ -106,6 +106,7 @@ pub struct VarStore {
 }
 
 impl VarStore {
+    // will want to init the actual kv store when that is done
     pub fn new(store: SqliteStore, host_id: HostId, encryption_key: [u8; 32]) -> VarStore {
         VarStore {
             store,

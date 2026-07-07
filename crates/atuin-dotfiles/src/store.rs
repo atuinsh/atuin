@@ -131,6 +131,7 @@ pub struct AliasStore {
 }
 
 impl AliasStore {
+    // will want to init the actual kv store when that is done
     pub fn new(store: SqliteStore, host_id: HostId, encryption_key: [u8; 32]) -> AliasStore {
         AliasStore {
             store,
