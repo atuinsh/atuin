@@ -234,8 +234,9 @@ impl HistoryStore {
         }
 
         if skipped > 0 {
-            eprintln!(
-                "Warning: skipped {skipped} history records that could not be decrypted or decoded.\nRun `atuin store verify` to check your store, and `atuin store purge` to remove broken records locally."
+            // library code that may run under the TUI or shell hooks, so no stderr here
+            warn!(
+                "skipped {skipped} history records that could not be decrypted or decoded. Run `atuin store verify` to check your store, and `atuin store purge` to remove broken records locally."
             );
         }
 

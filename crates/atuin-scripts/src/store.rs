@@ -98,8 +98,9 @@ impl ScriptStore {
         }
 
         if skipped > 0 {
-            eprintln!(
-                "Warning: skipped {skipped} script records that could not be decrypted or decoded"
+            // library code that may run under the TUI or shell hooks, so no stderr here
+            tracing::warn!(
+                "skipped {skipped} script records that could not be decrypted or decoded"
             );
         }
 

@@ -175,9 +175,8 @@ impl KvStore {
         }
 
         if skipped > 0 {
-            eprintln!(
-                "Warning: skipped {skipped} kv records that could not be decrypted or decoded"
-            );
+            // library code that may run under the TUI or shell hooks, so no stderr here
+            tracing::warn!("skipped {skipped} kv records that could not be decrypted or decoded");
         }
 
         Ok(())
