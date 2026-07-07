@@ -6,7 +6,7 @@ use eye_declare::{
 use ratatui_core::style::{Color, Modifier, Style};
 
 use crate::driver::ViewState;
-use crate::fsm::{AgentState, StreamPhase};
+use crate::fsm::{AgentState, ModelPicker, StreamPhase};
 use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview};
 use crate::tui::components::select::SelectOption;
 use crate::tui::components::session_continue::SessionContinue;
@@ -115,12 +115,36 @@ fn input_view(state: &ViewState) -> Elements {
         .collect::<Vec<_>>();
     let first_slash_result = slash_results.first().cloned();
 
+    // While the model list loads, the input box stays up (with a spinner
+    // line) so a focusable component always exists; once Ready, the Select
+    // replaces the input box like the permission prompt does.
+    let ready_picker = match &state.model_picker {
+        Some(ModelPicker::Ready(list)) => Some(list),
+        _ => None,
+    };
+    let picker_loading = matches!(state.model_picker, Some(ModelPicker::Loading));
+
     element! {
         #(if let Some(tc) = asking_tool {
             #(tool_call_view(tc, in_git_project))
         })
 
-        #(if asking_tool.is_none() {
+        #(if let Some(list) = ready_picker {
+            #(if asking_tool.is_none() {
+                #(model_picker_view(list, state.model.as_deref()))
+            })
+        })
+
+        #(if picker_loading {
+            View(key: "model-picker-loading", padding_top: Cells::from(1)) {
+                Spinner(
+                    label: "Loading models…",
+                    label_style: Style::default().fg(Color::Gray),
+                )
+            }
+        })
+
+        #(if asking_tool.is_none() && ready_picker.is_none() {
             View(key: "input-box", padding_top: Cells::from(1)) {
                 InputBox(
                     key: "input",
@@ -157,6 +181,40 @@ fn input_view(state: &ViewState) -> Elements {
                 })
             }
         })
+    }
+}
+
+/// Render the /model picker: one row per model, the in-use model marked.
+/// `current` is the session's explicit selection; when unset, the server
+/// default is what's actually in use, so mark that row instead.
+fn model_picker_view(list: &crate::models::ModelList, current: Option<&str>) -> Elements {
+    let in_use = current.unwrap_or(&list.default);
+    let options: Vec<SelectOption> = list
+        .models
+        .iter()
+        .map(|m| {
+            let marker = if m.alias == in_use { " (current)" } else { "" };
+            SelectOption::builder()
+                .label(format!("{} — {}{}", m.name, m.description, marker))
+                .value(m.alias.clone())
+                .build()
+        })
+        .collect();
+
+    element! {
+        View(key: "model-picker", padding_left: Cells::from(2), padding_top: Cells::from(1)) {
+            Text {
+                Span(text: "Select a model:", style: Style::default().add_modifier(Modifier::BOLD))
+            }
+            View(padding_left: Cells::from(2)) {
+                Select(options: options, on_select: Box::new(move |option: &SelectOption| {
+                    Some(AiTuiEvent::SelectModel(option.value.clone()))
+                }) as Box<dyn Fn(&SelectOption) -> Option<AiTuiEvent> + Send + Sync>)
+            }
+            Text {
+                Span(text: "[Esc] Cancel", style: Style::default().fg(Color::DarkGray))
+            }
+        }
     }
 }
 

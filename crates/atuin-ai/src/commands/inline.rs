@@ -179,7 +179,7 @@ async fn run_inline_tui(
         .await?;
 
     // ─── Build FSM ───────────────────────────────────────────────
-    let (session_mgr, fsm, file_tracker, edit_permissions) = if let Some(stored) = resumable {
+    let (session_mgr, mut fsm, file_tracker, edit_permissions) = if let Some(stored) = resumable {
         debug!(session_id = %stored.id, "resuming AI session");
         let (mgr, mut events, server_sid, last_event_ts, invocation_id) =
             SessionManager::resume(Box::new(service), &stored).await?;
@@ -238,6 +238,16 @@ async fn run_inline_tui(
         let fsm = AgentFsm::new(caps, invocation_id);
         (mgr, fsm, Default::default(), Default::default())
     };
+
+    // `ai.model` is read once at startup, so /model in another running
+    // session doesn't retarget this one mid-conversation.
+    fsm.ctx.model = settings
+        .ai
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
 
     // ─── Snapshot store ─────────────────────────────────────────
     let snapshot_dir = atuin_common::utils::data_dir()
@@ -400,6 +410,8 @@ fn build_view_state(
         last_event_time: fsm.ctx.last_event_time,
         in_git_project,
         archived_events,
+        model_picker: fsm.ctx.model_picker.clone(),
+        model: fsm.ctx.model.clone(),
         turns,
         has_command,
         committed_turn_count: 0,
