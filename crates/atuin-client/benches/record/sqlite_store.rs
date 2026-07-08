@@ -2,12 +2,15 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::store::Store;
 use atuin_common::record::{EncryptedData, Host, HostId, Record};
 use atuin_common::utils::uuid_v7;
-use rand::{Rng, distributions::Alphanumeric};
+use rand::Rng;
+use rand::distributions::Alphanumeric;
 use tempfile::TempDir;
 
-struct BenchRecordBuilder;
+use crate::_util::context::BenchCtx;
 
-impl BenchRecordBuilder {
+struct BenchRecord;
+
+impl BenchRecord {
     /// Controls how large the record payload is. Roughly, this is between 200 and 400 bytes for
     /// a typical history record.
     ///
@@ -27,16 +30,18 @@ impl BenchRecordBuilder {
     /// Rough size of the PASETO PIE-wrapped key.
     const KEY_SIZE: usize = 150;
 
-    fn chain(n: usize) -> Vec<Record<EncryptedData>> {
+    fn chain(ctx: &mut BenchCtx, n: usize) -> Vec<Record<EncryptedData>> {
         let host = Host::new(HostId(uuid_v7()));
         let version: String = "v1".into();
         let tag = uuid_v7().simple().to_string();
-        let data: String = rand::thread_rng()
+        let data: String = ctx
+            .rng()
             .sample_iter(&Alphanumeric)
             .take(Self::PAYLOAD_SIZE)
             .map(char::from)
             .collect();
-        let key: String = rand::thread_rng()
+        let key: String = ctx
+            .rng()
             .sample_iter(&Alphanumeric)
             .take(Self::KEY_SIZE)
             .map(char::from)
@@ -85,14 +90,15 @@ impl BenchSqliteStore {
 /// The parameters are:
 ///  - 1 proves out the case of adding one shell entry via `push_record` (history/store.rs).
 ///  - 100 is the page size used by `sync_remote` (record/sync.rs).
-#[divan::bench(args = [1, 10, 100], sample_count = 500, min_time = 5)]
+#[divan::bench(args = [1, 10, 100], sample_count = 500, min_time = 1)]
 fn push_batch(bencher: divan::Bencher, n: usize) {
     let rt = tokio::runtime::Runtime::new().unwrap();
 
     bencher
         .with_inputs(|| {
+            let mut ctx = BenchCtx::new();
             let db = rt.block_on(BenchSqliteStore::new());
-            let records = BenchRecordBuilder::chain(n);
+            let records = BenchRecord::chain(&mut ctx, n);
             (db, records)
         })
         .bench_values(|(db, records)| {

@@ -2,6 +2,7 @@
 name = "atuin-client"
 edition = "2024"
 description = "client library for atuin"
+autobenches = false
 
 rust-version = { workspace = true }
 version = { workspace = true }
@@ -86,5 +87,5 @@ divan = "0.1.14"
 tempfile = "3"
 
 [[bench]]
-name = "record_store"
+name = "benchmarks"
 harness = false
