@@ -5,7 +5,6 @@
 //! them by history ID for AI tool lookup.
 
 use std::collections::{HashMap, VecDeque};
-use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use atuin_client::history::{History, HistoryId};
@@ -45,7 +44,9 @@ struct SemanticState {
     pending_histories: VecDeque<History>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::Display, derive_more::AsRef)]
+#[display("{_0}")]
+#[as_ref(str)]
 struct SessionId(String);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -437,18 +438,6 @@ impl TryFrom<String> for SessionId {
 
     fn try_from(value: String) -> std::result::Result<Self, Self::Error> {
         Self::try_from(value.as_str())
-    }
-}
-
-impl AsRef<str> for SessionId {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Display for SessionId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
     }
 }
 

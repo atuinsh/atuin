@@ -1,9 +1,7 @@
-use core::fmt::Formatter;
 use rmp::decode::DecodeStringError;
 use rmp::decode::ValueReadError;
 use rmp::{Marker, decode::Bytes};
 use std::env;
-use std::fmt::Display;
 
 use atuin_common::record::DecryptedData;
 use atuin_common::utils::uuid_v7;
@@ -45,20 +43,9 @@ pub const HISTORY_TAG: &str = "history";
 const HISTORY_AUTHOR_ENV: &str = "ATUIN_HISTORY_AUTHOR";
 const HISTORY_INTENT_ENV: &str = "ATUIN_HISTORY_INTENT";
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, derive_more::Display, derive_more::From)]
+#[display("{_0}")]
 pub struct HistoryId(pub String);
-
-impl Display for HistoryId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<String> for HistoryId {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
 
 /// Client-side history entry.
 ///

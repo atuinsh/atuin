@@ -152,7 +152,7 @@ pub(crate) struct ToolPreview {
 }
 
 /// A tool call from the server, with parsed input parameters.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, derive_more::From)]
 pub(crate) enum ClientToolCall {
     Read(ReadToolCall),
     Edit(EditToolCall),

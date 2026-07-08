@@ -4,35 +4,24 @@ use serde::Serialize;
 use sysinfo::{Process, System, get_current_pid};
 use thiserror::Error;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, derive_more::Display)]
 pub enum Shell {
+    #[display("sh")]
     Sh,
+    #[display("bash")]
     Bash,
+    #[display("fish")]
     Fish,
+    #[display("zsh")]
     Zsh,
+    #[display("xonsh")]
     Xonsh,
+    #[display("nu")]
     Nu,
+    #[display("powershell")]
     Powershell,
-
+    #[display("unknown")]
     Unknown,
-}
-
-impl std::fmt::Display for Shell {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let shell = match self {
-            Shell::Bash => "bash",
-            Shell::Fish => "fish",
-            Shell::Zsh => "zsh",
-            Shell::Nu => "nu",
-            Shell::Xonsh => "xonsh",
-            Shell::Sh => "sh",
-            Shell::Powershell => "powershell",
-
-            Shell::Unknown => "unknown",
-        };
-
-        write!(f, "{shell}")
-    }
 }
 
 #[derive(Debug, Error, Serialize)]

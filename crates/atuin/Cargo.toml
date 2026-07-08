@@ -53,6 +53,7 @@ atuin-daemon = { path = "../atuin-daemon", version = "18.16.1", optional = true,
 atuin-pty-proxy = { path = "../atuin-pty-proxy", version = "18.16.1", optional = true, default-features = false }
 atuin-scripts = { workspace = true }
 atuin-kv = { workspace = true }
+derive_more = { workspace = true }
 
 log = { workspace = true }
 time = { workspace = true }

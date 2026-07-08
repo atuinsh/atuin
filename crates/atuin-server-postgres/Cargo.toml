@@ -12,6 +12,7 @@ repository = { workspace = true }
 [dependencies]
 atuin-common = { path = "../atuin-common", version = "18.16.1" }
 atuin-server-database = { path = "../atuin-server-database", version = "18.16.1" }
+derive_more = { workspace = true }
 
 eyre = { workspace = true }
 tracing = { workspace = true }
