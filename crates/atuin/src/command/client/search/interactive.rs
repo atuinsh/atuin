@@ -1173,7 +1173,8 @@ impl State {
             history_highlighter,
             show_numeric_shortcuts,
             columns,
-        );
+        )
+        .ultracompact(matches!(style.compactness, Compactness::Ultracompact));
 
         match style.compactness {
             Compactness::Full => {
