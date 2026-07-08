@@ -152,7 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn as_percentage_averages_limited_buckets() {
+    fn as_percentage_uses_higher_limited_bucket() {
         let mut snapshot = UsageSnapshot {
             period: "calendar_monthly".into(),
             resets_at: "2026-08-01T00:00:00Z".into(),
@@ -166,7 +166,7 @@ mod tests {
                 limit: 100,
             },
         };
-        assert_eq!(snapshot.as_percentage(), Some(70.0));
+        assert_eq!(snapshot.as_percentage(), Some(90.0));
 
         // Unlimited/disabled buckets drop out of the average
         snapshot.output.limit = -1;
