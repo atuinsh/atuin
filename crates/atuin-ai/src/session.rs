@@ -54,6 +54,11 @@ pub(crate) trait SessionService: Send + Sync {
 
     async fn get_metadata(&self, session_id: &str, key: &str) -> Result<Option<String>>;
     async fn set_metadata(&self, session_id: &str, key: &str, value: &str) -> Result<()>;
+
+    /// Read the cached usage snapshot (JSON, written-at unix timestamp) for
+    /// a user key. Not session-scoped: usage is per hub account.
+    async fn get_cached_usage(&self, user_key: &str) -> Result<Option<(String, i64)>>;
+    async fn set_cached_usage(&self, user_key: &str, snapshot_json: &str) -> Result<()>;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +143,14 @@ impl SessionService for LocalSessionService {
 
     async fn set_metadata(&self, session_id: &str, key: &str, value: &str) -> Result<()> {
         self.store.set_metadata(session_id, key, value).await
+    }
+
+    async fn get_cached_usage(&self, user_key: &str) -> Result<Option<(String, i64)>> {
+        self.store.get_usage(user_key).await
+    }
+
+    async fn set_cached_usage(&self, user_key: &str, snapshot_json: &str) -> Result<()> {
+        self.store.set_usage(user_key, snapshot_json).await
     }
 }
 
@@ -336,6 +349,12 @@ impl SessionManager {
         self.service
             .set_metadata(&self.session_id, key, value)
             .await
+    }
+
+    /// Write the usage cache for a user key. Not tied to the current
+    /// session, so no session row is created.
+    pub async fn set_cached_usage(&self, user_key: &str, snapshot_json: &str) -> Result<()> {
+        self.service.set_cached_usage(user_key, snapshot_json).await
     }
 }
 

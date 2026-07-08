@@ -21,7 +21,11 @@ pub(crate) static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSI
 /// Frames that alter the stream lifecycle — terminal or state-changing.
 #[derive(Debug, Clone)]
 pub(crate) enum StreamControl {
-    Done { session_id: String },
+    Done {
+        session_id: String,
+        /// Period credit totals from the server, when it sends them.
+        credits: Option<crate::usage::UsageSnapshot>,
+    },
     Error(String),
     StatusChanged(String),
 }
@@ -257,9 +261,12 @@ pub(crate) fn create_chat_stream(
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("")
                                     .to_string();
-                                yield Ok(StreamFrame::Control(StreamControl::Done { session_id }));
+                                let credits = json.get("credits")
+                                    .cloned()
+                                    .and_then(|v| serde_json::from_value(v).ok());
+                                yield Ok(StreamFrame::Control(StreamControl::Done { session_id, credits }));
                             } else {
-                                yield Ok(StreamFrame::Control(StreamControl::Done { session_id: String::new() }));
+                                yield Ok(StreamFrame::Control(StreamControl::Done { session_id: String::new(), credits: None }));
                             }
                             break;
                         }

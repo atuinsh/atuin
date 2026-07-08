@@ -331,6 +331,35 @@ impl AiSessionStore {
         .await?;
         Ok(())
     }
+
+    // ── Usage cache (server credit totals, one row per user key) ──
+
+    /// Read the cached usage snapshot for a user key. Returns the snapshot
+    /// JSON and the unix timestamp it was written at.
+    pub async fn get_usage(&self, user_key: &str) -> Result<Option<(String, i64)>> {
+        let row: Option<(String, i64)> =
+            sqlx::query_as("SELECT snapshot, updated_at FROM usage WHERE user_key = ?1")
+                .bind(user_key)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row)
+    }
+
+    /// Write the usage snapshot for a user key (upsert).
+    pub async fn set_usage(&self, user_key: &str, snapshot_json: &str) -> Result<()> {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        sqlx::query(
+            "INSERT INTO usage (user_key, snapshot, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT (user_key) DO UPDATE SET snapshot = ?2, updated_at = ?3",
+        )
+        .bind(user_key)
+        .bind(snapshot_json)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -522,6 +551,26 @@ mod tests {
         let after = store.get_session("s1").await.unwrap().unwrap();
 
         assert_eq!(before.updated_at, after.updated_at);
+    }
+
+    #[tokio::test]
+    async fn test_usage_cache_roundtrip() {
+        let store = new_test_store().await;
+
+        assert!(store.get_usage("key-a").await.unwrap().is_none());
+
+        store.set_usage("key-a", r#"{"used":1}"#).await.unwrap();
+        let (json, updated_at) = store.get_usage("key-a").await.unwrap().unwrap();
+        assert_eq!(json, r#"{"used":1}"#);
+        assert!(updated_at > 0);
+
+        // Upsert replaces the snapshot for the same key
+        store.set_usage("key-a", r#"{"used":2}"#).await.unwrap();
+        let (json, _) = store.get_usage("key-a").await.unwrap().unwrap();
+        assert_eq!(json, r#"{"used":2}"#);
+
+        // Other keys are independent
+        assert!(store.get_usage("key-b").await.unwrap().is_none());
     }
 
     #[tokio::test]
