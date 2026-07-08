@@ -46,7 +46,7 @@ struct SemanticState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::Display, derive_more::AsRef)]
 #[display("{_0}")]
-#[as_ref(forward)]
+#[as_ref(str)]
 struct SessionId(String);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
