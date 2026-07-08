@@ -365,7 +365,7 @@ pub async fn sync(
     check_encryption_key(&client, &remote_index, encryption_key).await?;
 
     let operations = operations(diff, store).await?;
-    let (uploaded, downloaded) = sync_remote(&client, operations, store, 100).await?;
+    let (uploaded, downloaded) = sync_remote(&client, operations, store, 1000).await?;
 
     Ok((uploaded, downloaded))
 }
