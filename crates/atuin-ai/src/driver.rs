@@ -947,15 +947,10 @@ fn update_usage(handle: &Handle<ViewState>, io: &IoContext, snapshot: crate::usa
         move |vs| vs.usage = Some(snapshot)
     });
 
-    match serde_json::to_string(&snapshot) {
-        Ok(json) => {
-            let key = crate::usage::cache_key(&io.app_ctx.token);
-            let rt = tokio::runtime::Handle::current();
-            if let Err(e) = rt.block_on(io.session_mgr.set_cached_usage(&key, &json)) {
-                tracing::warn!("Failed to persist usage cache: {e}");
-            }
-        }
-        Err(e) => tracing::warn!("Failed to serialize usage snapshot: {e}"),
+    let key = crate::usage::cache_key(&io.app_ctx.token);
+    let rt = tokio::runtime::Handle::current();
+    if let Err(e) = rt.block_on(io.session_mgr.set_cached_usage(&key, &snapshot)) {
+        tracing::warn!("Failed to persist usage cache: {e}");
     }
 }
 

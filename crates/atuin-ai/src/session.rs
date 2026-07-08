@@ -11,10 +11,16 @@ use eyre::Result;
 use crate::event_serde;
 use crate::store::{AiSessionStore, StoredEvent, StoredSession};
 use crate::tui::ConversationEvent;
+use crate::usage::UsageSnapshot;
 
 // ---------------------------------------------------------------------------
 // Trait
 // ---------------------------------------------------------------------------
+
+pub(crate) struct CachedUsageSnapshot {
+    pub snapshot: UsageSnapshot,
+    pub written_at: i64,
+}
 
 #[async_trait]
 pub(crate) trait SessionService: Send + Sync {
@@ -57,8 +63,8 @@ pub(crate) trait SessionService: Send + Sync {
 
     /// Read the cached usage snapshot (JSON, written-at unix timestamp) for
     /// a user key. Not session-scoped: usage is per hub account.
-    async fn get_cached_usage(&self, user_key: &str) -> Result<Option<(String, i64)>>;
-    async fn set_cached_usage(&self, user_key: &str, snapshot_json: &str) -> Result<()>;
+    async fn get_cached_usage(&self, user_key: &str) -> Result<Option<CachedUsageSnapshot>>;
+    async fn set_cached_usage(&self, user_key: &str, snapshot: &UsageSnapshot) -> Result<()>;
 }
 
 // ---------------------------------------------------------------------------
@@ -145,12 +151,19 @@ impl SessionService for LocalSessionService {
         self.store.set_metadata(session_id, key, value).await
     }
 
-    async fn get_cached_usage(&self, user_key: &str) -> Result<Option<(String, i64)>> {
-        self.store.get_usage(user_key).await
+    async fn get_cached_usage(&self, user_key: &str) -> Result<Option<CachedUsageSnapshot>> {
+        match self.store.get_usage(user_key).await? {
+            Some((json, written_at)) => Ok(Some(CachedUsageSnapshot {
+                snapshot: serde_json::from_str(&json)?,
+                written_at,
+            })),
+            None => return Ok(None),
+        }
     }
 
-    async fn set_cached_usage(&self, user_key: &str, snapshot_json: &str) -> Result<()> {
-        self.store.set_usage(user_key, snapshot_json).await
+    async fn set_cached_usage(&self, user_key: &str, snapshot: &UsageSnapshot) -> Result<()> {
+        let snapshot_json = serde_json::to_string(snapshot)?;
+        self.store.set_usage(user_key, &snapshot_json).await
     }
 }
 
@@ -353,8 +366,8 @@ impl SessionManager {
 
     /// Write the usage cache for a user key. Not tied to the current
     /// session, so no session row is created.
-    pub async fn set_cached_usage(&self, user_key: &str, snapshot_json: &str) -> Result<()> {
-        self.service.set_cached_usage(user_key, snapshot_json).await
+    pub async fn set_cached_usage(&self, user_key: &str, snapshot: &UsageSnapshot) -> Result<()> {
+        self.service.set_cached_usage(user_key, snapshot).await
     }
 }
 

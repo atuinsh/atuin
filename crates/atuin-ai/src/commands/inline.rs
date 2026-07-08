@@ -167,11 +167,10 @@ async fn run_inline_tui(
     // once the event channel exists) replaces it unless it's fresh.
     let usage_key = crate::usage::cache_key(&ctx.token);
     let (cached_usage, usage_is_fresh) = match service.get_cached_usage(&usage_key).await {
-        Ok(Some((json, updated_at))) => {
-            let snapshot = serde_json::from_str::<crate::usage::UsageSnapshot>(&json).ok();
-            let age = time::OffsetDateTime::now_utc().unix_timestamp() - updated_at;
-            let fresh = snapshot.is_some() && age < crate::usage::REFRESH_AFTER.as_secs() as i64;
-            (snapshot, fresh)
+        Ok(Some(cached_snapshot)) => {
+            let age = time::OffsetDateTime::now_utc().unix_timestamp() - cached_snapshot.written_at;
+            let fresh = age < crate::usage::REFRESH_AFTER.as_secs() as i64;
+            (Some(cached_snapshot.snapshot), fresh)
         }
         Ok(None) => (None, false),
         Err(e) => {
