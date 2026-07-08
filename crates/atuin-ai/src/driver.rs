@@ -374,7 +374,7 @@ fn resolve_skill_name(input: &str, handle: &Handle<ViewState>) -> Option<(String
     let is_skill = handle
         .fetch({
             let cmd_name = cmd_name.clone();
-            move |vs| vs.skill_names.contains(&cmd_name) && !vs.slash_registry.contains(&cmd_name)
+            move |vs| is_skill_command(&cmd_name, &vs.skill_names, &vs.slash_registry)
         })
         .blocking_recv()
         .unwrap_or(false);
@@ -390,6 +390,16 @@ fn resolve_skill_name(input: &str, handle: &Handle<ViewState>) -> Option<(String
         .map(|s| s.to_string());
 
     Some((cmd_name, args))
+}
+
+/// Skills are registered in `slash_registry` too (for autocomplete and
+/// `/help`), so precedence is decided by the builtin flag, not membership.
+fn is_skill_command(
+    cmd_name: &str,
+    skill_names: &std::collections::HashSet<String>,
+    slash_registry: &crate::tui::slash::SlashCommandRegistry,
+) -> bool {
+    skill_names.contains(cmd_name) && !slash_registry.contains_builtin(cmd_name)
 }
 
 fn resolve_slash_command(command: &str, handle: &Handle<ViewState>, io: &IoContext) -> String {
@@ -1117,5 +1127,41 @@ async fn run_stream_bridge(
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_skill_command;
+    use crate::tui::slash::{SlashCommand, SlashCommandRegistry};
+
+    /// Regression test: skills are registered into the slash registry so they
+    /// appear in autocomplete, which must not stop them dispatching as skills.
+    #[test]
+    fn skill_dispatches_even_when_registered_for_autocomplete() {
+        let mut registry = SlashCommandRegistry::default();
+        let mut skill_names = std::collections::HashSet::new();
+        registry.register(SlashCommand::new("release", "Cut a release"));
+        skill_names.insert("release".to_string());
+
+        assert!(is_skill_command("release", &skill_names, &registry));
+    }
+
+    #[test]
+    fn builtin_takes_precedence_over_skill_with_same_name() {
+        let mut registry = SlashCommandRegistry::default();
+        let mut skill_names = std::collections::HashSet::new();
+        registry.register(SlashCommand::new("reload", "A skill shadowing /reload"));
+        skill_names.insert("reload".to_string());
+
+        assert!(!is_skill_command("reload", &skill_names, &registry));
+    }
+
+    #[test]
+    fn unregistered_name_is_not_a_skill() {
+        let registry = SlashCommandRegistry::default();
+        let skill_names = std::collections::HashSet::new();
+
+        assert!(!is_skill_command("release", &skill_names, &registry));
     }
 }
