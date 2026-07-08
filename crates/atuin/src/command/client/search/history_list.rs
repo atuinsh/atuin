@@ -31,6 +31,12 @@ impl HistoryHighlighter<'_> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EmptyHistoryRow {
+    Hidden,
+    Prompt,
+}
+
 pub struct HistoryList<'a> {
     history: &'a [History],
     block: Option<Block<'a>>,
@@ -42,7 +48,7 @@ pub struct HistoryList<'a> {
     theme: &'a Theme,
     history_highlighter: HistoryHighlighter<'a>,
     show_numeric_shortcuts: bool,
-    ultracompact: bool,
+    empty_history_row: EmptyHistoryRow,
     /// Columns to display (in order, after the indicator)
     columns: &'a [UiColumn],
 }
@@ -93,7 +99,7 @@ impl StatefulWidget for HistoryList<'_> {
             // Ultracompact mode renders the prompt as part of the selected
             // history row. Preserve that prompt when the current filter has no
             // matches so the UI does not appear blank.
-            if self.ultracompact {
+            if self.empty_history_row == EmptyHistoryRow::Prompt {
                 DrawState {
                     buf,
                     list_area,
@@ -170,7 +176,7 @@ impl<'a> HistoryList<'a> {
             theme,
             history_highlighter,
             show_numeric_shortcuts,
-            ultracompact: false,
+            empty_history_row: EmptyHistoryRow::Hidden,
             columns,
         }
     }
@@ -181,7 +187,11 @@ impl<'a> HistoryList<'a> {
     }
 
     pub fn ultracompact(mut self, ultracompact: bool) -> Self {
-        self.ultracompact = ultracompact;
+        self.empty_history_row = if ultracompact {
+            EmptyHistoryRow::Prompt
+        } else {
+            EmptyHistoryRow::Hidden
+        };
         self
     }
 
