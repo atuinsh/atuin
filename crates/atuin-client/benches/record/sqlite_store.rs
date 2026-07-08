@@ -89,8 +89,9 @@ impl BenchSqliteStore {
 /// Benchmark to exercise the latency of pushing a batch of varying records.
 /// The parameters are:
 ///  - 1 proves out the case of adding one shell entry via `push_record` (history/store.rs).
-///  - 100 is the page size used by `sync_remote` (record/sync.rs).
-#[divan::bench(args = [1, 10, 100], sample_count = 500, min_time = 1)]
+///  - 100 is the old page size used by `sync_remote` (record/sync.rs).
+///  - 1000 is the new page size used by `sync_remote`.
+#[divan::bench(args = [1, 10, 100, 1000], sample_count = 500, min_time = 1)]
 fn push_batch(bencher: divan::Bencher, n: usize) {
     let rt = tokio::runtime::Runtime::new().unwrap();
 
