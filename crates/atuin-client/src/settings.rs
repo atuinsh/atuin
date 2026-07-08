@@ -30,7 +30,7 @@ mod scripts;
 pub mod watcher;
 
 #[derive(derive_more::AsRef)]
-#[as_ref(forward)]
+#[as_ref(str)]
 pub struct HubEndpoint(String);
 
 /// Default sync address for Atuin's hosted service
