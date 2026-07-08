@@ -18,4 +18,5 @@ pub(crate) mod store;
 pub(crate) mod stream;
 pub(crate) mod tools;
 pub(crate) mod tui;
+pub(crate) mod usage;
 pub(crate) mod user_context;

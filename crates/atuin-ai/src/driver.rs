@@ -43,6 +43,9 @@ pub(crate) enum DriverEvent {
     Tui(AiTuiEvent),
     /// Internal FSM event (from spawned stream/tool tasks)
     Fsm(Event),
+    /// Fresh credit-usage snapshot (from the done event or a background
+    /// fetch). Handled by the driver directly — the FSM never sees it.
+    Usage(crate::usage::UsageSnapshot),
 }
 
 // ============================================================================
@@ -87,6 +90,9 @@ pub(crate) struct ViewState {
     pub model_picker: Option<crate::fsm::ModelPicker>,
     /// Model alias currently in effect (`None` = server default).
     pub model: Option<String>,
+    /// Latest known credit usage: cached at startup, refreshed from the
+    /// done event and background fetches.
+    pub usage: Option<crate::usage::UsageSnapshot>,
 
     // ─── Pre-computed for rendering ────────────────────────────
     pub turns: Vec<turn::UiTurn>,
@@ -186,6 +192,10 @@ pub(crate) fn run_driver(
             DriverEvent::Tui(tui_event) => {
                 tracing::trace!(?tui_event, state = ?fsm.state, "TUI event");
                 translate_tui_event(tui_event, &handle, &io)
+            }
+            DriverEvent::Usage(snapshot) => {
+                update_usage(&handle, &io, snapshot);
+                None
             }
         };
 
@@ -929,6 +939,21 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
 // Persistence
 // ============================================================================
 
+/// Apply a fresh usage snapshot: sync it to the view and write it to the
+/// local cache so the next TUI open can render it immediately.
+fn update_usage(handle: &Handle<ViewState>, io: &IoContext, snapshot: crate::usage::UsageSnapshot) {
+    handle.update({
+        let snapshot = snapshot.clone();
+        move |vs| vs.usage = Some(snapshot)
+    });
+
+    let key = crate::usage::cache_key(&io.app_ctx.token);
+    let rt = tokio::runtime::Handle::current();
+    if let Err(e) = rt.block_on(io.session_mgr.set_cached_usage(&key, &snapshot)) {
+        tracing::warn!("Failed to persist usage cache: {e}");
+    }
+}
+
 fn persist(fsm: &AgentFsm, io: &mut IoContext) {
     let start = std::time::Instant::now();
     let rt = tokio::runtime::Handle::current();
@@ -1063,7 +1088,15 @@ async fn run_stream_bridge(
             },
             Ok(StreamFrame::Control(control)) => match control {
                 StreamControl::StatusChanged(status) => Some(Event::StreamStatusChanged(status)),
-                StreamControl::Done { session_id } => Some(Event::StreamDone { session_id }),
+                StreamControl::Done {
+                    session_id,
+                    credits,
+                } => {
+                    if let Some(snapshot) = credits {
+                        let _ = tx.send(DriverEvent::Usage(snapshot));
+                    }
+                    Some(Event::StreamDone { session_id })
+                }
                 StreamControl::Error(msg) => Some(Event::StreamError(msg)),
             },
             Ok(StreamFrame::SessionIdentity(session_id)) => {

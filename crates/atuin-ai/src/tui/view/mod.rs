@@ -179,8 +179,75 @@ fn input_view(state: &ViewState) -> Elements {
 
                     })
                 })
+
+                #(status_bar_view(state))
             }
         })
+    }
+}
+
+/// Usage below this percentage isn't worth a status-bar warning.
+const USAGE_BAR_THRESHOLD_PCT: f64 = 50.0;
+
+/// Width of the usage bar in cells.
+const USAGE_BAR_WIDTH: usize = 5;
+
+/// One-line status bar under the input box: current model on the left;
+/// on the right, once usage crosses the threshold, a small bar chart with
+/// the percentage and time until the period resets.
+fn status_bar_view(state: &ViewState) -> Elements {
+    let model_label = format!(" Model: {}", state.model.as_deref().unwrap_or("default"));
+
+    let usage = state.usage.as_ref().and_then(|snapshot| {
+        let pct = snapshot.as_percentage()?;
+        if pct < USAGE_BAR_THRESHOLD_PCT {
+            return None;
+        }
+        Some((pct, snapshot.resets_in()))
+    });
+
+    element! {
+        HStack(key: "status-bar") {
+            View(width: WidthConstraint::Fill) {
+                Text {
+                    Span(text: model_label, style: Style::default().fg(Color::DarkGray))
+                }
+            }
+            #(if let Some((pct, resets_in)) = usage {
+                #({
+                    let filled = ((pct / 100.0).clamp(0.0, 1.0) * USAGE_BAR_WIDTH as f64).round() as usize;
+                    let bar_filled = "█".repeat(filled);
+                    let bar_empty = "░".repeat(USAGE_BAR_WIDTH - filled);
+                    let pct_text = format!(" {}%", pct.round() as i64);
+                    let resets_text = resets_in
+                        .map(|d| format!(" · resets in {} ", crate::usage::format_reset_delta(d)))
+                        .unwrap_or_default();
+
+                    let bar_color = if pct >= 90.0 {
+                        Color::Red
+                    } else if pct >= 70.0 {
+                        Color::Yellow
+                    } else {
+                        Color::Green
+                    };
+
+                    let width = (USAGE_BAR_WIDTH
+                        + pct_text.chars().count()
+                        + resets_text.chars().count()) as u16;
+
+                    element! {
+                        View(width: WidthConstraint::Fixed(width)) {
+                            Text {
+                                Span(text: bar_filled, style: Style::default().fg(bar_color))
+                                Span(text: bar_empty, style: Style::default().fg(Color::DarkGray))
+                                Span(text: pct_text, style: Style::default().fg(Color::Gray))
+                                Span(text: resets_text, style: Style::default().fg(Color::DarkGray))
+                            }
+                        }
+                    }
+                })
+            })
+        }
     }
 }
 

@@ -163,6 +163,22 @@ async fn run_inline_tui(
         .await
         .context("failed to open AI session database")?;
 
+    // Cached usage renders immediately; a background fetch (spawned below,
+    // once the event channel exists) replaces it unless it's fresh.
+    let usage_key = crate::usage::cache_key(&ctx.token);
+    let (cached_usage, usage_is_fresh) = match service.get_cached_usage(&usage_key).await {
+        Ok(Some(cached_snapshot)) => {
+            let age = time::OffsetDateTime::now_utc().unix_timestamp() - cached_snapshot.written_at;
+            let fresh = age < crate::usage::REFRESH_AFTER.as_secs() as i64;
+            (Some(cached_snapshot.snapshot), fresh)
+        }
+        Ok(None) => (None, false),
+        Err(e) => {
+            debug!("failed to read usage cache: {e}");
+            (None, false)
+        }
+    };
+
     let cwd = std::env::current_dir()
         .ok()
         .map(|p| p.to_string_lossy().into_owned());
@@ -266,7 +282,8 @@ async fn run_inline_tui(
     let skill_registry = crate::skills::SkillRegistry::discover(project_root.as_deref()).await;
 
     // ─── Build initial ViewState from FSM ───────────────────────
-    let initial_view = build_view_state(&fsm, in_git_project, &skill_registry);
+    let mut initial_view = build_view_state(&fsm, in_git_project, &skill_registry);
+    initial_view.usage = cached_usage;
 
     // ─── Build IoContext ────────────────────────────────────────
     let io = IoContext {
@@ -287,6 +304,20 @@ async fn run_inline_tui(
 
     // Wrap sender for components: they send AiTuiEvent, we wrap it
     let tui_tx = DriverEventSender(tx.clone());
+
+    if !usage_is_fresh {
+        let endpoint = ctx.endpoint.clone();
+        let token = ctx.token.clone();
+        let usage_tx = tx.clone();
+        tokio::spawn(async move {
+            match crate::usage::fetch_usage(&endpoint, &token).await {
+                Ok(snapshot) => {
+                    let _ = usage_tx.send(DriverEvent::Usage(snapshot));
+                }
+                Err(e) => debug!("background usage fetch failed: {e}"),
+            }
+        });
+    }
 
     println!();
 
@@ -412,6 +443,7 @@ fn build_view_state(
         archived_events,
         model_picker: fsm.ctx.model_picker.clone(),
         model: fsm.ctx.model.clone(),
+        usage: None,
         turns,
         has_command,
         committed_turn_count: 0,
