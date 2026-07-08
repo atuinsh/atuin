@@ -11,6 +11,7 @@ repository = { workspace = true }
 
 [dependencies]
 atuin-common = { path = "../atuin-common", version = "18.16.1" }
+derive_more = { workspace = true }
 
 async-trait = { workspace = true }
 eyre = { workspace = true }

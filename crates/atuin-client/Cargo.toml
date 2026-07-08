@@ -2,6 +2,7 @@
 name = "atuin-client"
 edition = "2024"
 description = "client library for atuin"
+autobenches = false
 
 rust-version = { workspace = true }
 version = { workspace = true }
@@ -21,6 +22,7 @@ check-update = []
 
 [dependencies]
 atuin-common = { path = "../atuin-common", version = "18.16.1" }
+derive_more = { workspace = true }
 
 log = { workspace = true }
 base64 = { workspace = true }
@@ -86,5 +88,5 @@ divan = "0.1.14"
 tempfile = "3"
 
 [[bench]]
-name = "record_store"
+name = "benchmarks"
 harness = false
