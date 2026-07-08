@@ -40,7 +40,7 @@
 ## how often to sync history. note that this is only triggered when a command
 ## is ran, so sync intervals may well be longer
 ## set it to 0 to sync after every command
-# sync_frequency = "10m"
+# sync_frequency = "5m"
 
 ## which search mode to use
 ## possible values: prefix, fulltext, fuzzy, skim
@@ -71,11 +71,11 @@
 
 ## which style to use
 ## possible values: auto, full, compact
-# style = "auto"
+# style = "compact"
 
 ## the maximum number of lines the interface should take up
 ## set it to 0 to always go full screen
-# inline_height = 0
+# inline_height = 40
 
 ## the maximum number of lines the interface should take up
 ## when atuin is invoked from a shell up-key binding
@@ -174,21 +174,20 @@ enter_accept = true
 ## Defaults to false. If enabled, when triggered after &&, || or |, Atuin will complete commands to chain rather than replace the current line.
 # command_chaining = false
 
-## Defaults to "emacs".  This specifies the keymap on the startup of `atuin
-## search`.  If this is set to "auto", the startup keymap mode in the Atuin
-## search is automatically selected based on the shell's keymap where the
-## keybinding is defined.  If this is set to "emacs", "vim-insert", or
-## "vim-normal", the startup keymap mode in the Atuin search is forced to be
-## the specified one.
-# keymap_mode = "auto"
+## This specifies the keymap on the startup of `atuin search`. If this is set
+## to "auto", the startup keymap mode in the Atuin search is automatically
+## selected based on the shell's keymap where the keybinding is defined. If
+## this is set to "emacs", "vim-insert", or "vim-normal", the startup keymap
+## mode in the Atuin search is forced to be the specified one.
+# keymap_mode = "emacs"
 
-## Cursor style in each keymap mode.  If specified, the cursor style is changed
-## in entering the cursor shape.  Available values are "default" and
+## Cursor style in each keymap mode. If specified, the cursor style is changed
+## in entering the cursor shape. Available values are "default" and
 ## "{blink,steady}-{block,underline,bar}".
 # keymap_cursor = { emacs = "blink-block", vim_insert = "blink-block", vim_normal = "steady-block" }
 
 # network_connect_timeout = 5
-# network_timeout = 5
+# network_timeout = 30
 
 ## Timeout (in seconds) for acquiring a local database connection (sqlite)
 # local_timeout = 5
@@ -311,7 +310,7 @@ records = true
 ## The list of enabled filter modes, in order of priority.
 ## The "workspace" mode is skipped when not in a workspace or workspaces = false.
 ## Default filter mode can be overridden with the filter_mode setting.
-# filters = [ "global", "host", "session", "session-preload", "workspace", "directory" ]
+# filters = ["global", "host", "session", "workspace", "directory", "session-preload"]
 
 [tmux]
 ## Enable using atuin with tmux popup (requires tmux >= 3.2)
