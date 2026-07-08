@@ -46,6 +46,10 @@ pub struct Context {
 pub struct OptFilters {
     pub exit: Option<i64>,
     pub exclude_exit: Option<i64>,
+    /// Only commands that recorded a non-zero exit. Unlike `exclude_exit: 0`,
+    /// this also skips the `exit = -1` sentinel rows for commands still
+    /// running (or whose end hook never fired).
+    pub only_failed: bool,
     pub cwd: Option<String>,
     pub exclude_cwd: Option<String>,
     pub before: Option<String>,
@@ -58,10 +62,13 @@ pub struct OptFilters {
     pub authors: Vec<String>,
 }
 
-pub async fn current_context() -> eyre::Result<Context> {
-    let session = env::var("ATUIN_SESSION").map_err(|_| {
-        eyre::eyre!("Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set up your shell.")
-    })?;
+/// Build a query [`Context`] without requiring a live shell session.
+///
+/// Outside of an atuin-hooked shell (e.g. when running as an MCP server),
+/// `ATUIN_SESSION` is unset; the session is left empty so session-scoped
+/// filters simply match nothing.
+pub async fn query_context() -> eyre::Result<Context> {
+    let session = env::var("ATUIN_SESSION").unwrap_or_default();
     let hostname = get_host_user();
     let cwd = utils::get_current_dir();
     let host_id = Settings::host_id().await?;
@@ -74,6 +81,16 @@ pub async fn current_context() -> eyre::Result<Context> {
         git_root,
         host_id: host_id.0.as_simple().to_string(),
     })
+}
+
+pub async fn current_context() -> eyre::Result<Context> {
+    if env::var("ATUIN_SESSION").is_err() {
+        return Err(eyre::eyre!(
+            "Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set up your shell."
+        ));
+    }
+
+    query_context().await
 }
 
 impl Context {
@@ -587,6 +604,10 @@ impl Database for Sqlite {
         filter_options
             .exclude_exit
             .map(|exclude_exit| sql.and_where_ne("exit", exclude_exit));
+
+        if filter_options.only_failed {
+            sql.and_where("exit != 0 AND exit != -1");
+        }
 
         filter_options
             .cwd
