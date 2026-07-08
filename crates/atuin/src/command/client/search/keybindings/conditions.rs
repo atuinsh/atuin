@@ -259,7 +259,7 @@ impl<'a> ExprParser<'a> {
         }
     }
 
-    /// atom = [a-z][a-z0-9-]*
+    /// atom = `[a-z][a-z0-9-]*`
     fn parse_atom(&mut self) -> Result<ConditionExpr, String> {
         self.skip_whitespace();
         let start = self.pos;

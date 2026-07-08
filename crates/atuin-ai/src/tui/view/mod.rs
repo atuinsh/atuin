@@ -829,7 +829,7 @@ fn visible_group_calls(group: &turn::ToolGroup) -> &[turn::ToolCallDetails] {
     &group.calls[start..]
 }
 
-/// Render a single row in a grouped list: [tree marker][status][content].
+/// Render a single row in a grouped list: `[tree marker][status][content]`.
 fn group_row_view(is_first: bool, status: &turn::ToolResultStatus, content: Elements) -> Elements {
     element! {
         HStack {

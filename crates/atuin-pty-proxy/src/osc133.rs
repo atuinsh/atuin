@@ -2,15 +2,15 @@
 //!
 //! OSC 133 marks four regions of a shell interaction:
 //!
-//! | Marker | Meaning                              |
-//! |--------|--------------------------------------|
-//! | A      | Prompt is about to be printed        |
-//! | B      | Prompt ended — command input begins   |
-//! | C      | Command submitted — output begins     |
-//! | D[;n]  | Command finished with exit code *n*   |
+//! | Marker  | Meaning                               |
+//! |---------|---------------------------------------|
+//! | `A`     | Prompt is about to be printed         |
+//! | `B`     | Prompt ended — command input begins   |
+//! | `C`     | Command submitted — output begins     |
+//! | `D[;n]` | Command finished with exit code *n*   |
 //!
-//! The wire format is `ESC ] 133 ; <cmd> [; <params>] ST` where ST is BEL
-//! (0x07), ESC \ (0x1B 0x5C), or C1 ST (0x9C).
+//! The wire format is `ESC ] 133 ; <cmd> [; <params>] ST` where `ST` is `BEL`
+//! (0x07), `ESC \` (0x1B 0x5C), or `C1 ST` (0x9C).
 //!
 //! # Design goals
 //!
@@ -18,8 +18,8 @@
 //!   the caller remains responsible for forwarding bytes to their destination.
 //! * **Bounded** — OSC parameter buffering is capped so malformed output cannot
 //!   grow memory without limit.
-//! * **Non-blocking** — [`Parser::push`] processes whatever bytes are available
-//!   and returns immediately.
+//! * **Non-blocking** — [`Parser::push_located`] processes whatever bytes are
+//!   available and returns immediately.
 //! * **Extensible** — marker parameters are preserved so Atuin-specific metadata
 //!   can ride alongside standard OSC 133 markers.
 
@@ -145,7 +145,7 @@ enum State {
 
 /// A streaming, zero-allocation parser for OSC 133 escape sequences.
 ///
-/// Feed arbitrary byte slices into [`Parser::push`].  The parser detects
+/// Feed arbitrary byte slices into [`Parser::push_located`].  The parser detects
 /// OSC 133 markers and reports [`Event`]s through a caller-supplied callback
 /// without modifying the data.  It can sit transparently between a PTY reader
 /// and stdout.
