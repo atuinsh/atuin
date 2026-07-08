@@ -24,11 +24,13 @@ steps or combine them.
 
 ## Step 1 — Check Dependencies
 
-Verify these tools are installed: `git`, `gsed`, `cargo`, `gh`, `git-cliff`.
+Verify these tools are installed: `git`, `cargo`, `gh`, `git-cliff`.
+
+On macOS, also verify `gsed`. On Linux, `sed` is already GNU sed.
 
 Use `command -v` for each. If any are missing, report which ones and stop.
 
-Remember to use `gsed`, or else macOS flags to regular `sed`, later in the workflow.
+Set the `SED` variable for later use: if on macOS, `SED=gsed`; on Linux, `SED=sed`.
 
 ---
 
@@ -73,7 +75,7 @@ ALL subsequent Bash commands run from `$WORKDIR`.
    ```bash
    VERSION_PATTERN="${OLD_VERSION//./\\.}"
    find . -type f -name 'Cargo.toml' -not -path './.git/*' \
-       -exec gsed -i "s/$VERSION_PATTERN/$NEW_VERSION/g" {} \;
+       -exec $SED -i "s/$VERSION_PATTERN/$NEW_VERSION/g" {} \;
    ```
 
 3. Run `cargo check` to update `Cargo.lock`.
