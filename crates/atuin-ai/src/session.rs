@@ -152,13 +152,7 @@ impl SessionService for LocalSessionService {
     }
 
     async fn get_cached_usage(&self, user_key: &str) -> Result<Option<CachedUsageSnapshot>> {
-        match self.store.get_usage(user_key).await? {
-            Some((json, written_at)) => Ok(Some(CachedUsageSnapshot {
-                snapshot: serde_json::from_str(&json)?,
-                written_at,
-            })),
-            None => return Ok(None),
-        }
+        self.store.get_usage(user_key).await
     }
 
     async fn set_cached_usage(&self, user_key: &str, snapshot: &UsageSnapshot) -> Result<()> {
