@@ -8,7 +8,7 @@ If you used the Atuin installer, you can totally delete it by removing the follo
 2. Delete the `~/.config/atuin` directory
 3. Delete the `~/.local/share/atuin` directory
 4. Remove the line referencing "atuin init" from your shell config
-5. Fish users should also delete `~/.config/fish/conf.d/atuin.env.fish`
+5. Fish users: delete `~/.config/fish/conf.d/atuin.env.fish` if it exists
 
 Otherwise, uninstalling Atuin depends on your system, and how you installed it.
 
