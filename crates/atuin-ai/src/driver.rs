@@ -83,6 +83,10 @@ pub(crate) struct ViewState {
 
     // ─── View-only ──────────────────────────────────────────────
     pub archived_events: Vec<ConversationEvent>,
+    /// Open /model picker, if any (mirrors `AgentContext::model_picker`).
+    pub model_picker: Option<crate::fsm::ModelPicker>,
+    /// Model alias currently in effect (`None` = server default).
+    pub model: Option<String>,
 
     // ─── Pre-computed for rendering ────────────────────────────
     pub turns: Vec<turn::UiTurn>,
@@ -255,6 +259,8 @@ fn translate_tui_event(
                 Some(Event::ExecuteCommand)
             } else if input == "/new" {
                 Some(Event::NewSession)
+            } else if input == "/model" || input.starts_with("/model ") {
+                Some(Event::OpenModelPicker)
             } else if input.starts_with('/') {
                 if let Some((skill_name, arguments)) = resolve_skill_name(&input, handle) {
                     Some(Event::RequestSkillLoad {
@@ -329,6 +335,7 @@ fn translate_tui_event(
             };
             Some(Event::PermissionUserChoice { tool_id, choice })
         }
+        AiTuiEvent::SelectModel(alias) => Some(Event::ModelSelected(alias)),
         AiTuiEvent::SlashCommand(cmd) => {
             if let Some((skill_name, arguments)) = resolve_skill_name(&cmd, handle) {
                 Some(Event::RequestSkillLoad {
@@ -414,6 +421,8 @@ fn sync_view_state(handle: &Handle<ViewState>, fsm: &AgentFsm, in_git_project: b
     let is_resumed = fsm.ctx.is_resumed;
     let last_event_time = fsm.ctx.last_event_time;
     let archived_events = fsm.ctx.archived_events.clone();
+    let model_picker = fsm.ctx.model_picker.clone();
+    let model = fsm.ctx.model.clone();
 
     // Inject streaming text as a synthetic event for live rendering.
     // The FSM commits text to events on stream end; this makes it visible during streaming.
@@ -462,6 +471,8 @@ fn sync_view_state(handle: &Handle<ViewState>, fsm: &AgentFsm, in_git_project: b
         vs.last_event_time = last_event_time;
         vs.in_git_project = in_git_project;
         vs.archived_events = archived_events;
+        vs.model_picker = model_picker;
+        vs.model = model;
         vs.turns = turns;
         vs.has_command = has_command;
         vs.archived_turn_count = archived_turn_count;
@@ -505,6 +516,7 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
                 &app.capabilities,
                 app.daemon_enabled,
                 fsm.ctx.invocation_id.clone(),
+                fsm.ctx.model.clone(),
             );
             tokio::spawn(async move {
                 run_stream_bridge(
@@ -848,6 +860,27 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
 
         Effect::CacheSessionGrant { path } => {
             io.edit_permissions.grant(path.clone());
+        }
+
+        Effect::FetchModels => {
+            let tx = tx.clone();
+            let endpoint = io.app_ctx.endpoint.clone();
+            let token = io.app_ctx.token.clone();
+            tokio::spawn(async move {
+                let result = crate::models::fetch_models(&endpoint, &token)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(DriverEvent::Fsm(Event::ModelListLoaded(result)));
+            });
+        }
+
+        Effect::SaveModelSelection { alias } => {
+            let alias = alias.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::models::save_model_selection(&alias).await {
+                    tracing::error!("Failed to save model selection: {e}");
+                }
+            });
         }
 
         Effect::ArchiveSession => {

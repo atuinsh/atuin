@@ -345,16 +345,30 @@ impl VarStore {
 
         // this is sorted, oldest to newest
         let tagged = self.store.all_tagged(DOTFILES_VAR_TAG).await?;
+        let mut skipped = 0;
 
         for record in tagged {
             let version = record.version.clone();
 
-            let decrypted = match version.as_str() {
-                DOTFILES_VAR_VERSION => record.decrypt::<PASETO_V4>(&self.encryption_key)?,
-                version => bail!("unknown version {version:?}"),
-            };
+            // Skip records we can't decrypt or decode, rather than failing the entire build.
+            let ar =
+                match version.as_str() {
+                    DOTFILES_VAR_VERSION => record
+                        .decrypt::<PASETO_V4>(&self.encryption_key)
+                        .and_then(|decrypted| {
+                            VarRecord::deserialize(&decrypted.data, version.as_str())
+                        }),
+                    version => Err(eyre!("unknown version {version:?}")),
+                };
 
-            let ar = VarRecord::deserialize(&decrypted.data, version.as_str())?;
+            let ar = match ar {
+                Ok(ar) => ar,
+                Err(e) => {
+                    tracing::warn!("failed to decode var record, skipping: {e}");
+                    skipped += 1;
+                    continue;
+                }
+            };
 
             match ar {
                 VarRecord::Create(a) => {
@@ -364,6 +378,11 @@ impl VarStore {
                     build.remove(&d);
                 }
             }
+        }
+
+        if skipped > 0 {
+            // vars() runs during shell init, so this must not write to stderr
+            tracing::warn!("skipped {skipped} var records that could not be decrypted or decoded");
         }
 
         Ok(build.into_values().collect())

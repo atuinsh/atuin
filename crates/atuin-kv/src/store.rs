@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use eyre::{Result, bail};
+use eyre::{Result, eyre};
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::{encryption::PASETO_V4, store::Store};
@@ -114,16 +114,31 @@ impl KvStore {
         let cached = self.kv_db.list(None).await?;
 
         let mut visited = HashSet::new();
+        let mut skipped = 0;
 
         // Iterate through all KV records from newest to oldest;
         // only visit each KV once, inserting or deleting based on the first time we see it
         for record in tagged {
-            let decrypted = match record.version.as_str() {
-                "v0" | KV_VERSION => record.decrypt::<PASETO_V4>(&self.encryption_key)?,
-                version => bail!("unknown version {version:?}"),
+            // Skip records we can't decrypt or decode, rather than failing the entire build.
+            let kv =
+                match record.version.as_str() {
+                    "v0" | KV_VERSION => record
+                        .decrypt::<PASETO_V4>(&self.encryption_key)
+                        .and_then(|decrypted| {
+                            KvRecord::deserialize(&decrypted.data, &decrypted.version)
+                        }),
+                    version => Err(eyre!("unknown version {version:?}")),
+                };
+
+            let kv = match kv {
+                Ok(kv) => kv,
+                Err(e) => {
+                    tracing::warn!("failed to decode kv record, skipping: {e}");
+                    skipped += 1;
+                    continue;
+                }
             };
 
-            let kv = KvRecord::deserialize(&decrypted.data, &decrypted.version)?;
             let uniq_id = format!("{}.{}", kv.namespace, kv.key);
 
             if visited.insert(uniq_id) {
@@ -157,6 +172,11 @@ impl KvStore {
                     .delete(kv.namespace.as_str(), kv.key.as_str())
                     .await?;
             }
+        }
+
+        if skipped > 0 {
+            // library code that may run under the TUI or shell hooks, so no stderr here
+            tracing::warn!("skipped {skipped} kv records that could not be decrypted or decoded");
         }
 
         Ok(())

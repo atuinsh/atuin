@@ -2,6 +2,7 @@
 name = "atuin-client"
 edition = "2024"
 description = "client library for atuin"
+autobenches = false
 
 rust-version = { workspace = true }
 version = { workspace = true }
@@ -83,3 +84,9 @@ strum = { version = "0.27", features = ["strum_macros"] }
 tokio = { version = "1", features = ["full"] }
 pretty_assertions = { workspace = true }
 testing_logger = "0.1.1"
+divan = "0.1.14"
+tempfile = "3"
+
+[[bench]]
+name = "benchmarks"
+harness = false

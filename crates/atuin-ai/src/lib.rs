@@ -8,6 +8,8 @@ pub(crate) mod event_serde;
 pub(crate) mod file_tracker;
 pub(crate) mod fsm;
 pub(crate) mod history_format;
+pub mod mcp;
+pub(crate) mod models;
 pub(crate) mod permissions;
 pub(crate) mod session;
 pub(crate) mod skills;
