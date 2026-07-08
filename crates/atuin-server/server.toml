@@ -5,11 +5,12 @@
 # port = 8888
 
 ## whether to allow anyone to register an account
-# open_registration = false
+open_registration = true
 
 ## URI for postgres (using development creds here)
 # db_uri="postgres://username:password@localhost/atuin"
 # db_uri="sqlite:///config/atuin-server.db"
+db_uri = "mysql://root:foobar@127.0.0.1/atuin"
 
 ## Optional: URI for read replica database
 ## If set, read-only queries will be routed to this database
