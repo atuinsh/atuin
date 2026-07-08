@@ -163,6 +163,21 @@ impl History {
             .map_or_else(|| hostname.to_owned(), |(_, user)| user.to_owned())
     }
 
+    /// Strip NUL bytes from a command string.
+    ///
+    /// NUL bytes can enter the history when an external tool writes a raw NUL
+    /// byte into the command. They break downstream consumers that expect
+    /// valid UTF-8 text. Rather than reject the whole entry, we silently
+    /// strip the offending bytes. See atuinsh/atuin#3589.
+    fn sanitize_command(command: String) -> String {
+        if !command.contains('\0') {
+            // fast path: most commands are clean
+            command
+        } else {
+            command.replace('\0', "")
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new(
         timestamp: OffsetDateTime,
@@ -191,7 +206,7 @@ impl History {
         Self {
             id: uuid_v7().as_simple().to_string().into(),
             timestamp,
-            command,
+            command: Self::sanitize_command(command),
             cwd,
             exit,
             duration,
@@ -652,6 +667,31 @@ mod tests {
             .expect("failed to deserialize history");
 
         assert_eq!(history, deserialized);
+    }
+
+    #[test]
+    fn test_sanitize_strips_nul_bytes() {
+        // Simulate the "start=\0" mis-escape reported in #3589
+        let entry: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("start=\0 foo\0bar")
+            .cwd("/")
+            .build()
+            .into();
+
+        assert_eq!(entry.command, "start= foobar");
+    }
+
+    #[test]
+    fn test_sanitize_preserves_clean_command() {
+        let entry: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("git status")
+            .cwd("/")
+            .build()
+            .into();
+
+        assert_eq!(entry.command, "git status");
     }
 
     #[test]
