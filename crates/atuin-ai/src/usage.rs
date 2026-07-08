@@ -35,6 +35,50 @@ pub(crate) struct UsageSnapshot {
     pub output: UsageBucket,
 }
 
+impl UsageSnapshot {
+    pub(crate) fn resets_in(&self) -> Option<Duration> {
+        let reset_time = chrono::DateTime::parse_from_rfc3339(&self.resets_at).ok()?;
+        let now = chrono::Utc::now().fixed_offset();
+        let duration = reset_time - now;
+        duration.to_std().ok()
+    }
+
+    pub(crate) fn as_percentage(&self) -> Option<f64> {
+        let input_percentage = if self.input.limit > 0 {
+            Some(self.input.used as f64 / self.input.limit as f64 * 100.0)
+        } else {
+            None
+        };
+
+        let output_percentage = if self.output.limit > 0 {
+            Some(self.output.used as f64 / self.output.limit as f64 * 100.0)
+        } else {
+            None
+        };
+
+        match (input_percentage, output_percentage) {
+            (Some(input), Some(output)) if input > output => Some(input),
+            (Some(_), Some(output)) => Some(output),
+            (Some(input), None) => Some(input),
+            (None, Some(output)) => Some(output),
+            (None, None) => None,
+        }
+    }
+}
+
+/// Format a reset delta as its largest sensible unit: "4d", "23h", or "56m".
+/// Sub-minute deltas render as "1m" — "0m" would read as already reset.
+pub(crate) fn format_reset_delta(delta: Duration) -> String {
+    let minutes = delta.as_secs() / 60;
+    if minutes >= 24 * 60 {
+        format!("{}d", minutes / (24 * 60))
+    } else if minutes >= 60 {
+        format!("{}h", minutes / 60)
+    } else {
+        format!("{}m", minutes.max(1))
+    }
+}
+
 /// Key for the local usage cache. The client never learns its hub user id,
 /// so rows are keyed by a hash of the auth token: a different login (or a
 /// rotated token) simply misses the cache and refetches.
@@ -105,6 +149,40 @@ mod tests {
             serde_json::from_str::<UsageSnapshot>(&json).unwrap(),
             snapshot
         );
+    }
+
+    #[test]
+    fn as_percentage_averages_limited_buckets() {
+        let mut snapshot = UsageSnapshot {
+            period: "calendar_monthly".into(),
+            resets_at: "2026-08-01T00:00:00Z".into(),
+            requests: UsageBucket { used: 3, limit: -1 },
+            input: UsageBucket {
+                used: 50,
+                limit: 100,
+            },
+            output: UsageBucket {
+                used: 90,
+                limit: 100,
+            },
+        };
+        assert_eq!(snapshot.as_percentage(), Some(70.0));
+
+        // Unlimited/disabled buckets drop out of the average
+        snapshot.output.limit = -1;
+        assert_eq!(snapshot.as_percentage(), Some(50.0));
+
+        snapshot.input.limit = 0;
+        assert_eq!(snapshot.as_percentage(), None);
+    }
+
+    #[test]
+    fn formats_reset_deltas() {
+        let mins = |m: u64| Duration::from_secs(m * 60);
+        assert_eq!(format_reset_delta(mins(4 * 24 * 60 + 300)), "4d");
+        assert_eq!(format_reset_delta(mins(23 * 60 + 59)), "23h");
+        assert_eq!(format_reset_delta(mins(56)), "56m");
+        assert_eq!(format_reset_delta(Duration::from_secs(30)), "1m");
     }
 
     #[test]
