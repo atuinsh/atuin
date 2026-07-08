@@ -156,8 +156,7 @@ impl SessionService for LocalSessionService {
     }
 
     async fn set_cached_usage(&self, user_key: &str, snapshot: &UsageSnapshot) -> Result<()> {
-        let snapshot_json = serde_json::to_string(snapshot)?;
-        self.store.set_usage(user_key, &snapshot_json).await
+        self.store.set_usage(user_key, snapshot).await
     }
 }
 

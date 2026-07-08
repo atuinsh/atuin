@@ -6,7 +6,7 @@ use eyre::{Result, eyre};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 use time::OffsetDateTime;
 
-use crate::session::CachedUsageSnapshot;
+use crate::{session::CachedUsageSnapshot, usage::UsageSnapshot};
 
 // Database row mappings — all columns are kept even if not yet read in
 // non-test code, since they're part of the schema and used in tests.
@@ -357,7 +357,8 @@ impl AiSessionStore {
     }
 
     /// Write the usage snapshot for a user key (upsert).
-    pub async fn set_usage(&self, user_key: &str, snapshot_json: &str) -> Result<()> {
+    pub async fn set_usage(&self, user_key: &str, snapshot: &UsageSnapshot) -> Result<()> {
+        let snapshot_json = serde_json::to_string(snapshot)?;
         let now = OffsetDateTime::now_utc().unix_timestamp();
         sqlx::query(
             "INSERT INTO usage (user_key, snapshot, updated_at)
@@ -580,8 +581,7 @@ mod tests {
             input: UsageBucket { used: 2, limit: 20 },
             output: UsageBucket { used: 3, limit: 0 },
         };
-        let json = serde_json::to_string(&snapshot).unwrap();
-        store.set_usage("key-a", &json).await.unwrap();
+        store.set_usage("key-a", &snapshot).await.unwrap();
 
         let cached = store.get_usage("key-a").await.unwrap().unwrap();
         assert!(cached.written_at > 0);
@@ -592,8 +592,7 @@ mod tests {
             requests: UsageBucket { used: 4, limit: 10 },
             ..snapshot
         };
-        let json = serde_json::to_string(&updated).unwrap();
-        store.set_usage("key-a", &json).await.unwrap();
+        store.set_usage("key-a", &updated).await.unwrap();
 
         let cached = store.get_usage("key-a").await.unwrap().unwrap();
         assert_eq!(cached.snapshot, updated);
