@@ -253,8 +253,9 @@ type FrecencyMap = Arc<HashMap<Arc<str>, u32>>;
 /// although this should never happen due to precomputing the frecency map.
 pub struct SearchIndex {
     /// Map from command text to command data.
-    /// Using DashMap for concurrent read/write access, wrapped in Arc for sharing with scorer.
-    /// Keys are Arc<str> to enable zero-copy sharing with frecency_map.
+    ///
+    /// Using `DashMap` for concurrent read/write access, wrapped in `Arc` for sharing with scorer.
+    /// Keys are `Arc<str>` to enable zero-copy sharing with frecency_map.
     commands: Arc<DashMap<Arc<str>, CommandData>>,
     /// Nucleo fuzzy matcher - items are command strings.
     nucleo: RwLock<Nucleo<String>>,

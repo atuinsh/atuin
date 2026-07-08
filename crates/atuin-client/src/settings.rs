@@ -171,7 +171,7 @@ impl fmt::Display for Timezone {
         self.0.fmt(f)
     }
 }
-/// format: <+|-><hour>[:<minute>[:<second>]]
+/// format: `<+|-><hour>[:<minute>[:<second>]]`
 static OFFSET_FMT: &[FormatItem<'_>] = format_description!(
     "[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional [:[offset_second padding:none]]]]]"
 );
@@ -1379,7 +1379,7 @@ impl Settings {
 
     /// Returns the appropriate auth token for sync operations.
     ///
-    /// Delegates to [`resolve_sync_auth`] and converts the result to an
+    /// Delegates to [`Self::resolve_sync_auth`] and converts the result to an
     /// `AuthToken`. Callers that need to distinguish between auth states
     /// (e.g. to show different UI) should call `resolve_sync_auth` directly.
     #[cfg(feature = "sync")]
