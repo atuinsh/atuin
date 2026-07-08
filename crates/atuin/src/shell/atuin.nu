@@ -69,7 +69,7 @@ let _atuin_pre_prompt = {||
         }
 
     }
-    hide-env ATUIN_HISTORY_ID
+    hide-env -i ATUIN_HISTORY_ID
 }
 
 def _atuin_search_cmd [...flags: string] {
