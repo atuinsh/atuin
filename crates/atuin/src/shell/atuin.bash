@@ -86,7 +86,7 @@ __atuin_preexec() {
     __atuin_update_preexec_backend
 
     local id
-    id=$(atuin history start --hook -- "$1" 2>/dev/null)
+    id=$(ATUIN_SHELL=bash atuin history start --hook -- "$1" 2>/dev/null)
     export ATUIN_HISTORY_ID=$id
     [[ -n ${__atuin_skip_osc133:-} ]] || __atuin_osc133_command_executed
     __atuin_preexec_time=${EPOCHREALTIME-}

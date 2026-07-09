@@ -182,6 +182,8 @@ pub trait Escapable: AsRef<str> {
     }
 }
 
+impl<T: AsRef<str>> Escapable for T {}
+
 pub fn unquote(s: &str) -> Result<String> {
     if s.chars().count() < 2 {
         return Err(eyre!("not enough chars"));
@@ -206,7 +208,25 @@ pub fn unquote(s: &str) -> Result<String> {
     Ok(s.to_string())
 }
 
-impl<T: AsRef<str>> Escapable for T {}
+/// Normalize an optional string by trimming whitespace and filtering out empty strings.
+///
+/// This function always returns either [`None`], or a nonempty string with no leading or trailing
+/// whitespace.
+pub fn normalize_optional_string<T>(string: T) -> Option<String>
+where
+    T: Into<Option<String>>,
+{
+    let mut string = string.into()?;
+    // Remove whitespace at end
+    string.truncate(string.trim_end().len());
+    // Remove whitespace at start
+    string.drain(0..(string.len() - string.trim_start().len()));
+    if string.is_empty() {
+        None
+    } else {
+        Some(string)
+    }
+}
 
 #[allow(unsafe_code)]
 #[cfg(test)]

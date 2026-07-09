@@ -19,6 +19,8 @@ use colored::Colorize;
 use serde::Serialize;
 
 #[cfg(feature = "daemon")]
+use atuin_common::utils::normalize_optional_string;
+#[cfg(feature = "daemon")]
 use atuin_daemon::history::{HistoryEventKind, TailHistoryReply};
 
 use atuin_client::{
@@ -385,18 +387,6 @@ fn parse_fmt(format: &str) -> ParsedFmt<'_> {
     }
 }
 
-fn apply_start_metadata(history: &mut History, author: Option<&str>, intent: Option<&str>) {
-    if let Some(author) = author.map(str::trim).filter(|author| !author.is_empty()) {
-        author.clone_into(&mut history.author);
-    }
-
-    if let Some(intent) = intent.map(str::trim).filter(|intent| !intent.is_empty()) {
-        history.intent = Some(intent.to_owned());
-    } else if intent.is_some() {
-        history.intent = None;
-    }
-}
-
 fn normalize_command_for_storage<'a>(command: &'a str, settings: &Settings) -> &'a str {
     if !settings.strip_trailing_whitespace {
         return command;
@@ -421,6 +411,30 @@ fn normalize_command_for_storage<'a>(command: &'a str, settings: &Settings) -> &
     }
 }
 
+fn make_starting_history(
+    settings: &Settings,
+    command: &str,
+    author: Option<&str>,
+    intent: Option<&str>,
+) -> Option<History> {
+    // It's better for atuin to silently fail here and attempt to
+    // store whatever is ran, than to throw an error to the terminal
+    let cwd = utils::get_current_dir();
+    let command = normalize_command_for_storage(command, settings);
+
+    let h: History = History::capture()
+        .timestamp(OffsetDateTime::now_utc())
+        .command(command)
+        .cwd(cwd)
+        .author_opt(author.map(String::from))
+        .intent_opt(intent.map(String::from))
+        .shell_opt(std::env::var("ATUIN_SHELL").ok())
+        .build()
+        .into();
+
+    h.should_save(settings).then_some(h)
+}
+
 async fn handle_start(
     db: &impl Database,
     settings: &Settings,
@@ -428,24 +442,9 @@ async fn handle_start(
     author: Option<&str>,
     intent: Option<&str>,
 ) -> Result<Option<String>> {
-    // It's better for atuin to silently fail here and attempt to
-    // store whatever is ran, than to throw an error to the terminal
-    let cwd = utils::get_current_dir();
-    let command = normalize_command_for_storage(command, settings);
-
-    let mut h: History = History::capture()
-        .timestamp(OffsetDateTime::now_utc())
-        .command(command)
-        .cwd(cwd)
-        .build()
-        .into();
-    apply_start_metadata(&mut h, author, intent);
-
-    if !h.should_save(settings) {
+    let Some(h) = make_starting_history(settings, command, author, intent) else {
         return Ok(None);
-    }
-
-    let id = h.id.0.clone();
+    };
 
     // Silently ignore database errors to avoid breaking the shell
     // This is important when disk is full or database is locked
@@ -453,7 +452,7 @@ async fn handle_start(
         debug!("failed to save history: {e}");
     }
 
-    Ok(Some(id))
+    Ok(Some(h.id.0.clone()))
 }
 
 #[cfg(feature = "daemon")]
@@ -463,30 +462,19 @@ async fn handle_daemon_start(
     author: Option<&str>,
     intent: Option<&str>,
 ) -> Result<Option<String>> {
-    // It's better for atuin to silently fail here and attempt to
-    // store whatever is ran, than to throw an error to the terminal
-    let cwd = utils::get_current_dir();
-    let command = normalize_command_for_storage(command, settings);
-
-    let mut h: History = History::capture()
-        .timestamp(OffsetDateTime::now_utc())
-        .command(command)
-        .cwd(cwd)
-        .build()
-        .into();
-    apply_start_metadata(&mut h, author, intent);
-
-    if !h.should_save(settings) {
+    let Some(h) = make_starting_history(settings, command, author, intent) else {
         return Ok(None);
-    }
+    };
+
+    let local_id = h.id.0.clone();
 
     // Attempt to start history via daemon, but silently ignore errors
     // to avoid breaking the shell when the daemon is unavailable or disk is full
-    let resp = match daemon::start_history(settings, h.clone()).await {
+    let resp = match daemon::start_history(settings, h).await {
         Ok(id) => id,
         Err(e) => {
             debug!("failed to start history via daemon: {e}");
-            h.id.0.clone()
+            local_id
         }
     };
 
@@ -696,7 +684,8 @@ impl TailEvent {
                 session: history.session,
                 hostname: history.hostname,
                 author: history.author,
-                intent: normalize_optional_field(&history.intent),
+                intent: normalize_optional_string(history.intent),
+                shell: normalize_optional_string(history.shell),
                 deleted_at: None,
             },
         })
@@ -908,16 +897,6 @@ fn push_pretty_field(out: &mut String, label: &str, value: &str) {
         out.push_str("             ");
         out.push_str(line);
         out.push('\n');
-    }
-}
-
-#[cfg(feature = "daemon")]
-fn normalize_optional_field(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_owned())
     }
 }
 
@@ -1346,6 +1325,7 @@ mod tests {
                 author: "claude".to_owned(),
                 intent: Some("inspect repository state".to_owned()),
                 deleted_at: None,
+                shell: Some("zsh".into()),
             },
         }
     }

@@ -14,7 +14,7 @@ if "ATUIN_SESSION" not in ${...} or ${...}.get("ATUIN_SHLVL", "") != ${...}.get(
 def _atuin_precommand(cmd: str):
     cmd = cmd.rstrip("\n")
     try:
-        $ATUIN_HISTORY_ID = $(atuin history start --hook -- @(cmd) 2>@(os.devnull)).rstrip("\n")
+        $ATUIN_HISTORY_ID = $($ATUIN_SHELL="xonsh" atuin history start --hook -- @(cmd) 2>@(os.devnull)).rstrip("\n")
     except:
         $ATUIN_HISTORY_ID = ""
 

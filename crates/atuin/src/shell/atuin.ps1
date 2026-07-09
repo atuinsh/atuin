@@ -117,6 +117,7 @@ New-Module -Name Atuin -ScriptBlock {
         # This makes it unreliable, so we go through an environment variable, which should always be consistent across versions.
         try {
             $env:ATUIN_COMMAND_LINE = $line
+            $env:ATUIN_SHELL = "powershell"
             $script:atuinHistoryId = atuin history start --hook --command-from-env
         }
         catch {
@@ -124,6 +125,7 @@ New-Module -Name Atuin -ScriptBlock {
         }
         finally {
             $env:ATUIN_COMMAND_LINE = $null
+            $env:ATUIN_SHELL = $null
         }
 
         $global:LASTEXITCODE = $lastNativeExitCode

@@ -48,7 +48,9 @@ let _atuin_pre_execution = {||
         return
     }
     if not ($cmd | str starts-with $ATUIN_KEYBINDING_TOKEN) {
-        $env.ATUIN_HISTORY_ID = (atuin history start --hook -- $cmd | complete | get stdout | str trim)
+        $env.ATUIN_HISTORY_ID = (with-env { ATUIN_SHELL: nu } {
+            atuin history start --hook -- $cmd | complete | get stdout | str trim
+        })
         _atuin_osc133_command_executed
     }
 }
