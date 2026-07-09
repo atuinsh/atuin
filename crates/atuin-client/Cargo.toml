@@ -21,7 +21,7 @@ daemon = []
 check-update = []
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.16.1" }
+atuin-common = { path = "../atuin-common", version = "18.17.0" }
 derive_more = { workspace = true }
 
 log = { workspace = true }
