@@ -52,7 +52,7 @@ Whether or not to include the "history search" capability in the context sent to
 
 Default: `true`
 
-Whether or not to include the "history output" capability in the context sent to the LLM. This allows the AI to request to view the output of previous commands. This requires the [pty-proxy](../reference/pty-proxy.md) and [daemon](../reference/daemon.md) to be enabled and running in order for Atuin to capture commands' outputs.
+Whether or not to include the "history output" capability in the context sent to the LLM. This allows the AI to request to view the output of previous commands. This requires the [pty-proxy](../reference/pty-proxy.md) and [daemon](../reference/daemon.md) to be enabled and running in order for Atuin to capture commands' outputs — see [Reading Command Output](./command-output.md) for setup.
 
 ### enable_file_tools
 
