@@ -74,6 +74,22 @@ The `AtuinHistory` tool allows Atuin AI to search your Atuin history for relevan
 allow = ["AtuinHistory"]
 ```
 
+### Atuin Output
+
+The `AtuinOutput` tool allows Atuin AI to read the captured output of commands in your Atuin history. This tool is read-only. Atuin AI might ask to use this tool when you ask about the result of a command you ran, or for help with a failing command. Output capture requires the daemon and pty-proxy to be set up — see [Reading Command Output](./command-output.md).
+
+**Permission rule and scope:** `AtuinOutput`
+
+**Config value:** `ai.capabilities.enable_history_output` (see [settings documentation](./settings.md#capabilities))
+
+**Example permissions file:**
+
+```toml
+[permissions]
+
+allow = ["AtuinOutput"]
+```
+
 ### Read
 
 The `Read` tool allows Atuin AI to read files on your system. Atuin AI might ask to use this tool when you ask it to analyze the contents of a file, when you ask for edits to the contents of a file, or when you ask a question that is most easily answered by consulting the contents of a file.

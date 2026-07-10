@@ -406,25 +406,46 @@ fn ensure_reply_compatible(settings: &Settings, version: &str, protocol: u32) ->
     bail!("{message}. Enable `daemon.autostart = true` or restart the daemon manually");
 }
 
-pub async fn start_history(settings: &Settings, history: History) -> Result<String> {
-    match async {
-        connect_client(settings)
-            .await?
-            .start_history(history.clone())
-            .await
-    }
-    .await
+#[derive(Clone, Copy)]
+struct TryWithRestartOptions {
+    /// Whether to resend the command if the daemon isn't the expected version.
+    pub retry_on_version_mismatch: bool,
+}
+
+/// Try to send a request to the daemon, restarting it and retrying if necessary.
+///
+/// `context` will be passed to the closure. Compared to capturing the needed context in the
+/// closure, this may reduce the number of required clones.
+async fn try_with_restart<C, F, R>(
+    settings: &Settings,
+    send_request: F,
+    context: C,
+    options: TryWithRestartOptions,
+) -> Result<R>
+where
+    C: Clone + Sync,
+    F: AsyncFn(&mut HistoryClient, C) -> Result<R> + Sync,
+    R: atuin_daemon::history::VersionedReply,
+{
+    match async { send_request(&mut connect_client(settings).await?, context.clone()).await }.await
     {
         Ok(resp) => {
-            if daemon_matches_expected(&resp.version, resp.protocol) {
-                return Ok(resp.id);
+            if daemon_matches_expected(resp.version(), resp.protocol()) {
+                return Ok(resp);
             }
 
             if !settings.daemon.autostart {
                 return Err(eyre!(
                     "{}. Enable `daemon.autostart = true` or restart the daemon manually",
-                    daemon_mismatch_message(&resp.version, resp.protocol)
+                    daemon_mismatch_message(resp.version(), resp.protocol())
                 ));
+            }
+
+            if !options.retry_on_version_mismatch {
+                // We don't need to retry the request, so only restart to make subsequent hook calls
+                // target the expected version.
+                let _ = restart_daemon(settings).await;
+                return Ok(resp);
             }
         }
         Err(err) if !settings.daemon.autostart => return Err(err),
@@ -432,50 +453,47 @@ pub async fn start_history(settings: &Settings, history: History) -> Result<Stri
         Err(_) => {}
     }
 
-    let resp = restart_daemon(settings)
-        .await?
-        .start_history(history)
-        .await?;
-    ensure_reply_compatible(settings, &resp.version, resp.protocol)?;
+    let resp = send_request(&mut restart_daemon(settings).await?, context).await?;
+    ensure_reply_compatible(settings, resp.version(), resp.protocol())?;
+    Ok(resp)
+}
+
+pub async fn start_history(settings: &Settings, history: History) -> Result<String> {
+    let resp = try_with_restart(
+        settings,
+        async |client, history| client.start_history(history).await,
+        history,
+        TryWithRestartOptions {
+            retry_on_version_mismatch: true,
+        },
+    )
+    .await?;
     Ok(resp.id)
 }
 
 pub async fn end_history(settings: &Settings, id: String, duration: u64, exit: i64) -> Result<()> {
-    match async {
-        connect_client(settings)
-            .await?
-            .end_history(id.clone(), duration, exit)
-            .await
-    }
-    .await
-    {
-        Ok(resp) => {
-            if daemon_matches_expected(&resp.version, resp.protocol) {
-                return Ok(());
-            }
+    try_with_restart(
+        settings,
+        async |client, id| client.end_history(id, duration, exit).await,
+        id,
+        TryWithRestartOptions {
+            retry_on_version_mismatch: false,
+        },
+    )
+    .await?;
+    Ok(())
+}
 
-            if !settings.daemon.autostart {
-                return Err(eyre!(
-                    "{}. Enable `daemon.autostart = true` or restart the daemon manually",
-                    daemon_mismatch_message(&resp.version, resp.protocol)
-                ));
-            }
-
-            // End succeeded on the running daemon, so avoid replaying it.
-            // We only restart to make subsequent hook calls target the expected version.
-            let _ = restart_daemon(settings).await;
-            return Ok(());
-        }
-        Err(err) if !settings.daemon.autostart => return Err(err),
-        Err(err) if !should_retry_after_error(&err) => return Err(err),
-        Err(_) => {}
-    }
-
-    let resp = restart_daemon(settings)
-        .await?
-        .end_history(id, duration, exit)
-        .await?;
-    ensure_reply_compatible(settings, &resp.version, resp.protocol)?;
+pub async fn cancel_history(settings: &Settings, id: String) -> Result<()> {
+    try_with_restart(
+        settings,
+        async |client, id| client.cancel_history(id).await,
+        id,
+        TryWithRestartOptions {
+            retry_on_version_mismatch: false,
+        },
+    )
+    .await?;
     Ok(())
 }
 

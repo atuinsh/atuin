@@ -1991,6 +1991,10 @@ pub async fn history(
         }
     } else if inline_height > 0 {
         terminal.clear()?;
+        // ratatui-core v0.1.1 changed the behavior of `Terminal::clear` so it no longer moves the
+        // cursor to the viewport origin; do that manually here.
+        let origin = terminal.get_frame().area().as_position();
+        terminal.set_cursor_position(origin)?;
     }
 
     let accept = accept

@@ -13,6 +13,7 @@ repository = { workspace = true }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+derive_more = { workspace = true }
 time = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }

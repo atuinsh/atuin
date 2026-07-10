@@ -81,6 +81,16 @@ pub(crate) struct PendingConfirmation {
     pub timeout_id: u64,
 }
 
+/// The /model picker, rendered by the view when present on the context.
+///
+/// While `Loading` the input box stays visible (there'd be no focusable
+/// component otherwise); `Ready` swaps it for the selection list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ModelPicker {
+    Loading,
+    Ready(crate::models::ModelList),
+}
+
 // ============================================================================
 // Context
 // ============================================================================
@@ -109,6 +119,14 @@ pub(crate) struct AgentContext {
     pub capabilities: Vec<String>,
     /// Unique invocation ID for this CLI invocation.
     pub invocation_id: String,
+    /// Model alias sent with chat requests. `None` = server default.
+    /// Seeded from `ai.model` at startup; updated by the /model picker.
+    pub model: Option<String>,
+    /// Model list fetched this invocation. Later /model calls reuse it
+    /// instead of re-hitting the server.
+    pub models_cache: Option<crate::models::ModelList>,
+    /// Open /model picker, if any.
+    pub model_picker: Option<ModelPicker>,
 
     // ─── View state (owned by FSM for atomic transitions) ───────
     /// Index into events where the current TUI invocation starts.
@@ -159,6 +177,9 @@ impl AgentFsm {
                 next_timeout_id: 0,
                 capabilities,
                 invocation_id,
+                model: None,
+                models_cache: None,
+                model_picker: None,
                 view_start_index: 0,
                 is_resumed: false,
                 last_event_time: None,
@@ -189,6 +210,9 @@ impl AgentFsm {
                 next_timeout_id: 0,
                 capabilities,
                 invocation_id,
+                model: None,
+                models_cache: None,
+                model_picker: None,
                 view_start_index,
                 is_resumed,
                 last_event_time,
@@ -199,6 +223,15 @@ impl AgentFsm {
 
     /// Handle an event, returning effects to execute.
     pub fn handle(&mut self, event: Event) -> Vec<Effect> {
+        // From all states: if the session ID arrives and isn't set, set it, then continue as normal.
+        // This event fires from the stream response headers, rather than having to wait until the end
+        // of a turn when StreamDone arrives, which can be lost for cancelled turns.
+        if let Event::SessionIdReceived(session_id) = &event {
+            self.ctx
+                .session_id
+                .get_or_insert_with(|| session_id.clone());
+        }
+
         match (&self.state, event) {
             // ================================================================
             // Idle state
@@ -268,7 +301,12 @@ impl AgentFsm {
             }
 
             (AgentState::Idle { confirmation: None }, Event::Cancel) => {
-                vec![Effect::ExitApp(ExitAction::Cancel)]
+                if self.ctx.model_picker.is_some() {
+                    self.ctx.model_picker = None;
+                    vec![]
+                } else {
+                    vec![Effect::ExitApp(ExitAction::Cancel)]
+                }
             }
 
             (AgentState::Idle { .. }, Event::ConfirmationTimeout { timeout_id }) => {
@@ -292,6 +330,7 @@ impl AgentFsm {
                 self.ctx.current_turn_tool_ids.clear();
                 self.ctx.view_start_index = 0;
                 self.ctx.is_resumed = false;
+                self.ctx.model_picker = None;
 
                 // Add OOB indicator for the new session
                 self.ctx.events.push(ConversationEvent::OutOfBandOutput {
@@ -307,6 +346,33 @@ impl AgentFsm {
             (AgentState::Idle { .. }, Event::SlashCommand { command, content }) => {
                 self.handle_slash_command(&command, &content);
                 vec![]
+            }
+
+            (AgentState::Idle { .. }, Event::OpenModelPicker) => {
+                if let Some(list) = self.ctx.models_cache.clone() {
+                    self.ctx.model_picker = Some(ModelPicker::Ready(list));
+                    vec![]
+                } else {
+                    self.ctx.model_picker = Some(ModelPicker::Loading);
+                    vec![Effect::FetchModels]
+                }
+            }
+
+            (AgentState::Idle { .. }, Event::ModelSelected(alias)) => {
+                self.ctx.model_picker = None;
+                self.ctx.model = Some(alias.clone());
+                let display = self
+                    .ctx
+                    .models_cache
+                    .as_ref()
+                    .and_then(|list| list.models.iter().find(|m| m.alias == alias))
+                    .map(|m| m.name.clone())
+                    .unwrap_or_else(|| alias.clone());
+                self.handle_slash_command(
+                    "/model",
+                    &format!("Model set to {display} for this and future sessions."),
+                );
+                vec![Effect::SaveModelSelection { alias }]
             }
 
             (
@@ -611,6 +677,30 @@ impl AgentFsm {
                 vec![]
             }
 
+            // The fetch may finish after the picker was dismissed (user
+            // submitted a message or hit Esc while loading) — always cache
+            // the list, but only surface UI if the picker is still waiting.
+            (_, Event::ModelListLoaded(result)) => {
+                match result {
+                    Ok(list) => {
+                        self.ctx.models_cache = Some(list.clone());
+                        if self.ctx.model_picker == Some(ModelPicker::Loading) {
+                            self.ctx.model_picker = Some(ModelPicker::Ready(list));
+                        }
+                    }
+                    Err(e) => {
+                        if self.ctx.model_picker == Some(ModelPicker::Loading) {
+                            self.ctx.model_picker = None;
+                            self.handle_slash_command(
+                                "/model",
+                                &format!("Could not load the model list: {e}"),
+                            );
+                        }
+                    }
+                }
+                vec![]
+            }
+
             // RequestSkillLoad during non-idle: still emit the effect
             (_, Event::RequestSkillLoad { name, arguments }) => {
                 vec![Effect::LoadSkill { name, arguments }]
@@ -644,6 +734,8 @@ impl AgentFsm {
 
     /// Start a new turn: push user message, build messages, emit StartStream.
     fn start_turn(&mut self, msg: String) -> Vec<Effect> {
+        // A message submitted while the picker was loading dismisses it.
+        self.ctx.model_picker = None;
         self.ctx
             .events
             .push(ConversationEvent::UserMessage { content: msg });

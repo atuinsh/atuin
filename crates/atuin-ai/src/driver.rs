@@ -43,6 +43,9 @@ pub(crate) enum DriverEvent {
     Tui(AiTuiEvent),
     /// Internal FSM event (from spawned stream/tool tasks)
     Fsm(Event),
+    /// Fresh credit-usage snapshot (from the done event or a background
+    /// fetch). Handled by the driver directly — the FSM never sees it.
+    Usage(crate::usage::UsageSnapshot),
 }
 
 // ============================================================================
@@ -57,6 +60,7 @@ pub(crate) struct IoContext {
     pub edit_permissions: EditPermissionCache,
     pub snapshot_store: Option<crate::snapshots::SnapshotStore>,
     pub skill_registry: crate::skills::SkillRegistry,
+    pub user_context_cache: crate::user_context::UserContextCache,
 }
 
 // ============================================================================
@@ -82,6 +86,13 @@ pub(crate) struct ViewState {
 
     // ─── View-only ──────────────────────────────────────────────
     pub archived_events: Vec<ConversationEvent>,
+    /// Open /model picker, if any (mirrors `AgentContext::model_picker`).
+    pub model_picker: Option<crate::fsm::ModelPicker>,
+    /// Model alias currently in effect (`None` = server default).
+    pub model: Option<String>,
+    /// Latest known credit usage: cached at startup, refreshed from the
+    /// done event and background fetches.
+    pub usage: Option<crate::usage::UsageSnapshot>,
 
     // ─── Pre-computed for rendering ────────────────────────────
     pub turns: Vec<turn::UiTurn>,
@@ -180,7 +191,11 @@ pub(crate) fn run_driver(
             }
             DriverEvent::Tui(tui_event) => {
                 tracing::trace!(?tui_event, state = ?fsm.state, "TUI event");
-                translate_tui_event(tui_event, &handle)
+                translate_tui_event(tui_event, &handle, &io)
+            }
+            DriverEvent::Usage(snapshot) => {
+                update_usage(&handle, &io, snapshot);
+                None
             }
         };
 
@@ -234,7 +249,11 @@ pub(crate) fn run_driver(
 
 /// Translate a TUI event into an FSM event.
 /// Returns None for events handled directly (e.g. InputUpdated).
-fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<Event> {
+fn translate_tui_event(
+    event: AiTuiEvent,
+    handle: &Handle<ViewState>,
+    io: &IoContext,
+) -> Option<Event> {
     match event {
         AiTuiEvent::SubmitInput(input) => {
             // Clear slash state and reset is_input_blank (the InputBox clears
@@ -250,6 +269,8 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
                 Some(Event::ExecuteCommand)
             } else if input == "/new" {
                 Some(Event::NewSession)
+            } else if input == "/model" || input.starts_with("/model ") {
+                Some(Event::OpenModelPicker)
             } else if input.starts_with('/') {
                 if let Some((skill_name, arguments)) = resolve_skill_name(&input, handle) {
                     Some(Event::RequestSkillLoad {
@@ -257,7 +278,7 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
                         arguments,
                     })
                 } else {
-                    let content = resolve_slash_command(&input, handle);
+                    let content = resolve_slash_command(&input, handle, io);
                     Some(Event::SlashCommand {
                         command: input,
                         content,
@@ -324,6 +345,7 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
             };
             Some(Event::PermissionUserChoice { tool_id, choice })
         }
+        AiTuiEvent::SelectModel(alias) => Some(Event::ModelSelected(alias)),
         AiTuiEvent::SlashCommand(cmd) => {
             if let Some((skill_name, arguments)) = resolve_skill_name(&cmd, handle) {
                 Some(Event::RequestSkillLoad {
@@ -331,7 +353,7 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
                     arguments,
                 })
             } else {
-                let content = resolve_slash_command(&cmd, handle);
+                let content = resolve_slash_command(&cmd, handle, io);
                 Some(Event::SlashCommand {
                     command: cmd,
                     content,
@@ -344,6 +366,7 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
 /// Resolve a slash command to its output content.
 /// If the input starts with `/`, check whether the command name matches a
 /// registered skill. Returns `Some((skill_name, arguments))` if it does.
+/// Built-in slash commands take precedence: a skill can't shadow them.
 fn resolve_skill_name(input: &str, handle: &Handle<ViewState>) -> Option<(String, Option<String>)> {
     let after_slash = input.trim_start_matches('/');
     let cmd_name = after_slash.split_whitespace().next()?.to_string();
@@ -351,7 +374,7 @@ fn resolve_skill_name(input: &str, handle: &Handle<ViewState>) -> Option<(String
     let is_skill = handle
         .fetch({
             let cmd_name = cmd_name.clone();
-            move |vs| vs.skill_names.contains(&cmd_name)
+            move |vs| is_skill_command(&cmd_name, &vs.skill_names, &vs.slash_registry)
         })
         .blocking_recv()
         .unwrap_or(false);
@@ -369,8 +392,22 @@ fn resolve_skill_name(input: &str, handle: &Handle<ViewState>) -> Option<(String
     Some((cmd_name, args))
 }
 
-fn resolve_slash_command(command: &str, handle: &Handle<ViewState>) -> String {
+/// Skills are registered in `slash_registry` too (for autocomplete and
+/// `/help`), so precedence is decided by the builtin flag, not membership.
+fn is_skill_command(
+    cmd_name: &str,
+    skill_names: &std::collections::HashSet<String>,
+    slash_registry: &crate::tui::slash::SlashCommandRegistry,
+) -> bool {
+    skill_names.contains(cmd_name) && !slash_registry.contains_builtin(cmd_name)
+}
+
+fn resolve_slash_command(command: &str, handle: &Handle<ViewState>, io: &IoContext) -> String {
     match command.trim() {
+        "/reload" => {
+            io.user_context_cache.invalidate();
+            "Context files will be reloaded on the next request.".to_string()
+        }
         "/help" => {
             let commands = handle
                 .fetch(|vs| {
@@ -404,6 +441,8 @@ fn sync_view_state(handle: &Handle<ViewState>, fsm: &AgentFsm, in_git_project: b
     let is_resumed = fsm.ctx.is_resumed;
     let last_event_time = fsm.ctx.last_event_time;
     let archived_events = fsm.ctx.archived_events.clone();
+    let model_picker = fsm.ctx.model_picker.clone();
+    let model = fsm.ctx.model.clone();
 
     // Inject streaming text as a synthetic event for live rendering.
     // The FSM commits text to events on stream end; this makes it visible during streaming.
@@ -452,6 +491,8 @@ fn sync_view_state(handle: &Handle<ViewState>, fsm: &AgentFsm, in_git_project: b
         vs.last_event_time = last_event_time;
         vs.in_git_project = in_git_project;
         vs.archived_events = archived_events;
+        vs.model_picker = model_picker;
+        vs.model = model;
         vs.turns = turns;
         vs.has_command = has_command;
         vs.archived_turn_count = archived_turn_count;
@@ -487,12 +528,15 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
             let tx = tx.clone();
             let app = io.app_ctx.clone();
             let cc = io.client_ctx.clone();
+            let user_context_cache = io.user_context_cache.clone();
             let (skill_summaries, skill_overflow) = io.skill_registry.server_skills();
             let request = ChatRequest::new(
                 messages.clone(),
                 session_id.clone(),
                 &app.capabilities,
+                app.daemon_enabled,
                 fsm.ctx.invocation_id.clone(),
+                fsm.ctx.model.clone(),
             );
             tokio::spawn(async move {
                 run_stream_bridge(
@@ -503,6 +547,7 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
                     cancel_rx,
                     skill_summaries,
                     skill_overflow,
+                    user_context_cache,
                 )
                 .await;
             });
@@ -570,7 +615,6 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
 
         Effect::ExecuteTool { tool_id, tool } => {
             let tool_id = tool_id.clone();
-            let tool = tool.clone();
             let tx = tx.clone();
             let db = io.app_ctx.history_db.clone();
 
@@ -731,10 +775,22 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
                         preview: None,
                     }));
                 }
-                ClientToolCall::AtuinHistory(_) => {
+                ClientToolCall::AtuinHistory(tool) => {
                     // History search needs async DB access
+                    let tool = tool.clone();
                     tokio::spawn(async move {
                         let outcome = tool.execute(&db).await;
+                        let _ = tx.send(DriverEvent::Fsm(Event::ToolExecutionDone {
+                            tool_id,
+                            outcome,
+                            preview: None,
+                        }));
+                    });
+                }
+                ClientToolCall::AtuinOutput(tool) => {
+                    let tool = tool.clone();
+                    tokio::spawn(async move {
+                        let outcome = tool.execute().await;
                         let _ = tx.send(DriverEvent::Fsm(Event::ToolExecutionDone {
                             tool_id,
                             outcome,
@@ -826,6 +882,27 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
             io.edit_permissions.grant(path.clone());
         }
 
+        Effect::FetchModels => {
+            let tx = tx.clone();
+            let endpoint = io.app_ctx.endpoint.clone();
+            let token = io.app_ctx.token.clone();
+            tokio::spawn(async move {
+                let result = crate::models::fetch_models(&endpoint, &token)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(DriverEvent::Fsm(Event::ModelListLoaded(result)));
+            });
+        }
+
+        Effect::SaveModelSelection { alias } => {
+            let alias = alias.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::models::save_model_selection(&alias).await {
+                    tracing::error!("Failed to save model selection: {e}");
+                }
+            });
+        }
+
         Effect::ArchiveSession => {
             let rt = tokio::runtime::Handle::current();
             if let Err(e) = rt.block_on(io.session_mgr.archive_and_reset()) {
@@ -871,6 +948,21 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
 // ============================================================================
 // Persistence
 // ============================================================================
+
+/// Apply a fresh usage snapshot: sync it to the view and write it to the
+/// local cache so the next TUI open can render it immediately.
+fn update_usage(handle: &Handle<ViewState>, io: &IoContext, snapshot: crate::usage::UsageSnapshot) {
+    handle.update({
+        let snapshot = snapshot.clone();
+        move |vs| vs.usage = Some(snapshot)
+    });
+
+    let key = crate::usage::cache_key(&io.app_ctx.token);
+    let rt = tokio::runtime::Handle::current();
+    if let Err(e) = rt.block_on(io.session_mgr.set_cached_usage(&key, &snapshot)) {
+        tracing::warn!("Failed to persist usage cache: {e}");
+    }
+}
 
 fn persist(fsm: &AgentFsm, io: &mut IoContext) {
     let start = std::time::Instant::now();
@@ -923,6 +1015,7 @@ async fn load_skill_content(
 // Stream bridge
 // ============================================================================
 
+#[allow(clippy::too_many_arguments)]
 async fn run_stream_bridge(
     request: ChatRequest,
     app_ctx: AppContext,
@@ -931,16 +1024,25 @@ async fn run_stream_bridge(
     mut cancel_rx: tokio::sync::watch::Receiver<()>,
     skill_summaries: Vec<crate::skills::SkillSummary>,
     skill_overflow: Option<String>,
+    user_context_cache: crate::user_context::UserContextCache,
 ) {
     use crate::stream::{StreamContent, StreamControl, StreamFrame, create_chat_stream};
     use futures::StreamExt;
 
-    // Gather user context files (TERMINAL.md) and interpolate commands.
+    // User context files (TERMINAL.md) are gathered and interpolated on the
+    // first request, then served from the cache until `/reload`.
+    //
+    // Watch for cancellation during the gather: interpolation commands can
+    // be slow, and a cancelled (or replaced) bridge must not populate the
+    // cache — its result may predate a gather a newer bridge already stored.
     let shell = client_ctx.shell.as_deref().unwrap_or("sh");
     let start_dir = std::env::current_dir().unwrap_or_default();
     let global_ctx_path = crate::user_context::global_context_path();
-    let user_contexts =
-        crate::user_context::gather(&start_dir, Some(&global_ctx_path), shell).await;
+    let user_contexts = tokio::select! {
+        biased;
+        _ = cancel_rx.changed() => return,
+        contexts = user_context_cache.get_or_gather(&start_dir, Some(&global_ctx_path), shell) => contexts,
+    };
 
     let stream = create_chat_stream(
         app_ctx.endpoint.clone(),
@@ -996,9 +1098,20 @@ async fn run_stream_bridge(
             },
             Ok(StreamFrame::Control(control)) => match control {
                 StreamControl::StatusChanged(status) => Some(Event::StreamStatusChanged(status)),
-                StreamControl::Done { session_id } => Some(Event::StreamDone { session_id }),
+                StreamControl::Done {
+                    session_id,
+                    credits,
+                } => {
+                    if let Some(snapshot) = credits {
+                        let _ = tx.send(DriverEvent::Usage(snapshot));
+                    }
+                    Some(Event::StreamDone { session_id })
+                }
                 StreamControl::Error(msg) => Some(Event::StreamError(msg)),
             },
+            Ok(StreamFrame::SessionIdentity(session_id)) => {
+                Some(Event::SessionIdReceived(session_id))
+            }
             Err(e) => Some(Event::StreamError(e.to_string())),
         };
 
@@ -1014,5 +1127,41 @@ async fn run_stream_bridge(
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_skill_command;
+    use crate::tui::slash::{SlashCommand, SlashCommandRegistry};
+
+    /// Regression test: skills are registered into the slash registry so they
+    /// appear in autocomplete, which must not stop them dispatching as skills.
+    #[test]
+    fn skill_dispatches_even_when_registered_for_autocomplete() {
+        let mut registry = SlashCommandRegistry::default();
+        let mut skill_names = std::collections::HashSet::new();
+        registry.register(SlashCommand::new("release", "Cut a release"));
+        skill_names.insert("release".to_string());
+
+        assert!(is_skill_command("release", &skill_names, &registry));
+    }
+
+    #[test]
+    fn builtin_takes_precedence_over_skill_with_same_name() {
+        let mut registry = SlashCommandRegistry::default();
+        let mut skill_names = std::collections::HashSet::new();
+        registry.register(SlashCommand::new("reload", "A skill shadowing /reload"));
+        skill_names.insert("reload".to_string());
+
+        assert!(!is_skill_command("reload", &skill_names, &registry));
+    }
+
+    #[test]
+    fn unregistered_name_is_not_a_skill() {
+        let registry = SlashCommandRegistry::default();
+        let skill_names = std::collections::HashSet::new();
+
+        assert!(!is_skill_command("release", &skill_names, &registry));
     }
 }

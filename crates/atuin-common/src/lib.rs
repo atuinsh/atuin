@@ -14,8 +14,12 @@ macro_rules! new_uuid {
             Ord,
             serde::Serialize,
             serde::Deserialize,
+            derive_more::Display,
+            derive_more::From,
+            derive_more::Deref,
         )]
         #[serde(transparent)]
+        #[display("{_0}")]
         pub struct $name(pub Uuid);
 
         impl<DB: sqlx::Database> sqlx::Type<DB> for $name

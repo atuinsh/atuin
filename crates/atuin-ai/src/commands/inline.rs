@@ -67,7 +67,7 @@ pub(crate) async fn run(
         settings.ai.opening.send_cwd.unwrap_or(false) || settings.ai.send_cwd.unwrap_or(false);
 
     let last_command = if settings.ai.opening.send_last_command.unwrap_or(false) {
-        history_db.last().await.ok().flatten().map(|h| h.command)
+        history_db.last().await.ok().flatten()
     } else {
         None
     };
@@ -84,6 +84,7 @@ pub(crate) async fn run(
         history_db: std::sync::Arc::new(history_db),
         git_root,
         capabilities: settings.ai.capabilities.clone(),
+        daemon_enabled: settings.daemon.enabled,
     };
 
     let action = run_inline_tui(ctx, initial_command, settings).await?;
@@ -162,6 +163,22 @@ async fn run_inline_tui(
         .await
         .context("failed to open AI session database")?;
 
+    // Cached usage renders immediately; a background fetch (spawned below,
+    // once the event channel exists) replaces it unless it's fresh.
+    let usage_key = crate::usage::cache_key(&ctx.token);
+    let (cached_usage, usage_is_fresh) = match service.get_cached_usage(&usage_key).await {
+        Ok(Some(cached_snapshot)) => {
+            let age = time::OffsetDateTime::now_utc().unix_timestamp() - cached_snapshot.written_at;
+            let fresh = age < crate::usage::REFRESH_AFTER.as_secs() as i64;
+            (Some(cached_snapshot.snapshot), fresh)
+        }
+        Ok(None) => (None, false),
+        Err(e) => {
+            debug!("failed to read usage cache: {e}");
+            (None, false)
+        }
+    };
+
     let cwd = std::env::current_dir()
         .ok()
         .map(|p| p.to_string_lossy().into_owned());
@@ -178,7 +195,7 @@ async fn run_inline_tui(
         .await?;
 
     // ─── Build FSM ───────────────────────────────────────────────
-    let (session_mgr, fsm, file_tracker, edit_permissions) = if let Some(stored) = resumable {
+    let (session_mgr, mut fsm, file_tracker, edit_permissions) = if let Some(stored) = resumable {
         debug!(session_id = %stored.id, "resuming AI session");
         let (mgr, mut events, server_sid, last_event_ts, invocation_id) =
             SessionManager::resume(Box::new(service), &stored).await?;
@@ -238,6 +255,16 @@ async fn run_inline_tui(
         (mgr, fsm, Default::default(), Default::default())
     };
 
+    // `ai.model` is read once at startup, so /model in another running
+    // session doesn't retarget this one mid-conversation.
+    fsm.ctx.model = settings
+        .ai
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+
     // ─── Snapshot store ─────────────────────────────────────────
     let snapshot_dir = atuin_common::utils::data_dir()
         .join("ai")
@@ -255,7 +282,8 @@ async fn run_inline_tui(
     let skill_registry = crate::skills::SkillRegistry::discover(project_root.as_deref()).await;
 
     // ─── Build initial ViewState from FSM ───────────────────────
-    let initial_view = build_view_state(&fsm, in_git_project, &skill_registry);
+    let mut initial_view = build_view_state(&fsm, in_git_project, &skill_registry);
+    initial_view.usage = cached_usage;
 
     // ─── Build IoContext ────────────────────────────────────────
     let io = IoContext {
@@ -266,6 +294,7 @@ async fn run_inline_tui(
         edit_permissions,
         snapshot_store,
         skill_registry,
+        user_context_cache: Default::default(),
     };
 
     // ─── Channel + Application ──────────────────────────────────
@@ -275,6 +304,20 @@ async fn run_inline_tui(
 
     // Wrap sender for components: they send AiTuiEvent, we wrap it
     let tui_tx = DriverEventSender(tx.clone());
+
+    if !usage_is_fresh {
+        let endpoint = ctx.endpoint.clone();
+        let token = ctx.token.clone();
+        let usage_tx = tx.clone();
+        tokio::spawn(async move {
+            match crate::usage::fetch_usage(&endpoint, &token).await {
+                Ok(snapshot) => {
+                    let _ = usage_tx.send(DriverEvent::Usage(snapshot));
+                }
+                Err(e) => debug!("background usage fetch failed: {e}"),
+            }
+        });
+    }
 
     println!();
 
@@ -398,6 +441,9 @@ fn build_view_state(
         last_event_time: fsm.ctx.last_event_time,
         in_git_project,
         archived_events,
+        model_picker: fsm.ctx.model_picker.clone(),
+        model: fsm.ctx.model.clone(),
+        usage: None,
         turns,
         has_command,
         committed_turn_count: 0,
@@ -424,7 +470,7 @@ enum SetupChoice {
 fn prompt_ai_setup() -> Result<SetupChoice> {
     use crossterm::{
         cursor,
-        event::{self, Event, KeyCode},
+        event::{self, Event, KeyCode, KeyEventKind},
         terminal,
     };
 
@@ -458,6 +504,9 @@ fn prompt_ai_setup() -> Result<SetupChoice> {
         crossterm::execute!(stdout, cursor::MoveUp(options.len() as u16))?;
 
         if let Event::Key(key) = ev {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
             match key.code {
                 KeyCode::Up | KeyCode::Char('k') => {
                     selected = selected.saturating_sub(1);

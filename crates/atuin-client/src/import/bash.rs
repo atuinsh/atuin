@@ -53,7 +53,7 @@ impl Importer for Bash {
                 _ => None,
             })
             // if no known timestamps, use now as base
-            .unwrap_or((lines.len(), OffsetDateTime::now_utc()));
+            .unwrap_or_else(|| (lines.len(), OffsetDateTime::now_utc()));
 
         // if no timestamp is recorded, then use this increment to set an arbitrary timestamp
         // to preserve ordering
@@ -64,8 +64,9 @@ impl Importer for Bash {
 
         // make sure there is a minimum amount of time before the first known timestamp
         // to fit all commands, given the default increment
-        let mut next_timestamp =
-            first_timestamp - timestamp_increment * commands_before_first_timestamp as i32;
+        let mut next_timestamp = first_timestamp
+            - timestamp_increment
+                * u32::try_from(commands_before_first_timestamp).unwrap_or(u32::MAX);
 
         for line in lines.into_iter() {
             match line {

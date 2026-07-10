@@ -557,7 +557,12 @@ async fn handle_daemon_end(
     exit: i64,
     duration: Option<u64>,
 ) -> Result<()> {
-    daemon::end_history(settings, id.to_string(), duration.unwrap_or(0), exit).await?;
+    if !settings.store_failed && exit > 0 {
+        debug!("history has non-zero exit code, and store_failed is false");
+        daemon::cancel_history(settings, id.to_string()).await?;
+    } else {
+        daemon::end_history(settings, id.to_string(), duration.unwrap_or(0), exit).await?;
+    }
 
     Ok(())
 }

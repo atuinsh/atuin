@@ -337,8 +337,10 @@ impl DrawState<'_> {
         let formatted = h
             .timestamp
             .format(
-                &time::format_description::parse("[year]-[month]-[day] [hour]:[minute]")
-                    .expect("valid format"),
+                &time::format_description::parse_borrowed::<1>(
+                    "[year]-[month]-[day] [hour]:[minute]",
+                )
+                .expect("valid format"),
             )
             .unwrap_or_else(|_| "????-??-?? ??:??".to_string());
         let w = width as usize;

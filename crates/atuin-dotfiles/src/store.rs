@@ -298,16 +298,29 @@ impl AliasStore {
 
         // this is sorted, oldest to newest
         let tagged = self.store.all_tagged(CONFIG_SHELL_ALIAS_TAG).await?;
+        let mut skipped = 0;
 
         for record in tagged {
             let version = record.version.clone();
 
-            let decrypted = match version.as_str() {
-                CONFIG_SHELL_ALIAS_VERSION => record.decrypt::<PASETO_V4>(&self.encryption_key)?,
-                version => bail!("unknown version {version:?}"),
+            // Skip records we can't decrypt or decode, rather than failing the entire build.
+            let ar = match version.as_str() {
+                CONFIG_SHELL_ALIAS_VERSION => record
+                    .decrypt::<PASETO_V4>(&self.encryption_key)
+                    .and_then(|decrypted| {
+                        AliasRecord::deserialize(&decrypted.data, version.as_str())
+                    }),
+                version => Err(eyre!("unknown version {version:?}")),
             };
 
-            let ar = AliasRecord::deserialize(&decrypted.data, version.as_str())?;
+            let ar = match ar {
+                Ok(ar) => ar,
+                Err(e) => {
+                    tracing::warn!("failed to decode alias record, skipping: {e}");
+                    skipped += 1;
+                    continue;
+                }
+            };
 
             match ar {
                 AliasRecord::Create(a) => {
@@ -317,6 +330,13 @@ impl AliasStore {
                     build.remove(&d);
                 }
             }
+        }
+
+        if skipped > 0 {
+            // aliases() runs during shell init, so this must not write to stderr
+            tracing::warn!(
+                "skipped {skipped} alias records that could not be decrypted or decoded"
+            );
         }
 
         Ok(build.into_values().collect())
@@ -417,5 +437,50 @@ alias k='kubectl'
 alias kgap='kubectl get pods --all-namespaces'
 "
         )
+    }
+
+    #[tokio::test]
+    async fn build_aliases_skips_corrupt_records() {
+        use atuin_client::record::{encryption::PASETO_V4, store::Store};
+        use atuin_common::record::{DecryptedData, Host};
+
+        use super::CONFIG_SHELL_ALIAS_TAG;
+
+        let store = SqliteStore::new(":memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
+        let host_id = atuin_common::record::HostId(atuin_common::utils::uuid_v7());
+
+        let alias = AliasStore::new(store.clone(), host_id, key);
+
+        alias.set("k", "kubectl").await.unwrap();
+
+        // a record in the alias tag encrypted with a different key - the store is corrupt,
+        // or "mixed". it should be skipped, rather than breaking the build entirely.
+        let corrupt_key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
+        let corrupt = atuin_common::record::Record::builder()
+            .host(Host::new(host_id))
+            .version(CONFIG_SHELL_ALIAS_VERSION.to_string())
+            .tag(CONFIG_SHELL_ALIAS_TAG.to_string())
+            .idx(1)
+            .data(DecryptedData(vec![1, 2, 3]))
+            .build();
+
+        store
+            .push(&corrupt.encrypt::<PASETO_V4>(&corrupt_key))
+            .await
+            .unwrap();
+
+        let aliases = alias.aliases().await.unwrap();
+
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(
+            aliases[0],
+            Alias {
+                name: String::from("k"),
+                value: String::from("kubectl")
+            }
+        );
     }
 }

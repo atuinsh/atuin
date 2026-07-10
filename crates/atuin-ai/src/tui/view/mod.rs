@@ -6,7 +6,7 @@ use eye_declare::{
 use ratatui_core::style::{Color, Modifier, Style};
 
 use crate::driver::ViewState;
-use crate::fsm::{AgentState, StreamPhase};
+use crate::fsm::{AgentState, ModelPicker, StreamPhase};
 use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview};
 use crate::tui::components::select::SelectOption;
 use crate::tui::components::session_continue::SessionContinue;
@@ -115,12 +115,36 @@ fn input_view(state: &ViewState) -> Elements {
         .collect::<Vec<_>>();
     let first_slash_result = slash_results.first().cloned();
 
+    // While the model list loads, the input box stays up (with a spinner
+    // line) so a focusable component always exists; once Ready, the Select
+    // replaces the input box like the permission prompt does.
+    let ready_picker = match &state.model_picker {
+        Some(ModelPicker::Ready(list)) => Some(list),
+        _ => None,
+    };
+    let picker_loading = matches!(state.model_picker, Some(ModelPicker::Loading));
+
     element! {
         #(if let Some(tc) = asking_tool {
             #(tool_call_view(tc, in_git_project))
         })
 
-        #(if asking_tool.is_none() {
+        #(if let Some(list) = ready_picker {
+            #(if asking_tool.is_none() {
+                #(model_picker_view(list, state.model.as_deref()))
+            })
+        })
+
+        #(if picker_loading {
+            View(key: "model-picker-loading", padding_top: Cells::from(1)) {
+                Spinner(
+                    label: "Loading models…",
+                    label_style: Style::default().fg(Color::Gray),
+                )
+            }
+        })
+
+        #(if asking_tool.is_none() && ready_picker.is_none() {
             View(key: "input-box", padding_top: Cells::from(1)) {
                 InputBox(
                     key: "input",
@@ -155,8 +179,109 @@ fn input_view(state: &ViewState) -> Elements {
 
                     })
                 })
+
+                #(status_bar_view(state))
             }
         })
+    }
+}
+
+/// Usage below this percentage isn't worth a status-bar warning.
+const USAGE_BAR_THRESHOLD_PCT: f64 = 50.0;
+
+/// Width of the usage bar in cells.
+const USAGE_BAR_WIDTH: usize = 5;
+
+/// One-line status bar under the input box: current model on the left;
+/// on the right, once usage crosses the threshold, a small bar chart with
+/// the percentage and time until the period resets.
+fn status_bar_view(state: &ViewState) -> Elements {
+    let model_label = format!(" Model: {}", state.model.as_deref().unwrap_or("default"));
+
+    let usage = state.usage.as_ref().and_then(|snapshot| {
+        let pct = snapshot.as_percentage()?;
+        if pct < USAGE_BAR_THRESHOLD_PCT {
+            return None;
+        }
+        Some((pct, snapshot.resets_in()))
+    });
+
+    element! {
+        HStack(key: "status-bar") {
+            View(width: WidthConstraint::Fill) {
+                Text {
+                    Span(text: model_label, style: Style::default().fg(Color::DarkGray))
+                }
+            }
+            #(if let Some((pct, resets_in)) = usage {
+                #({
+                    let filled = ((pct / 100.0).clamp(0.0, 1.0) * USAGE_BAR_WIDTH as f64).round() as usize;
+                    let bar_filled = "█".repeat(filled);
+                    let bar_empty = "░".repeat(USAGE_BAR_WIDTH - filled);
+                    let pct_text = format!(" {}%", pct.round() as i64);
+                    let resets_text = resets_in
+                        .map(|d| format!(" · resets in {} ", crate::usage::format_reset_delta(d)))
+                        .unwrap_or_default();
+
+                    let bar_color = if pct >= 90.0 {
+                        Color::Red
+                    } else if pct >= 70.0 {
+                        Color::Yellow
+                    } else {
+                        Color::Green
+                    };
+
+                    let width = (USAGE_BAR_WIDTH
+                        + pct_text.chars().count()
+                        + resets_text.chars().count()) as u16;
+
+                    element! {
+                        View(width: WidthConstraint::Fixed(width)) {
+                            Text {
+                                Span(text: bar_filled, style: Style::default().fg(bar_color))
+                                Span(text: bar_empty, style: Style::default().fg(Color::DarkGray))
+                                Span(text: pct_text, style: Style::default().fg(Color::Gray))
+                                Span(text: resets_text, style: Style::default().fg(Color::DarkGray))
+                            }
+                        }
+                    }
+                })
+            })
+        }
+    }
+}
+
+/// Render the /model picker: one row per model, the in-use model marked.
+/// `current` is the session's explicit selection; when unset, the server
+/// default is what's actually in use, so mark that row instead.
+fn model_picker_view(list: &crate::models::ModelList, current: Option<&str>) -> Elements {
+    let in_use = current.unwrap_or(&list.default);
+    let options: Vec<SelectOption> = list
+        .models
+        .iter()
+        .map(|m| {
+            let marker = if m.alias == in_use { " (current)" } else { "" };
+            SelectOption::builder()
+                .label(format!("{} — {}{}", m.name, m.description, marker))
+                .value(m.alias.clone())
+                .build()
+        })
+        .collect();
+
+    element! {
+        View(key: "model-picker", padding_left: Cells::from(2), padding_top: Cells::from(1)) {
+            Text {
+                Span(text: "Select a model:", style: Style::default().add_modifier(Modifier::BOLD))
+            }
+            View(padding_left: Cells::from(2)) {
+                Select(options: options, on_select: Box::new(move |option: &SelectOption| {
+                    Some(AiTuiEvent::SelectModel(option.value.clone()))
+                }) as Box<dyn Fn(&SelectOption) -> Option<AiTuiEvent> + Send + Sync>)
+            }
+            Text {
+                Span(text: "[Esc] Cancel", style: Style::default().fg(Color::DarkGray))
+            }
+        }
     }
 }
 
@@ -168,6 +293,7 @@ fn tool_call_view(tool_call: &crate::fsm::tools::TrackedTool, in_git_project: bo
         ClientToolCall::Write(tool) => tool.path.display().to_string(),
         ClientToolCall::Shell(tool) => tool.command.clone(),
         ClientToolCall::AtuinHistory(tool) => tool.query.clone(),
+        ClientToolCall::AtuinOutput(tool) => tool.history_id.to_string(),
         ClientToolCall::LoadSkill(tool) => format!("skill: {}", tool.name),
     };
 
@@ -770,7 +896,7 @@ fn visible_group_calls(group: &turn::ToolGroup) -> &[turn::ToolCallDetails] {
     &group.calls[start..]
 }
 
-/// Render a single row in a grouped list: [tree marker][status][content].
+/// Render a single row in a grouped list: `[tree marker][status][content]`.
 fn group_row_view(is_first: bool, status: &turn::ToolResultStatus, content: Elements) -> Elements {
     element! {
         HStack {

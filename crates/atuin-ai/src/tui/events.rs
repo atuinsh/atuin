@@ -15,6 +15,8 @@ pub(crate) enum AiTuiEvent {
     SlashCommand(String),
     /// User selected a permission
     SelectPermission(PermissionResult),
+    /// User picked a model alias from the /model picker
+    SelectModel(String),
     /// Cancel active generation or streaming (Esc during Generating/Streaming)
     CancelGeneration,
     /// Execute the suggested command

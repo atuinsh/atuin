@@ -1,4 +1,4 @@
-use eyre::{Result, bail};
+use eyre::{Result, eyre};
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::{encryption::PASETO_V4, store::Store};
@@ -73,18 +73,35 @@ impl ScriptStore {
     pub async fn scripts(&self) -> Result<Vec<ScriptRecord>> {
         let records = self.store.all_tagged(SCRIPT_TAG).await?;
         let mut ret = Vec::with_capacity(records.len());
+        let mut skipped = 0;
 
         for record in records.into_iter() {
+            // Skip records we can't decrypt or decode, rather than failing the entire build.
             let script = match record.version.as_str() {
                 SCRIPT_VERSION => {
-                    let decrypted = record.decrypt::<PASETO_V4>(&self.encryption_key)?;
-
-                    ScriptRecord::deserialize(&decrypted.data, SCRIPT_VERSION)
+                    record
+                        .decrypt::<PASETO_V4>(&self.encryption_key)
+                        .and_then(|decrypted| {
+                            ScriptRecord::deserialize(&decrypted.data, SCRIPT_VERSION)
+                        })
                 }
-                version => bail!("unknown history version {version:?}"),
-            }?;
+                version => Err(eyre!("unknown script version {version:?}")),
+            };
 
-            ret.push(script);
+            match script {
+                Ok(script) => ret.push(script),
+                Err(e) => {
+                    tracing::warn!("failed to decode script record, skipping: {e}");
+                    skipped += 1;
+                }
+            }
+        }
+
+        if skipped > 0 {
+            // library code that may run under the TUI or shell hooks, so no stderr here
+            tracing::warn!(
+                "skipped {skipped} script records that could not be decrypted or decoded"
+            );
         }
 
         Ok(ret)

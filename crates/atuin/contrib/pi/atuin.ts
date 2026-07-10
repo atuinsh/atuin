@@ -9,8 +9,7 @@
  * Then restart pi or run /reload.
  */
 
-import type { BashOperations, ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { createBashTool, createLocalBashOperations } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 const ATUIN_AUTHOR = "pi";
 const ATUIN_TIMEOUT_MS = 10_000;
@@ -53,35 +52,54 @@ async function endHistory(
 	}
 }
 
+// The bash tool reports failures by appending a status line to the result
+// text rather than exposing a numeric exit code, so recover it from there.
+function exitCodeFromResult(result: unknown, isError: boolean): number {
+	if (!isError) return 0;
+
+	const content = (result as { content?: unknown } | undefined)?.content;
+	const text = Array.isArray(content)
+		? content
+				.map((part) => {
+					const t = (part as { text?: unknown } | undefined)?.text;
+					return typeof t === "string" ? t : "";
+				})
+				.join("\n")
+		: "";
+
+	const exited = text.match(/Command exited with code (\d+)\s*$/);
+	if (exited) return Number(exited[1]);
+	if (/Command aborted\s*$/.test(text)) return 130;
+	if (/Command timed out after \S+ seconds\s*$/.test(text)) return 124;
+	return 1;
+}
+
 export default function atuinPiExtension(pi: ExtensionAPI) {
-	const cwd = process.cwd();
-	const local = createLocalBashOperations();
+	// Atuin history IDs for in-flight bash tool calls, keyed by tool call ID.
+	const pending = new Map<string, string>();
 
-	const trackedOperations: BashOperations = {
-		async exec(command, commandCwd, options) {
-			const historyId = await startHistory(pi, commandCwd, command);
-			let exitCode: number | null = null;
+	// Observe bash executions through events instead of registering a bash
+	// tool: registering one conflicts with other extensions that provide
+	// their own bash tool (sandboxes, RTK, remote runners), while events
+	// fire no matter which extension's bash tool ends up executing the
+	// command.
+	pi.on("tool_call", async (event, ctx: ExtensionContext) => {
+		if (event.toolName !== "bash") return;
 
-			try {
-				const result = await local.exec(command, commandCwd, options);
-				exitCode = result.exitCode;
-				return result;
-			} finally {
-				if (historyId) {
-					await endHistory(
-						pi,
-						commandCwd,
-						historyId,
-						exitCode ?? (options.signal?.aborted ? 130 : 1),
-					);
-				}
-			}
-		},
-	};
+		const command = (event.input as { command?: unknown }).command;
+		if (typeof command !== "string" || command.length === 0) return;
 
-	pi.registerTool(
-		createBashTool(cwd, {
-			operations: trackedOperations,
-		}),
-	);
+		const historyId = await startHistory(pi, ctx.cwd, command);
+		if (historyId) pending.set(event.toolCallId, historyId);
+	});
+
+	// tool_execution_end also fires when another extension blocks the call,
+	// unlike tool_result, so entries started above are always closed.
+	pi.on("tool_execution_end", async (event, ctx: ExtensionContext) => {
+		const historyId = pending.get(event.toolCallId);
+		if (!historyId) return;
+		pending.delete(event.toolCallId);
+
+		await endHistory(pi, ctx.cwd, historyId, exitCodeFromResult(event.result, event.isError));
+	});
 }

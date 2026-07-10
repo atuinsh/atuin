@@ -8,6 +8,7 @@ result
 publish.sh
 .envrc
 .planning/
+.antigravitycli/
 
 ui/backend/target
 ui/backend/gen

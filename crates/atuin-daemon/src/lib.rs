@@ -10,6 +10,7 @@ pub mod daemon;
 pub mod events;
 pub mod history;
 pub mod search;
+pub mod semantic;
 pub mod server;
 
 // Re-export core daemon types for convenience
@@ -17,10 +18,10 @@ pub use daemon::{Component, Daemon, DaemonBuilder, DaemonHandle};
 pub use events::DaemonEvent;
 
 // Re-export components
-pub use components::{HistoryComponent, SearchComponent, SyncComponent};
+pub use components::{HistoryComponent, SearchComponent, SemanticComponent, SyncComponent};
 
 // Re-export client helpers
-pub use client::{ControlClient, emit_event, emit_event_with_settings};
+pub use client::{ControlClient, SemanticClient, emit_event, emit_event_with_settings};
 
 /// Boot the daemon using the new component-based architecture.
 ///
@@ -34,12 +35,14 @@ pub async fn boot(
     // Create the components
     let history_component = HistoryComponent::new();
     let search_component = SearchComponent::new();
+    let semantic_component = SemanticComponent::new();
     let sync_component = SyncComponent::new();
 
     // Get the gRPC services before moving components into the daemon
     // (The services share state with the components via Arc)
     let history_service = history_component.grpc_service();
     let search_service = search_component.grpc_service();
+    let semantic_service = semantic_component.grpc_service();
 
     // Build the daemon
     let mut daemon = Daemon::builder(settings.clone())
@@ -47,6 +50,7 @@ pub async fn boot(
         .history_db(history_db)
         .component(history_component)
         .component(search_component)
+        .component(semantic_component)
         .component(sync_component)
         .build()
         .await?;
@@ -93,6 +97,7 @@ pub async fn boot(
         settings,
         history_service,
         search_service,
+        semantic_service,
         control_service.into_server(),
         handle,
     )

@@ -2,6 +2,72 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.17.0
+
+### Bug Fixes
+
+- *(ai)* Dispatch skills registered in the slash command registry ([#3593](https://github.com/atuinsh/atuin/issues/3593))
+- *(ci)* Fossier install in scan workflow ([#3485](https://github.com/atuinsh/atuin/issues/3485))
+- *(i18n)* Fix typos in Russian localization ([#3575](https://github.com/atuinsh/atuin/issues/3575))
+- *(nu)* Use `char -u 1b` for ESC in OSC 133 sequences ([#3530](https://github.com/atuinsh/atuin/issues/3530))
+- *(nu)* Suppress error when `ATUIN_HISTORY_ID` is missing in `pre_prompt` hook ([#3587](https://github.com/atuinsh/atuin/issues/3587))
+- *(pi)* Observe tool events instead of registering a bash tool ([#3557](https://github.com/atuinsh/atuin/issues/3557))
+- *(pty-proxy)* Set `$SHELL` to the spawned shell ([#3548](https://github.com/atuinsh/atuin/issues/3548))
+- *(search)* Fix terminal clearing with latest Ratatui ([#3578](https://github.com/atuinsh/atuin/issues/3578))
+- *(sync)* Skip records that fail to decrypt or decode instead of failing the whole store ([#3569](https://github.com/atuinsh/atuin/issues/3569))
+- Atuin hangs when attempting to spawn daemon from Ctrl+R invocation ([#3502](https://github.com/atuinsh/atuin/issues/3502))
+- Capture session ID from stream headers rather than final event ([#3531](https://github.com/atuinsh/atuin/issues/3531))
+- Doctor resiliency fo runknown platforms + openbsd warning ([#3551](https://github.com/atuinsh/atuin/issues/3551))
+- Double input on arrow keys in AI setup prompt on Windows ([#3552](https://github.com/atuinsh/atuin/issues/3552))
+- Exclude AI agent commands from zsh-autosuggestions ([#3567](https://github.com/atuinsh/atuin/issues/3567))
+- Silence shellcheck SC2016 on literal `$all-user` author filter
+- Respect `store_failed` when using daemon ([#3571](https://github.com/atuinsh/atuin/issues/3571))
+
+
+### Documentation
+
+- Highlight `Ctrl-r` keybinding on docs page ([#3489](https://github.com/atuinsh/atuin/issues/3489))
+- Document store purge workflow ([#3544](https://github.com/atuinsh/atuin/issues/3544))
+- Fix command example typo in documentation ([#3536](https://github.com/atuinsh/atuin/issues/3536))
+- Make commented-out lines in `config.toml` match real defaults ([#3583](https://github.com/atuinsh/atuin/issues/3583))
+- Add fish shell cleanup step to uninstall instructions ([#3582](https://github.com/atuinsh/atuin/issues/3582))
+
+
+### Features
+
+- *(doctor)* Add whether daemon is enabled to `doctor` output ([#3572](https://github.com/atuinsh/atuin/issues/3572))
+- *(pty-proxy)* Add `--shell` flag to override the spawned shell ([#3327](https://github.com/atuinsh/atuin/issues/3327))
+- Setup fossier to stop bot slop prs ([#3482](https://github.com/atuinsh/atuin/issues/3482))
+- Capture command output + expose to new `atuin_output` tool ([#3510](https://github.com/atuinsh/atuin/issues/3510))
+- Cache user contexts on load until `/reload` ([#3525](https://github.com/atuinsh/atuin/issues/3525))
+- Create database integration tests for atuin-server ([#3514](https://github.com/atuinsh/atuin/issues/3514))
+- Add `/model` slash command for changing models ([#3576](https://github.com/atuinsh/atuin/issues/3576))
+- Add mcp server for history tools and expand search filters ([#3581](https://github.com/atuinsh/atuin/issues/3581))
+- Add status bar with model and usage information ([#3591](https://github.com/atuinsh/atuin/issues/3591))
+
+
+### Miscellaneous Tasks
+
+- *(rustdoc)* Fix Rustdoc warnings ([#3585](https://github.com/atuinsh/atuin/issues/3585))
+- *(warnings)* Fix compile warnings with latest dependencies ([#3586](https://github.com/atuinsh/atuin/issues/3586))
+- Vouch for all existing contributors ([#3486](https://github.com/atuinsh/atuin/issues/3486))
+- Update GitHub app token format
+- Update to Rust 1.96.1 ([#3568](https://github.com/atuinsh/atuin/issues/3568))
+- Adopt `derive_more` to reduce boilerplate across the codebase ([#3573](https://github.com/atuinsh/atuin/pull/3573))
+
+
+### Performance
+
+- *(search)* Scan history by recency until N unique ([#3553](https://github.com/atuinsh/atuin/issues/3553))
+- Add `synchronous(Normal)` + `optimize_on_close` to record store SQLite ([#3577](https://github.com/atuinsh/atuin/issues/3577))
+- Remove unnecessary clones in a hot path ([#3580](https://github.com/atuinsh/atuin/issues/3580))
+
+
+### Refactor
+
+- Implement `From<sqlx::Error>` and clean up `fix_error` ([#3484](https://github.com/atuinsh/atuin/issues/3484))
+- Pull `fn into_utc` into `atuin-server-database` crate ([#3487](https://github.com/atuinsh/atuin/issues/3487))
+
 ## 18.16.1
 
 ### Bug Fixes

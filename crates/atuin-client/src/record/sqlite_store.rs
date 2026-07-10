@@ -11,7 +11,10 @@ use fs_err as fs;
 
 use sqlx::{
     Row,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow},
+    sqlite::{
+        SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
+        SqliteSynchronous,
+    },
 };
 
 use atuin_common::record::{
@@ -49,6 +52,8 @@ impl SqliteStore {
 
         let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
             .journal_mode(SqliteJournalMode::Wal)
+            .optimize_on_close(true, None)
+            .synchronous(SqliteSynchronous::Normal)
             .foreign_keys(true)
             .create_if_missing(true);
 

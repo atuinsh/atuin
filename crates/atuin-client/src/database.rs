@@ -46,6 +46,10 @@ pub struct Context {
 pub struct OptFilters {
     pub exit: Option<i64>,
     pub exclude_exit: Option<i64>,
+    /// Only commands that recorded a non-zero exit. Unlike `exclude_exit: 0`,
+    /// this also skips the `exit = -1` sentinel rows for commands still
+    /// running (or whose end hook never fired).
+    pub only_failed: bool,
     pub cwd: Option<String>,
     pub exclude_cwd: Option<String>,
     pub before: Option<String>,
@@ -58,10 +62,13 @@ pub struct OptFilters {
     pub authors: Vec<String>,
 }
 
-pub async fn current_context() -> eyre::Result<Context> {
-    let session = env::var("ATUIN_SESSION").map_err(|_| {
-        eyre::eyre!("Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set up your shell.")
-    })?;
+/// Build a query [`Context`] without requiring a live shell session.
+///
+/// Outside of an atuin-hooked shell (e.g. when running as an MCP server),
+/// `ATUIN_SESSION` is unset; the session is left empty so session-scoped
+/// filters simply match nothing.
+pub async fn query_context() -> eyre::Result<Context> {
+    let session = env::var("ATUIN_SESSION").unwrap_or_default();
     let hostname = get_host_user();
     let cwd = utils::get_current_dir();
     let host_id = Settings::host_id().await?;
@@ -74,6 +81,16 @@ pub async fn current_context() -> eyre::Result<Context> {
         git_root,
         host_id: host_id.0.as_simple().to_string(),
     })
+}
+
+pub async fn current_context() -> eyre::Result<Context> {
+    if env::var("ATUIN_SESSION").is_err() {
+        return Err(eyre::eyre!(
+            "Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set up your shell."
+        ));
+    }
+
+    query_context().await
 }
 
 impl Context {
@@ -492,25 +509,11 @@ impl Database for Sqlite {
         query: &str,
         filter_options: OptFilters,
     ) -> Result<Vec<History>> {
+        // Build the inner query holding all of the user's filters (filter mode,
+        // fuzzy/regex command matches, exit/cwd/date filters, author, deleted_at).
+        // Deduplication, ordering and limiting are applied by the outer query
+        // built below, so that the timestamp-ordered scan can early-terminate.
         let mut sql = SqlBuilder::select_from("history");
-
-        if !filter_options.include_duplicates {
-            sql.group_by("command").having("max(timestamp)");
-        }
-
-        if let Some(limit) = filter_options.limit {
-            sql.limit(limit);
-        }
-
-        if let Some(offset) = filter_options.offset {
-            sql.offset(offset);
-        }
-
-        if filter_options.reverse {
-            sql.order_asc("timestamp");
-        } else {
-            sql.order_desc("timestamp");
-        }
 
         let git_root = if let Some(git_root) = context.git_root.clone() {
             git_root.to_str().unwrap_or("/").to_string()
@@ -602,6 +605,10 @@ impl Database for Sqlite {
             .exclude_exit
             .map(|exclude_exit| sql.and_where_ne("exit", exclude_exit));
 
+        if filter_options.only_failed {
+            sql.and_where("exit != 0 AND exit != -1");
+        }
+
         filter_options
             .cwd
             .map(|cwd| sql.and_where_eq("cwd", quote(cwd)));
@@ -636,7 +643,45 @@ impl Database for Sqlite {
 
         sql.and_where_is_null("deleted_at");
 
-        let query = sql.sql().expect("bug in search query. please report");
+        // sql_builder inlines every bound value, so the inner query carries no
+        // positional parameters and is safe to embed (twice) as a derived table.
+        let inner = sql.sql().expect("bug in search query. please report");
+        let inner = inner.trim().trim_end_matches(';');
+
+        let order = if filter_options.reverse {
+            "ASC"
+        } else {
+            "DESC"
+        };
+
+        let tail = match (filter_options.limit, filter_options.offset) {
+            (Some(limit), Some(offset)) => format!(" LIMIT {limit} OFFSET {offset}"),
+            (Some(limit), None) => format!(" LIMIT {limit}"),
+            // SQLite requires a LIMIT before OFFSET; -1 means "no limit".
+            (None, Some(offset)) => format!(" LIMIT -1 OFFSET {offset}"),
+            (None, None) => String::new(),
+        };
+
+        // Deduplicate by keeping, for each command, only its most recent entry
+        // within the filtered set. Expressed as a correlated NOT EXISTS rather
+        // than GROUP BY so that the timestamp-ordered scan can stop as soon as
+        // `limit` distinct commands have been emitted, instead of aggregating
+        // the entire table on every keystroke. The `(timestamp, id)` row-value
+        // comparison both breaks timestamp ties (one row per command) and stays
+        // a sargable range scan on the (command, timestamp) index.
+        let query = if filter_options.include_duplicates {
+            format!("SELECT * FROM ({inner}) f ORDER BY f.timestamp {order}{tail}")
+        } else {
+            format!(
+                "SELECT * FROM ({inner}) f \
+                 WHERE NOT EXISTS ( \
+                     SELECT 1 FROM ({inner}) f2 \
+                     WHERE f2.command = f.command \
+                       AND (f2.timestamp, f2.id) > (f.timestamp, f.id) \
+                 ) \
+                 ORDER BY f.timestamp {order}{tail}"
+            )
+        };
 
         let res = sqlx::query(&query)
             .map(Self::query_history)

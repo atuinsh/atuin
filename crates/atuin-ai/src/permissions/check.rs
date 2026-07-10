@@ -1,13 +1,13 @@
 use eyre::Result;
 
-use crate::{permissions::file::RuleFile, tools::PermissableToolCall};
+use crate::{permissions::file::RuleFile, tools::PermissibleToolCall};
 
 pub(crate) struct PermissionRequest<'t> {
-    call: &'t (dyn PermissableToolCall + Send + Sync),
+    call: &'t (dyn PermissibleToolCall + Send + Sync),
 }
 
 impl<'t> PermissionRequest<'t> {
-    pub fn new(call: &'t (dyn PermissableToolCall + Send + Sync)) -> Self {
+    pub fn new(call: &'t (dyn PermissibleToolCall + Send + Sync)) -> Self {
         Self { call }
     }
 }

@@ -43,6 +43,7 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 
 - Rust 2024 edition, toolchain 1.93.1.
 - Errors: `eyre::Result` in binaries, `thiserror` for typed errors in libraries.
+- Derive boilerplate: `derive_more` (workspace dep) for `Display`, `From`, `Into`, `AsRef`, `Deref`, `Debug` on newtypes and simple enums. Prefer `derive_more` over manual `impl` when the formatting/conversion is a straight delegation. Use `thiserror` (not `derive_more`) for error types. Use `#[as_ref(str)]` on string newtypes for `AsRef<str>`.
 - Async: tokio. Client uses `current_thread`; server uses `multi_thread`.
 - `#![deny(unsafe_code)]` on client/common, `#![forbid(unsafe_code)]` on server.
 - Clippy: `pedantic` + `nursery` on main crate. CI enforces `-D warnings -D clippy::redundant_clone`.
