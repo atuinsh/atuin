@@ -58,6 +58,9 @@ impl Importer for Nu {
                 * u32::try_from(self.num_entries().saturating_sub(1)).unwrap_or(u32::MAX);
 
         for b in unix_byte_lines(&self.bytes) {
+            let current_timestamp = timestamp;
+            timestamp += timestamp_increment;
+
             let s = match std::str::from_utf8(b) {
                 Ok(s) => s,
                 Err(_) => continue, // we can skip past things like invalid utf8
@@ -65,8 +68,7 @@ impl Importer for Nu {
 
             let cmd: String = s.replace("<\\n>", "\n");
 
-            let entry = History::import().timestamp(timestamp).command(cmd);
-            timestamp += timestamp_increment;
+            let entry = History::import().timestamp(current_timestamp).command(cmd);
 
             h.push(entry.build().into()).await?;
         }
