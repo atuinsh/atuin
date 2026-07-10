@@ -5,6 +5,7 @@ use atuin_client::{
     record::sqlite_store::SqliteStore,
     settings::{Settings, Tmux},
 };
+use atuin_common::shell::Shell as CommonShell;
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
 use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr};
@@ -17,6 +18,8 @@ mod zsh;
 
 #[derive(Parser, Debug)]
 pub struct Cmd {
+    /// Shell to generate init for, or "auto" to detect
+    #[arg(default_value = "auto")]
     shell: Shell,
 
     /// Disable the binding of CTRL-R to atuin
@@ -36,6 +39,8 @@ pub struct Cmd {
 #[value(rename_all = "lower")]
 #[allow(clippy::enum_variant_names, clippy::doc_markdown)]
 pub enum Shell {
+    /// Auto-detect shell
+    Auto,
     /// Zsh setup
     Zsh,
     /// Bash setup
@@ -51,6 +56,28 @@ pub enum Shell {
 }
 
 impl Cmd {
+    fn resolve_shell(&self) -> Result<Shell> {
+        match self.shell {
+            Shell::Auto => {
+                let detected = CommonShell::current();
+                match detected {
+                    CommonShell::Zsh => Ok(Shell::Zsh),
+                    CommonShell::Bash => Ok(Shell::Bash),
+                    CommonShell::Fish => Ok(Shell::Fish),
+                    CommonShell::Nu => Ok(Shell::Nu),
+                    CommonShell::Xonsh => Ok(Shell::Xonsh),
+                    CommonShell::Powershell => Ok(Shell::PowerShell),
+                    CommonShell::Sh | CommonShell::Unknown => {
+                        Err(eyre::eyre!(
+                            "could not detect shell. Supported shells: zsh, bash, fish, nu, xonsh, powershell"
+                        ))
+                    }
+                }
+            }
+            other => Ok(other),
+        }
+    }
+
     fn init_nu(&self, _tmux: &Tmux) {
         let full = include_str!("../../shell/atuin.nu");
 
@@ -98,12 +125,12 @@ $env.config = (
         }
     }
 
-    fn static_init(&self, settings: &Settings) {
+    fn static_init(&self, shell: Shell, settings: &Settings) {
         let tmux = &settings.tmux;
 
         let disable_ai = self.disable_ai || matches!(settings.ai.enabled, Some(false));
 
-        match self.shell {
+        match shell {
             Shell::Zsh => {
                 zsh::init_static(self.disable_up_arrow, self.disable_ctrl_r, disable_ai, tmux);
             }
@@ -122,10 +149,11 @@ $env.config = (
             Shell::PowerShell => {
                 powershell::init_static(self.disable_up_arrow, self.disable_ctrl_r, tmux);
             }
+            Shell::Auto => unreachable!("shell should be resolved before static_init"),
         }
     }
 
-    async fn dotfiles_init(&self, settings: &Settings) -> Result<()> {
+    async fn dotfiles_init(&self, shell: Shell, settings: &Settings) -> Result<()> {
         let record_store_path = PathBuf::from(settings.record_store_path.as_str());
         let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
@@ -139,7 +167,7 @@ $env.config = (
 
         let disable_ai = self.disable_ai || matches!(settings.ai.enabled, Some(false));
 
-        match self.shell {
+        match shell {
             Shell::Zsh => {
                 zsh::init(
                     alias_store,
@@ -194,6 +222,7 @@ $env.config = (
                 )
                 .await?;
             }
+            Shell::Auto => unreachable!("shell should be resolved before dotfiles_init"),
         }
 
         Ok(())
@@ -207,10 +236,12 @@ $env.config = (
             return Ok(());
         }
 
+        let shell = self.resolve_shell()?;
+
         if settings.dotfiles.enabled {
-            self.dotfiles_init(settings).await?;
+            self.dotfiles_init(shell, settings).await?;
         } else {
-            self.static_init(settings);
+            self.static_init(shell, settings);
         }
 
         Ok(())

@@ -172,7 +172,7 @@ Modify your shell configuration to skip Atuin initialization based on an environ
 ```shell
 # In .bashrc or .zshrc
 if [[ -z "${MY_TOOL_SESSION}" ]]; then
-    eval "$(atuin init bash)"
+    eval "$(atuin init)"
 fi
 ```
 
