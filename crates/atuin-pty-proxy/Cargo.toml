@@ -16,6 +16,7 @@ clap = { workspace = true }
 [target.'cfg(unix)'.dependencies]
 crossterm = { workspace = true }
 eyre = { workspace = true }
+libc = "0.2"
 portable-pty = "0.9"
 signal-hook = "0.3"
 vt100 = { workspace = true }

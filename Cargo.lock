@@ -521,6 +521,7 @@ dependencies = [
  "clap",
  "crossterm",
  "eyre",
+ "libc",
  "portable-pty",
  "signal-hook",
  "vt100",
