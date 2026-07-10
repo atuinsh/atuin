@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use directories::BaseDirs;
 use eyre::{Result, eyre};
-use time::OffsetDateTime;
+use time::{Duration, OffsetDateTime};
 
 use super::{Importer, Loader, unix_byte_lines};
 use crate::history::History;
@@ -15,6 +15,12 @@ use crate::import::read_to_end;
 #[derive(Debug)]
 pub struct Nu {
     bytes: Vec<u8>,
+}
+
+impl Nu {
+    fn num_entries(&self) -> usize {
+        super::count_lines(&self.bytes)
+    }
 }
 
 fn get_histpath() -> Result<PathBuf> {
@@ -39,13 +45,18 @@ impl Importer for Nu {
     }
 
     async fn entries(&mut self) -> Result<usize> {
-        Ok(super::count_lines(&self.bytes))
+        Ok(self.num_entries())
     }
 
     async fn load(self, h: &mut impl Loader) -> Result<()> {
-        let now = OffsetDateTime::now_utc();
+        // Separate commands by 1ms as with bash and zsh
+        let timestamp_increment = Duration::milliseconds(1);
 
-        let mut counter = 0;
+        // Subtract enough milliseconds so the most recent command's timestamp will be now.
+        let mut timestamp = OffsetDateTime::now_utc()
+            - timestamp_increment
+                * u32::try_from(self.num_entries().saturating_sub(1)).unwrap_or(u32::MAX);
+
         for b in unix_byte_lines(&self.bytes) {
             let s = match std::str::from_utf8(b) {
                 Ok(s) => s,
@@ -54,10 +65,8 @@ impl Importer for Nu {
 
             let cmd: String = s.replace("<\\n>", "\n");
 
-            let offset = time::Duration::nanoseconds(counter);
-            counter += 1;
-
-            let entry = History::import().timestamp(now - offset).command(cmd);
+            let entry = History::import().timestamp(timestamp).command(cmd);
+            timestamp += timestamp_increment;
 
             h.push(entry.build().into()).await?;
         }
