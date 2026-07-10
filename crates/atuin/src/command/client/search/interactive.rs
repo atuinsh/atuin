@@ -23,7 +23,7 @@ use atuin_client::{
     history::{History, HistoryId, HistoryStats, store::HistoryStore},
     settings::{
         CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, SearchMode, Settings,
-        UiColumn,
+        UiColumn, UiColumnType,
     },
 };
 
@@ -153,6 +153,31 @@ struct StyleState {
 }
 
 impl State {
+    fn command_column_width(settings: &Settings, available_width: u16) -> u16 {
+        const INDICATOR_WIDTH: u16 = 3;
+
+        let fixed_width = settings
+            .ui
+            .columns
+            .iter()
+            .filter(|column| !column.expand)
+            .map(|column| column.width + 1)
+            .sum::<u16>();
+
+        settings
+            .ui
+            .columns
+            .iter()
+            .find(|column| column.column_type == UiColumnType::Command)
+            .map_or(0, |command| {
+                if command.expand {
+                    available_width.saturating_sub(INDICATOR_WIDTH + fixed_width)
+                } else {
+                    command.width
+                }
+            })
+    }
+
     async fn query_results(
         &mut self,
         db: &mut dyn Database,
@@ -746,6 +771,7 @@ impl State {
             && !results.is_empty()
         {
             let length_current_cmd = results[selected].command.len() as u16;
+            let command_width = Self::command_column_width(settings, preview_width);
             // calculate the number of newlines in the command
             let num_newlines = results[selected]
                 .command
@@ -764,9 +790,7 @@ impl State {
                         })
                         .sum(),
                 ) + border_size * 2
-            }
-            // The '- 19' takes the characters before the command (duration and time) into account
-            else if length_current_cmd > preview_width - 19 {
+            } else if length_current_cmd > command_width {
                 std::cmp::min(
                     settings.max_preview_height,
                     (length_current_cmd + preview_width - 1 - border_size)
@@ -2079,7 +2103,8 @@ mod tests {
     use atuin_client::database::Context;
     use atuin_client::history::History;
     use atuin_client::settings::{
-        FilterMode, KeymapMode, Preview, PreviewStrategy, SearchMode, Settings,
+        FilterMode, KeymapMode, Preview, PreviewStrategy, SearchMode, Settings, Ui, UiColumn,
+        UiColumnType,
     };
     use time::OffsetDateTime;
 
@@ -2087,6 +2112,39 @@ mod tests {
     use crate::command::client::search::history_list::ListState;
 
     use super::{Compactness, InspectingState, KeymapSet, State};
+
+    #[test]
+    fn calc_preview_height_uses_configured_columns() {
+        let settings = Settings {
+            preview: Preview {
+                strategy: PreviewStrategy::Auto,
+            },
+            show_preview: true,
+            ui: Ui {
+                columns: vec![
+                    UiColumn::new(UiColumnType::Duration),
+                    UiColumn::new(UiColumnType::Time),
+                    UiColumn::new(UiColumnType::Datetime),
+                    UiColumn::new(UiColumnType::Exit),
+                    UiColumn::new(UiColumnType::Command),
+                ],
+            },
+            ..Settings::utc()
+        };
+        let results = vec![
+            History::capture()
+                .timestamp(OffsetDateTime::now_utc())
+                .command("du -sch ~/.bash_sessions/* | sort -h")
+                .cwd("/")
+                .build()
+                .into(),
+        ];
+
+        let height =
+            State::calc_preview_height(&settings, &results, 0, 0, Compactness::Full, 1, 60);
+
+        assert_eq!(height, 3);
+    }
 
     #[test]
     #[allow(clippy::too_many_lines)]
