@@ -112,9 +112,10 @@ impl Importer for Zsh {
                 line.push_str(s);
                 line.push('\n');
             } else {
+                line.push_str(&s);
                 entries.push(Entry::parse(&line));
+                line.clear();
             }
-            line.clear();
         }
 
         // Similar approach to preserving order as the Bash importer.
