@@ -128,13 +128,13 @@ pub struct MeResponse {
 
 // Hub CLI authentication types
 
-/// Response from POST /auth/cli/code - generates a code for CLI auth
+/// Response from `POST /auth/cli/code` - generates a code for CLI auth
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CliCodeResponse {
     pub code: String,
 }
 
-/// Response from GET /auth/cli/verify?code=<code> - polls for authorization
+/// Response from `GET /auth/cli/verify?code=<code>` - polls for authorization
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CliVerifyResponse {
     /// Session token, present only when authorization is complete

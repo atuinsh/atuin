@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt, io::prelude::*, path::PathBuf, str::FromStr, sync::OnceLock};
+use std::{collections::HashMap, io::prelude::*, path::PathBuf, str::FromStr, sync::OnceLock};
 use tokio::sync::OnceCell;
 
 use atuin_common::record::HostId;
@@ -29,6 +29,8 @@ pub(crate) mod meta;
 mod scripts;
 pub mod watcher;
 
+#[derive(derive_more::AsRef)]
+#[as_ref(str)]
 pub struct HubEndpoint(String);
 
 /// Default sync address for Atuin's hosted service
@@ -40,12 +42,6 @@ pub const DEFAULT_HUB_ENDPOINT: &str = "https://hub.atuin.sh";
 impl Default for HubEndpoint {
     fn default() -> Self {
         HubEndpoint(DEFAULT_HUB_ENDPOINT.to_string())
-    }
-}
-
-impl AsRef<str> for HubEndpoint {
-    fn as_ref(&self) -> &str {
-        &self.0
     }
 }
 
@@ -164,14 +160,12 @@ impl From<Dialect> for interim::Dialect {
 /// multithreaded runtime, otherwise it will fail on most Unix systems.
 ///
 /// See: <https://github.com/atuinsh/atuin/pull/1517#discussion_r1447516426>
-#[derive(Clone, Copy, Debug, Eq, PartialEq, DeserializeFromStr, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, DeserializeFromStr, Serialize, derive_more::Display,
+)]
+#[display("{_0}")]
 pub struct Timezone(pub UtcOffset);
-impl fmt::Display for Timezone {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-/// format: <+|-><hour>[:<minute>[:<second>]]
+/// format: `<+|-><hour>[:<minute>[:<second>]]`
 static OFFSET_FMT: &[FormatItem<'_>] = format_description!(
     "[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional [:[offset_second padding:none]]]]]"
 );
@@ -673,6 +667,9 @@ pub struct Ai {
     /// The maximum time in minutes that an AI session can be automatically resumed.
     pub session_continue_minutes: i64,
 
+    /// The AI model to use for AI chats, based on the Atuin AI model alias.
+    pub model: Option<String>,
+
     /// Deprecated: use opening.send_cwd instead. Kept for backwards compatibility.
     #[serde(default)]
     pub send_cwd: Option<bool>,
@@ -690,6 +687,8 @@ pub struct Ai {
 pub struct AiCapabilities {
     /// Whether the AI can request to search Atuin history. `None` = unset (defaults to enabled, and the ai will ask for permission).
     pub enable_history_search: Option<bool>,
+    /// Whether the AI can request to view the stored output, if any, for Atuin history entries. `None` = unset (defaults to enabled, and the ai will ask for permission).
+    pub enable_history_output: Option<bool>,
     /// Whether the AI can request to read and write files. `None` = unset (defaults to enabled, and the ai will ask for permission).
     pub enable_file_tools: Option<bool>,
     /// Whether the AI can request to execute bash commands. `None` = unset (defaults to enabled, and the ai will ask for permission).
@@ -1377,7 +1376,7 @@ impl Settings {
 
     /// Returns the appropriate auth token for sync operations.
     ///
-    /// Delegates to [`resolve_sync_auth`] and converts the result to an
+    /// Delegates to [`Self::resolve_sync_auth`] and converts the result to an
     /// `AuthToken`. Callers that need to distinguish between auth states
     /// (e.g. to show different UI) should call `resolve_sync_auth` directly.
     #[cfg(feature = "sync")]

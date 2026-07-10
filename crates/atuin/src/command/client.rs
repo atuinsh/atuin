@@ -145,6 +145,11 @@ pub enum Cmd {
     #[cfg(feature = "ai")]
     #[command(subcommand)]
     Ai(atuin_ai::commands::Commands),
+
+    /// Start an MCP server exposing history search to AI tools (stdio)
+    #[cfg(feature = "ai")]
+    #[command()]
+    Mcp,
 }
 
 impl Cmd {
@@ -398,6 +403,9 @@ impl Cmd {
 
             #[cfg(feature = "ai")]
             Self::Ai(cli) => atuin_ai::commands::run(cli, &settings).await,
+
+            #[cfg(feature = "ai")]
+            Self::Mcp => atuin_ai::mcp::run(&db).await,
         }
     }
 }

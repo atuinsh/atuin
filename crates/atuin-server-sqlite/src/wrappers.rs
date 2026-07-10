@@ -3,9 +3,13 @@ use atuin_common::record::{EncryptedData, Host, Record};
 use atuin_server_database::models::{History, Session, User};
 use sqlx::{Row, sqlite::SqliteRow};
 
+#[derive(derive_more::Into)]
 pub struct DbUser(pub User);
+#[derive(derive_more::Into)]
 pub struct DbSession(pub Session);
+#[derive(derive_more::Into)]
 pub struct DbHistory(pub History);
+#[derive(derive_more::Into)]
 pub struct DbRecord(pub Record<EncryptedData>);
 
 impl<'a> FromRow<'a, SqliteRow> for DbUser {
@@ -62,11 +66,5 @@ impl<'a> ::sqlx::FromRow<'a, SqliteRow> for DbRecord {
             tag: row.try_get("tag")?,
             data,
         }))
-    }
-}
-
-impl From<DbRecord> for Record<EncryptedData> {
-    fn from(other: DbRecord) -> Record<EncryptedData> {
-        Record { ..other.0 }
     }
 }

@@ -2,10 +2,12 @@ use eyre::Result;
 
 use crate::components::history::HistoryGrpcService;
 use crate::components::search::SearchGrpcService;
+use crate::components::semantic::SemanticGrpcService;
 use crate::control::{ControlService, control_server::ControlServer};
 use crate::daemon::DaemonHandle;
 use crate::history::history_server::HistoryServer;
 use crate::search::search_server::SearchServer;
+use crate::semantic::semantic_server::SemanticServer;
 
 use atuin_client::settings::Settings;
 
@@ -18,6 +20,7 @@ pub async fn run_grpc_server(
     settings: Settings,
     history_service: HistoryServer<HistoryGrpcService>,
     search_service: SearchServer<SearchGrpcService>,
+    semantic_service: SemanticServer<SemanticGrpcService>,
     control_service: ControlServer<ControlService>,
     handle: DaemonHandle,
 ) -> Result<()> {
@@ -101,6 +104,7 @@ pub async fn run_grpc_server(
         if let Err(e) = Server::builder()
             .add_service(history_service)
             .add_service(search_service)
+            .add_service(semantic_service)
             .add_service(control_service)
             .serve_with_incoming_shutdown(uds_stream, shutdown_signal)
             .await
@@ -118,6 +122,7 @@ pub async fn run_grpc_server(
     settings: Settings,
     history_service: HistoryServer<HistoryGrpcService>,
     search_service: SearchServer<SearchGrpcService>,
+    semantic_service: SemanticServer<SemanticGrpcService>,
     control_service: ControlServer<ControlService>,
     handle: DaemonHandle,
 ) -> Result<()> {
@@ -152,6 +157,7 @@ pub async fn run_grpc_server(
         if let Err(e) = Server::builder()
             .add_service(history_service)
             .add_service(search_service)
+            .add_service(semantic_service)
             .add_service(control_service)
             .serve_with_incoming_shutdown(tcp_stream, shutdown_signal)
             .await

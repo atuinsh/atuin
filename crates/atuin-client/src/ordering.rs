@@ -12,9 +12,9 @@ pub fn reorder_fuzzy(mode: SearchMode, query: &str, res: Vec<History>) -> Vec<Hi
 fn reorder<F, A>(query: &str, f: F, res: Vec<A>) -> Vec<A>
 where
     F: Fn(&A) -> &String,
-    A: Clone,
 {
-    let mut r = res.clone();
+    let mut r = res;
+    let len = r.len();
     let qvec = &query.chars().collect();
     r.sort_by_cached_key(|h| {
         // TODO for fzf search we should sum up scores for each matched term
@@ -24,7 +24,7 @@ where
             // we don't want to return a None, as the comparison behaviour would put the worst matches
             // at the front. therefore, we'll return a set of indices that are one larger than the longest
             // possible legitimate match. This is meaningless except as a comparison.
-            None => (0, res.len()),
+            None => (0, len),
         };
         1 + to - from
     });

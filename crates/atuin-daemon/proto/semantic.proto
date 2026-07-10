@@ -1,0 +1,47 @@
+syntax = "proto3";
+package semantic;
+
+service Semantic {
+  rpc RecordCommands(stream CommandCapture) returns (RecordCommandsReply);
+  rpc CommandOutput(CommandOutputRequest) returns (CommandOutputReply);
+}
+
+message CommandCapture {
+  string prompt = 1;
+  string command = 2;
+  string output = 3;
+  optional int32 exit_code = 4;
+  optional string history_id = 5;
+  optional string session_id = 6;
+  bool output_truncated = 7;
+  uint64 output_observed_bytes = 8;
+}
+
+message RecordCommandsReply {
+  uint64 accepted = 1;
+}
+
+message CommandOutputRequest {
+  string history_id = 1;
+  repeated OutputRange ranges = 2;
+}
+
+message OutputRange {
+  int64 start = 1;
+  int64 end = 2;
+}
+
+message OutputLine {
+  uint64 line_number = 1;
+  string content = 2;
+}
+
+message CommandOutputReply {
+  bool found = 1;
+  string output = 2;
+  uint64 total_bytes = 3;
+  uint64 total_lines = 4;
+  repeated OutputLine lines = 5;
+  bool output_truncated = 6;
+  uint64 output_observed_bytes = 7;
+}

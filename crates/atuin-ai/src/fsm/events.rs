@@ -2,6 +2,7 @@
 
 use serde_json::Value;
 
+use crate::models::ModelList;
 use crate::tools::ToolOutcome;
 
 /// Events that drive state transitions in the agent FSM.
@@ -22,6 +23,7 @@ pub(crate) enum Event {
     InterruptTools,
 
     // ─── Stream lifecycle ───────────────────────────────────────
+    SessionIdReceived(String),
     /// Stream connection established, first frame received.
     StreamStarted,
     /// Received a chunk of streamed text content.
@@ -43,14 +45,19 @@ pub(crate) enum Event {
     /// Stream status changed (e.g. "thinking", "searching").
     StreamStatusChanged(String),
     /// Stream ended normally.
-    StreamDone { session_id: String },
+    StreamDone {
+        session_id: String,
+    },
     /// Stream encountered an error.
     StreamError(String),
 
     // ─── Suggest command (terminal tool call) ───────────────────
     /// The suggest_command tool call acts as a stream terminal event.
     /// This is the server signaling "turn complete, here's the command."
-    SuggestCommand { id: String, input: Value },
+    SuggestCommand {
+        id: String,
+        input: Value,
+    },
 
     // ─── Tool lifecycle ─────────────────────────────────────────
     /// Permission resolver completed for a tool.
@@ -79,9 +86,14 @@ pub(crate) enum Event {
 
     // ─── Timers ─────────────────────────────────────────────────
     /// Confirmation timeout expired.
-    ConfirmationTimeout { timeout_id: u64 },
+    ConfirmationTimeout {
+        timeout_id: u64,
+    },
     /// Shell tool execution timeout expired.
-    ToolExecutionTimeout { timeout_id: u64, tool_id: String },
+    ToolExecutionTimeout {
+        timeout_id: u64,
+        tool_id: String,
+    },
 
     // ─── Session management ─────────────────────────────────────
     /// User ran /new to start a fresh session.
@@ -91,7 +103,18 @@ pub(crate) enum Event {
     /// User submitted a slash command (other than /new).
     /// The driver resolves known commands (like /help) and passes the
     /// rendered content; the FSM just pushes an OOB event.
-    SlashCommand { command: String, content: String },
+    SlashCommand {
+        command: String,
+        content: String,
+    },
+
+    // ─── Model selection ────────────────────────────────────────
+    /// User ran /model — open the model picker.
+    OpenModelPicker,
+    /// The model list fetch finished (spawned by FetchModels).
+    ModelListLoaded(Result<ModelList, String>),
+    /// User picked a model from the picker.
+    ModelSelected(String),
 
     // ─── Skills ────────────────────────────────────────────────
     /// User invoked a skill via /skill-name. FSM emits a LoadSkill

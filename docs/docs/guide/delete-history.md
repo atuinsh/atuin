@@ -105,6 +105,26 @@ atuin history prune
 
 This is useful when you add a new pattern to `history_filter` - future commands matching the filter are never recorded, but old entries that were recorded before the filter was set up remain. `prune` cleans those up.
 
+## Purging undecryptable local store records
+
+If `atuin store verify` reports that some local store records cannot be decrypted with your current key, you can remove only those broken local records:
+
+```sh
+# Check whether every local store record can be decrypted
+atuin store verify
+
+# Delete only the local records that fail decryption
+atuin store purge
+```
+
+This is useful when one machine ends up with local records that were encrypted with a different key than the one Atuin is currently using.
+
+!!! warning
+    `atuin store purge` only affects the local record store on the current machine. It does not wipe your history, delete your sync account, or reset other machines.
+
+!!! danger
+    `atuin store purge` permanently deletes the records it cannot decrypt. Before running it, make sure Atuin is using the key you intend to keep, and back up the local store if the records may still be recoverable. Run `atuin store verify` first so you know whether you are cleaning up a real key mismatch and not just deleting data blindly.
+
 ## Deduplicating history
 
 Remove duplicate entries (same command, working directory, and hostname):
@@ -142,5 +162,6 @@ This removes your account and all synchronized history from the server. **Local 
 | Delete all history | `atuin search --delete-it-all` |
 | Start fresh (with sync) | `atuin account delete` then re-register |
 | Remove filtered entries | `atuin history prune` |
+| Remove undecryptable local store records | `atuin store verify` then `atuin store purge` |
 | Remove duplicates | `atuin history dedup --before <date> --dupkeep <n>` |
 | Delete sync account | `atuin account delete` |

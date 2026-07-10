@@ -6,6 +6,8 @@ use eyre::{Result, eyre};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 use time::OffsetDateTime;
 
+use crate::{session::CachedUsageSnapshot, usage::UsageSnapshot};
+
 // Database row mappings — all columns are kept even if not yet read in
 // non-test code, since they're part of the schema and used in tests.
 #[derive(Debug)]
@@ -331,11 +333,51 @@ impl AiSessionStore {
         .await?;
         Ok(())
     }
+
+    // ── Usage cache (server credit totals, one row per user key) ──
+
+    /// Read the cached usage snapshot for a user key. Returns the snapshot
+    /// JSON and the unix timestamp it was written at.
+    pub async fn get_usage(&self, user_key: &str) -> Result<Option<CachedUsageSnapshot>> {
+        let row: Option<(String, i64)> =
+            sqlx::query_as("SELECT snapshot, updated_at FROM usage WHERE user_key = ?1")
+                .bind(user_key)
+                .fetch_optional(&self.pool)
+                .await?;
+
+        let Some((snapshot, written_at)) = row else {
+            return Ok(None);
+        };
+
+        let snapshot = serde_json::from_str(&snapshot)?;
+        Ok(Some(CachedUsageSnapshot {
+            snapshot,
+            written_at,
+        }))
+    }
+
+    /// Write the usage snapshot for a user key (upsert).
+    pub async fn set_usage(&self, user_key: &str, snapshot: &UsageSnapshot) -> Result<()> {
+        let snapshot_json = serde_json::to_string(snapshot)?;
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        sqlx::query(
+            "INSERT INTO usage (user_key, snapshot, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT (user_key) DO UPDATE SET snapshot = ?2, updated_at = ?3",
+        )
+        .bind(user_key)
+        .bind(snapshot_json)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::usage::UsageSnapshot;
 
     async fn new_test_store() -> AiSessionStore {
         AiSessionStore::new("sqlite::memory:", 2.0).await.unwrap()
@@ -522,6 +564,41 @@ mod tests {
         let after = store.get_session("s1").await.unwrap().unwrap();
 
         assert_eq!(before.updated_at, after.updated_at);
+    }
+
+    #[tokio::test]
+    async fn test_usage_cache_roundtrip() {
+        use crate::usage::UsageBucket;
+
+        let store = new_test_store().await;
+
+        assert!(store.get_usage("key-a").await.unwrap().is_none());
+
+        let snapshot = UsageSnapshot {
+            period: "calendar_monthly".into(),
+            resets_at: "2026-08-01T00:00:00Z".into(),
+            requests: UsageBucket { used: 1, limit: 10 },
+            input: UsageBucket { used: 2, limit: 20 },
+            output: UsageBucket { used: 3, limit: 0 },
+        };
+        store.set_usage("key-a", &snapshot).await.unwrap();
+
+        let cached = store.get_usage("key-a").await.unwrap().unwrap();
+        assert!(cached.written_at > 0);
+        assert_eq!(cached.snapshot, snapshot);
+
+        // Upsert replaces the snapshot for the same key
+        let updated = UsageSnapshot {
+            requests: UsageBucket { used: 4, limit: 10 },
+            ..snapshot
+        };
+        store.set_usage("key-a", &updated).await.unwrap();
+
+        let cached = store.get_usage("key-a").await.unwrap().unwrap();
+        assert_eq!(cached.snapshot, updated);
+
+        // Other keys are independent
+        assert!(store.get_usage("key-b").await.unwrap().is_none());
     }
 
     #[tokio::test]

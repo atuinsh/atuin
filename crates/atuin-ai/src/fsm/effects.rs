@@ -50,6 +50,8 @@ pub(crate) enum Effect {
         name: String,
         arguments: Option<String>,
     },
+    /// Fetch the available model list from the server.
+    FetchModels,
 
     // ─── Persistence ────────────────────────────────────────────
     /// Persist current conversation state to disk.
@@ -62,6 +64,8 @@ pub(crate) enum Effect {
     },
     /// Cache a session-scoped file permission grant.
     CacheSessionGrant { path: PathBuf },
+    /// Persist the selected model alias to `ai.model` in config.toml.
+    SaveModelSelection { alias: String },
     /// Archive current session and start fresh (IO only — state already updated by FSM).
     ArchiveSession,
 

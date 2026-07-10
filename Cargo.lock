@@ -139,7 +139,7 @@ checksum = "3c3610892ee6e0cbce8ae2700349fcf8f98adb0dbfbee85aec3c9179d29cc072"
 dependencies = [
  "base64ct",
  "blake2",
- "cpufeatures",
+ "cpufeatures 0.2.17",
  "password-hash",
 ]
 
@@ -214,7 +214,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "atuin"
-version = "18.16.1"
+version = "18.17.0"
 dependencies = [
  "arboard",
  "async-trait",
@@ -237,6 +237,7 @@ dependencies = [
  "colored",
  "crossterm",
  "daemonize",
+ "derive_more",
  "eyre",
  "fs-err",
  "fs4",
@@ -274,16 +275,18 @@ dependencies = [
 
 [[package]]
 name = "atuin-ai"
-version = "18.16.1"
+version = "18.17.0"
 dependencies = [
  "async-stream",
  "async-trait",
  "atuin-client",
  "atuin-common",
+ "atuin-daemon",
  "chrono",
  "chrono-humanize",
  "clap",
  "crossterm",
+ "derive_more",
  "directories",
  "eventsource-stream",
  "eye_declare",
@@ -299,6 +302,7 @@ dependencies = [
  "ratatui-widgets",
  "regex",
  "reqwest",
+ "rmcp",
  "serde",
  "serde_json",
  "shellexpand",
@@ -326,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-client"
-version = "18.16.1"
+version = "18.17.0"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -335,7 +339,9 @@ dependencies = [
  "config",
  "crossterm",
  "crypto_secretbox",
+ "derive_more",
  "directories",
+ "divan",
  "eyre",
  "fs-err",
  "futures",
@@ -368,6 +374,7 @@ dependencies = [
  "sqlx",
  "strum",
  "strum_macros",
+ "tempfile",
  "testing_logger",
  "thiserror 2.0.18",
  "time",
@@ -381,9 +388,10 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "18.16.1"
+version = "18.17.0"
 dependencies = [
  "base64",
+ "derive_more",
  "directories",
  "eyre",
  "getrandom 0.2.17",
@@ -401,7 +409,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-daemon"
-version = "18.16.1"
+version = "18.17.0"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -409,6 +417,7 @@ dependencies = [
  "atuin-history",
  "atuin-nucleo",
  "dashmap",
+ "derive_more",
  "eyre",
  "hyper-util",
  "lasso",
@@ -434,21 +443,23 @@ dependencies = [
 
 [[package]]
 name = "atuin-dotfiles"
-version = "18.16.1"
+version = "18.17.0"
 dependencies = [
  "atuin-client",
  "atuin-common",
  "crypto_secretbox",
+ "derive_more",
  "eyre",
  "rand 0.8.5",
  "rmp",
  "serde",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
 name = "atuin-history"
-version = "18.16.1"
+version = "18.17.0"
 dependencies = [
  "atuin-client",
  "crossterm",
@@ -461,10 +472,11 @@ dependencies = [
 
 [[package]]
 name = "atuin-kv"
-version = "18.16.1"
+version = "18.17.0"
 dependencies = [
  "atuin-client",
  "atuin-common",
+ "derive_more",
  "eyre",
  "pretty_assertions",
  "rmp",
@@ -504,7 +516,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-pty-proxy"
-version = "18.16.1"
+version = "18.17.0"
 dependencies = [
  "clap",
  "crossterm",
@@ -516,10 +528,11 @@ dependencies = [
 
 [[package]]
 name = "atuin-scripts"
-version = "18.16.1"
+version = "18.17.0"
 dependencies = [
  "atuin-client",
  "atuin-common",
+ "derive_more",
  "eyre",
  "minijinja",
  "pretty_assertions",
@@ -538,7 +551,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server"
-version = "18.16.1"
+version = "18.17.0"
 dependencies = [
  "argon2",
  "atuin-common",
@@ -567,10 +580,11 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-database"
-version = "18.16.1"
+version = "18.17.0"
 dependencies = [
  "async-trait",
  "atuin-common",
+ "derive_more",
  "eyre",
  "serde",
  "sqlx",
@@ -581,11 +595,12 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-postgres"
-version = "18.16.1"
+version = "18.17.0"
 dependencies = [
  "async-trait",
  "atuin-common",
  "atuin-server-database",
+ "derive_more",
  "eyre",
  "futures-util",
  "metrics",
@@ -599,11 +614,12 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-sqlite"
-version = "18.16.1"
+version = "18.17.0"
 dependencies = [
  "async-trait",
  "atuin-common",
  "atuin-server-database",
+ "derive_more",
  "eyre",
  "futures-util",
  "metrics",
@@ -829,7 +845,18 @@ checksum = "c3613f74bd2eac03dad61bd53dbe620703d4371614fe0bc3b9f04dd36fe4e818"
 dependencies = [
  "cfg-if",
  "cipher",
- "cpufeatures",
+ "cpufeatures 0.2.17",
+]
+
+[[package]]
+name = "chacha20"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f8d983286843e49675a4b7a2d174efe136dc93a18d69130dd18198a6c167601"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.0",
+ "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -1055,6 +1082,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpufeatures"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "crc"
 version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1185,7 +1221,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fb8b7c4503de7d6ae7b42ab72a5a59857b4c937ec27a3d4539dba95b5ab2be"
 dependencies = [
  "cfg-if",
- "cpufeatures",
+ "cpufeatures 0.2.17",
  "curve25519-dalek-derive",
  "digest",
  "fiat-crypto",
@@ -1315,7 +1351,14 @@ dependencies = [
  "quote",
  "rustc_version",
  "syn 2.0.117",
+ "unicode-xid",
 ]
+
+[[package]]
+name = "deunicode"
+version = "1.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
 
 [[package]]
 name = "diff"
@@ -1585,6 +1628,18 @@ checksum = "7cd915d99f24784cdc19fd37ef22b97e3ff0ae756c7e492e9fbfe897d61e2aec"
 dependencies = [
  "indenter",
  "once_cell",
+]
+
+[[package]]
+name = "fake"
+version = "5.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea6be833b323a56361118a747470a45a1bcd5c52a2ec9b1e40c83dafe687e453"
+dependencies = [
+ "deunicode",
+ "either",
+ "rand 0.10.1",
+ "time",
 ]
 
 [[package]]
@@ -1898,6 +1953,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "r-efi 6.0.0",
+ "rand_core 0.10.1",
  "wasip2",
  "wasip3",
 ]
@@ -3247,6 +3303,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "pastey"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
+
+[[package]]
 name = "pathdiff"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3454,7 +3516,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8159bd90725d2df49889a078b54f4f79e87f1f8a8444194cdca81d38f5393abf"
 dependencies = [
- "cpufeatures",
+ "cpufeatures 0.2.17",
  "opaque-debug",
  "universal-hash",
 ]
@@ -3726,6 +3788,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2e8e8bcc7961af1fdac401278c6a831614941f6164ee3bf4ce61b7edb162207"
+dependencies = [
+ "chacha20 0.10.0",
+ "getrandom 0.4.2",
+ "rand_core 0.10.1",
+]
+
+[[package]]
 name = "rand_chacha"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3762,6 +3835,12 @@ checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
 dependencies = [
  "getrandom 0.3.4",
 ]
+
+[[package]]
+name = "rand_core"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
 name = "rand_xoshiro"
@@ -4024,6 +4103,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmcp"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f00a32c3b81b7b254076a65abd5ab2551209146713ba38f73818657e865e9433"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "futures",
+ "pastey",
+ "pin-project-lite",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "rmp"
 version = "0.8.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4199,7 +4298,7 @@ dependencies = [
  "base64",
  "base64ct",
  "blake2",
- "chacha20",
+ "chacha20 0.9.1",
  "cipher",
  "curve25519-dalek",
  "digest",
@@ -4220,7 +4319,7 @@ checksum = "a61ebc4c4e058565285d54a1134a4f9f5d951ef901194c79437f3ee4f2538e49"
 dependencies = [
  "base64",
  "blake2",
- "chacha20",
+ "chacha20 0.9.1",
  "digest",
  "ed25519-dalek",
  "hex",
@@ -4284,10 +4383,24 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2b42f36aa1cd011945615b92222f6bf73c599a102a300334cd7f8dbeec726cc"
 dependencies = [
+ "chrono",
  "dyn-clone",
  "ref-cast",
+ "schemars_derive",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "schemars_derive"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d115b50f4aaeea07e79c1912f645c7513d81715d0420f8bc77a18c6260b307f"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -4349,6 +4462,17 @@ name = "serde_derive"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "serde_derive_internals"
+version = "0.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18d26a20a969b9e3fdf2fc2d9f21eda6c40e2de84c9408bb5d3b05d499aae711"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4460,7 +4584,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
 dependencies = [
  "cfg-if",
- "cpufeatures",
+ "cpufeatures 0.2.17",
  "digest",
 ]
 
@@ -4471,7 +4595,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
 dependencies = [
  "cfg-if",
- "cpufeatures",
+ "cpufeatures 0.2.17",
  "digest",
 ]
 
@@ -4582,6 +4706,12 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 dependencies = [
  "serde",
 ]
+
+[[package]]
+name = "snowflake_uid"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "167e0bc9777318b7b2168046f75fa9cdd1211c37cc5079847f3fec58088a0853"
 
 [[package]]
 name = "socket2"
@@ -5033,6 +5163,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d92b727cb45d33ae956f7f46b966b25f1bc712092aeef9dba5ac798fc89f720"
 dependencies = [
  "log",
+]
+
+[[package]]
+name = "tests-database"
+version = "18.17.0"
+dependencies = [
+ "async-trait",
+ "atuin-common",
+ "atuin-server-database",
+ "atuin-server-postgres",
+ "atuin-server-sqlite",
+ "eyre",
+ "fake",
+ "futures-util",
+ "metrics",
+ "regex",
+ "serde",
+ "snowflake_uid",
+ "sqlx",
+ "time",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
 ]
 
 [[package]]

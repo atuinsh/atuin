@@ -17,7 +17,7 @@ pub struct Fish {
     bytes: Vec<u8>,
 }
 
-/// see https://fishshell.com/docs/current/interactive.html#searchable-command-history
+/// see <https://fishshell.com/docs/current/interactive.html#searchable-command-history>
 fn default_histpath() -> Result<PathBuf> {
     let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
     let data = std::env::var("XDG_DATA_HOME").map_or_else(

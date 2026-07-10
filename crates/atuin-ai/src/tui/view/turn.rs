@@ -495,6 +495,7 @@ impl<'a> TurnBuilder<'a> {
                     query: history.query.clone(),
                     filter_modes: history.filter_modes.clone(),
                 },
+                ClientToolCall::AtuinOutput(_) => ToolRenderData::Remote,
                 ClientToolCall::LoadSkill(skill) => ToolRenderData::SkillLoad {
                     _name: skill.name.clone(),
                 },

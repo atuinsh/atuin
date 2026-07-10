@@ -37,14 +37,30 @@ pub async fn build(
     let kv_store = KvStore::new(store.clone(), kv_db, host_id, encryption_key);
     let script_store = ScriptStore::new(store.clone(), host_id, encryption_key);
 
-    history_store.incremental_build(db, downloaded).await?;
+    // A failure in one store should not stop the others from building - build as much as
+    // possible, and warn about the rest.
+    if let Err(e) = history_store.incremental_build(db, downloaded).await {
+        eprintln!("Warning: failed to build history: {e}");
+    }
 
-    alias_store.build().await?;
-    var_store.build().await?;
-    kv_store.build().await?;
+    if let Err(e) = alias_store.build().await {
+        eprintln!("Warning: failed to build aliases: {e}");
+    }
+
+    if let Err(e) = var_store.build().await {
+        eprintln!("Warning: failed to build vars: {e}");
+    }
+
+    if let Err(e) = kv_store.build().await {
+        eprintln!("Warning: failed to build kv: {e}");
+    }
 
     let script_db =
         atuin_scripts::database::Database::new(settings.scripts.db_path.clone(), 1.0).await?;
-    script_store.build(script_db).await?;
+
+    if let Err(e) = script_store.build(script_db).await {
+        eprintln!("Warning: failed to build scripts: {e}");
+    }
+
     Ok(())
 }
