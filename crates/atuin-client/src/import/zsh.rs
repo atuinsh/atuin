@@ -50,6 +50,41 @@ fn default_histpath() -> Result<PathBuf> {
     }
 }
 
+/// Represents a line of zsh history.
+struct Entry {
+    pub command: String,
+    pub timestamp: Option<OffsetDateTime>,
+    /// Nanoseconds
+    pub duration: Option<i64>,
+}
+
+impl Entry {
+    pub fn parse(line: &str) -> Self {
+        if let Some(rest) = line.strip_prefix(": ") {
+            let (time, rest) = rest.split_once(':').unwrap();
+            let (duration, command) = rest.split_once(';').unwrap();
+            let time = time
+                .parse::<i64>()
+                .ok()
+                .and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok());
+
+            // use nanos, because why the hell not? we won't display them.
+            let duration = duration.parse::<i64>().map_or(-1, |t| t * 1_000_000_000);
+            Self {
+                command: command.trim_end().to_owned(),
+                timestamp: time,
+                duration: Some(duration),
+            }
+        } else {
+            Self {
+                command: line.trim_end().to_owned(),
+                timestamp: None,
+                duration: None,
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl Importer for Zsh {
     const NAME: &'static str = "zsh";
@@ -76,26 +111,9 @@ impl Importer for Zsh {
             if let Some(s) = s.strip_suffix('\\') {
                 line.push_str(s);
                 line.push('\n');
-                continue;
-            }
-
-            line.push_str(&s);
-            let entry = if let Some(rest) = line.strip_prefix(": ") {
-                let (time, rest) = rest.split_once(':').unwrap();
-                let (duration, command) = rest.split_once(';').unwrap();
-                let time = time
-                    .parse::<i64>()
-                    .ok()
-                    .and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok());
-
-                // use nanos, because why the hell not? we won't display them.
-                let duration = duration.parse::<i64>().map_or(-1, |t| t * 1_000_000_000);
-                let command = command.trim_end().to_owned();
-                (command, time, Some(duration))
             } else {
-                (std::mem::take(&mut line), None, None)
-            };
-            entries.push(entry);
+                entries.push(Entry::parse(&line));
+            }
             line.clear();
         }
 
@@ -103,23 +121,25 @@ impl Importer for Zsh {
         let (commands_until_timestamp, first_timestamp) = entries
             .iter()
             .enumerate()
-            .find_map(|(i, (_, time, _))| time.map(|t| (i + 1, t)))
+            .find_map(|(i, entry)| entry.timestamp.map(|t| (i + 1, t)))
             .unwrap_or_else(|| (entries.len(), OffsetDateTime::now_utc()));
 
         let timestamp_increment = Duration::milliseconds(1);
         let mut timestamp = first_timestamp
             - u32::try_from(commands_until_timestamp).unwrap_or(u32::MAX) * timestamp_increment;
 
-        for (command, time, duration) in entries {
-            if let Some(time) = time {
+        for entry in entries {
+            if let Some(time) = entry.timestamp {
                 timestamp = time;
             } else {
                 timestamp += timestamp_increment;
             }
 
-            let builder = History::import().timestamp(timestamp).command(command);
+            let builder = History::import()
+                .timestamp(timestamp)
+                .command(entry.command);
 
-            let imported = if let Some(duration) = duration {
+            let imported = if let Some(duration) = entry.duration {
                 builder.duration(duration).build()
             } else {
                 builder.build()
@@ -160,39 +180,39 @@ mod test {
 
     #[test]
     fn test_parse_extended_simple() {
-        let parsed = parse_extended("1613322469:0;cargo install atuin", 0);
+        let parsed = Entry::parse(": 1613322469:0;cargo install atuin");
 
         assert_eq!(parsed.command, "cargo install atuin");
-        assert_eq!(parsed.duration, 0);
+        assert_eq!(parsed.duration, Some(0));
         assert_eq!(
-            parsed.timestamp,
+            parsed.timestamp.unwrap(),
             OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
         );
 
-        let parsed = parse_extended("1613322469:10;cargo install atuin;cargo update", 0);
+        let parsed = Entry::parse(": 1613322469:10;cargo install atuin;cargo update");
 
         assert_eq!(parsed.command, "cargo install atuin;cargo update");
-        assert_eq!(parsed.duration, 10_000_000_000);
+        assert_eq!(parsed.duration, Some(10_000_000_000));
         assert_eq!(
-            parsed.timestamp,
+            parsed.timestamp.unwrap(),
             OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
         );
 
-        let parsed = parse_extended("1613322469:10;cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷", 0);
+        let parsed = Entry::parse(": 1613322469:10;cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷");
 
         assert_eq!(parsed.command, "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷");
-        assert_eq!(parsed.duration, 10_000_000_000);
+        assert_eq!(parsed.duration, Some(10_000_000_000));
         assert_eq!(
-            parsed.timestamp,
+            parsed.timestamp.unwrap(),
             OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
         );
 
-        let parsed = parse_extended("1613322469:10;cargo install \\n atuin\n", 0);
+        let parsed = Entry::parse(": 1613322469:10;cargo install \\n atuin\n");
 
         assert_eq!(parsed.command, "cargo install \\n atuin");
-        assert_eq!(parsed.duration, 10_000_000_000);
+        assert_eq!(parsed.duration, Some(10_000_000_000));
         assert_eq!(
-            parsed.timestamp,
+            parsed.timestamp.unwrap(),
             OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
         );
     }
