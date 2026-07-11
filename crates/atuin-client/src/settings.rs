@@ -1697,7 +1697,7 @@ impl Settings {
         .filter_map(|(key, value)| match Self::expand_path(value) {
             Ok(expanded) => Some((key, expanded)),
             Err(e) => {
-                log::warn!("failed to expand path for {key}: {e}");
+                tracing::warn!("failed to expand path for {key}: {e}");
                 None
             }
         })

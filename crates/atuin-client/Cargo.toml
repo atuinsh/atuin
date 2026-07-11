@@ -24,7 +24,7 @@ check-update = []
 atuin-common = { path = "../atuin-common", version = "18.17.0" }
 derive_more = { workspace = true }
 
-log = { workspace = true }
+tracing = { workspace = true }
 base64 = { workspace = true }
 time = { workspace = true, features = ["macros", "formatting", "parsing"] }
 clap = { workspace = true }
@@ -83,9 +83,14 @@ strum = { version = "0.27", features = ["strum_macros"] }
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 pretty_assertions = { workspace = true }
-testing_logger = "0.1.1"
 divan = "0.1.14"
 tempfile = "3"
+
+# This crate's tests require the `test-utils` feature in atuin-common.
+[dev-dependencies.atuin-common]
+path = "../atuin-common"
+version = "18.17.0"
+features = ["test-utils"]
 
 [[bench]]
 name = "benchmarks"

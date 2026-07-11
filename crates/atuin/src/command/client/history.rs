@@ -34,8 +34,8 @@ use atuin_client::{
 #[cfg(feature = "sync")]
 use atuin_client::{record, sync};
 
-use log::{debug, warn};
 use time::{OffsetDateTime, macros::format_description};
+use tracing::{debug, warn};
 
 #[cfg(feature = "daemon")]
 use super::daemon;
