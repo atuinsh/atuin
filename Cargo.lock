@@ -246,7 +246,6 @@ dependencies = [
  "indicatif",
  "interim",
  "itertools",
- "log",
  "norm",
  "open",
  "ratatui",
@@ -351,7 +350,6 @@ dependencies = [
  "indicatif",
  "interim",
  "itertools",
- "log",
  "memchr",
  "minspan",
  "notify",
@@ -375,11 +373,11 @@ dependencies = [
  "strum",
  "strum_macros",
  "tempfile",
- "testing_logger",
  "thiserror 2.0.18",
  "time",
  "tiny-bip39",
  "tokio",
+ "tracing",
  "typed-builder 0.18.2",
  "urlencoding",
  "uuid",
@@ -403,6 +401,8 @@ dependencies = [
  "sysinfo",
  "thiserror 2.0.18",
  "time",
+ "tracing",
+ "tracing-subscriber",
  "typed-builder 0.18.2",
  "uuid",
 ]
@@ -5154,15 +5154,6 @@ dependencies = [
  "wezterm-dynamic",
  "wezterm-input-types",
  "winapi",
-]
-
-[[package]]
-name = "testing_logger"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d92b727cb45d33ae956f7f46b966b25f1bc712092aeef9dba5ac798fc89f720"
-dependencies = [
- "log",
 ]
 
 [[package]]

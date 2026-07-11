@@ -1,5 +1,4 @@
 use config::{Config, File as ConfigFile, FileFormat};
-use log;
 use palette::named;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -71,20 +70,20 @@ impl Theme {
     }
 
     pub fn get_info(&self) -> ContentStyle {
-        self.get_alert(log::Level::Info)
+        self.get_alert(tracing::Level::INFO)
     }
 
     pub fn get_warning(&self) -> ContentStyle {
-        self.get_alert(log::Level::Warn)
+        self.get_alert(tracing::Level::WARN)
     }
 
     pub fn get_error(&self) -> ContentStyle {
-        self.get_alert(log::Level::Error)
+        self.get_alert(tracing::Level::ERROR)
     }
 
     // The alert meanings may be chosen by the Level enum, rather than the methods above
     // or the full Meaning enum, to simplify programmatic selection of a log-level.
-    pub fn get_alert(&self, severity: log::Level) -> ContentStyle {
+    pub fn get_alert(&self, severity: tracing::Level) -> ContentStyle {
         self.styles[ALERT_TYPES.get(&severity).unwrap()]
     }
 
@@ -133,7 +132,7 @@ impl Theme {
                     *name,
                     StyleFactory::from_fg_string(color).unwrap_or_else(|err| {
                         if debug {
-                            log::warn!("Tried to load string as a color unsuccessfully: ({name}={color}) {err}");
+                            tracing::warn!("Tried to load string as a color unsuccessfully: ({name}={color}) {err}");
                         }
                         ContentStyle::default()
                     }),
@@ -241,11 +240,11 @@ impl StyleFactory {
 // Built-in themes. Rather than having extra files added before any theming
 // is available, this gives a couple of basic options, demonstrating the use
 // of themes: autumn and marine
-static ALERT_TYPES: LazyLock<HashMap<log::Level, Meaning>> = LazyLock::new(|| {
+static ALERT_TYPES: LazyLock<HashMap<tracing::Level, Meaning>> = LazyLock::new(|| {
     HashMap::from([
-        (log::Level::Info, Meaning::AlertInfo),
-        (log::Level::Warn, Meaning::AlertWarn),
-        (log::Level::Error, Meaning::AlertError),
+        (tracing::Level::INFO, Meaning::AlertInfo),
+        (tracing::Level::WARN, Meaning::AlertWarn),
+        (tracing::Level::ERROR, Meaning::AlertError),
     ])
 });
 
@@ -459,7 +458,7 @@ impl ThemeManager {
         };
 
         if debug && name != theme_config.theme.name {
-            log::warn!(
+            tracing::warn!(
                 "Your theme config name is not the name of your loaded theme {} != {}",
                 name,
                 theme_config.theme.name
@@ -485,7 +484,7 @@ impl ThemeManager {
             None => match self.load_theme_from_file(name, max_depth.unwrap_or(DEFAULT_MAX_DEPTH)) {
                 Ok(theme) => theme,
                 Err(err) => {
-                    log::warn!("Could not load theme {name}: {err}");
+                    tracing::warn!("Could not load theme {name}: {err}");
                     built_ins.get("(none)").unwrap()
                 }
             },
@@ -496,6 +495,7 @@ impl ThemeManager {
 #[cfg(test)]
 mod theme_tests {
     use super::*;
+    use atuin_common::test_utils::capture_logs;
 
     #[test]
     fn test_can_load_builtin_theme() {
@@ -620,14 +620,17 @@ mod theme_tests {
         assert_eq!(theme.get_info().foreground_color.unwrap(), Color::DarkGreen);
         assert_eq!(theme.get_base().foreground_color, None);
         assert_eq!(
-            theme.get_alert(log::Level::Error).foreground_color.unwrap(),
+            theme
+                .get_alert(tracing::Level::ERROR)
+                .foreground_color
+                .unwrap(),
             Color::DarkRed
         )
     }
 
     #[test]
     fn test_can_use_parent_theme_for_fallbacks() {
-        testing_logger::setup();
+        let logs = capture_logs();
 
         let mut manager = ThemeManager::new(Some(false), Some("".to_string()));
 
@@ -692,7 +695,7 @@ mod theme_tests {
             from_string("white").ok()
         );
 
-        testing_logger::validate(|captured_logs| assert_eq!(captured_logs.len(), 0));
+        assert_eq!(logs.get().len(), 0);
 
         // If the parent is not found, we end up with the no theme colors or styling
         // as this is considered a (soft) error state.
@@ -721,20 +724,20 @@ mod theme_tests {
             None
         );
 
-        testing_logger::validate(|captured_logs| {
-            assert_eq!(captured_logs.len(), 1);
-            assert_eq!(
-                captured_logs[0].body,
-                "Could not load theme nonsolarized: Empty theme directory override and could not find theme elsewhere"
-            );
-            assert_eq!(captured_logs[0].level, log::Level::Warn)
-        });
+        let captured_logs = logs.get();
+        assert_eq!(captured_logs.len(), 1);
+        assert_eq!(
+            captured_logs[0].message,
+            "Could not load theme nonsolarized: Empty theme directory override and could not find theme elsewhere"
+        );
+        assert_eq!(captured_logs[0].level, tracing::Level::WARN)
     }
 
     #[test]
     fn test_can_debug_theme() {
-        testing_logger::setup();
         [true, false].iter().for_each(|debug| {
+            let logs = capture_logs();
+
             let mut manager = ThemeManager::new(Some(*debug), Some("".to_string()));
             let config = Config::builder()
                 .add_source(ConfigFile::from_str(
@@ -753,23 +756,22 @@ mod theme_tests {
             manager
                 .load_theme_from_config("config_theme", config, 1)
                 .unwrap();
-            testing_logger::validate(|captured_logs| {
-                if *debug {
-                    assert_eq!(captured_logs.len(), 2);
-                    assert_eq!(
-                        captured_logs[0].body,
-                        "Your theme config name is not the name of your loaded theme config_theme != mytheme"
-                    );
-                    assert_eq!(captured_logs[0].level, log::Level::Warn);
-                    assert_eq!(
-                        captured_logs[1].body,
-                        "Tried to load string as a color unsuccessfully: (AlertInfo=xinetic) No such color in palette"
-                    );
-                    assert_eq!(captured_logs[1].level, log::Level::Warn)
-                } else {
-                    assert_eq!(captured_logs.len(), 0)
-                }
-            })
+            let captured_logs = logs.get();
+            if *debug {
+                assert_eq!(captured_logs.len(), 2);
+                assert_eq!(
+                    captured_logs[0].message,
+                    "Your theme config name is not the name of your loaded theme config_theme != mytheme"
+                );
+                assert_eq!(captured_logs[0].level, tracing::Level::WARN);
+                assert_eq!(
+                    captured_logs[1].message,
+                    "Tried to load string as a color unsuccessfully: (AlertInfo=xinetic) No such color in palette"
+                );
+                assert_eq!(captured_logs[1].level, tracing::Level::WARN)
+            } else {
+                assert_eq!(captured_logs.len(), 0)
+            }
         })
     }
 

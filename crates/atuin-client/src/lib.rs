@@ -1,7 +1,7 @@
 #![deny(unsafe_code)]
 
 #[macro_use]
-extern crate log;
+extern crate tracing;
 
 #[cfg(feature = "sync")]
 pub mod api_client;

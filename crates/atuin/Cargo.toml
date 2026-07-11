@@ -55,7 +55,6 @@ atuin-scripts = { workspace = true }
 atuin-kv = { workspace = true }
 derive_more = { workspace = true }
 
-log = { workspace = true }
 time = { workspace = true }
 eyre = { workspace = true }
 indicatif = "0.18.0"
