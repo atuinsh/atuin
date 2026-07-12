@@ -86,6 +86,7 @@ pub async fn run(db: &Sqlite) -> Result<()> {
     let server = AtuinMcp {
         db: Sqlite {
             pool: db.pool.clone(),
+            read_only: db.read_only,
         },
     }
     .serve(rmcp::transport::stdio())

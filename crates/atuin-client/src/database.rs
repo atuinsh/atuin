@@ -204,6 +204,7 @@ pub trait Database: Send + Sync + 'static {
 #[derive(Debug, Clone)]
 pub struct Sqlite {
     pub pool: SqlitePool,
+    pub read_only: bool,
 }
 
 impl Sqlite {
@@ -224,9 +225,16 @@ impl Sqlite {
             fs::create_dir_all(dir)?;
         }
 
+        // Best effort, we can likely improve this detection if more exotic cases are reported.
+        let read_only = path.exists() && fs::metadata(path)?.permissions().readonly();
+        if read_only {
+            debug!("database is read-only: write operations will be ignored");
+        }
+
         let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
             .journal_mode(SqliteJournalMode::Wal)
-            .optimize_on_close(true, None)
+            .optimize_on_close(!read_only, None)
+            .read_only(read_only)
             .synchronous(SqliteSynchronous::Normal)
             .with_regexp()
             .create_if_missing(true);
@@ -236,8 +244,11 @@ impl Sqlite {
             .connect_with(opts)
             .await?;
 
-        Self::setup_db(&pool).await?;
-        Ok(Self { pool })
+        // We can't migrate if the database is readonly, in which case we hope for the best.
+        if !read_only {
+            Self::setup_db(&pool).await?;
+        }
+        Ok(Self { pool, read_only })
     }
 
     pub async fn sqlite_version(&self) -> Result<String> {
@@ -324,6 +335,12 @@ impl Sqlite {
 impl Database for Sqlite {
     async fn save(&self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
+
+        if self.read_only {
+            debug!("database is read-only, skipping save");
+            return Ok(());
+        }
+
         let mut tx = self.pool.begin().await?;
         Self::save_raw(&mut tx, h).await?;
         tx.commit().await?;
@@ -333,6 +350,11 @@ impl Database for Sqlite {
 
     async fn save_bulk(&self, h: &[History]) -> Result<()> {
         debug!("saving history to sqlite");
+
+        if self.read_only {
+            debug!("database is read-only, skipping bulk save");
+            return Ok(());
+        }
 
         let mut tx = self.pool.begin().await?;
 
@@ -359,6 +381,11 @@ impl Database for Sqlite {
 
     async fn update(&self, h: &History) -> Result<()> {
         debug!("updating sqlite history");
+
+        if self.read_only {
+            debug!("database is read-only, skipping update");
+            return Ok(());
+        }
 
         sqlx::query(
             "update history
@@ -745,6 +772,11 @@ impl Database for Sqlite {
     // deleted_at doesn't mean the actual time that the user deleted it,
     // but the time that the system marks it as deleted
     async fn delete(&self, mut h: History) -> Result<()> {
+        if self.read_only {
+            debug!("database is read-only, skipping delete");
+            return Ok(());
+        }
+
         let now = OffsetDateTime::now_utc();
         h.command = rand::thread_rng()
             .sample_iter(&Alphanumeric)
@@ -759,6 +791,11 @@ impl Database for Sqlite {
     }
 
     async fn delete_rows(&self, ids: &[HistoryId]) -> Result<()> {
+        if self.read_only {
+            debug!("database is read-only, skipping rows deletion");
+            return Ok(());
+        }
+
         let mut tx = self.pool.begin().await?;
 
         for id in ids {
@@ -1475,6 +1512,96 @@ mod test {
         let duration = start.elapsed();
 
         assert!(duration < Duration::from_secs(15));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_read_only_database_handling() {
+        let temp = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+        let path = &*temp;
+
+        // First we create the database with writes allowed, to make migrations run and add some
+        // entries to the history
+        {
+            let mut db = Sqlite::new(path, test_local_timeout()).await.unwrap();
+            for i in 0..10 {
+                new_history_item(&mut db, &format!("echo 'added {i}'"))
+                    .await
+                    .unwrap();
+            }
+        }
+
+        // Modify the database file to be read-only
+        {
+            let mut perms = fs::metadata(path).unwrap().permissions();
+            perms.set_readonly(true);
+            fs::set_permissions(path, perms).unwrap();
+        }
+
+        let mut db = Sqlite::new(path, test_local_timeout()).await.unwrap();
+
+        // Reading all commands works just fine
+        let all = db
+            .list(
+                &[],
+                &Context {
+                    hostname: "".to_string(),
+                    session: "".to_string(),
+                    cwd: "".to_string(),
+                    host_id: "".to_string(),
+                    git_root: None,
+                },
+                None,
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+
+        // Searching existing commands works
+        assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, "echo", 10)
+            .await
+            .unwrap();
+
+        // Adding a command is marked as ok but actually does nothing
+        {
+            new_history_item(&mut db, "command that will not be saved")
+                .await
+                .unwrap();
+
+            assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, "command", 0)
+                .await
+                .unwrap();
+        }
+
+        // Deleting one item is marked as ok but actually does nothing
+        {
+            assert_search_eq(
+                &db,
+                SearchMode::Prefix,
+                FilterMode::Global,
+                "echo 'added 2'",
+                1,
+            )
+            .await
+            .unwrap();
+
+            let to_delete = all
+                .iter()
+                .find(|h| h.command == "echo 'added 2'")
+                .unwrap()
+                .clone();
+            db.delete(to_delete).await.unwrap();
+
+            assert_search_eq(
+                &db,
+                SearchMode::Prefix,
+                FilterMode::Global,
+                "echo 'added 2'",
+                1,
+            )
+            .await
+            .unwrap();
+        }
     }
 }
 
