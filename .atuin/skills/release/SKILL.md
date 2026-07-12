@@ -5,7 +5,7 @@ description: >
   generation, PR creation, tagging, and crates.io publishing. Invoke with
   /release or /release <version>.
 disable-model-invocation: true
-argument-hint: [version]
+argument-hint: "[version]"
 ---
 
 # Atuin CLI Release
