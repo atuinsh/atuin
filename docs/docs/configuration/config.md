@@ -466,6 +466,20 @@ This technically defaults to true for new users, but false for existing. We
 have set `enter_accept = true` in the default config file. This is likely to
 change to be the default for everyone in a later release.
 
+### `enhanced_keyboard`
+
+Default: `true`
+
+Enables the [kitty keyboard enhancement
+protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) in the interactive
+search TUI. This makes modifier keys (including `Cmd`/`Super`) and F1-F24 keys
+report unambiguously. On some terminals (notably iTerm2), this protocol changes
+how keys are delivered so that pressing Enter while a CJK input method (Chinese,
+Japanese, Korean, etc.) is composing will run the highlighted command instead of
+committing the composed text into the search box. If you use such an input method
+and find that Enter is being captured, set this to `false` to restore normal IME
+handling.
+
 ### `keymap_mode`
 
 Atuin version: >= 18.0

@@ -1493,10 +1493,11 @@ struct Stdout {
     writer: TerminalWriter,
     inline_mode: bool,
     no_mouse: bool,
+    enhanced_keyboard: bool,
 }
 
 impl Stdout {
-    pub fn new(inline_mode: bool, no_mouse: bool) -> std::io::Result<Self> {
+    pub fn new(inline_mode: bool, no_mouse: bool, enhanced_keyboard: bool) -> std::io::Result<Self> {
         terminal::enable_raw_mode()?;
 
         let mut writer = TerminalWriter::new()?;
@@ -1511,29 +1512,38 @@ impl Stdout {
 
         execute!(writer, event::EnableBracketedPaste)?;
 
-        #[cfg(not(target_os = "windows"))]
-        execute!(
-            writer,
-            PushKeyboardEnhancementFlags(
-                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
-                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-            ),
-        )?;
+        // The kitty keyboard enhancement protocol makes modifier/F-key reporting
+        // unambiguous, but on some terminals (e.g. iTerm2) it causes Enter during
+        // an active IME composition to be reported to us instead of committing the
+        // IME text. `enhanced_keyboard = false` restores normal IME handling.
+        if enhanced_keyboard {
+            #[cfg(not(target_os = "windows"))]
+            execute!(
+                writer,
+                PushKeyboardEnhancementFlags(
+                    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+                ),
+            )?;
+        }
 
         Ok(Self {
             writer,
             inline_mode,
             no_mouse,
+            enhanced_keyboard,
         })
     }
 }
 
 impl Drop for Stdout {
     fn drop(&mut self) {
-        #[cfg(not(target_os = "windows"))]
-        if let Err(e) = execute!(self.writer, PopKeyboardEnhancementFlags) {
-            tracing::error!(?e, "Failed to pop keyboard enhancement flags");
+        if self.enhanced_keyboard {
+            #[cfg(not(target_os = "windows"))]
+            if let Err(e) = execute!(self.writer, PopKeyboardEnhancementFlags) {
+                tracing::error!(?e, "Failed to pop keyboard enhancement flags");
+            }
         }
 
         if !self.inline_mode
@@ -1683,7 +1693,7 @@ pub async fn history(
 
     let popup_mode = saved_screen.is_some();
 
-    let stdout = Stdout::new(inline_height > 0, settings.no_mouse)?;
+    let stdout = Stdout::new(inline_height > 0, settings.no_mouse, settings.enhanced_keyboard)?;
 
     // In popup mode, clear the popup region on the physical terminal before
     // ratatui takes over. Ratatui's diff-based rendering compares against an

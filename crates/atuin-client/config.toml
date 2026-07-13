@@ -171,6 +171,12 @@
 ## This applies for new installs. Old installs will keep the old behaviour unless configured otherwise.
 enter_accept = true
 
+## Defaults to true. Enables the kitty keyboard enhancement protocol for the search TUI,
+## which makes modifier and F-key reporting unambiguous. If you use a CJK input method
+## (Chinese/Japanese/Korean) in iTerm2 and pressing Enter runs a command instead of
+## committing your input into the search box, set this to false.
+# enhanced_keyboard = true
+
 ## Defaults to false. If enabled, when triggered after &&, || or |, Atuin will complete commands to chain rather than replace the current line.
 # command_chaining = false
 
