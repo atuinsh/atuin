@@ -386,8 +386,8 @@ mod tests {
             deleted_at: None,
         };
         let stats = HistoryStats {
-            next: Some(next.clone()),
-            previous: Some(prev.clone()),
+            next: Some(next),
+            previous: Some(prev),
             total: 2,
             average_duration: 3,
             exits: Vec::new(),
@@ -406,10 +406,10 @@ mod tests {
         let prev = stats.previous.clone().unwrap();
         let next = stats.next.clone().unwrap();
 
-        let mut manager = ThemeManager::new(Some(true), Some("".to_string()));
+        let mut manager = ThemeManager::new(Some(true), Some(String::new()));
         let theme = manager.load_theme("(none)", None);
-        let _ = terminal.draw(|f| draw_ultracompact(f, chunk, &history, &stats, &theme));
-        let mut lines = ["                      "; 5].map(|l| Line::from(l));
+        let _ = terminal.draw(|f| draw_ultracompact(f, chunk, &history, &stats, theme));
+        let mut lines = ["                      "; 5].map(Line::from);
         for (n, entry) in [prev, history, next].iter().enumerate() {
             let mut l = lines[n].to_string();
             l.replace_range(0..entry.command.len(), &entry.command);

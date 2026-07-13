@@ -363,7 +363,7 @@ mod tests {
 
         // should resolve to the main repo root, not the worktree root
         let result = in_git_repo(worktree_subdir.to_str().unwrap());
-        assert_eq!(result, Some(main_repo.clone()));
+        assert_eq!(result, Some(main_repo));
 
         std::fs::remove_dir_all(&tmp).unwrap();
     }

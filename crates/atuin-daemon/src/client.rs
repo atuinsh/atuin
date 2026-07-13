@@ -85,7 +85,7 @@ impl HistoryClient {
             .wrap_err_with(|| {
                 format!(
                     "failed to connect to local atuin daemon at {}. Is it running?",
-                    &log_path
+                    log_path
                 )
             })?;
 
@@ -185,7 +185,7 @@ impl SearchClient {
             .wrap_err_with(|| {
                 format!(
                     "failed to connect to local atuin daemon at {}. Is it running?",
-                    &log_path
+                    log_path
                 )
             })?;
 
@@ -286,7 +286,7 @@ impl SemanticClient {
             .wrap_err_with(|| {
                 format!(
                     "failed to connect to local atuin daemon at {}. Is it running?",
-                    &log_path
+                    log_path
                 )
             })?;
 
@@ -380,7 +380,7 @@ impl ControlClient {
             .wrap_err_with(|| {
                 format!(
                     "failed to connect to local atuin daemon at {}. Is it running?",
-                    &log_path
+                    log_path
                 )
             })?;
 
