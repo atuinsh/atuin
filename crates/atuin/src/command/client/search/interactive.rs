@@ -276,11 +276,14 @@ impl State {
     }
 
     /// Whether the current mode supports character insertion on unmatched keys.
+    /// The inspector tab has no text input, so unmatched keys are dropped there
+    /// rather than leaking into the (hidden) search input.
     fn is_insert_mode(&self) -> bool {
-        matches!(
-            self.keymap_mode,
-            KeymapMode::Emacs | KeymapMode::Auto | KeymapMode::VimInsert
-        )
+        self.tab_index == 0
+            && matches!(
+                self.keymap_mode,
+                KeymapMode::Emacs | KeymapMode::Auto | KeymapMode::VimInsert
+            )
     }
 
     fn handle_key_input(&mut self, settings: &Settings, input: &KeyEvent) -> InputAction {
@@ -1197,7 +1200,9 @@ impl State {
     }
 
     fn build_input(&self, style: StyleState, prefix_width: u16) -> Paragraph<'_> {
-        let (pref, mode) = if self.switched_search_mode {
+        let (pref, mode) = if self.prefix {
+            ("", "PREFIX")
+        } else if self.switched_search_mode {
             (" SRCH:", self.search_mode.as_str())
         } else if self.search.custom_context.is_some() {
             (" CTX:", self.search.filter_mode.as_str())
@@ -2897,6 +2902,65 @@ mod tests {
         assert!(!state.prefix);
         state.execute_action(&Action::EnterPrefixMode, &settings);
         assert!(state.prefix);
+    }
+
+    #[test]
+    fn prefix_chord_ctrl_a_c_switches_context() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut state = make_executor_state(100, 7);
+        let settings = Settings::utc();
+
+        let ctrl_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        let result = state.handle_key_input(&settings, &ctrl_a);
+        assert!(matches!(result, super::InputAction::Continue));
+        assert!(state.prefix, "ctrl-a should enter prefix mode");
+
+        let c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
+        let result = state.handle_key_input(&settings, &c);
+        assert!(
+            matches!(result, super::InputAction::SwitchContext(Some(7))),
+            "prefix + c should switch context"
+        );
+        assert_eq!(state.search.input.as_str(), "", "c should not be inserted");
+    }
+
+    #[test]
+    fn inspector_prefix_chord_switches_context() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut state = make_executor_state(100, 7);
+        state.tab_index = 1;
+        let settings = Settings::utc();
+
+        let ctrl_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        state.handle_key_input(&settings, &ctrl_a);
+        assert!(state.prefix, "ctrl-a should enter prefix mode in inspector");
+
+        let c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
+        let result = state.handle_key_input(&settings, &c);
+        assert!(
+            matches!(result, super::InputAction::SwitchContext(Some(7))),
+            "prefix + c should switch context in inspector"
+        );
+    }
+
+    #[test]
+    fn inspector_unmatched_key_does_not_edit_search_input() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut state = make_executor_state(100, 7);
+        state.tab_index = 1;
+        let settings = Settings::utc();
+
+        let x = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        let result = state.handle_key_input(&settings, &x);
+        assert!(matches!(result, super::InputAction::Continue));
+        assert_eq!(
+            state.search.input.as_str(),
+            "",
+            "unmatched keys in the inspector must not leak into the search input"
+        );
     }
 
     #[test]
