@@ -380,7 +380,7 @@ mod tests {
                 assert_eq!(keys[0].code, KeyCodeValue::Char('g'));
                 assert_eq!(keys[1].code, KeyCodeValue::Char('g'));
             }
-            _ => panic!("expected sequence"),
+            KeyInput::Single(_) => panic!("expected sequence"),
         }
     }
 

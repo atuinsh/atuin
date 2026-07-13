@@ -2291,6 +2291,7 @@ mod tests {
         state.scroll_down(1);
     }
 
+    #[allow(clippy::too_many_lines)]
     #[test]
     fn test_accept_keybindings() {
         use atuin_client::settings::Keys;
@@ -2631,15 +2632,19 @@ mod tests {
         // Ctrl+d should return Continue and clear pending key
         // (scroll amount depends on max_entries which is 0 in tests)
         state.pending_vim_key = Some('g');
-        let ctrl_d_event = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
-        let result = state.handle_key_input(&settings, &ctrl_d_event);
+        let result = state.handle_key_input(
+            &settings,
+            &KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
         assert!(matches!(result, super::InputAction::Continue));
         assert_eq!(state.pending_vim_key, None);
 
         // Ctrl+u should return Continue and clear pending key
         state.pending_vim_key = Some('g');
-        let ctrl_u_event = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
-        let result = state.handle_key_input(&settings, &ctrl_u_event);
+        let result = state.handle_key_input(
+            &settings,
+            &KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
         assert!(matches!(result, super::InputAction::Continue));
         assert_eq!(state.pending_vim_key, None);
     }
@@ -2691,15 +2696,19 @@ mod tests {
         // Ctrl+f should return Continue and clear pending key
         // (scroll amount depends on max_entries which is 0 in tests)
         state.pending_vim_key = Some('g');
-        let ctrl_f_event = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
-        let result = state.handle_key_input(&settings, &ctrl_f_event);
+        let result = state.handle_key_input(
+            &settings,
+            &KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+        );
         assert!(matches!(result, super::InputAction::Continue));
         assert_eq!(state.pending_vim_key, None);
 
         // Ctrl+b should return Continue and clear pending key
         state.pending_vim_key = Some('g');
-        let ctrl_b_event = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL);
-        let result = state.handle_key_input(&settings, &ctrl_b_event);
+        let result = state.handle_key_input(
+            &settings,
+            &KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+        );
         assert!(matches!(result, super::InputAction::Continue));
         assert_eq!(state.pending_vim_key, None);
     }
@@ -2712,7 +2721,7 @@ mod tests {
     fn make_executor_state(results_len: usize, selected: usize) -> State {
         let settings = Settings::utc();
         let mut state = State {
-            history_count: results_len as i64,
+            history_count: i64::try_from(results_len).unwrap(),
             update_needed: None,
             results_state: ListState::default(),
             switched_search_mode: false,

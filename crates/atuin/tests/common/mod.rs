@@ -38,7 +38,7 @@ pub async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandl
         register_webhook_url: None,
         register_webhook_username: String::new(),
         db_settings: DbSettings {
-            db_uri: db_uri,
+            db_uri,
             read_db_uri: None,
         },
         metrics: atuin_server::settings::Metrics::default(),
