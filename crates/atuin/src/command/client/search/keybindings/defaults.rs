@@ -366,6 +366,10 @@ pub fn default_inspector_keymap(settings: &Settings) -> Keymap {
     km.bind(key("tab"), Action::ReturnSelection);
     km.bind(key("ctrl-o"), Action::ToggleTab);
 
+    // Prefix key: ctrl-<prefix_char> → enter prefix mode
+    let prefix_char = settings.keys.prefix.chars().next().unwrap_or('a');
+    km.bind(key(&format!("ctrl-{prefix_char}")), Action::EnterPrefixMode);
+
     // Accept behavior respects enter_accept setting
     let accept = if settings.enter_accept {
         Action::Accept
@@ -881,6 +885,16 @@ mod tests {
         let km = default_inspector_keymap(&default_settings());
         let ctx = make_ctx(0, 0, 0, 10);
         assert_eq!(km.resolve(&key("tab"), &ctx), Some(Action::ReturnSelection));
+    }
+
+    #[test]
+    fn inspector_prefix_key_enters_prefix() {
+        let km = default_inspector_keymap(&default_settings());
+        let ctx = make_ctx(0, 0, 0, 10);
+        assert_eq!(
+            km.resolve(&key("ctrl-a"), &ctx),
+            Some(Action::EnterPrefixMode)
+        );
     }
 
     // -- Prefix keymap tests --
