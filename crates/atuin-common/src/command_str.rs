@@ -14,7 +14,10 @@
 //!
 //! The wrapper adds no behaviour to the string it holds.
 
-use std::borrow::Cow;
+use std::{
+    borrow::{Borrow, Cow},
+    ops::Deref,
+};
 
 /// A shell command, generic over the string storage `S`.
 ///
@@ -47,6 +50,43 @@ impl<S> Command<S> {
     /// Unwrap this command into the storage it is held in.
     pub fn into_inner(self) -> S {
         self.0
+    }
+}
+
+impl<S: AsRef<str>> Command<S> {
+    /// The command text.
+    pub fn as_str(&self) -> &str {
+        self.0.as_ref()
+    }
+
+    /// Borrow this command as a [`CommandStr`], whatever storage it is held in.
+    pub fn as_command_str(&self) -> CommandStr<'_> {
+        Command(self.0.as_ref())
+    }
+
+    /// Copy this command into an owned [`CommandString`].
+    pub fn to_command_string(&self) -> CommandString {
+        Command(self.0.as_ref().to_owned())
+    }
+}
+
+impl<S: AsRef<str>> AsRef<str> for Command<S> {
+    fn as_ref(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+impl<S: AsRef<str>> Borrow<str> for Command<S> {
+    fn borrow(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+impl<S: AsRef<str>> Deref for Command<S> {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        self.0.as_ref()
     }
 }
 
@@ -88,5 +128,46 @@ mod tests {
     #[test]
     fn owned_commands_default_to_empty() {
         assert_eq!(CommandString::default().into_inner(), String::new());
+    }
+
+    #[test]
+    fn as_str_exposes_the_command_text_for_every_storage() {
+        assert_eq!(CommandStr::new("ls").as_str(), "ls");
+        assert_eq!(CommandString::new(String::from("ls")).as_str(), "ls");
+        assert_eq!(
+            CommandCow::new(Cow::Owned(String::from("ls"))).as_str(),
+            "ls"
+        );
+        assert_eq!(Command::new(Arc::<str>::from("ls")).as_str(), "ls");
+    }
+
+    #[test]
+    fn converts_between_borrowed_and_owned() {
+        let owned = CommandString::new(String::from("cargo test"));
+
+        let borrowed: CommandStr<'_> = owned.as_command_str();
+        assert_eq!(borrowed.as_str(), "cargo test");
+
+        let round_tripped: CommandString = borrowed.to_command_string();
+        assert_eq!(round_tripped.as_str(), "cargo test");
+    }
+
+    #[test]
+    fn any_storage_can_be_borrowed_as_a_command_str() {
+        let cow = CommandCow::new(Cow::Borrowed("git push"));
+
+        assert_eq!(cow.as_command_str().as_str(), "git push");
+    }
+
+    #[test]
+    fn derefs_and_as_refs_to_str() {
+        let cmd = CommandString::new(String::from("git commit -m wip"));
+
+        // `Deref<Target = str>` gives us the `str` API without re-implementing any of it.
+        assert_eq!(cmd.len(), 17);
+        assert!(cmd.starts_with("git"));
+
+        let as_ref: &str = cmd.as_ref();
+        assert_eq!(as_ref, "git commit -m wip");
     }
 }
