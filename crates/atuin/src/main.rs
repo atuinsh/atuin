@@ -9,6 +9,7 @@ use eyre::Result;
 use command::AtuinCmd;
 
 mod command;
+pub(crate) mod logs;
 
 #[cfg(feature = "sync")]
 mod print_error;

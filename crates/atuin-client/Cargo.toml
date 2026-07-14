@@ -21,9 +21,7 @@ daemon = []
 check-update = []
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.17.1" }
 derive_more = { workspace = true }
-
 tracing = { workspace = true }
 base64 = { workspace = true }
 time = { workspace = true, features = ["macros", "formatting", "parsing"] }
@@ -79,6 +77,11 @@ crossterm = { workspace = true, features = ["serde"] }
 palette = { version = "0.7.5", features = ["serializing"] }
 strum_macros = "0.27"
 strum = { version = "0.27", features = ["strum_macros"] }
+
+[dependencies.atuin-common]
+path = "../atuin-common"
+version = "18.17.1"
+features = ["tracing"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

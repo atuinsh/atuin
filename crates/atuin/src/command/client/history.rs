@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use atuin_common::logs::LogConfig;
 use atuin_common::utils::{self, Escapable as _};
 use clap::Subcommand;
 use eyre::{Context, Result, bail};
@@ -60,6 +61,11 @@ pub enum Cmd {
         intent: Option<String>,
 
         command: Vec<String>,
+
+        /// Passed by shell hooks; this flag disables logging to avoid corrupting the terminal and
+        /// to minimize the amount of time the command takes to run.
+        #[arg(long, hide = true)]
+        hook: bool,
     },
 
     /// Finishes a new command in the history (adds time, exit code)
@@ -69,6 +75,11 @@ pub enum Cmd {
         exit: i64,
         #[arg(long, short)]
         duration: Option<u64>,
+
+        /// Passed by shell hooks; this flag disables logging to avoid corrupting the terminal and
+        /// to minimize the amount of time the command takes to run.
+        #[arg(long, hide = true)]
+        hook: bool,
     },
 
     /// Stream history events from the daemon as they are received
@@ -1105,6 +1116,7 @@ impl Cmd {
                 author,
                 intent,
                 command,
+                ..
             } => {
                 let command = if cmd_env {
                     std::env::var("ATUIN_COMMAND_LINE").unwrap_or_default()
@@ -1121,9 +1133,9 @@ impl Cmd {
 
                 Ok(())
             }
-            Self::End { id, exit, duration } => {
-                end_history_entry(settings, &id, exit, duration).await
-            }
+            Self::End {
+                id, exit, duration, ..
+            } => end_history_entry(settings, &id, exit, duration).await,
             Self::Tail => {
                 #[cfg(feature = "daemon")]
                 {
@@ -1219,6 +1231,18 @@ impl Cmd {
                 }
             }
         }
+    }
+
+    fn logs_enabled(&self) -> bool {
+        match self {
+            // Enable logs if not invoked from a shell hook.
+            Self::Start { hook, .. } | Self::End { hook, .. } => !*hook,
+            _ => true,
+        }
+    }
+
+    pub fn log_config(&self) -> Option<LogConfig> {
+        self.logs_enabled().then(LogConfig::stderr_only)
     }
 }
 

@@ -20,7 +20,7 @@ end
 
 function _atuin_preexec --on-event fish_preexec
     if not test -n "$fish_private_mode"
-        set -g ATUIN_HISTORY_ID (atuin history start -- "$argv[1]" 2>/dev/null)
+        set -g ATUIN_HISTORY_ID (atuin history start --hook -- "$argv[1]" 2>/dev/null)
         _atuin_osc133_command_executed
     end
 end
@@ -30,7 +30,7 @@ function _atuin_postexec --on-event fish_postexec
 
     if test -n "$ATUIN_HISTORY_ID"
         _atuin_osc133_command_finished $s
-        ATUIN_LOG=error atuin history end --exit $s -- $ATUIN_HISTORY_ID &>/dev/null &
+        atuin history end --hook --exit $s -- $ATUIN_HISTORY_ID &>/dev/null &
         disown
     end
 
@@ -102,7 +102,7 @@ function _atuin_search
         set -l tmpdir (mktemp -d)
         if not test -d "$tmpdir"
             # if mktemp got errors
-            set ATUIN_H (ATUIN_SHELL=fish ATUIN_LOG=error ATUIN_QUERY=(commandline -b) atuin search --keymap-mode=$keymap_mode $argv -i 3>&1 1>&2 2>&3 3>&- | string collect)
+            set ATUIN_H (ATUIN_SHELL=fish ATUIN_QUERY=(commandline -b) atuin search --keymap-mode=$keymap_mode $argv -i 3>&1 1>&2 2>&3 3>&- | string collect)
             set ATUIN_STATUS $pipestatus[1]
         else
             set -l result_file "$tmpdir/result"
@@ -119,7 +119,7 @@ function _atuin_search
             set -l popup_width (test -n "$ATUIN_TMUX_POPUP_WIDTH" && echo "$ATUIN_TMUX_POPUP_WIDTH" || echo "80%")
             set -l popup_height (test -n "$ATUIN_TMUX_POPUP_HEIGHT" && echo "$ATUIN_TMUX_POPUP_HEIGHT" || echo "60%")
             tmux display-popup -d "$cdir" -w "$popup_width" -h "$popup_height" -E -E -- \
-                sh -c "PATH='$PATH' ATUIN_SESSION='$ATUIN_SESSION' ATUIN_SHELL=fish ATUIN_LOG=error ATUIN_QUERY='$query' atuin search --keymap-mode=$keymap_mode$escaped_args -i 2>'$result_file'"
+                sh -c "PATH='$PATH' ATUIN_SESSION='$ATUIN_SESSION' ATUIN_SHELL=fish ATUIN_QUERY='$query' atuin search --keymap-mode=$keymap_mode$escaped_args -i 2>'$result_file'"
             set ATUIN_STATUS $status
 
             if test -f "$result_file"
@@ -132,7 +132,7 @@ function _atuin_search
         # In fish 3.4 and above we can use `"$(some command)"` to keep multiple lines separate;
         # but to support fish 3.3 we need to use `(some command | string collect)`.
         # https://fishshell.com/docs/current/relnotes.html#id24 (fish 3.4 "Notable improvements and fixes")
-        set ATUIN_H (ATUIN_SHELL=fish ATUIN_LOG=error ATUIN_QUERY=(commandline -b) atuin search --keymap-mode=$keymap_mode $argv -i 3>&1 1>&2 2>&3 3>&- | string collect)
+        set ATUIN_H (ATUIN_SHELL=fish ATUIN_QUERY=(commandline -b) atuin search --keymap-mode=$keymap_mode $argv -i 3>&1 1>&2 2>&3 3>&- | string collect)
         set ATUIN_STATUS $pipestatus[1]
     end
 

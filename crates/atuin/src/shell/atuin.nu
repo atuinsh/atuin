@@ -48,7 +48,7 @@ let _atuin_pre_execution = {||
         return
     }
     if not ($cmd | str starts-with $ATUIN_KEYBINDING_TOKEN) {
-        $env.ATUIN_HISTORY_ID = (atuin history start -- $cmd | complete | get stdout | str trim)
+        $env.ATUIN_HISTORY_ID = (atuin history start --hook -- $cmd | complete | get stdout | str trim)
         _atuin_osc133_command_executed
     }
 }
@@ -59,15 +59,12 @@ let _atuin_pre_prompt = {||
         return
     }
     _atuin_osc133_command_finished $last_exit
-    with-env { ATUIN_LOG: error } {
-        if (version).minor >= 104 or (version).major > 0 {
-            job spawn {
-                ^atuin history end $'--exit=($env.LAST_EXIT_CODE)' -- $env.ATUIN_HISTORY_ID | complete
-            } | ignore
-        } else {
-            do { atuin history end $'--exit=($last_exit)' -- $env.ATUIN_HISTORY_ID } | complete
-        }
-
+    if (version).minor >= 104 or (version).major > 0 {
+        job spawn {
+            ^atuin history end --hook $'--exit=($env.LAST_EXIT_CODE)' -- $env.ATUIN_HISTORY_ID | complete
+        } | ignore
+    } else {
+        do { atuin history end --hook $'--exit=($last_exit)' -- $env.ATUIN_HISTORY_ID } | complete
     }
     hide-env -i ATUIN_HISTORY_ID
 }
@@ -77,7 +74,7 @@ def _atuin_search_cmd [...flags: string] {
         [
             $ATUIN_KEYBINDING_TOKEN,
             ([
-                `with-env { ATUIN_LOG: error, ATUIN_QUERY: (commandline), ATUIN_SHELL: nu } {`,
+                `with-env { ATUIN_QUERY: (commandline), ATUIN_SHELL: nu } {`,
                     ([
                         'let output = (run-external atuin search',
                         ($flags | append [--interactive] | each {|e| $'"($e)"'}),
@@ -95,7 +92,7 @@ def _atuin_search_cmd [...flags: string] {
         [
             $ATUIN_KEYBINDING_TOKEN,
             ([
-                `with-env { ATUIN_LOG: error, ATUIN_QUERY: (commandline) } {`,
+                `with-env { ATUIN_QUERY: (commandline) } {`,
                     'commandline edit',
                     '(run-external atuin search',
                         ($flags | append [--interactive] | each {|e| $'"($e)"'}),
