@@ -22,11 +22,14 @@ use std::{
     ops::Deref,
 };
 
+use serde::{Deserialize, Serialize};
+
 /// A shell command, generic over the string storage `S`.
 ///
 /// Use the [`CommandStr`], [`CommandString`] and [`CommandCow`] aliases rather than
 /// naming this type directly.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[serde(transparent)]
 #[repr(transparent)]
 pub struct Command<S>(S);
 
@@ -318,5 +321,28 @@ mod tests {
         assert!(matches!(borrowed_to_cow.into_inner(), Cow::Borrowed(_)));
         assert_eq!(owned_to_cow.as_str(), "ls");
         assert!(matches!(owned_to_cow.into_inner(), Cow::Owned(_)));
+    }
+
+    #[test]
+    fn serialises_transparently_as_a_bare_string() {
+        let cmd = CommandString::new(String::from("ls -la"));
+
+        assert_eq!(serde_json::to_string(&cmd).unwrap(), "\"ls -la\"");
+    }
+
+    #[test]
+    fn deserialises_from_a_bare_string() {
+        let cmd: CommandString = serde_json::from_str("\"ls -la\"").unwrap();
+
+        assert_eq!(cmd.as_str(), "ls -la");
+    }
+
+    #[test]
+    fn deserialises_a_borrowed_command_from_the_input() {
+        let json = String::from("\"ls -la\"");
+
+        let cmd: CommandStr<'_> = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(cmd, CommandStr::new("ls -la"));
     }
 }
