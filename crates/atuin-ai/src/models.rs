@@ -30,14 +30,14 @@ pub(crate) async fn fetch_models(endpoint: &str, token: &str) -> Result<ModelLis
     atuin_common::tls::ensure_crypto_provider();
     let url = crate::stream::hub_url(endpoint, "/api/cli/models")?;
 
-    let response = reqwest::Client::new()
+    let mut request = reqwest::Client::new()
         .get(url)
         .header(USER_AGENT, crate::stream::APP_USER_AGENT)
-        .bearer_auth(token)
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await
-        .context("failed to fetch model list")?;
+        .timeout(Duration::from_secs(10));
+    if !token.is_empty() {
+        request = request.bearer_auth(token);
+    }
+    let response = request.send().await.context("failed to fetch model list")?;
 
     let status = response.status();
     if !status.is_success() {
