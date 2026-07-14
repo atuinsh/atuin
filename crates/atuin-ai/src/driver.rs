@@ -1047,6 +1047,7 @@ async fn run_stream_bridge(
     let stream = create_chat_stream(
         app_ctx.endpoint.clone(),
         app_ctx.token.clone(),
+        app_ctx.token_from_hub_session,
         request,
         client_ctx,
         app_ctx.send_cwd,

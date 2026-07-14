@@ -10,7 +10,17 @@ use atuin_client::settings::AiCapabilities;
 #[derive(Clone, Debug)]
 pub(crate) struct AppContext {
     pub endpoint: String,
+    /// Bearer token for `endpoint`. Empty means unauthenticated — no
+    /// Authorization header is sent (an OSS server may not require auth).
     pub token: String,
+    /// Whether `endpoint` is an Atuin Hub instance. Hub endpoints report
+    /// credit usage; OSS endpoints (e.g. atuin-ai-server) don't have the
+    /// usage API, so usage fetching and caching are skipped.
+    pub endpoint_is_hub: bool,
+    /// Whether `token` came from the stored Hub session rather than
+    /// `ai.api_token` or the CLI flag. Only a session-sourced token may be
+    /// cleared (logging the user out) when the server rejects it.
+    pub token_from_hub_session: bool,
     pub send_cwd: bool,
     pub last_command: Option<History>,
     pub history_db: Arc<atuin_client::database::Sqlite>,

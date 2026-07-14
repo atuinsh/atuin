@@ -645,6 +645,25 @@ pub struct Logs {
     pub ai: LogConfig,
 }
 
+/// Endpoint protocol for Atuin AI.
+///
+/// When set to "auto" (default), the protocol is inferred from `ai.endpoint`:
+/// an unset or official Atuin address is treated as Hub, anything else as an
+/// OSS server. Set explicitly to "hub" to keep Hub behavior with a custom
+/// endpoint (useful for local development against a Hub instance).
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AiEndpointProtocol {
+    /// Atuin Hub: browser-based login flow, stored Hub session, usage reporting.
+    Hub,
+    /// A standalone AI server (e.g. atuin-ai-server): requests go straight to
+    /// the endpoint, authenticated with `ai.api_token` if set.
+    Oss,
+    /// Infer from ai.endpoint (default behavior)
+    #[default]
+    Auto,
+}
+
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
 pub struct Ai {
     /// Whether or not the AI features are enabled.
@@ -653,6 +672,10 @@ pub struct Ai {
     /// The address of the Atuin AI endpoint. Used for AI features like command generation.
     /// Only necessary for custom AI endpoints.
     pub endpoint: Option<String>,
+
+    /// How to talk to `endpoint`. See [`AiEndpointProtocol`].
+    #[serde(default)]
+    pub endpoint_protocol: AiEndpointProtocol,
 
     /// The API token for the Atuin AI endpoint. Used for AI features like command generation.
     /// Only necessary for custom AI endpoints.
@@ -1296,6 +1319,21 @@ impl Settings {
         }
     }
 
+    /// Returns whether the resolved AI endpoint should be treated as an Atuin
+    /// Hub instance (browser login flow, Hub session management, usage
+    /// reporting) rather than a standalone OSS server.
+    ///
+    /// `endpoint` is the resolved AI endpoint — the `--api-endpoint` flag or
+    /// `ai.endpoint` setting, after defaults are applied — which is why it's a
+    /// parameter rather than read from `self.ai.endpoint`.
+    pub fn is_hub_ai_endpoint(&self, endpoint: &str) -> bool {
+        match self.ai.endpoint_protocol {
+            AiEndpointProtocol::Hub => true,
+            AiEndpointProtocol::Oss => false,
+            AiEndpointProtocol::Auto => Self::is_official_address(endpoint),
+        }
+    }
+
     /// Returns the base URL for the Hub endpoint.
     ///
     /// For Atuin's official hosted service, this always returns `https://hub.atuin.sh`
@@ -1885,6 +1923,24 @@ mod tests {
         assert!(Timezone::from_str("10:30").is_err());
 
         Ok(())
+    }
+
+    #[test]
+    fn ai_endpoint_protocol_resolution() {
+        let mut settings = super::Settings::default();
+
+        // Auto: official addresses are Hub, anything else is OSS
+        assert!(settings.is_hub_ai_endpoint("https://hub.atuin.sh"));
+        assert!(settings.is_hub_ai_endpoint("https://api.atuin.sh"));
+        assert!(!settings.is_hub_ai_endpoint("https://ai.example.com"));
+        assert!(!settings.is_hub_ai_endpoint("http://localhost:4000"));
+
+        // Explicit settings override the address check
+        settings.ai.endpoint_protocol = super::AiEndpointProtocol::Hub;
+        assert!(settings.is_hub_ai_endpoint("http://localhost:4000"));
+
+        settings.ai.endpoint_protocol = super::AiEndpointProtocol::Oss;
+        assert!(!settings.is_hub_ai_endpoint("https://hub.atuin.sh"));
     }
 
     #[test]
