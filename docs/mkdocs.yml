@@ -169,7 +169,7 @@ nav:
       - "Tools & Permissions": ai/tools-permissions.md
       - "Reading Command Output": ai/command-output.md
       - "MCP Server": ai/mcp.md
-      - "Self Hosting": ai/self-hosting.md
+      - "Self Hosting & Local Models": ai/self-hosting.md
   - Known Issues: known-issues.md
   - Integrations: integrations.md
   - FAQ: faq.md
