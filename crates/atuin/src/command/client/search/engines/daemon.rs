@@ -103,7 +103,21 @@ impl Search {
 
     #[instrument(skip_all, level = Level::TRACE, name = "hydrate_from_db", fields(count = ids.len()))]
     async fn hydrate_from_db(&self, db: &dyn Database, ids: &[String]) -> Result<Vec<History>> {
-        let placeholders: Vec<String> = ids.iter().map(|id| format!("'{id}'")).collect();
+        // These ids are history UUIDs. `query_history` runs raw SQL with no bind
+        // support, so normalise every id through `Uuid` before interpolating:
+        // a valid UUID renders as 32 hex chars (matching the `as_simple()` form
+        // stored in the `id` column), and anything that isn't a UUID is dropped.
+        // That makes the interpolation below safe regardless of the caller.
+        let placeholders: Vec<String> = ids
+            .iter()
+            .filter_map(|id| Uuid::parse_str(id).ok())
+            .map(|uuid| format!("'{}'", uuid.as_simple()))
+            .collect();
+
+        if placeholders.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let sql_query = format!(
             "SELECT * FROM history WHERE id IN ({}) ORDER BY timestamp DESC",
             placeholders.join(",")
@@ -245,5 +259,70 @@ impl SearchEngine for Search {
 
         // Convert u32 indices to usize
         indices.into_iter().map(|i| i as usize).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::database::{Database, Sqlite};
+    use time::OffsetDateTime;
+
+    use super::*;
+
+    async fn new_history_item(db: &impl Database, cmd: &str) -> String {
+        let mut captured: History = History::capture()
+            .timestamp(OffsetDateTime::now_utc())
+            .command(cmd)
+            .cwd("/home/ellie")
+            .build()
+            .into();
+
+        captured.exit = 0;
+        captured.duration = 1;
+        captured.session = "beep boop".to_string();
+        captured.hostname = "booop".to_string();
+
+        let id = captured.id.0.clone();
+        db.save(&captured).await.unwrap();
+        id
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn hydrate_from_db_drops_non_uuid_ids_and_keeps_valid_ones() {
+        let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
+        let valid_id = new_history_item(&db, "echo hello").await;
+
+        let search = Search::new(&Settings::default());
+
+        // Mix a valid id (in both simple and hyphenated form) with garbage that
+        // must never reach the SQL string.
+        let hyphenated = Uuid::parse_str(&valid_id).unwrap().hyphenated().to_string();
+        let ids = vec![
+            valid_id.clone(),
+            hyphenated,
+            "'; DROP TABLE history; --".to_string(),
+            "not-a-uuid".to_string(),
+        ];
+
+        let results = search.hydrate_from_db(&db, &ids).await.unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id.0, valid_id);
+        assert_eq!(results[0].command, "echo hello");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn hydrate_from_db_returns_empty_when_no_ids_are_valid_uuids() {
+        let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
+        let _ = new_history_item(&db, "echo hello").await;
+
+        let search = Search::new(&Settings::default());
+        let ids = vec![
+            "not-a-uuid".to_string(),
+            "'; DROP TABLE history; --".to_string(),
+        ];
+
+        let results = search.hydrate_from_db(&db, &ids).await.unwrap();
+        assert!(results.is_empty());
     }
 }
