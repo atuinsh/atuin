@@ -18,11 +18,14 @@ placeholders instead of relying on escaping. `list`/`stats`/`Paged`/
 correct.
 
 Separately, this rewrite found one raw-`format!` SQL site in
-`crates/atuin/src/command/client/search/engines/daemon.rs` that interpolates a
-value with **no escaping and no quoting at all**. It is not currently
-exploitable, but only because of an invariant enforced by its one caller, not
-because of anything in the vulnerable function itself — see §5 below. This is
-the one item in this audit that should actually be fixed, not just recorded.
+`crates/atuin/src/command/client/search/engines/daemon.rs` that interpolated a
+value with **no escaping and no quoting at all**. It was not exploitable, but
+only because of an invariant enforced by its one caller, not because of
+anything in the vulnerable function itself — see §5a below. This branch fixed
+it: `hydrate_from_db` now normalises every id through `Uuid::parse_str(..)`
+before interpolating, dropping anything that isn't a valid UUID, so no
+unescaped interpolation remains there regardless of what a future caller
+passes in.
 
 ## The escaping contract (why the scary-looking `quote()`-based code is safe)
 
@@ -125,15 +128,19 @@ is a **constant** `&str` (e.g. `"SELECT COUNT(*) FROM xonsh_history"`). The
 `sqlx::query(db_sql)` in `zsh_histdb.rs` is hardcoded fixture SQL inside a
 `#[test]`. No interpolation.
 
-### 5. Unescaped raw-`format!` callers of `query_history` outside `atuin-client` (NEW — needs a fix)
+### 5. Raw-`format!` callers of `query_history` outside `atuin-client` (a: FIXED in this branch; b/c: documented, unfixed)
 
 `Database::query_history` is a public trait method; nothing stops a caller
 elsewhere in the workspace from building unsafe SQL and passing it in. Three
-such callers exist, with differing risk:
+such callers exist, with differing risk. Only §5a was a real (if latent) risk,
+and it has now been fixed in this branch; §5b and §5c remain as recorded
+recommendations for follow-up, not changed here.
 
 **a. `crates/atuin/src/command/client/search/engines/daemon.rs`,
-`hydrate_from_db` (L104–111) — unescaped, unquoted interpolation, currently
-safe only by an unstated caller invariant.**
+`hydrate_from_db` (L104–126) — RESOLVED in this branch. Previously:
+unescaped, unquoted interpolation, safe only by an unstated caller invariant.**
+
+The original code was:
 
 ```rust
 async fn hydrate_from_db(&self, db: &dyn Database, ids: &[String]) -> Result<Vec<History>> {
@@ -146,35 +153,63 @@ async fn hydrate_from_db(&self, db: &dyn Database, ids: &[String]) -> Result<Vec
 }
 ```
 
-Each `id` is wrapped in single quotes by `format!("'{id}'")` with **zero
+Each `id` was wrapped in single quotes by `format!("'{id}'")` with **zero
 escaping** — if `id` ever contained a `'`, it would break out of the string
-literal into the surrounding SQL. This is currently not exploitable only
-because the sole caller (`full_query`, same file, ~L188–190) always builds
-`ids` by re-serializing daemon-supplied UUID bytes:
+literal into the surrounding SQL. This was not exploitable only because the
+sole caller (`full_query`, same file, ~L204) always built `ids` by
+re-serializing daemon-supplied UUID bytes:
 
 ```rust
 Uuid::from_bytes(bytes).as_simple().to_string()
 ```
 
 `as_simple()` always yields exactly 32 lowercase hex characters — a value
-space with no `'` in it — so today's only call path is safe. But
-`hydrate_from_db` takes `ids: &[String]`, not `&[Uuid]`, and `HistoryId` itself
+space with no `'` in it — so that call path was safe. But `hydrate_from_db`
+took `ids: &[String]`, not `&[Uuid]`, and `HistoryId` itself
 (`crates/atuin-client/src/history.rs:48`, `pub struct HistoryId(pub String)`)
 has no validation on construction. The daemon builds a `HistoryId` directly
 from a gRPC request field with no format check
 (`crates/atuin-daemon/src/components/history.rs`, `end_history`, ~L189:
 `let id = HistoryId(req.id);`). Nothing in the type system or in
-`hydrate_from_db` itself prevents a future caller from passing an arbitrary
-string through this path — the safety property lives entirely in "the one
-current caller happens to only ever construct 32-hex strings," which is easy
-to silently break in a refactor.
+`hydrate_from_db` itself prevented a future caller from passing an arbitrary
+string through this path — the safety property lived entirely in "the one
+current caller happens to only ever construct 32-hex strings," which would
+have been easy to silently break in a refactor.
 
-**Recommendation: bind the ids** instead of inlining them, e.g. build
-`"SELECT * FROM history WHERE id IN (?,?,...)"` with one placeholder per id
-and bind each `id` as a string, or (simpler, given `query_history` takes a
-plain string) add a dedicated `Database` method that accepts `&[String]` and
-binds them internally. This removes the reliance on the caller-side
-hex-only invariant entirely.
+**Fix applied**: every id is now normalised through `Uuid::parse_str(id)`
+before being interpolated; anything that fails to parse as a UUID is dropped
+via `filter_map`, and survivors are re-rendered with `.as_simple()` (the same
+32-hex form stored in the `id` column) before being wrapped in quotes:
+
+```rust
+async fn hydrate_from_db(&self, db: &dyn Database, ids: &[String]) -> Result<Vec<History>> {
+    let placeholders: Vec<String> = ids
+        .iter()
+        .filter_map(|id| Uuid::parse_str(id).ok())
+        .map(|uuid| format!("'{}'", uuid.as_simple()))
+        .collect();
+
+    if placeholders.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let sql_query = format!(
+        "SELECT * FROM history WHERE id IN ({}) ORDER BY timestamp DESC",
+        placeholders.join(",")
+    );
+    Ok(db.query_history(&sql_query).await?)
+}
+```
+
+Only 32 hex characters (or nothing, for a fully-invalid input list) can ever
+reach the SQL string now, regardless of what a future caller passes in — the
+fix no longer depends on the one current caller's construction invariant.
+Covered by two unit tests in the same file's `#[cfg(test)] mod tests` that
+exercise the private method directly against an in-memory `Sqlite` database:
+one confirms a mix of a valid id (simple and hyphenated form) and non-UUID
+garbage (including a `'; DROP TABLE ...` string) keeps only the valid row,
+and one confirms an all-garbage id list returns an empty result rather than
+erroring.
 
 **b. `crates/atuin/src/command/client/search/interactive.rs`,
 `DeleteAllMatching` (~L1865–1880) — hand-rolled escaping, safe but fragile.**
@@ -243,10 +278,10 @@ Independently re-verified; unchanged from the prior audit.
 
 ## Recommendations (in priority order)
 
-1. **Fix `hydrate_from_db`** (§5a) — bind the ids instead of `format!("'{id}'")`
-   interpolation. This is the one place where safety depends entirely on an
-   invariant (`HistoryId` values always being 32-hex) that isn't enforced by
-   the type, so it should not be left as "safe today, fragile tomorrow."
+1. ~~**Fix `hydrate_from_db`** (§5a)~~ — **done in this branch.** Ids are now
+   normalised through `Uuid::parse_str(..).as_simple()` before interpolation,
+   with non-UUID input dropped, so safety no longer depends on the
+   `HistoryId`-values-are-always-32-hex invariant holding at every call site.
 2. Replace the hand-rolled `command.replace('\'', "''")` in
    `DeleteAllMatching` (§5b) with a bound parameter or `sql_builder::quote()`,
    so the escaping isn't a silent, uncommented `.replace()` call.
