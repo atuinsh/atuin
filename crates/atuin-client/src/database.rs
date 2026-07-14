@@ -11,6 +11,12 @@ use atuin_common::utils;
 use fs_err as fs;
 use itertools::Itertools;
 use rand::{Rng, distributions::Alphanumeric};
+// NOTE: `quote` is deliberately still used below (list/stats/Paged/all_with_count):
+// only `search`'s query-building path (build_inner_query et al.) was migrated to
+// sqlx bind parameters. Do not copy-paste a `"?"` placeholder pattern from that
+// path into a `quote()`-based query without also adding a matching `.bind()` —
+// sqlx-sqlite silently binds NULL for an under-bound placeholder (no error,
+// just zero rows), so the mistake will not be caught by testing casually.
 use sql_builder::{SqlBuilder, SqlName, quote};
 use sqlx::{
     Result, Row,
@@ -157,7 +163,14 @@ fn get_session_start_time(session_id: &str) -> Option<i64> {
     None
 }
 
-fn assemble_search_query(inner: &str, filter_options: &OptFilters) -> String {
+/// Wraps `inner` with ordering/limit/dedup logic.
+///
+/// Returns the assembled SQL along with the number of times `inner` was
+/// embedded into it (1 or 2). This count is the single source of truth for
+/// how many times the caller's bind args must be repeated when binding the
+/// query — it is returned from the very branch that does the embedding, so
+/// the two can never drift apart.
+fn assemble_search_query(inner: &str, filter_options: &OptFilters) -> (String, usize) {
     let order = if filter_options.reverse {
         "ASC"
     } else {
@@ -179,16 +192,22 @@ fn assemble_search_query(inner: &str, filter_options: &OptFilters) -> String {
     // twice on purpose; do not collapse it into a CTE (SQLite may materialize
     // it and lose the early-termination scan).
     if filter_options.include_duplicates {
-        format!("SELECT * FROM ({inner}) f ORDER BY f.timestamp {order}{tail}")
+        (
+            format!("SELECT * FROM ({inner}) f ORDER BY f.timestamp {order}{tail}"),
+            1,
+        )
     } else {
-        format!(
-            "SELECT * FROM ({inner}) f \
+        (
+            format!(
+                "SELECT * FROM ({inner}) f \
              WHERE NOT EXISTS ( \
                  SELECT 1 FROM ({inner}) f2 \
                  WHERE f2.command = f.command \
                    AND (f2.timestamp, f2.id) > (f.timestamp, f.id) \
              ) \
              ORDER BY f.timestamp {order}{tail}"
+            ),
+            2,
         )
     }
 }
@@ -594,6 +613,12 @@ impl Database for Sqlite {
     }
 
     // make a unique list, that only shows the *newest* version of things
+    //
+    // Deliberate split from `search`: this function (and stats/Paged/all_with_count)
+    // still inlines values via `quote()` rather than sqlx bind parameters. That's
+    // fine as-is (quote() escapes correctly), but don't mix the two styles — e.g.
+    // do not lift a `"?"`/`and_where_eq(field, "?")` pattern from `build_inner_query`
+    // into this function without also adding the corresponding `.bind()` call.
     async fn list(
         &self,
         filters: &[FilterMode],
@@ -723,19 +748,19 @@ impl Database for Sqlite {
         let orig_query = query;
 
         let (inner, args) = build_inner_query(search_mode, filter, context, query, &filter_options);
-        let sql = assemble_search_query(&inner, &filter_options);
+        let (sql, embeds) = assemble_search_query(&inner, &filter_options);
 
-        // The dedup wrapper embeds `inner` twice, so its placeholders appear
-        // twice; bind the args vector once per copy, in order. The
-        // include_duplicates wrapper embeds it once.
-        let copies = if filter_options.include_duplicates {
-            1
-        } else {
-            2
-        };
+        // `embeds` (returned by assemble_search_query itself) is how many
+        // times `inner` — and therefore its placeholders — appears in `sql`.
+        // Bind the args vector once per embed, in order.
+        debug_assert_eq!(
+            sql.matches('?').count(),
+            embeds * args.len(),
+            "bind arity mismatch: sqlx-sqlite would silently bind NULL"
+        );
 
         let mut q = sqlx::query(&sql);
-        for _ in 0..copies {
+        for _ in 0..embeds {
             for value in &args {
                 q = match value {
                     SqlValue::Int(i) => q.bind(*i),
@@ -1183,7 +1208,8 @@ mod test {
 
         // dedup (default): inner appears twice
         let opts = OptFilters::default();
-        let sql = assemble_search_query("SELECT 42", &opts);
+        let (sql, embeds) = assemble_search_query("SELECT 42", &opts);
+        assert_eq!(embeds, 2, "dedup must report embedding inner twice");
         assert_eq!(
             sql.matches("SELECT 42").count(),
             2,
@@ -1197,7 +1223,11 @@ mod test {
             include_duplicates: true,
             ..Default::default()
         };
-        let sql_dup = assemble_search_query("SELECT 42", &opts_dup);
+        let (sql_dup, embeds_dup) = assemble_search_query("SELECT 42", &opts_dup);
+        assert_eq!(
+            embeds_dup, 1,
+            "include_duplicates must report embedding inner once"
+        );
         assert_eq!(sql_dup.matches("SELECT 42").count(), 1);
         assert!(!sql_dup.contains("NOT EXISTS"));
 
@@ -1206,7 +1236,11 @@ mod test {
             reverse: true,
             ..Default::default()
         };
-        assert!(assemble_search_query("SELECT 42", &opts_rev).contains("ORDER BY f.timestamp ASC"));
+        assert!(
+            assemble_search_query("SELECT 42", &opts_rev)
+                .0
+                .contains("ORDER BY f.timestamp ASC")
+        );
 
         // limit/offset are inlined as integers
         let opts_lim = OptFilters {
@@ -1214,7 +1248,11 @@ mod test {
             offset: Some(2),
             ..Default::default()
         };
-        assert!(assemble_search_query("SELECT 42", &opts_lim).contains("LIMIT 5 OFFSET 2"));
+        assert!(
+            assemble_search_query("SELECT 42", &opts_lim)
+                .0
+                .contains("LIMIT 5 OFFSET 2")
+        );
     }
 
     fn test_context() -> Context {
@@ -1366,6 +1404,72 @@ mod test {
         assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "no'such", 0)
             .await
             .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_include_duplicates() {
+        // `atuin search --dupes` maps to OptFilters { include_duplicates: true, .. }.
+        // This exercises the copies=1 bind path end-to-end: if the bind loop
+        // under-bound (e.g. copies computed as 0, or drifted from the actual
+        // embed count), sqlx-sqlite would silently bind NULL and this would
+        // come back empty rather than erroring.
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        // Two distinct saves of the same command string give two distinct
+        // rows (History::capture() assigns a fresh id/timestamp each time).
+        new_history_item(&mut db, "duplicate command")
+            .await
+            .unwrap();
+        new_history_item(&mut db, "duplicate command")
+            .await
+            .unwrap();
+
+        let context = Context {
+            hostname: "test:host".to_string(),
+            session: "beepboopiamasession".to_string(),
+            cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
+            git_root: None,
+        };
+
+        // Default (dedup) path: only the most recent copy comes back.
+        let deduped = db
+            .search(
+                SearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "duplicate",
+                OptFilters::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            deduped.len(),
+            1,
+            "default search must dedup to a single row"
+        );
+
+        // include_duplicates: both copies come back.
+        let with_dupes = db
+            .search(
+                SearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "duplicate",
+                OptFilters {
+                    include_duplicates: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            with_dupes.len(),
+            2,
+            "include_duplicates search must return both copies"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
