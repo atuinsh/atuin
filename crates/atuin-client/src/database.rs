@@ -1651,6 +1651,60 @@ mod test {
             .unwrap();
     }
 
+    // Reproduces the trailing-space ranking bug (atuinsh/atuin#3603).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fuzzy_trailing_space() {
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        let now = OffsetDateTime::now_utc();
+        let irssi = "screen irssi";
+        let ls_l = "ls -l secrets/rendered";
+        let ls_ld = "ls -ld secrets/rendered";
+        let screen_r = "screen -r";
+
+        new_history_item_at(&mut db, irssi, Some(now - time::Duration::days(5)))
+            .await
+            .unwrap();
+        new_history_item_at(&mut db, ls_l, Some(now - time::Duration::days(4)))
+            .await
+            .unwrap();
+        new_history_item_at(
+            &mut db,
+            ls_ld,
+            Some(now - time::Duration::days(4) + time::Duration::seconds(1)),
+        )
+        .await
+        .unwrap();
+        new_history_item_at(&mut db, screen_r, Some(now - time::Duration::hours(1)))
+            .await
+            .unwrap();
+
+        // Baseline: "screen" ranks the screen rows first, most-recent on top.
+        let results = assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "screen", 4)
+            .await
+            .unwrap();
+        assert_eq!(
+            results[0].command,
+            screen_r,
+            "\"screen\" should rank the screen command first, got: {:?}",
+            results.iter().map(|h| &h.command).collect::<Vec<_>>()
+        );
+
+        // "screen " should still rank the row that literally contains "screen " first,
+        // not an unrelated `ls` row.
+        let results = assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "screen ", 4)
+            .await
+            .unwrap();
+        assert_eq!(
+            results[0].command,
+            screen_r,
+            "\"screen \" should rank the literal \"screen \" match first, got: {:?}",
+            results.iter().map(|h| &h.command).collect::<Vec<_>>()
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_paged_basic() {
         let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
