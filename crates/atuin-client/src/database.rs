@@ -147,6 +147,42 @@ fn get_session_start_time(session_id: &str) -> Option<i64> {
     None
 }
 
+fn assemble_search_query(inner: &str, filter_options: &OptFilters) -> String {
+    let order = if filter_options.reverse {
+        "ASC"
+    } else {
+        "DESC"
+    };
+
+    let tail = match (filter_options.limit, filter_options.offset) {
+        (Some(limit), Some(offset)) => format!(" LIMIT {limit} OFFSET {offset}"),
+        (Some(limit), None) => format!(" LIMIT {limit}"),
+        // SQLite requires a LIMIT before OFFSET; -1 means "no limit".
+        (None, Some(offset)) => format!(" LIMIT -1 OFFSET {offset}"),
+        (None, None) => String::new(),
+    };
+
+    // Deduplicate by keeping, for each command, only its most recent entry
+    // within the filtered set. Expressed as a correlated NOT EXISTS rather
+    // than GROUP BY so that the timestamp-ordered scan can stop as soon as
+    // `limit` distinct commands have been emitted. The inner query is embedded
+    // twice on purpose; do not collapse it into a CTE (SQLite may materialize
+    // it and lose the early-termination scan).
+    if filter_options.include_duplicates {
+        format!("SELECT * FROM ({inner}) f ORDER BY f.timestamp {order}{tail}")
+    } else {
+        format!(
+            "SELECT * FROM ({inner}) f \
+             WHERE NOT EXISTS ( \
+                 SELECT 1 FROM ({inner}) f2 \
+                 WHERE f2.command = f.command \
+                   AND (f2.timestamp, f2.id) > (f.timestamp, f.id) \
+             ) \
+             ORDER BY f.timestamp {order}{tail}"
+        )
+    }
+}
+
 #[async_trait]
 pub trait Database: Send + Sync + 'static {
     async fn save(&self, h: &History) -> Result<()>;
@@ -513,6 +549,12 @@ impl Database for Sqlite {
         // fuzzy/regex command matches, exit/cwd/date filters, author, deleted_at).
         // Deduplication, ordering and limiting are applied by the outer query
         // built below, so that the timestamp-ordered scan can early-terminate.
+        //
+        // Snapshot the fields the outer query needs before the filter-building
+        // code below partially moves `cwd`/`exclude_cwd`/`before`/`after` out
+        // of `filter_options`.
+        let assembly_filters = filter_options.clone();
+
         let mut sql = SqlBuilder::select_from("history");
 
         let git_root = if let Some(git_root) = context.git_root.clone() {
@@ -648,40 +690,7 @@ impl Database for Sqlite {
         let inner = sql.sql().expect("bug in search query. please report");
         let inner = inner.trim().trim_end_matches(';');
 
-        let order = if filter_options.reverse {
-            "ASC"
-        } else {
-            "DESC"
-        };
-
-        let tail = match (filter_options.limit, filter_options.offset) {
-            (Some(limit), Some(offset)) => format!(" LIMIT {limit} OFFSET {offset}"),
-            (Some(limit), None) => format!(" LIMIT {limit}"),
-            // SQLite requires a LIMIT before OFFSET; -1 means "no limit".
-            (None, Some(offset)) => format!(" LIMIT -1 OFFSET {offset}"),
-            (None, None) => String::new(),
-        };
-
-        // Deduplicate by keeping, for each command, only its most recent entry
-        // within the filtered set. Expressed as a correlated NOT EXISTS rather
-        // than GROUP BY so that the timestamp-ordered scan can stop as soon as
-        // `limit` distinct commands have been emitted, instead of aggregating
-        // the entire table on every keystroke. The `(timestamp, id)` row-value
-        // comparison both breaks timestamp ties (one row per command) and stays
-        // a sargable range scan on the (command, timestamp) index.
-        let query = if filter_options.include_duplicates {
-            format!("SELECT * FROM ({inner}) f ORDER BY f.timestamp {order}{tail}")
-        } else {
-            format!(
-                "SELECT * FROM ({inner}) f \
-                 WHERE NOT EXISTS ( \
-                     SELECT 1 FROM ({inner}) f2 \
-                     WHERE f2.command = f.command \
-                       AND (f2.timestamp, f2.id) > (f.timestamp, f.id) \
-                 ) \
-                 ORDER BY f.timestamp {order}{tail}"
-            )
-        };
+        let query = assemble_search_query(inner, &assembly_filters);
 
         let res = sqlx::query(&query)
             .map(Self::query_history)
@@ -1109,6 +1118,52 @@ mod test {
 
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn assemble_search_query_embeds_inner_for_dedup_and_dup() {
+        // NOTE: deliberately probing with "SELECT 42" rather than "SELECT 1".
+        // The dedup branch's NOT EXISTS subquery hardcodes the literal
+        // "SELECT 1 FROM (...)" as part of its own SQL (a dummy select-list),
+        // which is unrelated to the `inner` argument. Using "SELECT 1" as the
+        // probe string would collide with that literal and inflate the match
+        // count by one regardless of how many times `inner` is actually
+        // embedded, so a distinct probe is required to test embedding count.
+
+        // dedup (default): inner appears twice
+        let opts = OptFilters::default();
+        let sql = assemble_search_query("SELECT 42", &opts);
+        assert_eq!(
+            sql.matches("SELECT 42").count(),
+            2,
+            "dedup must embed inner twice"
+        );
+        assert!(sql.contains("NOT EXISTS"));
+        assert!(sql.contains("ORDER BY f.timestamp DESC"));
+
+        // include_duplicates: inner appears once, no NOT EXISTS
+        let opts_dup = OptFilters {
+            include_duplicates: true,
+            ..Default::default()
+        };
+        let sql_dup = assemble_search_query("SELECT 42", &opts_dup);
+        assert_eq!(sql_dup.matches("SELECT 42").count(), 1);
+        assert!(!sql_dup.contains("NOT EXISTS"));
+
+        // reverse flips the order direction
+        let opts_rev = OptFilters {
+            reverse: true,
+            ..Default::default()
+        };
+        assert!(assemble_search_query("SELECT 42", &opts_rev).contains("ORDER BY f.timestamp ASC"));
+
+        // limit/offset are inlined as integers
+        let opts_lim = OptFilters {
+            limit: Some(5),
+            offset: Some(2),
+            ..Default::default()
+        };
+        assert!(assemble_search_query("SELECT 42", &opts_lim).contains("LIMIT 5 OFFSET 2"));
+    }
 
     async fn assert_search_eq(
         db: &impl Database,
