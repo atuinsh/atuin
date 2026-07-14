@@ -1,3 +1,4 @@
+use atuin_common::logs::LogConfig;
 use clap::Subcommand;
 use eyre::Result;
 
@@ -46,6 +47,13 @@ impl AtuinCmd {
             // or in other words, 077. Do not allow any access to any other user
             let mode = Mode::RWXG | Mode::RWXO;
             umask(mode);
+        }
+
+        match self {
+            // Client commands initialize their own logging
+            #[cfg(feature = "client")]
+            Self::Client(_) => {}
+            _ => crate::logs::init_logging(&LogConfig::stderr_only()),
         }
 
         match self {

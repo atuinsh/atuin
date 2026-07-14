@@ -259,6 +259,7 @@ dependencies = [
  "shlex",
  "sysinfo",
  "tempfile",
+ "thiserror 2.0.18",
  "time",
  "tiny-bip39",
  "tokio",

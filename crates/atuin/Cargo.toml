@@ -91,6 +91,7 @@ norm = { version = "0.1.1", features = ["fzf-v2"] }
 atuin-nucleo-matcher = { workspace = true }
 tempfile = { workspace = true }
 shlex = "1.3.0"
+thiserror = { workspace = true }
 
 # settings editor with comment and relative ordering preservation
 toml_edit = { workspace = true }

@@ -77,7 +77,7 @@ New-Module -Name Atuin -ScriptBlock {
                 # Fire and forget the atuin history end command to avoid blocking the shell during a potential sync.
                 $process = New-Object System.Diagnostics.Process
                 $process.StartInfo.FileName = "atuin"
-                $process.StartInfo.Arguments = "history end --exit=$exitCode $durationArg -- $script:atuinHistoryId"
+                $process.StartInfo.Arguments = "history end --no-logs --exit=$exitCode $durationArg -- $script:atuinHistoryId"
                 $process.StartInfo.UseShellExecute = $false
                 $process.StartInfo.CreateNoWindow = $true
                 $process.StartInfo.RedirectStandardInput = $true
@@ -117,7 +117,7 @@ New-Module -Name Atuin -ScriptBlock {
         # This makes it unreliable, so we go through an environment variable, which should always be consistent across versions.
         try {
             $env:ATUIN_COMMAND_LINE = $line
-            $script:atuinHistoryId = atuin history start --command-from-env
+            $script:atuinHistoryId = atuin history start --no-logs --command-from-env
         }
         catch {
             # Ignore errors to avoid breaking the shell, see above.

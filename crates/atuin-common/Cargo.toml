@@ -14,7 +14,7 @@ repository = { workspace = true }
 
 [features]
 # Enables the `test_utils` module.
-test-utils = ["dep:tracing", "dep:tracing-subscriber"]
+test-utils = ["tracing", "dep:tracing-subscriber"]
 
 [dependencies]
 derive_more = { workspace = true }

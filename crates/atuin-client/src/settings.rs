@@ -1,6 +1,4 @@
-use std::{collections::HashMap, io::prelude::*, path::PathBuf, str::FromStr, sync::OnceLock};
-use tokio::sync::OnceCell;
-
+use atuin_common::logs::LogLevel;
 use atuin_common::record::HostId;
 use atuin_common::utils;
 use clap::ValueEnum;
@@ -14,7 +12,9 @@ use regex::RegexSet;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_with::DeserializeFromStr;
+use std::{collections::HashMap, io::prelude::*, path::PathBuf, str::FromStr, sync::OnceLock};
 use time::{OffsetDateTime, UtcOffset, format_description::FormatItem, macros::format_description};
+use tokio::sync::OnceCell;
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
@@ -573,31 +573,6 @@ pub struct Tmux {
     pub height: String,
 }
 
-/// Log level for file logging. Maps to tracing's LevelFilter.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum LogLevel {
-    Trace,
-    Debug,
-    #[default]
-    Info,
-    Warn,
-    Error,
-}
-
-impl LogLevel {
-    /// Convert to a tracing directive string for use with EnvFilter.
-    pub fn as_directive(&self) -> &'static str {
-        match self {
-            LogLevel::Trace => "trace",
-            LogLevel::Debug => "debug",
-            LogLevel::Info => "info",
-            LogLevel::Warn => "warn",
-            LogLevel::Error => "error",
-        }
-    }
-}
-
 /// Configuration for a specific log type (search or daemon).
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct LogConfig {
@@ -612,6 +587,15 @@ pub struct LogConfig {
 
     /// Override global retention days setting for this log type.
     pub retention: Option<u64>,
+}
+
+impl LogConfig {
+    pub fn new(file: impl Into<String>) -> Self {
+        Self {
+            file: file.into(),
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -632,7 +616,7 @@ pub struct Logs {
     #[serde(default = "Logs::default_retention")]
     pub retention: u64,
 
-    /// Search log settings
+    /// Search log settings; only used with `--interactive`
     #[serde(default)]
     pub search: LogConfig,
 
@@ -763,18 +747,9 @@ impl Default for Logs {
             dir: "".to_string(),
             level: LogLevel::default(),
             retention: Self::default_retention(),
-            search: LogConfig {
-                file: "search.log".to_string(),
-                ..Default::default()
-            },
-            daemon: LogConfig {
-                file: "daemon.log".to_string(),
-                ..Default::default()
-            },
-            ai: LogConfig {
-                file: "ai.log".to_string(),
-                ..Default::default()
-            },
+            search: LogConfig::new("search.log"),
+            daemon: LogConfig::new("daemon.log"),
+            ai: LogConfig::new("ai.log"),
         }
     }
 }
@@ -786,78 +761,6 @@ impl Logs {
 
     fn default_retention() -> u64 {
         4
-    }
-
-    /// Returns whether search logging is enabled.
-    /// Uses search-specific setting if set, otherwise falls back to global.
-    pub fn search_enabled(&self) -> bool {
-        self.search.enabled.unwrap_or(self.enabled)
-    }
-
-    /// Returns whether daemon logging is enabled.
-    /// Uses daemon-specific setting if set, otherwise falls back to global.
-    pub fn daemon_enabled(&self) -> bool {
-        self.daemon.enabled.unwrap_or(self.enabled)
-    }
-
-    /// Returns whether AI logging is enabled.
-    /// Uses AI-specific setting if set, otherwise falls back to global.
-    pub fn ai_enabled(&self) -> bool {
-        self.ai.enabled.unwrap_or(self.enabled)
-    }
-
-    /// Returns the log level for search logging.
-    /// Uses search-specific setting if set, otherwise falls back to global.
-    pub fn search_level(&self) -> LogLevel {
-        self.search.level.unwrap_or(self.level)
-    }
-
-    /// Returns the log level for daemon logging.
-    /// Uses daemon-specific setting if set, otherwise falls back to global.
-    pub fn daemon_level(&self) -> LogLevel {
-        self.daemon.level.unwrap_or(self.level)
-    }
-
-    /// Returns the log level for AI logging.
-    /// Uses AI-specific setting if set, otherwise falls back to global.
-    pub fn ai_level(&self) -> LogLevel {
-        self.ai.level.unwrap_or(self.level)
-    }
-
-    /// Returns the retention days for search logging.
-    /// Uses search-specific setting if set, otherwise falls back to global.
-    pub fn search_retention(&self) -> u64 {
-        self.search.retention.unwrap_or(self.retention)
-    }
-
-    /// Returns the retention days for daemon logging.
-    /// Uses daemon-specific setting if set, otherwise falls back to global.
-    pub fn daemon_retention(&self) -> u64 {
-        self.daemon.retention.unwrap_or(self.retention)
-    }
-
-    /// Returns the retention days for AI logging.
-    /// Uses AI-specific setting if set, otherwise falls back to global.
-    pub fn ai_retention(&self) -> u64 {
-        self.ai.retention.unwrap_or(self.retention)
-    }
-
-    /// Returns the full path for the search log file.
-    pub fn search_path(&self) -> PathBuf {
-        let path = PathBuf::from(&self.search.file);
-        PathBuf::from(&self.dir).join(path)
-    }
-
-    /// Returns the full path for the daemon log file.
-    pub fn daemon_path(&self) -> PathBuf {
-        let path = PathBuf::from(&self.daemon.file);
-        PathBuf::from(&self.dir).join(path)
-    }
-
-    /// Returns the full path for the AI log file.
-    pub fn ai_path(&self) -> PathBuf {
-        let path = PathBuf::from(&self.ai.file);
-        PathBuf::from(&self.dir).join(path)
     }
 }
 
