@@ -93,11 +93,13 @@ plugins:
         AI:
           - ai/introduction.md: Atuin AI - command generation and lookup via LLM from your terminal.
           - ai/settings.md: AI configuration in config.toml - enabled, endpoint, session timeout.
+          - ai/slash-commands.md: Slash commands available in Atuin AI.
           - ai/user-context.md: Send additional context to the LLM via TERMINAL.md files and dynamic shell substitution.
           - ai/skills.md: Reusable instruction sets (skills) for Atuin AI - playbooks, conventions, workflows.
           - ai/tools-permissions.md: Tools the AI can use (shell, filesystem) and permission files to control access.
           - ai/command-output.md: Let Atuin AI read command outputs - capture via pty-proxy and the daemon.
           - ai/mcp.md: Built-in MCP server exposing history search and command output to Claude Code, Cursor, and other AI tools.
+          - ai/self-hosting.md: Self-hosting the Atuin AI backend.
         Misc:
           - known-issues.md: Known issues with ZFS and network filesystems.
           - integrations.md: Integrations with zsh-autosuggestions, zsh-vi-mode, ble.sh, and mcfly.
@@ -161,11 +163,13 @@ nav:
   - AI:
       - Introduction: ai/introduction.md
       - Settings: ai/settings.md
+      - "Slash Commands": ai/slash-commands.md
       - "User-Defined Context": ai/user-context.md
       - Skills: ai/skills.md
       - "Tools & Permissions": ai/tools-permissions.md
       - "Reading Command Output": ai/command-output.md
       - "MCP Server": ai/mcp.md
+      - "Self Hosting & Local Models": ai/self-hosting.md
   - Known Issues: known-issues.md
   - Integrations: integrations.md
   - FAQ: faq.md
