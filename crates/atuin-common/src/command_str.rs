@@ -17,6 +17,7 @@
 use std::{
     borrow::{Borrow, Cow},
     cmp::Ordering,
+    fmt,
     hash::{Hash, Hasher},
     ops::Deref,
 };
@@ -115,6 +116,48 @@ impl<S: AsRef<str>> Ord for Command<S> {
 impl<S: AsRef<str>> Hash for Command<S> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.as_str().hash(state);
+    }
+}
+
+impl<S: AsRef<str>> fmt::Display for Command<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.pad(self.as_str())
+    }
+}
+
+impl<S> From<S> for Command<S> {
+    fn from(inner: S) -> Self {
+        Self(inner)
+    }
+}
+
+impl From<&str> for CommandString {
+    fn from(command: &str) -> Self {
+        Command(command.to_owned())
+    }
+}
+
+impl From<CommandStr<'_>> for CommandString {
+    fn from(command: CommandStr<'_>) -> Self {
+        Command(command.0.to_owned())
+    }
+}
+
+impl From<CommandCow<'_>> for CommandString {
+    fn from(command: CommandCow<'_>) -> Self {
+        Command(command.0.into_owned())
+    }
+}
+
+impl<'a> From<CommandStr<'a>> for CommandCow<'a> {
+    fn from(command: CommandStr<'a>) -> Self {
+        Command(Cow::Borrowed(command.0))
+    }
+}
+
+impl From<CommandString> for CommandCow<'_> {
+    fn from(command: CommandString) -> Self {
+        Command(Cow::Owned(command.0))
     }
 }
 
@@ -232,5 +275,48 @@ mod tests {
         // `Borrow<str>` + a str-consistent `Hash` let us probe the map with a plain `&str`.
         assert_eq!(counts.get("ls -la"), Some(&3));
         assert_eq!(counts.get("ls"), None);
+    }
+
+    #[test]
+    fn displays_as_the_raw_command() {
+        assert_eq!(CommandStr::new("echo hi").to_string(), "echo hi");
+        assert_eq!(
+            CommandString::new(String::from("echo hi")).to_string(),
+            "echo hi"
+        );
+
+        // Width and alignment are forwarded to the underlying `str`.
+        assert_eq!(format!("[{:>4}]", CommandStr::new("ls")), "[  ls]");
+    }
+
+    #[test]
+    fn wraps_any_storage_via_from() {
+        let borrowed: CommandStr<'_> = "ls".into();
+        let owned: CommandString = String::from("ls").into();
+        let cow: CommandCow<'_> = Cow::Borrowed("ls").into();
+
+        assert_eq!(borrowed, owned);
+        assert_eq!(owned, cow);
+    }
+
+    #[test]
+    fn converts_between_the_specialisations_via_from() {
+        let from_literal: CommandString = "ls".into();
+        let from_borrowed: CommandString = CommandStr::new("ls").into();
+        let from_cow: CommandString = CommandCow::new(Cow::Owned(String::from("ls"))).into();
+
+        let borrowed_to_cow: CommandCow<'_> = CommandStr::new("ls").into();
+        let owned_to_cow: CommandCow<'_> = CommandString::new(String::from("ls")).into();
+
+        assert_eq!(from_literal.as_str(), "ls");
+        assert_eq!(from_borrowed.as_str(), "ls");
+        assert_eq!(from_cow.as_str(), "ls");
+
+        // A borrowed command stays borrowed and an owned one stays owned: neither
+        // conversion allocates or copies where it does not have to.
+        assert_eq!(borrowed_to_cow.as_str(), "ls");
+        assert!(matches!(borrowed_to_cow.into_inner(), Cow::Borrowed(_)));
+        assert_eq!(owned_to_cow.as_str(), "ls");
+        assert!(matches!(owned_to_cow.into_inner(), Cow::Owned(_)));
     }
 }
