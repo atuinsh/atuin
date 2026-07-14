@@ -119,6 +119,7 @@ impl ChatRequest {
 pub(crate) fn create_chat_stream(
     hub_address: String,
     token: String,
+    token_from_hub_session: bool,
     request: ChatRequest,
     client_ctx: ClientContext,
     send_cwd: bool,
@@ -173,15 +174,15 @@ pub(crate) fn create_chat_stream(
         }
 
         let client = reqwest::Client::new();
-        let response = match client
+        let mut request_builder = client
             .post(endpoint.clone())
             .header("Accept", "text/event-stream")
             .header(USER_AGENT, APP_USER_AGENT)
-            .bearer_auth(&token)
-            .json(&request_body)
-            .send()
-            .await
-        {
+            .json(&request_body);
+        if !token.is_empty() {
+            request_builder = request_builder.bearer_auth(&token);
+        }
+        let response = match request_builder.send().await {
             Ok(resp) => resp,
             Err(e) => {
                 yield Err(eyre::eyre!("Failed to send SSE request: {}", e));
@@ -191,9 +192,17 @@ pub(crate) fn create_chat_stream(
 
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
-            tracing::error!("SSE request failed with status: {status}, clearing session");
-            let _ = atuin_client::hub::delete_session().await;
-            yield Err(eyre::eyre!("Hub session expired. Re-run to authenticate again."));
+            if token_from_hub_session {
+                tracing::error!("SSE request failed with status: {status}, clearing session");
+                let _ = atuin_client::hub::delete_session().await;
+                yield Err(eyre::eyre!("Hub session expired. Re-run to authenticate again."));
+            } else if token.is_empty() {
+                tracing::error!("SSE request failed with status: {status}");
+                yield Err(eyre::eyre!("The endpoint requires authentication. Set ai.api_token in your config."));
+            } else {
+                tracing::error!("SSE request failed with status: {status}");
+                yield Err(eyre::eyre!("The endpoint rejected the API token. Check ai.api_token in your config."));
+            }
             return;
         }
         if !status.is_success() {

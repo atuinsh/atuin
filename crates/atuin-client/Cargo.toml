@@ -21,7 +21,7 @@ daemon = []
 check-update = []
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.17.0" }
+atuin-common = { path = "../atuin-common", version = "18.17.1" }
 derive_more = { workspace = true }
 
 tracing = { workspace = true }
@@ -89,7 +89,7 @@ tempfile = "3"
 # This crate's tests require the `test-utils` feature in atuin-common.
 [dev-dependencies.atuin-common]
 path = "../atuin-common"
-version = "18.17.0"
+version = "18.17.1"
 features = ["test-utils"]
 
 [[bench]]
