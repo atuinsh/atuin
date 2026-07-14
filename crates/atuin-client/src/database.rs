@@ -497,26 +497,26 @@ fn build_inner_query(
         sql.and_where("cwd != ?");
     }
 
-    if let Some(before) = &filter_options.before {
-        if let Ok(before) = interim::parse_date_string(
+    if let Some(before) = &filter_options.before
+        && let Ok(before) = interim::parse_date_string(
             before.as_str(),
             OffsetDateTime::now_utc(),
             interim::Dialect::Uk,
-        ) {
-            args.push(SqlValue::Int(before.unix_timestamp_nanos() as i64));
-            sql.and_where("timestamp < ?");
-        }
+        )
+    {
+        args.push(SqlValue::Int(before.unix_timestamp_nanos() as i64));
+        sql.and_where("timestamp < ?");
     }
 
-    if let Some(after) = &filter_options.after {
-        if let Ok(after) = interim::parse_date_string(
+    if let Some(after) = &filter_options.after
+        && let Ok(after) = interim::parse_date_string(
             after.as_str(),
             OffsetDateTime::now_utc(),
             interim::Dialect::Uk,
-        ) {
-            args.push(SqlValue::Int(after.unix_timestamp_nanos() as i64));
-            sql.and_where("timestamp > ?");
-        }
+        )
+    {
+        args.push(SqlValue::Int(after.unix_timestamp_nanos() as i64));
+        sql.and_where("timestamp > ?");
     }
 
     if !filter_options.authors.is_empty() {
@@ -722,14 +722,17 @@ impl Database for Sqlite {
     ) -> Result<Vec<History>> {
         let orig_query = query;
 
-        let (inner, args) =
-            build_inner_query(search_mode, filter, context, query, &filter_options);
+        let (inner, args) = build_inner_query(search_mode, filter, context, query, &filter_options);
         let sql = assemble_search_query(&inner, &filter_options);
 
         // The dedup wrapper embeds `inner` twice, so its placeholders appear
         // twice; bind the args vector once per copy, in order. The
         // include_duplicates wrapper embeds it once.
-        let copies = if filter_options.include_duplicates { 1 } else { 2 };
+        let copies = if filter_options.include_duplicates {
+            1
+        } else {
+            2
+        };
 
         let mut q = sqlx::query(&sql);
         for _ in 0..copies {
@@ -741,10 +744,7 @@ impl Database for Sqlite {
             }
         }
 
-        let res = q
-            .map(Self::query_history)
-            .fetch_all(&self.pool)
-            .await?;
+        let res = q.map(Self::query_history).fetch_all(&self.pool).await?;
 
         Ok(ordering::reorder_fuzzy(search_mode, orig_query, res))
     }
@@ -1232,13 +1232,26 @@ mod test {
         let ctx = test_context();
         // A term containing a single quote used to require esc(); with binds it
         // must travel as a bound value, never inlined into the SQL text.
-        let (sql, args) =
-            build_inner_query(SearchMode::FullText, FilterMode::Global, &ctx, "foo'bar", &OptFilters::default());
+        let (sql, args) = build_inner_query(
+            SearchMode::FullText,
+            FilterMode::Global,
+            &ctx,
+            "foo'bar",
+            &OptFilters::default(),
+        );
 
-        assert_eq!(sql.matches('?').count(), args.len(), "one bound value per placeholder");
-        assert!(!sql.contains("foo'bar"), "user term must not be inlined into SQL");
+        assert_eq!(
+            sql.matches('?').count(),
+            args.len(),
+            "one bound value per placeholder"
+        );
         assert!(
-            args.iter().any(|v| matches!(v, SqlValue::Text(s) if s.contains("foo'bar"))),
+            !sql.contains("foo'bar"),
+            "user term must not be inlined into SQL"
+        );
+        assert!(
+            args.iter()
+                .any(|v| matches!(v, SqlValue::Text(s) if s.contains("foo'bar"))),
             "user term must be carried as a bound value"
         );
     }
@@ -1252,8 +1265,13 @@ mod test {
             authors: vec!["ellie".to_string()],
             ..Default::default()
         };
-        let (sql, args) =
-            build_inner_query(SearchMode::FullText, FilterMode::Session, &ctx, "cargo build", &opts);
+        let (sql, args) = build_inner_query(
+            SearchMode::FullText,
+            FilterMode::Session,
+            &ctx,
+            "cargo build",
+            &opts,
+        );
         assert_eq!(sql.matches('?').count(), args.len());
     }
 
@@ -1329,7 +1347,9 @@ mod test {
         let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
             .await
             .unwrap();
-        new_history_item(&mut db, "echo 'hello world'").await.unwrap();
+        new_history_item(&mut db, "echo 'hello world'")
+            .await
+            .unwrap();
 
         // A stored command containing a single quote is still matched.
         assert_search_commands(
