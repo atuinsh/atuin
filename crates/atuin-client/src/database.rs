@@ -11,7 +11,7 @@ use atuin_common::utils;
 use fs_err as fs;
 use itertools::Itertools;
 use rand::{Rng, distributions::Alphanumeric};
-use sql_builder::{SqlBuilder, SqlName, bind::Bind, esc, quote};
+use sql_builder::{SqlBuilder, SqlName, quote};
 use sqlx::{
     Result, Row,
     sqlite::{
@@ -62,6 +62,14 @@ pub struct OptFilters {
     pub authors: Vec<String>,
 }
 
+/// A value to be bound into a search query via sqlx, instead of being inlined
+/// into the SQL text. Collected in placeholder order by `build_inner_query`.
+#[derive(Debug, Clone)]
+enum SqlValue {
+    Int(i64),
+    Text(String),
+}
+
 /// Build a query [`Context`] without requiring a live shell session.
 ///
 /// Outside of an atuin-hooked shell (e.g. when running as an MCP server),
@@ -106,8 +114,9 @@ impl Context {
 }
 
 /// Each entry is OR'd: `$all-user` → NOT IN agents, `$all-agent` → IN agents, literal → exact match.
-fn apply_author_filter(sql: &mut SqlBuilder, authors: &[String]) {
+fn apply_author_filter(sql: &mut SqlBuilder, authors: &[String], args: &mut Vec<SqlValue>) {
     let mut conditions: Vec<String> = Vec::new();
+    // KNOWN_AGENTS is a compile-time constant, so inlining it is safe.
     let agent_list: String = KNOWN_AGENTS.iter().map(quote).join(", ");
     let author_expr = "CASE \
         WHEN author IS NULL OR trim(author) = '' THEN \
@@ -127,7 +136,8 @@ fn apply_author_filter(sql: &mut SqlBuilder, authors: &[String]) {
                 conditions.push(format!("{author_expr} IN ({agent_list})"));
             }
             literal => {
-                conditions.push(format!("{author_expr} = {}", quote(literal)));
+                args.push(SqlValue::Text(literal.to_string()));
+                conditions.push(format!("{author_expr} = ?"));
             }
         }
     }
@@ -356,6 +366,171 @@ impl Sqlite {
     }
 }
 
+fn build_inner_query(
+    search_mode: SearchMode,
+    filter: FilterMode,
+    context: &Context,
+    query: &str,
+    filter_options: &OptFilters,
+) -> (String, Vec<SqlValue>) {
+    let mut sql = SqlBuilder::select_from("history");
+    let mut args: Vec<SqlValue> = Vec::new();
+
+    let git_root = if let Some(git_root) = context.git_root.clone() {
+        git_root.to_str().unwrap_or("/").to_string()
+    } else {
+        context.cwd.clone()
+    };
+
+    let session_start = get_session_start_time(&context.session);
+
+    match filter {
+        FilterMode::Global => &mut sql,
+        FilterMode::Host => {
+            args.push(SqlValue::Text(context.hostname.to_lowercase()));
+            sql.and_where_eq("lower(hostname)", "?")
+        }
+        FilterMode::Session => {
+            args.push(SqlValue::Text(context.session.clone()));
+            sql.and_where_eq("session", "?")
+        }
+        FilterMode::SessionPreload => {
+            args.push(SqlValue::Text(context.session.clone()));
+            sql.and_where_eq("session", "?");
+            if let Some(session_start) = session_start {
+                args.push(SqlValue::Int(session_start));
+                sql.or_where_lt("timestamp", "?");
+            }
+            &mut sql
+        }
+        FilterMode::Directory => {
+            args.push(SqlValue::Text(context.cwd.clone()));
+            sql.and_where_eq("cwd", "?")
+        }
+        FilterMode::Workspace => {
+            args.push(SqlValue::Text(format!("{git_root}%")));
+            sql.and_where("cwd LIKE ?")
+        }
+    };
+
+    let mut regexes = Vec::new();
+    match search_mode {
+        SearchMode::Prefix => {
+            args.push(SqlValue::Text(format!("{}%", query.replace('*', "%"))));
+            sql.and_where("command LIKE ?")
+        }
+        _ => {
+            let mut is_or = false;
+            for token in QueryTokenizer::new(query) {
+                // TODO smart case mode could be made configurable like in fzf
+                let (is_glob, glob) = if token.has_uppercase() {
+                    (true, "*")
+                } else {
+                    (false, "%")
+                };
+                let param = match token {
+                    QueryToken::Regex(r) => {
+                        regexes.push(String::from(r));
+                        continue;
+                    }
+                    QueryToken::Or => {
+                        if !is_or {
+                            is_or = true;
+                            continue;
+                        } else {
+                            format!("{glob}|{glob}")
+                        }
+                    }
+                    QueryToken::MatchStart(term, _) => format!("{term}{glob}"),
+                    QueryToken::MatchEnd(term, _) => format!("{glob}{term}"),
+                    QueryToken::MatchFull(term, _) => format!("{glob}{term}{glob}"),
+                    QueryToken::Match(term, _) => {
+                        if search_mode == SearchMode::FullText {
+                            format!("{glob}{term}{glob}")
+                        } else {
+                            term.split("").join(glob)
+                        }
+                    }
+                };
+
+                sql.fuzzy_condition(
+                    "command",
+                    param,
+                    token.is_inverse(),
+                    is_glob,
+                    is_or,
+                    &mut args,
+                );
+                is_or = false;
+            }
+
+            &mut sql
+        }
+    };
+
+    for regex in regexes {
+        args.push(SqlValue::Text(regex));
+        sql.and_where("command regexp ?");
+    }
+
+    if let Some(exit) = filter_options.exit {
+        args.push(SqlValue::Int(exit));
+        sql.and_where("exit = ?");
+    }
+
+    if let Some(exclude_exit) = filter_options.exclude_exit {
+        args.push(SqlValue::Int(exclude_exit));
+        sql.and_where("exit != ?");
+    }
+
+    if filter_options.only_failed {
+        sql.and_where("exit != 0 AND exit != -1");
+    }
+
+    if let Some(cwd) = &filter_options.cwd {
+        args.push(SqlValue::Text(cwd.clone()));
+        sql.and_where("cwd = ?");
+    }
+
+    if let Some(exclude_cwd) = &filter_options.exclude_cwd {
+        args.push(SqlValue::Text(exclude_cwd.clone()));
+        sql.and_where("cwd != ?");
+    }
+
+    if let Some(before) = &filter_options.before {
+        if let Ok(before) = interim::parse_date_string(
+            before.as_str(),
+            OffsetDateTime::now_utc(),
+            interim::Dialect::Uk,
+        ) {
+            args.push(SqlValue::Int(before.unix_timestamp_nanos() as i64));
+            sql.and_where("timestamp < ?");
+        }
+    }
+
+    if let Some(after) = &filter_options.after {
+        if let Ok(after) = interim::parse_date_string(
+            after.as_str(),
+            OffsetDateTime::now_utc(),
+            interim::Dialect::Uk,
+        ) {
+            args.push(SqlValue::Int(after.unix_timestamp_nanos() as i64));
+            sql.and_where("timestamp > ?");
+        }
+    }
+
+    if !filter_options.authors.is_empty() {
+        apply_author_filter(&mut sql, &filter_options.authors, &mut args);
+    }
+
+    sql.and_where_is_null("deleted_at");
+
+    let inner = sql.sql().expect("bug in search query. please report");
+    let inner = inner.trim().trim_end_matches(';').to_string();
+
+    (inner, args)
+}
+
 #[async_trait]
 impl Database for Sqlite {
     async fn save(&self, h: &History) -> Result<()> {
@@ -545,154 +720,28 @@ impl Database for Sqlite {
         query: &str,
         filter_options: OptFilters,
     ) -> Result<Vec<History>> {
-        // Build the inner query holding all of the user's filters (filter mode,
-        // fuzzy/regex command matches, exit/cwd/date filters, author, deleted_at).
-        // Deduplication, ordering and limiting are applied by the outer query
-        // built below, so that the timestamp-ordered scan can early-terminate.
-        //
-        // Snapshot the fields the outer query needs before the filter-building
-        // code below partially moves `cwd`/`exclude_cwd`/`before`/`after` out
-        // of `filter_options`.
-        let assembly_filters = filter_options.clone();
-
-        let mut sql = SqlBuilder::select_from("history");
-
-        let git_root = if let Some(git_root) = context.git_root.clone() {
-            git_root.to_str().unwrap_or("/").to_string()
-        } else {
-            context.cwd.clone()
-        };
-
-        let session_start = get_session_start_time(&context.session);
-
-        match filter {
-            FilterMode::Global => &mut sql,
-            FilterMode::Host => {
-                sql.and_where_eq("lower(hostname)", quote(context.hostname.to_lowercase()))
-            }
-            FilterMode::Session => sql.and_where_eq("session", quote(&context.session)),
-            FilterMode::SessionPreload => {
-                sql.and_where_eq("session", quote(&context.session));
-                if let Some(session_start) = session_start {
-                    sql.or_where_lt("timestamp", session_start);
-                }
-                &mut sql
-            }
-            FilterMode::Directory => sql.and_where_eq("cwd", quote(&context.cwd)),
-            FilterMode::Workspace => sql.and_where_like_left("cwd", git_root),
-        };
-
         let orig_query = query;
 
-        let mut regexes = Vec::new();
-        match search_mode {
-            SearchMode::Prefix => sql.and_where_like_left("command", query.replace('*', "%")),
-            _ => {
-                let mut is_or = false;
-                for token in QueryTokenizer::new(query) {
-                    // TODO smart case mode could be made configurable like in fzf
-                    let (is_glob, glob) = if token.has_uppercase() {
-                        (true, "*")
-                    } else {
-                        (false, "%")
-                    };
-                    let param = match token {
-                        QueryToken::Regex(r) => {
-                            regexes.push(String::from(r));
-                            continue;
-                        }
-                        QueryToken::Or => {
-                            if !is_or {
-                                is_or = true;
-                                continue;
-                            } else {
-                                format!("{glob}|{glob}")
-                            }
-                        }
-                        QueryToken::MatchStart(term, _) => {
-                            format!("{term}{glob}")
-                        }
-                        QueryToken::MatchEnd(term, _) => {
-                            format!("{glob}{term}")
-                        }
-                        QueryToken::MatchFull(term, _) => {
-                            format!("{glob}{term}{glob}")
-                        }
-                        QueryToken::Match(term, _) => {
-                            if search_mode == SearchMode::FullText {
-                                format!("{glob}{term}{glob}")
-                            } else {
-                                term.split("").join(glob)
-                            }
-                        }
-                    };
+        let (inner, args) =
+            build_inner_query(search_mode, filter, context, query, &filter_options);
+        let sql = assemble_search_query(&inner, &filter_options);
 
-                    sql.fuzzy_condition("command", param, token.is_inverse(), is_glob, is_or);
-                    is_or = false;
-                }
+        // The dedup wrapper embeds `inner` twice, so its placeholders appear
+        // twice; bind the args vector once per copy, in order. The
+        // include_duplicates wrapper embeds it once.
+        let copies = if filter_options.include_duplicates { 1 } else { 2 };
 
-                &mut sql
+        let mut q = sqlx::query(&sql);
+        for _ in 0..copies {
+            for value in &args {
+                q = match value {
+                    SqlValue::Int(i) => q.bind(*i),
+                    SqlValue::Text(s) => q.bind(s.clone()),
+                };
             }
-        };
-
-        for regex in regexes {
-            sql.and_where("command regexp ?".bind(&regex));
         }
 
-        filter_options
-            .exit
-            .map(|exit| sql.and_where_eq("exit", exit));
-
-        filter_options
-            .exclude_exit
-            .map(|exclude_exit| sql.and_where_ne("exit", exclude_exit));
-
-        if filter_options.only_failed {
-            sql.and_where("exit != 0 AND exit != -1");
-        }
-
-        filter_options
-            .cwd
-            .map(|cwd| sql.and_where_eq("cwd", quote(cwd)));
-
-        filter_options
-            .exclude_cwd
-            .map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
-
-        filter_options.before.map(|before| {
-            interim::parse_date_string(
-                before.as_str(),
-                OffsetDateTime::now_utc(),
-                interim::Dialect::Uk,
-            )
-            .map(|before| {
-                sql.and_where_lt("timestamp", quote(before.unix_timestamp_nanos() as i64))
-            })
-        });
-
-        filter_options.after.map(|after| {
-            interim::parse_date_string(
-                after.as_str(),
-                OffsetDateTime::now_utc(),
-                interim::Dialect::Uk,
-            )
-            .map(|after| sql.and_where_gt("timestamp", quote(after.unix_timestamp_nanos() as i64)))
-        });
-
-        if !filter_options.authors.is_empty() {
-            apply_author_filter(&mut sql, &filter_options.authors);
-        }
-
-        sql.and_where_is_null("deleted_at");
-
-        // sql_builder inlines every bound value, so the inner query carries no
-        // positional parameters and is safe to embed (twice) as a derived table.
-        let inner = sql.sql().expect("bug in search query. please report");
-        let inner = inner.trim().trim_end_matches(';');
-
-        let query = assemble_search_query(inner, &assembly_filters);
-
-        let res = sqlx::query(&query)
+        let res = q
             .map(Self::query_history)
             .fetch_all(&self.pool)
             .await?;
@@ -982,37 +1031,40 @@ impl Paged {
 }
 
 trait SqlBuilderExt {
-    fn fuzzy_condition<S: ToString, T: ToString>(
+    fn fuzzy_condition<S: ToString>(
         &mut self,
         field: S,
-        mask: T,
+        mask: String,
         inverse: bool,
         glob: bool,
         is_or: bool,
+        args: &mut Vec<SqlValue>,
     ) -> &mut Self;
 }
 
 impl SqlBuilderExt for SqlBuilder {
-    /// adapted from the sql-builder *like functions
-    fn fuzzy_condition<S: ToString, T: ToString>(
+    /// adapted from the sql-builder *like functions, but binds `mask` instead of
+    /// inlining it — the glob/like metacharacters in `mask` are intentional and
+    /// pass through unescaped, exactly as before.
+    fn fuzzy_condition<S: ToString>(
         &mut self,
         field: S,
-        mask: T,
+        mask: String,
         inverse: bool,
         glob: bool,
         is_or: bool,
+        args: &mut Vec<SqlValue>,
     ) -> &mut Self {
         let mut cond = field.to_string();
         if inverse {
             cond.push_str(" NOT");
         }
         if glob {
-            cond.push_str(" GLOB '");
+            cond.push_str(" GLOB ?");
         } else {
-            cond.push_str(" LIKE '");
+            cond.push_str(" LIKE ?");
         }
-        cond.push_str(&esc(mask.to_string()));
-        cond.push('\'');
+        args.push(SqlValue::Text(mask));
         if is_or {
             self.or_where(cond)
         } else {
@@ -1165,6 +1217,46 @@ mod test {
         assert!(assemble_search_query("SELECT 42", &opts_lim).contains("LIMIT 5 OFFSET 2"));
     }
 
+    fn test_context() -> Context {
+        Context {
+            hostname: "test:host".to_string(),
+            session: "beepboopiamasession".to_string(),
+            cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
+            git_root: None,
+        }
+    }
+
+    #[test]
+    fn build_inner_query_binds_user_input() {
+        let ctx = test_context();
+        // A term containing a single quote used to require esc(); with binds it
+        // must travel as a bound value, never inlined into the SQL text.
+        let (sql, args) =
+            build_inner_query(SearchMode::FullText, FilterMode::Global, &ctx, "foo'bar", &OptFilters::default());
+
+        assert_eq!(sql.matches('?').count(), args.len(), "one bound value per placeholder");
+        assert!(!sql.contains("foo'bar"), "user term must not be inlined into SQL");
+        assert!(
+            args.iter().any(|v| matches!(v, SqlValue::Text(s) if s.contains("foo'bar"))),
+            "user term must be carried as a bound value"
+        );
+    }
+
+    #[test]
+    fn build_inner_query_placeholder_count_matches_args_with_filters() {
+        let ctx = test_context();
+        let opts = OptFilters {
+            exit: Some(0),
+            cwd: Some("/tmp".to_string()),
+            authors: vec!["ellie".to_string()],
+            ..Default::default()
+        };
+        let (sql, args) =
+            build_inner_query(SearchMode::FullText, FilterMode::Session, &ctx, "cargo build", &opts);
+        assert_eq!(sql.matches('?').count(), args.len());
+    }
+
     async fn assert_search_eq(
         db: &impl Database,
         mode: SearchMode,
@@ -1230,6 +1322,30 @@ mod test {
         captured.hostname = "booop".to_string();
 
         db.save(&captured).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_handles_quotes() {
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+        new_history_item(&mut db, "echo 'hello world'").await.unwrap();
+
+        // A stored command containing a single quote is still matched.
+        assert_search_commands(
+            &db,
+            SearchMode::FullText,
+            FilterMode::Global,
+            "hello",
+            vec!["echo 'hello world'"],
+        )
+        .await;
+
+        // A query that itself contains a quote must not break the SQL — it just
+        // matches nothing (previously this relied on esc(); now on binding).
+        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "no'such", 0)
+            .await
+            .unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
