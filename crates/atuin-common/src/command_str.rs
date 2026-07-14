@@ -16,6 +16,8 @@
 
 use std::{
     borrow::{Borrow, Cow},
+    cmp::Ordering,
+    hash::{Hash, Hasher},
     ops::Deref,
 };
 
@@ -90,9 +92,35 @@ impl<S: AsRef<str>> Deref for Command<S> {
     }
 }
 
+impl<S: AsRef<str>, T: AsRef<str>> PartialEq<Command<T>> for Command<S> {
+    fn eq(&self, other: &Command<T>) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl<S: AsRef<str>> Eq for Command<S> {}
+
+impl<S: AsRef<str>, T: AsRef<str>> PartialOrd<Command<T>> for Command<S> {
+    fn partial_cmp(&self, other: &Command<T>) -> Option<Ordering> {
+        Some(self.as_str().cmp(other.as_str()))
+    }
+}
+
+impl<S: AsRef<str>> Ord for Command<S> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl<S: AsRef<str>> Hash for Command<S> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, sync::Arc};
+    use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
     use pretty_assertions::assert_eq;
 
@@ -169,5 +197,40 @@ mod tests {
 
         let as_ref: &str = cmd.as_ref();
         assert_eq!(as_ref, "git commit -m wip");
+    }
+
+    #[test]
+    fn equality_is_content_based_across_storages() {
+        let borrowed = CommandStr::new("ls -la");
+        let owned = CommandString::new(String::from("ls -la"));
+        let cow = CommandCow::new(Cow::Borrowed("ls -la"));
+
+        assert_eq!(borrowed, owned);
+        assert_eq!(owned, cow);
+        assert_eq!(cow, borrowed);
+        assert_ne!(borrowed, CommandStr::new("ls"));
+    }
+
+    #[test]
+    fn ordering_is_content_based() {
+        let mut cmds = [
+            CommandString::new(String::from("git status")),
+            CommandString::new(String::from("cargo test")),
+        ];
+        cmds.sort();
+
+        assert_eq!(cmds[0].as_str(), "cargo test");
+        assert_eq!(cmds[1].as_str(), "git status");
+        assert!(CommandStr::new("a") < CommandStr::new("b"));
+    }
+
+    #[test]
+    fn hashes_like_the_underlying_str() {
+        let mut counts = HashMap::new();
+        counts.insert(CommandString::new(String::from("ls -la")), 3_u64);
+
+        // `Borrow<str>` + a str-consistent `Hash` let us probe the map with a plain `&str`.
+        assert_eq!(counts.get("ls -la"), Some(&3));
+        assert_eq!(counts.get("ls"), None);
     }
 }
