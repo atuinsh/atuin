@@ -13,6 +13,24 @@
 //! extra code: `Command<Arc<str>>` is a command too.
 //!
 //! The wrapper adds no behaviour to the string it holds.
+//!
+//! ```
+//! use std::borrow::Cow;
+//!
+//! use atuin_common::command_str::{CommandCow, CommandStr, CommandString};
+//!
+//! let borrowed: CommandStr<'_> = CommandStr::new("cargo test");
+//! let owned: CommandString = borrowed.to_command_string();
+//! let cow: CommandCow<'_> = CommandCow::new(Cow::Borrowed("cargo test"));
+//!
+//! // The specialisations compare by command text, whatever they are stored in.
+//! assert_eq!(borrowed, owned);
+//! assert_eq!(owned, cow);
+//!
+//! // Borrow any of them back down to a `CommandStr`, or read the text directly.
+//! assert_eq!(owned.as_command_str(), borrowed);
+//! assert_eq!(cow.as_str(), "cargo test");
+//! ```
 
 use std::{
     borrow::{Borrow, Cow},
