@@ -758,9 +758,16 @@ impl Database for Sqlite {
             .fetch_all(&self.pool)
             .await?;
 
-        // Rank against the same characters SQL matched: the tokenizer drops spaces, so
-        // strip them here too rather than scoring them as part of the fuzzy subsequence.
-        let reorder_query: String = orig_query.split_whitespace().collect();
+        // Rank against the same characters SQL matched: drop spaces and operators.
+        let reorder_query: String = QueryTokenizer::new(orig_query)
+            .filter_map(|token| match token {
+                QueryToken::Match(term, _)
+                | QueryToken::MatchStart(term, _)
+                | QueryToken::MatchEnd(term, _)
+                | QueryToken::MatchFull(term, _) => Some(term),
+                QueryToken::Or | QueryToken::Regex(_) => None,
+            })
+            .collect();
         Ok(ordering::reorder_fuzzy(search_mode, &reorder_query, res))
     }
 
@@ -1777,6 +1784,58 @@ mod test {
             FilterMode::Global,
             "foo bar",
             vec!["foo bar", "foo qux bar"],
+        )
+        .await;
+    }
+
+    // Isolates the operator fix: the "$" survives whitespace stripping, so both rows score None
+    // and fall back to recency; only dropping operators ranks them by span and the tight match wins.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fuzzy_operator_true_span() {
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        let now = OffsetDateTime::now_utc();
+        let tight = "foo screen";
+        let loose = "foo x screen";
+
+        new_history_item_at(&mut db, tight, Some(now - time::Duration::days(5)))
+            .await
+            .unwrap();
+        new_history_item_at(&mut db, loose, Some(now - time::Duration::hours(1)))
+            .await
+            .unwrap();
+
+        let results =
+            assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "foo screen$", 2)
+                .await
+                .unwrap();
+        assert_eq!(
+            results[0].command,
+            tight,
+            "\"foo screen$\" should rank the tight match first, got: {:?}",
+            results.iter().map(|h| &h.command).collect::<Vec<_>>()
+        );
+    }
+
+    // Dropping operators from the ranking query must not disturb SQL matching: the end-anchor
+    // still selects only commands ending in the term.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fuzzy_operator_query_returns_expected() {
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        new_history_item(&mut db, "use screen").await.unwrap();
+        new_history_item(&mut db, "screenshot tool").await.unwrap();
+
+        assert_search_commands(
+            &db,
+            SearchMode::Fuzzy,
+            FilterMode::Global,
+            "screen$",
+            vec!["use screen"],
         )
         .await;
     }
