@@ -48,7 +48,7 @@ let _atuin_pre_execution = {||
         return
     }
     if not ($cmd | str starts-with $ATUIN_KEYBINDING_TOKEN) {
-        $env.ATUIN_HISTORY_ID = (atuin history start --no-logs -- $cmd | complete | get stdout | str trim)
+        $env.ATUIN_HISTORY_ID = (atuin history start --hook -- $cmd | complete | get stdout | str trim)
         _atuin_osc133_command_executed
     }
 }
@@ -61,10 +61,10 @@ let _atuin_pre_prompt = {||
     _atuin_osc133_command_finished $last_exit
     if (version).minor >= 104 or (version).major > 0 {
         job spawn {
-            ^atuin history end --no-logs $'--exit=($env.LAST_EXIT_CODE)' -- $env.ATUIN_HISTORY_ID | complete
+            ^atuin history end --hook $'--exit=($env.LAST_EXIT_CODE)' -- $env.ATUIN_HISTORY_ID | complete
         } | ignore
     } else {
-        do { atuin history end --no-logs $'--exit=($last_exit)' -- $env.ATUIN_HISTORY_ID } | complete
+        do { atuin history end --hook $'--exit=($last_exit)' -- $env.ATUIN_HISTORY_ID } | complete
     }
     hide-env -i ATUIN_HISTORY_ID
 }

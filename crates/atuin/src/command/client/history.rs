@@ -62,10 +62,10 @@ pub enum Cmd {
 
         command: Vec<String>,
 
-        /// Do not initialize logging. Used by shell hooks to avoid corrupting the terminal and to
-        /// minimize the amount of time the command takes to run.
+        /// Passed by shell hooks; this flag disables logging to avoid corrupting the terminal and
+        /// to minimize the amount of time the command takes to run.
         #[arg(long, hide = true)]
-        no_logs: bool,
+        hook: bool,
     },
 
     /// Finishes a new command in the history (adds time, exit code)
@@ -76,10 +76,10 @@ pub enum Cmd {
         #[arg(long, short)]
         duration: Option<u64>,
 
-        /// Do not initialize logging. Used by shell hooks to avoid corrupting the terminal and to
-        /// minimize the amount of time the command takes to run.
+        /// Passed by shell hooks; this flag disables logging to avoid corrupting the terminal and
+        /// to minimize the amount of time the command takes to run.
         #[arg(long, hide = true)]
-        no_logs: bool,
+        hook: bool,
     },
 
     /// Stream history events from the daemon as they are received
@@ -1235,7 +1235,8 @@ impl Cmd {
 
     fn logs_enabled(&self) -> bool {
         match self {
-            Self::Start { no_logs, .. } | Self::End { no_logs, .. } => !*no_logs,
+            // Enable logs if not invoked from a shell hook.
+            Self::Start { hook, .. } | Self::End { hook, .. } => !*hook,
             _ => true,
         }
     }

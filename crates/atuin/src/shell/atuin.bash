@@ -86,7 +86,7 @@ __atuin_preexec() {
     __atuin_update_preexec_backend
 
     local id
-    id=$(atuin history start --no-logs -- "$1" 2>/dev/null)
+    id=$(atuin history start --hook -- "$1" 2>/dev/null)
     export ATUIN_HISTORY_ID=$id
     [[ -n ${__atuin_skip_osc133:-} ]] || __atuin_osc133_command_executed
     __atuin_preexec_time=${EPOCHREALTIME-}
@@ -141,7 +141,7 @@ __atuin_precmd() {
     fi
 
     [[ -n ${__atuin_skip_osc133:-} ]] || __atuin_osc133_command_finished "$EXIT"
-    (atuin history end --no-logs --exit "$EXIT" ${duration:+"--duration=$duration"} -- "$ATUIN_HISTORY_ID" &) >/dev/null 2>&1
+    (atuin history end --hook --exit "$EXIT" ${duration:+"--duration=$duration"} -- "$ATUIN_HISTORY_ID" >/dev/null 2>&1 &)
     export ATUIN_HISTORY_ID=""
 }
 

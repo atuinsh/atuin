@@ -20,7 +20,7 @@ end
 
 function _atuin_preexec --on-event fish_preexec
     if not test -n "$fish_private_mode"
-        set -g ATUIN_HISTORY_ID (atuin history start --no-logs -- "$argv[1]" 2>/dev/null)
+        set -g ATUIN_HISTORY_ID (atuin history start --hook -- "$argv[1]" 2>/dev/null)
         _atuin_osc133_command_executed
     end
 end
@@ -30,7 +30,7 @@ function _atuin_postexec --on-event fish_postexec
 
     if test -n "$ATUIN_HISTORY_ID"
         _atuin_osc133_command_finished $s
-        atuin history end --no-logs --exit $s -- $ATUIN_HISTORY_ID &>/dev/null &
+        atuin history end --hook --exit $s -- $ATUIN_HISTORY_ID &>/dev/null &
         disown
     end
 

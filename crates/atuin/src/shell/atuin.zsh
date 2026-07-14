@@ -70,7 +70,7 @@ __atuin_osc133_wrap_prompt() {
 
 _atuin_preexec() {
     local id
-    id=$(atuin history start --no-logs -- "$1" 2>/dev/null)
+    id=$(atuin history start --hook -- "$1" 2>/dev/null)
     export ATUIN_HISTORY_ID="$id"
     __atuin_osc133_command_executed
     __atuin_preexec_time=${EPOCHREALTIME-}
@@ -89,7 +89,7 @@ _atuin_precmd() {
     fi
 
     __atuin_osc133_command_finished "$EXIT"
-    (atuin history end --no-logs --exit $EXIT ${duration:+--duration=$duration} -- $ATUIN_HISTORY_ID &) >/dev/null 2>&1
+    (atuin history end --hook --exit $EXIT ${duration:+--duration=$duration} -- $ATUIN_HISTORY_ID >/dev/null 2>&1 &)
     export ATUIN_HISTORY_ID=""
 }
 
