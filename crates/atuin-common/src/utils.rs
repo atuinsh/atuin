@@ -235,8 +235,6 @@ mod tests {
 
     use super::*;
 
-    use std::collections::HashSet;
-
     #[cfg(not(windows))]
     #[test]
     fn test_dirs() {
