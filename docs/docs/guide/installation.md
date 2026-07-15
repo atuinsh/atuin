@@ -148,8 +148,8 @@ If you don't wish to use the installer, the manual installation steps are as fol
 
     ```shell
     git clone https://github.com/atuinsh/atuin.git
-    cd atuin/crates/atuin
-    cargo install --path . --locked
+    cd atuin
+    cargo install --path crates/atuin --locked
     ```
 
 !!! warning "Please be advised"
