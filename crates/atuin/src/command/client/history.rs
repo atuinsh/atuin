@@ -3,7 +3,7 @@ use std::{
     io::{self, IsTerminal, Write},
     time::Duration,
 };
-#[cfg(any(test, not(feature = "daemon")))]
+#[cfg(test)]
 use std::path::PathBuf;
 
 use atuin_common::utils::{self, Escapable as _};
@@ -11,14 +11,10 @@ use clap::Subcommand;
 use eyre::{Context, Result, bail};
 use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 
-#[cfg(feature = "daemon")]
 use super::daemon as daemon_cmd;
-#[cfg(feature = "daemon")]
 use colored::Colorize;
-#[cfg(feature = "daemon")]
 use serde::Serialize;
 
-#[cfg(feature = "daemon")]
 use atuin_daemon::history::{HistoryEventKind, TailHistoryReply};
 
 use atuin_client::{
@@ -34,22 +30,15 @@ use atuin_client::{
 
 // `Sqlite`/`SqliteStore` are opened directly only by the no-daemon build and by
 // tests; the daemon build reaches storage through the gRPC proxy.
-#[cfg(any(test, not(feature = "daemon")))]
+#[cfg(test)]
 use atuin_client::database::Sqlite;
-#[cfg(any(test, not(feature = "daemon")))]
+#[cfg(test)]
 use atuin_client::record::sqlite_store::SqliteStore;
-#[cfg(feature = "daemon")]
 use atuin_client::record::store::ArcStore;
-
-#[cfg(all(feature = "sync", not(feature = "daemon")))]
-use atuin_client::{record, sync};
 
 use time::{OffsetDateTime, macros::format_description};
 use tracing::debug;
-#[cfg(not(feature = "daemon"))]
-use tracing::warn;
 
-#[cfg(feature = "daemon")]
 use super::daemon;
 use super::search::format_duration_into;
 
@@ -422,43 +411,6 @@ fn normalize_command_for_storage<'a>(command: &'a str, settings: &Settings) -> &
     }
 }
 
-#[cfg(not(feature = "daemon"))]
-async fn handle_start(
-    db: &impl Database,
-    settings: &Settings,
-    command: &str,
-    author: Option<&str>,
-    intent: Option<&str>,
-) -> Result<Option<String>> {
-    // It's better for atuin to silently fail here and attempt to
-    // store whatever is ran, than to throw an error to the terminal
-    let cwd = utils::get_current_dir();
-    let command = normalize_command_for_storage(command, settings);
-
-    let mut h: History = History::capture()
-        .timestamp(OffsetDateTime::now_utc())
-        .command(command)
-        .cwd(cwd)
-        .build()
-        .into();
-    apply_start_metadata(&mut h, author, intent);
-
-    if !h.should_save(settings) {
-        return Ok(None);
-    }
-
-    let id = h.id.0.clone();
-
-    // Silently ignore database errors to avoid breaking the shell
-    // This is important when disk is full or database is locked
-    if let Err(e) = db.save(&h).await {
-        debug!("failed to save history: {e}");
-    }
-
-    Ok(Some(id))
-}
-
-#[cfg(feature = "daemon")]
 async fn handle_daemon_start(
     settings: &Settings,
     command: &str,
@@ -495,76 +447,6 @@ async fn handle_daemon_start(
     Ok(Some(resp))
 }
 
-#[cfg(not(feature = "daemon"))]
-#[allow(unused_variables)]
-async fn handle_end(
-    db: &impl Database,
-    store: SqliteStore,
-    history_store: HistoryStore,
-    settings: &Settings,
-    id: &str,
-    exit: i64,
-    duration: Option<u64>,
-) -> Result<()> {
-    if id.trim() == "" {
-        return Ok(());
-    }
-
-    let Some(mut h) = db.load(id).await? else {
-        warn!("history entry is missing");
-        return Ok(());
-    };
-
-    if h.duration > 0 {
-        debug!("cannot end history - already has duration");
-
-        // returning OK as this can occur if someone Ctrl-c a prompt
-        return Ok(());
-    }
-
-    if !settings.store_failed && exit > 0 {
-        debug!("history has non-zero exit code, and store_failed is false");
-
-        // the history has already been inserted half complete. remove it
-        db.delete(h).await?;
-
-        return Ok(());
-    }
-
-    h.exit = exit;
-    h.duration = match duration {
-        Some(value) => i64::try_from(value).context("command took over 292 years")?,
-        None => i64::try_from((OffsetDateTime::now_utc() - h.timestamp).whole_nanoseconds())
-            .context("command took over 292 years")?,
-    };
-
-    db.update(&h).await?;
-    history_store.push(h).await?;
-
-    if settings.should_sync().await? {
-        #[cfg(feature = "sync")]
-        {
-            if settings.sync.records {
-                let (_, downloaded) =
-                    record::sync::sync(settings, &store, &history_store.encryption_key).await?;
-                Settings::save_sync_time().await?;
-
-                crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
-            } else {
-                debug!("running periodic background sync");
-                sync::sync(settings, false, db).await?;
-            }
-        }
-        #[cfg(not(feature = "sync"))]
-        debug!("not compiled with sync support");
-    } else {
-        debug!("sync disabled! not syncing");
-    }
-
-    Ok(())
-}
-
-#[cfg(feature = "daemon")]
 async fn handle_daemon_end(
     settings: &Settings,
     id: &str,
@@ -588,16 +470,7 @@ pub(super) async fn start_history_entry(
     intent: Option<&str>,
 ) -> Result<Option<String>> {
     // The daemon is the sole owner of storage; route the write through it.
-    #[cfg(feature = "daemon")]
-    {
-        handle_daemon_start(settings, command, author, intent).await
-    }
-    #[cfg(not(feature = "daemon"))]
-    {
-        let db_path = PathBuf::from(settings.db_path.as_str());
-        let db = Sqlite::new(db_path, settings.local_timeout).await?;
-        handle_start(&db, settings, command, author, intent).await
-    }
+    handle_daemon_start(settings, command, author, intent).await
 }
 
 pub(super) async fn end_history_entry(
@@ -607,50 +480,27 @@ pub(super) async fn end_history_entry(
     duration: Option<u64>,
 ) -> Result<()> {
     // The daemon is the sole owner of storage; route the write through it.
-    #[cfg(feature = "daemon")]
-    {
-        handle_daemon_end(settings, id, exit, duration).await
-    }
-    #[cfg(not(feature = "daemon"))]
-    {
-        let db_path = PathBuf::from(settings.db_path.as_str());
-        let record_store_path = PathBuf::from(settings.record_store_path.as_str());
-
-        let db = Sqlite::new(db_path, settings.local_timeout).await?;
-        let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
-
-        let encryption_key: [u8; 32] = encryption::load_key(settings)
-            .context("could not load encryption key")?
-            .into();
-        let host_id = Settings::host_id().await?;
-        let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
-
-        handle_end(&db, store, history_store, settings, id, exit, duration).await
-    }
+    handle_daemon_end(settings, id, exit, duration).await
 }
 
-#[cfg(feature = "daemon")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TailKind {
     Started,
     Ended,
 }
 
-#[cfg(feature = "daemon")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TailEvent {
     kind: TailKind,
     history: History,
 }
 
-#[cfg(feature = "daemon")]
 #[derive(Serialize)]
 struct TailJsonEvent<'a> {
     event: &'static str,
     history: TailJsonHistory<'a>,
 }
 
-#[cfg(feature = "daemon")]
 #[derive(Serialize)]
 struct TailJsonHistory<'a> {
     id: &'a str,
@@ -677,7 +527,6 @@ struct TailJsonHistory<'a> {
     finished_at: Option<String>,
 }
 
-#[cfg(feature = "daemon")]
 impl TailEvent {
     fn from_proto(reply: TailHistoryReply) -> Result<Self> {
         let history = reply
@@ -863,7 +712,6 @@ impl TailEvent {
     }
 }
 
-#[cfg(feature = "daemon")]
 impl TailKind {
     const fn as_str(self) -> &'static str {
         match self {
@@ -881,12 +729,10 @@ impl TailKind {
     }
 }
 
-#[cfg(feature = "daemon")]
 fn format_history_time(timestamp: OffsetDateTime, tz: Timezone) -> Result<String> {
     Ok(timestamp.to_offset(tz.0).format(TIME_FMT)?)
 }
 
-#[cfg(feature = "daemon")]
 fn format_duration_ns(duration_ns: i64) -> String {
     struct F(Duration);
     impl Display for F {
@@ -898,7 +744,6 @@ fn format_duration_ns(duration_ns: i64) -> String {
     F(Duration::from_nanos(duration_ns.max(0).cast_unsigned())).to_string()
 }
 
-#[cfg(feature = "daemon")]
 fn push_pretty_field(out: &mut String, label: &str, value: &str) {
     out.push_str("  ");
     let label = format!("{label}:");
@@ -920,7 +765,6 @@ fn push_pretty_field(out: &mut String, label: &str, value: &str) {
     }
 }
 
-#[cfg(feature = "daemon")]
 fn normalize_optional_field(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -931,7 +775,6 @@ fn normalize_optional_field(value: &str) -> Option<String> {
 }
 
 impl Cmd {
-    #[cfg(feature = "daemon")]
     async fn handle_tail(settings: &Settings) -> Result<()> {
         let tty = std::io::stdout().is_terminal();
         let mut client = daemon::tail_client(settings).await?;
@@ -1049,7 +892,6 @@ impl Cmd {
                 }
             }
 
-            #[cfg(feature = "daemon")]
             daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryPruned).await;
         }
         Ok(())
@@ -1097,7 +939,6 @@ impl Cmd {
             let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
-            #[cfg(feature = "daemon")]
             let ids = matches.iter().map(|h| h.id.clone()).collect::<Vec<_>>();
 
             for entry in matches {
@@ -1110,7 +951,6 @@ impl Cmd {
                 }
             }
 
-            #[cfg(feature = "daemon")]
             daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryDeleted { ids })
                 .await;
         }
@@ -1144,21 +984,12 @@ impl Cmd {
             Self::End { id, exit, duration } => {
                 end_history_entry(settings, &id, exit, duration).await
             }
-            Self::Tail => {
-                #[cfg(feature = "daemon")]
-                {
-                    return Self::handle_tail(settings).await;
-                }
-
-                #[cfg(not(feature = "daemon"))]
-                bail!("`atuin history tail` requires Atuin to be built with the `daemon` feature");
-            }
+            Self::Tail => Self::handle_tail(settings).await,
             cmd => {
                 let context = current_context().await?;
 
                 // History DB and record store both go through the daemon (sole
                 // storage owner).
-                #[cfg(feature = "daemon")]
                 let (db, store): (Box<dyn Database>, ArcStore) = {
                     super::daemon::ensure_daemon_running(settings).await?;
                     (
@@ -1166,15 +997,6 @@ impl Cmd {
                         std::sync::Arc::new(
                             atuin_daemon::store_proxy::DaemonStore::from_settings(settings).await?,
                         ),
-                    )
-                };
-                #[cfg(not(feature = "daemon"))]
-                let (db, store) = {
-                    let db_path = PathBuf::from(settings.db_path.as_str());
-                    let record_store_path = PathBuf::from(settings.record_store_path.as_str());
-                    (
-                        Sqlite::new(db_path, settings.local_timeout).await?,
-                        SqliteStore::new(record_store_path, settings.local_timeout).await?,
                     )
                 };
 
@@ -1260,7 +1082,6 @@ impl Cmd {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "daemon")]
     use time::macros::datetime;
 
     use super::*;
@@ -1287,46 +1108,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "daemon"))]
-    #[tokio::test]
-    async fn handle_start_saves_trimmed_command() {
-        let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
-        let settings = Settings::utc();
-
-        handle_start(&db, &settings, "ls   \t", None, None)
-            .await
-            .unwrap();
-
-        let history = db
-            .before(OffsetDateTime::now_utc() + time::Duration::SECOND, 1)
-            .await
-            .unwrap()
-            .pop()
-            .unwrap();
-        assert_eq!(history.command, "ls");
-    }
-
-    #[cfg(not(feature = "daemon"))]
-    #[tokio::test]
-    async fn handle_start_can_keep_trailing_whitespace() {
-        let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
-        let settings = Settings {
-            strip_trailing_whitespace: false,
-            ..Settings::utc()
-        };
-
-        handle_start(&db, &settings, "ls   \t", None, None)
-            .await
-            .unwrap();
-
-        let history = db
-            .before(OffsetDateTime::now_utc() + time::Duration::SECOND, 1)
-            .await
-            .unwrap()
-            .pop()
-            .unwrap();
-        assert_eq!(history.command, "ls   \t");
-    }
 
     #[test]
     fn test_format_string_no_panic() {
@@ -1344,7 +1125,6 @@ mod tests {
         assert!(std::panic::catch_unwind(|| parse_fmt("{time} - {command}")).is_ok());
     }
 
-    #[cfg(feature = "daemon")]
     fn sample_tail_event(kind: TailKind) -> TailEvent {
         TailEvent {
             kind,
@@ -1364,7 +1144,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "daemon")]
     #[test]
     fn test_tail_json_output_contains_history_fields() {
         let json = sample_tail_event(TailKind::Ended)
@@ -1379,7 +1158,6 @@ mod tests {
         assert!(value.get("record").is_none());
     }
 
-    #[cfg(feature = "daemon")]
     #[test]
     fn test_tail_pretty_output_shows_pending_fields_for_started_events() {
         let rendered = sample_tail_event(TailKind::Started)

@@ -14,7 +14,6 @@ repository = { workspace = true }
 
 [features]
 default = []
-daemon = []
 tree-sitter = ["dep:tree-sitter-lib", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
 
 [dependencies]

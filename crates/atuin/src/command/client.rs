@@ -5,8 +5,6 @@ use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
 use atuin_client::{database::Database, settings::Settings, theme};
-#[cfg(not(feature = "daemon"))]
-use atuin_client::record::sqlite_store::SqliteStore;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{
     Layer, filter::EnvFilter, filter::LevelFilter, fmt, fmt::format::FmtSpan, prelude::*,
@@ -46,7 +44,6 @@ mod sync;
 #[cfg(feature = "sync")]
 mod account;
 
-#[cfg(feature = "daemon")]
 mod daemon;
 
 mod config;
@@ -130,7 +127,6 @@ pub enum Cmd {
     Wrapped { year: Option<i32> },
 
     /// *Experimental* Manage the background daemon
-    #[cfg(feature = "daemon")]
     #[command()]
     Daemon(daemon::Cmd),
 
@@ -156,7 +152,7 @@ impl Cmd {
     pub fn run(self) -> Result<()> {
         // Daemonize before creating the async runtime – fork() inside a live
         // tokio runtime corrupts its internal state.
-        #[cfg(all(unix, feature = "daemon"))]
+        #[cfg(unix)]
         if let Self::Daemon(ref cmd) = self
             && cmd.should_daemonize()
         {
@@ -205,18 +201,10 @@ impl Cmd {
         let use_search_logging = is_interactive_search && settings.logs.search_enabled();
 
         // Use file-based logging for daemon
-        #[cfg(feature = "daemon")]
         let use_daemon_logging = matches!(&self, Self::Daemon(_)) && settings.logs.daemon_enabled();
 
-        #[cfg(not(feature = "daemon"))]
-        let use_daemon_logging = false;
-
         // Check if daemon should also log to console
-        #[cfg(feature = "daemon")]
         let daemon_show_logs = matches!(&self, Self::Daemon(cmd) if cmd.show_logs());
-
-        #[cfg(not(feature = "daemon"))]
-        let daemon_show_logs = false;
 
         // Set up span timing JSON logs if ATUIN_SPAN is set
         let span_path = std::env::var("ATUIN_SPAN").ok().map(|p| {
@@ -423,7 +411,6 @@ impl Cmd {
                 wrapped::run(year, &db, &settings, store, theme).await
             }
 
-            #[cfg(feature = "daemon")]
             Self::Daemon(cmd) => cmd.run(settings).await,
 
             Self::History(_) | Self::Hook(_) | Self::Init(_) | Self::Doctor | Self::Config(_) => {
@@ -433,7 +420,6 @@ impl Cmd {
             #[cfg(feature = "ai")]
             Self::Ai(cli) => {
                 // The AI TUI reaches history through the daemon; ensure it is up.
-                #[cfg(feature = "daemon")]
                 daemon::ensure_daemon_running(&settings).await?;
                 atuin_ai::commands::run(cli, &settings).await
             }
@@ -453,7 +439,6 @@ impl Cmd {
 /// owner of on-disk storage: ensure it is running and return a gRPC-backed
 /// proxy that implements `Database`. Without the feature (a minimal build with
 /// no daemon) open the local `SQLite` database directly.
-#[cfg(feature = "daemon")]
 async fn history_database(settings: &Settings) -> Result<Box<dyn Database>> {
     daemon::ensure_daemon_running(settings).await?;
     Ok(Box::new(
@@ -461,29 +446,11 @@ async fn history_database(settings: &Settings) -> Result<Box<dyn Database>> {
     ))
 }
 
-#[cfg(not(feature = "daemon"))]
-async fn history_database(settings: &Settings) -> Result<Box<dyn Database>> {
-    let db_path = PathBuf::from(settings.db_path.as_str());
-    Ok(Box::new(
-        atuin_client::database::Sqlite::new(db_path, settings.local_timeout).await?,
-    ))
-}
-
-/// Obtain a handle to the record store, mirroring [`history_database`]: with the
-/// `daemon` feature it is a gRPC-backed `DaemonStore` (the daemon is the sole
-/// owner of the record store); without it, the local `SqliteStore`.
-#[cfg(feature = "daemon")]
+/// Obtain a handle to the record store, mirroring [`history_database`]: a
+/// gRPC-backed `DaemonStore` (the daemon is the sole owner of the record store).
 async fn record_store(settings: &Settings) -> Result<atuin_client::record::store::ArcStore> {
     daemon::ensure_daemon_running(settings).await?;
     Ok(std::sync::Arc::new(
         atuin_daemon::store_proxy::DaemonStore::from_settings(settings).await?,
-    ))
-}
-
-#[cfg(not(feature = "daemon"))]
-async fn record_store(settings: &Settings) -> Result<atuin_client::record::store::ArcStore> {
-    let record_store_path = PathBuf::from(settings.record_store_path.as_str());
-    Ok(std::sync::Arc::new(
-        SqliteStore::new(record_store_path, settings.local_timeout).await?,
     ))
 }

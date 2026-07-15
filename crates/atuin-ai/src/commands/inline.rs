@@ -1,5 +1,3 @@
-#[cfg(not(feature = "daemon"))]
-use std::path::PathBuf;
 use std::sync::mpsc;
 
 use crate::context::{AppContext, ClientContext};
@@ -10,8 +8,6 @@ use crate::session::{LocalSessionService, SessionManager, SessionService};
 use crate::tui::events::AiTuiEvent;
 use crate::tui::state::ConversationEvent;
 use crate::tui::view::ai_view;
-#[cfg(not(feature = "daemon"))]
-use atuin_client::database::Sqlite;
 use eye_declare::{Application, CtrlCBehavior};
 use eyre::{Context as _, Result, bail};
 use tracing::{debug, info};
@@ -64,20 +60,10 @@ pub(crate) async fn run(
 
     // History access goes through the daemon (sole storage owner). The caller
     // (the atuin dispatcher) has already ensured the daemon is running.
-    #[cfg(feature = "daemon")]
     let history_db: std::sync::Arc<dyn atuin_client::database::Database> = std::sync::Arc::new(
         atuin_daemon::proxy::DaemonDatabase::from_settings(settings)
             .await
             .context("failed to connect to the daemon for AI")?,
-    );
-    #[cfg(not(feature = "daemon"))]
-    let history_db: std::sync::Arc<dyn atuin_client::database::Database> = std::sync::Arc::new(
-        Sqlite::new(
-            PathBuf::from(settings.db_path.as_str()),
-            settings.local_timeout,
-        )
-        .await
-        .context("failed to open history database for AI")?,
     );
 
     // Support both legacy [ai] send_cwd and new [ai.opening] send_cwd

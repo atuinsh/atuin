@@ -50,7 +50,7 @@ impl std::fmt::Debug for AppContext {
 }
 
 pub(crate) fn history_output_capability_available(daemon_enabled: bool) -> bool {
-    cfg!(feature = "daemon") && daemon_enabled
+    daemon_enabled
 }
 
 impl AppContext {
