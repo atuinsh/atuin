@@ -403,7 +403,9 @@ dependencies = [
  "time",
  "tracing",
  "tracing-subscriber",
- "typed-builder",
+ "typed-builder 0.18.2",
+ "unicode-segmentation",
+ "unicode-width 0.2.2",
  "uuid",
 ]
 
