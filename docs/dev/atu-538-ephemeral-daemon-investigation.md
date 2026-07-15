@@ -255,14 +255,28 @@ Done for the record store:
   over `Record<EncryptedData>`) and a client-side **`DaemonStore` proxy**,
   registered in the daemon server + boot. Records stay encrypted on the wire.
 
-Remaining (mechanical, given the above):
-- Route the CLI's record-store construction to a `DaemonStore`-backed
-  `ArcStore` (a `record_store()` helper like `history_database()`), updating the
-  ~8 command signatures that take `SqliteStore` and the direct-construction
-  sites in `history`/`search`/`sync`/`store`/`account`.
-- **Part B:** make `atuin-daemon` a non-optional dependency, remove the
-  `daemon` feature and every `#[cfg(not(feature = "daemon"))]` arm — physically
-  deleting the daemonless code.
+**Record store — routing DONE.** A `record_store()` helper (mirroring
+`history_database()`) returns a `DaemonStore`-backed `ArcStore` under the daemon
+feature; all ~8 dispatch commands and their subcommands (`sync`, `account`/
+`login` rekey, `kv`, `dotfiles alias/var`, `store rebuild/rekey/verify/purge/
+push/pull`, `scripts`, `wrapped`), the `history` subcommands, and `atuin init`'s
+dotfiles read now take an `ArcStore`. `crate::sync::build` is generic over
+`Store`. The product build has **zero** direct storage access in the CLI —
+`SqliteStore::new` survives only in the no-daemon build and the `daemon`
+subcommand (the owner). Verified: `kv set/get`, `store status`, `dotfiles`,
+`search`, history writes all served by the daemon.
+
+**The functional cutover is complete:** in the shipped build the daemon is the
+sole owner of both the history DB and the record store; the CLI is a pure gRPC
+client. The daemonless code is excluded from the product build.
+
+**Remaining — Part B (mechanical): physically delete the daemonless code.**
+Make `atuin-daemon` non-optional and remove the `daemon` feature plus all 71
+`#[cfg(feature = "daemon")]` / `#[cfg(not(feature = "daemon"))]` gates across
+`atuin` + `atuin-ai` (un-gate the daemon arms, delete the `not(daemon)` arms
+incl. `handle_start`/`handle_end` and the no-daemon `history_database`/
+`record_store` helpers). This is a wide sweep that drops the `--no-default-
+features` build; it must be done as one atomic green change.
 
 To *physically delete* the last daemonless code (the `cfg(not(daemon))` arms),
 promote `daemon` from an optional feature to a hard dependency — a Cargo change
