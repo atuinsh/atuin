@@ -105,7 +105,6 @@ plugins:
           - integrations.md: Integrations with zsh-autosuggestions, zsh-vi-mode, ble.sh, and mcfly.
           - faq.md: Frequently asked questions - IDE terminals, history filtering, up-arrow, uninstalling.
           - uninstall.md: How to uninstall Atuin and remove all data.
-          - sync-v2.md: Upgrading from sync v1 to v2 - faster, more reliable, less bandwidth.
 
 markdown_extensions:
   - pymdownx.highlight:
@@ -174,4 +173,3 @@ nav:
   - Integrations: integrations.md
   - FAQ: faq.md
   - Uninstall: uninstall.md
-  - Sync v2: sync-v2.md

@@ -250,7 +250,6 @@ impl SystemInfo {
 #[derive(Debug, Serialize)]
 struct SyncInfo {
     pub auth_state: String,
-    pub records: bool,
     pub auto_sync: bool,
 
     pub last_sync: String,
@@ -289,7 +288,6 @@ impl SyncInfo {
         Self {
             auth_state,
             auto_sync: settings.auto_sync,
-            records: settings.sync.records,
             last_sync: Settings::last_sync()
                 .await
                 .map_or_else(|_| "no last sync".to_string(), |v| v.to_string()),
