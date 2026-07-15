@@ -25,12 +25,10 @@
 //! let owned: CommandString = borrowed.to_command_string();
 //! let cow: CommandStrCow<'_> = CommandStrCow::new(Cow::Borrowed("cargo test"));
 //!
-//! // The specialisations compare by command text, whatever they are stored in.
-//! assert_eq!(borrowed, owned);
-//! assert_eq!(owned, cow);
-//!
-//! // Borrow any of them back down to a `CommandStr`, or read the text directly.
+//! // Commands compare by text within a storage; bring one to another's storage
+//! // (or read `.as_str()`) to compare across storages.
 //! assert_eq!(owned.as_command_str(), borrowed);
+//! assert_eq!(cow.as_str(), owned.as_str());
 //! assert_eq!(cow.as_str(), "cargo test");
 //!
 //! // Validated construction rejects a NUL byte but accepts multi-line commands.
@@ -38,13 +36,7 @@
 //! assert!(CommandString::try_from("oops\0nul").is_err());
 //! ```
 
-use std::{
-    borrow::{Borrow, Cow},
-    cmp::Ordering,
-    fmt,
-    hash::{Hash, Hasher},
-    ops::Deref,
-};
+use std::borrow::{Borrow, Cow};
 
 use serde::{Deserialize, Serialize};
 
@@ -52,10 +44,33 @@ use serde::{Deserialize, Serialize};
 ///
 /// Use the [`CommandStr`], [`CommandString`] and [`CommandStrCow`] aliases rather than
 /// naming this type directly.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+///
+/// The comparison and hashing derives are per-storage: two commands compare and
+/// hash by their text within one storage, but a [`CommandStr`] and a
+/// [`CommandString`] are different types and do not compare directly — bring one
+/// to the other's storage (e.g. [`Command::as_command_str`]) first.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    derive_more::AsRef,
+    derive_more::Deref,
+    derive_more::Display,
+    derive_more::From,
+)]
 #[serde(transparent)]
 #[repr(transparent)]
-pub struct Command<S>(S);
+#[deref(forward)]
+#[display("{_0}")]
+pub struct Command<S>(#[as_ref(str)] S);
 
 /// A borrowed command. Plays the role of `&str`.
 pub type CommandStr<'a> = Command<&'a str>;
@@ -125,61 +140,12 @@ impl<S: AsRef<str>> Command<S> {
     }
 }
 
-impl<S: AsRef<str>> AsRef<str> for Command<S> {
-    fn as_ref(&self) -> &str {
-        self.0.as_ref()
-    }
-}
-
+/// `Borrow<str>` is kept in step with the derived `Eq`/`Ord`/`Hash` (all of which
+/// reduce to the underlying `str`), so a `HashMap<CommandString, _>` can be probed
+/// with a plain `&str`. `derive_more` has no `Borrow` derive, so this is written out.
 impl<S: AsRef<str>> Borrow<str> for Command<S> {
     fn borrow(&self) -> &str {
         self.0.as_ref()
-    }
-}
-
-impl<S: AsRef<str>> Deref for Command<S> {
-    type Target = str;
-
-    fn deref(&self) -> &str {
-        self.0.as_ref()
-    }
-}
-
-impl<S: AsRef<str>, T: AsRef<str>> PartialEq<Command<T>> for Command<S> {
-    fn eq(&self, other: &Command<T>) -> bool {
-        self.as_str() == other.as_str()
-    }
-}
-
-impl<S: AsRef<str>> Eq for Command<S> {}
-
-impl<S: AsRef<str>, T: AsRef<str>> PartialOrd<Command<T>> for Command<S> {
-    fn partial_cmp(&self, other: &Command<T>) -> Option<Ordering> {
-        Some(self.as_str().cmp(other.as_str()))
-    }
-}
-
-impl<S: AsRef<str>> Ord for Command<S> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.as_str().cmp(other.as_str())
-    }
-}
-
-impl<S: AsRef<str>> Hash for Command<S> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.as_str().hash(state);
-    }
-}
-
-impl<S: AsRef<str>> fmt::Display for Command<S> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad(self.as_str())
-    }
-}
-
-impl<S> From<S> for Command<S> {
-    fn from(inner: S) -> Self {
-        Self(inner)
     }
 }
 
@@ -308,15 +274,17 @@ mod tests {
     }
 
     #[test]
-    fn equality_is_content_based_across_storages() {
-        let borrowed = CommandStr::new("ls -la");
-        let owned = CommandString::new(String::from("ls -la"));
-        let cow = CommandStrCow::new(Cow::Borrowed("ls -la"));
+    fn equality_is_content_based_within_a_storage() {
+        assert_eq!(CommandStr::new("ls -la"), CommandStr::new("ls -la"));
+        assert_ne!(CommandStr::new("ls -la"), CommandStr::new("ls"));
+        assert_eq!(
+            CommandString::new(String::from("ls -la")),
+            CommandString::new(String::from("ls -la"))
+        );
 
-        assert_eq!(borrowed, owned);
-        assert_eq!(owned, cow);
-        assert_eq!(cow, borrowed);
-        assert_ne!(borrowed, CommandStr::new("ls"));
+        // Different storages are different types; compare via a common storage.
+        let owned = CommandString::new(String::from("ls -la"));
+        assert_eq!(owned.as_command_str(), CommandStr::new("ls -la"));
     }
 
     #[test]
@@ -360,8 +328,9 @@ mod tests {
         let owned: CommandString = String::from("ls").into();
         let cow: CommandStrCow<'_> = Cow::Borrowed("ls").into();
 
-        assert_eq!(borrowed, owned);
-        assert_eq!(owned, cow);
+        assert_eq!(borrowed.as_str(), "ls");
+        assert_eq!(owned.as_str(), "ls");
+        assert_eq!(cow.as_str(), "ls");
     }
 
     #[test]
