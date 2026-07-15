@@ -29,6 +29,7 @@ pub(crate) struct AppContext {
     pub git_root: Option<PathBuf>,
     pub capabilities: AiCapabilities,
     pub daemon_enabled: bool,
+    pub yolo: bool,
 }
 
 pub(crate) fn history_output_capability_available(daemon_enabled: bool) -> bool {

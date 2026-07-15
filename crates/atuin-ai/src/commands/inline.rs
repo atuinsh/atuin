@@ -90,6 +90,7 @@ pub(crate) async fn run(
         git_root,
         capabilities: settings.ai.capabilities.clone(),
         daemon_enabled: settings.daemon.enabled,
+        yolo: settings.ai.yolo,
     };
 
     let action = run_inline_tui(ctx, initial_command, settings).await?;

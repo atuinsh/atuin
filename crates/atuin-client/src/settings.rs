@@ -668,6 +668,10 @@ pub struct Ai {
     /// The AI model to use for AI chats, based on the Atuin AI model alias.
     pub model: Option<String>,
 
+    /// Whether to enable YOLO mode (skips all permission checks)
+    #[serde(default)]
+    pub yolo: bool,
+
     /// Deprecated: use opening.send_cwd instead. Kept for backwards compatibility.
     #[serde(default)]
     pub send_cwd: Option<bool>,

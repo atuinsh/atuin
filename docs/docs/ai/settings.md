@@ -50,6 +50,14 @@ How the client talks to the configured `endpoint`. One of:
 
 With the default of `"auto"`, pointing `endpoint` at your own server just works: set `api_token` if your server requires one.
 
+### yolo
+
+Default: `false`
+
+Enables YOLO mode, which automatically allows all permission checks. **Use this setting with caution.**
+
+This setting does _not_ enable any capabilities; it simply bypasses any permission checks.
+
 ## Capabilities
 
 Settings that control what capabilities are sent to the LLM, which the LLM uses to understand what features the client has available. These are specified under `[ai.capabilities]`.
