@@ -190,6 +190,7 @@ impl KvStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atuin_client::record::sqlite_store::SqliteStore;
 
     async fn setup() -> Result<KvStore> {
         let record_store = SqliteStore::new("sqlite::memory:", 1.0).await.unwrap();
