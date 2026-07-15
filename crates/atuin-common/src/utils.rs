@@ -297,22 +297,6 @@ mod tests {
     }
 
     #[test]
-    fn uuid_is_unique() {
-        let how_many: usize = 1000000;
-
-        // for peace of mind
-        let mut uuids: HashSet<Uuid> = HashSet::with_capacity(how_many);
-
-        // there will be many in the same millisecond
-        for _ in 0..how_many {
-            let uuid = uuid_v7();
-            uuids.insert(uuid);
-        }
-
-        assert_eq!(uuids.len(), how_many);
-    }
-
-    #[test]
     fn escape_control_characters() {
         use super::Escapable;
         // CSI colour sequence

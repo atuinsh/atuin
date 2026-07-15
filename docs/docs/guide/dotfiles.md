@@ -29,15 +29,6 @@ enabled = true
 
 In a later release, this will be enabled by default.
 
-Note: If you have not yet set up sync v2, please also add
-
-```
-[sync]
-records = true
-```
-
-to the same config file.
-
 ## Usage
 
 ### Aliases

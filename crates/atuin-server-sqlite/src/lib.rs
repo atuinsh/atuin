@@ -3,17 +3,15 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 use atuin_server_database::{
-    Database, DbError, DbResult, DbSettings, into_utc,
-    models::{History, NewHistory, NewSession, NewUser, Session, User},
+    Database, DbError, DbResult, DbSettings,
+    models::{NewSession, NewUser, Session, User},
 };
-use futures_util::TryStreamExt;
 use sqlx::{
-    Row,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
     types::Uuid,
 };
 use tracing::instrument;
-use wrappers::{DbHistory, DbRecord, DbSession, DbUser};
+use wrappers::{DbRecord, DbSession, DbUser};
 
 mod wrappers;
 
@@ -138,28 +136,6 @@ impl Database for Sqlite {
     }
 
     #[instrument(skip_all)]
-    async fn count_history(&self, user: &User) -> DbResult<i64> {
-        // The cache is new, and the user might not yet have a cache value.
-        // They will have one as soon as they post up some new history, but handle that
-        // edge case.
-
-        let res: (i64,) = sqlx::query_as(
-            "select count(1) from history
-            where user_id = $1",
-        )
-        .bind(user.id)
-        .fetch_one(&self.pool)
-        .await?;
-
-        Ok(res.0)
-    }
-
-    #[instrument(skip_all)]
-    async fn count_history_cached(&self, _user: &User) -> DbResult<i64> {
-        Err(DbError::NotFound)
-    }
-
-    #[instrument(skip_all)]
     async fn delete_user(&self, u: &User) -> DbResult<()> {
         sqlx::query("delete from sessions where user_id = $1")
             .bind(u.id)
@@ -177,43 +153,6 @@ impl Database for Sqlite {
             .await?;
 
         Ok(())
-    }
-
-    async fn delete_history(&self, user: &User, id: String) -> DbResult<()> {
-        sqlx::query(
-            "update history
-            set deleted_at = $3
-            where user_id = $1
-            and client_id = $2
-            and deleted_at is null", // don't just keep setting it
-        )
-        .bind(user.id)
-        .bind(id)
-        .bind(time::OffsetDateTime::now_utc())
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    async fn deleted_history(&self, user: &User) -> DbResult<Vec<String>> {
-        // The cache is new, and the user might not yet have a cache value.
-        // They will have one as soon as they post up some new history, but handle that
-        // edge case.
-
-        let res = sqlx::query(
-            "select client_id from history 
-            where user_id = $1
-            and deleted_at is not null",
-        )
-        .bind(user.id)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let res = res.iter().map(|row| row.get("client_id")).collect();
-
-        Ok(res)
     }
 
     async fn delete_store(&self, user: &User) -> DbResult<()> {
@@ -329,102 +268,5 @@ impl Database for Sqlite {
         }
 
         Ok(status)
-    }
-
-    #[instrument(skip_all)]
-    async fn count_history_range(
-        &self,
-        user: &User,
-        range: std::ops::Range<time::OffsetDateTime>,
-    ) -> DbResult<i64> {
-        let res: (i64,) = sqlx::query_as(
-            "select count(1) from history
-            where user_id = $1
-            and timestamp >= $2::date
-            and timestamp < $3::date",
-        )
-        .bind(user.id)
-        .bind(into_utc(range.start))
-        .bind(into_utc(range.end))
-        .fetch_one(&self.pool)
-        .await?;
-
-        Ok(res.0)
-    }
-
-    #[instrument(skip_all)]
-    async fn list_history(
-        &self,
-        user: &User,
-        created_after: time::OffsetDateTime,
-        since: time::OffsetDateTime,
-        host: &str,
-        page_size: i64,
-    ) -> DbResult<Vec<History>> {
-        let res = sqlx::query_as(
-            "select id, client_id, user_id, hostname, timestamp, data, created_at from history
-            where user_id = $1
-            and hostname != $2
-            and created_at >= $3
-            and timestamp >= $4
-            order by timestamp asc
-            limit $5",
-        )
-        .bind(user.id)
-        .bind(host)
-        .bind(into_utc(created_after))
-        .bind(into_utc(since))
-        .bind(page_size)
-        .fetch(&self.pool)
-        .map_ok(|DbHistory(h)| h)
-        .try_collect()
-        .await?;
-
-        Ok(res)
-    }
-
-    #[instrument(skip_all)]
-    async fn add_history(&self, history: &[NewHistory]) -> DbResult<()> {
-        let mut tx = self.pool.begin().await?;
-
-        for i in history {
-            let client_id: &str = &i.client_id;
-            let hostname: &str = &i.hostname;
-            let data: &str = &i.data;
-
-            sqlx::query(
-                "insert into history
-                    (client_id, user_id, hostname, timestamp, data) 
-                values ($1, $2, $3, $4, $5)
-                on conflict do nothing
-                ",
-            )
-            .bind(client_id)
-            .bind(i.user_id)
-            .bind(hostname)
-            .bind(i.timestamp)
-            .bind(data)
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        tx.commit().await?;
-
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    async fn oldest_history(&self, user: &User) -> DbResult<History> {
-        sqlx::query_as(
-            "select id, client_id, user_id, hostname, timestamp, data, created_at from history 
-            where user_id = $1
-            order by timestamp asc
-            limit 1",
-        )
-        .bind(user.id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(Into::into)
-        .map(|DbHistory(h)| h)
     }
 }

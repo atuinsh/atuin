@@ -171,7 +171,6 @@ pub trait Database: Send + Sync + 'static {
 
     async fn delete(&self, h: History) -> Result<()>;
     async fn delete_rows(&self, ids: &[HistoryId]) -> Result<()>;
-    async fn deleted(&self) -> Result<Vec<History>>;
 
     // Yes I know, it's a lot.
     // Could maybe break it down to a searchparams struct or smth but that feels a little... pointless.
@@ -482,15 +481,6 @@ impl Database for Sqlite {
         .map(Self::query_history)
         .fetch_all(&self.pool)
         .await?;
-
-        Ok(res)
-    }
-
-    async fn deleted(&self) -> Result<Vec<History>> {
-        let res = sqlx::query("select * from history where deleted_at is not null")
-            .map(Self::query_history)
-            .fetch_all(&self.pool)
-            .await?;
 
         Ok(res)
     }
