@@ -1,4 +1,4 @@
-//! Parse `.atuin/ai-context.md` files and execute embedded commands.
+//! Parse `.atuin/TERMINAL.md` files and execute embedded commands.
 //!
 //! Two interpolation syntaxes are supported:
 //!

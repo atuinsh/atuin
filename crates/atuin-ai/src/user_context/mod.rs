@@ -93,7 +93,7 @@ impl UserContextCache {
 /// Discover context files and interpolate embedded commands.
 ///
 /// Walks from `start` up to the filesystem root looking for
-/// `.atuin/ai-context.md`, then checks `global_path`. Returns contexts
+/// `.atuin/TERMINAL.md`, then checks `global_path`. Returns contexts
 /// ordered from most general (global/root) to most specific (deepest).
 pub(crate) async fn gather(
     start: &Path,
