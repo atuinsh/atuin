@@ -282,7 +282,13 @@ impl HistoryStore {
         Ok(())
     }
 
-    pub async fn incremental_build(&self, database: &dyn Database, ids: &[RecordId]) -> Result<()> {
+    pub async fn incremental_build(
+        &self,
+        database: &dyn Database,
+        ids: &[RecordId],
+    ) -> Result<Vec<History>> {
+        let mut created = Vec::new();
+
         for id in ids {
             let record = self.store.get(*id).await;
 
@@ -323,6 +329,7 @@ impl HistoryStore {
                 HistoryRecord::Create(h) => {
                     // TODO: benchmark CPU time/memory tradeoff of batch commit vs one at a time
                     database.save(&h).await?;
+                    created.push(h);
                 }
                 HistoryRecord::Delete(id) => {
                     database.delete_rows(&[id]).await?;
@@ -330,7 +337,7 @@ impl HistoryStore {
             }
         }
 
-        Ok(())
+        Ok(created)
     }
 
     /// Get a list of history IDs that exist in the store
@@ -403,6 +410,7 @@ mod tests {
     use time::macros::datetime;
 
     use crate::{
+        database::Sqlite,
         history::{HISTORY_TAG, Version, store::HistoryRecord, store::HistoryStore},
         record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store},
         settings::test_local_timeout,
@@ -522,5 +530,47 @@ mod tests {
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0], HistoryRecord::Create(history));
+    }
+
+    #[tokio::test]
+    async fn test_incremental_build_returns_created_histories() {
+        let store = SqliteStore::new(":memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let host_id = HostId(atuin_common::utils::uuid_v7());
+        let key = [0u8; 32];
+
+        let history_store = HistoryStore::new(store.clone(), host_id, key);
+
+        let history = History {
+            id: "018cd4fe81757cd2aee65cd7861f9c81".to_owned().into(),
+            timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00),
+            duration: 100,
+            exit: 0,
+            command: "ls".to_owned(),
+            cwd: "/".to_owned(),
+            session: "018cd4fead897597852527a31c998059".to_owned(),
+            hostname: "test:test".to_owned(),
+            author: "test".to_owned(),
+            intent: None,
+            deleted_at: None,
+            shell: None,
+        };
+
+        // `push` returns the RECORD id (record-store id-space), distinct from
+        // `history.id` (the HistoryId). This distinction is the whole bug.
+        let (record_id, _) = history_store.push(history.clone()).await.unwrap();
+
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        let created = history_store
+            .incremental_build(&db, &[record_id])
+            .await
+            .unwrap();
+
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0], history);
     }
 }
