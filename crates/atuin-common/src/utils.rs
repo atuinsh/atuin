@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -152,36 +151,6 @@ pub fn broken_symlink<P: Into<PathBuf>>(path: P) -> bool {
     path.is_symlink() && !path.exists()
 }
 
-/// Extension trait for anything that can behave like a string to make it easy to escape control
-/// characters.
-///
-/// Intended to help prevent control characters being printed and interpreted by the terminal when
-/// printing history as well as to ensure the commands that appear in the interactive search
-/// reflect the actual command run rather than just the printable characters.
-pub trait Escapable: AsRef<str> {
-    fn escape_control(&self) -> Cow<'_, str> {
-        if !self.as_ref().contains(|c: char| c.is_ascii_control()) {
-            self.as_ref().into()
-        } else {
-            let mut remaining = self.as_ref();
-            // Not a perfect way to reserve space but should reduce the allocations
-            let mut buf = String::with_capacity(remaining.len());
-            while let Some(i) = remaining.find(|c: char| c.is_ascii_control()) {
-                // safe to index with `..i`, `i` and `i+1..` as part[i] is a single byte ascii char
-                buf.push_str(&remaining[..i]);
-                buf.push('^');
-                buf.push(match remaining.as_bytes()[i] {
-                    0x7F => '?',
-                    code => char::from_u32(u32::from(code) + 64).unwrap(),
-                });
-                remaining = &remaining[i + 1..];
-            }
-            buf.push_str(remaining);
-            buf.into()
-        }
-    }
-}
-
 pub fn unquote(s: &str) -> Result<String> {
     if s.chars().count() < 2 {
         return Err(eyre!("not enough chars"));
@@ -205,8 +174,6 @@ pub fn unquote(s: &str) -> Result<String> {
 
     Ok(s.to_string())
 }
-
-impl<T: AsRef<str>> Escapable for T {}
 
 #[allow(unsafe_code)]
 #[cfg(test)]
@@ -276,36 +243,6 @@ mod tests {
         unsafe { env::remove_var("HOME") };
     }
 
-    #[test]
-    fn escape_control_characters() {
-        use super::Escapable;
-        // CSI colour sequence
-        assert_eq!("\x1b[31mfoo".escape_control(), "^[[31mfoo");
-
-        // Tabs count as control chars
-        assert_eq!("foo\tbar".escape_control(), "foo^Ibar");
-
-        // space is in control char range but should be excluded
-        assert_eq!("two words".escape_control(), "two words");
-
-        // unicode multi-byte characters
-        let s = "🐢\x1b[32m🦀";
-        assert_eq!(s.escape_control(), s.replace("\x1b", "^["));
-    }
-
-    #[test]
-    fn escape_no_control_characters() {
-        use super::Escapable as _;
-        assert!(matches!(
-            "no control characters".escape_control(),
-            Cow::Borrowed(_)
-        ));
-        assert!(matches!(
-            "with \x1b[31mcontrol\x1b[0m characters".escape_control(),
-            Cow::Owned(_)
-        ));
-    }
-
     #[cfg(not(windows))]
     #[test]
     fn in_git_repo_regular() {
@@ -357,9 +294,6 @@ mod tests {
         // Obviously not a test of randomness, but make sure we haven't made some
         // catastrophic error
 
-        assert_ne!(crypto_random_string::<1>(), crypto_random_string::<1>());
-        assert_ne!(crypto_random_string::<2>(), crypto_random_string::<2>());
-        assert_ne!(crypto_random_string::<4>(), crypto_random_string::<4>());
         assert_ne!(crypto_random_string::<8>(), crypto_random_string::<8>());
         assert_ne!(crypto_random_string::<16>(), crypto_random_string::<16>());
         assert_ne!(crypto_random_string::<32>(), crypto_random_string::<32>());

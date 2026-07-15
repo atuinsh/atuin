@@ -6,7 +6,7 @@ use std::{
 #[cfg(unix)]
 use std::io::Read as _;
 
-use atuin_common::{shell::Shell, utils::Escapable as _};
+use atuin_common::{shell::Shell, string::EscapeNonPrintablePosixExt as _};
 use eyre::Result;
 use futures_util::FutureExt;
 use semver::Version;
@@ -1251,7 +1251,7 @@ impl State {
             let s = &results[selected].command;
             let mut lines = Vec::new();
             for line in s.split('\n') {
-                let line = line.escape_control();
+                let line = line.escape_non_printable();
                 let mut width = 0;
                 let mut start = 0;
                 for (idx, ch) in line.char_indices() {

@@ -6,7 +6,7 @@ use std::{
 };
 
 use atuin_common::logs::LogConfig;
-use atuin_common::utils::{self, Escapable as _};
+use atuin_common::{string::EscapeNonPrintablePosixExt as _, utils};
 use clap::Subcommand;
 use eyre::{Context, Result, bail};
 use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
@@ -321,7 +321,9 @@ impl FormatKey for FmtHistory<'_> {
         match key {
             "command" => match self.cmd_format {
                 CmdFormat::Literal => f.write_str(self.history.command.trim()),
-                CmdFormat::Escaped => f.write_str(&self.history.command.trim().escape_control()),
+                CmdFormat::Escaped => {
+                    f.write_str(&self.history.command.trim().escape_non_printable())
+                }
             }?,
             "directory" => f.write_str(self.history.cwd.trim())?,
             "exit" => f.write_str(&self.history.exit.to_string())?,
@@ -749,7 +751,7 @@ impl TailEvent {
         out.push('\n');
 
         let command = self.history.command.trim();
-        let escaped_command = command.escape_control();
+        let escaped_command = command.escape_non_printable();
         let mut command_lines = escaped_command.lines();
         let header = format!(
             "{} {}",

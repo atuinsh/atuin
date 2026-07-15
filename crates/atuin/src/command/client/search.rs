@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{IsTerminal as _, Write, stderr, stdout};
 
-use atuin_common::utils::{self, Escapable as _};
+use atuin_common::{string::EscapeNonPrintablePosixExt as _, utils};
 use clap::Parser;
 use eyre::Result;
 
@@ -237,7 +237,7 @@ impl Cmd {
                 // console code page or `[Console]::OutputEncoding` on PowerShell may be different from UTF-8.
                 println!("{item}");
             } else if stderr().is_terminal() {
-                eprintln!("{}", item.escape_control());
+                eprintln!("{}", item.escape_non_printable());
             } else {
                 eprintln!("{item}");
             }
