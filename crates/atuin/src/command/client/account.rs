@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
 use eyre::Result;
 
-use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::record::store::ArcStore;
 use atuin_client::settings::Settings;
 
 pub mod change_password;
@@ -39,7 +39,7 @@ pub enum Commands {
 }
 
 impl Cmd {
-    pub async fn run(self, settings: Settings, store: SqliteStore) -> Result<()> {
+    pub async fn run(self, settings: Settings, store: ArcStore) -> Result<()> {
         match self.command {
             Commands::Login(l) => l.run(&settings, &store).await,
             Commands::Register(r) => r.run(&settings, &store).await,

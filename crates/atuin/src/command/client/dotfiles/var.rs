@@ -1,7 +1,7 @@
 use clap::{Subcommand, ValueEnum};
 use eyre::{Context, Result};
 
-use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_client::{encryption, record::store::ArcStore, settings::Settings};
 
 use atuin_dotfiles::{shell::Var, store::var::VarStore};
 
@@ -147,7 +147,7 @@ impl Cmd {
         Ok(())
     }
 
-    pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
+    pub async fn run(&self, settings: &Settings, store: ArcStore) -> Result<()> {
         if !settings.dotfiles.enabled {
             eprintln!(
                 "Dotfiles are not enabled. Add\n\n[dotfiles]\nenabled = true\n\nto your configuration file to enable them.\n"

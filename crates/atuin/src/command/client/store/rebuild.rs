@@ -8,7 +8,7 @@ use crate::command::client::daemon as daemon_cmd;
 
 use atuin_client::{
     database::Database, encryption, history::store::HistoryStore,
-    record::sqlite_store::SqliteStore, settings::Settings,
+    record::store::ArcStore, settings::Settings,
 };
 
 #[derive(Args, Debug)]
@@ -20,7 +20,7 @@ impl Rebuild {
     pub async fn run(
         &self,
         settings: &Settings,
-        store: SqliteStore,
+        store: ArcStore,
         database: &dyn Database,
     ) -> Result<()> {
         // keep it as a string and not an enum atm
@@ -50,7 +50,7 @@ impl Rebuild {
     async fn rebuild_history(
         &self,
         settings: &Settings,
-        store: SqliteStore,
+        store: ArcStore,
         database: &dyn Database,
     ) -> Result<()> {
         let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
@@ -66,7 +66,7 @@ impl Rebuild {
         Ok(())
     }
 
-    async fn rebuild_dotfiles(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
+    async fn rebuild_dotfiles(&self, settings: &Settings, store: ArcStore) -> Result<()> {
         let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
 
         let host_id = Settings::host_id().await?;
@@ -80,7 +80,7 @@ impl Rebuild {
         Ok(())
     }
 
-    async fn rebuild_scripts(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
+    async fn rebuild_scripts(&self, settings: &Settings, store: ArcStore) -> Result<()> {
         let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
         let host_id = Settings::host_id().await?;
         let script_store = ScriptStore::new(store, host_id, encryption_key);

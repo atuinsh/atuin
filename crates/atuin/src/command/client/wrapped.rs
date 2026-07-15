@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use time::{Date, Duration, Month, OffsetDateTime, Time};
 
 use atuin_client::{
-    database::Database, encryption, record::sqlite_store::SqliteStore, settings::Settings,
+    database::Database, encryption, record::store::ArcStore, settings::Settings,
     theme::Theme,
 };
 use atuin_dotfiles::store::AliasStore;
@@ -290,7 +290,7 @@ pub async fn run(
     year: Option<i32>,
     db: &impl Database,
     settings: &Settings,
-    store: SqliteStore,
+    store: ArcStore,
     theme: &Theme,
 ) -> Result<()> {
     let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);

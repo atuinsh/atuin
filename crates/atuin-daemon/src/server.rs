@@ -19,6 +19,7 @@ use atuin_client::settings::Settings;
 ///
 /// This starts the gRPC server in the background and returns immediately.
 /// The server will shut down when a ShutdownRequested event is received.
+#[allow(clippy::too_many_arguments)]
 #[cfg(unix)]
 pub async fn run_grpc_server(
     settings: Settings,
@@ -125,6 +126,7 @@ pub async fn run_grpc_server(
 }
 
 /// Run the gRPC server with the given services (Windows/TCP version).
+#[allow(clippy::too_many_arguments)]
 #[cfg(not(unix))]
 pub async fn run_grpc_server(
     settings: Settings,

@@ -3,7 +3,7 @@ use eyre::Result;
 
 use atuin_client::{
     database::Database,
-    record::{sqlite_store::SqliteStore, store::Store},
+    record::store::{ArcStore, Store},
     settings::Settings,
 };
 use itertools::Itertools;
@@ -52,7 +52,7 @@ impl Cmd {
         &self,
         settings: &Settings,
         database: &dyn Database,
-        store: SqliteStore,
+        store: ArcStore,
     ) -> Result<()> {
         match self {
             Self::Status => self.status(store).await,
@@ -69,7 +69,7 @@ impl Cmd {
         }
     }
 
-    pub async fn status(&self, store: SqliteStore) -> Result<()> {
+    pub async fn status(&self, store: ArcStore) -> Result<()> {
         let host_id = Settings::host_id().await?;
         let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
 

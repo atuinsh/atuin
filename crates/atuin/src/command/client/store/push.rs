@@ -7,7 +7,7 @@ use atuin_client::{
     api_client::Client,
     encryption::load_key,
     record::sync::Operation,
-    record::{sqlite_store::SqliteStore, sync},
+    record::{store::ArcStore, sync},
     settings::Settings,
 };
 
@@ -34,7 +34,7 @@ pub struct Push {
 }
 
 impl Push {
-    pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
+    pub async fn run(&self, settings: &Settings, store: ArcStore) -> Result<()> {
         let host_id = Settings::host_id().await?;
 
         if self.force {

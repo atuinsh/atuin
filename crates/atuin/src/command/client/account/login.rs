@@ -7,7 +7,7 @@ use tokio::{fs::File, io::AsyncWriteExt};
 use atuin_client::{
     auth::{self, AuthResponse},
     encryption::{Key, decode_key, encode_key, load_key},
-    record::sqlite_store::SqliteStore,
+    record::store::ArcStore,
     record::store::Store,
     record::sync::{self, SyncError},
     settings::{Settings, SyncAuth},
@@ -41,7 +41,7 @@ fn get_input() -> Result<String> {
 }
 
 impl Cmd {
-    pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
+    pub async fn run(&self, settings: &Settings, store: &ArcStore) -> Result<()> {
         match settings.resolve_sync_auth().await {
             SyncAuth::Hub { .. } => {
                 println!("You are authenticated with Atuin Hub.");
@@ -72,7 +72,7 @@ impl Cmd {
     }
 
     /// Hub login: use the browser flow unless the username was provided for headless use.
-    async fn run_hub_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
+    async fn run_hub_login(&self, settings: &Settings, store: &ArcStore) -> Result<()> {
         let endpoint = settings.active_hub_endpoint().unwrap_or_default();
 
         if let Some(username) = &self.username {
@@ -134,7 +134,7 @@ impl Cmd {
 
     /// Legacy login: always prompt for username/password interactively
     /// (or accept them via flags).
-    async fn run_legacy_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
+    async fn run_legacy_login(&self, settings: &Settings, store: &ArcStore) -> Result<()> {
         let username = or_user_input(self.username.clone(), "username");
         let password = self.password.clone().unwrap_or_else(read_user_password);
 
@@ -178,7 +178,7 @@ impl Cmd {
         Ok(())
     }
 
-    async fn prompt_and_store_key(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
+    async fn prompt_and_store_key(&self, settings: &Settings, store: &ArcStore) -> Result<()> {
         let key_path = settings.key_path.as_str();
         let key_path = PathBuf::from(key_path);
 

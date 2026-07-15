@@ -14,7 +14,7 @@ use eyre::OptionExt;
 use eyre::{Result, bail};
 use tempfile::NamedTempFile;
 
-use atuin_client::{database::Database, record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_client::{database::Database, record::store::ArcStore, settings::Settings};
 use tracing::debug;
 
 #[derive(Parser, Debug)]
@@ -563,7 +563,7 @@ impl Cmd {
     pub async fn run(
         self,
         settings: &Settings,
-        store: SqliteStore,
+        store: ArcStore,
         history_db: &impl Database,
     ) -> Result<()> {
         let host_id = Settings::host_id().await?;

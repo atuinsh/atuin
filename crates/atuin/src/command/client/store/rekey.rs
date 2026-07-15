@@ -4,7 +4,7 @@ use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{
     encryption::{Key, decode_key, encode_key, generate_encoded_key, load_key},
-    record::sqlite_store::SqliteStore,
+    record::store::ArcStore,
     record::store::Store,
     settings::Settings,
 };
@@ -16,7 +16,7 @@ pub struct Rekey {
 }
 
 impl Rekey {
-    pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
+    pub async fn run(&self, settings: &Settings, store: ArcStore) -> Result<()> {
         let key = if let Some(key) = self.key.clone() {
             println!("Re-encrypting store with specified key");
 

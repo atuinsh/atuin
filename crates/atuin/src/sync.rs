@@ -3,7 +3,7 @@ use atuin_scripts::store::ScriptStore;
 use eyre::{Context, Result};
 
 use atuin_client::{
-    database::Database, history::store::HistoryStore, record::sqlite_store::SqliteStore,
+    database::Database, history::store::HistoryStore, record::store::Store,
     settings::Settings,
 };
 use atuin_common::record::RecordId;
@@ -17,7 +17,7 @@ use atuin_kv::store::KvStore;
 /// records.
 pub async fn build(
     settings: &Settings,
-    store: &SqliteStore,
+    store: &(impl Store + Clone + 'static),
     db: &dyn Database,
     downloaded: Option<&[RecordId]>,
 ) -> Result<()> {

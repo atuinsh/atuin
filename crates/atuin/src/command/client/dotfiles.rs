@@ -1,7 +1,7 @@
 use clap::Subcommand;
 use eyre::Result;
 
-use atuin_client::{record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_client::{record::store::ArcStore, settings::Settings};
 
 mod alias;
 mod var;
@@ -19,7 +19,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub async fn run(self, settings: &Settings, store: SqliteStore) -> Result<()> {
+    pub async fn run(self, settings: &Settings, store: ArcStore) -> Result<()> {
         match self {
             Self::Alias(cmd) => cmd.run(settings, store).await,
             Self::Var(cmd) => cmd.run(settings, store).await,

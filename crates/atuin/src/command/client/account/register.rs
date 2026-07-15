@@ -4,7 +4,7 @@ use eyre::{Result, bail};
 use super::login::or_user_input;
 use atuin_client::{
     auth::{self, AuthResponse},
-    record::sqlite_store::SqliteStore,
+    record::store::ArcStore,
     settings::{Settings, SyncAuth},
 };
 
@@ -22,7 +22,7 @@ pub struct Cmd {
 
 impl Cmd {
     #[allow(clippy::too_many_lines)]
-    pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
+    pub async fn run(&self, settings: &Settings, store: &ArcStore) -> Result<()> {
         match settings.resolve_sync_auth().await {
             SyncAuth::Hub { .. } => {
                 println!("You are already authenticated with Atuin Hub.");

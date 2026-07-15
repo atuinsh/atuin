@@ -5,7 +5,10 @@ use atuin_client::{
     database::Database,
     encryption,
     history::store::HistoryStore,
-    record::{sqlite_store::SqliteStore, store::Store, sync},
+    record::{
+        store::{ArcStore, Store},
+        sync,
+    },
     settings::Settings,
 };
 
@@ -48,7 +51,7 @@ impl Cmd {
         self,
         settings: Settings,
         db: &impl Database,
-        store: SqliteStore,
+        store: ArcStore,
     ) -> Result<()> {
         match self {
             Self::Sync { force } => run(&settings, force, db, store).await,
@@ -78,7 +81,7 @@ async fn run(
     settings: &Settings,
     force: bool,
     db: &impl Database,
-    store: SqliteStore,
+    store: ArcStore,
 ) -> Result<()> {
     if settings.sync.records {
         let encryption_key: [u8; 32] = encryption::load_key(settings)

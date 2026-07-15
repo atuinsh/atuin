@@ -10,7 +10,7 @@ use atuin_client::{
     database::{OptFilters, current_context},
     encryption,
     history::{History, store::HistoryStore},
-    record::sqlite_store::SqliteStore,
+    record::store::ArcStore,
     settings::{FilterMode, KeymapMode, SearchMode, Settings, Timezone},
     theme::Theme,
 };
@@ -159,7 +159,7 @@ impl Cmd {
         self,
         db: impl Database,
         settings: &mut Settings,
-        store: SqliteStore,
+        store: ArcStore,
         theme: &Theme,
     ) -> Result<()> {
         let query = self.query.unwrap_or_else(|| {

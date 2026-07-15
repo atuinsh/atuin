@@ -3,7 +3,7 @@ use std::io::{self, IsTerminal, Read};
 use clap::Subcommand;
 use eyre::{Context, Result, eyre};
 
-use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_client::{encryption, record::store::ArcStore, settings::Settings};
 use atuin_kv::store::KvStore;
 
 #[derive(Subcommand, Debug)]
@@ -62,7 +62,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
+    pub async fn run(&self, settings: &Settings, store: &ArcStore) -> Result<()> {
         let encryption_key: [u8; 32] = encryption::load_key(settings)
             .context("could not load encryption key")?
             .into();

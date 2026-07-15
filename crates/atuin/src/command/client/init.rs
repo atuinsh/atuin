@@ -1,10 +1,12 @@
+#[cfg(not(feature = "daemon"))]
 use std::path::PathBuf;
 
 use atuin_client::{
     encryption,
-    record::sqlite_store::SqliteStore,
     settings::{Settings, Tmux},
 };
+#[cfg(not(feature = "daemon"))]
+use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
 use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr};
@@ -126,16 +128,27 @@ $env.config = (
     }
 
     async fn dotfiles_init(&self, settings: &Settings) -> Result<()> {
-        let record_store_path = PathBuf::from(settings.record_store_path.as_str());
-        let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
+        // The record store is owned by the daemon; reach it through the proxy.
+        #[cfg(feature = "daemon")]
+        let record_store: atuin_client::record::store::ArcStore = {
+            super::daemon::ensure_daemon_running(settings).await?;
+            std::sync::Arc::new(
+                atuin_daemon::store_proxy::DaemonStore::from_settings(settings).await?,
+            )
+        };
+        #[cfg(not(feature = "daemon"))]
+        let record_store = {
+            let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+            SqliteStore::new(record_store_path, settings.local_timeout).await?
+        };
 
         let encryption_key: [u8; 32] = encryption::load_key(settings)
             .context("could not load encryption key")?
             .into();
         let host_id = Settings::host_id().await?;
 
-        let alias_store = AliasStore::new(sqlite_store.clone(), host_id, encryption_key);
-        let var_store = VarStore::new(sqlite_store.clone(), host_id, encryption_key);
+        let alias_store = AliasStore::new(record_store.clone(), host_id, encryption_key);
+        let var_store = VarStore::new(record_store.clone(), host_id, encryption_key);
 
         let disable_ai = self.disable_ai || matches!(settings.ai.enabled, Some(false));
 

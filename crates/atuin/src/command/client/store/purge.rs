@@ -3,7 +3,7 @@ use eyre::Result;
 
 use atuin_client::{
     encryption::load_key,
-    record::{sqlite_store::SqliteStore, store::Store},
+    record::store::{ArcStore, Store},
     settings::Settings,
 };
 
@@ -11,7 +11,7 @@ use atuin_client::{
 pub struct Purge {}
 
 impl Purge {
-    pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
+    pub async fn run(&self, settings: &Settings, store: ArcStore) -> Result<()> {
         println!("Purging local records that cannot be decrypted");
 
         let key = load_key(settings)?;

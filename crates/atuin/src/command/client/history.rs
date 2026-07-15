@@ -1,9 +1,10 @@
 use std::{
     fmt::{self, Display},
     io::{self, IsTerminal, Write},
-    path::PathBuf,
     time::Duration,
 };
+#[cfg(any(test, not(feature = "daemon")))]
+use std::path::PathBuf;
 
 use atuin_common::utils::{self, Escapable as _};
 use clap::Subcommand;
@@ -24,17 +25,21 @@ use atuin_client::{
     database::{Database, current_context},
     encryption,
     history::{History, store::HistoryStore},
-    record::sqlite_store::SqliteStore,
+    record::store::Store,
     settings::{
         FilterMode::{Directory, Global, Session},
         Settings, Timezone,
     },
 };
 
-// `Sqlite` is opened directly only by the no-daemon build and by tests; the
-// daemon build reaches storage through the gRPC proxy.
+// `Sqlite`/`SqliteStore` are opened directly only by the no-daemon build and by
+// tests; the daemon build reaches storage through the gRPC proxy.
 #[cfg(any(test, not(feature = "daemon")))]
 use atuin_client::database::Sqlite;
+#[cfg(any(test, not(feature = "daemon")))]
+use atuin_client::record::sqlite_store::SqliteStore;
+#[cfg(feature = "daemon")]
+use atuin_client::record::store::ArcStore;
 
 #[cfg(all(feature = "sync", not(feature = "daemon")))]
 use atuin_client::{record, sync};
@@ -996,7 +1001,7 @@ impl Cmd {
     async fn handle_prune(
         db: &impl Database,
         settings: &Settings,
-        store: SqliteStore,
+        store: impl Store + Clone + 'static,
         context: atuin_client::database::Context,
         dry_run: bool,
     ) -> Result<()> {
@@ -1053,7 +1058,7 @@ impl Cmd {
     async fn handle_dedup(
         db: &impl Database,
         settings: &Settings,
-        store: SqliteStore,
+        store: impl Store + Clone + 'static,
         before: i64,
         dupkeep: u32,
         dry_run: bool,
@@ -1151,21 +1156,27 @@ impl Cmd {
             cmd => {
                 let context = current_context().await?;
 
-                let record_store_path = PathBuf::from(settings.record_store_path.as_str());
-
-                // History reads/writes go through the daemon (sole storage owner).
+                // History DB and record store both go through the daemon (sole
+                // storage owner).
                 #[cfg(feature = "daemon")]
-                let db: Box<dyn Database> = {
+                let (db, store): (Box<dyn Database>, ArcStore) = {
                     super::daemon::ensure_daemon_running(settings).await?;
-                    Box::new(atuin_daemon::proxy::DaemonDatabase::from_settings(settings).await?)
+                    (
+                        Box::new(atuin_daemon::proxy::DaemonDatabase::from_settings(settings).await?),
+                        std::sync::Arc::new(
+                            atuin_daemon::store_proxy::DaemonStore::from_settings(settings).await?,
+                        ),
+                    )
                 };
                 #[cfg(not(feature = "daemon"))]
-                let db = {
+                let (db, store) = {
                     let db_path = PathBuf::from(settings.db_path.as_str());
-                    Sqlite::new(db_path, settings.local_timeout).await?
+                    let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+                    (
+                        Sqlite::new(db_path, settings.local_timeout).await?,
+                        SqliteStore::new(record_store_path, settings.local_timeout).await?,
+                    )
                 };
-
-                let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
                 let encryption_key: [u8; 32] = encryption::load_key(settings)
                     .context("could not load encryption key")?

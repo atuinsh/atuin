@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
-use atuin_client::{
-    database::Database, record::sqlite_store::SqliteStore, settings::Settings, theme,
-};
+use atuin_client::{database::Database, settings::Settings, theme};
+#[cfg(not(feature = "daemon"))]
+use atuin_client::record::sqlite_store::SqliteStore;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{
     Layer, filter::EnvFilter, filter::LevelFilter, fmt, fmt::format::FmtSpan, prelude::*,
@@ -353,10 +353,6 @@ impl Cmd {
             _ => {}
         }
 
-        let record_store_path = PathBuf::from(settings.record_store_path.as_str());
-
-        let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
-
         let theme_name = settings.theme.name.clone();
         let theme = theme_manager.load_theme(theme_name.as_str(), settings.theme.max_depth);
 
@@ -372,30 +368,43 @@ impl Cmd {
             }
             Self::Search(search) => {
                 let db = history_database(&settings).await?;
-                search.run(db, &mut settings, sqlite_store, theme).await
+                let store = record_store(&settings).await?;
+                search.run(db, &mut settings, store, theme).await
             }
 
             #[cfg(feature = "sync")]
             Self::Sync(sync) => {
                 let db = history_database(&settings).await?;
-                sync.run(settings, &db, sqlite_store).await
+                let store = record_store(&settings).await?;
+                sync.run(settings, &db, store).await
             }
 
             #[cfg(feature = "sync")]
-            Self::Account(account) => account.run(settings, sqlite_store).await,
-
-            Self::Kv(kv) => kv.run(&settings, &sqlite_store).await,
-
-            Self::Store(store) => {
-                let db = history_database(&settings).await?;
-                store.run(&settings, &*db, sqlite_store).await
+            Self::Account(account) => {
+                let store = record_store(&settings).await?;
+                account.run(settings, store).await
             }
 
-            Self::Dotfiles(dotfiles) => dotfiles.run(&settings, sqlite_store).await,
+            Self::Kv(kv) => {
+                let store = record_store(&settings).await?;
+                kv.run(&settings, &store).await
+            }
+
+            Self::Store(store_cmd) => {
+                let db = history_database(&settings).await?;
+                let store = record_store(&settings).await?;
+                store_cmd.run(&settings, &*db, store).await
+            }
+
+            Self::Dotfiles(dotfiles) => {
+                let store = record_store(&settings).await?;
+                dotfiles.run(&settings, store).await
+            }
 
             Self::Scripts(scripts) => {
                 let db = history_database(&settings).await?;
-                scripts.run(&settings, sqlite_store, &db).await
+                let store = record_store(&settings).await?;
+                scripts.run(&settings, store, &db).await
             }
 
             Self::Info => {
@@ -410,7 +419,8 @@ impl Cmd {
 
             Self::Wrapped { year } => {
                 let db = history_database(&settings).await?;
-                wrapped::run(year, &db, &settings, sqlite_store, theme).await
+                let store = record_store(&settings).await?;
+                wrapped::run(year, &db, &settings, store, theme).await
             }
 
             #[cfg(feature = "daemon")]
@@ -456,5 +466,24 @@ async fn history_database(settings: &Settings) -> Result<Box<dyn Database>> {
     let db_path = PathBuf::from(settings.db_path.as_str());
     Ok(Box::new(
         atuin_client::database::Sqlite::new(db_path, settings.local_timeout).await?,
+    ))
+}
+
+/// Obtain a handle to the record store, mirroring [`history_database`]: with the
+/// `daemon` feature it is a gRPC-backed `DaemonStore` (the daemon is the sole
+/// owner of the record store); without it, the local `SqliteStore`.
+#[cfg(feature = "daemon")]
+async fn record_store(settings: &Settings) -> Result<atuin_client::record::store::ArcStore> {
+    daemon::ensure_daemon_running(settings).await?;
+    Ok(std::sync::Arc::new(
+        atuin_daemon::store_proxy::DaemonStore::from_settings(settings).await?,
+    ))
+}
+
+#[cfg(not(feature = "daemon"))]
+async fn record_store(settings: &Settings) -> Result<atuin_client::record::store::ArcStore> {
+    let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+    Ok(std::sync::Arc::new(
+        SqliteStore::new(record_store_path, settings.local_timeout).await?,
     ))
 }

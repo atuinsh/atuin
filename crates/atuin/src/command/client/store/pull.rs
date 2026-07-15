@@ -6,7 +6,7 @@ use atuin_client::{
     encryption::load_key,
     record::store::Store,
     record::sync::Operation,
-    record::{sqlite_store::SqliteStore, sync},
+    record::{store::ArcStore, sync},
     settings::Settings,
 };
 
@@ -31,7 +31,7 @@ impl Pull {
     pub async fn run(
         &self,
         settings: &Settings,
-        store: SqliteStore,
+        store: ArcStore,
         db: &dyn Database,
     ) -> Result<()> {
         if self.force {
