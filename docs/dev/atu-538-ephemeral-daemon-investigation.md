@@ -237,12 +237,21 @@ daemon, then `history list`, `search` (fuzzy + prefix), and `stats` all served
 by the daemon; a single daemon owns the socket; `daemon status`/`stop` behave.
 `cargo build`/`clippy`/`test` are clean on default and `--no-default-features`.
 
-**Still on the direct path (next tranche):** the **record store** and everything
-built on it — `sync` (network), `store rebuild/rekey/purge/verify/push/pull`,
-`login`/`register` key rotation, `search --delete`/interactive delete, and the
-`dotfiles`/`kv`/`scripts` typed stores — plus the `atuin ai` interactive TUI
-(its `AppContext.history_db` is a concrete `Arc<Sqlite>`). These need new daemon
-RPCs (record-store `Store` surface + sync ownership) and are Phases 4–5.
+The `atuin ai` interactive TUI and the MCP server are done too: `AppContext`'s
+history handle is now `Arc<dyn Database>` and both build the proxy.
+
+**Still on the direct path (next tranche — the record store):** everything
+built on the `Store` trait — `sync` (network), `store
+rebuild/rekey/purge/verify/push/pull`, `login`/`register` key rotation,
+`search --delete`/interactive delete, and the `dotfiles`/`kv`/`scripts` typed
+stores. This is a materially bigger change than the Database axis: the `Store`
+trait is ~18 methods over `Record<EncryptedData>`, and all five typed stores
+(`HistoryStore`/`AliasStore`/`VarStore`/`KvStore`/`ScriptStore`) hold a
+*concrete* `SqliteStore`, so a `DaemonStore` proxy requires genericizing them
+across `atuin-client`/`atuin-dotfiles`/`atuin-kv`/`atuin-scripts` plus ~10
+command signatures. Load-bearing design decision first: does the daemon stay a
+dumb encrypted-blob store (crypto stays client-side — least disruptive) or does
+key handling move server-side too?
 
 To *physically delete* the last daemonless code (the `cfg(not(daemon))` arms),
 promote `daemon` from an optional feature to a hard dependency — a Cargo change
