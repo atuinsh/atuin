@@ -115,6 +115,8 @@ New-Module -Name Atuin -ScriptBlock {
         # PowerShell doesn't handle double quotes in native command line arguments the same way depending on its version,
         # and the value of $PSNativeCommandArgumentPassing - see the about_Parsing help page which explains the breaking changes.
         # This makes it unreliable, so we go through an environment variable, which should always be consistent across versions.
+        $prevCommandLine = $env:ATUIN_COMMAND_LINE
+        $prevShell = $env:ATUIN_SHELL
         try {
             $env:ATUIN_COMMAND_LINE = $line
             $env:ATUIN_SHELL = "powershell"
@@ -124,8 +126,8 @@ New-Module -Name Atuin -ScriptBlock {
             # Ignore errors to avoid breaking the shell, see above.
         }
         finally {
-            $env:ATUIN_COMMAND_LINE = $null
-            $env:ATUIN_SHELL = $null
+            $env:ATUIN_COMMAND_LINE = $prevCommandLine
+            $env:ATUIN_SHELL = $prevShell
         }
 
         $global:LASTEXITCODE = $lastNativeExitCode
