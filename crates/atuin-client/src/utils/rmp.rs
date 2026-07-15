@@ -62,8 +62,8 @@ pub fn read_string<'a>(bytes: &mut Bytes<'a>) -> Result<String, DecodeError<'a>>
         Ok(pair) => pair,
         Err(e) => {
             if let DecodeStringError::TypeMismatch(_) = e {
-                // The decode functions in [`rmp::decode`] consume the marker byte when there's a
-                // type mismatch; make sure we do that too, as [`read_optional`] depends on it.
+                // The decode functions in `rmp::decode` consume the marker byte when there's a
+                // type mismatch; make sure we do that too, as `read_optional` depends on it.
                 bytes
                     .read_u8()
                     .expect("TypeMismatch implies stream contains a marker byte");
