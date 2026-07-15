@@ -250,16 +250,19 @@ async fn do_sync_tick(
                 "sync complete"
             );
 
-            // Build history from downloaded records
-            if let Err(e) = history_store
+            // Build history from downloaded records, then index the results.
+            match history_store
                 .incremental_build(handle.history_db(), &downloaded_records)
                 .await
             {
-                tracing::error!("failed to build history from downloaded records: {e}");
+                Ok(histories) => {
+                    // Emit the synced history so the search component can index it.
+                    handle.emit(DaemonEvent::HistorySynced(histories));
+                }
+                Err(e) => {
+                    tracing::error!("failed to build history from downloaded records: {e}");
+                }
             }
-
-            // Emit the records added event (for search indexing)
-            handle.emit(DaemonEvent::RecordsAdded(downloaded_records.clone()));
 
             // Emit sync completed event
             handle.emit(DaemonEvent::SyncCompleted {

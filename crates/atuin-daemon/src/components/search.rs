@@ -181,36 +181,17 @@ impl Component for SearchComponent {
 
     async fn handle_event(&mut self, event: &DaemonEvent) -> Result<()> {
         match event {
-            DaemonEvent::RecordsAdded(records) => {
+            DaemonEvent::HistorySynced(histories) => {
                 debug!(
-                    count = records.len(),
-                    "Processing added records for search index"
+                    count = histories.len(),
+                    "Indexing synced history entries into search index"
                 );
 
-                let handle_guard = self.handle.read().await;
-                if let Some(handle) = handle_guard.as_ref() {
-                    let histories: Vec<_> = handle
-                        .history_db()
-                        .query_history(
-                            format!(
-                                "select * from history where id in ({})",
-                                records
-                                    .iter()
-                                    .map(|record| record.0.to_string())
-                                    .collect::<Vec<_>>()
-                                    .join(",")
-                            )
-                            .as_str(),
-                        )
-                        .await
-                        .unwrap_or_default();
-
-                    span!(Level::TRACE, "inject_records", count = histories.len())
-                        .in_scope(async || {
-                            self.index.read().await.add_histories(&histories);
-                        })
-                        .await;
-                }
+                span!(Level::TRACE, "inject_records", count = histories.len())
+                    .in_scope(async || {
+                        self.index.read().await.add_histories(histories);
+                    })
+                    .await;
             }
             DaemonEvent::HistoryStarted(history) => {
                 debug!(id = %history.id, command = %history.command, "History started (no index action)");

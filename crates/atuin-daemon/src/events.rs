@@ -8,7 +8,6 @@
 //! Control gRPC service.
 
 use atuin_client::history::{History, HistoryId};
-use atuin_common::record::RecordId;
 
 /// Events that flow through the daemon's event bus.
 ///
@@ -24,10 +23,10 @@ pub enum DaemonEvent {
     HistoryEnded(History),
 
     // ---- Sync ----
-    /// Records were synced from the server.
+    /// History entries were built from records synced from the server.
     ///
-    /// The search component uses this to update its index with new history.
-    RecordsAdded(Vec<RecordId>),
+    /// The search component uses this to update its index with the new history.
+    HistorySynced(Vec<History>),
 
     /// Sync completed successfully.
     SyncCompleted {
