@@ -56,7 +56,7 @@ If you don't wish to use the installer, the manual installation steps are as fol
     toolchain, then you can run:
 
     ```shell
-    cargo install atuin
+    cargo install atuin --locked
     ```
 
 === "Homebrew"
@@ -149,7 +149,7 @@ If you don't wish to use the installer, the manual installation steps are as fol
     ```shell
     git clone https://github.com/atuinsh/atuin.git
     cd atuin/crates/atuin
-    cargo install --path .
+    cargo install --path . --locked
     ```
 
 !!! warning "Please be advised"
