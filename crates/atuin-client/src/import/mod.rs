@@ -30,7 +30,7 @@ pub trait Importer: Sized {
 
 #[async_trait]
 pub trait Loader: Sync + Send {
-    async fn push(&mut self, hist: History) -> eyre::Result<()>;
+    async fn push(&mut self, hist: History) -> Result<()>;
 }
 
 fn unix_byte_lines(input: &[u8]) -> impl Iterator<Item = &[u8]> {

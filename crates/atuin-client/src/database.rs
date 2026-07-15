@@ -255,8 +255,10 @@ impl Sqlite {
 
     async fn save_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, h: &History) -> Result<()> {
         sqlx::query(
-            "insert or ignore into history(id, timestamp, duration, exit, command, cwd, session, hostname, author, intent, deleted_at)
-                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "insert or ignore into history(
+                id, timestamp, duration, exit, command, cwd, session, hostname, author, intent,
+                deleted_at, shell
+            ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         )
         .bind(h.id.0.as_str())
         .bind(h.timestamp.unix_timestamp_nanos() as i64)
@@ -268,7 +270,8 @@ impl Sqlite {
         .bind(h.hostname.as_str())
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
-        .bind(h.deleted_at.map(|t|t.unix_timestamp_nanos() as i64))
+        .bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
+        .bind(h.shell.as_deref())
         .execute(&mut **tx)
         .await?;
 
@@ -296,6 +299,7 @@ impl Sqlite {
             .unwrap_or_else(|| History::author_from_hostname(hostname.as_str()));
         let intent: Option<String> = row.try_get("intent").ok().flatten();
         let intent = intent.filter(|intent| !intent.trim().is_empty());
+        let shell: Option<String> = row.try_get("shell").ok().flatten();
 
         History::from_db()
             .id(row.get("id"))
@@ -314,6 +318,7 @@ impl Sqlite {
             .deleted_at(
                 deleted_at.and_then(|t| OffsetDateTime::from_unix_timestamp_nanos(t as i128).ok()),
             )
+            .shell(shell)
             .build()
             .into()
     }

@@ -175,14 +175,32 @@ pub fn unquote(s: &str) -> Result<String> {
     Ok(s.to_string())
 }
 
+/// Normalize an optional string by trimming whitespace and filtering out empty strings.
+///
+/// This function always returns either [`None`], or a nonempty string with no leading or trailing
+/// whitespace.
+pub fn normalize_optional_string<T>(string: T) -> Option<String>
+where
+    T: Into<Option<String>>,
+{
+    let mut string = string.into()?;
+    // Remove whitespace at end
+    string.truncate(string.trim_end().len());
+    // Remove whitespace at start
+    string.drain(0..(string.len() - string.trim_start().len()));
+    if string.is_empty() {
+        None
+    } else {
+        Some(string)
+    }
+}
+
 #[allow(unsafe_code)]
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_ne;
 
     use super::*;
-
-    use std::collections::HashSet;
 
     #[cfg(not(windows))]
     #[test]

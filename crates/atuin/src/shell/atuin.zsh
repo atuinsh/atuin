@@ -70,7 +70,7 @@ __atuin_osc133_wrap_prompt() {
 
 _atuin_preexec() {
     local id
-    id=$(atuin history start --hook -- "$1" 2>/dev/null)
+    id=$(ATUIN_SHELL=zsh atuin history start --hook -- "$1" 2>/dev/null)
     export ATUIN_HISTORY_ID="$id"
     __atuin_osc133_command_executed
     __atuin_preexec_time=${EPOCHREALTIME-}

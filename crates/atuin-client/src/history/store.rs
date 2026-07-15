@@ -10,7 +10,7 @@ use crate::{
 };
 use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
 
-use super::{HISTORY_TAG, HISTORY_VERSION, HISTORY_VERSION_V0, History, HistoryId};
+use super::{HISTORY_TAG, History, HistoryId, Version};
 
 #[derive(Debug, Clone)]
 pub struct HistoryStore {
@@ -20,6 +20,11 @@ pub struct HistoryStore {
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "`Create` records are much more common than `Delete` records; wrapping in a `Box`
+        would use more memory overall"
+)]
 pub enum HistoryRecord {
     Create(History),   // Create a history record
     Delete(HistoryId), // Delete a history record, identified by ID
@@ -127,8 +132,8 @@ impl HistoryStore {
 
         let record = Record::builder()
             .host(Host::new(self.host_id))
-            .version(HISTORY_VERSION.to_string())
-            .tag(HISTORY_TAG.to_string())
+            .version(Version::LATEST.name().to_owned())
+            .tag(HISTORY_TAG.to_owned())
             .idx(idx)
             .data(bytes)
             .build();
@@ -158,8 +163,8 @@ impl HistoryStore {
 
             let record = Record::builder()
                 .host(Host::new(self.host_id))
-                .version(HISTORY_VERSION.to_string())
-                .tag(HISTORY_TAG.to_string())
+                .version(Version::LATEST.name().to_owned())
+                .tag(HISTORY_TAG.to_owned())
                 .idx(idx + n as u64)
                 .data(bytes)
                 .build();
@@ -215,13 +220,15 @@ impl HistoryStore {
 
             // A record we can't decrypt or decode must not block the rest of the store -
             // skip it, and load everything else.
-            let hist = match version.as_str() {
-                HISTORY_VERSION_V0 | HISTORY_VERSION => record
-                    .decrypt::<PASETO_V4>(&self.encryption_key)
-                    .and_then(|decrypted| {
-                        HistoryRecord::deserialize(&decrypted.data, version.as_str())
-                    }),
-                version => Err(eyre!("unknown history version {version:?}")),
+            let hist = match Version::from_name(version.as_str()) {
+                Some(_) => {
+                    record
+                        .decrypt::<PASETO_V4>(&self.encryption_key)
+                        .and_then(|decrypted| {
+                            HistoryRecord::deserialize(&decrypted.data, version.as_str())
+                        })
+                }
+                None => Err(eyre!("unknown history version {version:?}")),
             };
 
             match hist {
@@ -293,13 +300,15 @@ impl HistoryStore {
             let version = record.version.clone();
 
             // Skip records we can't decrypt or decode, rather than failing the entire build.
-            let record = match version.as_str() {
-                HISTORY_VERSION_V0 | HISTORY_VERSION => record
-                    .decrypt::<PASETO_V4>(&self.encryption_key)
-                    .and_then(|decrypted| {
-                        HistoryRecord::deserialize(&decrypted.data, version.as_str())
-                    }),
-                version => Err(eyre!("unknown history version {version:?}")),
+            let record = match Version::from_name(version.as_str()) {
+                Some(_) => {
+                    record
+                        .decrypt::<PASETO_V4>(&self.encryption_key)
+                        .and_then(|decrypted| {
+                            HistoryRecord::deserialize(&decrypted.data, version.as_str())
+                        })
+                }
+                None => Err(eyre!("unknown history version {version:?}")),
             };
 
             let record = match record {
@@ -394,7 +403,7 @@ mod tests {
     use time::macros::datetime;
 
     use crate::{
-        history::{HISTORY_TAG, HISTORY_VERSION, store::HistoryRecord, store::HistoryStore},
+        history::{HISTORY_TAG, Version, store::HistoryRecord, store::HistoryStore},
         record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store},
         settings::test_local_timeout,
     };
@@ -404,14 +413,15 @@ mod tests {
     #[test]
     fn test_serialize_deserialize_create() {
         let bytes = [
-            204, 0, 196, 147, 205, 0, 1, 154, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49,
+            204, 0, 196, 153, 205, 0, 2, 156, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49,
             55, 53, 55, 99, 100, 50, 97, 101, 101, 54, 53, 99, 100, 55, 56, 54, 49, 102, 57, 99,
             56, 49, 207, 23, 166, 251, 212, 181, 82, 0, 0, 100, 0, 162, 108, 115, 217, 41, 47, 85,
             115, 101, 114, 115, 47, 101, 108, 108, 105, 101, 47, 115, 114, 99, 47, 103, 105, 116,
             104, 117, 98, 46, 99, 111, 109, 47, 97, 116, 117, 105, 110, 115, 104, 47, 97, 116, 117,
             105, 110, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 97, 100, 56, 57, 55, 53, 57, 55,
             56, 53, 50, 53, 50, 55, 97, 51, 49, 99, 57, 57, 56, 48, 53, 57, 170, 98, 111, 111, 112,
-            58, 101, 108, 108, 105, 101, 192, 165, 101, 108, 108, 105, 101,
+            58, 101, 108, 108, 105, 101, 192, 165, 101, 108, 108, 105, 101, 192, 164, 98, 97, 115,
+            104,
         ];
 
         let history = History {
@@ -426,6 +436,7 @@ mod tests {
             author: "ellie".to_owned(),
             intent: None,
             deleted_at: None,
+            shell: Some("bash".to_owned()),
         };
 
         let record = HistoryRecord::Create(history);
@@ -433,13 +444,13 @@ mod tests {
         let serialized = record.serialize().expect("failed to serialize history");
         assert_eq!(serialized.0, bytes);
 
-        let deserialized = HistoryRecord::deserialize(&serialized, HISTORY_VERSION)
+        let deserialized = HistoryRecord::deserialize(&serialized, Version::LATEST.name())
             .expect("failed to deserialize HistoryRecord");
         assert_eq!(deserialized, record);
 
         // check the snapshot too
         let deserialized =
-            HistoryRecord::deserialize(&DecryptedData(Vec::from(bytes)), HISTORY_VERSION)
+            HistoryRecord::deserialize(&DecryptedData(Vec::from(bytes)), Version::LATEST.name())
                 .expect("failed to deserialize HistoryRecord");
         assert_eq!(deserialized, record);
     }
@@ -455,12 +466,12 @@ mod tests {
         let serialized = record.serialize().expect("failed to serialize history");
         assert_eq!(serialized.0, bytes);
 
-        let deserialized = HistoryRecord::deserialize(&serialized, HISTORY_VERSION)
+        let deserialized = HistoryRecord::deserialize(&serialized, Version::LATEST.name())
             .expect("failed to deserialize HistoryRecord");
         assert_eq!(deserialized, record);
 
         let deserialized =
-            HistoryRecord::deserialize(&DecryptedData(Vec::from(bytes)), HISTORY_VERSION)
+            HistoryRecord::deserialize(&DecryptedData(Vec::from(bytes)), Version::LATEST.name())
                 .expect("failed to deserialize HistoryRecord");
         assert_eq!(deserialized, record);
     }
@@ -487,6 +498,7 @@ mod tests {
             author: "test".to_owned(),
             intent: None,
             deleted_at: None,
+            shell: None,
         };
 
         history_store.push(history.clone()).await.unwrap();
@@ -495,8 +507,8 @@ mod tests {
         // or "mixed". it should be skipped, rather than breaking loading entirely.
         let corrupt = Record::builder()
             .host(Host::new(host_id))
-            .version(HISTORY_VERSION.to_string())
-            .tag(HISTORY_TAG.to_string())
+            .version(Version::LATEST.name().to_owned())
+            .tag(HISTORY_TAG.to_owned())
             .idx(1)
             .data(DecryptedData(vec![1, 2, 3]))
             .build();
