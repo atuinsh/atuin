@@ -33,7 +33,7 @@ pub struct Settings {
     pub path: String,
     pub open_registration: bool,
     pub max_record_size: usize,
-    pub register_webhook_url: Option<String>,
+    pub register_webhook_url: Option<url::Url>,
     pub register_webhook_username: String,
     pub metrics: Metrics,
 

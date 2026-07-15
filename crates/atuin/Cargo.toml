@@ -57,6 +57,7 @@ derive_more = { workspace = true }
 
 time = { workspace = true }
 eyre = { workspace = true }
+url = { workspace = true }
 indicatif = "0.18.0"
 serde = { workspace = true }
 serde_json = { workspace = true }

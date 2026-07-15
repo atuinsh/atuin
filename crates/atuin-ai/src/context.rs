@@ -9,7 +9,7 @@ use atuin_client::settings::AiCapabilities;
 /// Holds the API configuration and client settings needed by the event loop and stream task.
 #[derive(Clone, Debug)]
 pub(crate) struct AppContext {
-    pub endpoint: String,
+    pub endpoint: reqwest::Url,
     /// Bearer token for `endpoint`. Empty means unauthenticated — no
     /// Authorization header is sent (an OSS server may not require auth).
     pub token: String,

@@ -12,14 +12,14 @@ pub async fn run(settings: &Settings) -> Result<()> {
         bail!("No CLI session found. Please log in first with 'atuin login'.");
     };
 
-    let hub_address = settings.active_hub_endpoint().unwrap_or_default();
+    let hub_address = settings.hub_endpoint();
 
     if hub_token.is_some() {
         println!("Found both Hub and CLI sessions. Linking accounts...");
     } else {
         println!("Found CLI session but no Hub session. Logging in to Hub first...");
 
-        let session = atuin_client::hub::HubAuthSession::start(hub_address.as_ref()).await?;
+        let session = atuin_client::hub::HubAuthSession::start(&hub_address).await?;
         println!("Open this URL to authenticate with Atuin Hub:");
         println!("{}", session.auth_url);
 
@@ -34,7 +34,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
         println!("Hub authentication complete.");
     }
 
-    atuin_client::hub::link_account(hub_address.as_ref(), &cli_token).await?;
+    atuin_client::hub::link_account(&hub_address, &cli_token).await?;
     println!("Successfully linked CLI account to Hub.");
 
     Ok(())

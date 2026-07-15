@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::env;
 use std::time::Duration;
 
-use eyre::{Result, bail, eyre};
+use eyre::{Result, bail};
 use reqwest::{
     Response, StatusCode, Url,
     header::{AUTHORIZATION, HeaderMap, USER_AGENT},
@@ -12,6 +12,7 @@ use atuin_common::{
     api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION},
     record::{EncryptedData, HostId, Record, RecordIdx},
     tls::ensure_crypto_provider,
+    url::UrlAppendExt,
 };
 use atuin_common::{
     api::{
@@ -52,31 +53,12 @@ impl AuthToken {
 }
 
 pub struct Client<'a> {
-    sync_addr: &'a str,
+    sync_addr: &'a Url,
     client: reqwest::Client,
 }
 
-fn make_url(address: &str, path: &str) -> Result<String> {
-    // `join()` expects a trailing `/` in order to join paths
-    // e.g. it treats `http://host:port/subdir` as a file called `subdir`
-    let address = if address.ends_with("/") {
-        address
-    } else {
-        &format!("{address}/")
-    };
-
-    // passing a path with a leading `/` will cause `join()` to replace the entire URL path
-    let path = path.strip_prefix("/").unwrap_or(path);
-
-    let url = Url::parse(address)
-        .map(|url| url.join(path))?
-        .map_err(|_| eyre!("invalid address"))?;
-
-    Ok(url.to_string())
-}
-
 pub async fn register(
-    address: &str,
+    address: &Url,
     username: &str,
     email: &str,
     password: &str,
@@ -87,14 +69,14 @@ pub async fn register(
     map.insert("email", email);
     map.insert("password", password);
 
-    let url = make_url(address, &format!("/user/{username}"))?;
+    let url = address.append(["user", username])?;
     let resp = reqwest::get(url).await?;
 
     if resp.status().is_success() {
         bail!("username already in use");
     }
 
-    let url = make_url(address, "/register")?;
+    let url = address.append(["register"])?;
     let client = reqwest::Client::new();
     let resp = client
         .post(url)
@@ -113,9 +95,9 @@ pub async fn register(
     Ok(session)
 }
 
-pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
+pub async fn login(address: &Url, req: LoginRequest) -> Result<LoginResponse> {
     ensure_crypto_provider();
-    let url = make_url(address, "/login")?;
+    let url = address.append(["login"])?;
     let client = reqwest::Client::new();
 
     let resp = client
@@ -139,7 +121,7 @@ pub async fn latest_version() -> Result<Version> {
     use atuin_common::api::IndexResponse;
 
     ensure_crypto_provider();
-    let url = "https://api.atuin.sh";
+    let url = crate::settings::DEFAULT_SYNC_URL.clone();
     let client = reqwest::Client::new();
 
     let resp = client
@@ -218,7 +200,7 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
 
 impl<'a> Client<'a> {
     pub fn new(
-        sync_addr: &'a str,
+        sync_addr: &'a Url,
         auth: AuthToken,
         connect_timeout: u64,
         timeout: u64,
@@ -242,8 +224,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn me(&self) -> Result<MeResponse> {
-        let url = make_url(self.sync_addr, "/api/v0/me")?;
-        let url = Url::parse(url.as_str())?;
+        let url = self.sync_addr.append_path("api/v0/me")?;
 
         let resp = self.client.get(url).send().await?;
         let resp = handle_resp_error(resp).await?;
@@ -254,8 +235,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn delete_store(&self) -> Result<()> {
-        let url = make_url(self.sync_addr, "/api/v0/store")?;
-        let url = Url::parse(url.as_str())?;
+        let url = self.sync_addr.append_path("api/v0/store")?;
 
         let resp = self.client.delete(url).send().await?;
 
@@ -265,8 +245,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn post_records(&self, records: &[Record<EncryptedData>]) -> Result<()> {
-        let url = make_url(self.sync_addr, "/api/v0/record")?;
-        let url = Url::parse(url.as_str())?;
+        let url = self.sync_addr.append_path("api/v0/record")?;
 
         debug!("uploading {} records to {url}", records.len());
 
@@ -285,15 +264,12 @@ impl<'a> Client<'a> {
     ) -> Result<Vec<Record<EncryptedData>>> {
         debug!("fetching record/s from host {}/{}/{}", host.0, tag, start);
 
-        let url = make_url(
-            self.sync_addr,
-            &format!(
-                "/api/v0/record/next?host={}&tag={}&count={}&start={}",
-                host.0, tag, count, start
-            ),
-        )?;
-
-        let url = Url::parse(url.as_str())?;
+        let mut url = self.sync_addr.append_path("api/v0/record/next")?;
+        url.query_pairs_mut()
+            .append_pair("host", &host.0.to_string())
+            .append_pair("tag", &tag)
+            .append_pair("count", &count.to_string())
+            .append_pair("start", &start.to_string());
 
         let resp = self.client.get(url).send().await?;
         let resp = handle_resp_error(resp).await?;
@@ -304,8 +280,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn record_status(&self) -> Result<RecordStatus> {
-        let url = make_url(self.sync_addr, "/api/v0/record")?;
-        let url = Url::parse(url.as_str())?;
+        let url = self.sync_addr.append_path("api/v0/record")?;
 
         let resp = self.client.get(url).send().await?;
         let resp = handle_resp_error(resp).await?;
@@ -322,8 +297,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn delete(&self) -> Result<()> {
-        let url = make_url(self.sync_addr, "/account")?;
-        let url = Url::parse(url.as_str())?;
+        let url = self.sync_addr.append(["account"])?;
 
         let resp = self.client.delete(url).send().await?;
 
@@ -341,8 +315,7 @@ impl<'a> Client<'a> {
         current_password: String,
         new_password: String,
     ) -> Result<()> {
-        let url = make_url(self.sync_addr, "/account/password")?;
-        let url = Url::parse(url.as_str())?;
+        let url = self.sync_addr.append_path("account/password")?;
 
         let resp = self
             .client

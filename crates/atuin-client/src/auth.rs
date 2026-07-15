@@ -9,6 +9,7 @@ use atuin_common::{
         LoginResponse, RegisterResponse,
     },
     tls::ensure_crypto_provider,
+    url::UrlAppendExt,
 };
 
 use crate::settings::Settings;
@@ -75,9 +76,9 @@ pub trait AuthClient: Send + Sync {
 /// Resolve the appropriate [`AuthClient`] for the current settings.
 pub async fn auth_client(settings: &Settings) -> Box<dyn AuthClient> {
     if settings.is_hub_sync() {
-        let endpoint = settings.active_hub_endpoint().unwrap_or_default();
+        let endpoint = settings.hub_endpoint();
         Box::new(HubAuthClient::new(
-            endpoint.as_ref(),
+            &endpoint,
             settings.hub_session_token().await.ok(),
         )) as Box<dyn AuthClient>
     } else {
@@ -95,7 +96,7 @@ pub async fn auth_client(settings: &Settings) -> Box<dyn AuthClient> {
 // ---------------------------------------------------------------------------
 
 pub struct LegacyAuthClient {
-    address: String,
+    address: Url,
     session_token: Option<String>,
     connect_timeout: u64,
     timeout: u64,
@@ -103,13 +104,13 @@ pub struct LegacyAuthClient {
 
 impl LegacyAuthClient {
     pub fn new(
-        address: &str,
+        address: &Url,
         session_token: Option<String>,
         connect_timeout: u64,
         timeout: u64,
     ) -> Self {
         Self {
-            address: address.to_string(),
+            address: address.clone(),
             session_token,
             connect_timeout,
             timeout,
@@ -178,10 +179,10 @@ impl AuthClient for LegacyAuthClient {
         _totp_code: Option<&str>,
     ) -> Result<MutateResponse> {
         let client = self.authenticated_client()?;
-        let url = make_url(&self.address, "/account/password")?;
+        let url = self.address.append_path("account/password")?;
 
         let resp = client
-            .patch(&url)
+            .patch(url)
             .json(&ChangePasswordRequest {
                 current_password: current_password.to_string(),
                 new_password: new_password.to_string(),
@@ -203,10 +204,10 @@ impl AuthClient for LegacyAuthClient {
         _totp_code: Option<&str>,
     ) -> Result<MutateResponse> {
         let client = self.authenticated_client()?;
-        let url = make_url(&self.address, "/account")?;
+        let url = self.address.append(["account"])?;
 
         let resp = client
-            .delete(&url)
+            .delete(url)
             .json(&serde_json::json!({ "password": password }))
             .send()
             .await?;
@@ -225,14 +226,14 @@ impl AuthClient for LegacyAuthClient {
 // ---------------------------------------------------------------------------
 
 pub struct HubAuthClient {
-    address: String,
+    address: Url,
     hub_token: Option<String>,
 }
 
 impl HubAuthClient {
-    pub fn new(address: &str, hub_token: Option<String>) -> Self {
+    pub fn new(address: &Url, hub_token: Option<String>) -> Self {
         Self {
-            address: address.trim_end_matches('/').to_string(),
+            address: address.clone(),
             hub_token,
         }
     }
@@ -255,7 +256,7 @@ impl AuthClient for HubAuthClient {
         totp_code: Option<&str>,
     ) -> Result<AuthResponse> {
         ensure_crypto_provider();
-        let url = make_url(&self.address, "/api/v0/login")?;
+        let url = self.address.append_path("api/v0/login")?;
         let client = reqwest::Client::new();
 
         let mut body = serde_json::json!({
@@ -267,7 +268,7 @@ impl AuthClient for HubAuthClient {
         }
 
         let resp = client
-            .post(&url)
+            .post(url)
             .header(USER_AGENT, APP_USER_AGENT)
             .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
             .json(&body)
@@ -303,11 +304,11 @@ impl AuthClient for HubAuthClient {
 
     async fn register(&self, username: &str, email: &str, password: &str) -> Result<AuthResponse> {
         ensure_crypto_provider();
-        let url = make_url(&self.address, "/api/v0/register")?;
+        let url = self.address.append_path("api/v0/register")?;
         let client = reqwest::Client::new();
 
         let resp = client
-            .post(&url)
+            .post(url)
             .header(USER_AGENT, APP_USER_AGENT)
             .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
             .json(&serde_json::json!({
@@ -357,7 +358,7 @@ impl AuthClient for HubAuthClient {
         }
 
         ensure_crypto_provider();
-        let url = make_url(&self.address, "/api/v0/account/password")?;
+        let url = self.address.append_path("api/v0/account/password")?;
         let client = reqwest::Client::new();
 
         let mut body = serde_json::json!({
@@ -369,7 +370,7 @@ impl AuthClient for HubAuthClient {
         }
 
         let resp = client
-            .patch(&url)
+            .patch(url)
             .header(USER_AGENT, APP_USER_AGENT)
             .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
             .bearer_auth(hub_token)
@@ -419,7 +420,7 @@ impl AuthClient for HubAuthClient {
         }
 
         ensure_crypto_provider();
-        let url = make_url(&self.address, "/api/v0/account")?;
+        let url = self.address.append_path("api/v0/account")?;
         let client = reqwest::Client::new();
 
         let mut body = serde_json::json!({
@@ -430,7 +431,7 @@ impl AuthClient for HubAuthClient {
         }
 
         let resp = client
-            .delete(&url)
+            .delete(url)
             .header(USER_AGENT, APP_USER_AGENT)
             .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
             .bearer_auth(hub_token)
@@ -459,25 +460,4 @@ impl AuthClient for HubAuthClient {
             _ => bail!("Hub account deletion failed with status {status}"),
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
-
-fn make_url(address: &str, path: &str) -> Result<String> {
-    let address = if address.ends_with('/') {
-        address.to_string()
-    } else {
-        format!("{address}/")
-    };
-
-    let path = path.strip_prefix('/').unwrap_or(path);
-
-    let url = Url::parse(&address)
-        .context("failed to parse server address")?
-        .join(path)
-        .context("failed to join URL path")?;
-
-    Ok(url.to_string())
 }

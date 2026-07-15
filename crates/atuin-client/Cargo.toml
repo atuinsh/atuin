@@ -34,6 +34,7 @@ interim = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+url = { workspace = true }
 humantime = "2.1.0"
 async-trait = { workspace = true }
 itertools = { workspace = true }
@@ -83,6 +84,7 @@ features = ["tracing"]
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 pretty_assertions = { workspace = true }
+rstest = { workspace = true }
 divan = "0.1.14"
 tempfile = "3"
 

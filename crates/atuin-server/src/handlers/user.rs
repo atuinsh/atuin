@@ -39,7 +39,7 @@ pub fn verify_str(hash: &str, password: &str) -> bool {
 
 // Try to send a Discord webhook once - if it fails, we don't retry. "At most once", and best effort.
 // Don't return the status because if this fails, we don't really care.
-async fn send_register_hook(url: &str, username: String, registered: String) {
+async fn send_register_hook(url: &url::Url, username: String, registered: String) {
     ensure_crypto_provider();
     let hook = HashMap::from([
         ("username", username),
@@ -49,7 +49,7 @@ async fn send_register_hook(url: &str, username: String, registered: String) {
     let client = reqwest::Client::new();
 
     let resp = client
-        .post(url)
+        .post(url.clone())
         .timeout(Duration::new(5, 0))
         .header(CONTENT_TYPE, "application/json")
         .json(&hook)
