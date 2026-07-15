@@ -7,7 +7,7 @@
 //! |---|---|---|
 //! | [`CommandStr<'a>`] | `&'a str` | `&'a str` |
 //! | [`CommandString`] | `String` | `String` |
-//! | [`CommandCow<'a>`] | `Cow<'a, str>` | `Cow<'a, str>` |
+//! | [`CommandStrCow<'a>`] | `Cow<'a, str>` | `Cow<'a, str>` |
 //!
 //! Any other storage that is `AsRef<str>` (`Arc<str>`, `Box<str>`, ...) works with no
 //! extra code: `Command<Arc<str>>` is a command too.
@@ -19,11 +19,11 @@
 //! ```
 //! use std::borrow::Cow;
 //!
-//! use atuin_common::command_str::{CommandCow, CommandStr, CommandString};
+//! use atuin_common::command_str::{CommandStrCow, CommandStr, CommandString};
 //!
 //! let borrowed: CommandStr<'_> = CommandStr::new("cargo test");
 //! let owned: CommandString = borrowed.to_command_string();
-//! let cow: CommandCow<'_> = CommandCow::new(Cow::Borrowed("cargo test"));
+//! let cow: CommandStrCow<'_> = CommandStrCow::new(Cow::Borrowed("cargo test"));
 //!
 //! // The specialisations compare by command text, whatever they are stored in.
 //! assert_eq!(borrowed, owned);
@@ -50,7 +50,7 @@ use serde::{Deserialize, Serialize};
 
 /// A shell command, generic over the string storage `S`.
 ///
-/// Use the [`CommandStr`], [`CommandString`] and [`CommandCow`] aliases rather than
+/// Use the [`CommandStr`], [`CommandString`] and [`CommandStrCow`] aliases rather than
 /// naming this type directly.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -64,7 +64,7 @@ pub type CommandStr<'a> = Command<&'a str>;
 pub type CommandString = Command<String>;
 
 /// A clone-on-write command. Plays the role of `Cow<'_, str>`.
-pub type CommandCow<'a> = Command<Cow<'a, str>>;
+pub type CommandStrCow<'a> = Command<Cow<'a, str>>;
 
 /// The reason a raw string could not be used as a [`Command`].
 ///
@@ -208,19 +208,19 @@ impl From<CommandStr<'_>> for CommandString {
     }
 }
 
-impl From<CommandCow<'_>> for CommandString {
-    fn from(command: CommandCow<'_>) -> Self {
+impl From<CommandStrCow<'_>> for CommandString {
+    fn from(command: CommandStrCow<'_>) -> Self {
         Command(command.0.into_owned())
     }
 }
 
-impl<'a> From<CommandStr<'a>> for CommandCow<'a> {
+impl<'a> From<CommandStr<'a>> for CommandStrCow<'a> {
     fn from(command: CommandStr<'a>) -> Self {
         Command(Cow::Borrowed(command.0))
     }
 }
 
-impl From<CommandString> for CommandCow<'_> {
+impl From<CommandString> for CommandStrCow<'_> {
     fn from(command: CommandString) -> Self {
         Command(Cow::Owned(command.0))
     }
@@ -232,13 +232,13 @@ mod tests {
 
     use pretty_assertions::assert_eq;
 
-    use super::{Command, CommandCow, CommandStr, CommandString, InvalidCommand};
+    use super::{Command, CommandStr, CommandStrCow, CommandString, InvalidCommand};
 
     #[test]
     fn wraps_borrowed_owned_and_cow_storage() {
         let borrowed = CommandStr::new("ls -la");
         let owned = CommandString::new(String::from("ls -la"));
-        let cow = CommandCow::new(Cow::Borrowed("ls -la"));
+        let cow = CommandStrCow::new(Cow::Borrowed("ls -la"));
 
         assert_eq!(*borrowed.inner(), "ls -la");
         assert_eq!(owned.into_inner(), String::from("ls -la"));
@@ -271,7 +271,7 @@ mod tests {
         assert_eq!(CommandStr::new("ls").as_str(), "ls");
         assert_eq!(CommandString::new(String::from("ls")).as_str(), "ls");
         assert_eq!(
-            CommandCow::new(Cow::Owned(String::from("ls"))).as_str(),
+            CommandStrCow::new(Cow::Owned(String::from("ls"))).as_str(),
             "ls"
         );
         assert_eq!(Command::new(Arc::<str>::from("ls")).as_str(), "ls");
@@ -290,7 +290,7 @@ mod tests {
 
     #[test]
     fn any_storage_can_be_borrowed_as_a_command_str() {
-        let cow = CommandCow::new(Cow::Borrowed("git push"));
+        let cow = CommandStrCow::new(Cow::Borrowed("git push"));
 
         assert_eq!(cow.as_command_str().as_str(), "git push");
     }
@@ -311,7 +311,7 @@ mod tests {
     fn equality_is_content_based_across_storages() {
         let borrowed = CommandStr::new("ls -la");
         let owned = CommandString::new(String::from("ls -la"));
-        let cow = CommandCow::new(Cow::Borrowed("ls -la"));
+        let cow = CommandStrCow::new(Cow::Borrowed("ls -la"));
 
         assert_eq!(borrowed, owned);
         assert_eq!(owned, cow);
@@ -358,7 +358,7 @@ mod tests {
     fn wraps_any_storage_via_from() {
         let borrowed: CommandStr<'_> = "ls".into();
         let owned: CommandString = String::from("ls").into();
-        let cow: CommandCow<'_> = Cow::Borrowed("ls").into();
+        let cow: CommandStrCow<'_> = Cow::Borrowed("ls").into();
 
         assert_eq!(borrowed, owned);
         assert_eq!(owned, cow);
@@ -367,10 +367,10 @@ mod tests {
     #[test]
     fn converts_between_the_specialisations_via_from() {
         let from_borrowed: CommandString = CommandStr::new("ls").into();
-        let from_cow: CommandString = CommandCow::new(Cow::Owned(String::from("ls"))).into();
+        let from_cow: CommandString = CommandStrCow::new(Cow::Owned(String::from("ls"))).into();
 
-        let borrowed_to_cow: CommandCow<'_> = CommandStr::new("ls").into();
-        let owned_to_cow: CommandCow<'_> = CommandString::new(String::from("ls")).into();
+        let borrowed_to_cow: CommandStrCow<'_> = CommandStr::new("ls").into();
+        let owned_to_cow: CommandStrCow<'_> = CommandString::new(String::from("ls")).into();
 
         assert_eq!(from_borrowed.as_str(), "ls");
         assert_eq!(from_cow.as_str(), "ls");
