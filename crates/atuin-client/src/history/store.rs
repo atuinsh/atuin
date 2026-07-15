@@ -169,7 +169,7 @@ impl HistoryStore {
             ret.push(record);
         }
 
-        self.store.push_batch(ret.iter()).await?;
+        self.store.push_batch(&mut ret.iter()).await?;
 
         Ok(())
     }

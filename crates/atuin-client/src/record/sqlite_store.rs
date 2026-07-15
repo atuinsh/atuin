@@ -134,7 +134,7 @@ impl SqliteStore {
 impl Store for SqliteStore {
     async fn push_batch(
         &self,
-        records: impl Iterator<Item = &Record<EncryptedData>> + Send + Sync,
+        records: &mut (dyn Iterator<Item = &Record<EncryptedData>> + Send),
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
@@ -573,7 +573,7 @@ mod tests {
             records.push(tail.clone());
         }
 
-        db.push_batch(records.iter()).await.unwrap();
+        db.push_batch(&mut records.iter()).await.unwrap();
 
         assert_eq!(
             db.len(tail.host.id, tail.tag.as_str()).await.unwrap(),

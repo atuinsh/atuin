@@ -102,7 +102,7 @@ fn push_batch(bencher: divan::Bencher, n: usize) {
             (db, records)
         })
         .bench_values(|(db, records)| {
-            rt.block_on(db.sqlite_store.push_batch(records.iter()))
+            rt.block_on(db.sqlite_store.push_batch(&mut records.iter()))
                 .unwrap();
         });
 }

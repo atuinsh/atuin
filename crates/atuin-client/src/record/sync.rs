@@ -263,7 +263,7 @@ async fn sync_download(
         }
 
         store
-            .push_batch(page.iter())
+            .push_batch(&mut page.iter())
             .await
             .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
 
