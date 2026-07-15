@@ -1,265 +1,256 @@
-# ATU-538 — Ephemeral Daemon Investigation & Cutover Plan
+# ATU-538 — Removing the Daemonless Code Paths (Daemon-Only Client)
 
-> **Status:** Investigation complete — recommendation and phased implementation plan below.
+> **Status:** Investigation complete — full census, feasibility verdict, architecture, and phased plan below.
 > **Issue:** ATU-538 "Investigate whether making daemonless mode just spawn an ephemeral daemon is possible."
 > **Project:** Completely Cutover to Daemon.
+> **Goal (as clarified by maintainer):** **Completely remove** the client's direct-to-SQLite and direct-to-record-store code paths. No config toggle, no fallback. The daemon becomes the sole owner of all local storage; the CLI becomes a thin RPC client that spawns the daemon on demand.
 >
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement the plan in Part 3 task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. **Do not begin implementation before the design decisions in Part 2 are ratified by a maintainer** — this is an investigation deliverable, and the plan is contingent on those decisions.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement the plan in Part 4 task-by-task. Steps use checkbox (`- [ ]`) syntax. **This is a multi-release re-architecture, not a single PR** — do not attempt it in one shot, and get the Part 3 design decisions ratified before starting.
 
-**Goal of the investigation:** Determine whether the daemonless code path can be eliminated by having the client transparently spawn/talk to a daemon, so we stop maintaining two storage code paths.
-
-**One-line verdict:** **Yes, it is feasible — and most of the mechanism already exists.** The autostart feature already does `fork`/`spawn`-into-daemon and waits for readiness. The real work is not "make spawning possible" (it is), but "collapse the branch so the daemon path is the *only* write path," plus deciding the fallback story for environments where a daemon genuinely cannot run. A *truly* ephemeral (spawn → serve one request → die) daemon is **not** recommended; a **spawn-on-demand, persistent** daemon is.
+**One-line verdict:** **Feasible, and the right end-state — but it is a re-architecture, not a refactor.** "Just spawn a daemon" is already solved (autostart does `fork`+exec today). The real cost is that *removing direct storage access entirely* forces the daemon to serve the **complete** data API that ~25 subcommands currently satisfy by opening SQLite themselves — including full search-row hydration, stats, import bulk-insert, sync, key rotation, and the dotfiles/kv/scripts record stores. The tractable way to do this without rewriting every command is to **proxy the existing `Database`/`Store` traits over gRPC** so command handlers stay unchanged and only the ~6 construction sites and the trait backends move.
 
 ---
 
-## Part 1 — What exists today (grounded architecture map)
+## Part 1 — The mechanism already exists; the hard part is the surface
 
-### 1.1 There are two independent axes, not one switch
+### 1.1 Spawning a daemon on demand is a solved problem
 
-The word "daemonless" hides two separate decisions:
+The autostart infrastructure in `crates/atuin/src/command/client/daemon.rs` already implements the issue's "`fork+execve` into the daemon" idea:
 
-| Axis | Gate | Where |
-|---|---|---|
-| **Write path** (record `start`/`end`) | runtime `settings.daemon.enabled` | `crates/atuin/src/command/client/history.rs:577`, `:593` |
-| **Read path** (interactive TUI search only) | `settings.search_mode == SearchMode::DaemonFuzzy` | `crates/atuin/src/command/client/search/engines.rs:17-29` |
+- `spawn_daemon_process()` (`daemon.rs:253-269`) re-execs `atuin daemon start` (+ `--daemonize` on unix; detached `spawn` on Windows).
+- `ensure_daemon_running()` (`daemon.rs:355-389`) takes a cross-process startup lock, probes, cleans a stale socket, spawns, and `wait_until_ready()`.
+- `try_with_restart()` (`daemon.rs:419-459`) already retries write RPCs across a restart.
+- systemd socket-activation is honored and excluded from autostart (`ensure_autostart_supported`, `daemon.rs:335-346`).
 
-Both are additionally behind the compile-time `#[cfg(feature = "daemon")]` gate. **Non-interactive `atuin search <query>` never uses the daemon at all** — it always queries local SQLite (`crates/atuin/src/command/client/search.rs:310-342`).
+So "is it possible to spawn an ephemeral daemon and talk to it?" — **yes, that code ships today.** A *truly* ephemeral (spawn → serve one request → die) daemon is the wrong shape (per-command spawn thrash defeats the in-memory index and background sync); the correct shape is **spawn-on-demand, resident** — exactly what autostart already does. What ATU-538 actually requires beyond this is deleting the *other* half: the direct storage code the client still runs when it isn't talking to a daemon.
 
-This decoupling matters: "cutover to daemon" is really "collapse the *write* axis," because the read axis already has a sane story (see §1.4).
+### 1.2 What "the other half" actually is (the census result)
 
-### 1.2 The write path — the actual dual-maintenance burden
+Two exhaustive censuses (Appendix A/B) found that **essentially the entire data surface of atuin** is reached by opening local storage directly in the client. The chokepoints:
 
-`crates/atuin/src/command/client/history.rs`:
+- `crates/atuin/src/command/client.rs:359-360` opens **both** the history `Sqlite` and the record `SqliteStore` for nearly every non-history subcommand.
+- `crates/atuin/src/command/client/history.rs:582 / 600 / 1142` open the history DB for the history subcommands.
+- `crates/atuin/src/command/client/history.rs:601 / 607 / 1143 / 1150` open the record store / `HistoryStore`.
+- `crates/atuin-ai/src/commands/inline.rs:64` and `crates/atuin-ai/src/mcp.rs:87` open the history DB for `atuin ai` / `atuin mcp`.
 
-```rust
-// start_history_entry — history.rs:570-584
-#[cfg(feature = "daemon")]
-if settings.daemon.enabled {
-    return handle_daemon_start(settings, command, author, intent).await; // gRPC to daemon
-}
-let db = Sqlite::new(db_path, settings.local_timeout).await?;             // daemonless: open DB directly
-handle_start(&db, settings, command, author, intent).await
+Commands that would stop working the instant the client can no longer open storage:
 
-// end_history_entry — history.rs:586-610
-#[cfg(feature = "daemon")]
-if settings.daemon.enabled {
-    return handle_daemon_end(settings, id, exit, duration).await;        // gRPC to daemon
-}
-// daemonless: open Sqlite + SqliteStore + HistoryStore, then...
-handle_end(&db, store, history_store, settings, id, exit, duration).await
+`history start/end/list/last/init-store/prune/dedup`, `search` (non-interactive **and** the full interactive TUI: search, count, load, stats, get_dups, query_history, all_with_count), `stats`, `wrapped`, `import` (bulk insert), `sync`, `sync status`, `store status/rebuild/rekey/purge/verify/push/pull`, `scripts new --last`, `ai`, `mcp`, `login`/`register` (key re-encryption), `kv *`, `dotfiles alias/var *`, `scripts *`, `init <shell>` (dotfiles read), and `daemon start` (opens then legitimately hands off to the daemon crate).
+
+That is the true scope of "remove the direct paths": **every one of those operations must become a daemon RPC, or be deleted.**
+
+### 1.3 The one place direct access must remain
+
+The **daemon crate itself** (`crates/atuin-daemon/`) keeps direct `Sqlite`/`SqliteStore` access — it is the single owner. `atuin daemon start` (`client.rs:359`, `daemon.rs:659/669`) opening the DB and handing it to `atuin_daemon::boot` is not a "daemonless path"; it is the boot path. The maintenance-burden duplication we are deleting is the *client-side second implementation* of the same operations, and the `if settings.daemon.enabled { rpc } else { direct }` branching that keeps both alive.
+
+---
+
+## Part 2 — Architecture: proxy the storage traits, don't rewrite every command
+
+### 2.1 The naive approach explodes; the trait-proxy approach doesn't
+
+The history DB is reached through the `Database` trait (`crates/atuin-client/src/database.rs:151-200`): ~18 methods — `save`, `save_bulk`, `load`, `list`, `range`, `update`, `history_count`, `last`, `before`, `delete`, `delete_rows`, `deleted`, `search`, `query_history`, `all_with_count`, `all_paged`, `stats`, `get_dups`. Record stores go through the `Store` trait (`record/store.rs`) and the typed `HistoryStore`/`AliasStore`/`VarStore`/`KvStore`/`ScriptStore` wrappers.
+
+Two ways to make the daemon serve these:
+
+- **(A) Curated RPCs** — design a bespoke gRPC method per command's need (`Stats`, `ListHistory`, `Dedup`, …). *Rejected:* it forces rewriting every command handler to call the new RPCs, re-deriving query/filter logic on the wire, and it multiplies the branch points we are trying to delete.
+- **(B) Trait proxy (RECOMMENDED)** — add gRPC methods that mirror the `Database`/`Store` trait surface, then implement **`DaemonDatabase: Database`** and **`DaemonStore: Store`** in the client that forward each call over gRPC to the daemon, which services it with the *one* `Sqlite`/`SqliteStore` impl. Command handlers keep taking `&dyn Database` / `impl Store` and **do not change**. Only the ~6 construction sites swap the concrete type, and the query logic stays single-sourced inside the daemon.
+
+Approach (B) is what makes "delete the direct paths" a bounded, mostly-mechanical project instead of a rewrite of 25 commands.
+
+### 2.2 The resulting shape
+
+```
+                 today                              target
+   CLI cmd ──► Sqlite (local file)      CLI cmd ──► &dyn Database
+   CLI cmd ──► SqliteStore (local)                     │
+       (also, when daemon.enabled,                     ▼
+        a *second* path over gRPC)          DaemonDatabase / DaemonStore  (client-side proxy)
+                                                        │ gRPC (unix socket / TCP)
+                                                        ▼
+                                            atuin-daemon ──► Sqlite / SqliteStore   (sole owner)
 ```
 
-The daemonless `handle_end` (`history.rs:485-551`) does: `db.update()` → `history_store.push()` → **inline sync** (`history.rs:530-548`). The daemon replicates the exact same `db.save` / `history_store.push` server-side (`crates/atuin-daemon/src/components/history.rs:184-248`) and moves sync to a **background timer** (`crates/atuin-daemon/src/components/sync.rs`). So the two paths differ in *when sync happens* — a semantic difference the cutover must preserve or consciously change.
+Benefits beyond deleting the duplication:
+- **Single-writer SQLite for free.** Only the daemon opens the DB, eliminating multi-process lock contention (a recurring source of `database is locked`).
+- **One place for query/sync/crypto logic.** No more "inline sync in `history end`" vs "background sync in the daemon" divergence.
 
-### 1.3 The daemon can already be spawned on demand — this is the crux
+### 2.3 Prerequisite: handlers must be generic over the trait, not the concrete `Sqlite`
 
-The autostart infrastructure in `crates/atuin/src/command/client/daemon.rs` **already implements the issue's proposed `fork+execve` idea**:
+Several handlers today take a concrete `Sqlite`/`SqliteStore` rather than `&dyn Database`/`impl Store`, and `HistoryStore::new` holds a concrete `SqliteStore`. Making them generic (or trait-object) is a mechanical but wide-reaching prerequisite (Task 1). Where a handler needs the *whole* history set (the **skim** engine calls `all_with_count`, `engines/skim.rs:60`, loading all rows), the proxy must stream — see risks.
 
-- `spawn_daemon_process()` (`daemon.rs:253-269`): re-execs the current binary as `atuin daemon start` (+ `--daemonize` on unix), stdio nulled.
-- `ensure_daemon_running()` (`daemon.rs:355-389`): takes a cross-process startup lock, probes, removes a stale socket, spawns, then `wait_until_ready()`.
-- `try_with_restart()` (`daemon.rs:419-459`): on a retriable error and if `settings.daemon.autostart`, restarts and retries. Already wraps `start_history`/`end_history`/`cancel_history`.
-- Cold-start is serialized against thundering-herd shell hooks by a pidfile + `.startup.lock` (`daemon.rs:359-361`, `wait_for_pidfile_available` at `:379`).
+### 2.4 Records/sync/dotfiles are higher-level and can use direct RPCs
 
-**Conclusion:** the question "is it *possible* to spawn a daemon and talk to it ephemerally?" is already answered by shipping code. Autostart is that mechanism, minus the "it stays resident afterward" part.
-
-### 1.4 The read path already depends on local SQLite regardless
-
-Even in `DaemonFuzzy` search mode, the daemon only returns **ranked UUIDs** from its in-memory index; the client still hydrates full rows from local SQLite (`crates/atuin/src/command/client/search/engines/daemon.rs:104-112`, `full_query` at `:118-228`), and falls back to `db.search` for regex. So the client *always* links and opens SQLite for reads. This means removing the daemonless *read* path is neither necessary nor clearly beneficial — keeping local reads is fine. **The cutover should focus on writes.**
-
-### 1.5 Lifecycle & platform facts that constrain the design
-
-- **No idle/ephemeral shutdown exists.** The daemon runs until `ShutdownRequested`/SIGTERM (`crates/atuin-daemon/src/daemon.rs:297-322`). There is no "serve one request then exit."
-- **Windows is a first-class target** (`dist-workspace.toml`, CI matrix `windows-latest`). It has **no `fork`/daemonize** — autostart just `cmd.spawn()`s a detached `atuin daemon start` and the daemon listens on **TCP loopback** `127.0.0.1:8889` (`crates/atuin-daemon/src/server.rs:120-170`, `client.rs` `#[cfg(not(unix))]` blocks). So "fork+execve" is unix-specific framing; the portable primitive is "spawn a detached child process."
-- **macOS** has no systemd; it relies on autostart or a manual launch (no launchd plist in-repo).
-- **systemd socket activation** exists on Linux (`server.rs:32-67`) and is *incompatible* with autostart (`ensure_autostart_supported` bails, `daemon.rs:335-346`). Any always-on-daemon design must keep deferring to systemd when `daemon.systemd_socket = true`.
+Unlike the wide history *read* surface, record-store *writes* and sync are few and high-level (`push`, `delete_entries`, `re_encrypt`, `purge`, `verify`, `status`, `sync`, `rebuild`, plus dotfiles/kv/scripts `set/get/list/delete`). These are better exposed as explicit daemon RPCs than as a raw `Store`-trait proxy, because they carry policy (encryption keys, sync cadence, projection rebuilds) that must live daemon-side anyway. The daemon already owns the encryption key and a background sync loop (`components/sync.rs`), so moving `login`'s `re_encrypt` and `sync`'s network calls behind the daemon also **centralizes key handling** instead of loading the key in every client process.
 
 ---
 
-## Part 2 — Design analysis & recommendation
+## Part 3 — Decisions to ratify before coding
 
-### 2.1 Option A — Truly ephemeral daemon (spawn → serve → die). NOT recommended.
-
-Spawn a fresh daemon per shell command (or per burst), serve the request, exit when idle.
-
-- **Cost:** every `history start`/`end` hook (i.e. every shell command) pays process-spawn + gRPC-connect + component-boot latency. Even with a short idle window, interactive shells fire these constantly; you'd thrash spawn/teardown.
-- **Loses the daemon's whole point:** the in-memory fuzzy index and the background sync loop only pay off if the process persists across commands. An ephemeral daemon rebuilds/dumps that state every time.
-- **Verdict:** technically possible, practically worse than both current modes. Reject.
-
-### 2.2 Option B — Spawn-on-demand, *persistent* daemon (RECOMMENDED)
-
-Keep exactly one resident daemon, spawned lazily on first need, reused thereafter — i.e. make autostart's behavior the default and remove the daemonless write branch.
-
-- The daemon becomes the single write path. The daemonless `handle_start`/`handle_end` inline-DB logic is deleted (or demoted to a narrow fallback — see §2.4).
-- Sync semantics converge on the daemon's background loop (a deliberate, documented change from inline-on-every-`end`).
-- Reuses all the hardening already built: startup lock, stale-socket cleanup, version negotiation, retry-on-restart.
-- "Ephemeral" in the issue's spirit is satisfied by *spawn-on-demand*: users who never opened a daemon still get one transparently, without adopting systemd.
-
-**This is the recommendation.** The rest of the plan implements Option B.
-
-### 2.3 The load-bearing open questions (need maintainer ratification before coding)
-
-1. **Fallback policy.** `atuin history start/end` runs on *every shell command*. If the daemon cannot be spawned (locked-down container, no fork, exhausted PIDs, read-only runtime dir), do we:
-   - **(2a)** fall back to the current direct-DB write (keep `handle_start`/`handle_end` alive as a fallback only), or
-   - **(2b)** fail the hook (history silently not recorded)?
-
-   Recommendation: **(2a) keep the direct-DB path as an explicit, last-resort fallback**, not as a co-equal mode. This retains reliability while removing it from the *happy path*. It does **not** fully eliminate the code — but it removes the *config-driven* dual maintenance and lets the fallback be tested as one narrow branch. If the goal is truly deleting the code, that is **(2b)**, which is riskier and should be a follow-up once telemetry shows autostart is reliable in the wild.
-2. **Default flip.** Do we flip `daemon.enabled`/`daemon.autostart` defaults to `true`, or keep them opt-in for a release and only change the *plumbing*? Flipping defaults changes behavior for every existing user (first command in a shell now spawns a daemon). Recommendation: land the plumbing first (Phase 1-3) behind existing config, then flip defaults in a separate, well-announced release (Phase 4).
-3. **Sync latency change.** Moving from inline-per-`end` sync to the background loop means the last command before a shell exits may not sync immediately. Acceptable? (The daemon already behaves this way for autostart users; this just makes it universal.) Recommendation: accept and document.
-4. **Non-interactive `atuin search` in scripts/CI.** Should a one-off `atuin search` in a script spawn a daemon? Today it never does (pure local read). Recommendation: **leave non-interactive search local** — it is a read, §1.4 shows reads always use local SQLite anyway, and spawning a daemon for a one-shot scripted query is pure overhead.
-
-### 2.4 What "unification" concretely reduces to
-
-After Option B, the only genuinely dual-maintained logic left is the §2.3-item-1 fallback. Everything else collapses:
-
-- `history.rs:577`/`:593` branch → single `ensure_daemon_running` + daemon RPC (with optional fallback).
-- Autostart stops being an opt-in feature and becomes the mechanism the write path always uses.
-- The daemon `search` engine and local `db` engine remain as-is (read axis unchanged, §1.4).
+1. **No fallback — accepted consequence.** With the direct paths deleted, if the daemon cannot be spawned (no `fork`, locked-down sandbox, read-only `XDG_RUNTIME_DIR`, exhausted PIDs), **atuin cannot record or search history at all** — it fails rather than degrades. This is the explicit goal; documenting it here so it is a chosen tradeoff, not a surprise. Mitigation is limited to clear error messaging and making spawn as robust as possible.
+2. **Every command spawns/needs a daemon**, including one-shots in scripts/CI (`atuin stats`, `atuin search <q>`, `atuin import`, `atuin mcp`, `atuin ai`). First invocation pays cold-start (already serialized by the startup lock). Acceptable? (Recommendation: yes, but keep cold-start fast and consider a `--no-daemon`-style *escape hatch for import only*, see risks.)
+3. **Import bulk path.** `atuin import` does `save_bulk` of potentially millions of rows (`import.rs:155/168`). Proxying that row-by-row over gRPC is a non-starter; it needs a **client-streaming `SaveBulk` RPC**, or import runs *inside* the daemon. Ratify which.
+4. **Sync/network ownership moves to the daemon** (diff/operations/sync_remote, `store push`/`pull`, `history end` auto-sync). Confirm the daemon becomes the sole sync driver and the CLI `sync`/`store push/pull` commands become thin RPC triggers.
+5. **Scope of stores.** Confirm the dotfiles (`alias`/`var`), `kv`, and `scripts` record stores are in scope for removal too (they are separate `Store`-backed DBs). They are the long tail of the census and the largest incremental surface.
+6. **Non-daemon build (`--no-default-features`, `daemon` feature off).** Today the daemonless path *is* the code that compiles with the `daemon` feature off. If we delete it, either (a) the `daemon` feature becomes non-optional, or (b) a minimal embedded path remains for that build. Ratify — this decides whether `#[cfg(feature = "daemon")]` gates disappear entirely.
 
 ---
 
-## Part 3 — Phased implementation plan (contingent on §2.3 ratification)
+## Part 4 — Phased implementation plan (contingent on Part 3)
 
-> This plan implements **Option B with a §2.3-item-1(2a) fallback**: the daemon becomes the default write path, spawned on demand; the direct-DB write survives only as an explicit last-resort fallback. Each task ends with an independently testable deliverable. TDD throughout: write the failing test, watch it fail, implement, watch it pass, commit.
+> Multi-release. Each phase is independently shippable and leaves the tree working. TDD throughout: write the failing test, watch it fail, implement, watch it pass, commit. Every phase keeps Windows CI (`windows-latest`, TCP transport) green and preserves the non-fatal-on-error behavior of the shell hooks.
 
 ### Global Constraints
 
-- **Rust edition/toolchain:** as pinned by `rust-toolchain.toml` (currently 1.97). Do not bump.
-- **Must compile with `--no-default-features` and with the `daemon` feature off.** All new daemon-path code stays behind `#[cfg(feature = "daemon")]`; the fallback path must remain the code that compiles when `daemon` is disabled.
-- **Windows must keep building and passing CI** (`windows-latest`). Never assume `fork`/unix sockets; use the existing `#[cfg(unix)]` / `#[cfg(not(unix))]` split (TCP on Windows).
-- **Never break the shell hook.** `history start`/`end` errors must stay swallowed/non-fatal exactly as today (`history.rs` already logs-and-continues).
-- **Respect `daemon.systemd_socket = true`:** never autostart in that mode (`ensure_autostart_supported`, `daemon.rs:335-346`); defer to systemd.
-- **Preserve `store_failed` semantics:** non-zero exit with `store_failed = false` must cancel/delete the in-flight entry, in both daemon and fallback paths (`history.rs:560-565`, `:511-518`).
-- Conventional-commit messages; frequent commits; one deliverable per task.
+- Toolchain per `rust-toolchain.toml` (currently 1.97); do not bump.
+- Keep Windows building/passing at every phase (no `fork`/unix-socket assumptions; use the existing `#[cfg(unix)]`/`#[cfg(not(unix))]` split).
+- `history start`/`end` must stay non-fatal on error, exactly as today.
+- Never autostart when `daemon.systemd_socket = true`; defer to systemd (`ensure_autostart_supported`, `daemon.rs:335-346`).
+- Preserve `store_failed` semantics: non-zero exit with `store_failed = false` cancels the in-flight entry (`history.rs:560-565`, `:511-518`).
+- Conventional commits; one shippable deliverable per phase; breaking changes flagged with `!` + changelog.
 
 ---
 
-### Task 1: Introduce a single "resolve the write path" seam (no behavior change)
+### Phase 0 — Make handlers generic over the storage traits (no behavior change)
 
-Refactor `start_history_entry`/`end_history_entry` so the daemon-vs-fallback decision lives in one function instead of being inlined at two call sites. Pure refactor; behavior identical; this is the seam every later task edits.
+Prerequisite refactor so a proxy can be substituted for `Sqlite`/`SqliteStore` later. Pure refactor; behavior identical.
 
-**Files:**
-- Modify: `crates/atuin/src/command/client/history.rs:570-610`
-- Test: `crates/atuin/src/command/client/history.rs` (inline `#[cfg(test)]` module) or `crates/atuin/tests/` if one exists.
+**Files (representative):** `crates/atuin/src/command/client.rs`, `.../history.rs`, `.../search*.rs`, `.../stats.rs`, `.../sync.rs`, `crates/atuin-client/src/history/store.rs` (make `HistoryStore` generic over `Store`).
 
-**Interfaces:**
-- Produces: `async fn write_backend(settings: &Settings) -> WriteBackend` where `enum WriteBackend { Daemon, Direct }`, chosen today by `cfg!(feature="daemon") && settings.daemon.enabled`. `start_history_entry`/`end_history_entry` match on it.
-
-- [ ] **Step 1: Write the failing test** — assert that with `daemon.enabled = false`, `write_backend(&settings)` returns `WriteBackend::Direct`; with `daemon.enabled = true` (and feature on), returns `WriteBackend::Daemon`.
-
-```rust
-#[tokio::test]
-async fn write_backend_follows_daemon_enabled() {
-    let mut settings = Settings::utils_test_config();
-    settings.daemon.enabled = false;
-    assert_eq!(write_backend(&settings).await, WriteBackend::Direct);
-    #[cfg(feature = "daemon")]
-    {
-        settings.daemon.enabled = true;
-        assert_eq!(write_backend(&settings).await, WriteBackend::Daemon);
-    }
-}
-```
-
-- [ ] **Step 2: Run it, confirm it fails** — `cargo test -p atuin --features daemon write_backend_follows_daemon_enabled` → FAIL (`write_backend` not found). (Check whether a `Settings::utils_test_config`-style helper exists; if not, construct `Settings` via the existing test pattern in `atuin-client`.)
-- [ ] **Step 3: Implement `WriteBackend` + `write_backend()`** and rewrite the two entry points to `match` on it, calling the *existing* `handle_daemon_*` / `handle_*` bodies unchanged.
-- [ ] **Step 4: Run test + full build both feature states** — `cargo test -p atuin --features daemon write_backend...` PASS; `cargo build -p atuin --no-default-features` and `cargo build -p atuin --features daemon` both succeed.
-- [ ] **Step 5: Commit** — `refactor(history): centralize daemon-vs-direct write backend selection`
+- [ ] **Step 1:** Add a compile-time assertion / test that the command handlers accept `&dyn Database` (e.g. a test that constructs a trivial `Database` mock and passes it to `run_non_interactive`).
+- [ ] **Step 2:** Run it; confirm it fails to compile (handlers currently demand concrete `Sqlite`).
+- [ ] **Step 3:** Change handler signatures from `&Sqlite`/`Sqlite` to `&dyn Database`/`impl Database`; make `HistoryStore<S: Store>` generic. Construction sites still pass concrete `Sqlite`/`SqliteStore`.
+- [ ] **Step 4:** `cargo test --workspace` + `cargo build -p atuin --no-default-features` + `--features daemon` all green.
+- [ ] **Step 5: Commit** — `refactor(client): make command handlers generic over Database/Store traits`
 
 ---
 
-### Task 2: Make the daemon write path autostart-on-demand by default
+### Phase 1 — `DaemonDatabase` read proxy + proto for the `Database` read surface
 
-Ensure that when `WriteBackend::Daemon` is selected, a missing daemon is spawned transparently (not only when `autostart` was explicitly set). This is the "spawn ephemeral daemon" behavior.
+Add gRPC methods mirroring the read half of `Database` (`search`, `query_history`, `list`, `range`, `load`, `last`, `before`, `history_count`, `stats`, `get_dups`, `all_with_count`/`all_paged` as streaming), a server impl backed by the daemon's `Sqlite`, and a client `DaemonDatabase` implementing those `Database` methods over gRPC. Writes still go direct in this phase.
 
-**Files:**
-- Modify: `crates/atuin/src/command/client/daemon.rs` (the `try_with_restart` / `start_history` / `end_history` wrappers around `daemon.rs:419-498`)
-- Modify: `crates/atuin/src/command/client/history.rs` (`handle_daemon_start`/`handle_daemon_end`)
+**Files:** `crates/atuin-daemon/proto/history.proto` (or a new `database.proto`); `crates/atuin-daemon/src/components/` (new service impl); `crates/atuin-daemon/src/client.rs` (new client); `crates/atuin/src/command/client/.../DaemonDatabase` proxy.
 
-**Interfaces:**
-- Consumes: `ensure_daemon_running(settings)` (`daemon.rs:355`), `try_with_restart` (`daemon.rs:419`).
-- Produces: daemon write RPCs that, on a connect/unavailable error, call `ensure_daemon_running` and retry **whenever the daemon write backend is in use**, independent of the legacy `autostart` opt-in (still gated off for `systemd_socket`).
-
-- [ ] **Step 1: Write the failing test** — a unit test around the retry decision: given a first call that returns a `DaemonClientErrorKind::Connect` error and `systemd_socket = false`, the wrapper attempts `ensure_daemon_running` exactly once and retries. Use a small injected closure/fake so no real socket is needed (mirror the existing `try_with_restart` signature which already takes a closure).
-
-```rust
-#[tokio::test]
-async fn daemon_write_spawns_on_connect_error() {
-    // fake sender: first call -> Connect error, second -> Ok
-    // assert ensure-hook invoked once, final result Ok
-}
-```
-
-- [ ] **Step 2: Run it, confirm it fails** — `cargo test -p atuin --features daemon daemon_write_spawns_on_connect_error` → FAIL.
-- [ ] **Step 3: Implement** — thread a "may autostart" decision that is `true` for the daemon write backend (except `systemd_socket`), so `try_with_restart` no longer requires `settings.daemon.autostart` for the write path specifically. Keep `ensure_autostart_supported`'s systemd guard.
-- [ ] **Step 4: Run test + `cargo clippy -p atuin --features daemon -- -D warnings`** → PASS/clean.
-- [ ] **Step 5: Commit** — `feat(daemon): autostart daemon on demand for the write path`
+- [ ] **Step 1:** Failing test — a round-trip: start an in-process daemon service over a `Sqlite`, seed rows, call `DaemonDatabase::search(...)`, assert the same rows as calling `Sqlite::search(...)` directly.
+- [ ] **Step 2:** Run it; confirm it fails (RPC/proxy absent).
+- [ ] **Step 3:** Add the proto methods + `prost`/`tonic` regen, server impl delegating to `Sqlite`, and `DaemonDatabase` client forwarding + type (de)serialization for `History`, `FilterMode`, `SearchMode`, `Context`.
+- [ ] **Step 4:** Test passes; clippy clean; both feature builds green.
+- [ ] **Step 5: Commit** — `feat(daemon): serve the Database read surface over gRPC`
 
 ---
 
-### Task 3: Add the explicit last-resort fallback (§2.3-item-1(2a))
+### Phase 2 — Route all history *reads* through `DaemonDatabase`; delete direct read construction
 
-When the daemon write backend is selected but the daemon cannot be spawned (spawn fails or never becomes ready within `startup_timeout`), fall back to the direct-DB write instead of dropping the record — and log a one-time-ish warning.
+Swap the read construction sites to build a `DaemonDatabase` (ensuring a daemon is running) instead of a `Sqlite`. This removes direct SQLite reads from `search`, `stats`, `wrapped`, interactive TUI, `history list/last`, `scripts new --last`, `ai`, `mcp`.
 
-**Files:**
-- Modify: `crates/atuin/src/command/client/history.rs` (`handle_daemon_start`/`handle_daemon_end` error handling)
+**Files:** `crates/atuin/src/command/client.rs:359`; `crates/atuin-ai/src/commands/inline.rs:64`, `mcp.rs:87`; `crates/atuin/src/command/client/search/engines/daemon.rs` (drop the local-hydrate fallback — the daemon now returns rows).
 
-**Interfaces:**
-- Consumes: existing `handle_start`/`handle_end` (the direct-DB writers) and `Sqlite`/`SqliteStore`/`HistoryStore` construction already present in `end_history_entry` (`history.rs:597-607`).
-- Produces: `handle_daemon_start`/`handle_daemon_end` that, on an unrecoverable daemon error, delegate to the direct writers and return `Ok`.
-
-- [ ] **Step 1: Write the failing test** — simulate `ensure_daemon_running` failing (e.g. point `socket_path`/`pidfile` at an unwritable/uncreatable location, or inject a failing spawn hook) and assert the record is still persisted to the local `Sqlite` DB afterward. Read it back with `db.load(id)`.
-- [ ] **Step 2: Run it, confirm it fails** — `cargo test -p atuin --features daemon daemon_write_falls_back_to_direct` → FAIL (record absent).
-- [ ] **Step 3: Implement the fallback** — wrap the daemon RPC; on terminal failure, `warn!` and call the direct writer. Preserve `store_failed`/exit-code cancel semantics in the fallback branch.
-- [ ] **Step 4: Run test + both-feature builds** — PASS; `--no-default-features` still builds (fallback body is the code that must survive with `daemon` off).
-- [ ] **Step 5: Commit** — `feat(history): fall back to direct DB write when daemon unavailable`
+- [ ] **Step 1:** Failing integration test — run `atuin search <q>` / `atuin stats` against a fixture with a daemon and assert correct output with **no** client-side `Sqlite::new` (assert via a build-time grep test or a seam that panics if the client opens the DB).
+- [ ] **Step 2:** Confirm failure.
+- [ ] **Step 3:** Replace read constructors with `DaemonDatabase` behind `ensure_daemon_running`; collapse the `SearchMode::DaemonFuzzy` engine into the single daemon-backed engine (`engines.rs:17-29`).
+- [ ] **Step 4:** Full suite + Windows-path build green.
+- [ ] **Step 5: Commit** — `feat(client): route history reads through the daemon; remove direct-read SQLite`
 
 ---
 
-### Task 4: Documentation — reference + migration note
+### Phase 3 — Write/delete/import over the daemon; delete the daemonless write branch
 
-Document the new behavior: the daemon is the blessed write path, spawned on demand; the direct write is a fallback; sync moves to the background loop for these users.
+Add write RPCs (`save`, `update`, `delete`, streaming `save_bulk`), route `history start/end/prune/dedup/init-store`, `import`, and interactive/`--delete` deletes through them, and **delete `handle_start`/`handle_end` direct bodies and the `settings.daemon.enabled` branch** at `history.rs:577/593`.
 
-**Files:**
-- Modify: `docs/docs/reference/daemon.md`
-- Modify: `docs/docs/reference/config.md` (or wherever `daemon.*` keys are documented) to describe the new default/behavior of `daemon.enabled`/`daemon.autostart`.
-- Modify: this file's Part 2 open questions → record the ratified decisions.
+**Files:** proto write methods; daemon server write impl; `crates/atuin/src/command/client/history.rs` (remove daemonless branch + direct constructors at `:582/600/601/607/1142/1150`); `import.rs` (streaming bulk).
 
-- [ ] **Step 1:** Update `daemon.md`: explain spawn-on-demand, the systemd-socket exception, and the fallback.
-- [ ] **Step 2:** Note the sync-timing change (inline → background) and its user-visible effect.
-- [ ] **Step 3:** Build the docs site if tooling is available (`mkdocs build` under `docs/`), else visually review the Markdown.
-- [ ] **Step 4: Commit** — `docs(daemon): document spawn-on-demand write path and fallback`
+- [ ] **Step 1:** Failing tests — `history start`→`end` persists via daemon and reads back; `import` streams N rows and count matches; failed-cmd cancel semantics preserved.
+- [ ] **Step 2:** Confirm failure.
+- [ ] **Step 3:** Implement write RPCs + streaming bulk; delete the direct write branch and constructors.
+- [ ] **Step 4:** Suite green; `--no-default-features` decision from Part 3.6 enforced.
+- [ ] **Step 5: Commit** — `feat(client)!: daemon owns all history writes; remove daemonless write path`
 
 ---
 
-### Task 5 (SEPARATE RELEASE — gated on §2.3-item-2): Flip defaults
+### Phase 4 — Record store, sync, and key ops behind the daemon
 
-**Do not bundle with Tasks 1–4.** Once telemetry/dogfooding shows spawn-on-demand is reliable, flip `daemon.enabled` (and/or `autostart`) defaults to `true` so new users get the daemon path without config.
+Move `store status/rebuild/rekey/purge/verify/push/pull`, `sync`/`sync status`, and `login`/`register` key re-encryption to daemon RPCs; delete the client's `SqliteStore`/`HistoryStore` construction and inline sync (`client.rs:360`, `history.rs:528-548/601-609`, `sync.rs`, `store/*`, `account/login.rs:263`).
 
-**Files:**
-- Modify: `crates/atuin-client/src/settings.rs:1583-1584` (`daemon.enabled` / `daemon.autostart` defaults)
-
-- [ ] **Step 1: Write/adjust the failing test** — assert the default `Settings` now reports the daemon write backend on a platform where autostart is supported.
-- [ ] **Step 2:** Confirm it fails against current defaults.
-- [ ] **Step 3:** Flip the `set_default` values.
-- [ ] **Step 4:** Full test suite `cargo test --workspace`; verify Windows CI green.
-- [ ] **Step 5: Commit** — `feat(daemon)!: default to daemon write path (spawn on demand)` (breaking-change footer; changelog + release-notes call-out).
+- [ ] **Step 1–5:** Per-operation TDD as above; the daemon becomes the sole sync driver and key holder; CLI sync/store commands become thin RPC triggers. Commit `feat(client)!: daemon owns record store, sync, and key rotation`.
 
 ---
 
-## Part 4 — Risks & mitigations (summary)
+### Phase 5 — Dotfiles / kv / scripts stores + final cleanup
 
-| Risk | Mitigation |
+Move `dotfiles alias/var`, `kv`, `scripts`, and `init <shell>` dotfiles reads behind the daemon; delete the last direct `*Store::new` sites; remove now-dead `#[cfg(feature = "daemon")]` branches per Part 3.6; delete the `daemon.enabled` setting (or repurpose).
+
+- [ ] **Step 1–5:** Per-store TDD; final grep-test asserts **zero** `Sqlite::new`/`SqliteStore::new`/`*Store::new` outside `crates/atuin-daemon/` and the daemon boot path. Commit `feat(client)!: complete removal of direct storage access from the CLI`.
+
+---
+
+## Part 5 — Risks & mitigations
+
+| Risk | Mitigation / decision |
 |---|---|
-| Daemon can't spawn in restricted envs | Task 3 direct-DB fallback keeps history recording working |
-| Cold-start latency on first shell command | Existing startup lock + `wait_until_ready`; latency paid once per daemon lifetime, not per command |
-| Windows (no fork) | Reuse existing detached-`spawn` + TCP path; keep CI on `windows-latest` |
-| systemd users double-managing the daemon | Keep `ensure_autostart_supported` guard; never autostart when `systemd_socket = true` |
-| Sync no longer inline-per-command | Documented behavior change (Task 4); matches what autostart users already experience |
-| Scripted one-off `atuin search` spawning daemons | Leave non-interactive search local (§2.3-item-4) |
+| Daemon can't spawn ⇒ atuin non-functional (no fallback) | Accepted per Part 3.1; invest in robust spawn + clear errors |
+| Cold-start on every one-shot command (CI/scripts) | Existing startup lock; keep boot fast; possible import-only escape hatch (Part 3.2/3.3) |
+| `import` of millions of rows over gRPC | Client-streaming `SaveBulk` RPC or in-daemon import (Part 3.3) |
+| skim engine loads *all* history (`all_with_count`) | Streaming read RPC, or reconsider skim under daemon |
+| Windows (no fork) | Existing detached-spawn + TCP loopback path; keep `windows-latest` CI |
+| systemd users double-managing daemon | Keep `ensure_autostart_supported` guard |
+| Encryption key now daemon-held | Centralizes key handling; audit key lifecycle during Phase 4 |
+| `--no-default-features` build loses its storage path | Ratify Part 3.6 (feature becomes non-optional vs minimal embedded path) |
+| Large blast radius / long migration | Phased; each phase ships independently and keeps the tree working |
 
-## Part 5 — Recommendation to the maintainer
+## Part 6 — Recommendation
 
-1. **Adopt Option B** (spawn-on-demand persistent daemon), not a truly ephemeral one.
-2. **Ratify the four §2.3 decisions** (fallback policy, default-flip timing, sync-latency acceptance, non-interactive search stays local).
-3. **Land Tasks 1–4 first** (plumbing + fallback + docs) behind current config, then **Task 5** (default flip) as a separate, announced release.
-4. The daemonless *read* path stays — it is not a maintenance problem and reads always use local SQLite anyway.
+1. **Proceed with complete removal** via the **trait-proxy architecture** (Part 2) — it is the only approach that deletes the duplication without rewriting every command.
+2. **Ratify the six Part 3 decisions** first; #3 (import), #4 (sync ownership), and #6 (no-default-features build) are load-bearing.
+3. **Land Phases 0–5 across several releases**, each shippable; do **not** attempt this in one PR.
+4. Accept and document that the daemon becomes a hard dependency (no degraded mode).
+
+---
+
+## Appendix A — Full census: direct history-DB (`Database`/`Sqlite`) access
+
+*(Excludes `crates/atuin-daemon/`, which is the intended sole owner.)*
+
+**CONSTRUCT sites:** `client.rs:359` (all non-early-return cmds); `history.rs:582` (start), `:600` (end), `:1142` (list/last/init-store/prune/dedup); `atuin-ai/src/commands/inline.rs:64` (ai); `atuin-ai/src/mcp.rs:87-88` (mcp). (`doctor.rs:360` opens only an in-memory DB for a version string.)
+
+**READ:** `search.rs:332` + delete-loop `:281`; `search/engines/db.rs:27`; `search/engines.rs:76`; `search/engines/skim.rs:60` (`all_with_count`); `search/engines/daemon.rs:88` (regex fallback), `:111` (`query_history` hydrate); `search/interactive.rs:1760` (`history_count`), `:1876` (`query_history`), `:1955` (`load`), `:1972` (`stats`), `:1935` (dispatch); `stats.rs:54` (`list`), `:58/62/66/70/74` (`range`); `wrapped.rs:319` (`range`); `history.rs:962` (`list`), `:991` (`list`), `:1053` (`get_dups`), `:1178` (`last`), `:499` (`load`); `sync.rs:99/130` (`history_count`); `sync/status.rs:31/32`; `scripts.rs:236` (`list`); `atuin-ai/src/tools/mod.rs:1206` (`search`, from `driver.rs:782` + `mcp.rs:52`); `atuin-ai/src/commands/inline.rs:73` (`last`).
+
+**WRITE:** `history.rs:441` (`save`), `:527` (`update`); `import.rs:155/168` (`save_bulk`).
+
+**DELETE:** `history.rs:515` (`delete`), `:1028` (prune), `:1089` (dedup).
+
+**INDIRECT (`&db` handed to `HistoryStore`/sync):** `history.rs:1196` (`init_store`), `:1026/1087` (`incremental_build`); `search.rs:278`; `search/interactive.rs:1861/1884`; `sync.rs:42` (`crate::sync::build`); `command/client/sync.rs:111/125`; `store/rebuild.rs:61` (`build`); `store/pull.rs:90`.
+
+## Appendix B — Full census: direct record-store (`Store`/`SqliteStore`/`HistoryStore`/…) access & sync
+
+*(Excludes `crates/atuin-daemon/`.)*
+
+**Shared CONSTRUCT:** `client.rs:360` opens `SqliteStore` for every non-early-return cmd.
+
+**Per-command (file:line → op):**
+- `history end`: `history.rs:601/607` construct; `:528` push; `:535` `record::sync::sync`; `:538` `crate::sync::build`; `:541` legacy sync.
+- `history init-store`: `:1143/1150` construct; `:1196` `init_store`.
+- `history prune`: `:1020` construct; `:1025` `delete`; `:1026` `incremental_build`.
+- `history dedup`: `:1078` construct; `:1086` `delete`; `:1087` `incremental_build`.
+- `sync`: `command/client/sync.rs:89` construct; `:91/116` `sync`; `:95/120` `build`; `:100` `len_tag`; `:111` `init_store`; `:125` legacy sync.
+- `search --delete`: `search.rs:226` construct; `:277` `delete_entries`; `:278` `incremental_build`.
+- `search -i` delete: `interactive.rs:1860/1883` `delete_entries`; `:1861/1884` `incremental_build`.
+- `store status`: `store.rs:58/76/91/92` `status/first/last`.
+- `store rebuild`: `store/rebuild.rs:59-61` history `build`; `:74-78` dotfiles; `:86-90` scripts.
+- `store rekey`: `store/rekey.rs:49` `re_encrypt`.
+- `store purge`: `store/purge.rs:19` `purge`.
+- `store verify`: `store/verify.rs:19` `verify`.
+- `store push`: `store/push.rs:63/73/106` diff/operations/`sync_remote`.
+- `store pull`: `store/pull.rs:41` `delete_all`; `:51/61/86` diff/operations/`sync_remote`; `:90` `build`.
+- `login`/`register`: `account/login.rs:263` `re_encrypt`; `account/register.rs:119` delegates.
+- `kv *`: `kv.rs:73` `KvStore::new`.
+- `dotfiles alias`: `dotfiles/alias.rs:164` `AliasStore::new`.
+- `dotfiles var`: `dotfiles/var.rs:164` `VarStore::new`.
+- `scripts *`: `scripts.rs:572` `ScriptStore::new`.
+- `init <shell>`: `init.rs:130` construct; `:137-138` alias/var read.
+- `wrapped`: `wrapped.rs:332` alias read.
+- `daemon start`: `daemon.rs:86/658/669` receive store, hand to `atuin_daemon::boot` (kept — this is the owner).
+- Shared projection `crate::sync::build`: `sync.rs:24` `load_key`, `:34` `HistoryStore::new`, `:35-38` alias/var/kv/script stores, `:42-62` `incremental_build`/`build`.
+
+**Underlying `.push` impls:** `atuin-client/src/history/store.rs:139/167`; `atuin-dotfiles/src/store.rs:251/287`, `store/var.rs:298/334`; `atuin-kv/src/store.rs:104`; `atuin-scripts/src/store.rs:49`.
+
+**Not implicated:** `crates/atuin-ai/` has no direct record-store/sync access. `import`, `stats`, `sync status`, `logout`, `account delete/change-password/link` open the store at dispatch but don't use it (would still need the lazy-construct change).
