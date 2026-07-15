@@ -14,6 +14,7 @@
 //! - [`semantic::SemanticComponent`]: In-memory semantic command captures
 //! - [`sync::SyncComponent`]: Cloud sync
 
+pub mod database;
 pub mod history;
 pub mod search;
 pub mod semantic;

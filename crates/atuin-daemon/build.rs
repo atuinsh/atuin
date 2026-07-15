@@ -8,6 +8,7 @@ fn main() -> std::io::Result<()> {
         "proto/search.proto",
         "proto/control.proto",
         "proto/semantic.proto",
+        "proto/database.proto",
     ];
     let proto_include_dirs = ["proto"];
 

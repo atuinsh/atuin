@@ -7,6 +7,8 @@ pub mod client;
 pub mod components;
 pub mod control;
 pub mod daemon;
+pub mod database;
+pub mod proxy;
 pub mod events;
 pub mod history;
 pub mod search;
@@ -43,6 +45,11 @@ pub async fn boot(
     let history_service = history_component.grpc_service();
     let search_service = search_component.grpc_service();
     let semantic_service = semantic_component.grpc_service();
+
+    // The storage-database service exposes the owned history DB over gRPC so
+    // the CLI can act as a pure client. It clones the pool (cheap, shared).
+    let database_service =
+        components::database::StorageDatabaseService::new(history_db.clone()).into_server();
 
     // Build the daemon
     let mut daemon = Daemon::builder(settings.clone())
@@ -99,6 +106,7 @@ pub async fn boot(
         search_service,
         semantic_service,
         control_service.into_server(),
+        database_service,
         handle,
     )
     .await?;

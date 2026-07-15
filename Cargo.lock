@@ -426,6 +426,7 @@ dependencies = [
  "prost-types",
  "protox",
  "rand 0.8.5",
+ "sqlx",
  "tempfile",
  "time",
  "tokio",

@@ -1,6 +1,6 @@
 # ATU-538 — Removing the Daemonless Code Paths (Daemon-Only Client)
 
-> **Status:** Investigation complete — full census, feasibility verdict, architecture, and phased plan below.
+> **Status:** Investigation complete + **working proof-of-concept landed** (see Part 7). Full census, feasibility verdict, architecture, and phased plan below.
 > **Issue:** ATU-538 "Investigate whether making daemonless mode just spawn an ephemeral daemon is possible."
 > **Project:** Completely Cutover to Daemon.
 > **Goal (as clarified by maintainer):** **Completely remove** the client's direct-to-SQLite and direct-to-record-store code paths. No config toggle, no fallback. The daemon becomes the sole owner of all local storage; the CLI becomes a thin RPC client that spawns the daemon on demand.
@@ -203,6 +203,50 @@ Move `dotfiles alias/var`, `kv`, `scripts`, and `init <shell>` dotfiles reads be
 2. **Ratify the six Part 3 decisions** first; #3 (import), #4 (sync ownership), and #6 (no-default-features build) are load-bearing.
 3. **Land Phases 0–5 across several releases**, each shippable; do **not** attempt this in one PR.
 4. Accept and document that the daemon becomes a hard dependency (no degraded mode).
+
+---
+
+## Part 7 — Working proof of concept (landed in this branch)
+
+To de-risk the architecture in Part 2, a vertical slice of the trait-proxy is
+implemented and working end-to-end. It proves the core claim: **the CLI can
+serve a real read entirely through the daemon, never opening SQLite itself.**
+
+What was built:
+
+- **`crates/atuin-daemon/proto/database.proto`** — a `StorageDatabase` gRPC
+  service mirroring the read/write half of the `Database` trait
+  (`Save`/`SaveBulk`/`Load`/`List`/`Range`/`Update`/`HistoryCount`/`Last`/
+  `Before`/`Delete`/`DeleteRows`/`Deleted`/`Search`/`QueryHistory`/`GetDups`),
+  plus `HistoryRecord`/`Context`/`OptFiltersMsg` messages.
+- **`crates/atuin-daemon/src/database/mod.rs`** — `History ⇄ HistoryRecord`,
+  `Context`, `OptFilters`, `SearchMode`, `FilterMode` conversions.
+- **`crates/atuin-daemon/src/components/database.rs`** — server-side
+  `StorageDatabaseService`, delegating every call to the daemon's owned
+  `Sqlite` via the existing `Database` trait. Registered in `server.rs`
+  (unix + Windows) and `boot()`.
+- **`crates/atuin-daemon/src/proxy.rs`** — **`DaemonDatabase`**, a client-side
+  `impl Database` that forwards each call over gRPC. This is the drop-in that
+  replaces `Sqlite` at construction sites. `all_paged` works for free (it only
+  needs a boxed `Database` and drives itself via `query_history`).
+- **`crates/atuin/src/command/client/search.rs`** — non-interactive
+  `atuin search` now spawns the daemon on demand (`ensure_daemon_running`) and
+  runs the query through `DaemonDatabase` when `daemon.enabled` is set. The
+  command handler was **unchanged** — it already took `impl Database`, which
+  is exactly why the proxy approach is low-churn.
+
+Smoke test (isolated env, `daemon.enabled = true`): history written while
+daemonless, then `atuin search echo` transparently spawned the daemon and
+returned the right rows over gRPC; `search cargo` → 1 match; a non-matching
+query → exit 1; `daemon status`/`stop` behaved. No client-side `Sqlite::new`
+on the search read path.
+
+Deliberately stubbed for the slice (return a clear "not yet supported" error,
+wired up in the full cutover): `all_with_count` (skim engine) and `stats`
+(interactive inspector). Writes/records/sync/dotfiles are not yet routed — that
+is Phases 3–5. This PoC is Phase 1 + a sliver of Phase 2, and it compiles on
+all three feature configurations (`--features daemon`, default,
+`--no-default-features`).
 
 ---
 

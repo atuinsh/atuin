@@ -22,6 +22,7 @@ atuin-history = { path = "../atuin-history", version = "18.17.1" }
 
 time = { workspace = true }
 uuid = { workspace = true }
+sqlx = { workspace = true, features = ["sqlite"] }
 tokio = { workspace = true }
 tower = { workspace = true }
 eyre = { workspace = true }

@@ -257,8 +257,26 @@ impl Cmd {
                 authors: self.author.clone().unwrap_or_default(),
             };
 
-            let mut entries =
-                run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
+            // When the daemon owns storage, route the read through it: spawn
+            // the daemon on demand and query it via the DaemonDatabase proxy
+            // instead of opening SQLite ourselves.
+            let mut entries;
+            #[cfg(feature = "daemon")]
+            {
+                if settings.daemon.enabled {
+                    super::daemon::ensure_daemon_running(settings).await?;
+                    let ddb = atuin_daemon::proxy::DaemonDatabase::from_settings(settings).await?;
+                    entries =
+                        run_non_interactive(settings, opt_filter.clone(), &query, &ddb).await?;
+                } else {
+                    entries =
+                        run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
+                }
+            }
+            #[cfg(not(feature = "daemon"))]
+            {
+                entries = run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
+            }
 
             if entries.is_empty() {
                 std::process::exit(1)

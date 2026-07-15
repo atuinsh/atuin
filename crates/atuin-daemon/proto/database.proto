@@ -1,0 +1,110 @@
+syntax = "proto3";
+package database;
+
+// A full history row, mirroring atuin_client::history::History.
+message HistoryRecord {
+  string id = 1;
+  uint64 timestamp = 2; // nanosecond unix epoch
+  int64 duration = 3;
+  int64 exit = 4;
+  string command = 5;
+  string cwd = 6;
+  string session = 7;
+  string hostname = 8;
+  string author = 9;
+  optional string intent = 10;
+  optional uint64 deleted_at = 11; // nanosecond unix epoch when soft-deleted
+}
+
+// Mirrors atuin_client::database::Context.
+message Context {
+  string session = 1;
+  string cwd = 2;
+  string hostname = 3;
+  string host_id = 4;
+  optional string git_root = 5;
+}
+
+// Mirrors atuin_client::database::OptFilters.
+message OptFiltersMsg {
+  optional int64 exit = 1;
+  optional int64 exclude_exit = 2;
+  bool only_failed = 3;
+  optional string cwd = 4;
+  optional string exclude_cwd = 5;
+  optional string before = 6;
+  optional string after = 7;
+  optional int64 limit = 8;
+  optional int64 offset = 9;
+  bool reverse = 10;
+  bool include_duplicates = 11;
+  repeated string authors = 12;
+}
+
+// Mirrors atuin_client::settings::SearchMode discriminants.
+enum SearchMode {
+  SEARCH_MODE_PREFIX = 0;
+  SEARCH_MODE_FULL_TEXT = 1;
+  SEARCH_MODE_FUZZY = 2;
+  SEARCH_MODE_SKIM = 3;
+  SEARCH_MODE_DAEMON_FUZZY = 4;
+}
+
+// Mirrors atuin_client::settings::FilterMode discriminants.
+enum FilterMode {
+  FILTER_MODE_GLOBAL = 0;
+  FILTER_MODE_HOST = 1;
+  FILTER_MODE_SESSION = 2;
+  FILTER_MODE_DIRECTORY = 3;
+  FILTER_MODE_WORKSPACE = 4;
+  FILTER_MODE_SESSION_PRELOAD = 5;
+}
+
+message Empty {}
+message Records { repeated HistoryRecord records = 1; }
+message OptionalRecord { optional HistoryRecord record = 1; }
+
+message SaveRequest { HistoryRecord record = 1; }
+message SaveBulkRequest { repeated HistoryRecord records = 1; }
+message LoadRequest { string id = 1; }
+message ListRequest {
+  repeated FilterMode filters = 1;
+  Context context = 2;
+  optional uint64 max = 3;
+  bool unique = 4;
+  bool include_deleted = 5;
+}
+message RangeRequest { uint64 from = 1; uint64 to = 2; }
+message HistoryCountRequest { bool include_deleted = 1; }
+message HistoryCountReply { int64 count = 1; }
+message BeforeRequest { uint64 timestamp = 1; int64 count = 2; }
+message DeleteRowsRequest { repeated string ids = 1; }
+message SearchRequest {
+  SearchMode search_mode = 1;
+  FilterMode filter = 2;
+  Context context = 3;
+  string query = 4;
+  OptFiltersMsg filter_options = 5;
+}
+message QueryHistoryRequest { string query = 1; }
+message GetDupsRequest { int64 before = 1; uint32 dupkeep = 2; }
+
+// atuin_client::database::Database, served by the daemon over gRPC so the
+// client never has to open the local SQLite database itself.
+service StorageDatabase {
+  rpc Save(SaveRequest) returns (Empty);
+  rpc SaveBulk(SaveBulkRequest) returns (Empty);
+  rpc Load(LoadRequest) returns (OptionalRecord);
+  rpc List(ListRequest) returns (Records);
+  rpc Range(RangeRequest) returns (Records);
+  rpc Update(SaveRequest) returns (Empty);
+  rpc HistoryCount(HistoryCountRequest) returns (HistoryCountReply);
+  rpc Last(Empty) returns (OptionalRecord);
+  rpc Before(BeforeRequest) returns (Records);
+  rpc Delete(SaveRequest) returns (Empty);
+  rpc DeleteRows(DeleteRowsRequest) returns (Empty);
+  rpc Deleted(Empty) returns (Records);
+  rpc Search(SearchRequest) returns (Records);
+  rpc QueryHistory(QueryHistoryRequest) returns (Records);
+  rpc GetDups(GetDupsRequest) returns (Records);
+}
