@@ -5,6 +5,7 @@ use atuin_client::{
     history::{History, HistoryStats},
     settings::{Settings, Timezone},
 };
+use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use ratatui::{
     Frame,
     backend::FromCrossterm,
@@ -55,7 +56,7 @@ pub fn draw_commands(
         .split(parent);
 
     let command = Paragraph::new(Text::from(Span::styled(
-        history.command.clone(),
+        history.command.escape_non_printable(),
         Style::from_crossterm(theme.as_style(Meaning::Important)),
     )))
     .block(if compact {
@@ -70,12 +71,10 @@ pub fn draw_commands(
             .padding(Padding::horizontal(1))
     });
 
-    let previous = Paragraph::new(
-        stats
-            .previous
-            .clone()
-            .map_or_else(|| "[No previous command]".to_string(), |prev| prev.command),
-    )
+    let previous = Paragraph::new(stats.previous.clone().map_or_else(
+        || "[No previous command]".to_string(),
+        |prev| prev.command.escape_non_printable().into_owned(),
+    ))
     .block(if compact {
         Block::new()
             .borders(Borders::NONE)
@@ -90,12 +89,10 @@ pub fn draw_commands(
 
     // Add [] around blank text, as when this is shown in a list
     // compacted, it makes it more obviously control text.
-    let next = Paragraph::new(
-        stats
-            .next
-            .clone()
-            .map_or_else(|| "[No next command]".to_string(), |next| next.command),
-    )
+    let next = Paragraph::new(stats.next.clone().map_or_else(
+        || "[No next command]".to_string(),
+        |next| next.command.escape_non_printable().into_owned(),
+    ))
     .block(if compact {
         Block::new()
             .borders(Borders::NONE)
@@ -420,5 +417,40 @@ mod tests {
         }
 
         terminal.backend().assert_buffer_lines(lines);
+    }
+
+    #[test]
+    fn control_chars_are_escaped_in_commands() {
+        let backend = TestBackend::new(40, 8);
+        let mut terminal = Terminal::new(backend).expect("Could not create terminal");
+        let chunk = Rect::new(0, 0, 40, 8);
+        let (mut history, mut stats) = mock_history_stats();
+
+        // Inject a NUL byte into the current and neighbouring commands
+        history.command = "echo\0hi".to_string();
+        stats.previous.as_mut().unwrap().command = "prev\0cmd".to_string();
+        stats.next.as_mut().unwrap().command = "next\0cmd".to_string();
+
+        let mut manager = ThemeManager::new(Some(true), Some(String::new()));
+        let theme = manager.load_theme("(none)", None);
+        let _ = terminal.draw(|f| draw_ultracompact(f, chunk, &history, &stats, theme));
+
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+
+        // NUL is shown as caret notation ^@, never as a raw NUL byte
+        assert!(
+            rendered.contains("^@"),
+            "expected caret-escaped NUL (^@) in rendered output"
+        );
+        assert!(
+            !rendered.contains('\u{0000}'),
+            "raw NUL byte leaked to the terminal"
+        );
     }
 }

@@ -7,7 +7,7 @@ use atuin_client::{
     settings::{UiColumn, UiColumnType},
     theme::{Meaning, Theme},
 };
-use atuin_common::utils::Escapable as _;
+use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use itertools::Itertools;
 use ratatui::{
     backend::FromCrossterm,
@@ -297,7 +297,7 @@ impl DrawState<'_> {
         // Build the normalized command string (whitespace-collapsed, control chars escaped)
         let normalized: String = h
             .command
-            .escape_control()
+            .escape_non_printable()
             .split_ascii_whitespace()
             .join(" ");
 
