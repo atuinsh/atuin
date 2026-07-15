@@ -22,4 +22,3 @@ sqlx = { workspace = true, features = ["sqlite", "regexp"] }
 async-trait = { workspace = true }
 uuid = { workspace = true }
 metrics = "0.24"
-futures-util = "0.3"

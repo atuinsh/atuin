@@ -33,7 +33,7 @@ use atuin_client::{
 };
 
 #[cfg(feature = "sync")]
-use atuin_client::{record, sync};
+use atuin_client::record;
 
 use time::{OffsetDateTime, macros::format_description};
 use tracing::{debug, warn};
@@ -541,16 +541,11 @@ async fn handle_end(
     if settings.should_sync().await? {
         #[cfg(feature = "sync")]
         {
-            if settings.sync.records {
-                let (_, downloaded) =
-                    record::sync::sync(settings, &store, &history_store.encryption_key).await?;
-                Settings::save_sync_time().await?;
+            let (_, downloaded) =
+                record::sync::sync(settings, &store, &history_store.encryption_key).await?;
+            Settings::save_sync_time().await?;
 
-                crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
-            } else {
-                debug!("running periodic background sync");
-                sync::sync(settings, false, db).await?;
-            }
+            crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
         }
         #[cfg(not(feature = "sync"))]
         debug!("not compiled with sync support");
@@ -1032,12 +1027,8 @@ impl Cmd {
 
             for entry in matches {
                 eprintln!("deleting {}", entry.id);
-                if settings.sync.records {
-                    let (id, _) = history_store.delete(entry.id.clone()).await?;
-                    history_store.incremental_build(db, &[id]).await?;
-                } else {
-                    db.delete(entry.clone()).await?;
-                }
+                let (id, _) = history_store.delete(entry.id.clone()).await?;
+                history_store.incremental_build(db, &[id]).await?;
             }
 
             #[cfg(feature = "daemon")]
@@ -1093,12 +1084,8 @@ impl Cmd {
 
             for entry in matches {
                 eprintln!("deleting {}", entry.id);
-                if settings.sync.records {
-                    let (id, _) = history_store.delete(entry.id).await?;
-                    history_store.incremental_build(db, &[id]).await?;
-                } else {
-                    db.delete(entry).await?;
-                }
+                let (id, _) = history_store.delete(entry.id).await?;
+                history_store.incremental_build(db, &[id]).await?;
             }
 
             #[cfg(feature = "daemon")]

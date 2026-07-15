@@ -16,7 +16,6 @@ use std::{collections::HashMap, io::prelude::*, path::PathBuf, str::FromStr, syn
 use time::{OffsetDateTime, UtcOffset, format_description::FormatItem, macros::format_description};
 use tokio::sync::OnceCell;
 
-pub const HISTORY_PAGE_SIZE: i64 = 100;
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
 static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -349,11 +348,6 @@ impl Default for Stats {
             ignored_commands: Self::ignored_commands_default(),
         }
     }
-}
-
-#[derive(Clone, Debug, Deserialize, Default, Serialize)]
-pub struct Sync {
-    pub records: bool,
 }
 
 /// Sync protocol type for authentication.
@@ -1063,9 +1057,6 @@ pub struct Settings {
     pub stats: Stats,
 
     #[serde(default)]
-    pub sync: Sync,
-
-    #[serde(default)]
     pub keys: Keys,
 
     #[serde(default)]
@@ -1469,7 +1460,6 @@ impl Settings {
             // muscle memory.
             // New users will get the new default, that is more similar to what they are used to.
             .set_default("enter_accept", false)?
-            .set_default("sync.records", true)?
             .set_default("keys.scroll_exits", true)?
             .set_default("keys.accept_past_line_end", true)?
             .set_default("keys.exit_past_line_start", true)?

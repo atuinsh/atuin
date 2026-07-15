@@ -18,5 +18,4 @@ eyre = { workspace = true }
 serde = { workspace = true }
 sqlx = { workspace = true }
 time = { workspace = true }
-tracing = { workspace = true }
 url = "2.5.2"

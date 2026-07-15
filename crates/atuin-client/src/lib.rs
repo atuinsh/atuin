@@ -13,8 +13,6 @@ pub mod hub;
 pub mod login;
 #[cfg(feature = "sync")]
 pub mod register;
-#[cfg(feature = "sync")]
-pub mod sync;
 
 pub mod database;
 pub mod distro;

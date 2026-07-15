@@ -4,13 +4,11 @@ use atuin_common::{
 };
 use atuin_server_database::{
     Database, DbSettings, DbType,
-    models::{NewHistory, NewSession, NewUser, User},
+    models::{NewSession, NewUser, User},
 };
 use atuin_server_postgres::Postgres;
 use atuin_server_sqlite::Sqlite;
 use tests_database::helpers::{create_test_db, destroy_test_db};
-use time::OffsetDateTime;
-use uuid::Uuid;
 
 struct TestDb {
     settings: DbSettings,
@@ -95,25 +93,6 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
     let user = db.get_user("foo").await?;
     assert_eq!(user.password, "hunter3");
 
-    // add some history
-    let h = vec![
-        generate_history(user_id),
-        generate_history(user_id),
-        generate_history(user_id),
-        generate_history(user_id),
-    ];
-    db.add_history(&h).await?;
-
-    assert_eq!(db.count_history(&user).await?, 4);
-
-    // AFAICT history is not used any more so I'm not going figure out how to take the timestamps
-    // from generated history into this
-    // assert_eq!(db.count_history_range(&user).await?, 4);
-
-    db.delete_history(&user, h[0].client_id.clone()).await?;
-    let deleted_history = db.deleted_history(&user).await?;
-    assert_eq!(deleted_history.len(), 1);
-
     // add a bunch of records
     let host_a = Host::new(HostId(uuid_v7()));
     let host_b = Host::new(HostId(uuid_v7()));
@@ -177,25 +156,6 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
     assert_eq!(recs.len(), 0);
 
     Ok(())
-}
-
-fn generate_history(user_id: i64) -> NewHistory {
-    use fake::Fake;
-    use fake::faker::lorem::en::*;
-
-    let data: String = Sentence(1..3).fake();
-    let hostname: String = "foo".to_owned();
-    let client_id = Uuid::new_v4().to_string();
-
-    let timestamp: OffsetDateTime = OffsetDateTime::now_utc();
-
-    NewHistory {
-        client_id,
-        user_id,
-        hostname,
-        timestamp,
-        data,
-    }
 }
 
 fn generate_record(host: &Host, idx: RecordIdx) -> Record<EncryptedData> {
