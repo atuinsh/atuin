@@ -240,18 +240,29 @@ by the daemon; a single daemon owns the socket; `daemon status`/`stop` behave.
 The `atuin ai` interactive TUI and the MCP server are done too: `AppContext`'s
 history handle is now `Arc<dyn Database>` and both build the proxy.
 
-**Still on the direct path (next tranche — the record store):** everything
-built on the `Store` trait — `sync` (network), `store
-rebuild/rekey/purge/verify/push/pull`, `login`/`register` key rotation,
-`search --delete`/interactive delete, and the `dotfiles`/`kv`/`scripts` typed
-stores. This is a materially bigger change than the Database axis: the `Store`
-trait is ~18 methods over `Record<EncryptedData>`, and all five typed stores
-(`HistoryStore`/`AliasStore`/`VarStore`/`KvStore`/`ScriptStore`) hold a
-*concrete* `SqliteStore`, so a `DaemonStore` proxy requires genericizing them
-across `atuin-client`/`atuin-dotfiles`/`atuin-kv`/`atuin-scripts` plus ~10
-command signatures. Load-bearing design decision first: does the daemon stay a
-dumb encrypted-blob store (crypto stays client-side — least disruptive) or does
-key handling move server-side too?
+**Record-store axis — foundation built, routing pending.** Decisions ratified:
+daemon = encrypted-blob store (crypto stays client-side); and `daemon` will
+become a mandatory dependency so the daemonless code is physically deleted.
+
+Done for the record store:
+- `Store` made **object-safe** (`push_batch` takes `&mut dyn Iterator`), with
+  blanket `impl Store for ArcStore`/`BoxStore` and `Debug + Send + Sync`
+  supertraits.
+- All five typed stores (`HistoryStore`/`AliasStore`/`VarStore`/`KvStore`/
+  `ScriptStore`) now hold an `ArcStore` (`Arc<dyn Store>`); `new` takes
+  `impl Store` and wraps in `Arc`. Existing `SqliteStore` callers unchanged.
+- A **`StorageStore` gRPC service** (mirroring the 16-method `Store` surface
+  over `Record<EncryptedData>`) and a client-side **`DaemonStore` proxy**,
+  registered in the daemon server + boot. Records stay encrypted on the wire.
+
+Remaining (mechanical, given the above):
+- Route the CLI's record-store construction to a `DaemonStore`-backed
+  `ArcStore` (a `record_store()` helper like `history_database()`), updating the
+  ~8 command signatures that take `SqliteStore` and the direct-construction
+  sites in `history`/`search`/`sync`/`store`/`account`.
+- **Part B:** make `atuin-daemon` a non-optional dependency, remove the
+  `daemon` feature and every `#[cfg(not(feature = "daemon"))]` arm — physically
+  deleting the daemonless code.
 
 To *physically delete* the last daemonless code (the `cfg(not(daemon))` arms),
 promote `daemon` from an optional feature to a hard dependency — a Cargo change
