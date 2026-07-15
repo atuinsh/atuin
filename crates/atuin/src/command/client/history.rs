@@ -116,12 +116,14 @@ pub enum Cmd {
         /// Display the command time in another timezone other than the configured default.
         ///
         /// This option takes one of the following kinds of values:
+        ///
         /// - the special value "local" (or "l") which refers to the system time zone
         /// - an offset from UTC (e.g. "+9", "-2:30")
-        #[arg(long, visible_alias = "tz")]
+        #[arg(long, visible_alias = "tz", verbatim_doc_comment)]
         timezone: Option<Timezone>,
 
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {author}, {intent}, {exit}, {time}, {session}, and {uuid}
+        ///
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
         #[arg(long, short)]
         format: Option<String>,
@@ -139,12 +141,14 @@ pub enum Cmd {
         /// Display the command time in another timezone other than the configured default.
         ///
         /// This option takes one of the following kinds of values:
+        ///
         /// - the special value "local" (or "l") which refers to the system time zone
         /// - an offset from UTC (e.g. "+9", "-2:30")
-        #[arg(long, visible_alias = "tz")]
+        #[arg(long, visible_alias = "tz", verbatim_doc_comment)]
         timezone: Option<Timezone>,
 
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {author}, {intent}, {time}, {session}, {uuid} and {relativetime}.
+        ///
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
         #[arg(long, short)]
         format: Option<String>,

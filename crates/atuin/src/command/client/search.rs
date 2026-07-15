@@ -112,17 +112,20 @@ pub struct Cmd {
     /// Display the command time in another timezone other than the configured default.
     ///
     /// This option takes one of the following kinds of values:
+    ///
     /// - the special value "local" (or "l") which refers to the system time zone
     /// - an offset from UTC (e.g. "+9", "-2:30")
-    #[arg(long, visible_alias = "tz")]
-    #[arg(allow_hyphen_values = true)]
-    // Clippy warns about `Option<Option<T>>`, but we suppress it because we need
-    // this distinction for proper argument handling.
-    #[allow(clippy::option_option)]
-    timezone: Option<Option<Timezone>>,
+    #[arg(long, visible_alias = "tz", verbatim_doc_comment)]
+    // `num_args = 0..=1` allows a user to run `atuin search --tz` with no argument to `--tz`. This
+    // does the same thing as not providing the flag, but we previously allowed it (via an
+    // `Option<Option<T>>` field type), so let's keep supporting it to avoid breaking existing
+    // scripts.
+    #[arg(allow_hyphen_values = true, num_args = 0..=1)]
+    timezone: Option<Timezone>,
 
     /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and
     /// {relativetime}.
+    ///
     /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
     #[arg(long, short)]
     format: Option<String>,
@@ -132,6 +135,7 @@ pub struct Cmd {
     inline_height: Option<u16>,
 
     /// Filter by author. Supports $all-user (non-agents), $all-agent, or literal names.
+    ///
     /// Can be specified multiple times.
     #[arg(long)]
     author: Vec<String>,
@@ -283,19 +287,16 @@ impl Cmd {
                         run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
                 }
             } else {
-                let format = match self.format {
-                    None => Some(settings.history_format.as_str()),
-                    _ => self.format.as_deref(),
-                };
-                let tz = match self.timezone {
-                    Some(Some(tz)) => tz,                   // User provided a value
-                    Some(None) | None => settings.timezone, // No value was provided
-                };
+                let format = self
+                    .format
+                    .as_deref()
+                    .unwrap_or_else(|| settings.history_format.as_str());
+                let tz = self.timezone.unwrap_or(settings.timezone);
 
                 super::history::print_list(
                     &entries,
                     ListMode::from_flags(self.human, self.cmd_only),
-                    format,
+                    Some(format),
                     self.print0,
                     true,
                     tz,
