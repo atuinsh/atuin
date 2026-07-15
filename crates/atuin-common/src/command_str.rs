@@ -12,7 +12,9 @@
 //! Any other storage that is `AsRef<str>` (`Arc<str>`, `Box<str>`, ...) works with no
 //! extra code: `Command<Arc<str>>` is a command too.
 //!
-//! The wrapper adds no behaviour to the string it holds.
+//! The wrapper stores its string verbatim. The one structural invariant it can
+//! check is that a command contains no NUL byte — use [`CommandString::try_from`]
+//! at the boundary where an untrusted string becomes a command.
 //!
 //! ```
 //! use std::borrow::Cow;
@@ -30,6 +32,10 @@
 //! // Borrow any of them back down to a `CommandStr`, or read the text directly.
 //! assert_eq!(owned.as_command_str(), borrowed);
 //! assert_eq!(cow.as_str(), "cargo test");
+//!
+//! // Validated construction rejects a NUL byte but accepts multi-line commands.
+//! assert!(CommandString::try_from("git commit -m 'a\nb'").is_ok());
+//! assert!(CommandString::try_from("oops\0nul").is_err());
 //! ```
 
 use std::{
@@ -59,6 +65,31 @@ pub type CommandString = Command<String>;
 
 /// A clone-on-write command. Plays the role of `Cow<'_, str>`.
 pub type CommandCow<'a> = Command<Cow<'a, str>>;
+
+/// The reason a raw string could not be used as a [`Command`].
+///
+/// Returned by the validating `TryFrom` conversions (see [`CommandString`]'s
+/// `TryFrom<&str>` impl). It is deliberately narrow: the only structural
+/// invariant a shell command must hold — beyond being valid UTF-8, which the
+/// `str`/`String` storage already guarantees — is that it contains no NUL byte.
+/// Newlines (multi-line commands), tabs, other control characters and an empty
+/// string are all valid commands and are **not** rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum InvalidCommand {
+    /// The string contains a NUL byte (`\0`), at the given byte index.
+    ///
+    /// A shell command can never legitimately contain a NUL: it cannot be
+    /// captured through `argv` or an environment variable (both are
+    /// NUL-terminated), and it is silently truncated when replayed through the
+    /// shell's `$(...)` command substitution — so a stored NUL corrupts the
+    /// command rather than representing anything runnable.
+    #[error("command contains a NUL byte at index {index}")]
+    ContainsNul {
+        /// Byte index of the first NUL in the rejected string.
+        index: usize,
+    },
+}
 
 impl<S> Command<S> {
     /// Wrap `inner` as a command.
@@ -152,9 +183,22 @@ impl<S> From<S> for Command<S> {
     }
 }
 
-impl From<&str> for CommandString {
-    fn from(command: &str) -> Self {
-        Command(command.to_owned())
+/// Validates an untrusted string slice into an owned [`CommandString`],
+/// rejecting any command that contains a NUL byte (see [`InvalidCommand`]).
+///
+/// This is the checked entry point at the raw-string boundary. The infallible
+/// constructors ([`Command::new`] and the `From` conversions between storages)
+/// still exist and do **not** validate, so validation here is opt-in rather than
+/// an enforced invariant — reach for `try_from` when the string comes from an
+/// untrusted source such as an imported history file.
+impl TryFrom<&str> for CommandString {
+    type Error = InvalidCommand;
+
+    fn try_from(command: &str) -> Result<Self, Self::Error> {
+        if let Some(index) = command.find('\0') {
+            return Err(InvalidCommand::ContainsNul { index });
+        }
+        Ok(Command(command.to_owned()))
     }
 }
 
@@ -188,7 +232,7 @@ mod tests {
 
     use pretty_assertions::assert_eq;
 
-    use super::{Command, CommandCow, CommandStr, CommandString};
+    use super::{Command, CommandCow, CommandStr, CommandString, InvalidCommand};
 
     #[test]
     fn wraps_borrowed_owned_and_cow_storage() {
@@ -322,14 +366,12 @@ mod tests {
 
     #[test]
     fn converts_between_the_specialisations_via_from() {
-        let from_literal: CommandString = "ls".into();
         let from_borrowed: CommandString = CommandStr::new("ls").into();
         let from_cow: CommandString = CommandCow::new(Cow::Owned(String::from("ls"))).into();
 
         let borrowed_to_cow: CommandCow<'_> = CommandStr::new("ls").into();
         let owned_to_cow: CommandCow<'_> = CommandString::new(String::from("ls")).into();
 
-        assert_eq!(from_literal.as_str(), "ls");
         assert_eq!(from_borrowed.as_str(), "ls");
         assert_eq!(from_cow.as_str(), "ls");
 
@@ -362,5 +404,42 @@ mod tests {
         let cmd: CommandStr<'_> = serde_json::from_str(&json).unwrap();
 
         assert_eq!(cmd, CommandStr::new("ls -la"));
+    }
+
+    #[test]
+    fn try_from_accepts_a_normal_command() {
+        let cmd = CommandString::try_from("git status").unwrap();
+
+        assert_eq!(cmd.as_str(), "git status");
+    }
+
+    #[test]
+    fn try_from_accepts_newlines_tabs_and_empty() {
+        // Multi-line commands, tabs and the empty string are all legitimate and
+        // must not be rejected — only NUL is structurally invalid.
+        assert_eq!(
+            CommandString::try_from("git commit -m 'line one\nline two'")
+                .unwrap()
+                .as_str(),
+            "git commit -m 'line one\nline two'"
+        );
+        assert_eq!(
+            CommandString::try_from("echo\t123").unwrap().as_str(),
+            "echo\t123"
+        );
+        assert_eq!(CommandString::try_from("").unwrap().as_str(), "");
+    }
+
+    #[test]
+    fn try_from_rejects_a_nul_byte_and_reports_its_index() {
+        assert_eq!(
+            CommandString::try_from("echo a\0b"),
+            Err(InvalidCommand::ContainsNul { index: 6 })
+        );
+        // A leading NUL is reported at index 0.
+        assert_eq!(
+            CommandString::try_from("\0"),
+            Err(InvalidCommand::ContainsNul { index: 0 })
+        );
     }
 }
