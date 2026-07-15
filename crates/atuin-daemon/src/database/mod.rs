@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use atuin_client::{
     database::{Context as DbContext, OptFilters},
-    history::{History, HistoryId},
+    history::{History, HistoryId, HistoryStats},
     settings::{FilterMode as DbFilterMode, SearchMode as DbSearchMode},
 };
 use time::OffsetDateTime;
@@ -184,6 +184,71 @@ impl Records {
     pub fn from_history(history: Vec<History>) -> Self {
         Self {
             records: history.into_iter().map(HistoryRecord::from).collect(),
+        }
+    }
+}
+
+impl From<HistoryStats> for HistoryStatsReply {
+    fn from(s: HistoryStats) -> Self {
+        Self {
+            next: s.next.map(HistoryRecord::from),
+            previous: s.previous.map(HistoryRecord::from),
+            total: s.total,
+            average_duration: s.average_duration,
+            exits: s
+                .exits
+                .into_iter()
+                .map(|(a, b)| I64Pair { a, b })
+                .collect(),
+            day_of_week: s
+                .day_of_week
+                .into_iter()
+                .map(|(a, b)| StrI64Pair { a, b })
+                .collect(),
+            duration_over_time: s
+                .duration_over_time
+                .into_iter()
+                .map(|(a, b)| StrI64Pair { a, b })
+                .collect(),
+        }
+    }
+}
+
+impl From<HistoryStatsReply> for HistoryStats {
+    fn from(s: HistoryStatsReply) -> Self {
+        Self {
+            next: s.next.map(History::from),
+            previous: s.previous.map(History::from),
+            total: s.total,
+            average_duration: s.average_duration,
+            exits: s.exits.into_iter().map(|p| (p.a, p.b)).collect(),
+            day_of_week: s.day_of_week.into_iter().map(|p| (p.a, p.b)).collect(),
+            duration_over_time: s
+                .duration_over_time
+                .into_iter()
+                .map(|p| (p.a, p.b))
+                .collect(),
+        }
+    }
+}
+
+impl RecordsWithCount {
+    pub fn into_history_with_count(self) -> Vec<(History, i32)> {
+        self.items
+            .into_iter()
+            .filter_map(|i| i.record.map(|r| (History::from(r), i.count)))
+            .collect()
+    }
+
+    pub fn from_history_with_count(items: Vec<(History, i32)>) -> Self {
+        Self {
+            items: items
+                .into_iter()
+                .map(|(h, count)| RecordWithCount {
+                    record: Some(HistoryRecord::from(h)),
+                    count,
+                })
+                .collect(),
         }
     }
 }

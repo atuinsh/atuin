@@ -5,7 +5,7 @@ use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
 use atuin_client::{
-    database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings, theme,
+    database::Database, record::sqlite_store::SqliteStore, settings::Settings, theme,
 };
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{
@@ -353,10 +353,8 @@ impl Cmd {
             _ => {}
         }
 
-        let db_path = PathBuf::from(settings.db_path.as_str());
         let record_store_path = PathBuf::from(settings.record_store_path.as_str());
 
-        let db = Sqlite::new(db_path, settings.local_timeout).await?;
         let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
         let theme_name = settings.theme.name.clone();
@@ -364,23 +362,41 @@ impl Cmd {
 
         match self {
             Self::Setup => setup::run(&settings).await,
-            Self::Import(import) => import.run(&db).await,
-            Self::Stats(stats) => stats.run(&db, &settings, theme).await,
-            Self::Search(search) => search.run(db, &mut settings, sqlite_store, theme).await,
+            Self::Import(import) => {
+                let db = history_database(&settings).await?;
+                import.run(&db).await
+            }
+            Self::Stats(stats) => {
+                let db = history_database(&settings).await?;
+                stats.run(&db, &settings, theme).await
+            }
+            Self::Search(search) => {
+                let db = history_database(&settings).await?;
+                search.run(db, &mut settings, sqlite_store, theme).await
+            }
 
             #[cfg(feature = "sync")]
-            Self::Sync(sync) => sync.run(settings, &db, sqlite_store).await,
+            Self::Sync(sync) => {
+                let db = history_database(&settings).await?;
+                sync.run(settings, &db, sqlite_store).await
+            }
 
             #[cfg(feature = "sync")]
             Self::Account(account) => account.run(settings, sqlite_store).await,
 
             Self::Kv(kv) => kv.run(&settings, &sqlite_store).await,
 
-            Self::Store(store) => store.run(&settings, &db, sqlite_store).await,
+            Self::Store(store) => {
+                let db = history_database(&settings).await?;
+                store.run(&settings, &*db, sqlite_store).await
+            }
 
             Self::Dotfiles(dotfiles) => dotfiles.run(&settings, sqlite_store).await,
 
-            Self::Scripts(scripts) => scripts.run(&settings, sqlite_store, &db).await,
+            Self::Scripts(scripts) => {
+                let db = history_database(&settings).await?;
+                scripts.run(&settings, sqlite_store, &db).await
+            }
 
             Self::Info => {
                 info::run(&settings);
@@ -392,10 +408,13 @@ impl Cmd {
                 Ok(())
             }
 
-            Self::Wrapped { year } => wrapped::run(year, &db, &settings, sqlite_store, theme).await,
+            Self::Wrapped { year } => {
+                let db = history_database(&settings).await?;
+                wrapped::run(year, &db, &settings, sqlite_store, theme).await
+            }
 
             #[cfg(feature = "daemon")]
-            Self::Daemon(cmd) => cmd.run(settings, sqlite_store, db).await,
+            Self::Daemon(cmd) => cmd.run(settings).await,
 
             Self::History(_) | Self::Hook(_) | Self::Init(_) | Self::Doctor | Self::Config(_) => {
                 unreachable!()
@@ -405,7 +424,32 @@ impl Cmd {
             Self::Ai(cli) => atuin_ai::commands::run(cli, &settings).await,
 
             #[cfg(feature = "ai")]
-            Self::Mcp => atuin_ai::mcp::run(&db).await,
+            Self::Mcp => {
+                let db = history_database(&settings).await?;
+                atuin_ai::mcp::run(&*db).await
+            }
         }
     }
+}
+
+/// Obtain a handle to the history database.
+///
+/// With the `daemon` feature (the shipped default) the daemon is the sole
+/// owner of on-disk storage: ensure it is running and return a gRPC-backed
+/// proxy that implements `Database`. Without the feature (a minimal build with
+/// no daemon) open the local `SQLite` database directly.
+#[cfg(feature = "daemon")]
+async fn history_database(settings: &Settings) -> Result<Box<dyn Database>> {
+    daemon::ensure_daemon_running(settings).await?;
+    Ok(Box::new(
+        atuin_daemon::proxy::DaemonDatabase::from_settings(settings).await?,
+    ))
+}
+
+#[cfg(not(feature = "daemon"))]
+async fn history_database(settings: &Settings) -> Result<Box<dyn Database>> {
+    let db_path = PathBuf::from(settings.db_path.as_str());
+    Ok(Box::new(
+        atuin_client::database::Sqlite::new(db_path, settings.local_timeout).await?,
+    ))
 }

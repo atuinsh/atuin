@@ -8,7 +8,7 @@
 //! daemon; output retrieval talks to the daemon and returns a tool error when
 //! it is not running.
 
-use atuin_client::database::Sqlite;
+use atuin_client::database::Database;
 use atuin_client::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNOWN_AGENTS};
 use eyre::Result;
 use rmcp::model::{
@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use crate::tools::{AtuinHistoryToolCall, AtuinOutputToolCall, ToolOutcome};
 
 struct AtuinMcp {
-    db: Sqlite,
+    db: Box<dyn Database>,
 }
 
 impl ServerHandler for AtuinMcp {
@@ -49,7 +49,7 @@ impl ServerHandler for AtuinMcp {
             "atuin_history" => {
                 AtuinHistoryToolCall::try_from(&arguments)
                     .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
-                    .execute(&self.db)
+                    .execute(self.db.as_ref())
                     .await
             }
             "atuin_output" => {
@@ -82,11 +82,9 @@ impl ServerHandler for AtuinMcp {
 ///
 /// stdout carries only JSON-RPC messages; anything else (logs, errors) must
 /// go to stderr or it will corrupt the protocol stream.
-pub async fn run(db: &Sqlite) -> Result<()> {
+pub async fn run(db: &dyn Database) -> Result<()> {
     let server = AtuinMcp {
-        db: Sqlite {
-            pool: db.pool.clone(),
-        },
+        db: db.clone_boxed(),
     }
     .serve(rmcp::transport::stdio())
     .await?;

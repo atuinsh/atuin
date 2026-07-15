@@ -206,11 +206,55 @@ Move `dotfiles alias/var`, `kv`, `scripts`, and `init <shell>` dotfiles reads be
 
 ---
 
-## Part 7 — Working proof of concept (landed in this branch)
+## Part 7 — Implementation status (landed in this branch)
 
-To de-risk the architecture in Part 2, a vertical slice of the trait-proxy is
-implemented and working end-to-end. It proves the core claim: **the CLI can
-serve a real read entirely through the daemon, never opening SQLite itself.**
+**The entire history-`Database` axis is now daemon-only in the shipped build.**
+Under the default (`daemon`) feature, the CLI never opens the history SQLite
+database itself — every read and write is served by the daemon over gRPC. The
+daemonless code survives only under `#[cfg(not(feature = "daemon"))]` (the
+minimal no-daemon build) and behind `#[cfg(test)]`.
+
+What is routed through the daemon now:
+- **Writes:** `history start`/`end` always go through the daemon
+  (`start_history_entry`/`end_history_entry` call the daemon handlers
+  unconditionally; the direct `handle_start`/`handle_end` are `cfg(not(daemon))`).
+  The write hooks spawn the daemon on demand regardless of the old
+  `daemon.autostart` opt-in (`autostart_enabled()` = "not systemd-managed").
+- **Reads (all commands):** `search` (interactive + non-interactive), `stats`,
+  `wrapped`, `history list/last/prune/dedup/init-store`, `scripts new --last`,
+  `import`, `sync`/`store` history-count, and `mcp` — all receive a
+  `Box<dyn Database>` from a single `history_database()` helper that ensures the
+  daemon is running and returns a `DaemonDatabase` proxy.
+- **The linchpin:** a blanket `impl Database for Box<dyn Database>`
+  (`atuin-client/src/database.rs`) so every handler written against
+  `impl Database`/`&impl Database` accepts the boxed proxy **unchanged**. Only
+  `mcp` (concrete `&Sqlite` → `&dyn Database`) and the `daemon` subcommand
+  (opens its own real `Sqlite`, since it *is* the owner) needed edits.
+- The proxy is fully de-stubbed: `stats` and `all_with_count` now forward too.
+
+Verified end-to-end with no `daemon.enabled` set: history written via the
+daemon, then `history list`, `search` (fuzzy + prefix), and `stats` all served
+by the daemon; a single daemon owns the socket; `daemon status`/`stop` behave.
+`cargo build`/`clippy`/`test` are clean on default and `--no-default-features`.
+
+**Still on the direct path (next tranche):** the **record store** and everything
+built on it — `sync` (network), `store rebuild/rekey/purge/verify/push/pull`,
+`login`/`register` key rotation, `search --delete`/interactive delete, and the
+`dotfiles`/`kv`/`scripts` typed stores — plus the `atuin ai` interactive TUI
+(its `AppContext.history_db` is a concrete `Arc<Sqlite>`). These need new daemon
+RPCs (record-store `Store` surface + sync ownership) and are Phases 4–5.
+
+To *physically delete* the last daemonless code (the `cfg(not(daemon))` arms),
+promote `daemon` from an optional feature to a hard dependency — a Cargo change
+that drops the no-daemon build. Deferred pending that explicit call.
+
+---
+
+### Earlier proof of concept (superseded by the above)
+
+The first slice proved the core claim — **the CLI can serve a real read
+entirely through the daemon, never opening SQLite itself** — before the axis-wide
+cutover:
 
 What was built:
 

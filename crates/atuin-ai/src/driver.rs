@@ -779,7 +779,7 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
                     // History search needs async DB access
                     let tool = tool.clone();
                     tokio::spawn(async move {
-                        let outcome = tool.execute(&db).await;
+                        let outcome = tool.execute(db.as_ref()).await;
                         let _ = tx.send(DriverEvent::Fsm(Event::ToolExecutionDone {
                             tool_id,
                             outcome,

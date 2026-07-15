@@ -80,23 +80,36 @@ impl Cmd {
         }
     }
 
-    pub async fn run(
-        self,
-        settings: Settings,
-        store: SqliteStore,
-        history_db: Sqlite,
-    ) -> Result<()> {
+    pub async fn run(self, settings: Settings) -> Result<()> {
         match self.subcmd {
             None => {
                 eprintln!("Warning: `atuin daemon` is deprecated, use `atuin daemon start`");
+                let (store, history_db) = open_local_storage(&settings).await?;
                 run(settings, store, history_db, false).await
             }
-            Some(SubCmd::Start { force, .. }) => run(settings, store, history_db, force).await,
+            Some(SubCmd::Start { force, .. }) => {
+                let (store, history_db) = open_local_storage(&settings).await?;
+                run(settings, store, history_db, force).await
+            }
             Some(SubCmd::Status) => status_cmd(&settings).await,
             Some(SubCmd::Stop) => stop_cmd(&settings).await,
             Some(SubCmd::Restart) => restart_cmd(&settings).await,
         }
     }
+}
+
+/// Open the local history DB and record store that the daemon owns.
+///
+/// The daemon is the sole process that touches these files directly; every
+/// other command reaches them through the daemon over gRPC.
+async fn open_local_storage(settings: &Settings) -> Result<(SqliteStore, Sqlite)> {
+    let db_path = PathBuf::from(settings.db_path.as_str());
+    let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+
+    let history_db = Sqlite::new(db_path, settings.local_timeout).await?;
+    let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
+
+    Ok((store, history_db))
 }
 
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -412,6 +425,16 @@ struct TryWithRestartOptions {
     pub retry_on_version_mismatch: bool,
 }
 
+/// Whether the client may spawn/restart the daemon itself.
+///
+/// The client is daemon-only: the daemon is the sole owner of storage, so we
+/// always manage its lifecycle — the historical `daemon.autostart` opt-in no
+/// longer gates this. The one exception is systemd socket-activation, where the
+/// daemon's lifecycle is owned by systemd and we must not spawn it ourselves.
+fn autostart_enabled(settings: &Settings) -> bool {
+    !settings.daemon.systemd_socket
+}
+
 /// Try to send a request to the daemon, restarting it and retrying if necessary.
 ///
 /// `context` will be passed to the closure. Compared to capturing the needed context in the
@@ -434,9 +457,9 @@ where
                 return Ok(resp);
             }
 
-            if !settings.daemon.autostart {
+            if !autostart_enabled(settings) {
                 return Err(eyre!(
-                    "{}. Enable `daemon.autostart = true` or restart the daemon manually",
+                    "{}. Restart the daemon manually (its lifecycle is managed by systemd)",
                     daemon_mismatch_message(resp.version(), resp.protocol())
                 ));
             }
@@ -448,7 +471,7 @@ where
                 return Ok(resp);
             }
         }
-        Err(err) if !settings.daemon.autostart => return Err(err),
+        Err(err) if !autostart_enabled(settings) => return Err(err),
         Err(err) if !should_retry_after_error(&err) => return Err(err),
         Err(_) => {}
     }

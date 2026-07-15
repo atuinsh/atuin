@@ -199,6 +199,90 @@ pub trait Database: Send + Sync + 'static {
     fn clone_boxed(&self) -> Box<dyn Database + 'static>;
 }
 
+/// Blanket forwarding impl so a `Box<dyn Database>` is itself a `Database`.
+///
+/// This lets callers hold a boxed trait object (e.g. a gRPC-backed proxy that
+/// talks to the daemon) and pass it to any handler written against
+/// `impl Database` / `&impl Database` without changing those handlers.
+#[async_trait]
+impl Database for Box<dyn Database> {
+    async fn save(&self, h: &History) -> Result<()> {
+        (**self).save(h).await
+    }
+    async fn save_bulk(&self, h: &[History]) -> Result<()> {
+        (**self).save_bulk(h).await
+    }
+    async fn load(&self, id: &str) -> Result<Option<History>> {
+        (**self).load(id).await
+    }
+    async fn list(
+        &self,
+        filters: &[FilterMode],
+        context: &Context,
+        max: Option<usize>,
+        unique: bool,
+        include_deleted: bool,
+    ) -> Result<Vec<History>> {
+        (**self)
+            .list(filters, context, max, unique, include_deleted)
+            .await
+    }
+    async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>> {
+        (**self).range(from, to).await
+    }
+    async fn update(&self, h: &History) -> Result<()> {
+        (**self).update(h).await
+    }
+    async fn history_count(&self, include_deleted: bool) -> Result<i64> {
+        (**self).history_count(include_deleted).await
+    }
+    async fn last(&self) -> Result<Option<History>> {
+        (**self).last().await
+    }
+    async fn before(&self, timestamp: OffsetDateTime, count: i64) -> Result<Vec<History>> {
+        (**self).before(timestamp, count).await
+    }
+    async fn delete(&self, h: History) -> Result<()> {
+        (**self).delete(h).await
+    }
+    async fn delete_rows(&self, ids: &[HistoryId]) -> Result<()> {
+        (**self).delete_rows(ids).await
+    }
+    async fn deleted(&self) -> Result<Vec<History>> {
+        (**self).deleted().await
+    }
+    async fn search(
+        &self,
+        search_mode: SearchMode,
+        filter: FilterMode,
+        context: &Context,
+        query: &str,
+        filter_options: OptFilters,
+    ) -> Result<Vec<History>> {
+        (**self)
+            .search(search_mode, filter, context, query, filter_options)
+            .await
+    }
+    async fn query_history(&self, query: &str) -> Result<Vec<History>> {
+        (**self).query_history(query).await
+    }
+    async fn all_with_count(&self) -> Result<Vec<(History, i32)>> {
+        (**self).all_with_count().await
+    }
+    fn all_paged(&self, page_size: usize, include_deleted: bool, unique: bool) -> Paged {
+        (**self).all_paged(page_size, include_deleted, unique)
+    }
+    async fn stats(&self, h: &History) -> Result<HistoryStats> {
+        (**self).stats(h).await
+    }
+    async fn get_dups(&self, before: i64, dupkeep: u32) -> Result<Vec<History>> {
+        (**self).get_dups(before, dupkeep).await
+    }
+    fn clone_boxed(&self) -> Box<dyn Database + 'static> {
+        (**self).clone_boxed()
+    }
+}
+
 // Intended for use on a developer machine and not a sync server.
 // TODO: implement IntoIterator
 #[derive(Debug, Clone)]

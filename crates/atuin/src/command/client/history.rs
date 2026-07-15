@@ -21,7 +21,7 @@ use serde::Serialize;
 use atuin_daemon::history::{HistoryEventKind, TailHistoryReply};
 
 use atuin_client::{
-    database::{Database, Sqlite, current_context},
+    database::{Database, current_context},
     encryption,
     history::{History, store::HistoryStore},
     record::sqlite_store::SqliteStore,
@@ -31,11 +31,18 @@ use atuin_client::{
     },
 };
 
-#[cfg(feature = "sync")]
+// `Sqlite` is opened directly only by the no-daemon build and by tests; the
+// daemon build reaches storage through the gRPC proxy.
+#[cfg(any(test, not(feature = "daemon")))]
+use atuin_client::database::Sqlite;
+
+#[cfg(all(feature = "sync", not(feature = "daemon")))]
 use atuin_client::{record, sync};
 
 use time::{OffsetDateTime, macros::format_description};
-use tracing::{debug, warn};
+use tracing::debug;
+#[cfg(not(feature = "daemon"))]
+use tracing::warn;
 
 #[cfg(feature = "daemon")]
 use super::daemon;
@@ -410,6 +417,7 @@ fn normalize_command_for_storage<'a>(command: &'a str, settings: &Settings) -> &
     }
 }
 
+#[cfg(not(feature = "daemon"))]
 async fn handle_start(
     db: &impl Database,
     settings: &Settings,
@@ -482,6 +490,7 @@ async fn handle_daemon_start(
     Ok(Some(resp))
 }
 
+#[cfg(not(feature = "daemon"))]
 #[allow(unused_variables)]
 async fn handle_end(
     db: &impl Database,
@@ -573,14 +582,17 @@ pub(super) async fn start_history_entry(
     author: Option<&str>,
     intent: Option<&str>,
 ) -> Result<Option<String>> {
+    // The daemon is the sole owner of storage; route the write through it.
     #[cfg(feature = "daemon")]
-    if settings.daemon.enabled {
-        return handle_daemon_start(settings, command, author, intent).await;
+    {
+        handle_daemon_start(settings, command, author, intent).await
     }
-
-    let db_path = PathBuf::from(settings.db_path.as_str());
-    let db = Sqlite::new(db_path, settings.local_timeout).await?;
-    handle_start(&db, settings, command, author, intent).await
+    #[cfg(not(feature = "daemon"))]
+    {
+        let db_path = PathBuf::from(settings.db_path.as_str());
+        let db = Sqlite::new(db_path, settings.local_timeout).await?;
+        handle_start(&db, settings, command, author, intent).await
+    }
 }
 
 pub(super) async fn end_history_entry(
@@ -589,24 +601,27 @@ pub(super) async fn end_history_entry(
     exit: i64,
     duration: Option<u64>,
 ) -> Result<()> {
+    // The daemon is the sole owner of storage; route the write through it.
     #[cfg(feature = "daemon")]
-    if settings.daemon.enabled {
-        return handle_daemon_end(settings, id, exit, duration).await;
+    {
+        handle_daemon_end(settings, id, exit, duration).await
     }
+    #[cfg(not(feature = "daemon"))]
+    {
+        let db_path = PathBuf::from(settings.db_path.as_str());
+        let record_store_path = PathBuf::from(settings.record_store_path.as_str());
 
-    let db_path = PathBuf::from(settings.db_path.as_str());
-    let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+        let db = Sqlite::new(db_path, settings.local_timeout).await?;
+        let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
-    let db = Sqlite::new(db_path, settings.local_timeout).await?;
-    let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
+        let encryption_key: [u8; 32] = encryption::load_key(settings)
+            .context("could not load encryption key")?
+            .into();
+        let host_id = Settings::host_id().await?;
+        let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
-    let encryption_key: [u8; 32] = encryption::load_key(settings)
-        .context("could not load encryption key")?
-        .into();
-    let host_id = Settings::host_id().await?;
-    let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
-
-    handle_end(&db, store, history_store, settings, id, exit, duration).await
+        handle_end(&db, store, history_store, settings, id, exit, duration).await
+    }
 }
 
 #[cfg(feature = "daemon")]
@@ -1136,10 +1151,20 @@ impl Cmd {
             cmd => {
                 let context = current_context().await?;
 
-                let db_path = PathBuf::from(settings.db_path.as_str());
                 let record_store_path = PathBuf::from(settings.record_store_path.as_str());
 
-                let db = Sqlite::new(db_path, settings.local_timeout).await?;
+                // History reads/writes go through the daemon (sole storage owner).
+                #[cfg(feature = "daemon")]
+                let db: Box<dyn Database> = {
+                    super::daemon::ensure_daemon_running(settings).await?;
+                    Box::new(atuin_daemon::proxy::DaemonDatabase::from_settings(settings).await?)
+                };
+                #[cfg(not(feature = "daemon"))]
+                let db = {
+                    let db_path = PathBuf::from(settings.db_path.as_str());
+                    Sqlite::new(db_path, settings.local_timeout).await?
+                };
+
                 let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
                 let encryption_key: [u8; 32] = encryption::load_key(settings)
@@ -1251,6 +1276,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "daemon"))]
     #[tokio::test]
     async fn handle_start_saves_trimmed_command() {
         let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
@@ -1269,6 +1295,7 @@ mod tests {
         assert_eq!(history.command, "ls");
     }
 
+    #[cfg(not(feature = "daemon"))]
     #[tokio::test]
     async fn handle_start_can_keep_trailing_whitespace() {
         let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();

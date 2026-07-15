@@ -64,6 +64,23 @@ message Empty {}
 message Records { repeated HistoryRecord records = 1; }
 message OptionalRecord { optional HistoryRecord record = 1; }
 
+message I64Pair { int64 a = 1; int64 b = 2; }
+message StrI64Pair { string a = 1; int64 b = 2; }
+
+// Mirrors atuin_client::history::HistoryStats.
+message HistoryStatsReply {
+  optional HistoryRecord next = 1;
+  optional HistoryRecord previous = 2;
+  uint64 total = 3;
+  uint64 average_duration = 4;
+  repeated I64Pair exits = 5;
+  repeated StrI64Pair day_of_week = 6;
+  repeated StrI64Pair duration_over_time = 7;
+}
+
+message RecordWithCount { HistoryRecord record = 1; int32 count = 2; }
+message RecordsWithCount { repeated RecordWithCount items = 1; }
+
 message SaveRequest { HistoryRecord record = 1; }
 message SaveBulkRequest { repeated HistoryRecord records = 1; }
 message LoadRequest { string id = 1; }
@@ -107,4 +124,6 @@ service StorageDatabase {
   rpc Search(SearchRequest) returns (Records);
   rpc QueryHistory(QueryHistoryRequest) returns (Records);
   rpc GetDups(GetDupsRequest) returns (Records);
+  rpc Stats(SaveRequest) returns (HistoryStatsReply);
+  rpc AllWithCount(Empty) returns (RecordsWithCount);
 }

@@ -14,11 +14,11 @@ use time::OffsetDateTime;
 use tonic::{Request, Response, Status};
 
 use crate::database::{
-    Context, Empty, FilterMode, HistoryCountReply, HistoryCountRequest, HistoryRecord, ListRequest,
-    LoadRequest, OptionalRecord, QueryHistoryRequest, RangeRequest, Records, SaveBulkRequest,
-    SaveRequest, SearchMode, SearchRequest,
+    BeforeRequest, Context, DeleteRowsRequest, Empty, FilterMode, GetDupsRequest,
+    HistoryCountReply, HistoryCountRequest, HistoryRecord, HistoryStatsReply, ListRequest,
+    LoadRequest, OptionalRecord, QueryHistoryRequest, RangeRequest, Records, RecordsWithCount,
+    SaveBulkRequest, SaveRequest, SearchMode, SearchRequest,
     storage_database_server::{StorageDatabase, StorageDatabaseServer},
-    BeforeRequest, DeleteRowsRequest, GetDupsRequest,
 };
 
 use atuin_client::database::Sqlite as HistoryDatabase;
@@ -223,5 +223,22 @@ impl StorageDatabase for StorageDatabaseService {
             .await
             .map_err(internal)?;
         Ok(Response::new(Records::from_history(history)))
+    }
+
+    async fn stats(
+        &self,
+        request: Request<SaveRequest>,
+    ) -> Result<Response<HistoryStatsReply>, Status> {
+        let record = require_record(request.into_inner().record)?;
+        let stats = self.db.stats(&record.into()).await.map_err(internal)?;
+        Ok(Response::new(stats.into()))
+    }
+
+    async fn all_with_count(
+        &self,
+        _request: Request<Empty>,
+    ) -> Result<Response<RecordsWithCount>, Status> {
+        let items = self.db.all_with_count().await.map_err(internal)?;
+        Ok(Response::new(RecordsWithCount::from_history_with_count(items)))
     }
 }

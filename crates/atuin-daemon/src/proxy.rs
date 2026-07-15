@@ -36,12 +36,6 @@ fn wire_err<E: std::error::Error + Send + Sync + 'static>(e: E) -> sqlx::Error {
     sqlx::Error::Configuration(Box::new(e))
 }
 
-fn unsupported(what: &str) -> sqlx::Error {
-    sqlx::Error::Protocol(format!(
-        "{what} is not yet supported via the daemon database proxy"
-    ))
-}
-
 fn ts_to_nanos(ts: OffsetDateTime) -> u64 {
     ts.unix_timestamp_nanos().max(0) as u64
 }
@@ -291,8 +285,13 @@ impl Database for DaemonDatabase {
     }
 
     async fn all_with_count(&self) -> Result<Vec<(History, i32)>> {
-        // Only the skim search engine uses this; wire it up in the full cutover.
-        Err(unsupported("all_with_count"))
+        let mut client = self.client.clone();
+        let reply = client
+            .all_with_count(crate::database::Empty {})
+            .await
+            .map_err(wire_err)?
+            .into_inner();
+        Ok(reply.into_history_with_count())
     }
 
     fn all_paged(&self, page_size: usize, include_deleted: bool, unique: bool) -> Paged {
@@ -301,9 +300,16 @@ impl Database for DaemonDatabase {
         Paged::new(self.clone_boxed(), page_size, include_deleted, unique)
     }
 
-    async fn stats(&self, _h: &History) -> Result<HistoryStats> {
-        // Only the interactive inspector uses this; wire it up in the full cutover.
-        Err(unsupported("stats"))
+    async fn stats(&self, h: &History) -> Result<HistoryStats> {
+        let mut client = self.client.clone();
+        let reply = client
+            .stats(SaveRequest {
+                record: Some(h.clone().into()),
+            })
+            .await
+            .map_err(wire_err)?
+            .into_inner();
+        Ok(reply.into())
     }
 
     async fn get_dups(&self, before: i64, dupkeep: u32) -> Result<Vec<History>> {

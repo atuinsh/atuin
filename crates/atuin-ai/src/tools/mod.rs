@@ -1165,8 +1165,8 @@ impl PermissibleToolCall for AtuinHistoryToolCall {
 }
 
 impl AtuinHistoryToolCall {
-    pub(crate) async fn execute(&self, db: &atuin_client::database::Sqlite) -> ToolOutcome {
-        use atuin_client::database::{self, Database as _, OptFilters};
+    pub(crate) async fn execute(&self, db: &dyn atuin_client::database::Database) -> ToolOutcome {
+        use atuin_client::database::{self, OptFilters};
         use atuin_client::settings::SearchMode;
 
         // query_context rather than current_context: when running outside an
