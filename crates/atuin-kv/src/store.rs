@@ -2,8 +2,12 @@ use std::collections::HashSet;
 
 use eyre::{Result, eyre};
 
-use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::record::{encryption::PASETO_V4, store::Store};
+use std::sync::Arc;
+
+use atuin_client::record::{
+    encryption::PASETO_V4,
+    store::{ArcStore, Store},
+};
 use atuin_common::record::{Host, HostId, Record, RecordId, RecordIdx};
 use entry::KvEntry;
 use record::{KV_TAG, KV_VERSION, KvRecord};
@@ -15,7 +19,7 @@ pub mod record;
 
 #[derive(Debug, Clone)]
 pub struct KvStore {
-    pub record_store: SqliteStore,
+    pub record_store: ArcStore,
     pub kv_db: Database,
     pub host_id: HostId,
     pub encryption_key: [u8; 32],
@@ -23,13 +27,13 @@ pub struct KvStore {
 
 impl KvStore {
     pub fn new(
-        record_store: SqliteStore,
+        record_store: impl Store + 'static,
         kv_db: Database,
         host_id: HostId,
         encryption_key: [u8; 32],
     ) -> Self {
         KvStore {
-            record_store,
+            record_store: Arc::new(record_store),
             kv_db,
             host_id,
             encryption_key,

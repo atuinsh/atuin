@@ -4,9 +4,14 @@ use eyre::{Result, bail, eyre};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use rmp::decode::Bytes;
 
+use std::sync::Arc;
+
 use crate::{
     database::{Database, current_context},
-    record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store},
+    record::{
+        encryption::PASETO_V4,
+        store::{ArcStore, Store},
+    },
 };
 use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
 
@@ -14,7 +19,7 @@ use super::{HISTORY_TAG, HISTORY_VERSION, HISTORY_VERSION_V0, History, HistoryId
 
 #[derive(Debug, Clone)]
 pub struct HistoryStore {
-    pub store: SqliteStore,
+    pub store: ArcStore,
     pub host_id: HostId,
     pub encryption_key: [u8; 32],
 }
@@ -109,9 +114,9 @@ impl HistoryRecord {
 }
 
 impl HistoryStore {
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: [u8; 32]) -> Self {
+    pub fn new(store: impl Store + 'static, host_id: HostId, encryption_key: [u8; 32]) -> Self {
         HistoryStore {
-            store,
+            store: Arc::new(store),
             host_id,
             encryption_key,
         }

@@ -1,7 +1,11 @@
 use eyre::{Result, eyre};
 
-use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::record::{encryption::PASETO_V4, store::Store};
+use std::sync::Arc;
+
+use atuin_client::record::{
+    encryption::PASETO_V4,
+    store::{ArcStore, Store},
+};
 use atuin_common::record::{Host, HostId, Record, RecordId, RecordIdx};
 use record::ScriptRecord;
 use script::{SCRIPT_TAG, SCRIPT_VERSION, Script};
@@ -13,15 +17,15 @@ pub mod script;
 
 #[derive(Debug, Clone)]
 pub struct ScriptStore {
-    pub store: SqliteStore,
+    pub store: ArcStore,
     pub host_id: HostId,
     pub encryption_key: [u8; 32],
 }
 
 impl ScriptStore {
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: [u8; 32]) -> Self {
+    pub fn new(store: impl Store + 'static, host_id: HostId, encryption_key: [u8; 32]) -> Self {
         ScriptStore {
-            store,
+            store: Arc::new(store),
             host_id,
             encryption_key,
         }

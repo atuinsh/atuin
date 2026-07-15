@@ -3,13 +3,13 @@
 /// This is easier for now
 /// Once I have two implementations, building a common base is much easier.
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
-use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::record::{DecryptedData, Host, HostId};
 use eyre::{Result, bail, ensure, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;
-use atuin_client::record::store::Store;
+use atuin_client::record::store::{ArcStore, Store};
 
 use crate::shell::Var;
 
@@ -100,16 +100,16 @@ impl VarRecord {
 
 #[derive(Debug, Clone)]
 pub struct VarStore {
-    pub store: SqliteStore,
+    pub store: ArcStore,
     pub host_id: HostId,
     pub encryption_key: [u8; 32],
 }
 
 impl VarStore {
     // will want to init the actual kv store when that is done
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: [u8; 32]) -> VarStore {
+    pub fn new(store: impl Store + 'static, host_id: HostId, encryption_key: [u8; 32]) -> VarStore {
         VarStore {
-            store,
+            store: Arc::new(store),
             host_id,
             encryption_key,
         }

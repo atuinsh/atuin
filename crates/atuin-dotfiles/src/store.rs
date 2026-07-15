@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
-use atuin_client::record::sqlite_store::SqliteStore;
 // Sync aliases
 // This will be noticeable similar to the kv store, though I expect the two shall diverge
 // While we will support a range of shell config, I'd rather have a larger number of small records
@@ -10,7 +10,7 @@ use atuin_common::utils::unquote;
 use eyre::{Result, bail, ensure, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;
-use atuin_client::record::store::Store;
+use atuin_client::record::store::{ArcStore, Store};
 
 use crate::shell::Alias;
 
@@ -125,16 +125,16 @@ impl AliasRecord {
 
 #[derive(Debug, Clone)]
 pub struct AliasStore {
-    pub store: SqliteStore,
+    pub store: ArcStore,
     pub host_id: HostId,
     pub encryption_key: [u8; 32],
 }
 
 impl AliasStore {
     // will want to init the actual kv store when that is done
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: [u8; 32]) -> AliasStore {
+    pub fn new(store: impl Store + 'static, host_id: HostId, encryption_key: [u8; 32]) -> AliasStore {
         AliasStore {
-            store,
+            store: Arc::new(store),
             host_id,
             encryption_key,
         }
