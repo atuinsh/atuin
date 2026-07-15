@@ -290,7 +290,7 @@ impl Cmd {
                 let format = self
                     .format
                     .as_deref()
-                    .unwrap_or_else(|| settings.history_format.as_str());
+                    .unwrap_or(settings.history_format.as_str());
                 let tz = self.timezone.unwrap_or(settings.timezone);
 
                 super::history::print_list(
