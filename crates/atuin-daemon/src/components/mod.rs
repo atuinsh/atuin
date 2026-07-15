@@ -18,6 +18,7 @@ pub mod database;
 pub mod history;
 pub mod search;
 pub mod semantic;
+pub mod store;
 pub mod sync;
 
 pub use history::HistoryComponent;

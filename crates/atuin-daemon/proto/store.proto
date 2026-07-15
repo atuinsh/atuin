@@ -1,0 +1,68 @@
+syntax = "proto3";
+package store;
+
+// Mirrors atuin_common::record::Host.
+message Host {
+  string id = 1;   // HostId uuid (hyphenated)
+  string name = 2;
+}
+
+// Mirrors atuin_common::record::EncryptedData.
+message EncryptedData {
+  string data = 1;
+  string content_encryption_key = 2;
+}
+
+// Mirrors atuin_common::record::Record<EncryptedData>.
+message EncryptedRecord {
+  string id = 1;   // RecordId uuid (hyphenated)
+  uint64 idx = 2;
+  Host host = 3;
+  uint64 timestamp = 4;
+  string version = 5;
+  string tag = 6;
+  EncryptedData data = 7;
+}
+
+message Empty {}
+message Records { repeated EncryptedRecord records = 1; }
+message OptionalRecord { optional EncryptedRecord record = 1; }
+message Count { uint64 count = 1; }
+
+message PushBatchRequest { repeated EncryptedRecord records = 1; }
+message RecordIdRequest { string id = 1; }
+message HostTagRequest { string host = 1; string tag = 2; }
+message TagRequest { string tag = 1; }
+message KeyRequest { bytes key = 1; }
+message ReEncryptRequest { bytes old_key = 1; bytes new_key = 2; }
+message NextRequest { string host = 1; string tag = 2; uint64 idx = 3; uint64 limit = 4; }
+message IdxRequest { string host = 1; string tag = 2; uint64 idx = 3; }
+
+// Mirrors atuin_common::record::RecordStatus (host -> tag -> max idx).
+message HostTags {
+  string host = 1;
+  map<string, uint64> tags = 2;
+}
+message RecordStatusReply { repeated HostTags hosts = 1; }
+
+// atuin_client::record::store::Store, served by the daemon over gRPC so the
+// client never opens the local record store itself. Records stay encrypted on
+// the wire; the daemon is a blob store and crypto remains client-side.
+service StorageStore {
+  rpc PushBatch(PushBatchRequest) returns (Empty);
+  rpc Get(RecordIdRequest) returns (EncryptedRecord);
+  rpc Delete(RecordIdRequest) returns (Empty);
+  rpc DeleteAll(Empty) returns (Empty);
+  rpc LenAll(Empty) returns (Count);
+  rpc Len(HostTagRequest) returns (Count);
+  rpc LenTag(TagRequest) returns (Count);
+  rpc Last(HostTagRequest) returns (OptionalRecord);
+  rpc First(HostTagRequest) returns (OptionalRecord);
+  rpc ReEncrypt(ReEncryptRequest) returns (Empty);
+  rpc Verify(KeyRequest) returns (Empty);
+  rpc Purge(KeyRequest) returns (Empty);
+  rpc Next(NextRequest) returns (Records);
+  rpc Idx(IdxRequest) returns (OptionalRecord);
+  rpc Status(Empty) returns (RecordStatusReply);
+  rpc AllTagged(TagRequest) returns (Records);
+}

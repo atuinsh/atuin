@@ -9,6 +9,8 @@ pub mod control;
 pub mod daemon;
 pub mod database;
 pub mod proxy;
+pub mod store;
+pub mod store_proxy;
 pub mod events;
 pub mod history;
 pub mod search;
@@ -50,6 +52,9 @@ pub async fn boot(
     // the CLI can act as a pure client. It clones the pool (cheap, shared).
     let database_service =
         components::database::StorageDatabaseService::new(history_db.clone()).into_server();
+
+    // The record-store service exposes the owned record store over gRPC.
+    let store_service = components::store::StorageStoreService::new(store.clone()).into_server();
 
     // Build the daemon
     let mut daemon = Daemon::builder(settings.clone())
@@ -107,6 +112,7 @@ pub async fn boot(
         semantic_service,
         control_service.into_server(),
         database_service,
+        store_service,
         handle,
     )
     .await?;

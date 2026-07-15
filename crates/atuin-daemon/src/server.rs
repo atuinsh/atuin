@@ -1,12 +1,14 @@
 use eyre::Result;
 
 use crate::components::database::StorageDatabaseService;
+use crate::components::store::StorageStoreService;
 use crate::components::history::HistoryGrpcService;
 use crate::components::search::SearchGrpcService;
 use crate::components::semantic::SemanticGrpcService;
 use crate::control::{ControlService, control_server::ControlServer};
 use crate::daemon::DaemonHandle;
 use crate::database::storage_database_server::StorageDatabaseServer;
+use crate::store::storage_store_server::StorageStoreServer;
 use crate::history::history_server::HistoryServer;
 use crate::search::search_server::SearchServer;
 use crate::semantic::semantic_server::SemanticServer;
@@ -25,6 +27,7 @@ pub async fn run_grpc_server(
     semantic_service: SemanticServer<SemanticGrpcService>,
     control_service: ControlServer<ControlService>,
     database_service: StorageDatabaseServer<StorageDatabaseService>,
+    store_service: StorageStoreServer<StorageStoreService>,
     handle: DaemonHandle,
 ) -> Result<()> {
     use tokio::net::UnixListener;
@@ -110,6 +113,7 @@ pub async fn run_grpc_server(
             .add_service(semantic_service)
             .add_service(control_service)
             .add_service(database_service)
+            .add_service(store_service)
             .serve_with_incoming_shutdown(uds_stream, shutdown_signal)
             .await
         {
@@ -129,6 +133,7 @@ pub async fn run_grpc_server(
     semantic_service: SemanticServer<SemanticGrpcService>,
     control_service: ControlServer<ControlService>,
     database_service: StorageDatabaseServer<StorageDatabaseService>,
+    store_service: StorageStoreServer<StorageStoreService>,
     handle: DaemonHandle,
 ) -> Result<()> {
     use tokio::net::TcpListener;
@@ -165,6 +170,7 @@ pub async fn run_grpc_server(
             .add_service(semantic_service)
             .add_service(control_service)
             .add_service(database_service)
+            .add_service(store_service)
             .serve_with_incoming_shutdown(tcp_stream, shutdown_signal)
             .await
         {
