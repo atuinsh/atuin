@@ -270,13 +270,20 @@ subcommand (the owner). Verified: `kv set/get`, `store status`, `dotfiles`,
 sole owner of both the history DB and the record store; the CLI is a pure gRPC
 client. The daemonless code is excluded from the product build.
 
-**Remaining — Part B (mechanical): physically delete the daemonless code.**
-Make `atuin-daemon` non-optional and remove the `daemon` feature plus all 71
-`#[cfg(feature = "daemon")]` / `#[cfg(not(feature = "daemon"))]` gates across
-`atuin` + `atuin-ai` (un-gate the daemon arms, delete the `not(daemon)` arms
-incl. `handle_start`/`handle_end` and the no-daemon `history_database`/
-`record_store` helpers). This is a wide sweep that drops the `--no-default-
-features` build; it must be done as one atomic green change.
+**Part B — DONE. The daemonless code is physically deleted.** `atuin-daemon`
+is now a mandatory (non-optional) dependency; the `daemon` cargo feature is
+removed from `atuin`/`atuin-client`/`atuin-ai`. All ~45 `#[cfg(feature =
+"daemon")]` gates were un-gated (daemon code is now unconditional) and all
+`#[cfg(not(feature = "daemon"))]` arms deleted — `handle_start`/`handle_end`,
+the no-daemon branches in `start`/`end_history_entry` and the history
+subcommands, the no-daemon `history_database`/`record_store`/`init`/`ai`
+fallbacks, the `DaemonFuzzy` search fallback, and the two `handle_start` tests.
+There is no longer any way to build a daemonless client. Both `default` and
+`--no-default-features` build (the latter now includes the daemon); clippy
+clean; 224 bin tests + workspace lib tests pass.
+
+**ATU-538 is complete: the CLI is a pure daemon client with zero direct
+storage access and zero daemonless code.**
 
 To *physically delete* the last daemonless code (the `cfg(not(daemon))` arms),
 promote `daemon` from an optional feature to a hard dependency — a Cargo change
