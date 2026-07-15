@@ -1,13 +1,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use atuin_client::database::Database;
 use atuin_client::distro::detect_linux_distribution;
 use atuin_client::history::History;
 use atuin_client::settings::AiCapabilities;
 
 /// Session-scoped context for the AI chat session.
 /// Holds the API configuration and client settings needed by the event loop and stream task.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct AppContext {
     pub endpoint: String,
     /// Bearer token for `endpoint`. Empty means unauthenticated — no
@@ -23,12 +24,29 @@ pub(crate) struct AppContext {
     pub token_from_hub_session: bool,
     pub send_cwd: bool,
     pub last_command: Option<History>,
-    pub history_db: Arc<atuin_client::database::Sqlite>,
+    pub history_db: Arc<dyn Database>,
     /// Git root of the current working directory, if inside a git repo.
     /// Resolves through worktrees to the main repo root.
     pub git_root: Option<PathBuf>,
     pub capabilities: AiCapabilities,
     pub daemon_enabled: bool,
+}
+
+impl std::fmt::Debug for AppContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppContext")
+            .field("endpoint", &self.endpoint)
+            .field("token", &self.token)
+            .field("endpoint_is_hub", &self.endpoint_is_hub)
+            .field("token_from_hub_session", &self.token_from_hub_session)
+            .field("send_cwd", &self.send_cwd)
+            .field("last_command", &self.last_command)
+            .field("history_db", &"<Database>")
+            .field("git_root", &self.git_root)
+            .field("capabilities", &self.capabilities)
+            .field("daemon_enabled", &self.daemon_enabled)
+            .finish()
+    }
 }
 
 pub(crate) fn history_output_capability_available(daemon_enabled: bool) -> bool {

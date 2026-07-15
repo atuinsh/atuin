@@ -421,7 +421,12 @@ impl Cmd {
             }
 
             #[cfg(feature = "ai")]
-            Self::Ai(cli) => atuin_ai::commands::run(cli, &settings).await,
+            Self::Ai(cli) => {
+                // The AI TUI reaches history through the daemon; ensure it is up.
+                #[cfg(feature = "daemon")]
+                daemon::ensure_daemon_running(&settings).await?;
+                atuin_ai::commands::run(cli, &settings).await
+            }
 
             #[cfg(feature = "ai")]
             Self::Mcp => {
