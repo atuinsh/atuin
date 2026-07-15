@@ -30,17 +30,25 @@ impl From<HistDbEntry> for History {
     fn from(histdb_item: HistDbEntry) -> Self {
         let ts_secs = histdb_item.start_timestamp / 1000;
         let ts_ns = (histdb_item.start_timestamp % 1000) * 1_000_000;
+        // A nushell history row is a set of sqlite blobs: the timestamp is an
+        // arbitrary i64 and command_line/cwd/hostname are raw bytes that may
+        // not be valid UTF-8 (e.g. a path or command containing non-UTF-8
+        // bytes, which is legal on POSIX). Neither from_unix_timestamp nor
+        // from_utf8 is guaranteed to succeed, so unwrapping them here made a
+        // single bad row abort the entire 'atuin import nu-histdb' run. Clamp
+        // an out-of-range timestamp to the epoch and decode the byte fields
+        // lossily so importing keeps the row instead of panicking.
+        let timestamp = OffsetDateTime::from_unix_timestamp(ts_secs)
+            .unwrap_or(OffsetDateTime::UNIX_EPOCH)
+            + Duration::nanoseconds(ts_ns);
         let imported = History::import()
-            .timestamp(
-                OffsetDateTime::from_unix_timestamp(ts_secs).unwrap()
-                    + Duration::nanoseconds(ts_ns),
-            )
-            .command(String::from_utf8(histdb_item.command_line).unwrap())
-            .cwd(String::from_utf8(histdb_item.cwd).unwrap())
+            .timestamp(timestamp)
+            .command(String::from_utf8_lossy(&histdb_item.command_line).into_owned())
+            .cwd(String::from_utf8_lossy(&histdb_item.cwd).into_owned())
             .exit(histdb_item.exit_status)
             .duration(histdb_item.duration_ms)
             .session(format!("{:x}", histdb_item.session_id))
-            .hostname(String::from_utf8(histdb_item.hostname).unwrap());
+            .hostname(String::from_utf8_lossy(&histdb_item.hostname).into_owned());
 
         imported.build().into()
     }
@@ -109,5 +117,68 @@ impl Importer for NuHistDb {
             h.push(i.into()).await?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn from_entry_survives_non_utf8_and_out_of_range_timestamp() {
+        // 0xc3 0x28 is an invalid UTF-8 sequence (0xc3 starts a two-byte
+        // sequence but 0x28 is not a continuation byte). i64::MAX / 1000 is
+        // far past OffsetDateTime's supported range, so from_unix_timestamp
+        // returns Err. Both used to unwrap and panic the whole import.
+        let entry = HistDbEntry {
+            id: 1,
+            command_line: vec![b'l', b's', b' ', 0xc3, 0x28],
+            start_timestamp: i64::MAX,
+            session_id: 0x1a2b,
+            hostname: vec![b'h', 0xff],
+            cwd: vec![b'/', 0xfe],
+            duration_ms: 42,
+            exit_status: 0,
+            more_info: Vec::new(),
+        };
+
+        let history: History = entry.into();
+
+        assert_eq!(history.command, "ls \u{fffd}(");
+        assert_eq!(history.cwd, "/\u{fffd}");
+        assert_eq!(history.hostname, "h\u{fffd}");
+        assert_eq!(history.session, "1a2b");
+        assert_eq!(history.duration, 42);
+        // i64::MAX % 1000 == 807, i.e. 807ms past the clamped epoch.
+        assert_eq!(
+            history.timestamp,
+            OffsetDateTime::UNIX_EPOCH + Duration::nanoseconds(807_000_000)
+        );
+    }
+
+    #[test]
+    fn from_entry_decodes_valid_row() {
+        let entry = HistDbEntry {
+            id: 2,
+            command_line: b"cargo test".to_vec(),
+            start_timestamp: 1_613_322_469_000,
+            session_id: 255,
+            hostname: b"host".to_vec(),
+            cwd: b"/home/user".to_vec(),
+            duration_ms: 1000,
+            exit_status: 0,
+            more_info: Vec::new(),
+        };
+
+        let history: History = entry.into();
+
+        assert_eq!(history.command, "cargo test");
+        assert_eq!(history.cwd, "/home/user");
+        assert_eq!(history.hostname, "host");
+        assert_eq!(history.session, "ff");
+        assert_eq!(
+            history.timestamp,
+            OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
+        );
     }
 }
