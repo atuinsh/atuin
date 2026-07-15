@@ -87,7 +87,7 @@ pub struct Cmd {
     human: bool,
 
     #[arg(allow_hyphen_values = true)]
-    query: Option<Vec<String>>,
+    query: Vec<String>,
 
     /// Show only the text of the command
     #[arg(long)]
@@ -134,7 +134,7 @@ pub struct Cmd {
     /// Filter by author. Supports $all-user (non-agents), $all-agent, or literal names.
     /// Can be specified multiple times.
     #[arg(long)]
-    author: Option<Vec<String>>,
+    author: Vec<String>,
 
     /// Include duplicate commands in the output (non-interactive only)
     #[arg(long)]
@@ -162,7 +162,7 @@ impl Cmd {
         store: SqliteStore,
         theme: &Theme,
     ) -> Result<()> {
-        let query = self.query.unwrap_or_else(|| {
+        let query = if self.query.is_empty() {
             std::env::var("ATUIN_QUERY").map_or_else(
                 |_| vec![],
                 |query| {
@@ -172,7 +172,9 @@ impl Cmd {
                         .collect()
                 },
             )
-        });
+        } else {
+            self.query
+        };
 
         if (self.delete_it_all || self.delete) && self.limit.is_some() {
             // Because of how deletion is implemented, it will always delete all matches
@@ -254,7 +256,7 @@ impl Cmd {
                 offset: self.offset,
                 reverse: self.reverse,
                 include_duplicates: self.include_duplicates,
-                authors: self.author.clone().unwrap_or_default(),
+                authors: self.author.clone(),
             };
 
             let mut entries =
@@ -352,7 +354,7 @@ mod tests {
         let cmd = Cmd::try_parse_from(["search", "---"]);
         assert!(cmd.is_ok(), "Failed to parse '---' as a query: {cmd:?}");
         let cmd = cmd.unwrap();
-        assert_eq!(cmd.query, Some(vec!["---".to_string()]));
+        assert_eq!(cmd.query, vec!["---".to_string()]);
     }
 
     #[test]
@@ -361,16 +363,13 @@ mod tests {
         let cmd = Cmd::try_parse_from(["search", "--", "--foo"]);
         assert!(cmd.is_ok());
         let cmd = cmd.unwrap();
-        assert_eq!(cmd.query, Some(vec!["--foo".to_string()]));
+        assert_eq!(cmd.query, vec!["--foo".to_string()]);
     }
 
     #[test]
     fn search_author_cli_flag() {
         let cmd =
             Cmd::try_parse_from(["search", "--author", "codex", "--author", "ellie"]).unwrap();
-        assert_eq!(
-            cmd.author,
-            Some(vec!["codex".to_string(), "ellie".to_string()])
-        );
+        assert_eq!(cmd.author, vec!["codex".to_string(), "ellie".to_string()]);
     }
 }
