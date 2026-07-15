@@ -187,7 +187,7 @@ impl Component for SearchComponent {
                     "Indexing synced history entries into search index"
                 );
 
-                span!(Level::TRACE, "inject_records", count = histories.len())
+                span!(Level::TRACE, "inject_synced_history", count = histories.len())
                     .in_scope(async || {
                         self.index.read().await.add_histories(histories);
                     })
