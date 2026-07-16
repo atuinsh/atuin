@@ -10,6 +10,7 @@ use command::AtuinCmd;
 
 mod command;
 pub(crate) mod logs;
+#[cfg(feature = "client")]
 pub(crate) mod shell;
 
 #[cfg(feature = "sync")]
