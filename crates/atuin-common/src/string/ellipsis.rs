@@ -83,16 +83,13 @@ pub trait EllipsizeExt: AsRef<str> {
         let s = self.as_ref();
         let amount = budget.amount();
         let len = s.len();
-        // The boundary helpers only need a per-grapheme cost, not the budget.
         let cost = |seg: &str| budget.cost(seg);
 
-        // Fast path: already fits - a single contiguous slice.
         if cost(s) <= amount {
             return Ellipsized::contiguous(s, 0);
         }
 
-        // Not enough room for the indicator itself: hard-truncate to a bare,
-        // unmarked slice.
+        // Not enough room for the indicator itself: hard-truncate to a bare, unmarked slice.
         let indicator_cost = cost(indicator.as_ref());
         if amount < indicator_cost {
             return match side {
@@ -112,7 +109,6 @@ pub trait EllipsizeExt: AsRef<str> {
             Pos::Start => Ellipsized::spliced(s, 0, suffix_boundary(s, content, cost), indicator),
             Pos::Middle => {
                 let end = prefix_boundary(s, content.div_ceil(2), cost);
-                // Clamp so prefix and suffix never overlap (zero-width graphemes).
                 let start = suffix_boundary(s, content / 2, cost).max(end);
                 Ellipsized::spliced(s, end, start, indicator)
             }
@@ -298,10 +294,8 @@ mod tests {
     }
 
     #[rstest]
-    // Fits unchanged (borrowed).
     #[case("hello", Budget::Columns(10), Pos::End, Indicator::ASCII, "hello")]
     #[case("hello", Budget::Columns(5), Pos::End, Indicator::ASCII, "hello")]
-    // Basic Right/Left/Middle truncation with Dots.
     #[case(
         "hello world",
         Budget::Columns(8),
@@ -323,7 +317,6 @@ mod tests {
         Indicator::ASCII,
         "he...ld"
     )]
-    // Unicode ellipsis costs 1 column, so more content survives.
     #[case(
         "hello world",
         Budget::Columns(6),
@@ -338,11 +331,9 @@ mod tests {
         Indicator::UNICODE,
         "…world"
     )]
-    // Wide (double-width) glyphs: CJK.
     #[case("你好世界", Budget::Columns(5), Pos::End, Indicator::ASCII, "你...")]
     #[case("你好世界", Budget::Columns(4), Pos::End, Indicator::ASCII, "...")]
     #[case("你好世界", Budget::Columns(8), Pos::End, Indicator::ASCII, "你好世界")]
-    // Wide glyphs: emoji.
     #[case("🐢🦀🐢🦀", Budget::Columns(5), Pos::End, Indicator::UNICODE, "🐢🦀…")]
     #[case(
         "🐢🦀🐢🦀",
@@ -351,13 +342,10 @@ mod tests {
         Indicator::UNICODE,
         "🐢🦀🐢🦀"
     )]
-    // Amount below ellipsis cost: hard-truncate, no ellipsis.
     #[case("hello", Budget::Columns(2), Pos::End, Indicator::ASCII, "he")]
     #[case("hello", Budget::Columns(2), Pos::Start, Indicator::ASCII, "lo")]
     #[case("hello", Budget::Columns(0), Pos::End, Indicator::ASCII, "")]
-    // Empty input.
     #[case("", Budget::Columns(5), Pos::End, Indicator::ASCII, "")]
-    // Byte budgets: ASCII bytes == columns.
     #[case(
         "hello world",
         Budget::Bytes(8),
@@ -365,8 +353,6 @@ mod tests {
         Indicator::ASCII,
         "hello..."
     )]
-    // Contrast: the same `hello…` output fits in 6 columns (the Columns(6) case
-    // above) but needs 8 bytes, since `…` is 1 column but 3 bytes.
     #[case(
         "hello world",
         Budget::Bytes(8),
@@ -374,7 +360,6 @@ mod tests {
         Indicator::UNICODE,
         "hello…"
     )]
-    // Multi-byte (but single-column) content under a byte budget.
     #[case("café", Budget::Bytes(4), Pos::End, Indicator::ASCII, "c...")]
     #[case("café", Budget::Bytes(5), Pos::End, Indicator::ASCII, "café")]
     #[case("你好", Budget::Bytes(5), Pos::End, Indicator::ASCII, "...")]
@@ -482,7 +467,6 @@ mod tests {
             let out = e.to_string();
             for (i, ch) in out.char_indices() {
                 if let Some(j) = e.source_index(i) {
-                    // The output char at byte `i` is the source char at byte `j`.
                     prop_assert_eq!(s[j..].chars().next(), Some(ch));
                 }
             }
@@ -491,15 +475,14 @@ mod tests {
 
     #[test]
     fn source_index_middle_maps_head_gap_tail() {
-        // "hello world" -> Columns(7) Middle Dots = "he...ld"
         let e = "hello world".ellipsize(Budget::Columns(7), Pos::Middle, Indicator::ASCII);
         assert_eq!(e.to_string(), "he...ld");
-        assert_eq!(e.source_index(0), Some(0)); // 'h' head identity
-        assert_eq!(e.source_index(1), Some(1)); // 'e' head identity
-        assert_eq!(e.source_index(2), None); // '.' on the indicator
-        assert_eq!(e.source_index(4), None); // '.' on the indicator
-        assert_eq!(e.source_index(5), Some(9)); // 'l' tail: 5 - 2 - 3 + 9
-        assert_eq!(e.source_index(6), Some(10)); // 'd' tail
+        assert_eq!(e.source_index(0), Some(0));
+        assert_eq!(e.source_index(1), Some(1));
+        assert_eq!(e.source_index(2), None);
+        assert_eq!(e.source_index(4), None);
+        assert_eq!(e.source_index(5), Some(9));
+        assert_eq!(e.source_index(6), Some(10));
     }
 
     #[test]
