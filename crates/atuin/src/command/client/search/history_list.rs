@@ -7,7 +7,9 @@ use atuin_client::{
     settings::{UiColumn, UiColumnType},
     theme::{Meaning, Theme},
 };
+use atuin_common::string::EllipsizeExt as _;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
+use atuin_common::string::ellipsis::{Budget, Indicator, Pos};
 use itertools::Itertools;
 use ratatui::{
     backend::FromCrossterm,
@@ -18,6 +20,7 @@ use ratatui::{
     widgets::{Block, StatefulWidget, Widget},
 };
 use time::OffsetDateTime;
+use unicode_width::UnicodeWidthStr;
 
 pub struct HistoryHighlighter<'a> {
     pub engine: &'a dyn SearchEngine,
@@ -310,28 +313,27 @@ impl DrawState<'_> {
 
         // Truncate long commands from the middle to show both start and end,
         // so users can identify commands even in narrow terminals (issue #3596).
-        let (display, display_to_original) = truncate_middle(&normalized, avail);
-        let normalized_byte_len = normalized.len();
-
-        // Render each character of the display string, applying highlights
-        // where the original position matches a highlight index.
-        for (ch, &original_byte_pos) in display.chars().zip(display_to_original.iter()) {
+        let ellipsized =
+            normalized.ellipsize(Budget::Columns(avail), Pos::Middle, Indicator::UNICODE);
+        let display = ellipsized.to_string();
+        for (i, ch) in display.char_indices() {
             if self.x > self.list_area.width {
                 return;
             }
-
+            // Map each output cell back to its source byte and test the existing
+            // highlight set; a cell on the spliced ellipsis maps to None and is
+            // never highlighted (this is why the "…" is never bolded).
+            let highlighted = ellipsized
+                .source_index(i)
+                .is_some_and(|b| highlight_indices.contains(&b));
             let mut char_style = style;
-            if original_byte_pos < normalized_byte_len
-                && highlight_indices.contains(&original_byte_pos)
-            {
+            if highlighted {
                 if row_highlighted {
                     char_style = self.theme.as_style(Meaning::AlertWarn);
                 }
                 char_style.attributes.set(style::Attribute::Bold);
             }
-
-            let s = ch.to_string();
-            self.draw(&s, Style::from_crossterm(char_style));
+            self.draw(&ch.to_string(), Style::from_crossterm(char_style));
         }
     }
 
@@ -358,12 +360,11 @@ impl DrawState<'_> {
         let style = self.theme.as_style(Meaning::Annotation);
         let w = width as usize;
         let cwd = &h.cwd;
-        let char_count = cwd.chars().count();
-        // Truncate from the left with "..." if too long, plus trailing space
-        // Use character count for comparison and skip for UTF-8 safety
-        let display = if char_count > w && w >= 4 {
-            let truncated: String = cwd.chars().skip(char_count - (w - 3)).collect();
-            format!("...{truncated}")
+        // Elide from the left with "..." so the leaf directory stays visible;
+        // pad to the column width when it already fits.
+        let display = if cwd.width() > w {
+            cwd.ellipsize(Budget::Columns(w), Pos::Start, Indicator::UNICODE)
+                .to_string()
         } else {
             format!("{cwd:w$}")
         };
@@ -376,11 +377,9 @@ impl DrawState<'_> {
         let w = width as usize;
         // Database stores hostname as "hostname:username"
         let host = h.hostname.split(':').next().unwrap_or(&h.hostname);
-        let char_count = host.chars().count();
-        // Use character count for comparison and take for UTF-8 safety
-        let display = if char_count > w && w >= 4 {
-            let truncated: String = host.chars().take(w.saturating_sub(4)).collect();
-            format!("{truncated}...")
+        let display = if host.width() > w {
+            host.ellipsize(Budget::Columns(w), Pos::End, Indicator::UNICODE)
+                .to_string()
         } else {
             format!("{host:w$}")
         };
@@ -393,11 +392,9 @@ impl DrawState<'_> {
         let w = width as usize;
         // Database stores hostname as "hostname:username"
         let user = h.hostname.split(':').nth(1).unwrap_or("");
-        let char_count = user.chars().count();
-        // Use character count for comparison and take for UTF-8 safety
-        let display = if char_count > w && w >= 4 {
-            let truncated: String = user.chars().take(w.saturating_sub(4)).collect();
-            format!("{truncated}...")
+        let display = if user.width() > w {
+            user.ellipsize(Budget::Columns(w), Pos::End, Indicator::UNICODE)
+                .to_string()
         } else {
             format!("{user:w$}")
         };
@@ -432,130 +429,5 @@ impl DrawState<'_> {
 
         let w = (self.list_area.width - self.x) as usize;
         self.x += self.buf.set_stringn(cx, cy, s, w, style).0 - cx;
-    }
-}
-
-/// Truncate a string from the middle to fit within `avail` characters,
-/// showing the start and end separated by "...".
-///
-/// Returns the truncated display string and a mapping from each display
-/// character's byte position to the corresponding byte position in the
-/// original string. Characters in the "..." sentinel map to
-/// `original.len()` (an out-of-range value that will never match any
-/// real highlight index).
-///
-/// If the string fits within `avail`, or `avail < 7` (too small to
-/// truncate meaningfully), the original string is returned as-is with
-/// a 1:1 mapping.
-fn truncate_middle(original: &str, avail: usize) -> (String, Vec<usize>) {
-    let char_byte_offsets: Vec<usize> = original.char_indices().map(|(bp, _)| bp).collect();
-    let char_count = char_byte_offsets.len();
-
-    if char_count <= avail || avail < 7 {
-        return (original.to_string(), char_byte_offsets);
-    }
-
-    let remaining = avail - 3;
-    let prefix_len = remaining.div_ceil(2);
-    let suffix_len = remaining / 2;
-
-    let prefix: String = original.chars().take(prefix_len).collect();
-    let suffix: String = original.chars().skip(char_count - suffix_len).collect();
-    let display = format!("{prefix}...{suffix}");
-
-    let original_byte_len = original.len();
-    let mut mapping = Vec::with_capacity(avail);
-    mapping.extend_from_slice(&char_byte_offsets[..prefix_len]);
-    mapping.extend(std::iter::repeat_n(original_byte_len, 3));
-    for i in 0..suffix_len {
-        mapping.push(char_byte_offsets[char_count - suffix_len + i]);
-    }
-
-    (display, mapping)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::truncate_middle;
-
-    #[test]
-    fn test_no_truncation_when_fits() {
-        let (display, mapping) = truncate_middle("hello", 10);
-        assert_eq!(display, "hello");
-        assert_eq!(mapping.len(), 5);
-        // Mapping should be 1:1 with byte offsets
-        assert_eq!(mapping, vec![0, 1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn test_no_truncation_exact_fit() {
-        let (display, _) = truncate_middle("hello", 5);
-        assert_eq!(display, "hello");
-    }
-
-    #[test]
-    fn test_no_truncation_when_too_small() {
-        // avail < 7 — too small to truncate, return as-is
-        let (display, _) = truncate_middle("hello world this is long", 6);
-        assert_eq!(display, "hello world this is long");
-    }
-
-    #[test]
-    fn test_truncation_shows_start_and_end() {
-        let (display, _) = truncate_middle("abcdefghijklmnopqrstuvwxyz", 11);
-        // avail=11, remaining=8, prefix=4, suffix=4
-        // "abcd...wxyz"
-        assert_eq!(display, "abcd...wxyz");
-        assert_eq!(display.len(), 11);
-    }
-
-    #[test]
-    fn test_truncation_preserves_byte_mapping() {
-        let original = "abcdefghij";
-        let (display, mapping) = truncate_middle(original, 7);
-        // avail=7, remaining=4, prefix=2, suffix=2
-        // "ab...ij"
-        assert_eq!(display, "ab...ij");
-
-        // Prefix chars map to original positions 0, 1
-        assert_eq!(mapping[0], 0); // 'a'
-        assert_eq!(mapping[1], 1); // 'b'
-        // "..." maps to original.len() (out of range)
-        assert_eq!(mapping[2], original.len());
-        assert_eq!(mapping[3], original.len());
-        assert_eq!(mapping[4], original.len());
-        // Suffix chars map to original positions 8, 9
-        assert_eq!(mapping[5], 8); // 'i'
-        assert_eq!(mapping[6], 9); // 'j'
-    }
-
-    #[test]
-    fn test_truncation_with_unicode() {
-        let original = "héllo wörld thïs ïs ä löng cömmänd";
-        let (display, mapping) = truncate_middle(original, 15);
-        // Should still be 15 chars
-        assert_eq!(display.chars().count(), 15);
-        // Should contain "..."
-        assert!(display.contains("..."));
-        // Mapping length matches display char count
-        assert_eq!(mapping.len(), 15);
-    }
-
-    #[test]
-    fn test_truncation_minimum_width() {
-        // avail=7 is the minimum for truncation
-        let original = "abcdefghij";
-        let (display, _) = truncate_middle(original, 7);
-        assert_eq!(display, "ab...ij");
-    }
-
-    #[test]
-    fn test_truncation_odd_remaining() {
-        // avail=10, remaining=7, prefix=4 (ceil), suffix=3
-        let original = "abcdefghijklmno"; // 15 chars
-        let (display, _) = truncate_middle(original, 10);
-        // "abcd...mno"
-        assert_eq!(display, "abcd...mno");
-        assert_eq!(display.len(), 10);
     }
 }

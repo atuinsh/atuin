@@ -46,7 +46,7 @@ check-update = ["atuin-client/check-update"]
 [dependencies]
 atuin-ai = { path = "../atuin-ai", version = "18.17.1", optional = true, default-features = false }
 atuin-client = { path = "../atuin-client", version = "18.17.1", optional = true, default-features = false }
-atuin-common = { workspace = true, features = ["tracing"] }
+atuin-common = { workspace = true, features = ["tracing", "unicode"] }
 atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }
 atuin-daemon = { path = "../atuin-daemon", version = "18.17.1", optional = true, default-features = false }
