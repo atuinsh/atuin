@@ -3,12 +3,17 @@
 use ::url::Url;
 use thiserror::Error;
 
-/// The URL given cannot be a base URL (e.g. `mailto:` or `data:`).
-///
-/// These are usually URLs which do not support file-path-like semantics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-#[error("URL cannot be a base: it has no hierarchical path to append segments to")]
-pub struct NonSplittableUrlError;
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum UrlAppendError {
+    /// The URL given cannot be a base URL (e.g. `mailto:` or `data:`).
+    ///
+    /// These are usually URLs which do not support file-path-like semantics.
+    #[error("URL cannot be a base: it has no hierarchical path to append segments to")]
+    NonSplittable,
+
+    #[error("segment {0:?} is a dot segment, which cannot be a literal path segment")]
+    DotSegment(String),
+}
 
 /// Extension methods for [`Url`].
 pub trait UrlAppendExt {
@@ -27,13 +32,13 @@ pub trait UrlAppendExt {
     ///
     /// // Url::join behavior:
     /// assert_eq!(base.join("foo/bar").unwrap().as_str(), "https://host.example/foo/bar");
-    /// # Ok::<(), atuin_common::url::NonSplittableUrlError>(())
+    /// # Ok::<(), atuin_common::url::UrlAppendError>(())
     /// ```
     ///
     /// # Errors
     ///
-    /// See [`NonSplittableUrlError`].
-    fn append<I, S>(&self, segments: I) -> Result<Url, NonSplittableUrlError>
+    /// See [`UrlAppendError`].
+    fn append<I, S>(&self, segments: I) -> Result<Url, UrlAppendError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>;
@@ -51,31 +56,48 @@ pub trait UrlAppendExt {
     ///     base.append_path("api/v0/me")?.as_str(),
     ///     "https://host.example/atuin/api/v0/me",
     /// );
-    /// # Ok::<(), atuin_common::url::NonSplittableUrlError>(())
+    /// # Ok::<(), atuin_common::url::UrlAppendError>(())
     /// ```
     ///
     /// # Errors
     ///
-    /// See [`NonSplittableUrlError`].
-    fn append_path(&self, path: &'static str) -> Result<Url, NonSplittableUrlError>;
+    /// See [`UrlAppendError`].
+    fn append_path(&self, path: &'static str) -> Result<Url, UrlAppendError>;
 }
 
 impl UrlAppendExt for Url {
-    fn append<I, S>(&self, segments: I) -> Result<Url, NonSplittableUrlError>
+    fn append<I, S>(&self, segments: I) -> Result<Url, UrlAppendError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        let trailing_empty = self.path_segments().map_or(0, |segments| {
+            segments.rev().take_while(|s| s.is_empty()).count()
+        });
+
         let mut url = self.clone();
-        url.path_segments_mut()
-            .map_err(|()| NonSplittableUrlError)?
-            // A base like `https://h.example/atuin/` ends in an empty segment. Drop it.
-            .pop_if_empty()
-            .extend(segments);
+        {
+            let mut path = url
+                .path_segments_mut()
+                .map_err(|()| UrlAppendError::NonSplittable)?;
+
+            for _ in 0..trailing_empty {
+                path.pop_if_empty();
+            }
+
+            for segment in segments {
+                let segment = segment.as_ref();
+                if matches!(segment, "." | "..") {
+                    return Err(UrlAppendError::DotSegment(segment.to_owned()));
+                }
+                path.push(segment);
+            }
+        }
+
         Ok(url)
     }
 
-    fn append_path(&self, path: &'static str) -> Result<Url, NonSplittableUrlError> {
+    fn append_path(&self, path: &'static str) -> Result<Url, UrlAppendError> {
         self.append(path.split('/').filter(|s| !s.is_empty()))
     }
 }
@@ -103,10 +125,55 @@ mod tests {
     #[case("https://h.example", "john doe", "https://h.example/john%20doe")]
     #[case("https://h.example", "a?b#c", "https://h.example/a%3Fb%23c")]
     #[case("https://h.example:8443/x", "y", "https://h.example:8443/x/y")]
-    #[case("https://host.example/atuin", ".", "https://host.example/atuin")]
-    #[case("https://host.example/atuin", "..", "https://host.example/atuin")]
+    #[case(
+        "https://host.example/atuin//",
+        "api",
+        "https://host.example/atuin/api"
+    )]
+    #[case(
+        "https://host.example/atuin////",
+        "api",
+        "https://host.example/atuin/api"
+    )]
+    #[case("https://h.example//", "me", "https://h.example/me")]
+    #[case("https://h.example////", "me", "https://h.example/me")]
+    #[case("https://h.example/a//b", "me", "https://h.example/a//b/me")]
+    #[case("https://h.example/a//b//", "me", "https://h.example/a//b/me")]
     fn append_cases(#[case] base: &str, #[case] segment: &str, #[case] expected: &str) {
         assert_eq!(parse(base).append([segment]).unwrap().as_str(), expected);
+    }
+
+    #[rstest]
+    #[case(".")]
+    #[case("..")]
+    fn dot_segments_are_rejected(#[case] segment: &str) {
+        assert_eq!(
+            parse("https://host.example/atuin").append([segment]),
+            Err(UrlAppendError::DotSegment(segment.to_owned())),
+        );
+        assert_eq!(
+            parse("https://host.example/atuin").append(["user", segment]),
+            Err(UrlAppendError::DotSegment(segment.to_owned())),
+        );
+    }
+
+    #[test]
+    fn dot_segments_are_rejected_by_append_path() {
+        assert_eq!(
+            parse("https://h.example").append_path("api/../v0"),
+            Err(UrlAppendError::DotSegment("..".to_owned())),
+        );
+    }
+
+    #[test]
+    fn dot_lookalikes_are_still_appended() {
+        assert_eq!(
+            parse("https://h.example")
+                .append(["...", ".hidden", "a.b"])
+                .unwrap()
+                .as_str(),
+            "https://h.example/.../.hidden/a.b",
+        );
     }
 
     #[test]
@@ -146,6 +213,12 @@ mod tests {
     )]
     #[case("https://h.example", "/api/v0/me", "https://h.example/api/v0/me")]
     #[case("https://h.example", "account", "https://h.example/account")]
+    #[case("https://h.example//", "api/v0/me", "https://h.example/api/v0/me")]
+    #[case(
+        "https://host.example/atuin//",
+        "api/v0/me",
+        "https://host.example/atuin/api/v0/me"
+    )]
     fn append_path_cases(#[case] base: &str, #[case] path: &'static str, #[case] expected: &str) {
         assert_eq!(parse(base).append_path(path).unwrap().as_str(), expected);
     }
@@ -153,7 +226,7 @@ mod tests {
     #[test]
     fn cannot_be_a_base_url_is_an_error() {
         let url = parse("mailto:me@example.com");
-        assert_eq!(url.append(["x"]), Err(NonSplittableUrlError));
-        assert_eq!(url.append_path("a/b"), Err(NonSplittableUrlError));
+        assert_eq!(url.append(["x"]), Err(UrlAppendError::NonSplittable));
+        assert_eq!(url.append_path("a/b"), Err(UrlAppendError::NonSplittable));
     }
 }
