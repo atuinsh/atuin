@@ -263,7 +263,7 @@ impl Database for Postgres {
 
             let result = sqlx::query(
                 "insert into store
-                    (id, client_id, host, idx, timestamp, version, tag, data, cek, user_id) 
+                    (id, client_id, host, idx, timestamp, version, tag, data, cek, user_id)
                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 on conflict do nothing
                 ",
@@ -298,7 +298,7 @@ impl Database for Postgres {
         for ((host, tag), idx) in heads {
             sqlx::query(
                 "insert into store_idx_cache
-                    (user_id, host, tag, idx) 
+                    (user_id, host, tag, idx)
                 values ($1, $2, $3, $4)
                 on conflict(user_id, host, tag) do update set idx = greatest(store_idx_cache.idx, $4)
                 ",
