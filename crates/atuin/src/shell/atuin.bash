@@ -708,3 +708,14 @@ if [[ $__atuin_bind_up_arrow == true ]]; then
     atuin-bind -m vi-command '\eOA' atuin-up-search-vicmd
     atuin-bind -m vi-command 'k'    atuin-up-search-vicmd
 fi
+
+if command -v __atuin_load_builtin_preexec > /dev/null; then
+    if [[ -z ${ATUIN_NO_BUILTIN_PREEXEC-} ]]; then
+        __atuin_update_preexec_backend
+        if [[ $ATUIN_PREEXEC_BACKEND == *:unknown ]]; then
+            __atuin_load_builtin_preexec
+        fi
+    fi
+    # Free the function from memory
+    unset -f __atuin_load_builtin_preexec
+fi
