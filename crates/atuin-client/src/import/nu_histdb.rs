@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use directories::BaseDirs;
 use eyre::{Result, eyre};
 use sqlx::{Pool, sqlite::SqlitePool};
-use time::{Duration, OffsetDateTime};
+use time::OffsetDateTime;
 
 use super::Importer;
 use crate::history::History;
@@ -28,19 +28,20 @@ pub struct HistDbEntry {
 
 impl From<HistDbEntry> for History {
     fn from(histdb_item: HistDbEntry) -> Self {
-        let ts_secs = histdb_item.start_timestamp / 1000;
-        let ts_ns = (histdb_item.start_timestamp % 1000) * 1_000_000;
         // A nushell history row is a set of sqlite blobs: the timestamp is an
-        // arbitrary i64 and command_line/cwd/hostname are raw bytes that may
-        // not be valid UTF-8 (e.g. a path or command containing non-UTF-8
-        // bytes, which is legal on POSIX). Neither from_unix_timestamp nor
-        // from_utf8 is guaranteed to succeed, so unwrapping them here made a
-        // single bad row abort the entire 'atuin import nu-histdb' run. Clamp
-        // an out-of-range timestamp to the epoch and decode the byte fields
-        // lossily so importing keeps the row instead of panicking.
-        let timestamp = OffsetDateTime::from_unix_timestamp(ts_secs)
-            .unwrap_or(OffsetDateTime::UNIX_EPOCH)
-            + Duration::nanoseconds(ts_ns);
+        // arbitrary i64 (milliseconds) and command_line/cwd/hostname are raw
+        // bytes that may not be valid UTF-8 (e.g. a path or command containing
+        // non-UTF-8 bytes, which is legal on POSIX). Neither
+        // from_unix_timestamp_nanos nor from_utf8 is guaranteed to succeed, so
+        // unwrapping them here made a single bad row abort the entire
+        // 'atuin import nu-histdb' run. Widen to i128 nanoseconds (which cannot
+        // overflow for any i64 millisecond value) so the whole timestamp is
+        // range-checked at once, clamp an out-of-range value to the epoch, and
+        // decode the byte fields lossily, so importing keeps the row instead of
+        // panicking.
+        let ts_nanos = i128::from(histdb_item.start_timestamp) * 1_000_000;
+        let timestamp = OffsetDateTime::from_unix_timestamp_nanos(ts_nanos)
+            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
         let imported = History::import()
             .timestamp(timestamp)
             .command(String::from_utf8_lossy(&histdb_item.command_line).into_owned())
@@ -122,14 +123,17 @@ impl Importer for NuHistDb {
 
 #[cfg(test)]
 mod test {
+    use time::PrimitiveDateTime;
+
     use super::*;
 
     #[test]
     fn from_entry_survives_non_utf8_and_out_of_range_timestamp() {
         // 0xc3 0x28 is an invalid UTF-8 sequence (0xc3 starts a two-byte
-        // sequence but 0x28 is not a continuation byte). i64::MAX / 1000 is
-        // far past OffsetDateTime's supported range, so from_unix_timestamp
-        // returns Err. Both used to unwrap and panic the whole import.
+        // sequence but 0x28 is not a continuation byte). i64::MAX
+        // milliseconds is far past OffsetDateTime's supported range, so
+        // from_unix_timestamp_nanos returns Err. Both used to unwrap and
+        // panic the whole import.
         let entry = HistDbEntry {
             id: 1,
             command_line: vec![b'l', b's', b' ', 0xc3, 0x28],
@@ -149,11 +153,34 @@ mod test {
         assert_eq!(history.hostname, "h\u{fffd}");
         assert_eq!(history.session, "1a2b");
         assert_eq!(history.duration, 42);
-        // i64::MAX % 1000 == 807, i.e. 807ms past the clamped epoch.
-        assert_eq!(
-            history.timestamp,
-            OffsetDateTime::UNIX_EPOCH + Duration::nanoseconds(807_000_000)
-        );
+        assert_eq!(history.timestamp, OffsetDateTime::UNIX_EPOCH);
+    }
+
+    #[test]
+    fn from_entry_clamps_timestamp_just_below_supported_range() {
+        // One millisecond below OffsetDateTime's minimum. The previous fix
+        // split the millisecond value into whole seconds plus a nanosecond
+        // remainder and *added* them: here the seconds truncate to exactly
+        // the in-range minimum while the -1ms remainder pushes the sum below
+        // it, panicking in `OffsetDateTime + Duration`. It must clamp to the
+        // epoch instead of panicking.
+        let min_secs = PrimitiveDateTime::MIN.assume_utc().unix_timestamp();
+        let entry = HistDbEntry {
+            id: 3,
+            command_line: b"echo hi".to_vec(),
+            start_timestamp: min_secs * 1000 - 1,
+            session_id: 1,
+            hostname: b"host".to_vec(),
+            cwd: b"/".to_vec(),
+            duration_ms: 1,
+            exit_status: 0,
+            more_info: Vec::new(),
+        };
+
+        let history: History = entry.into();
+
+        assert_eq!(history.command, "echo hi");
+        assert_eq!(history.timestamp, OffsetDateTime::UNIX_EPOCH);
     }
 
     #[test]
