@@ -187,11 +187,15 @@ impl Component for SearchComponent {
                     "Indexing synced history entries into search index"
                 );
 
-                span!(Level::TRACE, "inject_synced_history", count = histories.len())
-                    .in_scope(async || {
-                        self.index.read().await.add_histories(histories);
-                    })
-                    .await;
+                span!(
+                    Level::TRACE,
+                    "inject_synced_history",
+                    count = histories.len()
+                )
+                .in_scope(async || {
+                    self.index.read().await.add_histories(histories);
+                })
+                .await;
             }
             DaemonEvent::HistoryStarted(history) => {
                 debug!(id = %history.id, command = %history.command, "History started (no index action)");
