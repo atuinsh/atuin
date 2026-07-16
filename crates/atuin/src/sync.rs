@@ -39,7 +39,7 @@ pub async fn build(
 
     // A failure in one store should not stop the others from building - build as much as
     // possible, and warn about the rest.
-    if let Err(e) = history_store.incremental_build(db, downloaded).await {
+    if let Err(e) = history_store.build_all(db, downloaded).await {
         eprintln!("Warning: failed to build history: {e}");
     }
 

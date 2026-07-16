@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use eyre::Result;
+use futures::StreamExt;
 use rand::Rng;
 use tokio::sync::mpsc;
 use tokio::time::{self, MissedTickBehavior};
@@ -16,6 +17,12 @@ use crate::{
     daemon::{Component, DaemonHandle},
     events::DaemonEvent,
 };
+
+/// How many synced history entries to carry in a single `HistorySynced` event.
+///
+/// Bounds the event payload: a first sync builds the entire history, which is far too
+/// much to hold in one message.
+const HISTORY_BATCH_SIZE: usize = 5000;
 
 /// Commands that can be sent to the sync task.
 enum SyncCommand {
@@ -250,17 +257,23 @@ async fn do_sync_tick(
                 "sync complete"
             );
 
-            // Build history from downloaded records, then index the results.
-            match history_store
+            // Build history from downloaded records, emitting each batch as it is built so
+            // the search component can index it. Batched rather than collected: a first sync
+            // covers the entire history, and holding all of it at once would spike memory.
+            let batches = history_store
                 .incremental_build(handle.history_db(), &downloaded_records)
-                .await
-            {
-                Ok(histories) => {
-                    // Emit the synced history so the search component can index it.
-                    handle.emit(DaemonEvent::HistorySynced(histories.into()));
-                }
-                Err(e) => {
-                    tracing::error!("failed to build history from downloaded records: {e}");
+                .chunks(HISTORY_BATCH_SIZE);
+            futures::pin_mut!(batches);
+
+            while let Some(batch) = batches.next().await {
+                match batch.into_iter().collect::<Result<Vec<_>, _>>() {
+                    Ok(histories) => {
+                        handle.emit(DaemonEvent::HistorySynced(histories.into()));
+                    }
+                    Err(e) => {
+                        tracing::error!("failed to build history from downloaded records: {e}");
+                        break;
+                    }
                 }
             }
 
