@@ -52,10 +52,8 @@ pub enum Shell {
 
 impl Cmd {
     fn init_nu(&self, _tmux: &Tmux) {
-        let full = include_str!("../../shell/atuin.nu");
-
         // TODO: tmux popup for Nu
-        println!("{full}");
+        println!("{}", crate::shell::NU);
 
         if std::env::var("ATUIN_NOBIND").is_err() {
             const BIND_CTRL_R: &str = r"$env.config = (

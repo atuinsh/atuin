@@ -12,10 +12,8 @@ fn print_tmux_config(tmux: &Tmux) {
 }
 
 pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool, disable_ai: bool, tmux: &Tmux) {
-    let base = include_str!("../../../shell/atuin.zsh");
-
     print_tmux_config(tmux);
-    println!("{base}");
+    println!("{}", crate::shell::ZSH);
 
     if std::env::var("ATUIN_NOBIND").is_err() {
         const BIND_CTRL_R: &str = r"bindkey -M emacs '^r' atuin-search
