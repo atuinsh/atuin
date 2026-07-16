@@ -7,6 +7,8 @@
 //! External processes (like CLI commands) can also inject events via the
 //! Control gRPC service.
 
+use std::sync::Arc;
+
 use atuin_client::history::{History, HistoryId};
 
 /// Events that flow through the daemon's event bus.
@@ -26,7 +28,11 @@ pub enum DaemonEvent {
     /// History entries were built from records synced from the server.
     ///
     /// The search component uses this to update its index with the new history.
-    HistorySynced(Vec<History>),
+    ///
+    /// Held behind an `Arc` so the broadcast bus shares one allocation across all
+    /// receivers instead of deep-cloning the batch (potentially the entire history
+    /// on a first full sync) once per subscriber.
+    HistorySynced(Arc<[History]>),
 
     /// Sync completed successfully.
     SyncCompleted {

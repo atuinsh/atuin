@@ -257,7 +257,7 @@ async fn do_sync_tick(
             {
                 Ok(histories) => {
                     // Emit the synced history so the search component can index it.
-                    handle.emit(DaemonEvent::HistorySynced(histories));
+                    handle.emit(DaemonEvent::HistorySynced(histories.into()));
                 }
                 Err(e) => {
                     tracing::error!("failed to build history from downloaded records: {e}");
