@@ -19,7 +19,7 @@ pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool, disable_ai: boo
         (!disable_ctrl_r, !disable_up_arrow)
     };
 
-    println!("{}", BASH.include_guard_start);
+    println!("{} && {{", BASH.include_guard);
     print_tmux_config(tmux);
     println!("__atuin_bind_ctrl_r={bind_ctrl_r}");
     println!("__atuin_bind_up_arrow={bind_up_arrow}");
@@ -30,7 +30,7 @@ pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool, disable_ai: boo
         let bind_ai = atuin_ai::commands::init::generate_bash_integration();
         println!("{bind_ai}");
     }
-    println!("{}", BASH.include_guard_end);
+    println!("}}");
 }
 
 pub async fn init(

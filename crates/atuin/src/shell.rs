@@ -5,15 +5,13 @@ macro_rules! include_shell {
 }
 
 pub struct Bash<'a> {
-    pub include_guard_start: &'a str,
+    pub include_guard: &'a str,
     pub main: &'a str,
-    pub include_guard_end: &'a str,
 }
 
 pub const BASH: Bash<'_> = Bash {
-    include_guard_start: include_shell!("atuin.bash.d/01-include-guard-start.bash"),
-    main: include_shell!("atuin.bash.d/02-main.bash"),
-    include_guard_end: include_shell!("atuin.bash.d/03-include-guard-end.bash"),
+    include_guard: include_shell!("atuin.bash.d/include-guard.bash"),
+    main: include_shell!("atuin.bash"),
 };
 
 pub const FISH: &str = include_shell!("atuin.fish");
