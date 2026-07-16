@@ -78,23 +78,22 @@ impl UrlAppendExt for Url {
         });
 
         let mut url = self.clone();
-        {
-            let mut path = url
-                .path_segments_mut()
-                .map_err(|()| UrlAppendError::NonSplittable)?;
+        let mut path = url
+            .path_segments_mut()
+            .map_err(|()| UrlAppendError::NonSplittable)?;
 
-            for _ in 0..trailing_empty {
-                path.pop_if_empty();
-            }
-
-            for segment in segments {
-                let segment = segment.as_ref();
-                if matches!(segment, "." | "..") {
-                    return Err(UrlAppendError::DotSegment);
-                }
-                path.push(segment);
-            }
+        for _ in 0..trailing_empty {
+            path.pop_if_empty();
         }
+
+        for segment in segments {
+            let segment = segment.as_ref();
+            if matches!(segment, "." | "..") {
+                return Err(UrlAppendError::DotSegment);
+            }
+            path.push(segment);
+        }
+        drop(path);
 
         Ok(url)
     }
