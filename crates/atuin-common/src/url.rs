@@ -1,7 +1,7 @@
 //! General-purpose URL utilities.
 
-use url::Url;
 use thiserror::Error;
+use url::Url;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum UrlAppendError {
