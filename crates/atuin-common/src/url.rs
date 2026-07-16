@@ -1,6 +1,6 @@
 //! General-purpose URL utilities.
 
-use ::url::Url;
+use url::Url;
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -11,8 +11,8 @@ pub enum UrlAppendError {
     #[error("URL cannot be a base: it has no hierarchical path to append segments to")]
     NonSplittable,
 
-    #[error("segment {0:?} is a dot segment, which cannot be a literal path segment")]
-    DotSegment(String),
+    #[error("path segments cannot be . or ..")]
+    DotSegment,
 }
 
 /// Extension methods for [`Url`].
@@ -62,7 +62,9 @@ pub trait UrlAppendExt {
     /// # Errors
     ///
     /// See [`UrlAppendError`].
-    fn append_path(&self, path: &'static str) -> Result<Url, UrlAppendError>;
+    fn append_path(&self, path: &'static str) -> Result<Url, UrlAppendError> {
+        self.append(path.split('/').filter(|s| !s.is_empty()))
+    }
 }
 
 impl UrlAppendExt for Url {
@@ -88,17 +90,13 @@ impl UrlAppendExt for Url {
             for segment in segments {
                 let segment = segment.as_ref();
                 if matches!(segment, "." | "..") {
-                    return Err(UrlAppendError::DotSegment(segment.to_owned()));
+                    return Err(UrlAppendError::DotSegment);
                 }
                 path.push(segment);
             }
         }
 
         Ok(url)
-    }
-
-    fn append_path(&self, path: &'static str) -> Result<Url, UrlAppendError> {
-        self.append(path.split('/').filter(|s| !s.is_empty()))
     }
 }
 
@@ -149,11 +147,11 @@ mod tests {
     fn dot_segments_are_rejected(#[case] segment: &str) {
         assert_eq!(
             parse("https://host.example/atuin").append([segment]),
-            Err(UrlAppendError::DotSegment(segment.to_owned())),
+            Err(UrlAppendError::DotSegment),
         );
         assert_eq!(
             parse("https://host.example/atuin").append(["user", segment]),
-            Err(UrlAppendError::DotSegment(segment.to_owned())),
+            Err(UrlAppendError::DotSegment),
         );
     }
 
@@ -161,7 +159,7 @@ mod tests {
     fn dot_segments_are_rejected_by_append_path() {
         assert_eq!(
             parse("https://h.example").append_path("api/../v0"),
-            Err(UrlAppendError::DotSegment("..".to_owned())),
+            Err(UrlAppendError::DotSegment),
         );
     }
 
