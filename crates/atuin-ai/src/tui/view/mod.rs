@@ -14,6 +14,7 @@ use ratatui_core::style::{Color, Modifier, Style};
 use crate::fsm::tools::InterruptReason;
 use crate::tools::{HistorySearchFilterMode, ToolPreview};
 
+pub(crate) mod input;
 pub(crate) mod turn;
 
 use turn::{

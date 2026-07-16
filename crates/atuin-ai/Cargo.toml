@@ -46,6 +46,7 @@ eventsource-stream = "0.2"
 pulldown-cmark = "0.13.0"
 async-stream = "0.3"
 uuid = { workspace = true }
+tui-textarea-2 = "0.10.2"
 unicode-width = "0.2"
 # The v2 redesign, consumed under its final name via package-rename; only
 # this line changes when eye_declare 0.6.0 publishes.

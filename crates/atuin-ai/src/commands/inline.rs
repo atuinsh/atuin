@@ -299,6 +299,17 @@ async fn run_inline_tui(
         None => "  Continuing previous session - type /new to start a new session".to_string(),
     });
 
+    // ─── Slash commands + skills ────────────────────────────────
+    let mut slash_registry = crate::tui::slash::SlashCommandRegistry::default();
+    let mut skill_names = std::collections::HashSet::new();
+    for skill in skill_registry.all() {
+        slash_registry.register(crate::tui::slash::SlashCommand::new(
+            &skill.name,
+            &skill.description,
+        ));
+        skill_names.insert(skill.name.clone());
+    }
+
     // ─── IO context ─────────────────────────────────────────────
     // TODO(v2 port, streaming slice): moves into AiApp when effect
     // execution lands.
@@ -321,8 +332,10 @@ async fn run_inline_tui(
 
     println!();
 
-    let app = AiApp::new(fsm, resume_notice);
-    let outcome = eye_declare::driver_tokio::run(app)
+    let app = AiApp::new(fsm, resume_notice, slash_registry, skill_names);
+    let options =
+        eye_declare::RunOptions::default().keyboard(eye_declare::KeyboardProtocol::Enhanced);
+    let outcome = eye_declare::driver_tokio::run_with(app, options)
         .await
         .context("failed running AI TUI")?;
 

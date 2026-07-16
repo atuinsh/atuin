@@ -1,13 +1,23 @@
 //! The eye-declare v2 app: the FSM is the model, `update` is the driver
 //! loop, and the live tail is a view over the not-yet-committed turns.
 
-use crossterm::event::KeyCode;
-use eye_declare::{App, Ctx, Element, Fluent, Keymap, col, key, keymap, text};
-use ratatui_core::style::{Color, Modifier, Style};
+use std::cell::RefCell;
+use std::collections::HashSet;
 
+use crossterm::event::KeyCode;
+use eye_declare::{
+    App, Ctx, Element, ElementExt, Fluent, Focus, FocusHandle, InputEvent, Keymap, col, key,
+    keymap, text,
+};
+use ratatui_core::style::{Color, Modifier, Style};
+use tui_textarea::TextArea;
+
+use crate::fsm::effects::{Effect, ExitAction};
+use crate::fsm::events::Event;
 use crate::fsm::{AgentFsm, AgentState};
+use crate::tui::slash::{SlashCommandRegistry, SlashCommandSearchResult};
 use crate::tui::view;
-use crate::tui::view::turn::{TurnBuilder, UiTurn};
+use crate::tui::view::turn::{TurnBuilder, UiTurn, UiTurnKind};
 
 /// What the TUI resolves to, for the shell hook.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -33,9 +43,30 @@ pub(crate) struct IoContext {
     pub user_context_cache: crate::user_context::UserContextCache,
 }
 
+/// The policy vocabulary. Mode-dependent resolution happens in `keymap()`
+/// (rebuilt from the model every update), so each variant means exactly one
+/// thing by the time it reaches `update`.
 #[derive(Debug, Clone)]
 pub(crate) enum Msg {
-    /// Leave the TUI without a command (Esc / Ctrl+C).
+    /// Unclaimed key/paste, routed to the editor.
+    Input(InputEvent),
+    /// Insert a newline (Shift+Enter / Ctrl+J).
+    Newline,
+    /// Submit the editor's text (Enter with non-blank input).
+    Submit,
+    /// Accept the top slash suggestion (Tab while suggesting).
+    AcceptSlashSuggestion,
+    /// Run the suggested command, or confirm a dangerous one (Enter).
+    ExecuteCommand,
+    /// Exit with the suggested command inserted, not executed (Tab).
+    InsertCommand,
+    /// Cancel: generation, or a pending confirmation (Esc).
+    Cancel,
+    /// Interrupt a running tool execution (Ctrl+C / Esc while executing).
+    Interrupt,
+    /// Retry after an error (Enter / r).
+    Retry,
+    /// Leave the TUI without a command.
     Quit,
 }
 
@@ -43,28 +74,275 @@ pub(crate) struct AiApp {
     pub fsm: AgentFsm,
     /// "Continuing previous session…" banner, frozen at startup.
     resume_notice: Option<String>,
+    /// The editor as a plain model value; see `view::input` for why RefCell.
+    input: RefCell<TextArea<'static>>,
+    /// Focus system; only the editor takes focus today, but keymap
+    /// fallthrough is focus-scoped by design.
+    #[allow(dead_code)]
+    focus: Focus,
+    input_focus: FocusHandle,
+    slash_registry: SlashCommandRegistry,
+    skill_names: HashSet<String>,
+    slash_results: Vec<SlashCommandSearchResult>,
+    /// Conversation events already committed to scrollback via `ctx.push`.
+    pushed_events: usize,
+    /// Turns already committed — 0 means the next turn is the first (no
+    /// leading blank row).
+    pushed_turns: usize,
 }
 
 impl AiApp {
-    pub fn new(fsm: AgentFsm, resume_notice: Option<String>) -> Self {
-        Self { fsm, resume_notice }
+    pub fn new(
+        fsm: AgentFsm,
+        resume_notice: Option<String>,
+        slash_registry: SlashCommandRegistry,
+        skill_names: HashSet<String>,
+    ) -> Self {
+        let focus = Focus::new();
+        let input_focus = focus.handle();
+        input_focus.focus();
+        Self {
+            fsm,
+            resume_notice,
+            input: RefCell::new(view::input::new_textarea()),
+            focus,
+            input_focus,
+            slash_registry,
+            skill_names,
+            slash_results: Vec::new(),
+            pushed_events: 0,
+            pushed_turns: 0,
+        }
     }
 
     fn is_busy(&self) -> bool {
         matches!(self.fsm.state, AgentState::Turn { .. })
     }
 
+    fn has_confirmation(&self) -> bool {
+        matches!(
+            self.fsm.state,
+            AgentState::Idle {
+                confirmation: Some(_)
+            }
+        )
+    }
+
+    fn input_active(&self) -> bool {
+        matches!(self.fsm.state, AgentState::Idle { .. }) && !self.has_confirmation()
+    }
+
+    fn is_input_blank(&self) -> bool {
+        self.input.borrow().is_empty()
+    }
+
+    fn has_executing_preview(&self) -> bool {
+        self.fsm.ctx.tools.has_executing_preview()
+    }
+
+    /// Whether the visible conversation carries a suggested command.
+    fn has_command(&self) -> bool {
+        self.visible_events()
+            .iter()
+            .any(|e| e.as_command().is_some())
+    }
+
+    fn visible_events(&self) -> &[crate::tui::state::ConversationEvent] {
+        let events = &self.fsm.ctx.events;
+        let start = self.fsm.ctx.view_start_index.min(events.len());
+        &events[start..]
+    }
+
+    fn footer_text(&self) -> &'static str {
+        match &self.fsm.state {
+            AgentState::Idle { confirmation: None } => {
+                if self.has_command() && self.is_input_blank() {
+                    "[Enter] Execute suggested command  [Tab] Insert Command"
+                } else {
+                    "[Enter] Send  [Shift+Enter] New line  [Esc] Exit"
+                }
+            }
+            AgentState::Idle {
+                confirmation: Some(_),
+            } => "[Enter] Confirm dangerous command  [Esc] Cancel",
+            AgentState::Turn { .. } => "[Esc] Cancel",
+            AgentState::Error(_) => "[Enter]/[r] Retry  [Esc] Exit",
+        }
+    }
+
     /// Turns not yet committed to scrollback, built fresh from the FSM's
-    /// events. O(visible conversation) per frame for now; the committed
-    /// frontier arrives with `ctx.push` wiring in the streaming slice.
+    /// events past the pushed frontier.
     fn live_turns(&self) -> Vec<UiTurn> {
         let events = &self.fsm.ctx.events;
-        let safe_start = self.fsm.ctx.view_start_index.min(events.len());
+        let start = self
+            .fsm
+            .ctx
+            .view_start_index
+            .max(self.pushed_events)
+            .min(events.len());
         let mut builder = TurnBuilder::new(&self.fsm.ctx.tools);
-        for event in &events[safe_start..] {
+        for event in &events[start..] {
             builder.add_event(event);
         }
         builder.build()
+    }
+
+    /// Recompute slash suggestions from the editor's text.
+    fn refresh_slash(&mut self) {
+        let query = {
+            let input = self.input.borrow();
+            let text = input.lines().join("\n");
+            text.strip_prefix('/').map(str::to_string)
+        };
+        match query {
+            Some(query) => {
+                let mut results = self.slash_registry.search_fuzzy(&query);
+                results.sort_by(|a, b| {
+                    b.relevance
+                        .partial_cmp(&a.relevance)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                self.slash_results = results;
+            }
+            None => self.slash_results.clear(),
+        }
+    }
+
+    /// Feed an event to the FSM and act on its effects.
+    fn handle_fsm(&mut self, event: Event, ctx: &mut Ctx<'_, Self>) {
+        let effects = self.fsm.handle(event);
+        tracing::trace!(?effects, state = ?self.fsm.state, "FSM transition");
+        for effect in effects {
+            match effect {
+                Effect::ExitApp(action) => ctx.exit(match action {
+                    ExitAction::Execute(cmd) => ExitOutcome::Execute(cmd),
+                    ExitAction::Insert(cmd) => ExitOutcome::Insert(cmd),
+                    ExitAction::Cancel => ExitOutcome::Cancel,
+                }),
+                // TODO(v2 port): remaining effects reconnect slice by slice
+                // (stream, tools, permissions, persistence, timeouts).
+                other => tracing::debug!(effect = ?other, "effect deferred (v2 port)"),
+            }
+        }
+        self.push_ready_turns(ctx);
+    }
+
+    /// Commit sealed turns to scrollback. A turn is sealed when nothing can
+    /// mutate it anymore; an in-flight agent turn stays live.
+    fn push_ready_turns(&mut self, ctx: &mut Ctx<'_, Self>) {
+        let turns = self.live_turns();
+        if turns.is_empty() {
+            return;
+        }
+        if self.is_busy()
+            && matches!(
+                turns.last().map(|t| &t.kind),
+                Some(UiTurnKind::Agent { .. })
+            )
+        {
+            // TODO(v2 port, streaming slice): push the sealed prefix once
+            // event-span tracking lands; today nothing streams while busy,
+            // so this branch is unreachable.
+            return;
+        }
+
+        if self.pushed_turns == 0
+            && let Some(notice) = self.resume_notice.take()
+        {
+            ctx.push(
+                text(notice).style(
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            );
+        }
+        for (i, turn) in turns.iter().enumerate() {
+            ctx.push(view::turn_view(
+                turn,
+                self.pushed_turns == 0 && i == 0,
+                false,
+                false,
+            ));
+            self.pushed_turns += 1;
+        }
+        self.pushed_events = self.fsm.ctx.events.len();
+    }
+
+    /// Translate submitted text into an FSM event: built-in slash commands,
+    /// skills, or a plain user message.
+    fn dispatch_submit(&self, input: String) -> Event {
+        if input == "/new" {
+            Event::NewSession
+        } else if input == "/model" || input.starts_with("/model ") {
+            Event::OpenModelPicker
+        } else if input.starts_with('/') {
+            if let Some((name, arguments)) = self.resolve_skill(&input) {
+                Event::RequestSkillLoad { name, arguments }
+            } else {
+                let content = self.resolve_slash_command(&input);
+                Event::SlashCommand {
+                    command: input,
+                    content,
+                }
+            }
+        } else {
+            Event::UserSubmit(input)
+        }
+    }
+
+    /// Whether a slash invocation names a registered skill. Built-in slash
+    /// commands take precedence: a skill can't shadow them.
+    fn resolve_skill(&self, input: &str) -> Option<(String, Option<String>)> {
+        let after_slash = input.trim_start_matches('/');
+        let name = after_slash.split_whitespace().next()?.to_string();
+
+        if !self.skill_names.contains(&name) || self.slash_registry.contains_builtin(&name) {
+            return None;
+        }
+
+        let args = after_slash
+            .strip_prefix(&name)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+        Some((name, args))
+    }
+
+    fn resolve_slash_command(&self, command: &str) -> String {
+        match command.trim() {
+            "/reload" => {
+                // TODO(v2 port, streaming slice): invalidate
+                // io.user_context_cache once the app owns IoContext.
+                "Context files will be reloaded on the next request.".to_string()
+            }
+            "/help" => {
+                let commands = self
+                    .slash_registry
+                    .get_commands()
+                    .iter()
+                    .map(|cmd| format!("- `/{}` — {}", cmd.name, cmd.description))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                include_str!("content/help.md").replace("{commands}", &commands)
+            }
+            other => format!("Unknown command: {other}"),
+        }
+    }
+
+    fn submit(&mut self, ctx: &mut Ctx<'_, Self>) {
+        let input = {
+            let editor = self.input.get_mut();
+            let text = editor.lines().join("\n").trim().to_string();
+            if text.is_empty() {
+                return;
+            }
+            editor.clear();
+            text
+        };
+        self.slash_results.clear();
+        let event = self.dispatch_submit(input);
+        self.handle_fsm(event, ctx);
     }
 }
 
@@ -74,6 +352,40 @@ impl App for AiApp {
 
     fn update(&mut self, msg: Msg, ctx: &mut Ctx<'_, Self>) {
         match msg {
+            Msg::Input(event) => {
+                if !self.input_active() {
+                    return;
+                }
+                match event {
+                    InputEvent::Key(k) => {
+                        self.input.get_mut().input(k);
+                    }
+                    InputEvent::Paste(s) => {
+                        self.input.get_mut().insert_str(s);
+                    }
+                }
+                self.refresh_slash();
+            }
+            Msg::Newline => {
+                if self.input_active() {
+                    self.input.get_mut().insert_newline();
+                }
+            }
+            Msg::AcceptSlashSuggestion => {
+                if let Some(first) = self.slash_results.first() {
+                    let name = first.command.name.clone();
+                    let editor = self.input.get_mut();
+                    editor.clear();
+                    editor.insert_str(format!("/{name}"));
+                    self.refresh_slash();
+                }
+            }
+            Msg::Submit => self.submit(ctx),
+            Msg::ExecuteCommand => self.handle_fsm(Event::ExecuteCommand, ctx),
+            Msg::InsertCommand => self.handle_fsm(Event::InsertCommand, ctx),
+            Msg::Cancel => self.handle_fsm(Event::Cancel, ctx),
+            Msg::Interrupt => self.handle_fsm(Event::InterruptTools, ctx),
+            Msg::Retry => self.handle_fsm(Event::Retry, ctx),
             Msg::Quit => ctx.exit(ExitOutcome::Cancel),
         }
     }
@@ -82,29 +394,117 @@ impl App for AiApp {
         let turns = self.live_turns();
         let busy = self.is_busy();
         let last = turns.len().saturating_sub(1);
+        let needs_pending_banner = busy
+            && !matches!(
+                turns.last().map(|t| &t.kind),
+                Some(UiTurnKind::Agent { .. })
+            );
 
         col()
-            .when_some(self.resume_notice.clone(), |c, notice| {
-                c.child(
-                    text(notice).style(
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::ITALIC),
-                    ),
-                )
-            })
-            .children(
-                turns
-                    .iter()
-                    .enumerate()
-                    .map(|(i, turn)| view::turn_view(turn, i == 0, busy && i == last, false)),
+            .when_some(
+                (self.pushed_turns == 0)
+                    .then_some(self.resume_notice.clone())
+                    .flatten(),
+                |c, notice| {
+                    c.child(
+                        text(notice).style(
+                            Style::default()
+                                .fg(Color::DarkGray)
+                                .add_modifier(Modifier::ITALIC),
+                        ),
+                    )
+                },
             )
+            .children(turns.iter().enumerate().map(|(i, turn)| {
+                view::turn_view(
+                    turn,
+                    self.pushed_turns == 0 && i == 0,
+                    busy && i == last,
+                    false,
+                )
+            }))
+            .when(needs_pending_banner, |c| {
+                c.child(view::agent_turn_view(&[], true, false))
+            })
+            .when_some(
+                match &self.fsm.state {
+                    AgentState::Error(msg) => Some(msg.clone()),
+                    _ => None,
+                },
+                |c, msg| {
+                    c.child(
+                        text("Error: ")
+                            .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                            .span(msg, Style::default().fg(Color::Red))
+                            .pad_left(2)
+                            .pad_top(1),
+                    )
+                },
+            )
+            .child(view::input::input_area(
+                &self.input,
+                self.input_active(),
+                self.footer_text(),
+                self.is_input_blank() && self.has_command() && self.input_active(),
+                &self.slash_results,
+            ))
     }
 
     fn keymap(&self) -> Keymap<Msg> {
-        keymap()
-            .on_override(key(KeyCode::Char('c')).ctrl(), Msg::Quit)
-            .on(key(KeyCode::Esc), Msg::Quit)
+        let mut km = keymap();
+
+        // Ctrl+C: interrupt a running tool execution, else exit.
+        km = km.on_override(
+            key(KeyCode::Char('c')).ctrl(),
+            if self.has_executing_preview() {
+                Msg::Interrupt
+            } else {
+                Msg::Quit
+            },
+        );
+
+        // Esc: mode-dependent — the old AppMode match, as data.
+        km = km.on(
+            key(KeyCode::Esc),
+            if self.is_busy() {
+                Msg::Cancel
+            } else if self.has_executing_preview() {
+                Msg::Interrupt
+            } else if self.has_confirmation() {
+                Msg::Cancel
+            } else {
+                Msg::Quit
+            },
+        );
+
+        if matches!(self.fsm.state, AgentState::Error(_)) {
+            km = km
+                .on(key(KeyCode::Enter), Msg::Retry)
+                .on(key(KeyCode::Char('r')), Msg::Retry);
+        }
+
+        if self.has_confirmation() {
+            km = km.on(key(KeyCode::Enter), Msg::ExecuteCommand);
+        }
+
+        if self.input_active() {
+            if !self.slash_results.is_empty() {
+                km = km.on(key(KeyCode::Tab), Msg::AcceptSlashSuggestion);
+            }
+            if self.is_input_blank() && self.has_command() {
+                km = km
+                    .on(key(KeyCode::Enter), Msg::ExecuteCommand)
+                    .on(key(KeyCode::Tab), Msg::InsertCommand);
+            } else {
+                km = km.on(key(KeyCode::Enter), Msg::Submit);
+            }
+            km = km
+                .on(key(KeyCode::Enter).shift(), Msg::Newline)
+                .on(key(KeyCode::Char('j')).ctrl(), Msg::Newline)
+                .fallthrough(&self.input_focus, Msg::Input);
+        }
+
+        km
     }
 }
 
@@ -113,7 +513,7 @@ mod tests {
     use super::*;
     use crate::tui::state::ConversationEvent;
     use crossterm::event::{KeyEvent, KeyModifiers};
-    use eye_declare::{InputEvent, Runtime};
+    use eye_declare::Runtime;
     use eye_declare_engine::test_terminal::TestTerminal;
 
     fn fixture_app() -> AiApp {
@@ -124,16 +524,78 @@ mod tests {
         fsm.ctx.events.push(ConversationEvent::Text {
             content: "Use `ls` to list files.".into(),
         });
-        AiApp::new(fsm, None)
+        app_with(fsm)
+    }
+
+    fn app_with(fsm: AgentFsm) -> AiApp {
+        AiApp::new(fsm, None, SlashCommandRegistry::default(), HashSet::new())
+    }
+
+    /// Runtime + VTE terminal pair. Every byte the runtime emits — including
+    /// per-event output from `handle` — must reach the terminal, or its
+    /// state diverges from what the diffing runtime believes is on screen.
+    struct Harness {
+        rt: Runtime<AiApp>,
+        term: TestTerminal,
+    }
+
+    impl Harness {
+        fn new(app: AiApp) -> Self {
+            let mut rt = Runtime::new(app, 60, 24);
+            let mut term = TestTerminal::new(60, 24);
+            term.feed(&rt.present());
+            Self { rt, term }
+        }
+
+        fn press(&mut self, code: KeyCode) -> Option<ExitOutcome> {
+            self.press_mod(code, KeyModifiers::NONE)
+        }
+
+        fn press_mod(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<ExitOutcome> {
+            let (bytes, exit) = self
+                .rt
+                .handle(InputEvent::Key(KeyEvent::new(code, modifiers)));
+            self.term.feed(&bytes);
+            exit
+        }
+
+        fn type_str(&mut self, s: &str) {
+            for ch in s.chars() {
+                self.press(KeyCode::Char(ch));
+            }
+        }
+
+        fn app(&self) -> &AiApp {
+            self.rt.app()
+        }
+
+        fn screen(&self) -> String {
+            self.term.viewport_lines().join("\n")
+        }
+
+        /// Scrollback + viewport, for content that has scrolled off.
+        fn all_lines(&self) -> String {
+            [self.term.scrollback_lines(), self.term.viewport_lines()]
+                .concat()
+                .join("\n")
+        }
+    }
+
+    fn suggest_command_fsm(cmd: &str) -> AgentFsm {
+        let mut fsm = AgentFsm::new(vec![], "test-invocation".into());
+        fsm.ctx.events.push(ConversationEvent::ToolCall {
+            id: "t1".into(),
+            name: "suggest_command".into(),
+            input: serde_json::json!({ "command": cmd }),
+        });
+        fsm
     }
 
     #[test]
     fn tail_renders_conversation_turns() {
-        let mut rt = Runtime::new(fixture_app(), 60, 24);
-        let mut term = TestTerminal::new(60, 24);
-        term.feed(&rt.present());
+        let h = Harness::new(fixture_app());
 
-        let screen = term.viewport_lines().join("\n");
+        let screen = h.screen();
         assert!(screen.contains(" You"), "user label missing:\n{screen}");
         assert!(
             screen.contains("list my files"),
@@ -151,12 +613,156 @@ mod tests {
 
     #[test]
     fn esc_exits_with_cancel() {
-        let mut rt = Runtime::new(fixture_app(), 60, 24);
-        let (_, exit) = rt.handle(InputEvent::Key(KeyEvent::new(
-            KeyCode::Esc,
-            KeyModifiers::NONE,
-        )));
-        assert_eq!(exit, Some(ExitOutcome::Cancel));
+        let mut h = Harness::new(fixture_app());
+        assert_eq!(h.press(KeyCode::Esc), Some(ExitOutcome::Cancel));
+    }
+
+    #[test]
+    fn typing_renders_in_the_editor() {
+        let mut h = Harness::new(fixture_app());
+        h.type_str("hi there");
+
+        let screen = h.screen();
+        assert!(screen.contains("hi there"), "typed text missing:\n{screen}");
+        assert!(
+            screen.contains("Generate a command or ask a question"),
+            "panel title missing:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn enter_submits_and_pushes_the_user_turn() {
+        let mut h = Harness::new(fixture_app());
+
+        h.type_str("hello agent");
+        let exit = h.press(KeyCode::Enter);
+        assert_eq!(exit, None);
+
+        let app = h.app();
+        assert!(matches!(
+            app.fsm.ctx.events.last(),
+            Some(ConversationEvent::UserMessage { content }) if content == "hello agent"
+        ));
+        assert!(app.is_input_blank(), "editor should clear on submit");
+        assert!(app.is_busy(), "fsm should be in a turn");
+        assert!(app.pushed_turns > 0, "turns should have been pushed");
+
+        // The submitted turn is now committed content; the tail shows the
+        // pending-agent banner.
+        let all = h.all_lines();
+        assert!(all.contains("hello agent"), "pushed turn missing:\n{all}");
+        assert!(all.contains(" Atuin AI"), "pending banner missing:\n{all}");
+    }
+
+    #[test]
+    fn blank_enter_executes_suggested_command() {
+        let mut h = Harness::new(app_with(suggest_command_fsm("ls -la")));
+        assert_eq!(
+            h.press(KeyCode::Enter),
+            Some(ExitOutcome::Execute("ls -la".into()))
+        );
+    }
+
+    #[test]
+    fn tab_inserts_suggested_command() {
+        let mut h = Harness::new(app_with(suggest_command_fsm("ls -la")));
+        assert_eq!(
+            h.press(KeyCode::Tab),
+            Some(ExitOutcome::Insert("ls -la".into()))
+        );
+    }
+
+    #[test]
+    fn typing_disarms_command_execution() {
+        let mut h = Harness::new(app_with(suggest_command_fsm("rm -rf /")));
+        h.type_str("actually, explain first");
+        // Enter now submits the question instead of executing the command.
+        assert_eq!(h.press(KeyCode::Enter), None);
+        assert!(matches!(
+            h.app().fsm.ctx.events.last(),
+            Some(ConversationEvent::UserMessage { .. })
+        ));
+    }
+
+    #[test]
+    fn slash_suggestions_and_tab_accept() {
+        let mut h = Harness::new(fixture_app());
+        h.type_str("/he");
+
+        let screen = h.screen();
+        assert!(
+            screen.contains("Show help information"),
+            "suggestion missing:\n{screen}"
+        );
+
+        h.press(KeyCode::Tab);
+        assert_eq!(h.app().input.borrow().lines(), ["/help".to_string()]);
+    }
+
+    #[test]
+    fn ctrl_j_inserts_newline() {
+        let mut h = Harness::new(fixture_app());
+        h.type_str("a");
+        h.press_mod(KeyCode::Char('j'), KeyModifiers::CONTROL);
+        h.type_str("b");
+        assert_eq!(
+            h.app().input.borrow().lines(),
+            ["a".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn shift_enter_inserts_newline() {
+        let mut h = Harness::new(fixture_app());
+        h.type_str("a");
+        h.press_mod(KeyCode::Enter, KeyModifiers::SHIFT);
+        h.type_str("b");
+        assert_eq!(h.app().input.borrow().lines().len(), 2);
+    }
+
+    #[test]
+    fn skill_dispatches_even_when_registered_for_autocomplete() {
+        let mut registry = SlashCommandRegistry::default();
+        let mut skill_names = HashSet::new();
+        registry.register(crate::tui::slash::SlashCommand::new(
+            "release",
+            "Cut a release",
+        ));
+        skill_names.insert("release".to_string());
+        let app = AiApp::new(
+            AgentFsm::new(vec![], "t".into()),
+            None,
+            registry,
+            skill_names,
+        );
+
+        assert!(matches!(
+            app.dispatch_submit("/release 1.2".into()),
+            Event::RequestSkillLoad { name, arguments }
+                if name == "release" && arguments.as_deref() == Some("1.2")
+        ));
+    }
+
+    #[test]
+    fn builtin_takes_precedence_over_skill_with_same_name() {
+        let mut registry = SlashCommandRegistry::default();
+        let mut skill_names = HashSet::new();
+        registry.register(crate::tui::slash::SlashCommand::new(
+            "reload",
+            "A skill shadowing /reload",
+        ));
+        skill_names.insert("reload".to_string());
+        let app = AiApp::new(
+            AgentFsm::new(vec![], "t".into()),
+            None,
+            registry,
+            skill_names,
+        );
+
+        assert!(matches!(
+            app.dispatch_submit("/reload".into()),
+            Event::SlashCommand { .. }
+        ));
     }
 
     #[test]
@@ -165,13 +771,15 @@ mod tests {
         fsm.ctx.events.push(ConversationEvent::UserMessage {
             content: "hello".into(),
         });
-        let app = AiApp::new(fsm, Some("  Continuing previous session".into()));
+        let app = AiApp::new(
+            fsm,
+            Some("  Continuing previous session".into()),
+            SlashCommandRegistry::default(),
+            HashSet::new(),
+        );
 
-        let mut rt = Runtime::new(app, 60, 24);
-        let mut term = TestTerminal::new(60, 24);
-        term.feed(&rt.present());
-
-        let lines = term.viewport_lines();
+        let h = Harness::new(app);
+        let lines = h.term.viewport_lines();
         let notice_row = lines
             .iter()
             .position(|l| l.contains("Continuing previous session"))
