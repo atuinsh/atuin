@@ -46,12 +46,10 @@ impl Default for Indicator<'_> {
 /// How much room to truncate into, and the unit it is measured in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Budget {
-    /// A UTF-8 byte budget. Cuts on `char` boundaries, so the result is valid
-    /// UTF-8 and its byte length never exceeds the budget. Use for storage or
-    /// prompt byte budgets.
+    /// A UTF-8 byte budget.
     Bytes(usize),
-    /// A display-column budget via `unicode-width` — a double-width glyph such
-    /// as `世` or `🦀` counts as two. Use for TUI column layout.
+    /// A display-column budget via `unicode-width` - a double-width glyph such
+    /// as `世` or `🦀` counts as two. Use for presentation.
     Columns(usize),
 }
 
@@ -75,7 +73,7 @@ impl Budget {
 pub trait EllipsizeExt: AsRef<str> {
     /// Truncate this string to fit within `budget`, splicing in `indicator` on
     /// `side` if any content had to be dropped. Returns a lazy [`Ellipsized`]
-    /// view — no allocation until you ask for an owned string.
+    /// view - no allocation until you ask for an owned string.
     fn ellipsize<'a>(
         &'a self,
         budget: Budget,
@@ -88,7 +86,7 @@ pub trait EllipsizeExt: AsRef<str> {
         // The boundary helpers only need a per-grapheme cost, not the budget.
         let cost = |seg: &str| budget.cost(seg);
 
-        // Fast path: already fits — a single contiguous slice.
+        // Fast path: already fits - a single contiguous slice.
         if cost(s) <= amount {
             return Ellipsized::contiguous(s, 0);
         }
@@ -124,13 +122,11 @@ pub trait EllipsizeExt: AsRef<str> {
 
 impl<T: AsRef<str>> EllipsizeExt for T {}
 
-/// A budget-truncated view of a source string — either a single contiguous
+/// A budget-truncated view of a source string - either a single contiguous
 /// slice (it fit, or there was no room even for the indicator) or a head +
-/// indicator + tail with content elided between them. Cheap (`Copy`); `Display`
-/// writes the pieces straight to the formatter with no intermediate `String`.
+/// indicator + tail with content elided between them.
 ///
-/// The spliced form always carries an indicator, so a gap between head and tail
-/// can never be rendered without a marker — that state is unrepresentable.
+/// Cheap `Copy`. `Display` writes the pieces straight to the formatter.
 #[derive(Debug, Clone, Copy)]
 pub struct Ellipsized<'a>(Repr<'a>);
 
@@ -139,7 +135,7 @@ enum Repr<'a> {
     /// The whole result is one contiguous slice of the source; `source_offset`
     /// is the slice's byte offset in the source.
     Contiguous { text: &'a str, source_offset: usize },
-    /// A head slice, an indicator, and a tail slice — always with a marker.
+    /// A head slice, an indicator, and a tail slice - always with a marker.
     Spliced {
         head: &'a str,
         indicator: Indicator<'a>,
@@ -157,8 +153,6 @@ impl<'a> Ellipsized<'a> {
         })
     }
 
-    /// Build a spliced view from the source and the head/tail byte boundaries;
-    /// the slicing happens once here.
     fn spliced(
         source: &'a str,
         head_end: usize,
@@ -249,39 +243,36 @@ impl PartialEq<&str> for Ellipsized<'_> {
     }
 }
 
-/// Byte end index of the longest prefix of `s` whose summed per-grapheme `cost`
-/// is at most `max`.
-///
-/// Iterates whole grapheme clusters, so it never splits one — the returned index
-/// is always a valid slice point, and width context effects (a variation
-/// selector or combining mark adjusting the width of the character it follows)
-/// stay contained within a single cluster.
-fn prefix_boundary(s: &str, max: usize, cost: impl Fn(&str) -> usize) -> usize {
+/// Total byte length of the longest leading run of `graphemes` whose summed
+/// `cost` is at most `max`.
+fn fitting_bytes<'a>(
+    graphemes: impl Iterator<Item = &'a str>,
+    max: usize,
+    cost: impl Fn(&str) -> usize,
+) -> usize {
     let mut used = 0;
-    for (idx, seg) in s.grapheme_indices(true) {
-        let seg_cost = cost(seg);
-        if used + seg_cost > max {
-            return idx;
-        }
-        used += seg_cost;
-    }
-    s.len()
-}
-
-/// Byte start index of the longest suffix of `s` whose summed per-grapheme
-/// `cost` is at most `max`. Iterates grapheme clusters like [`prefix_boundary`].
-fn suffix_boundary(s: &str, max: usize, cost: impl Fn(&str) -> usize) -> usize {
-    let mut used = 0;
-    let mut start = s.len();
-    for (idx, seg) in s.grapheme_indices(true).rev() {
+    let mut bytes = 0;
+    for seg in graphemes {
         let seg_cost = cost(seg);
         if used + seg_cost > max {
             break;
         }
         used += seg_cost;
-        start = idx;
+        bytes += seg.len();
     }
-    start
+    bytes
+}
+
+/// Byte end index of the longest prefix of `s` whose summed per-grapheme cost is
+/// at most `max`.
+fn prefix_boundary(s: &str, max: usize, cost: impl Fn(&str) -> usize) -> usize {
+    fitting_bytes(s.graphemes(true), max, cost)
+}
+
+/// Byte start index of the longest suffix of `s` whose summed per-grapheme cost
+/// is at most `max`.
+fn suffix_boundary(s: &str, max: usize, cost: impl Fn(&str) -> usize) -> usize {
+    s.len() - fitting_bytes(s.graphemes(true).rev(), max, cost)
 }
 
 #[cfg(test)]
@@ -292,8 +283,6 @@ mod tests {
     use rstest::rstest;
     use unicode_width::UnicodeWidthStr;
 
-    /// Test-local mirror of a budget's inner amount — the crate's own cost
-    /// accessors are private to the production module.
     fn amount(b: Budget) -> usize {
         match b {
             Budget::Bytes(n) => n,
@@ -301,8 +290,6 @@ mod tests {
         }
     }
 
-    /// Test-local mirror of how a budget measures a string's cost: byte
-    /// length for `Bytes`, display-column width for `Columns`.
     fn cost(b: Budget, s: &str) -> usize {
         match b {
             Budget::Bytes(_) => s.len(),
@@ -310,10 +297,6 @@ mod tests {
         }
     }
 
-    /// Table-driven examples covering both units, all three sides, both
-    /// ellipsis glyphs, wide (CJK/emoji) content, and the below-ellipsis-cost
-    /// hard-truncation edge case. Each case is its own test, so a failure
-    /// names precisely which input broke.
     #[rstest]
     // Fits unchanged (borrowed).
     #[case("hello", Budget::Columns(10), Pos::End, Indicator::ASCII, "hello")]
@@ -423,9 +406,6 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(2048))]
 
-        /// The result never costs more than the budget's amount, in the
-        /// budget's own unit. Also proves the call never panics for any
-        /// input across every side/ellipsis/unit combination.
         #[test]
         fn never_overflows(
             s in r"(?s).*",
@@ -437,8 +417,6 @@ mod tests {
             prop_assert!(cost(budget, out.as_ref()) <= amount(budget));
         }
 
-        /// When the input already fits, it is returned borrowed and
-        /// byte-for-byte unchanged (zero-copy fast path).
         #[test]
         fn borrowed_when_it_fits(
             s in r"(?s).*",
@@ -456,7 +434,6 @@ mod tests {
             }
         }
 
-        /// Truncation never makes a string cost more than it started with.
         #[test]
         fn never_grows(
             s in r"(?s).*",
@@ -468,9 +445,6 @@ mod tests {
             prop_assert!(cost(budget, out.as_ref()) <= cost(budget, &s));
         }
 
-        /// Byte budgets specifically: the result's byte length never exceeds
-        /// `n`. This is subsumed by `never_overflows` but is asserted
-        /// explicitly since it is the `truncate_description` invariant.
         #[test]
         fn valid_byte_cut(
             s in r"(?s).*",
@@ -482,8 +456,6 @@ mod tests {
             prop_assert!(out.len() <= n);
         }
 
-        /// When content had to be dropped and the budget can afford the
-        /// ellipsis glyph, the glyph appears in the result.
         #[test]
         fn ellipsis_present_when_needed(
             s in r"(?s).*",
@@ -499,9 +471,6 @@ mod tests {
             }
         }
 
-        /// Every kept output byte maps back (via `source_index`) to the source
-        /// char it came from; indicator bytes map to `None`. Exercises all
-        /// shapes: contiguous fit/prefix/suffix and spliced start/middle/end.
         #[test]
         fn source_index_round_trips(
             s in r"(?s).*",
