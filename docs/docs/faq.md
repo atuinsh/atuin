@@ -32,7 +32,7 @@ Add `--disable-up-arrow`
 EG:
 
 ```
-eval "$(atuin init zsh --disable-up-arrow)"
+eval "$(atuin init --disable-up-arrow)"
 ```
 
 See [key binding](../configuration/key-binding.md) for more
@@ -46,7 +46,7 @@ Add `--disable-ai`
 EG:
 
 ```
-eval "$(atuin init zsh --disable-ai)"
+eval "$(atuin init --disable-ai)"
 ```
 
 ## How do I edit a command instead of running it immediately?
@@ -73,7 +73,7 @@ in on at least one machine, it's safe to delete and re-create your account.
 ## I did not set up sync, and now I have to reinstall my system!
 
 If you have a backup of `~/.local/share/atuin`, you can import it by:
-1. disabling atuin by commenting out the shell integration, e.g. for bash it's `eval "$(atuin init bash)"`
+1. disabling atuin by commenting out the shell integration, e.g. `eval "$(atuin init)"`
 2. copying the backup to `~/.local/share/atuin`
 3. reenabling atuin
 4. setting up sync!

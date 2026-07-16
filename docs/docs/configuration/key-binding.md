@@ -21,13 +21,13 @@ Otherwise, if you don't like it, it's easy to disable.
 You can also disable either the up-arrow or ++ctrl+r++ bindings individually, by passing
 `--disable-up-arrow` or `--disable-ctrl-r` to the call to `atuin init` in your shell config file:
 
-An example for zsh:
+An example:
 ```
 # Bind ctrl-r but not up arrow
-eval "$(atuin init zsh --disable-up-arrow)"
+eval "$(atuin init --disable-up-arrow)"
 
 # Bind up-arrow but not ctrl-r
-eval "$(atuin init zsh --disable-ctrl-r)"
+eval "$(atuin init --disable-ctrl-r)"
 ```
 
 If you do not want either key to be bound, either pass both `--disable` arguments, or set the
@@ -36,11 +36,11 @@ environment variable `ATUIN_NOBIND` to any value before the call to `atuin init`
 ```
 ## Do not bind any keys
 # Either:
-eval "$(atuin init zsh --disable-up-arrow --disable-ctrl-r)"
+eval "$(atuin init --disable-up-arrow --disable-ctrl-r)"
 
 # Or:
 export ATUIN_NOBIND="true"
-eval "$(atuin init zsh)"
+eval "$(atuin init)"
 ```
 
 You can then choose to bind Atuin if needed, do this after the call to init.

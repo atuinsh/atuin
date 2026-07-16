@@ -65,5 +65,5 @@ eval "$(atuin pty-proxy init bash)"
 
 # ... other shell configuration ...
 
-eval "$(atuin init bash)"
+eval "$(atuin init)"
 ```

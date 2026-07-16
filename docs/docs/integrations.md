@@ -6,7 +6,7 @@ This page covers integrations with shell plugins and tools. For information abou
 
 Atuin automatically adds itself as an [autosuggest strategy](https://github.com/zsh-users/zsh-autosuggestions#suggestion-strategy).
 
-If you'd like to override this, add your own config after `"$(atuin init zsh)"` in your `.zshrc`.
+If you'd like to override this, add your own config after `"$(atuin init)"` in your `.zshrc`.
 
 ## zsh-vi-mode
 
@@ -15,7 +15,7 @@ If you are using [Zsh Vi Mode](https://github.com/jeffreytse/zsh-vi-mode), you m
 ```shell
 # Append a command directly (after sourcing zvm)
 zvm_after_init_commands+=(
-  'eval "$(atuin init zsh)"'
+  'eval "$(atuin init)"'
 )
 ```
 
@@ -23,12 +23,12 @@ zvm_after_init_commands+=(
 
 If ble.sh is available when Atuin's integration is loaded in Bash, Atuin automatically defines and registers an auto-complete source for the autosuggestion feature of ble.sh.
 
-If you'd like to change the behavior, please overwrite the shell function `ble/complete/auto-complete/source:atuin-history` after `eval "$(atuin init bash)"` in your `.bashrc`.
+If you'd like to change the behavior, please overwrite the shell function `ble/complete/auto-complete/source:atuin-history` after `eval "$(atuin init)"` in your `.bashrc`.
 
-If you would not like Atuin's auto-complete source, please add the following setting after `eval "$(atuin init bash)"` in your `.bashrc`:
+If you would not like Atuin's auto-complete source, please add the following setting after `eval "$(atuin init)"` in your `.bashrc`:
 
 ```shell
-# bashrc (after eval "$(atuin init bash)")
+# bashrc (after eval "$(atuin init)")
 
 ble/util/import/eval-after-load core-complete '
   ble/array#remove _ble_complete_auto_source atuin-history'
