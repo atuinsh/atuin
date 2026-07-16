@@ -3,7 +3,7 @@
 use thiserror::Error;
 use url::Url;
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum UrlAppendError {
     /// The URL given cannot be a base URL (e.g. `mailto:` or `data:`).
     ///
