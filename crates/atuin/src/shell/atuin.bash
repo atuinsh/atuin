@@ -1,15 +1,3 @@
-# Include guard
-if [[ ${__atuin_initialized-} == true ]]; then
-    false
-elif [[ $- != *i* ]]; then
-    # Enable only in interactive shells
-    false
-elif ((BASH_VERSINFO[0] < 3 || BASH_VERSINFO[0] == 3 && BASH_VERSINFO[1] < 1)); then
-    # Require bash >= 3.1
-    [[ -t 2 ]] && printf 'atuin: requires bash >= 3.1 for the integration.\n' >&2
-    false
-else # (include guard) beginning of main content
-#------------------------------------------------------------------------------
 __atuin_initialized=true
 
 if [[ -z "${ATUIN_SESSION:-}" || "${ATUIN_SHLVL:-}" != "$SHLVL" ]]; then
@@ -86,7 +74,7 @@ __atuin_preexec() {
     __atuin_update_preexec_backend
 
     local id
-    id=$(atuin history start -- "$1" 2>/dev/null)
+    id=$(ATUIN_SHELL=bash atuin history start --hook -- "$1" 2>/dev/null)
     export ATUIN_HISTORY_ID=$id
     [[ -n ${__atuin_skip_osc133:-} ]] || __atuin_osc133_command_executed
     __atuin_preexec_time=${EPOCHREALTIME-}
@@ -141,7 +129,7 @@ __atuin_precmd() {
     fi
 
     [[ -n ${__atuin_skip_osc133:-} ]] || __atuin_osc133_command_finished "$EXIT"
-    (ATUIN_LOG=error atuin history end --exit "$EXIT" ${duration:+"--duration=$duration"} -- "$ATUIN_HISTORY_ID" &) >/dev/null 2>&1
+    (atuin history end --hook --exit "$EXIT" ${duration:+"--duration=$duration"} -- "$ATUIN_HISTORY_ID" >/dev/null 2>&1 &)
     export ATUIN_HISTORY_ID=""
 }
 
@@ -163,7 +151,7 @@ if ((BASH_VERSINFO[0] >= 5 || BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4)); 
     __atuin_evaluate_prompt() {
         __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
         __atuin_prompt=${PS1@P}
-    
+
         # Note: Strip the control characters ^A (\001) and ^B (\002), which
         # Bash internally uses to enclose the escape sequences.  They are
         # produced by '\[' and '\]', respectively, in $PS1 and used to tell
@@ -323,7 +311,7 @@ __atuin_search_cmd() {
         popup_width="${ATUIN_TMUX_POPUP_WIDTH:-80%}" # Keep default value anyways
         popup_height="${ATUIN_TMUX_POPUP_HEIGHT:-60%}"
         tmux display-popup -d "$cdir" -w "$popup_width" -h "$popup_height" -E -E -- \
-            sh -c "PATH='$PATH' ATUIN_SESSION='$ATUIN_SESSION' ATUIN_SHELL=bash ATUIN_LOG=error ATUIN_QUERY='$escaped_query' atuin search $escaped_args -i 2>'$result_file'"
+            sh -c "PATH='$PATH' ATUIN_SESSION='$ATUIN_SESSION' ATUIN_SHELL=bash ATUIN_QUERY='$escaped_query' atuin search $escaped_args -i 2>'$result_file'"
 
         if [[ -f "$result_file" ]]; then
             cat "$result_file"
@@ -332,7 +320,7 @@ __atuin_search_cmd() {
         __atuin_tmux_popup_cleanup
         trap - EXIT HUP INT TERM
     else
-        ATUIN_SHELL=bash ATUIN_LOG=error ATUIN_QUERY=$READLINE_LINE atuin search "${search_args[@]}" -i 3>&1 1>&2 2>&3 3>&-
+        ATUIN_SHELL=bash ATUIN_QUERY=$READLINE_LINE atuin search "${search_args[@]}" -i 3>&1 1>&2 2>&3 3>&-
     fi
 }
 
@@ -720,6 +708,3 @@ if [[ $__atuin_bind_up_arrow == true ]]; then
     atuin-bind -m vi-command '\eOA' atuin-up-search-vicmd
     atuin-bind -m vi-command 'k'    atuin-up-search-vicmd
 fi
-
-#------------------------------------------------------------------------------
-fi # (include guard) end of main content

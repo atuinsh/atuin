@@ -666,26 +666,13 @@ common_prefix = [
 
 Configures commands that should be totally stripped from stats calculations. For example, 'sudo' should be ignored.
 
-## sync
-
-We have developed a new version of sync, that is both faster and more efficient than the original version.
-
-Presently, it is the default for fresh installs but not for existing users. This will change in a later release.
-
-To enable sync v2, add the following to your config
-
-```toml
-[sync]
-records = true
-```
-
 ## `dotfiles`
 
 Atuin version: >= 18.1
 
 Default: `false`
 
-To enable sync of shell aliases between hosts. Requires `sync` enabled.
+To enable sync of shell aliases between hosts.
 
 Add the new section to the bottom of your config file, for every machine you use Atuin with
 
@@ -693,8 +680,6 @@ Add the new section to the bottom of your config file, for every machine you use
 [dotfiles]
 enabled = true
 ```
-
-Note: you will need to have sync v2 enabled. See the above section.
 
 Manage aliases using the command line options
 

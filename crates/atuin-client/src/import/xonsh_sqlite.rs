@@ -12,6 +12,7 @@ use uuid::timestamp::{Timestamp, context::NoContext};
 
 use super::{Importer, Loader, get_histfile_path};
 use crate::history::History;
+use crate::history::builder::HistoryImported;
 use crate::utils::get_host_user;
 
 #[derive(Debug, FromRow)]
@@ -35,26 +36,17 @@ impl HistDbEntry {
         let session_id = Uuid::new_v7(session_ts).to_string();
         let duration = (self.tse - self.tsb) * 1_000_000_000_f64;
 
-        if let Some(exit) = self.rtn {
-            let imported = History::import()
-                .timestamp(timestamp)
-                .duration(duration.trunc() as i64)
-                .exit(exit)
-                .command(self.inp)
-                .cwd(self.cwd)
-                .session(session_id)
-                .hostname(hostname);
-            imported.build().into()
-        } else {
-            let imported = History::import()
-                .timestamp(timestamp)
-                .duration(duration.trunc() as i64)
-                .command(self.inp)
-                .cwd(self.cwd)
-                .session(session_id)
-                .hostname(hostname);
-            imported.build().into()
-        }
+        History::import()
+            .shell("xonsh")
+            .timestamp(timestamp)
+            .duration(duration.trunc() as i64)
+            .exit(self.rtn.unwrap_or(HistoryImported::DEFAULT_EXIT))
+            .command(self.inp)
+            .cwd(self.cwd)
+            .session(session_id)
+            .hostname(hostname)
+            .build()
+            .into()
     }
 }
 

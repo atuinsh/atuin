@@ -1,6 +1,4 @@
-use std::{collections::HashMap, io::prelude::*, path::PathBuf, str::FromStr, sync::OnceLock};
-use tokio::sync::OnceCell;
-
+use atuin_common::logs::LogLevel;
 use atuin_common::record::HostId;
 use atuin_common::utils;
 use clap::ValueEnum;
@@ -14,9 +12,10 @@ use regex::RegexSet;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_with::DeserializeFromStr;
+use std::{collections::HashMap, io::prelude::*, path::PathBuf, str::FromStr, sync::OnceLock};
 use time::{OffsetDateTime, UtcOffset, format_description::FormatItem, macros::format_description};
+use tokio::sync::OnceCell;
 
-pub const HISTORY_PAGE_SIZE: i64 = 100;
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
 static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -351,11 +350,6 @@ impl Default for Stats {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Default, Serialize)]
-pub struct Sync {
-    pub records: bool,
-}
-
 /// Sync protocol type for authentication.
 ///
 /// This setting is primarily for development/testing. When not explicitly set,
@@ -573,31 +567,6 @@ pub struct Tmux {
     pub height: String,
 }
 
-/// Log level for file logging. Maps to tracing's LevelFilter.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum LogLevel {
-    Trace,
-    Debug,
-    #[default]
-    Info,
-    Warn,
-    Error,
-}
-
-impl LogLevel {
-    /// Convert to a tracing directive string for use with EnvFilter.
-    pub fn as_directive(&self) -> &'static str {
-        match self {
-            LogLevel::Trace => "trace",
-            LogLevel::Debug => "debug",
-            LogLevel::Info => "info",
-            LogLevel::Warn => "warn",
-            LogLevel::Error => "error",
-        }
-    }
-}
-
 /// Configuration for a specific log type (search or daemon).
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct LogConfig {
@@ -612,6 +581,15 @@ pub struct LogConfig {
 
     /// Override global retention days setting for this log type.
     pub retention: Option<u64>,
+}
+
+impl LogConfig {
+    pub fn new(file: impl Into<String>) -> Self {
+        Self {
+            file: file.into(),
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -632,7 +610,7 @@ pub struct Logs {
     #[serde(default = "Logs::default_retention")]
     pub retention: u64,
 
-    /// Search log settings
+    /// Search log settings; only used with `--interactive`
     #[serde(default)]
     pub search: LogConfig,
 
@@ -645,6 +623,25 @@ pub struct Logs {
     pub ai: LogConfig,
 }
 
+/// Endpoint protocol for Atuin AI.
+///
+/// When set to "auto" (default), the protocol is inferred from `ai.endpoint`:
+/// an unset or official Atuin address is treated as Hub, anything else as an
+/// OSS server. Set explicitly to "hub" to keep Hub behavior with a custom
+/// endpoint (useful for local development against a Hub instance).
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AiEndpointProtocol {
+    /// Atuin Hub: browser-based login flow, stored Hub session, usage reporting.
+    Hub,
+    /// A standalone AI server (e.g. atuin-ai-server): requests go straight to
+    /// the endpoint, authenticated with `ai.api_token` if set.
+    Oss,
+    /// Infer from ai.endpoint (default behavior)
+    #[default]
+    Auto,
+}
+
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
 pub struct Ai {
     /// Whether or not the AI features are enabled.
@@ -653,6 +650,10 @@ pub struct Ai {
     /// The address of the Atuin AI endpoint. Used for AI features like command generation.
     /// Only necessary for custom AI endpoints.
     pub endpoint: Option<String>,
+
+    /// How to talk to `endpoint`. See [`AiEndpointProtocol`].
+    #[serde(default)]
+    pub endpoint_protocol: AiEndpointProtocol,
 
     /// The API token for the Atuin AI endpoint. Used for AI features like command generation.
     /// Only necessary for custom AI endpoints.
@@ -666,6 +667,10 @@ pub struct Ai {
 
     /// The AI model to use for AI chats, based on the Atuin AI model alias.
     pub model: Option<String>,
+
+    /// Whether to enable YOLO mode (skips all permission checks)
+    #[serde(default)]
+    pub yolo: bool,
 
     /// Deprecated: use opening.send_cwd instead. Kept for backwards compatibility.
     #[serde(default)]
@@ -740,18 +745,9 @@ impl Default for Logs {
             dir: "".to_string(),
             level: LogLevel::default(),
             retention: Self::default_retention(),
-            search: LogConfig {
-                file: "search.log".to_string(),
-                ..Default::default()
-            },
-            daemon: LogConfig {
-                file: "daemon.log".to_string(),
-                ..Default::default()
-            },
-            ai: LogConfig {
-                file: "ai.log".to_string(),
-                ..Default::default()
-            },
+            search: LogConfig::new("search.log"),
+            daemon: LogConfig::new("daemon.log"),
+            ai: LogConfig::new("ai.log"),
         }
     }
 }
@@ -763,78 +759,6 @@ impl Logs {
 
     fn default_retention() -> u64 {
         4
-    }
-
-    /// Returns whether search logging is enabled.
-    /// Uses search-specific setting if set, otherwise falls back to global.
-    pub fn search_enabled(&self) -> bool {
-        self.search.enabled.unwrap_or(self.enabled)
-    }
-
-    /// Returns whether daemon logging is enabled.
-    /// Uses daemon-specific setting if set, otherwise falls back to global.
-    pub fn daemon_enabled(&self) -> bool {
-        self.daemon.enabled.unwrap_or(self.enabled)
-    }
-
-    /// Returns whether AI logging is enabled.
-    /// Uses AI-specific setting if set, otherwise falls back to global.
-    pub fn ai_enabled(&self) -> bool {
-        self.ai.enabled.unwrap_or(self.enabled)
-    }
-
-    /// Returns the log level for search logging.
-    /// Uses search-specific setting if set, otherwise falls back to global.
-    pub fn search_level(&self) -> LogLevel {
-        self.search.level.unwrap_or(self.level)
-    }
-
-    /// Returns the log level for daemon logging.
-    /// Uses daemon-specific setting if set, otherwise falls back to global.
-    pub fn daemon_level(&self) -> LogLevel {
-        self.daemon.level.unwrap_or(self.level)
-    }
-
-    /// Returns the log level for AI logging.
-    /// Uses AI-specific setting if set, otherwise falls back to global.
-    pub fn ai_level(&self) -> LogLevel {
-        self.ai.level.unwrap_or(self.level)
-    }
-
-    /// Returns the retention days for search logging.
-    /// Uses search-specific setting if set, otherwise falls back to global.
-    pub fn search_retention(&self) -> u64 {
-        self.search.retention.unwrap_or(self.retention)
-    }
-
-    /// Returns the retention days for daemon logging.
-    /// Uses daemon-specific setting if set, otherwise falls back to global.
-    pub fn daemon_retention(&self) -> u64 {
-        self.daemon.retention.unwrap_or(self.retention)
-    }
-
-    /// Returns the retention days for AI logging.
-    /// Uses AI-specific setting if set, otherwise falls back to global.
-    pub fn ai_retention(&self) -> u64 {
-        self.ai.retention.unwrap_or(self.retention)
-    }
-
-    /// Returns the full path for the search log file.
-    pub fn search_path(&self) -> PathBuf {
-        let path = PathBuf::from(&self.search.file);
-        PathBuf::from(&self.dir).join(path)
-    }
-
-    /// Returns the full path for the daemon log file.
-    pub fn daemon_path(&self) -> PathBuf {
-        let path = PathBuf::from(&self.daemon.file);
-        PathBuf::from(&self.dir).join(path)
-    }
-
-    /// Returns the full path for the AI log file.
-    pub fn ai_path(&self) -> PathBuf {
-        let path = PathBuf::from(&self.ai.file);
-        PathBuf::from(&self.dir).join(path)
     }
 }
 
@@ -1137,9 +1061,6 @@ pub struct Settings {
     pub stats: Stats,
 
     #[serde(default)]
-    pub sync: Sync,
-
-    #[serde(default)]
     pub keys: Keys,
 
     #[serde(default)]
@@ -1293,6 +1214,21 @@ impl Settings {
             SyncProtocol::Hub => true,
             SyncProtocol::Legacy => false,
             SyncProtocol::Auto => Self::is_official_address(&self.sync_address),
+        }
+    }
+
+    /// Returns whether the resolved AI endpoint should be treated as an Atuin
+    /// Hub instance (browser login flow, Hub session management, usage
+    /// reporting) rather than a standalone OSS server.
+    ///
+    /// `endpoint` is the resolved AI endpoint — the `--api-endpoint` flag or
+    /// `ai.endpoint` setting, after defaults are applied — which is why it's a
+    /// parameter rather than read from `self.ai.endpoint`.
+    pub fn is_hub_ai_endpoint(&self, endpoint: &str) -> bool {
+        match self.ai.endpoint_protocol {
+            AiEndpointProtocol::Hub => true,
+            AiEndpointProtocol::Oss => false,
+            AiEndpointProtocol::Auto => Self::is_official_address(endpoint),
         }
     }
 
@@ -1528,7 +1464,6 @@ impl Settings {
             // muscle memory.
             // New users will get the new default, that is more similar to what they are used to.
             .set_default("enter_accept", false)?
-            .set_default("sync.records", true)?
             .set_default("keys.scroll_exits", true)?
             .set_default("keys.accept_past_line_end", true)?
             .set_default("keys.exit_past_line_start", true)?
@@ -1885,6 +1820,24 @@ mod tests {
         assert!(Timezone::from_str("10:30").is_err());
 
         Ok(())
+    }
+
+    #[test]
+    fn ai_endpoint_protocol_resolution() {
+        let mut settings = super::Settings::default();
+
+        // Auto: official addresses are Hub, anything else is OSS
+        assert!(settings.is_hub_ai_endpoint("https://hub.atuin.sh"));
+        assert!(settings.is_hub_ai_endpoint("https://api.atuin.sh"));
+        assert!(!settings.is_hub_ai_endpoint("https://ai.example.com"));
+        assert!(!settings.is_hub_ai_endpoint("http://localhost:4000"));
+
+        // Explicit settings override the address check
+        settings.ai.endpoint_protocol = super::AiEndpointProtocol::Hub;
+        assert!(settings.is_hub_ai_endpoint("http://localhost:4000"));
+
+        settings.ai.endpoint_protocol = super::AiEndpointProtocol::Oss;
+        assert!(!settings.is_hub_ai_endpoint("https://hub.atuin.sh"));
     }
 
     #[test]

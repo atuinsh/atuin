@@ -14,7 +14,7 @@ repository = { workspace = true }
 
 [features]
 # Enables the `test_utils` module.
-test-utils = ["dep:tracing", "dep:tracing-subscriber"]
+test-utils = ["tracing", "dep:tracing-subscriber"]
 
 [dependencies]
 derive_more = { workspace = true }
@@ -36,3 +36,5 @@ tracing-subscriber = { workspace = true, optional = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+proptest = { workspace = true }
+rstest = { workspace = true }

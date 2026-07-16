@@ -565,7 +565,7 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
             let tx = tx.clone();
 
             // Auto-approved tools (e.g. load_skill) bypass permission checks entirely
-            if tool.is_auto_approved() {
+            if io.app_ctx.yolo || tool.is_auto_approved() {
                 let _ = tx.send(DriverEvent::Fsm(Event::PermissionResolved {
                     tool_id,
                     response: PermissionResponse::Allowed,
@@ -1047,6 +1047,7 @@ async fn run_stream_bridge(
     let stream = create_chat_stream(
         app_ctx.endpoint.clone(),
         app_ctx.token.clone(),
+        app_ctx.token_from_hub_session,
         request,
         client_ctx,
         app_ctx.send_cwd,

@@ -40,10 +40,8 @@ fn print_bindings(
 pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool, disable_ai: bool, tmux: &Tmux) {
     let indent = " ".repeat(4);
 
-    let base = include_str!("../../../shell/atuin.fish");
-
     print_tmux_config(tmux);
-    println!("{base}");
+    println!("{}", crate::shell::FISH);
 
     if std::env::var("ATUIN_NOBIND").is_err() {
         println!("if string match -q '4.*' $version");

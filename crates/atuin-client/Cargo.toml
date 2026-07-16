@@ -15,15 +15,13 @@ repository = { workspace = true }
 
 [features]
 default = ["sync", "hub", "daemon"]
-sync = ["urlencoding", "reqwest", "sha2", "hex"]
+sync = ["reqwest"]
 hub = ["reqwest"]
 daemon = []
 check-update = []
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.17.0" }
 derive_more = { workspace = true }
-
 tracing = { workspace = true }
 base64 = { workspace = true }
 time = { workspace = true, features = ["macros", "formatting", "parsing"] }
@@ -67,10 +65,7 @@ rusty_paserk = { version = "0.5.0", default-features = false, features = [
 ] }
 
 # sync
-urlencoding = { version = "2.1.0", optional = true }
 reqwest = { workspace = true, optional = true }
-hex = { version = "0.4", optional = true }
-sha2 = { version = "0.10", optional = true }
 indicatif = "0.18.0"
 tiny-bip39 = "2.0.0"
 
@@ -79,6 +74,11 @@ crossterm = { workspace = true, features = ["serde"] }
 palette = { version = "0.7.5", features = ["serializing"] }
 strum_macros = "0.27"
 strum = { version = "0.27", features = ["strum_macros"] }
+
+[dependencies.atuin-common]
+path = "../atuin-common"
+version = "18.17.1"
+features = ["tracing"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -89,7 +89,7 @@ tempfile = "3"
 # This crate's tests require the `test-utils` feature in atuin-common.
 [dev-dependencies.atuin-common]
 path = "../atuin-common"
-version = "18.17.0"
+version = "18.17.1"
 features = ["test-utils"]
 
 [[bench]]

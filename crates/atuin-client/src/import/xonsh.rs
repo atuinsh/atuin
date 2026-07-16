@@ -12,6 +12,7 @@ use uuid::timestamp::{Timestamp, context::NoContext};
 
 use super::{Importer, Loader, get_histdir_path};
 use crate::history::History;
+use crate::history::builder::HistoryImported;
 use crate::utils::get_host_user;
 
 // Note: both HistoryFile and HistoryData have other keys present in the JSON, we don't
@@ -123,29 +124,16 @@ impl Importer for Xonsh {
 
                 let duration = (end - start) * 1_000_000_000_f64;
 
-                match cmd.rtn {
-                    Some(exit) => {
-                        let entry = History::import()
-                            .timestamp(timestamp)
-                            .duration(duration.trunc() as i64)
-                            .exit(exit)
-                            .command(cmd.inp.trim())
-                            .cwd(cmd.cwd)
-                            .session(session.sessionid.clone())
-                            .hostname(self.hostname.clone());
-                        loader.push(entry.build().into()).await?;
-                    }
-                    None => {
-                        let entry = History::import()
-                            .timestamp(timestamp)
-                            .duration(duration.trunc() as i64)
-                            .command(cmd.inp.trim())
-                            .cwd(cmd.cwd)
-                            .session(session.sessionid.clone())
-                            .hostname(self.hostname.clone());
-                        loader.push(entry.build().into()).await?;
-                    }
-                }
+                let entry = History::import()
+                    .shell("xonsh")
+                    .timestamp(timestamp)
+                    .duration(duration.trunc() as i64)
+                    .exit(cmd.rtn.unwrap_or(HistoryImported::DEFAULT_EXIT))
+                    .command(cmd.inp.trim())
+                    .cwd(cmd.cwd)
+                    .session(session.sessionid.clone())
+                    .hostname(self.hostname.clone());
+                loader.push(entry.build().into()).await?;
             }
         }
         Ok(())

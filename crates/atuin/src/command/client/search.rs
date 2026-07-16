@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{IsTerminal as _, Write, stderr, stdout};
 
-use atuin_common::utils::{self, Escapable as _};
+use atuin_common::{string::EscapeNonPrintablePosixExt as _, utils};
 use clap::Parser;
 use eyre::Result;
 
@@ -87,7 +87,7 @@ pub struct Cmd {
     human: bool,
 
     #[arg(allow_hyphen_values = true)]
-    query: Option<Vec<String>>,
+    query: Vec<String>,
 
     /// Show only the text of the command
     #[arg(long)]
@@ -112,17 +112,20 @@ pub struct Cmd {
     /// Display the command time in another timezone other than the configured default.
     ///
     /// This option takes one of the following kinds of values:
+    ///
     /// - the special value "local" (or "l") which refers to the system time zone
     /// - an offset from UTC (e.g. "+9", "-2:30")
-    #[arg(long, visible_alias = "tz")]
-    #[arg(allow_hyphen_values = true)]
-    // Clippy warns about `Option<Option<T>>`, but we suppress it because we need
-    // this distinction for proper argument handling.
-    #[allow(clippy::option_option)]
-    timezone: Option<Option<Timezone>>,
+    #[arg(long, visible_alias = "tz", verbatim_doc_comment)]
+    // `num_args = 0..=1` allows a user to run `atuin search --tz` with no argument to `--tz`. This
+    // does the same thing as not providing the flag, but we previously allowed it (via an
+    // `Option<Option<T>>` field type), so let's keep supporting it to avoid breaking existing
+    // scripts.
+    #[arg(allow_hyphen_values = true, num_args = 0..=1)]
+    timezone: Option<Timezone>,
 
     /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and
     /// {relativetime}.
+    ///
     /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
     #[arg(long, short)]
     format: Option<String>,
@@ -132,9 +135,10 @@ pub struct Cmd {
     inline_height: Option<u16>,
 
     /// Filter by author. Supports $all-user (non-agents), $all-agent, or literal names.
+    ///
     /// Can be specified multiple times.
     #[arg(long)]
-    author: Option<Vec<String>>,
+    author: Vec<String>,
 
     /// Include duplicate commands in the output (non-interactive only)
     #[arg(long)]
@@ -162,7 +166,7 @@ impl Cmd {
         store: SqliteStore,
         theme: &Theme,
     ) -> Result<()> {
-        let query = self.query.unwrap_or_else(|| {
+        let query = if self.query.is_empty() {
             std::env::var("ATUIN_QUERY").map_or_else(
                 |_| vec![],
                 |query| {
@@ -172,7 +176,9 @@ impl Cmd {
                         .collect()
                 },
             )
-        });
+        } else {
+            self.query
+        };
 
         if (self.delete_it_all || self.delete) && self.limit.is_some() {
             // Because of how deletion is implemented, it will always delete all matches
@@ -237,7 +243,7 @@ impl Cmd {
                 // console code page or `[Console]::OutputEncoding` on PowerShell may be different from UTF-8.
                 println!("{item}");
             } else if stderr().is_terminal() {
-                eprintln!("{}", item.escape_control());
+                eprintln!("{}", item.escape_non_printable());
             } else {
                 eprintln!("{item}");
             }
@@ -254,7 +260,7 @@ impl Cmd {
                 offset: self.offset,
                 reverse: self.reverse,
                 include_duplicates: self.include_duplicates,
-                authors: self.author.clone().unwrap_or_default(),
+                authors: self.author.clone(),
             };
 
             let mut entries =
@@ -281,19 +287,16 @@ impl Cmd {
                         run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
                 }
             } else {
-                let format = match self.format {
-                    None => Some(settings.history_format.as_str()),
-                    _ => self.format.as_deref(),
-                };
-                let tz = match self.timezone {
-                    Some(Some(tz)) => tz,                   // User provided a value
-                    Some(None) | None => settings.timezone, // No value was provided
-                };
+                let format = self
+                    .format
+                    .as_deref()
+                    .unwrap_or(settings.history_format.as_str());
+                let tz = self.timezone.unwrap_or(settings.timezone);
 
                 super::history::print_list(
                     &entries,
                     ListMode::from_flags(self.human, self.cmd_only),
-                    format,
+                    Some(format),
                     self.print0,
                     true,
                     tz,
@@ -352,7 +355,7 @@ mod tests {
         let cmd = Cmd::try_parse_from(["search", "---"]);
         assert!(cmd.is_ok(), "Failed to parse '---' as a query: {cmd:?}");
         let cmd = cmd.unwrap();
-        assert_eq!(cmd.query, Some(vec!["---".to_string()]));
+        assert_eq!(cmd.query, vec!["---".to_string()]);
     }
 
     #[test]
@@ -361,16 +364,13 @@ mod tests {
         let cmd = Cmd::try_parse_from(["search", "--", "--foo"]);
         assert!(cmd.is_ok());
         let cmd = cmd.unwrap();
-        assert_eq!(cmd.query, Some(vec!["--foo".to_string()]));
+        assert_eq!(cmd.query, vec!["--foo".to_string()]);
     }
 
     #[test]
     fn search_author_cli_flag() {
         let cmd =
             Cmd::try_parse_from(["search", "--author", "codex", "--author", "ellie"]).unwrap();
-        assert_eq!(
-            cmd.author,
-            Some(vec!["codex".to_string(), "ellie".to_string()])
-        );
+        assert_eq!(cmd.author, vec!["codex".to_string(), "ellie".to_string()]);
     }
 }

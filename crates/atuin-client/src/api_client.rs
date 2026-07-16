@@ -15,18 +15,13 @@ use atuin_common::{
 };
 use atuin_common::{
     api::{
-        AddHistoryRequest, ChangePasswordRequest, CountResponse, DeleteHistoryRequest,
-        ErrorResponse, LoginRequest, LoginResponse, MeResponse, RegisterResponse, StatusResponse,
-        SyncHistoryResponse,
+        ChangePasswordRequest, ErrorResponse, LoginRequest, LoginResponse, MeResponse,
+        RegisterResponse,
     },
     record::RecordStatus,
 };
 
 use semver::Version;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
-
-use crate::{history::History, sync::hash_str, utils::get_host_user};
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
@@ -246,42 +241,6 @@ impl<'a> Client<'a> {
         })
     }
 
-    pub async fn count(&self) -> Result<i64> {
-        let url = make_url(self.sync_addr, "/sync/count")?;
-        let url = Url::parse(url.as_str())?;
-
-        let resp = self.client.get(url).send().await?;
-        let resp = handle_resp_error(resp).await?;
-
-        if !ensure_version(&resp)? {
-            bail!("could not sync due to version mismatch");
-        }
-
-        if resp.status() != StatusCode::OK {
-            bail!("failed to get count (are you logged in?)");
-        }
-
-        let count = resp.json::<CountResponse>().await?;
-
-        Ok(count.count)
-    }
-
-    pub async fn status(&self) -> Result<StatusResponse> {
-        let url = make_url(self.sync_addr, "/sync/status")?;
-        let url = Url::parse(url.as_str())?;
-
-        let resp = self.client.get(url).send().await?;
-        let resp = handle_resp_error(resp).await?;
-
-        if !ensure_version(&resp)? {
-            bail!("could not sync due to version mismatch");
-        }
-
-        let status = resp.json::<StatusResponse>().await?;
-
-        Ok(status)
-    }
-
     pub async fn me(&self) -> Result<MeResponse> {
         let url = make_url(self.sync_addr, "/api/v0/me")?;
         let url = Url::parse(url.as_str())?;
@@ -292,59 +251,6 @@ impl<'a> Client<'a> {
         let status = resp.json::<MeResponse>().await?;
 
         Ok(status)
-    }
-
-    pub async fn get_history(
-        &self,
-        sync_ts: OffsetDateTime,
-        history_ts: OffsetDateTime,
-        host: Option<String>,
-    ) -> Result<SyncHistoryResponse> {
-        let host = host.unwrap_or_else(|| hash_str(&get_host_user()));
-
-        let url = make_url(
-            self.sync_addr,
-            &format!(
-                "/sync/history?sync_ts={}&history_ts={}&host={}",
-                urlencoding::encode(sync_ts.format(&Rfc3339)?.as_str()),
-                urlencoding::encode(history_ts.format(&Rfc3339)?.as_str()),
-                host,
-            ),
-        )?;
-
-        let resp = self.client.get(url).send().await?;
-        let resp = handle_resp_error(resp).await?;
-
-        let history = resp.json::<SyncHistoryResponse>().await?;
-        Ok(history)
-    }
-
-    pub async fn post_history(&self, history: &[AddHistoryRequest]) -> Result<()> {
-        let url = make_url(self.sync_addr, "/history")?;
-        let url = Url::parse(url.as_str())?;
-
-        let resp = self.client.post(url).json(history).send().await?;
-        handle_resp_error(resp).await?;
-
-        Ok(())
-    }
-
-    pub async fn delete_history(&self, h: History) -> Result<()> {
-        let url = make_url(self.sync_addr, "/history")?;
-        let url = Url::parse(url.as_str())?;
-
-        let resp = self
-            .client
-            .delete(url)
-            .json(&DeleteHistoryRequest {
-                client_id: h.id.to_string(),
-            })
-            .send()
-            .await?;
-
-        handle_resp_error(resp).await?;
-
-        Ok(())
     }
 
     pub async fn delete_store(&self) -> Result<()> {

@@ -10,8 +10,8 @@ homepage = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.17.0" }
-atuin-server-database = { path = "../atuin-server-database", version = "18.17.0" }
+atuin-common = { path = "../atuin-common", version = "18.17.1" }
+atuin-server-database = { path = "../atuin-server-database", version = "18.17.1" }
 derive_more = { workspace = true }
 
 eyre = { workspace = true }
@@ -22,4 +22,3 @@ sqlx = { workspace = true, features = ["sqlite", "regexp"] }
 async-trait = { workspace = true }
 uuid = { workspace = true }
 metrics = "0.24"
-futures-util = "0.3"

@@ -248,12 +248,6 @@ enter_accept = true
 # Defaults to false. The backspace key performs the same functionality as Tab and copies the selected line to the command line to be modified when at the start of the line.
 # accept_with_backspace = false
 
-[sync]
-# Enable sync v2 by default
-# This ensures that sync v2 is enabled for new installs only
-# In a later release it will become the default across the board
-records = true
-
 [preview]
 ## which preview strategy to use to calculate the preview height (respects max_preview_height).
 ## possible values: auto, static

@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.17.1
+
+### Bug Fixes
+
+- *(ai)* Default to non-Hub mode for custom AI endpoints ([#3620](https://github.com/atuinsh/atuin/issues/3620))
+- *(import)* Fix order of entries imported from zsh history ([#3597](https://github.com/atuinsh/atuin/issues/3597))
+- *(import)* Fix import order of nushell history entries ([#3598](https://github.com/atuinsh/atuin/issues/3598))
+- Various prefix mode bugs ([#3616](https://github.com/atuinsh/atuin/issues/3616))
+
+
+### Documentation
+
+- Document output capture and mcp ([#3595](https://github.com/atuinsh/atuin/issues/3595))
+
+
+### Features
+
+- *(tui)* Truncate long commands from middle to show start...end ([#3602](https://github.com/atuinsh/atuin/issues/3602))
+
+
+### Miscellaneous Tasks
+
+- *(logging)* Remove the `log` crate in favor of `tracing` ([#3608](https://github.com/atuinsh/atuin/issues/3608))
+- Update to rust 1.97 ([#3617](https://github.com/atuinsh/atuin/issues/3617))
+
 ## 18.17.0
 
 ### Bug Fixes

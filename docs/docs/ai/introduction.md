@@ -2,7 +2,7 @@
 
 Atuin AI is a subcommand that enables shell command generation and other information lookup via an LLM directly from your terminal.
 
-Atuin AI requires an account on [Atuin Hub](https://hub.atuin.sh/), and you'll be prompted to login upon first use of the binary.
+Atuin AI requires an account on [Atuin Hub](https://hub.atuin.sh/), and you'll be prompted to login upon first use of the binary. Alternatively, you can [self-host the Atuin AI backend](./self-hosting.md).
 
 Usage of Atuin AI is currently free.
 

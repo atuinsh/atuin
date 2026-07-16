@@ -123,6 +123,9 @@ impl Importer for Resh {
             };
 
             let imported = History::import()
+                // resh shell string matches what we use; see
+                // https://github.com/curusarn/resh/blob/master/scripts/shellrc.sh
+                .shell(entry.shell)
                 .command(entry.cmd_line)
                 .timestamp(timestamp)
                 .duration(duration)

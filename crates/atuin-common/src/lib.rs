@@ -58,8 +58,10 @@ macro_rules! new_uuid {
 }
 
 pub mod api;
+pub mod logs;
 pub mod record;
 pub mod shell;
+pub mod string;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
 pub mod tls;

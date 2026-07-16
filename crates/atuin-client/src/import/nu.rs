@@ -68,7 +68,10 @@ impl Importer for Nu {
 
             let cmd: String = s.replace("<\\n>", "\n");
 
-            let entry = History::import().timestamp(current_timestamp).command(cmd);
+            let entry = History::import()
+                .shell("nu")
+                .timestamp(current_timestamp)
+                .command(cmd);
 
             h.push(entry.build().into()).await?;
         }
