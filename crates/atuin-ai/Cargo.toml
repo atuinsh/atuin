@@ -46,9 +46,10 @@ eventsource-stream = "0.2"
 pulldown-cmark = "0.13.0"
 async-stream = "0.3"
 uuid = { workspace = true }
-tui-textarea-2 = "0.10.2"
 unicode-width = "0.2"
-eye_declare = "0.5.1"
+# The v2 redesign, consumed under its final name via package-rename; only
+# this line changes when eye_declare 0.6.0 publishes.
+eye_declare = { package = "eye_declare_next", path = "../../../eye_declare/crates/eye_declare_next" }
 ratatui-core = "0.1"
 ratatui-widgets = "0.3"
 thiserror = { workspace = true }
@@ -75,3 +76,4 @@ rmcp = { version = "2.1.0", default-features = false, features = ["server", "tra
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 rstest = { workspace = true }
+eye_declare_engine = { path = "../../../eye_declare/crates/eye_declare_engine", features = ["test-util"] }

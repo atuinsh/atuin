@@ -1,8 +1,13 @@
+// TODO(v2 port): remove in the deletion-audit slice. The FSM's effect
+// layer (stream bridge, tool execution, permissions, usage) is dormant
+// until `AiApp::update` reconnects it slice by slice; this silences the
+// transitional dead-code warnings without touching those files.
+#![allow(dead_code)]
+
 pub mod commands;
 pub(crate) mod context;
 pub(crate) mod context_window;
 pub(crate) mod diff;
-pub(crate) mod driver;
 pub(crate) mod edit_permissions;
 pub(crate) mod event_serde;
 pub(crate) mod file_tracker;

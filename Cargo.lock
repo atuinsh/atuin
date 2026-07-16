@@ -292,7 +292,8 @@ dependencies = [
  "derive_more",
  "directories",
  "eventsource-stream",
- "eye_declare",
+ "eye_declare_engine",
+ "eye_declare_next",
  "eyre",
  "fs-err",
  "futures",
@@ -323,7 +324,6 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-bash",
  "tree-sitter-fish",
- "tui-textarea-2",
  "typed-builder",
  "unicode-width 0.2.2",
  "uuid",
@@ -1619,30 +1619,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "eye_declare"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e4caff9f5574315258489ecb2d27aad2cc057521f4b0bc6819a1cd82a648f40"
+name = "eye_declare_engine"
+version = "0.1.0"
 dependencies = [
- "crossterm",
- "eye_declare_macros",
- "futures",
  "ratatui-core",
  "ratatui-widgets",
- "tokio",
- "typed-builder",
  "unicode-width 0.2.2",
+ "vte",
 ]
 
 [[package]]
-name = "eye_declare_macros"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb8ac27b19f79b61a8afc0a55a3148eb2dafc2aaec66c1103432e3e76e7c25af"
+name = "eye_declare_next"
+version = "0.0.0"
 dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
+ "crossterm",
+ "eye_declare_engine",
+ "futures-core",
+ "pulldown-cmark",
+ "ratatui-core",
+ "ratatui-widgets",
+ "tokio",
+ "unicode-segmentation",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -5829,20 +5827,6 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
-
-[[package]]
-name = "tui-textarea-2"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74a31ca0965e3ff6a7ac5ecb02b20a88b4f68ebf138d8ae438e8510b27a1f00f"
-dependencies = [
- "crossterm",
- "portable-atomic",
- "ratatui-core",
- "ratatui-widgets",
- "unicode-segmentation",
- "unicode-width 0.2.2",
-]
 
 [[package]]
 name = "typed-builder"
