@@ -275,7 +275,7 @@ static DEFAULT_THEME: LazyLock<Theme> = LazyLock::new(|| {
             ),
             (
                 Meaning::Annotation,
-                StyleFactory::from_fg_color(Color::DarkGrey),
+                StyleFactory::known_fg_string("steelblue"),
             ),
             (
                 Meaning::Guidance,
@@ -324,7 +324,7 @@ static BUILTIN_THEMES: LazyLock<HashMap<&'static str, Theme>> = LazyLock::new(||
                 (Meaning::AlertInfo, StyleFactory::known_fg_string("gold")),
                 (
                     Meaning::Annotation,
-                    StyleFactory::from_fg_color(Color::DarkGrey),
+                    StyleFactory::known_fg_string("steelblue"),
                 ),
                 (Meaning::Guidance, StyleFactory::known_fg_string("brown")),
             ]),
@@ -505,6 +505,24 @@ mod theme_tests {
             theme.as_style(Meaning::Guidance).foreground_color,
             from_string("brown").ok()
         );
+    }
+
+    // Annotation is used for the directory/user/host columns in the history popup, so it
+    // needs to stay readable on dark terminal backgrounds. DarkGrey was too close to the
+    // background on those terminals (see #3539), so default and autumn should use the same
+    // steelblue that marine already uses.
+    #[test]
+    fn test_annotation_has_contrast_in_builtin_themes() {
+        let mut manager = ThemeManager::new(Some(false), Some("".to_string()));
+
+        for name in ["default", "autumn", "marine"] {
+            let theme = manager.load_theme(name, None);
+            assert_eq!(
+                theme.as_style(Meaning::Annotation).foreground_color,
+                from_string("steelblue").ok(),
+                "unexpected Annotation color for {name} theme"
+            );
+        }
     }
 
     #[test]
