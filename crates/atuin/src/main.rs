@@ -10,6 +10,7 @@ use command::AtuinCmd;
 
 mod command;
 pub(crate) mod logs;
+pub(crate) mod shell;
 
 #[cfg(feature = "sync")]
 mod print_error;

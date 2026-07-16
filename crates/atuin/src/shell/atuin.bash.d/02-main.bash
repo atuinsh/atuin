@@ -1,15 +1,3 @@
-# Include guard
-if [[ ${__atuin_initialized-} == true ]]; then
-    false
-elif [[ $- != *i* ]]; then
-    # Enable only in interactive shells
-    false
-elif ((BASH_VERSINFO[0] < 3 || BASH_VERSINFO[0] == 3 && BASH_VERSINFO[1] < 1)); then
-    # Require bash >= 3.1
-    [[ -t 2 ]] && printf 'atuin: requires bash >= 3.1 for the integration.\n' >&2
-    false
-else # (include guard) beginning of main content
-#------------------------------------------------------------------------------
 __atuin_initialized=true
 
 if [[ -z "${ATUIN_SESSION:-}" || "${ATUIN_SHLVL:-}" != "$SHLVL" ]]; then
@@ -720,6 +708,3 @@ if [[ $__atuin_bind_up_arrow == true ]]; then
     atuin-bind -m vi-command '\eOA' atuin-up-search-vicmd
     atuin-bind -m vi-command 'k'    atuin-up-search-vicmd
 fi
-
-#------------------------------------------------------------------------------
-fi # (include guard) end of main content
