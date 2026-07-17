@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use atuin_common::api::LoginRequest;
 use eyre::{Context, Result, bail};
 use tokio::fs::File;
@@ -38,8 +36,7 @@ pub async fn login(
         }
     };
 
-    let key_path = settings.key_path.as_str();
-    let key_path = PathBuf::from(key_path);
+    let key_path = &settings.key_path;
 
     if !key_path.exists() {
         if decode_key(key.clone()).is_err() {
