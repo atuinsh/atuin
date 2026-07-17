@@ -5,6 +5,8 @@
 
 use serde::Deserialize;
 
+use atuin_common::string::CommandStr;
+
 #[derive(Debug, Deserialize)]
 pub enum WireToolName {
     /// The tool the agent requested is a Bash command.
@@ -50,7 +52,7 @@ pub enum HookEventName {
 #[derive(Debug, Deserialize)]
 pub struct WireToolInput {
     #[serde(default)]
-    pub command: Option<String>,
+    pub command: Option<CommandStr>,
     #[serde(default)]
     pub description: Option<String>,
 }

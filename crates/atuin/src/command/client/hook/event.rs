@@ -6,6 +6,8 @@
 
 use serde_json::error::Category;
 
+use atuin_common::string::CommandStr;
+
 use super::wire::{HookEventName, WireHookEvent, WireToolName};
 
 /// Why a hook payload could not be parsed.
@@ -32,7 +34,7 @@ pub enum ParseError {
 pub enum HookEvent {
     /// A Bash command is about to run; open a history entry.
     Start {
-        command: String,
+        command: CommandStr,
         intent: Option<String>,
         tool_use_id: String,
     },
@@ -63,7 +65,7 @@ impl From<WireHookEvent> for Option<HookEvent> {
             HookEventName::PreToolUse => {
                 let (command, intent) = match wire.tool_input {
                     Some(input) => (input.command.unwrap_or_default(), input.description),
-                    None => (String::new(), None),
+                    None => (CommandStr::default(), None),
                 };
 
                 if command.is_empty() {
@@ -225,6 +227,31 @@ mod tests {
         }),
         None
     )]
+    // A command carrying a NUL is truncated at ingest; the trailing garbage
+    // (issue #3589) never reaches history.
+    #[case::command_truncated_at_nul(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "echo hi\0rm -rf /"},
+            "tool_use_id": "toolu_abc123"
+        }),
+        Some(HookEvent::Start {
+            command: "echo hi".into(),
+            intent: None,
+            tool_use_id: "toolu_abc123".into(),
+        })
+    )]
+    // A command that is nothing but a NUL prefix truncates to empty → skipped.
+    #[case::command_only_nul_skipped(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "\0rm -rf /"},
+            "tool_use_id": "toolu_abc123"
+        }),
+        None
+    )]
     // No tool_input at all → empty command → skip.
     #[case::missing_tool_input_skipped(
         json!({
@@ -321,7 +348,7 @@ mod tests {
 
             prop_assert_eq!(
                 HookEvent::from_json_str(&input.to_string()).unwrap(),
-                Some(HookEvent::Start { command, intent: description, tool_use_id })
+                Some(HookEvent::Start { command: command.into(), intent: description, tool_use_id })
             );
         }
 
