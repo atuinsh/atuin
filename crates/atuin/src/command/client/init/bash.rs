@@ -24,7 +24,10 @@ fn write_static_init<W: Write>(writer: &mut W, options: &StaticInitOptions<'_>) 
     writeln!(writer, "{} && {{", BASH.include_guard)?;
 
     if std::env::var_os("ATUIN_NO_BUILTIN_PREEXEC").is_none_or(|s| s.is_empty()) {
-        writeln!(writer, "# Set ATUIN_NO_BUILTIN_PREEXEC=1 to disable loading bash-preexec")?;
+        writeln!(
+            writer,
+            "# Set ATUIN_NO_BUILTIN_PREEXEC=1 to disable loading bash-preexec"
+        )?;
         writeln!(writer, "__atuin_load_builtin_preexec() {{")?;
         for line in BASH.preexec.lines() {
             writeln!(writer, "    {line}")?;
