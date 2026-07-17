@@ -471,10 +471,7 @@ mod tests {
         "FOO='BAR=\"baz\"' echo foo \"BAR=quux\"",
         "echo foo \"BAR=quux\""
     )]
-    #[case::emojis(
-        "FOO='BAR=🚀' echo foo \"BAR=quux\" foo",
-        "echo foo \"BAR=quux\" foo"
-    )]
+    #[case::emojis("FOO='BAR=🚀' echo foo \"BAR=quux\" foo", "echo foo \"BAR=quux\" foo")]
     #[case::name_same_as_command("FOO='bar' bar baz", "bar baz")]
     fn strips_leading_env_vars(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(strip_leading_env_vars(input), expected);
