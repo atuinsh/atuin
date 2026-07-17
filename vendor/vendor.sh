@@ -1,4 +1,5 @@
 #!/bin/sh
+# This script manages vendored repositories. See `./vendor.sh --help`.
 # shellcheck disable=SC3043
 set -euf
 
