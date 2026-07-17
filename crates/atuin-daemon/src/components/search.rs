@@ -190,16 +190,7 @@ impl Component for SearchComponent {
                 };
 
                 let histories = handle.history_db().load_bulk(ids).await?;
-
-                span!(
-                    Level::TRACE,
-                    "inject_synced_history",
-                    count = histories.len()
-                )
-                .in_scope(async || {
-                    self.index.read().await.add_histories(&histories);
-                })
-                .await;
+                self.index.read().await.add_histories(&histories);
             }
             DaemonEvent::HistoryStarted(history) => {
                 debug!(id = %history.id, command = %history.command, "History started (no index action)");

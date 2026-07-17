@@ -315,6 +315,7 @@ impl SearchIndex {
     }
 
     /// Add multiple history entries to the index.
+    #[instrument(skip_all, level = tracing::Level::TRACE, name = "index_add_histories", fields(count = histories.len()))]
     pub fn add_histories(&self, histories: &[History]) {
         for history in histories {
             self.add_history(history);
