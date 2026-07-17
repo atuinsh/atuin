@@ -1,7 +1,6 @@
 use std::{
     fmt::{self, Display},
     io::{self, IsTerminal, Write},
-    path::PathBuf,
     time::Duration,
 };
 
@@ -578,7 +577,7 @@ pub(super) async fn start_history_entry(
         return handle_daemon_start(settings, command, author, intent).await;
     }
 
-    let db_path = PathBuf::from(settings.db_path.as_str());
+    let db_path = &settings.db_path;
     let db = Sqlite::new(db_path, settings.local_timeout).await?;
     handle_start(&db, settings, command, author, intent).await
 }
@@ -594,8 +593,8 @@ pub(super) async fn end_history_entry(
         return handle_daemon_end(settings, id, exit, duration).await;
     }
 
-    let db_path = PathBuf::from(settings.db_path.as_str());
-    let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+    let db_path = &settings.db_path;
+    let record_store_path = &settings.record_store_path;
 
     let db = Sqlite::new(db_path, settings.local_timeout).await?;
     let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
@@ -1120,8 +1119,8 @@ impl Cmd {
             cmd => {
                 let context = current_context().await?;
 
-                let db_path = PathBuf::from(settings.db_path.as_str());
-                let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+                let db_path = &settings.db_path;
+                let record_store_path = &settings.record_store_path;
 
                 let db = Sqlite::new(db_path, settings.local_timeout).await?;
                 let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;

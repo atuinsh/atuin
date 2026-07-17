@@ -10,11 +10,11 @@ pub fn run(settings: &Settings) {
     sever_config.push("server.toml");
 
     let config_paths = format!(
-        "Config files:\nclient config: {:?}\nserver config: {:?}\nclient db path: {:?}\nkey path: {:?}\nmeta db path: {:?}",
+        "Config files:\nclient config: {:?}\nserver config: {:?}\nclient db path: {}\nkey path: {}\nmeta db path: {:?}",
         config_file.to_string_lossy(),
         sever_config.to_string_lossy(),
-        settings.db_path,
-        settings.key_path,
+        settings.db_path.display(),
+        settings.key_path.display(),
         settings.meta.db_path
     );
 
