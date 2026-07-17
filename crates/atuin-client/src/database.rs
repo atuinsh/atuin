@@ -154,11 +154,13 @@ pub trait Database: Send + Sync + 'static {
 
     async fn load(&self, id: &str) -> Result<Option<History>>;
 
-    /// Load many entries by ID, skipping any that are missing or soft-deleted.
+    /// Load the *active* (not soft-deleted) entries for the given IDs.
     ///
-    /// Ordering is unspecified. Prefer this over calling `load` in a loop: it chunks
-    /// into a handful of queries rather than one round trip per ID.
-    async fn load_bulk(&self, ids: &[HistoryId]) -> Result<Vec<History>>;
+    /// Unlike [`load`](Self::load), this filters out soft-deleted rows -- an ID whose
+    /// row exists but is deleted is omitted, exactly like an ID that isn't present at
+    /// all. Ordering is unspecified. Prefer this over calling `load` in a loop: it
+    /// chunks into a handful of queries rather than one round trip per ID.
+    async fn load_active(&self, ids: &[HistoryId]) -> Result<Vec<History>>;
     async fn list(
         &self,
         filters: &[FilterMode],
@@ -367,7 +369,7 @@ impl Database for Sqlite {
         Ok(res)
     }
 
-    async fn load_bulk(&self, ids: &[HistoryId]) -> Result<Vec<History>> {
+    async fn load_active(&self, ids: &[HistoryId]) -> Result<Vec<History>> {
         // sqlite caps bound parameters per statement (SQLITE_MAX_VARIABLE_NUMBER, as low as 999).
         // Chunk well under that.
         const CHUNK: usize = 500;
@@ -377,14 +379,12 @@ impl Database for Sqlite {
         let mut out = Vec::with_capacity(ids.len());
 
         for chunk in ids.chunks(CHUNK) {
-            let mut query = sql::query(
-                format!(
-                    "select * from history where id in ({}) and deleted_at is null",
-                    ["?"].repeat(chunk.len()).join(",")
-                )
-                .as_str(),
+            let placeholders = ["?"].repeat(chunk.len()).join(",");
+            let sql = format!(
+                "select * from history where id in ({placeholders}) and deleted_at is null"
             );
 
+            let mut query = sqlx::query(sql.as_str());
             for id in chunk {
                 query = query.bind(id.0.as_str());
             }
@@ -1225,7 +1225,7 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_bulk_returns_only_requested_rows() {
+    async fn test_load_active_returns_only_requested_rows() {
         let db = Sqlite::new("sqlite::memory:", test_local_timeout())
             .await
             .unwrap();
@@ -1234,7 +1234,7 @@ mod test {
         let _charlie = save_history_item(&db, "echo charlie").await;
 
         let loaded = db
-            .load_bulk(&[alpha.id.clone(), bravo.id.clone()])
+            .load_active(&[alpha.id.clone(), bravo.id.clone()])
             .await
             .unwrap();
 
@@ -1244,7 +1244,7 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_bulk_empty_never_reaches_sqlite() {
+    async fn test_load_active_empty_never_reaches_sqlite() {
         let db = Sqlite::new("sqlite::memory:", test_local_timeout())
             .await
             .unwrap();
@@ -1252,13 +1252,13 @@ mod test {
 
         // `select ... where id in ()` is a syntax error, so the empty case must
         // short-circuit rather than build a query.
-        let loaded = db.load_bulk(&[]).await.unwrap();
+        let loaded = db.load_active(&[]).await.unwrap();
 
         assert!(loaded.is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_bulk_skips_soft_deleted() {
+    async fn test_load_active_skips_soft_deleted() {
         let db = Sqlite::new("sqlite::memory:", test_local_timeout())
             .await
             .unwrap();
@@ -1270,7 +1270,7 @@ mod test {
         db.update(&alpha).await.unwrap();
 
         let loaded = db
-            .load_bulk(&[alpha.id.clone(), bravo.id.clone()])
+            .load_active(&[alpha.id.clone(), bravo.id.clone()])
             .await
             .unwrap();
 
@@ -1279,14 +1279,14 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_bulk_missing_ids_are_omitted() {
+    async fn test_load_active_missing_ids_are_omitted() {
         let db = Sqlite::new("sqlite::memory:", test_local_timeout())
             .await
             .unwrap();
         let alpha = save_history_item(&db, "echo alpha").await;
 
         let loaded = db
-            .load_bulk(&[alpha.id.clone(), HistoryId("does-not-exist".to_string())])
+            .load_active(&[alpha.id.clone(), HistoryId("does-not-exist".to_string())])
             .await
             .unwrap();
 
@@ -1295,7 +1295,7 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_bulk_chunks_past_sqlite_param_limit() {
+    async fn test_load_active_chunks_past_sqlite_param_limit() {
         let db = Sqlite::new("sqlite::memory:", test_local_timeout())
             .await
             .unwrap();
@@ -1307,7 +1307,7 @@ mod test {
             ids.push(save_history_item(&db, &format!("echo {i}")).await.id);
         }
 
-        let loaded = db.load_bulk(&ids).await.unwrap();
+        let loaded = db.load_active(&ids).await.unwrap();
 
         assert_eq!(loaded.len(), 1200);
     }

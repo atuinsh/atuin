@@ -189,7 +189,7 @@ impl Component for SearchComponent {
                     return Ok(());
                 };
 
-                let histories = handle.history_db().load_bulk(ids).await?;
+                let histories = handle.history_db().load_active(ids).await?;
                 self.index.read().await.add_histories(&histories);
             }
             DaemonEvent::HistoryStarted(history) => {
