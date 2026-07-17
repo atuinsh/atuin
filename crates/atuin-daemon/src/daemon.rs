@@ -84,6 +84,11 @@ impl DaemonHandle {
     /// This is fire-and-forget - if no receivers are listening (which shouldn't
     /// happen in normal operation), the event is dropped silently.
     pub fn emit(&self, event: DaemonEvent) {
+        // TODO(markovejnovic): this send cannot await. When a receiver lags, broadcast
+        // drops the oldest events for it rather than slowing us down, so a large
+        // HistorySynced backfill can outrun the search index and leave those commands
+        // unsearchable until a restart. A bus we can await capacity on would apply real
+        // backpressure instead.
         if let Err(e) = self.state.event_tx.send(event) {
             tracing::warn!("failed to emit event (no receivers?): {e}");
         }
