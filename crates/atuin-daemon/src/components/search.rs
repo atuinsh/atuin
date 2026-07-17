@@ -320,8 +320,8 @@ impl SearchSvc for SearchGrpcService {
                         // Build QueryContext from proto context
                         let query_context = proto_context
                             .map(|ctx| QueryContext {
-                                cwd: Some(ctx.cwd.with_trailing_slash().to_string()),
-                                git_root: ctx.git_root.map(|s| s.with_trailing_slash().to_string()),
+                                cwd: Some(ctx.cwd.with_trailing_slash().display().to_string()),
+                                git_root: ctx.git_root.map(|s| s.with_trailing_slash().display().to_string()),
                                 hostname: Some(ctx.hostname),
                                 session_id: Some(ctx.session_id),
                             })
@@ -374,14 +374,14 @@ fn convert_filter_mode(
     match (mode, context) {
         (FilterMode::Global, _) => IndexFilterMode::Global,
         (FilterMode::Directory, Some(ctx)) => {
-            IndexFilterMode::Directory(ctx.cwd.with_trailing_slash().to_string())
+            IndexFilterMode::Directory(ctx.cwd.with_trailing_slash().display().to_string())
         }
         (FilterMode::Workspace, Some(ctx)) => {
             if let Some(ref git_root) = ctx.git_root {
-                IndexFilterMode::Workspace(git_root.with_trailing_slash().to_string())
+                IndexFilterMode::Workspace(git_root.with_trailing_slash().display().to_string())
             } else {
                 // Fall back to directory if no git root
-                IndexFilterMode::Directory(ctx.cwd.with_trailing_slash().to_string())
+                IndexFilterMode::Directory(ctx.cwd.with_trailing_slash().display().to_string())
             }
         }
         (FilterMode::Host, Some(ctx)) => IndexFilterMode::Host(ctx.hostname.clone()),

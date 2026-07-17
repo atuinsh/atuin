@@ -123,7 +123,7 @@ impl CommandData {
         let session = parse_uuid_bytes(&history.session)?;
         let timestamp = history.timestamp.unix_timestamp();
 
-        let dir_key = interner.get_or_intern(history.cwd.with_trailing_slash().to_string());
+        let dir_key = interner.get_or_intern(history.cwd.with_trailing_slash().display().to_string());
         let host_key = interner.get_or_intern(&history.hostname);
 
         let mut directories = HashSet::new();
@@ -164,7 +164,7 @@ impl CommandData {
         self.global_frecency.record_use(timestamp);
 
         // Update pre-computed indexes for O(1) filter lookups
-        let dir_key = interner.get_or_intern(history.cwd.with_trailing_slash().to_string());
+        let dir_key = interner.get_or_intern(history.cwd.with_trailing_slash().display().to_string());
         self.directories.insert(dir_key);
         self.hosts.insert(interner.get_or_intern(&history.hostname));
         self.sessions.insert(session);
@@ -602,15 +602,15 @@ mod tests {
 
         let (check1, check2, check3) = if cfg!(windows) {
             (
-                "C:\\Users\\User\\project".with_trailing_slash().to_string(),
-                "C:\\Users\\User\\other".with_trailing_slash().to_string(),
-                "C:\\Users\\User\\missing".with_trailing_slash().to_string(),
+                "C:\\Users\\User\\project".with_trailing_slash().display().to_string(),
+                "C:\\Users\\User\\other".with_trailing_slash().display().to_string(),
+                "C:\\Users\\User\\missing".with_trailing_slash().display().to_string(),
             )
         } else {
             (
-                "/home/user/project".with_trailing_slash().to_string(),
-                "/home/user/other".with_trailing_slash().to_string(),
-                "/home/user/missing".with_trailing_slash().to_string(),
+                "/home/user/project".with_trailing_slash().display().to_string(),
+                "/home/user/other".with_trailing_slash().display().to_string(),
+                "/home/user/missing".with_trailing_slash().display().to_string(),
             )
         };
 
@@ -620,15 +620,15 @@ mod tests {
 
         let (check1, check2, check3) = if cfg!(windows) {
             (
-                "C:\\Users\\User".with_trailing_slash().to_string(),
-                "C:\\Users".with_trailing_slash().to_string(),
-                "C:\\Users\\User\\var".with_trailing_slash().to_string(),
+                "C:\\Users\\User".with_trailing_slash().display().to_string(),
+                "C:\\Users".with_trailing_slash().display().to_string(),
+                "C:\\Users\\User\\var".with_trailing_slash().display().to_string(),
             )
         } else {
             (
-                "/home/user".with_trailing_slash().to_string(),
-                "/home".with_trailing_slash().to_string(),
-                "/var".with_trailing_slash().to_string(),
+                "/home/user".with_trailing_slash().display().to_string(),
+                "/home".with_trailing_slash().display().to_string(),
+                "/var".with_trailing_slash().display().to_string(),
             )
         };
 
@@ -673,7 +673,7 @@ mod tests {
         let results = index
             .search(
                 "",
-                IndexFilterMode::Directory("/home/user/project".with_trailing_slash().to_string()),
+                IndexFilterMode::Directory("/home/user/project".with_trailing_slash().display().to_string()),
                 &QueryContext::default(),
                 10,
             )
