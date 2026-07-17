@@ -123,3 +123,49 @@ fn upload(bencher: divan::Bencher, arg: SyncArg) {
             assert_eq!(uploaded, RECORDS as i64);
         });
 }
+
+/// Keeps each seeding request under axum's default 2 MB body limit.
+const SEED_CHUNK: usize = 1_000;
+
+/// Server holds `RECORDS` records, client holds none: the full corpus comes down.
+///
+/// Downloading does not mutate the server, so the corpus is seeded once per arg rather than per
+/// sample — only the client's store is rebuilt each time.
+#[divan::bench(args = ARGS, sample_count = 5, sample_size = 1)]
+fn download(bencher: divan::Bencher, arg: SyncArg) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let server = rt.block_on(BenchServer::start(Duration::from_millis(arg.rtt_ms)));
+    let client = rt.block_on(server.register());
+
+    rt.block_on(async {
+        let mut ctx = BenchCtx::new();
+        let records = BenchRecord::chain(&mut ctx, RECORDS);
+
+        // Chunked to stay under axum's default 2 MB request body limit.
+        for chunk in records.chunks(SEED_CHUNK) {
+            client.post_records(chunk).await.unwrap();
+        }
+    });
+
+    bencher
+        .with_inputs(|| {
+            rt.block_on(async {
+                let dir = tempfile::tempdir().unwrap();
+                let store = SqliteStore::new(dir.path().join("records.db"), SQL_TIMEOUT_S)
+                    .await
+                    .unwrap();
+
+                let (diffs, _) = diff(&client, &store).await.unwrap();
+                let ops = operations(diffs, &store).await.unwrap();
+
+                (dir, store, ops)
+            })
+        })
+        .bench_values(|(_dir, store, ops)| {
+            let (_, downloaded) = rt
+                .block_on(sync_remote(&client, ops, &store, arg.page_size))
+                .unwrap();
+
+            assert_eq!(downloaded.len(), RECORDS);
+        });
+}
