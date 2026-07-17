@@ -402,6 +402,7 @@ dependencies = [
  "rustls",
  "semver",
  "serde",
+ "serde_json",
  "sqlx",
  "sysinfo",
  "thiserror 2.0.18",
