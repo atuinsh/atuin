@@ -25,56 +25,94 @@ impl WordJumper<'_> {
     }
 
     fn emacs_get_next_word_pos(&self, source: &str, index: usize) -> usize {
-        let index = (index + 1..source.len().saturating_sub(1))
-            .find(|&i| self.word_chars.contains(source.chars().nth(i).unwrap()))
-            .unwrap_or(source.len());
-        (index + 1..source.len().saturating_sub(1))
-            .find(|&i| !self.word_chars.contains(source.chars().nth(i).unwrap()))
-            .unwrap_or(source.len())
+        let mut valid_range = source.char_indices().filter(|&(char_position, _)| {
+            index < char_position && char_position < source.len().saturating_sub(1)
+        });
+        let index = valid_range
+            .find(|&(_, char_value)| self.word_chars.contains(char_value))
+            .unwrap_or((source.len(), '\0'))
+            .0;
+        source
+            .char_indices()
+            .filter(|&(char_position, _)| {
+                index < char_position && char_position < source.len().saturating_sub(1)
+            })
+            .find(|&(_, char_value)| !self.word_chars.contains(char_value))
+            .unwrap_or((source.len(), '\0'))
+            .0
     }
 
     fn emacs_get_prev_word_pos(&self, source: &str, index: usize) -> usize {
-        let index = (1..index)
+        let valid_range = source
+            .char_indices()
+            .filter(|&(char_position, _)| 1 <= char_position && char_position < index);
+        let index_pair = valid_range
             .rev()
-            .find(|&i| self.word_chars.contains(source.chars().nth(i).unwrap()))
-            .unwrap_or(0);
-        (1..index)
+            .find(|&(_, char_value)| self.word_chars.contains(char_value))
+            .unwrap_or_default();
+        source
+            .char_indices()
+            .filter(|&(char_position, _)| 1 <= char_position && char_position < index_pair.0)
             .rev()
-            .find(|&i| !self.word_chars.contains(source.chars().nth(i).unwrap()))
-            .map_or(0, |i| i + 1)
+            .find(|&(_, char_value)| !self.word_chars.contains(char_value))
+            .map_or(0, |(t, _)| t + 1)
     }
 
     fn subl_get_next_word_pos(&self, source: &str, index: usize) -> usize {
-        let index = (index..source.len().saturating_sub(1)).find(|&i| {
-            self.is_word_boundary(
-                source.chars().nth(i).unwrap(),
-                source.chars().nth(i + 1).unwrap(),
-            )
-        });
+        let mut iterator = source
+            .char_indices()
+            .filter(|&(char_index, _)| {
+                index <= char_index && char_index < source.len().saturating_sub(1)
+            })
+            .peekable();
+        let index: Option<usize> = loop {
+            if let Some((char_index, char_value)) = iterator.next() {
+                if let Some(&(_, next_char_value)) = iterator.peek()
+                    && self.is_word_boundary(char_value, next_char_value)
+                {
+                    break Some(char_index);
+                }
+            } else {
+                break None;
+            }
+        };
         if index.is_none() {
             return source.len();
         }
-        (index.unwrap() + 1..source.len())
-            .find(|&i| !source.chars().nth(i).unwrap().is_whitespace())
-            .unwrap_or(source.len())
+        source
+            .char_indices()
+            .filter(|&(char_index, _)| index.unwrap() < char_index && char_index < source.len())
+            .find(|(_, char_value)| !char_value.is_whitespace())
+            .unwrap_or((source.len(), '\0'))
+            .0
     }
 
     fn subl_get_prev_word_pos(&self, source: &str, index: usize) -> usize {
-        let index = (1..index)
+        let index = source
+            .char_indices()
+            .filter(|&(char_index, _)| 1 <= char_index && char_index < index)
             .rev()
-            .find(|&i| !source.chars().nth(i).unwrap().is_whitespace());
+            .find(|(_, char_value)| !char_value.is_whitespace());
         if index.is_none() {
             return 0;
         }
-        (1..index.unwrap())
+
+        let mut iter = source
+            .char_indices()
+            .filter(|&(char_index, _)| 1 <= char_index && char_index < index.unwrap().0)
             .rev()
-            .find(|&i| {
-                self.is_word_boundary(
-                    source.chars().nth(i - 1).unwrap(),
-                    source.chars().nth(i).unwrap(),
-                )
-            })
-            .unwrap_or(0)
+            .peekable();
+        loop {
+            if let Some((char_index, char_value)) = iter.next()
+                && let Some(&(_, prev_word)) = iter.peek()
+            {
+                if self.is_word_boundary(prev_word, char_value) {
+                    break char_index;
+                }
+            } else {
+                break 0;
+            }
+        }
     }
 
     fn get_next_word_pos(&self, source: &str, index: usize) -> usize {
@@ -326,10 +364,10 @@ mod cursor_tests {
     }
     #[test]
     fn test_emacs_get_next_word_pos_non_ascii() {
-        let s = String::from("  😀   ");
-        let indices = [(0, 6), (3, 6)];
+        let s = String::from(" 😀 test");
+        let indices = [(0, 10), (1, 10)];
         for (i_src, i_dest) in indices {
-            assert_eq!(EMACS_WORD_JUMPER.get_prev_word_pos(&s, i_src), i_dest);
+            assert_eq!(EMACS_WORD_JUMPER.get_next_word_pos(&s, i_src), i_dest);
         }
     }
 
@@ -342,6 +380,14 @@ mod cursor_tests {
         }
         assert_eq!(EMACS_WORD_JUMPER.get_prev_word_pos("", 0), 0);
     }
+    #[test]
+    fn test_emacs_get_prev_word_pos_non_ascii() {
+        let s = String::from(" 😀 test");
+        let indices = [(6, 0), (1, 0)];
+        for (i_src, i_dest) in indices {
+            assert_eq!(EMACS_WORD_JUMPER.get_prev_word_pos(&s, i_src), i_dest);
+        }
+    }
 
     #[test]
     fn test_subl_get_next_word_pos() {
@@ -351,6 +397,14 @@ mod cursor_tests {
             assert_eq!(SUBL_WORD_JUMPER.get_next_word_pos(&s, i_src), i_dest);
         }
         assert_eq!(SUBL_WORD_JUMPER.get_next_word_pos("", 0), 0);
+    }
+    #[test]
+    fn test_subl_get_next_word_pos_non_ascii() {
+        let s = String::from(" hi 😀 ((test");
+        let indices = [(0, 1), (1, 4), (4, 9)];
+        for (i_src, i_dest) in indices {
+            assert_eq!(SUBL_WORD_JUMPER.get_next_word_pos(&s, i_src), i_dest);
+        }
     }
 
     #[test]
@@ -362,7 +416,14 @@ mod cursor_tests {
         }
         assert_eq!(SUBL_WORD_JUMPER.get_prev_word_pos("", 0), 0);
     }
-
+    #[test]
+    fn test_subl_get_prev_word_pos_non_ascii() {
+        let s = String::from(" hi 😀 ((test");
+        let indices = [(1, 0), (9, 3)];
+        for (i_src, i_dest) in indices {
+            assert_eq!(SUBL_WORD_JUMPER.get_prev_word_pos(&s, i_src), i_dest);
+        }
+    }
     #[test]
     fn pop() {
         let mut s = String::from("öaöböcödöeöfö");
