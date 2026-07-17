@@ -84,11 +84,6 @@ impl DaemonHandle {
     /// This is fire-and-forget - if no receivers are listening (which shouldn't
     /// happen in normal operation), the event is dropped silently.
     pub fn emit(&self, event: DaemonEvent) {
-        // TODO(markovejnovic): this send cannot await. When a receiver lags, broadcast
-        // drops the oldest events for it rather than slowing us down, so a large sync can
-        // still leave commands out of the search index until a restart. Now that events
-        // carry IDs rather than entries, raising the capacity is cheap -- but the honest
-        // fix is a bus we can await capacity on, or rebuilding the index on Lagged.
         if let Err(e) = self.state.event_tx.send(event) {
             tracing::warn!("failed to emit event (no receivers?): {e}");
         }
@@ -441,8 +436,6 @@ impl DaemonBuilder {
             .into();
 
         // Create the event bus
-        // Note: each slot is retained until every receiver has seen it, so this bounds
-        // the daemon's event-bus memory. Keep bulk payloads off it -- see HistorySynced.
         let (event_tx, _) = broadcast::channel(64);
 
         // Create the shared state
