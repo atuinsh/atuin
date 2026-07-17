@@ -436,6 +436,7 @@ impl DaemonBuilder {
             .into();
 
         // Create the event bus
+        // Note: this number impacts atuin's RAM pressure. Check this commit for info.
         let (event_tx, _) = broadcast::channel(64);
 
         // Create the shared state

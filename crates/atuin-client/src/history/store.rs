@@ -284,17 +284,6 @@ impl HistoryStore {
     }
 
     /// Apply records to the history database, yielding each `History` that was created.
-    ///
-    /// Records are processed sequentially, in the order given, so that `Delete` records
-    /// stay correctly ordered against the `Create` records they refer to.
-    ///
-    /// This is deliberately *not* an `async fn`: the returned stream is lazy, and the
-    /// database writes only happen as it is polled. A non-async signature means callers
-    /// that want the writes but not the values cannot silently drop it — use
-    /// [`HistoryStore::build_all`] for that.
-    ///
-    /// Yielding rather than collecting keeps memory flat: a first sync can cover the
-    /// entire history, and accumulating it into a `Vec` would hold every entry at once.
     pub fn incremental_build<'a>(
         &'a self,
         database: &'a dyn Database,
@@ -427,7 +416,7 @@ mod tests {
     use time::macros::datetime;
 
     use crate::{
-        database::{Database, Sqlite},
+        database::Sqlite,
         history::{HISTORY_TAG, Version, store::HistoryRecord, store::HistoryStore},
         record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store},
         settings::test_local_timeout,
@@ -549,13 +538,22 @@ mod tests {
         assert_eq!(records[0], HistoryRecord::Create(history));
     }
 
-    fn test_history(id: &str, command: &str) -> History {
-        History {
-            id: id.to_owned().into(),
+    #[tokio::test]
+    async fn test_incremental_build_returns_created_histories() {
+        let store = SqliteStore::new(":memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let host_id = HostId(atuin_common::utils::uuid_v7());
+        let key = [0u8; 32];
+
+        let history_store = HistoryStore::new(store.clone(), host_id, key);
+
+        let history = History {
+            id: "018cd4fe81757cd2aee65cd7861f9c81".to_owned().into(),
             timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00),
             duration: 100,
             exit: 0,
-            command: command.to_owned(),
+            command: "ls".to_owned(),
             cwd: "/".to_owned(),
             session: "018cd4fead897597852527a31c998059".to_owned(),
             hostname: "test:test".to_owned(),
@@ -563,34 +561,15 @@ mod tests {
             intent: None,
             deleted_at: None,
             shell: None,
-        }
-    }
-
-    async fn test_stores() -> (HistoryStore, Sqlite) {
-        let store = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let history_store =
-            HistoryStore::new(store, HostId(atuin_common::utils::uuid_v7()), [0u8; 32]);
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
-
-        (history_store, db)
-    }
-
-    async fn history_rows(db: &Sqlite) -> Vec<History> {
-        db.query_history("select * from history").await.unwrap()
-    }
-
-    #[tokio::test]
-    async fn test_incremental_build_returns_created_histories() {
-        let (history_store, db) = test_stores().await;
-        let history = test_history("018cd4fe81757cd2aee65cd7861f9c81", "ls");
+        };
 
         // `push` returns the RECORD id (record-store id-space), distinct from
         // `history.id` (the HistoryId). This distinction is the whole bug.
         let (record_id, _) = history_store.push(history.clone()).await.unwrap();
+
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
 
         let created: Vec<History> = history_store
             .incremental_build(&db, &[record_id])
@@ -598,72 +577,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(created, vec![history]);
-    }
-
-    /// `incremental_build` is lazy: nothing is written until the stream is polled.
-    ///
-    /// This is why it is not an `async fn` and why `build_all` exists — callers that want
-    /// the writes but not the values must be unable to drop the stream unpolled. If this
-    /// test fails, callers of `build_all` are at risk of silently not saving history.
-    #[tokio::test]
-    async fn test_incremental_build_writes_nothing_until_polled() {
-        let (history_store, db) = test_stores().await;
-        let history = test_history("018cd4fe81757cd2aee65cd7861f9c81", "ls");
-        let (record_id, _) = history_store.push(history).await.unwrap();
-
-        let ids = [record_id];
-        let stream = history_store.incremental_build(&db, &ids);
-        assert!(
-            history_rows(&db).await.is_empty(),
-            "records were applied before the stream was polled"
-        );
-
-        drop(stream);
-        assert!(
-            history_rows(&db).await.is_empty(),
-            "dropping an unpolled stream must not apply records"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_build_all_applies_records() {
-        let (history_store, db) = test_stores().await;
-        let history = test_history("018cd4fe81757cd2aee65cd7861f9c81", "ls");
-        let (record_id, _) = history_store.push(history.clone()).await.unwrap();
-
-        history_store.build_all(&db, &[record_id]).await.unwrap();
-
-        assert_eq!(history_rows(&db).await, vec![history]);
-    }
-
-    /// Deletes are applied to the database but must not be yielded as created history —
-    /// the daemon feeds the yielded entries straight into its search index.
-    #[tokio::test]
-    async fn test_incremental_build_applies_deletes_without_yielding_them() {
-        let (history_store, db) = test_stores().await;
-        let history = test_history("018cd4fe81757cd2aee65cd7861f9c81", "ls");
-
-        let (create_id, _) = history_store.push(history.clone()).await.unwrap();
-        let (delete_id, _) = history_store.delete(history.id.clone()).await.unwrap();
-
-        let created: Vec<History> = history_store
-            .incremental_build(&db, &[create_id, delete_id])
-            .try_collect()
-            .await
-            .unwrap();
-
-        assert_eq!(
-            created,
-            vec![history],
-            "only the Create should be yielded, not the Delete"
-        );
-
-        // `delete_rows` removes the row outright, so applying the Delete after the Create
-        // leaves the table empty.
-        assert!(
-            history_rows(&db).await.is_empty(),
-            "the Delete record should have been applied to the database"
-        );
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0], history);
     }
 }

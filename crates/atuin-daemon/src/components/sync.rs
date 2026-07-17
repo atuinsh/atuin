@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use eyre::Result;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt, stream::TryChunksError};
 use rand::Rng;
 use tokio::sync::mpsc;
 use tokio::time::{self, MissedTickBehavior};
@@ -17,12 +17,6 @@ use crate::{
     daemon::{Component, DaemonHandle},
     events::DaemonEvent,
 };
-
-/// How many synced history entries to carry in a single `HistorySynced` event.
-///
-/// Bounds the event payload: a first sync builds the entire history, which is far too
-/// much to hold in one message.
-const HISTORY_BATCH_SIZE: usize = 5000;
 
 /// Commands that can be sent to the sync task.
 enum SyncCommand {
@@ -251,29 +245,40 @@ async fn do_sync_tick(
             SyncState::Retrying
         }
         Ok((uploaded_count, downloaded_records)) => {
+            // Controls how large of a Vec<History> we should try to process at a a time.
+            // This is used limit how much memory we use at a time.
+            //
+            // An initial sync (on backfill, eg.), risks being dozens of GB of RAM
+            const HISTORY_BATCH_SIZE: usize = 5000;
+
             tracing::info!(
                 uploaded = uploaded_count,
                 downloaded = downloaded_records.len(),
                 "sync complete"
             );
 
-            // Build history from downloaded records, emitting each batch as it is built so
-            // the search component can index it. Batched rather than collected: a first sync
-            // covers the entire history, and holding all of it at once would spike memory.
             let batches = history_store
                 .incremental_build(handle.history_db(), &downloaded_records)
-                .chunks(HISTORY_BATCH_SIZE);
+                // intentional try_chunks -- legacy behavior was to abort on the first error.
+                .try_chunks(HISTORY_BATCH_SIZE);
             futures::pin_mut!(batches);
 
             while let Some(batch) = batches.next().await {
-                match batch.into_iter().collect::<Result<Vec<_>, _>>() {
-                    Ok(histories) => {
-                        handle.emit(DaemonEvent::HistorySynced(histories.into()));
-                    }
-                    Err(e) => {
-                        tracing::error!("failed to build history from downloaded records: {e}");
-                        break;
-                    }
+                let (histories, failure) = match batch {
+                    Ok(histories) => (histories, None),
+                    // The entries built before the failure are already saved to the history
+                    // database, so the index has to hear about them regardless - dropping
+                    // them is what leaves history searchable only after a daemon restart.
+                    Err(TryChunksError(histories, e)) => (histories, Some(e)),
+                };
+
+                if !histories.is_empty() {
+                    handle.emit(DaemonEvent::HistorySynced(histories.into()));
+                }
+
+                if let Some(e) = failure {
+                    tracing::error!("failed to build history from downloaded records: {e}");
+                    break;
                 }
             }
 
