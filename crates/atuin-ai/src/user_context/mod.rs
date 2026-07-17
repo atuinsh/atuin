@@ -13,8 +13,7 @@ mod walker;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-// Re-exported again when the stream bridge returns (v2 port, streaming slice).
-// pub(crate) use walker::global_context_path;
+pub(crate) use walker::global_context_path;
 
 /// A fully resolved user context, ready to include in an API request.
 #[derive(Debug, Clone, serde::Serialize)]

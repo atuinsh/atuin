@@ -6,18 +6,22 @@ use std::collections::HashSet;
 
 use crossterm::event::KeyCode;
 use eye_declare::{
-    App, Ctx, Element, ElementExt, Fluent, Focus, FocusHandle, InputEvent, Keymap, col, key,
+    App, Ctx, Element, ElementExt, Fluent, Focus, FocusHandle, InputEvent, Keymap, Task, col, key,
     keymap, text,
 };
 use ratatui_core::style::{Color, Modifier, Style};
+use tokio::sync::mpsc::UnboundedSender;
 use tui_textarea::TextArea;
 
-use crate::fsm::effects::{Effect, ExitAction};
+use crate::fsm::effects::{Effect, ExitAction, TimeoutKind};
 use crate::fsm::events::Event;
 use crate::fsm::{AgentFsm, AgentState};
+use crate::tui::persist::PersistJob;
 use crate::tui::slash::{SlashCommandRegistry, SlashCommandSearchResult};
+use crate::tui::state::ConversationEvent;
 use crate::tui::view;
 use crate::tui::view::turn::{TurnBuilder, UiTurn, UiTurnKind};
+use crate::usage::UsageSnapshot;
 
 /// What the TUI resolves to, for the shell hook.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -28,14 +32,14 @@ pub(crate) enum ExitOutcome {
     Cancel,
 }
 
-/// IO resources the app's effects need (databases, session persistence,
-/// caches). Not part of the FSM's state.
-// TODO(v2 port, streaming slice): effect execution reconnects these.
-#[allow(dead_code)]
+/// IO resources the app's effects need. Not part of the FSM's state.
+/// Session persistence goes through the [`crate::tui::persist`] worker,
+/// which owns the `SessionManager`.
+// TODO(v2 port, tools slice): trackers + snapshot store reconnect there.
 pub(crate) struct IoContext {
     pub app_ctx: crate::context::AppContext,
     pub client_ctx: crate::context::ClientContext,
-    pub session_mgr: crate::session::SessionManager,
+    pub persist: UnboundedSender<PersistJob>,
     pub file_tracker: crate::file_tracker::FileReadTracker,
     pub edit_permissions: crate::edit_permissions::EditPermissionCache,
     pub snapshot_store: Option<crate::snapshots::SnapshotStore>,
@@ -68,10 +72,23 @@ pub(crate) enum Msg {
     Retry,
     /// Leave the TUI without a command.
     Quit,
+    /// An FSM event from spawned work (stream frames, timeouts).
+    Fsm(Event),
+    /// Fresh credit-usage snapshot. Never reaches the FSM.
+    Usage(UsageSnapshot),
 }
 
 pub(crate) struct AiApp {
     pub fsm: AgentFsm,
+    /// `None` only in headless tests; every effect that needs IO degrades
+    /// to a debug log without it.
+    io: Option<IoContext>,
+    /// The in-flight stream turn; dropping it (Esc, replacement) cancels
+    /// the HTTP request.
+    streaming: Option<Task>,
+    /// Latest known credit usage (cached at startup, refreshed from Done
+    /// frames). Rendered by the status bar (pickers slice).
+    usage: Option<UsageSnapshot>,
     /// "Continuing previous session…" banner, frozen at startup.
     resume_notice: Option<String>,
     /// The editor as a plain model value; see `view::input` for why RefCell.
@@ -94,6 +111,24 @@ pub(crate) struct AiApp {
 impl AiApp {
     pub fn new(
         fsm: AgentFsm,
+        io: IoContext,
+        resume_notice: Option<String>,
+        slash_registry: SlashCommandRegistry,
+        skill_names: HashSet<String>,
+        usage: Option<UsageSnapshot>,
+    ) -> Self {
+        Self {
+            io: Some(io),
+            usage,
+            ..Self::headless(fsm, resume_notice, slash_registry, skill_names)
+        }
+    }
+
+    /// An app without IO: effects that need it degrade to debug logs.
+    /// Tests drive stream/timeout flows by processing `Msg::Fsm` directly.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn headless(
+        fsm: AgentFsm,
         resume_notice: Option<String>,
         slash_registry: SlashCommandRegistry,
         skill_names: HashSet<String>,
@@ -103,6 +138,9 @@ impl AiApp {
         input_focus.focus();
         Self {
             fsm,
+            io: None,
+            streaming: None,
+            usage: None,
             resume_notice,
             input: RefCell::new(view::input::new_textarea()),
             focus,
@@ -184,6 +222,14 @@ impl AiApp {
         for event in &events[start..] {
             builder.add_event(event);
         }
+        // Streaming text lives in current_response until the FSM commits it
+        // on stream end; inject it so the live turn shows it as it arrives.
+        let streaming_text = self.fsm.ctx.current_response.trim_start();
+        if !streaming_text.is_empty() {
+            builder.add_event(&ConversationEvent::Text {
+                content: streaming_text.to_string(),
+            });
+        }
         builder.build()
     }
 
@@ -219,17 +265,99 @@ impl AiApp {
                     ExitAction::Insert(cmd) => ExitOutcome::Insert(cmd),
                     ExitAction::Cancel => ExitOutcome::Cancel,
                 }),
-                // TODO(v2 port): remaining effects reconnect slice by slice
-                // (stream, tools, permissions, persistence, timeouts).
+                Effect::StartStream {
+                    messages,
+                    session_id,
+                } => self.start_stream(messages, session_id, ctx),
+                // Dropping the Task drops the bridge's generator, which
+                // drops the HTTP stream. Esc-cancels-generation is this.
+                Effect::AbortStream => self.streaming = None,
+                Effect::Persist => self.persist(),
+                Effect::ArchiveSession => {
+                    if let Some(io) = &self.io {
+                        let _ = io.persist.send(PersistJob::Archive);
+                    }
+                }
+                Effect::ScheduleTimeout {
+                    timeout_id,
+                    duration,
+                    kind,
+                } => {
+                    // Stale firings are guarded by timeout_id in the FSM,
+                    // so a detached sleep is safe.
+                    let event = match kind {
+                        TimeoutKind::Confirmation => Event::ConfirmationTimeout { timeout_id },
+                        TimeoutKind::ToolExecution { tool_id } => Event::ToolExecutionTimeout {
+                            timeout_id,
+                            tool_id,
+                        },
+                    };
+                    ctx.perform(async move {
+                        tokio::time::sleep(duration).await;
+                        Msg::Fsm(event)
+                    })
+                    .detach();
+                }
+                // TODO(v2 port): tools + permissions + model fetch reconnect
+                // in the next slices.
                 other => tracing::debug!(effect = ?other, "effect deferred (v2 port)"),
             }
         }
         self.push_ready_turns(ctx);
     }
 
+    /// Launch the chat stream as a spawned message stream, replacing (and
+    /// thereby cancelling) any previous one.
+    fn start_stream(
+        &mut self,
+        messages: Vec<serde_json::Value>,
+        session_id: Option<String>,
+        ctx: &mut Ctx<'_, Self>,
+    ) {
+        let Some(io) = &self.io else {
+            tracing::debug!("headless app: stream not started");
+            return;
+        };
+        let (skill_summaries, skill_overflow) = io.skill_registry.server_skills();
+        let request = crate::stream::ChatRequest::new(
+            messages,
+            session_id,
+            &io.app_ctx.capabilities,
+            io.app_ctx.daemon_enabled,
+            self.fsm.ctx.invocation_id.clone(),
+            self.fsm.ctx.model.clone(),
+        );
+        self.streaming = Some(ctx.spawn(crate::tui::bridge::stream_bridge(
+            request,
+            io.app_ctx.clone(),
+            io.client_ctx.clone(),
+            skill_summaries,
+            skill_overflow,
+            io.user_context_cache.clone(),
+        )));
+    }
+
+    /// Queue a full-session snapshot on the persist worker. Jobs apply in
+    /// channel order, so a later snapshot can never be overwritten by an
+    /// earlier one.
+    fn persist(&self) {
+        let Some(io) = &self.io else { return };
+        let _ = io.persist.send(PersistJob::Session {
+            events: self.fsm.ctx.events.clone(),
+            server_session_id: self.fsm.ctx.session_id.clone(),
+            file_tracker: io.file_tracker.to_json().ok(),
+            edit_permissions: io.edit_permissions.to_json().ok(),
+        });
+    }
+
     /// Commit sealed turns to scrollback. A turn is sealed when nothing can
     /// mutate it anymore; an in-flight agent turn stays live.
     fn push_ready_turns(&mut self, ctx: &mut Ctx<'_, Self>) {
+        // In Error state the failed turn stays live: Retry continues the
+        // same turn, and pushing a partial turn would split it.
+        if matches!(self.fsm.state, AgentState::Error(_)) {
+            return;
+        }
         let turns = self.live_turns();
         if turns.is_empty() {
             return;
@@ -240,9 +368,10 @@ impl AiApp {
                 Some(UiTurnKind::Agent { .. })
             )
         {
-            // TODO(v2 port, streaming slice): push the sealed prefix once
-            // event-span tracking lands; today nothing streams while busy,
-            // so this branch is unreachable.
+            // Mid-stream: the whole in-flight agent turn stays in the tail
+            // (statuses and text still mutate). It seals when the FSM
+            // returns to Idle. Frontier-within-a-turn pushing is a later
+            // optimization if tall turns ever hurt.
             return;
         }
 
@@ -312,8 +441,9 @@ impl AiApp {
     fn resolve_slash_command(&self, command: &str) -> String {
         match command.trim() {
             "/reload" => {
-                // TODO(v2 port, streaming slice): invalidate
-                // io.user_context_cache once the app owns IoContext.
+                if let Some(io) = &self.io {
+                    io.user_context_cache.invalidate();
+                }
                 "Context files will be reloaded on the next request.".to_string()
             }
             "/help" => {
@@ -387,6 +517,16 @@ impl App for AiApp {
             Msg::Interrupt => self.handle_fsm(Event::InterruptTools, ctx),
             Msg::Retry => self.handle_fsm(Event::Retry, ctx),
             Msg::Quit => ctx.exit(ExitOutcome::Cancel),
+            Msg::Fsm(event) => self.handle_fsm(event, ctx),
+            Msg::Usage(snapshot) => {
+                if let Some(io) = &self.io {
+                    let _ = io.persist.send(PersistJob::Usage {
+                        key: crate::usage::cache_key(&io.app_ctx.token),
+                        snapshot: snapshot.clone(),
+                    });
+                }
+                self.usage = Some(snapshot);
+            }
         }
     }
 
@@ -528,7 +668,7 @@ mod tests {
     }
 
     fn app_with(fsm: AgentFsm) -> AiApp {
-        AiApp::new(fsm, None, SlashCommandRegistry::default(), HashSet::new())
+        AiApp::headless(fsm, None, SlashCommandRegistry::default(), HashSet::new())
     }
 
     /// Runtime + VTE terminal pair. Every byte the runtime emits — including
@@ -563,6 +703,17 @@ mod tests {
             for ch in s.chars() {
                 self.press(KeyCode::Char(ch));
             }
+        }
+
+        /// Deliver a message as spawned work would (e.g. stream frames).
+        fn process(&mut self, msg: Msg) -> Option<ExitOutcome> {
+            let (bytes, exit) = self.rt.process(msg);
+            self.term.feed(&bytes);
+            exit
+        }
+
+        fn stream(&mut self, event: Event) {
+            self.process(Msg::Fsm(event));
         }
 
         fn app(&self) -> &AiApp {
@@ -721,6 +872,105 @@ mod tests {
     }
 
     #[test]
+    fn streaming_text_renders_live_and_seals_on_done() {
+        let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
+        h.type_str("what is atuin?");
+        h.press(KeyCode::Enter);
+
+        h.stream(Event::StreamStarted);
+        h.stream(Event::StreamChunk("Atuin is a ".into()));
+        h.stream(Event::StreamChunk("shell history tool.".into()));
+
+        // Mid-stream: text is visible in the live tail, nothing new pushed.
+        let pushed_mid = h.app().pushed_turns;
+        assert!(h.app().is_busy());
+        assert!(
+            h.screen().contains("Atuin is a shell history tool."),
+            "streaming text missing:\n{}",
+            h.screen()
+        );
+
+        h.stream(Event::StreamDone {
+            session_id: "s1".into(),
+        });
+
+        let app = h.app();
+        assert!(!app.is_busy(), "turn should be over");
+        assert!(
+            app.pushed_turns > pushed_mid,
+            "agent turn should seal to scrollback on Done"
+        );
+        assert_eq!(
+            app.pushed_events,
+            app.fsm.ctx.events.len(),
+            "frontier should cover all events"
+        );
+        // The sealed turn is on the terminal, and the live tail no longer
+        // repeats it.
+        let all = h.all_lines();
+        assert!(all.contains("Atuin is a shell history tool."));
+        assert!(!h.app().fsm.ctx.current_response.contains("Atuin"));
+    }
+
+    #[test]
+    fn esc_mid_stream_cancels_generation() {
+        let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
+        h.type_str("hello");
+        h.press(KeyCode::Enter);
+        h.stream(Event::StreamStarted);
+        h.stream(Event::StreamChunk("partial".into()));
+
+        assert_eq!(h.press(KeyCode::Esc), None, "Esc cancels, not exits");
+        assert!(!h.app().is_busy(), "cancel should end the turn");
+        // A second Esc from Idle exits.
+        assert_eq!(h.press(KeyCode::Esc), Some(ExitOutcome::Cancel));
+    }
+
+    #[test]
+    fn stream_error_offers_retry() {
+        let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
+        h.type_str("hello");
+        h.press(KeyCode::Enter);
+        h.stream(Event::StreamStarted);
+        let pushed_before = h.app().pushed_turns;
+        h.stream(Event::StreamError("connection lost".into()));
+
+        assert!(matches!(h.app().fsm.state, AgentState::Error(_)));
+        assert_eq!(
+            h.app().pushed_turns,
+            pushed_before,
+            "failed turn must stay live for retry"
+        );
+        let screen = h.screen();
+        assert!(
+            screen.contains("Error: connection lost"),
+            "error line missing:\n{screen}"
+        );
+        assert!(
+            screen.contains("[Enter]/[r] Retry"),
+            "retry footer:\n{screen}"
+        );
+
+        h.press(KeyCode::Char('r'));
+        assert!(h.app().is_busy(), "retry should restart the turn");
+    }
+
+    #[test]
+    fn usage_snapshot_is_stored() {
+        let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
+        let bucket = crate::usage::UsageBucket { used: 1, limit: 10 };
+        let snapshot = crate::usage::UsageSnapshot {
+            period: "calendar_monthly".into(),
+            resets_at: "2026-08-01T00:00:00Z".into(),
+            requests: bucket.clone(),
+            input: bucket.clone(),
+            output: bucket,
+        };
+        h.process(Msg::Usage(snapshot.clone()));
+        assert_eq!(h.app().usage, Some(snapshot));
+    }
+
+    #[test]
     fn skill_dispatches_even_when_registered_for_autocomplete() {
         let mut registry = SlashCommandRegistry::default();
         let mut skill_names = HashSet::new();
@@ -729,7 +979,7 @@ mod tests {
             "Cut a release",
         ));
         skill_names.insert("release".to_string());
-        let app = AiApp::new(
+        let app = AiApp::headless(
             AgentFsm::new(vec![], "t".into()),
             None,
             registry,
@@ -752,7 +1002,7 @@ mod tests {
             "A skill shadowing /reload",
         ));
         skill_names.insert("reload".to_string());
-        let app = AiApp::new(
+        let app = AiApp::headless(
             AgentFsm::new(vec![], "t".into()),
             None,
             registry,
@@ -771,7 +1021,7 @@ mod tests {
         fsm.ctx.events.push(ConversationEvent::UserMessage {
             content: "hello".into(),
         });
-        let app = AiApp::new(
+        let app = AiApp::headless(
             fsm,
             Some("  Continuing previous session".into()),
             SlashCommandRegistry::default(),

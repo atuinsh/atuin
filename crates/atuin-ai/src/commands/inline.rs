@@ -311,12 +311,13 @@ async fn run_inline_tui(
     }
 
     // ─── IO context ─────────────────────────────────────────────
-    // TODO(v2 port, streaming slice): moves into AiApp when effect
-    // execution lands.
-    let _io = IoContext {
+    // The persist worker owns the SessionManager and applies snapshots in
+    // channel order.
+    let persist = crate::tui::persist::spawn_persist_worker(session_mgr);
+    let io = IoContext {
         app_ctx: ctx.clone(),
         client_ctx: client_ctx.clone(),
-        session_mgr,
+        persist,
         file_tracker,
         edit_permissions,
         snapshot_store,
@@ -324,15 +325,22 @@ async fn run_inline_tui(
         user_context_cache: Default::default(),
     };
 
-    // TODO(v2 port, status-bar slice): cached usage renders again there;
-    // the background refresh needs startup effects (App::init) upstream.
-    let _ = (cached_usage, usage_is_fresh, in_git_project);
-    // TODO(v2 port): submitting the initial prompt needs startup effects.
+    // TODO(v2 port, pickers slice): in_git_project shapes permission options.
+    // TODO(v2 port): the background usage refresh and the initial prompt
+    // both need startup effects (App::init) upstream.
+    let _ = (usage_is_fresh, in_git_project);
     let _ = initial_prompt;
 
     println!();
 
-    let app = AiApp::new(fsm, resume_notice, slash_registry, skill_names);
+    let app = AiApp::new(
+        fsm,
+        io,
+        resume_notice,
+        slash_registry,
+        skill_names,
+        cached_usage,
+    );
     let options =
         eye_declare::RunOptions::default().keyboard(eye_declare::KeyboardProtocol::Enhanced);
     let outcome = eye_declare::driver_tokio::run_with(app, options)
