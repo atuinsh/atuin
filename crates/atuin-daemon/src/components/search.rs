@@ -189,8 +189,6 @@ impl Component for SearchComponent {
                     return Ok(());
                 };
 
-                // Propagates rather than unwrap_or_default: a read failure here means the
-                // index is silently missing entries, which is exactly #3627's symptom.
                 let histories = handle.history_db().load_bulk(ids).await?;
 
                 span!(

@@ -368,9 +368,8 @@ impl Database for Sqlite {
     }
 
     async fn load_bulk(&self, ids: &[HistoryId]) -> Result<Vec<History>> {
-        // sqlite caps bound parameters per statement (SQLITE_MAX_VARIABLE_NUMBER, as low
-        // as 999). Chunk well under that -- and bind every id rather than interpolating,
-        // which is what produced the malformed `in (...)` of #3627.
+        // sqlite caps bound parameters per statement (SQLITE_MAX_VARIABLE_NUMBER, as low as 999).
+        // Chunk well under that.
         const CHUNK: usize = 500;
 
         debug!("loading {} history items", ids.len());
