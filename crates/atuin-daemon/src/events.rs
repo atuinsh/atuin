@@ -27,12 +27,8 @@ pub enum DaemonEvent {
     // ---- Sync ----
     /// History entries were built from records synced from the server.
     ///
-    /// The search component uses this to update its index with the new history.
-    ///
-    /// Carries IDs, not entries. The rows are already committed to sqlite before this
-    /// is emitted, and the broadcast bus retains every event until all receivers have
-    /// seen it -- so a full ring of 5000-entry batches would pin tens of MB of history
-    /// we already have on disk. IDs cost ~40 bytes each instead of a few hundred.
+    /// Must carry an `Arc<[HistoryId]>`.
+    /// - These messages get sent across a spmc queue, so we avoid unnecessary clones.
     HistorySynced(Arc<[HistoryId]>),
 
     /// Sync completed successfully.
