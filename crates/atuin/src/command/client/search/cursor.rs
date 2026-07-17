@@ -324,6 +324,14 @@ mod cursor_tests {
         }
         assert_eq!(EMACS_WORD_JUMPER.get_next_word_pos("", 0), 0);
     }
+    #[test]
+    fn test_emacs_get_next_word_pos_non_ascii() {
+        let s = String::from("  😀   ");
+        let indices = [(0, 6), (3, 6)];
+        for (i_src, i_dest) in indices {
+            assert_eq!(EMACS_WORD_JUMPER.get_prev_word_pos(&s, i_src), i_dest);
+        }
+    }
 
     #[test]
     fn test_emacs_get_prev_word_pos() {
