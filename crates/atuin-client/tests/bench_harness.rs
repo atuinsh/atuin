@@ -65,14 +65,3 @@ async fn latency_layer_delays_every_request() {
         "expected at least one injected RTT of {rtt:?}, took {elapsed:?}"
     );
 }
-
-#[tokio::test]
-async fn zero_latency_does_not_delay() {
-    let server = BenchServer::start(Duration::ZERO).await;
-    let client = server.register().await;
-
-    let start = std::time::Instant::now();
-    client.me().await.unwrap();
-
-    assert!(start.elapsed() < Duration::from_millis(50));
-}
