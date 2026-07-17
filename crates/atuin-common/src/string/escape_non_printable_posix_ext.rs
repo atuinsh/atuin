@@ -59,19 +59,19 @@ mod tests {
     /// test, so a failure names precisely which input broke.
     #[rstest]
     // Nothing to escape — returned unchanged (space is printable).
-    #[case("plain text", "plain text")]
-    #[case("two words", "two words")]
+    #[case::plain_text_unchanged("plain text", "plain text")]
+    #[case::two_words_unchanged("two words", "two words")]
     // Printable multi-byte Unicode is preserved; only the control char changes.
-    #[case("🐢\x1b[32m🦀", "🐢^[[32m🦀")]
+    #[case::multibyte_unicode_preserved_around_escaped_control("🐢\x1b[32m🦀", "🐢^[[32m🦀")]
     // C0 controls and DEL → caret notation (`^` + byte ^ 0x40).
-    #[case("\x1b[31mfoo", "^[[31mfoo")] // ESC (0x1b)
-    #[case("foo\tbar", "foo^Ibar")] // TAB (0x09)
-    #[case("a\0b", "a^@b")] // NUL (0x00) — the core of issue #3589
-    #[case("a\x7fb", "a^?b")] // DEL (0x7f ^ 0x40 == '?')
+    #[case::esc_0x1b("\x1b[31mfoo", "^[[31mfoo")] // ESC (0x1b)
+    #[case::tab_0x09("foo\tbar", "foo^Ibar")] // TAB (0x09)
+    #[case::nul_0x00("a\0b", "a^@b")] // NUL (0x00) — the core of issue #3589
+    #[case::del_0x7f("a\x7fb", "a^?b")] // DEL (0x7f ^ 0x40 == '?')
     // C1 controls (U+0080..=U+009F) → `cat -v` meta+caret notation.
-    #[case("\u{80}", "M-^@")]
-    #[case("a\u{9b}b", "aM-^[b")] // single-char CSI: 0x9b & 0x7f == 0x1b → ^[
-    #[case("\u{9f}", "M-^_")]
+    #[case::c1_control_0x80("\u{80}", "M-^@")]
+    #[case::single_char_csi_0x9b("a\u{9b}b", "aM-^[b")] // single-char CSI: 0x9b & 0x7f == 0x1b → ^[
+    #[case::c1_control_0x9f("\u{9f}", "M-^_")]
     fn escapes_as_cat_v(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(input.escape_non_printable(), expected);
     }

@@ -48,6 +48,7 @@ listenfd = "1.0.1"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+rstest = { workspace = true }
 
 [build-dependencies]
 protox = "0.9"

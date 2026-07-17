@@ -364,6 +364,7 @@ fn parse_param(param: &[u8]) -> Param {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     /// Collect all events from a single `push` call.
     fn parse_events(data: &[u8]) -> Vec<Event> {
@@ -375,100 +376,21 @@ mod tests {
 
     // -- Basic event detection ------------------------------------------------
 
-    #[test]
-    fn detect_prompt_start_bel() {
-        let data = b"\x1b]133;A\x07";
-        assert_eq!(parse_events(data), vec![Event::PromptStart]);
-    }
-
-    #[test]
-    fn detect_prompt_start_st() {
-        let data = b"\x1b]133;A\x1b\\";
-        assert_eq!(parse_events(data), vec![Event::PromptStart]);
-    }
-
-    #[test]
-    fn detect_command_start_bel() {
-        let data = b"\x1b]133;B\x07";
-        assert_eq!(parse_events(data), vec![Event::CommandStart]);
-    }
-
-    #[test]
-    fn detect_command_start_st() {
-        let data = b"\x1b]133;B\x1b\\";
-        assert_eq!(parse_events(data), vec![Event::CommandStart]);
-    }
-
-    #[test]
-    fn detect_command_executed_bel() {
-        let data = b"\x1b]133;C\x07";
-        assert_eq!(parse_events(data), vec![Event::CommandExecuted]);
-    }
-
-    #[test]
-    fn detect_command_executed_st() {
-        let data = b"\x1b]133;C\x1b\\";
-        assert_eq!(parse_events(data), vec![Event::CommandExecuted]);
-    }
-
-    #[test]
-    fn detect_command_finished_no_exit_code() {
-        let data = b"\x1b]133;D\x07";
-        assert_eq!(
-            parse_events(data),
-            vec![Event::CommandFinished { exit_code: None }]
-        );
-    }
-
-    #[test]
-    fn detect_command_finished_exit_zero() {
-        let data = b"\x1b]133;D;0\x07";
-        assert_eq!(
-            parse_events(data),
-            vec![Event::CommandFinished { exit_code: Some(0) }]
-        );
-    }
-
-    #[test]
-    fn detect_command_finished_exit_nonzero() {
-        let data = b"\x1b]133;D;127\x07";
-        assert_eq!(
-            parse_events(data),
-            vec![Event::CommandFinished {
-                exit_code: Some(127)
-            }]
-        );
-    }
-
-    #[test]
-    fn detect_command_finished_negative_exit_code() {
-        let data = b"\x1b]133;D;-1\x07";
-        assert_eq!(
-            parse_events(data),
-            vec![Event::CommandFinished {
-                exit_code: Some(-1)
-            }]
-        );
-    }
-
-    #[test]
-    fn detect_command_finished_exit_code_st() {
-        let data = b"\x1b]133;D;42\x1b\\";
-        assert_eq!(
-            parse_events(data),
-            vec![Event::CommandFinished {
-                exit_code: Some(42)
-            }]
-        );
-    }
-
-    #[test]
-    fn invalid_exit_code_yields_none() {
-        let data = b"\x1b]133;D;abc\x07";
-        assert_eq!(
-            parse_events(data),
-            vec![Event::CommandFinished { exit_code: None }]
-        );
+    #[rstest]
+    #[case::prompt_start_bel(b"\x1b]133;A\x07", Event::PromptStart)]
+    #[case::prompt_start_st(b"\x1b]133;A\x1b\\", Event::PromptStart)]
+    #[case::command_start_bel(b"\x1b]133;B\x07", Event::CommandStart)]
+    #[case::command_start_st(b"\x1b]133;B\x1b\\", Event::CommandStart)]
+    #[case::command_executed_bel(b"\x1b]133;C\x07", Event::CommandExecuted)]
+    #[case::command_executed_st(b"\x1b]133;C\x1b\\", Event::CommandExecuted)]
+    #[case::finished_no_exit_code(b"\x1b]133;D\x07", Event::CommandFinished { exit_code: None })]
+    #[case::finished_exit_zero(b"\x1b]133;D;0\x07", Event::CommandFinished { exit_code: Some(0) })]
+    #[case::finished_exit_nonzero(b"\x1b]133;D;127\x07", Event::CommandFinished { exit_code: Some(127) })]
+    #[case::finished_negative_exit_code(b"\x1b]133;D;-1\x07", Event::CommandFinished { exit_code: Some(-1) })]
+    #[case::finished_exit_code_st(b"\x1b]133;D;42\x1b\\", Event::CommandFinished { exit_code: Some(42) })]
+    #[case::invalid_exit_code_yields_none(b"\x1b]133;D;abc\x07", Event::CommandFinished { exit_code: None })]
+    fn detects_event(#[case] data: &[u8], #[case] expected: Event) {
+        assert_eq!(parse_events(data), vec![expected]);
     }
 
     // -- Zone tracking --------------------------------------------------------
@@ -597,23 +519,16 @@ mod tests {
         assert_eq!(events, vec![Event::PromptStart]);
     }
 
-    #[test]
-    fn osc_7_ignored() {
-        let data = b"\x1b]7;file:///home/user\x07";
-        assert!(parse_events(data).is_empty());
-    }
-
     // -- Unknown command letter -----------------------------------------------
 
-    #[test]
-    fn unknown_command_ignored() {
-        let data = b"\x1b]133;Z\x07";
-        assert!(parse_events(data).is_empty());
-    }
-
-    #[test]
-    fn marker_with_unexpected_trailing_bytes_ignored() {
-        let data = b"\x1b]133;ABC\x07";
+    #[rstest]
+    #[case::osc_7(b"\x1b]7;file:///home/user\x07")]
+    #[case::unknown_command_letter(b"\x1b]133;Z\x07")]
+    #[case::marker_with_unexpected_trailing_bytes(b"\x1b]133;ABC\x07")]
+    // "13" followed by terminator — not "133;" so no event.
+    #[case::truncated_133_prefix(b"\x1b]13\x07")]
+    #[case::empty_osc(b"\x1b]\x07")]
+    fn ignores_input(#[case] data: &[u8]) {
         assert!(parse_events(data).is_empty());
     }
 
@@ -637,19 +552,6 @@ mod tests {
         // Feed non-bracket to abort the escape, then a real sequence.
         parser.push(b"x\x1b]133;A\x07", |e| events.push(e));
         assert_eq!(events, vec![Event::PromptStart]);
-    }
-
-    #[test]
-    fn truncated_133_prefix() {
-        // "13" followed by terminator — not "133;" so no event.
-        let data = b"\x1b]13\x07";
-        assert!(parse_events(data).is_empty());
-    }
-
-    #[test]
-    fn empty_osc() {
-        let data = b"\x1b]\x07";
-        assert!(parse_events(data).is_empty());
     }
 
     // -- Buffer overflow (very long non-133 OSC) ------------------------------
