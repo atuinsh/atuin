@@ -55,7 +55,7 @@ impl WordJumper<'_> {
             .filter(|&(char_position, _)| 1 <= char_position && char_position < index_pair.0)
             .rev()
             .find(|&(_, char_value)| !self.word_chars.contains(char_value))
-            .map_or(0, |(t, _)| t + 1)
+            .map_or(0, |(t, c)| t + c.len_utf8())
     }
 
     fn subl_get_next_word_pos(&self, source: &str, index: usize) -> usize {
