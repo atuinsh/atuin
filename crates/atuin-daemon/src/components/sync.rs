@@ -266,9 +266,6 @@ async fn do_sync_tick(
             while let Some(batch) = batches.next().await {
                 let (histories, failure) = match batch {
                     Ok(histories) => (histories, None),
-                    // The entries built before the failure are already saved to the history
-                    // database, so the index has to hear about them regardless - dropping
-                    // them is what leaves history searchable only after a daemon restart.
                     Err(TryChunksError(histories, e)) => (histories, Some(e)),
                 };
 
