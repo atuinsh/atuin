@@ -455,6 +455,7 @@ dependencies = [
  "eyre",
  "rand 0.8.7",
  "rmp",
+ "rstest",
  "serde",
  "tokio",
  "tracing",
