@@ -76,6 +76,14 @@ palette = { version = "0.7.5", features = ["serializing"] }
 strum_macros = "0.27"
 strum = { version = "0.27", features = ["strum_macros"] }
 
+# musl's built-in resolver queries all resolv.conf nameservers in parallel
+# and takes the first reply so static musl builds fail to resolve names in
+# split-horizon DNS setups where glibc builds work.
+# Use reqwest's hickory-dns resolver on musl for glibc-like behavior.
+# See https://wiki.musl-libc.org/functional-differences-from-glibc.html
+[target.'cfg(target_env = "musl")'.dependencies]
+reqwest = { workspace = true, optional = true, features = ["hickory-dns"] }
+
 [dependencies.atuin-common]
 path = "../atuin-common"
 version = "18.17.1"
