@@ -11,6 +11,7 @@ use eyre::{Result, WrapErr};
 
 mod bash;
 mod fish;
+mod nu;
 mod powershell;
 mod xonsh;
 mod zsh;
@@ -50,75 +51,36 @@ pub enum Shell {
     PowerShell,
 }
 
+struct StaticInitOptions<'a> {
+    pub enable_up_arrow: bool,
+    pub enable_ctrl_r: bool,
+    #[cfg_attr(not(feature = "ai"), allow(dead_code))]
+    pub enable_ai: bool,
+    pub tmux: &'a Tmux,
+}
+
 impl Cmd {
-    fn init_nu(&self, _tmux: &Tmux) {
-        // TODO: tmux popup for Nu
-        println!("{}", crate::shell::NU);
-
-        if std::env::var("ATUIN_NOBIND").is_err() {
-            const BIND_CTRL_R: &str = r"$env.config = (
-    $env.config | upsert keybindings (
-        $env.config.keybindings
-        | append {
-            name: atuin
-            modifier: control
-            keycode: char_r
-            mode: [emacs, vi_normal, vi_insert]
-            event: { send: executehostcommand cmd: (_atuin_search_cmd) }
-        }
-    )
-)";
-            const BIND_UP_ARROW: &str = r"
-$env.config = (
-    $env.config | upsert keybindings (
-        $env.config.keybindings
-        | append {
-            name: atuin
-            modifier: none
-            keycode: up
-            mode: [emacs, vi_normal, vi_insert]
-            event: {
-                until: [
-                    {send: menuup}
-                    {send: executehostcommand cmd: (_atuin_search_cmd '--shell-up-key-binding') }
-                ]
-            }
-        }
-    )
-)
-";
-            if !self.disable_ctrl_r {
-                println!("{BIND_CTRL_R}");
-            }
-            if !self.disable_up_arrow {
-                println!("{BIND_UP_ARROW}");
-            }
-        }
-    }
-
     fn static_init(&self, settings: &Settings) {
-        let tmux = &settings.tmux;
-
-        let disable_ai = self.disable_ai || matches!(settings.ai.enabled, Some(false));
+        let options = self.to_options(settings);
 
         match self.shell {
             Shell::Zsh => {
-                zsh::init_static(self.disable_up_arrow, self.disable_ctrl_r, disable_ai, tmux);
+                zsh::init_static(&options);
             }
             Shell::Bash => {
-                bash::init_static(self.disable_up_arrow, self.disable_ctrl_r, disable_ai, tmux);
+                bash::init_static(&options);
             }
             Shell::Fish => {
-                fish::init_static(self.disable_up_arrow, self.disable_ctrl_r, disable_ai, tmux);
+                fish::init_static(&options);
             }
             Shell::Nu => {
-                self.init_nu(tmux);
+                nu::init_static(&options);
             }
             Shell::Xonsh => {
-                xonsh::init_static(self.disable_up_arrow, self.disable_ctrl_r, tmux);
+                xonsh::init_static(&options);
             }
             Shell::PowerShell => {
-                powershell::init_static(self.disable_up_arrow, self.disable_ctrl_r, tmux);
+                powershell::init_static(&options);
             }
         }
     }
@@ -135,66 +97,37 @@ $env.config = (
         let alias_store = AliasStore::new(sqlite_store.clone(), host_id, encryption_key);
         let var_store = VarStore::new(sqlite_store.clone(), host_id, encryption_key);
 
-        let disable_ai = self.disable_ai || matches!(settings.ai.enabled, Some(false));
+        let options = self.to_options(settings);
 
         match self.shell {
             Shell::Zsh => {
-                zsh::init(
-                    alias_store,
-                    var_store,
-                    self.disable_up_arrow,
-                    self.disable_ctrl_r,
-                    disable_ai,
-                    &settings.tmux,
-                )
-                .await?;
+                zsh::init(alias_store, var_store, &options).await?;
             }
             Shell::Bash => {
-                bash::init(
-                    alias_store,
-                    var_store,
-                    self.disable_up_arrow,
-                    self.disable_ctrl_r,
-                    disable_ai,
-                    &settings.tmux,
-                )
-                .await?;
+                bash::init(alias_store, var_store, &options).await?;
             }
             Shell::Fish => {
-                fish::init(
-                    alias_store,
-                    var_store,
-                    self.disable_up_arrow,
-                    self.disable_ctrl_r,
-                    disable_ai,
-                    &settings.tmux,
-                )
-                .await?;
+                fish::init(alias_store, var_store, &options).await?;
             }
-            Shell::Nu => self.init_nu(&settings.tmux),
+            Shell::Nu => nu::init_static(&options),
             Shell::Xonsh => {
-                xonsh::init(
-                    alias_store,
-                    var_store,
-                    self.disable_up_arrow,
-                    self.disable_ctrl_r,
-                    &settings.tmux,
-                )
-                .await?;
+                xonsh::init(alias_store, var_store, &options).await?;
             }
             Shell::PowerShell => {
-                powershell::init(
-                    alias_store,
-                    var_store,
-                    self.disable_up_arrow,
-                    self.disable_ctrl_r,
-                    &settings.tmux,
-                )
-                .await?;
+                powershell::init(alias_store, var_store, &options).await?;
             }
         }
 
         Ok(())
+    }
+
+    fn to_options<'a>(&self, settings: &'a Settings) -> StaticInitOptions<'a> {
+        StaticInitOptions {
+            enable_up_arrow: !self.disable_up_arrow,
+            enable_ctrl_r: !self.disable_ctrl_r,
+            enable_ai: !self.disable_ai && settings.ai.enabled.unwrap_or(true),
+            tmux: &settings.tmux,
+        }
     }
 
     pub async fn run(self, settings: &Settings) -> Result<()> {
