@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::mpsc;
 
 use crate::context::{AppContext, ClientContext};
@@ -61,7 +60,7 @@ pub(crate) async fn run(
         None => (String::new(), false),
     };
 
-    let history_db_path = PathBuf::from(settings.db_path.as_str());
+    let history_db_path = &settings.db_path;
     let history_db = Sqlite::new(history_db_path, settings.local_timeout)
         .await
         .context("failed to open history database for AI")?;
