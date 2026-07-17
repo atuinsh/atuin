@@ -294,75 +294,147 @@ mod tests {
     }
 
     #[rstest]
-    #[case("hello", Budget::Columns(10), Pos::End, Indicator::ASCII, "hello")]
-    #[case("hello", Budget::Columns(5), Pos::End, Indicator::ASCII, "hello")]
-    #[case(
+    #[case::ascii_fits_under_column_budget(
+        "hello",
+        Budget::Columns(10),
+        Pos::End,
+        Indicator::ASCII,
+        "hello"
+    )]
+    #[case::ascii_exactly_fits_column_budget(
+        "hello",
+        Budget::Columns(5),
+        Pos::End,
+        Indicator::ASCII,
+        "hello"
+    )]
+    #[case::ascii_truncates_end_with_ascii_indicator(
         "hello world",
         Budget::Columns(8),
         Pos::End,
         Indicator::ASCII,
         "hello..."
     )]
-    #[case(
+    #[case::ascii_truncates_start_with_ascii_indicator(
         "hello world",
         Budget::Columns(8),
         Pos::Start,
         Indicator::ASCII,
         "...world"
     )]
-    #[case(
+    #[case::ascii_truncates_middle_with_ascii_indicator(
         "hello world",
         Budget::Columns(7),
         Pos::Middle,
         Indicator::ASCII,
         "he...ld"
     )]
-    #[case(
+    #[case::ascii_truncates_end_with_unicode_indicator(
         "hello world",
         Budget::Columns(6),
         Pos::End,
         Indicator::UNICODE,
         "hello…"
     )]
-    #[case(
+    #[case::ascii_truncates_start_with_unicode_indicator(
         "hello world",
         Budget::Columns(6),
         Pos::Start,
         Indicator::UNICODE,
         "…world"
     )]
-    #[case("你好世界", Budget::Columns(5), Pos::End, Indicator::ASCII, "你...")]
-    #[case("你好世界", Budget::Columns(4), Pos::End, Indicator::ASCII, "...")]
-    #[case("你好世界", Budget::Columns(8), Pos::End, Indicator::ASCII, "你好世界")]
-    #[case("🐢🦀🐢🦀", Budget::Columns(5), Pos::End, Indicator::UNICODE, "🐢🦀…")]
-    #[case(
+    #[case::cjk_truncates_under_column_budget(
+        "你好世界",
+        Budget::Columns(5),
+        Pos::End,
+        Indicator::ASCII,
+        "你..."
+    )]
+    #[case::cjk_truncates_to_indicator_only_under_tiny_column_budget(
+        "你好世界",
+        Budget::Columns(4),
+        Pos::End,
+        Indicator::ASCII,
+        "..."
+    )]
+    #[case::cjk_exactly_fits_column_budget(
+        "你好世界",
+        Budget::Columns(8),
+        Pos::End,
+        Indicator::ASCII,
+        "你好世界"
+    )]
+    #[case::emoji_truncates_end_under_column_budget_with_unicode_indicator(
+        "🐢🦀🐢🦀",
+        Budget::Columns(5),
+        Pos::End,
+        Indicator::UNICODE,
+        "🐢🦀…"
+    )]
+    #[case::emoji_exactly_fits_column_budget(
         "🐢🦀🐢🦀",
         Budget::Columns(8),
         Pos::End,
         Indicator::UNICODE,
         "🐢🦀🐢🦀"
     )]
-    #[case("hello", Budget::Columns(2), Pos::End, Indicator::ASCII, "he")]
-    #[case("hello", Budget::Columns(2), Pos::Start, Indicator::ASCII, "lo")]
-    #[case("hello", Budget::Columns(0), Pos::End, Indicator::ASCII, "")]
-    #[case("", Budget::Columns(5), Pos::End, Indicator::ASCII, "")]
-    #[case(
+    #[case::ascii_hard_truncates_end_when_budget_below_indicator_cost(
+        "hello",
+        Budget::Columns(2),
+        Pos::End,
+        Indicator::ASCII,
+        "he"
+    )]
+    #[case::ascii_hard_truncates_start_when_budget_below_indicator_cost(
+        "hello",
+        Budget::Columns(2),
+        Pos::Start,
+        Indicator::ASCII,
+        "lo"
+    )]
+    #[case::ascii_zero_budget_yields_empty_string(
+        "hello",
+        Budget::Columns(0),
+        Pos::End,
+        Indicator::ASCII,
+        ""
+    )]
+    #[case::empty_input_yields_empty_string("", Budget::Columns(5), Pos::End, Indicator::ASCII, "")]
+    #[case::ascii_truncates_end_under_byte_budget(
         "hello world",
         Budget::Bytes(8),
         Pos::End,
         Indicator::ASCII,
         "hello..."
     )]
-    #[case(
+    #[case::ascii_truncates_end_under_byte_budget_with_unicode_indicator(
         "hello world",
         Budget::Bytes(8),
         Pos::End,
         Indicator::UNICODE,
         "hello…"
     )]
-    #[case("café", Budget::Bytes(4), Pos::End, Indicator::ASCII, "c...")]
-    #[case("café", Budget::Bytes(5), Pos::End, Indicator::ASCII, "café")]
-    #[case("你好", Budget::Bytes(5), Pos::End, Indicator::ASCII, "...")]
+    #[case::accented_truncates_end_under_byte_budget(
+        "café",
+        Budget::Bytes(4),
+        Pos::End,
+        Indicator::ASCII,
+        "c..."
+    )]
+    #[case::accented_exactly_fits_byte_budget(
+        "café",
+        Budget::Bytes(5),
+        Pos::End,
+        Indicator::ASCII,
+        "café"
+    )]
+    #[case::cjk_truncates_to_indicator_only_under_byte_budget(
+        "你好",
+        Budget::Bytes(5),
+        Pos::End,
+        Indicator::ASCII,
+        "..."
+    )]
     fn truncates_per_table(
         #[case] input: &str,
         #[case] budget: Budget,
