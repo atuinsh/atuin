@@ -427,6 +427,7 @@ dependencies = [
  "dashmap",
  "derive_more",
  "eyre",
+ "futures",
  "hyper-util",
  "lasso",
  "listenfd",

@@ -36,6 +36,7 @@ tonic-prost = "0.14"
 prost = "0.14"
 prost-types = "0.14"
 tokio-stream = { version = "0.1.14", features = ["net"] }
+futures = "0.3"
 hyper-util = "0.1"
 
 rand.workspace = true
