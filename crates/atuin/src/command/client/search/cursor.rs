@@ -319,43 +319,43 @@ mod cursor_tests {
     const JUMPER_SUBJECT: &str = "   aaa   ((()))bbb   ((()))   ";
 
     #[rstest]
-    #[case(0, 6)]
-    #[case(3, 6)]
-    #[case(7, 18)]
-    #[case(19, 30)]
+    #[case::from_start_to_end_of_aaa(0, 6)]
+    #[case::from_within_aaa_to_end_of_aaa(3, 6)]
+    #[case::from_gap_skips_parens_to_end_of_bbb(7, 18)]
+    #[case::from_after_bbb_to_end_of_string(19, 30)]
     fn emacs_get_next_word_pos(#[case] src: usize, #[case] dest: usize) {
         let s = String::from(JUMPER_SUBJECT);
         assert_eq!(EMACS_WORD_JUMPER.get_next_word_pos(&s, src), dest);
     }
 
     #[rstest]
-    #[case(30, 15)]
-    #[case(29, 15)]
-    #[case(15, 3)]
-    #[case(3, 0)]
+    #[case::from_end_of_string_to_start_of_bbb(30, 15)]
+    #[case::from_trailing_space_to_start_of_bbb(29, 15)]
+    #[case::from_start_of_bbb_to_start_of_aaa(15, 3)]
+    #[case::from_start_of_aaa_to_string_start(3, 0)]
     fn emacs_get_prev_word_pos(#[case] src: usize, #[case] dest: usize) {
         let s = String::from(JUMPER_SUBJECT);
         assert_eq!(EMACS_WORD_JUMPER.get_prev_word_pos(&s, src), dest);
     }
 
     #[rstest]
-    #[case(0, 3)]
-    #[case(1, 3)]
-    #[case(3, 9)]
-    #[case(9, 15)]
-    #[case(15, 21)]
-    #[case(21, 30)]
+    #[case::from_string_start_to_start_of_aaa(0, 3)]
+    #[case::from_within_leading_spaces_to_start_of_aaa(1, 3)]
+    #[case::from_start_of_aaa_to_first_parens_block(3, 9)]
+    #[case::from_first_parens_block_to_start_of_bbb(9, 15)]
+    #[case::from_start_of_bbb_to_second_parens_block(15, 21)]
+    #[case::from_second_parens_block_to_end_of_string(21, 30)]
     fn subl_get_next_word_pos(#[case] src: usize, #[case] dest: usize) {
         let s = String::from(JUMPER_SUBJECT);
         assert_eq!(SUBL_WORD_JUMPER.get_next_word_pos(&s, src), dest);
     }
 
     #[rstest]
-    #[case(30, 21)]
-    #[case(21, 15)]
-    #[case(15, 9)]
-    #[case(9, 3)]
-    #[case(3, 0)]
+    #[case::from_end_of_string_to_second_parens_block(30, 21)]
+    #[case::from_second_parens_block_to_start_of_bbb(21, 15)]
+    #[case::from_start_of_bbb_to_first_parens_block(15, 9)]
+    #[case::from_first_parens_block_to_start_of_aaa(9, 3)]
+    #[case::from_start_of_aaa_to_string_start(3, 0)]
     fn subl_get_prev_word_pos(#[case] src: usize, #[case] dest: usize) {
         let s = String::from(JUMPER_SUBJECT);
         assert_eq!(SUBL_WORD_JUMPER.get_prev_word_pos(&s, src), dest);
