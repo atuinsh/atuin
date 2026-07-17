@@ -78,6 +78,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 vt100 = "0.16"
 regex = "1.10.5"
 toml_edit = "0.25.4"
+url = { version = "2.5", features = ["serde"] }
 
 [workspace.dependencies.tracing-subscriber]
 version = "0.3"

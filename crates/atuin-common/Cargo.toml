@@ -26,6 +26,7 @@ serde = { workspace = true }
 uuid = { workspace = true }
 typed-builder = { workspace = true }
 eyre = { workspace = true }
+url = { workspace = true }
 sqlx = { workspace = true }
 semver = { workspace = true }
 thiserror = { workspace = true }

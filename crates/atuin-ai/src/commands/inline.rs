@@ -42,14 +42,15 @@ pub(crate) async fn run(
         }
     }
 
-    let endpoint = api_endpoint.as_deref().unwrap_or(
-        settings
+    let endpoint = match api_endpoint.as_deref() {
+        Some(raw) => reqwest::Url::parse(raw).context("invalid --api-endpoint URL")?,
+        None => settings
             .ai
             .endpoint
-            .as_deref()
-            .unwrap_or("https://hub.atuin.sh"),
-    );
-    let endpoint_is_hub = settings.is_hub_ai_endpoint(endpoint);
+            .clone()
+            .unwrap_or_else(|| atuin_client::settings::DEFAULT_HUB_URL.clone()),
+    };
+    let endpoint_is_hub = settings.is_hub_ai_endpoint(&endpoint);
     let api_token = api_token.as_deref().or(settings.ai.api_token.as_deref());
 
     let (token, token_from_hub_session) = match api_token {
@@ -80,7 +81,7 @@ pub(crate) async fn run(
         .and_then(|cwd| atuin_common::utils::in_git_repo(cwd.to_str()?));
 
     let ctx = AppContext {
-        endpoint: endpoint.to_string(),
+        endpoint,
         token,
         endpoint_is_hub,
         token_from_hub_session,
@@ -105,7 +106,7 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
         return Ok(token);
     }
 
-    let hub_address = settings.active_hub_endpoint().unwrap_or_default();
+    let hub_address = settings.hub_endpoint();
     let will_sync = settings.is_hub_sync();
 
     info!("No Hub session found, prompting for authentication");
@@ -127,7 +128,7 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
     debug!("Starting Atuin Hub authentication...");
     println!("Authenticating with Atuin Hub...");
 
-    let session = atuin_client::hub::HubAuthSession::start(hub_address.as_ref()).await?;
+    let session = atuin_client::hub::HubAuthSession::start(&hub_address).await?;
     println!("Open this URL to continue:");
     println!("{}", session.auth_url);
 
@@ -145,7 +146,7 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
         && let Ok(Some(cli_token)) = meta.session_token().await
     {
         debug!("CLI session found, attempting to link accounts");
-        if let Err(e) = atuin_client::hub::link_account(hub_address.as_ref(), &cli_token).await {
+        if let Err(e) = atuin_client::hub::link_account(&hub_address, &cli_token).await {
             debug!("Could not link CLI account to Hub: {}", e);
         } else {
             info!("Successfully linked CLI account to Hub");

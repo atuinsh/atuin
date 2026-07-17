@@ -72,11 +72,8 @@ pub async fn login(
         }
     }
 
-    let session = api_client::login(
-        settings.sync_address.as_str(),
-        LoginRequest { username, password },
-    )
-    .await?;
+    let session =
+        api_client::login(&settings.sync_address, LoginRequest { username, password }).await?;
 
     Settings::meta_store()
         .await?

@@ -73,7 +73,7 @@ impl Cmd {
 
     /// Hub login: use the browser flow unless the username was provided for headless use.
     async fn run_hub_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        let endpoint = settings.active_hub_endpoint().unwrap_or_default();
+        let endpoint = settings.hub_endpoint();
 
         if let Some(username) = &self.username {
             // Headless login via v0 API (for CI / scripting).
@@ -118,12 +118,12 @@ impl Cmd {
                 self.prompt_and_store_key(settings, store).await?;
             }
 
-            self.ensure_hub_session(settings, endpoint.as_ref()).await?;
+            self.ensure_hub_session(settings, &endpoint).await?;
         }
 
         // Silently attempt to link CLI account to Hub if one exists
         if let Ok(cli_token) = settings.session_token().await
-            && let Err(e) = atuin_client::hub::link_account(endpoint.as_ref(), &cli_token).await
+            && let Err(e) = atuin_client::hub::link_account(&endpoint, &cli_token).await
         {
             tracing::debug!("Could not link CLI account to Hub: {}", e);
         }
@@ -157,7 +157,7 @@ impl Cmd {
         Ok(())
     }
 
-    async fn ensure_hub_session(&self, _settings: &Settings, hub_address: &str) -> Result<()> {
+    async fn ensure_hub_session(&self, _settings: &Settings, hub_address: &url::Url) -> Result<()> {
         tracing::info!("Authenticating with Atuin Hub...");
 
         let session = atuin_client::hub::HubAuthSession::start(hub_address).await?;

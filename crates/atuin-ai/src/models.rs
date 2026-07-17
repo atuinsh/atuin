@@ -6,6 +6,7 @@
 
 use std::time::Duration;
 
+use atuin_common::url::UrlAppendExt;
 use eyre::{Context, Result};
 use reqwest::header::USER_AGENT;
 use serde::Deserialize;
@@ -26,9 +27,9 @@ pub(crate) struct ModelList {
 
 /// Fetch the models available to this user. Sent authenticated because the
 /// server includes feature-flag-gated models only for entitled users.
-pub(crate) async fn fetch_models(endpoint: &str, token: &str) -> Result<ModelList> {
+pub(crate) async fn fetch_models(endpoint: &reqwest::Url, token: &str) -> Result<ModelList> {
     atuin_common::tls::ensure_crypto_provider();
-    let url = crate::stream::hub_url(endpoint, "/api/cli/models")?;
+    let url = endpoint.append_path("api/cli/models")?;
 
     let mut request = reqwest::Client::new()
         .get(url)
