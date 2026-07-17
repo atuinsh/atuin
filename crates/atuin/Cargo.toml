@@ -119,6 +119,8 @@ windows-sys = { version = "0.61.2", features = ["Win32_System_Console"] }
 
 [dev-dependencies]
 tracing-tree = "0.4"
+proptest = { workspace = true }
+rstest = { workspace = true }
 
 # Integration tests in tests/ spin up a test server to verify sync functionality.
 # TODO: Consider moving these tests to atuin-server crate instead (client would become a dev dep there)
