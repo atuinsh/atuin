@@ -114,13 +114,17 @@ fn upload(bencher: divan::Bencher, arg: SyncArg) {
                 (dir, store, ops)
             })
         })
-        .bench_values(|(_dir, store, ops)| {
+        .bench_values(|(dir, store, ops)| {
             let (uploaded, _) = rt
                 .block_on(sync_remote(&client, ops, &store, arg.page_size))
                 .unwrap();
 
             // A silently empty sync would benchmark nothing at all, very quickly.
             assert_eq!(uploaded, RECORDS as i64);
+
+            // Returned, not dropped here: divan drops outputs after the sample ends, so the
+            // TempDir teardown and pool close stay out of the timed region.
+            (dir, store)
         });
 }
 
@@ -161,11 +165,15 @@ fn download(bencher: divan::Bencher, arg: SyncArg) {
                 (dir, store, ops)
             })
         })
-        .bench_values(|(_dir, store, ops)| {
+        .bench_values(|(dir, store, ops)| {
             let (_, downloaded) = rt
                 .block_on(sync_remote(&client, ops, &store, arg.page_size))
                 .unwrap();
 
             assert_eq!(downloaded.len(), RECORDS);
+
+            // Returned, not dropped here: divan drops outputs after the sample ends, so the
+            // TempDir teardown and pool close stay out of the timed region.
+            (dir, store)
         });
 }

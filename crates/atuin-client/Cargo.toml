@@ -89,9 +89,14 @@ tempfile = "3"
 # The end-to-end sync benchmark (benches/sync.rs) runs a real server in-process and talks to it
 # over a real socket. `atuin-server` does not depend on `atuin-client`, so this is not a cycle.
 # `axum` must match the version `atuin-server` uses (0.8) so that `Router` is the same type.
-atuin-server = { workspace = true }
-atuin-server-database = { workspace = true }
-atuin-server-sqlite = { workspace = true }
+# These are path-only (no `version` key), unlike the `atuin-common` dev-dependency below: cargo
+# strips dev-dependencies from the published manifest only when they carry no `version` key. With
+# one, they'd be retained and would have to resolve against crates.io at publish time, and
+# `scripts/release.sh` publishes atuin-client before atuin-server/atuin-server-database/
+# atuin-server-sqlite, so publishing atuin-client would fail.
+atuin-server = { path = "../atuin-server" }
+atuin-server-database = { path = "../atuin-server-database" }
+atuin-server-sqlite = { path = "../atuin-server-sqlite" }
 axum = "0.8"
 
 # This crate's tests require the `test-utils` feature in atuin-common.
