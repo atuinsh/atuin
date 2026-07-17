@@ -64,13 +64,12 @@ impl From<WireHookEvent> for Option<HookEvent> {
         match wire.hook_event_name {
             HookEventName::PreToolUse => {
                 let (command, intent) = match wire.tool_input {
-                    Some(input) => (input.command.unwrap_or_default(), input.description),
-                    None => (CommandStr::default(), None),
+                    Some(input) => (input.command, input.description),
+                    None => (None, None),
                 };
 
-                if command.is_empty() {
-                    return None;
-                }
+                // A missing or empty command has nothing to record.
+                let command = command.filter(|command| !command.is_empty())?;
 
                 Some(HookEvent::Start {
                     command,

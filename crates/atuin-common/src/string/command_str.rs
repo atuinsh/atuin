@@ -1,59 +1,46 @@
 //! A command string sanitized at ingest: everything up to its first NUL byte.
 //!
 //! Coding agents occasionally hand `atuin hook` a command carrying a NUL byte
-//! and trailing junk. A C string ends at its first NUL, and so does this: the
-//! stored value holds no interior NUL, so the parts of Atuin that treat a
-//! command as text never see one.
+//! and trailing junk. Like a C string, this ends at its first NUL: the stored
+//! value holds no interior NUL, so the parts of Atuin that treat a command as
+//! text never see one.
 
-use std::ffi::CString;
-use std::fmt;
-use std::ops::Deref;
-
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 /// A command truncated at its first NUL byte.
 ///
-/// Every constructor keeps only the bytes before the first NUL, so the wrapped
-/// [`CString`] never contains an interior NUL and always dereferences to valid
-/// UTF-8.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
-pub struct CommandStr(CString);
+/// Every constructor — including `Deserialize` — keeps only the text before the
+/// first NUL, so the wrapped string never contains an interior NUL and is always
+/// valid UTF-8.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    derive_more::AsRef,
+    derive_more::Deref,
+    derive_more::Display,
+    Serialize,
+    Deserialize,
+)]
+#[display("{_0}")]
+#[serde(from = "String")]
+pub struct CommandStr(#[as_ref(str)] #[deref(forward)] Box<str>);
 
 impl CommandStr {
     /// Build a `CommandStr`, keeping only the text before the first NUL byte.
     pub fn new(s: impl AsRef<str>) -> Self {
         let s = s.as_ref();
         let end = s.find('\0').unwrap_or(s.len());
-        // `s[..end]` stops before the first NUL, so it has no interior NUL and
-        // `CString::new` cannot fail.
-        Self(CString::new(&s.as_bytes()[..end]).expect("slice has no interior NUL byte"))
+        Self(s[..end].into())
     }
 
-    /// The command as a string slice — always valid UTF-8 by construction.
+    /// The command as a string slice.
     pub fn as_str(&self) -> &str {
-        self.0
-            .to_str()
-            .expect("constructed from valid UTF-8, so always valid UTF-8")
-    }
-}
-
-impl Deref for CommandStr {
-    type Target = str;
-
-    fn deref(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl AsRef<str> for CommandStr {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl fmt::Display for CommandStr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        &self.0
     }
 }
 
@@ -66,19 +53,6 @@ impl From<&str> for CommandStr {
 impl From<String> for CommandStr {
     fn from(s: String) -> Self {
         Self::new(s)
-    }
-}
-
-impl Serialize for CommandStr {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for CommandStr {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(deserializer)?;
-        Ok(Self::new(s))
     }
 }
 
@@ -105,12 +79,6 @@ mod tests {
     #[case("a\0b\0c", "a")]
     fn truncates_at_first_nul(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(CommandStr::new(input).as_str(), expected);
-    }
-
-    #[test]
-    fn default_is_empty() {
-        assert_eq!(CommandStr::default().as_str(), "");
-        assert!(CommandStr::default().is_empty());
     }
 
     #[test]
