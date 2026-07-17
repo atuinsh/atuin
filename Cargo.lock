@@ -304,6 +304,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rmcp",
+ "rstest",
  "serde",
  "serde_json",
  "shellexpand",
