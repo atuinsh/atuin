@@ -86,6 +86,14 @@ pretty_assertions = { workspace = true }
 divan = "0.1.14"
 tempfile = "3"
 
+# The end-to-end sync benchmark (benches/sync.rs) runs a real server in-process and talks to it
+# over a real socket. `atuin-server` does not depend on `atuin-client`, so this is not a cycle.
+# `axum` must match the version `atuin-server` uses (0.8) so that `Router` is the same type.
+atuin-server = { workspace = true }
+atuin-server-database = { workspace = true }
+atuin-server-sqlite = { workspace = true }
+axum = "0.8"
+
 # This crate's tests require the `test-utils` feature in atuin-common.
 [dev-dependencies.atuin-common]
 path = "../atuin-common"
