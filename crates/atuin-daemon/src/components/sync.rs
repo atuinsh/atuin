@@ -249,7 +249,7 @@ async fn do_sync_tick(
             SyncState::Retrying
         }
         Ok((uploaded_count, downloaded_records)) => {
-            // Controls how large of a Vec<History> we should try to process at a a time.
+            // Controls how large of a Vec<History> we should try to process at a time.
             // This is used limit how much memory we use at a time.
             //
             // An initial sync (on backfill, eg.), risks being dozens of GB of RAM

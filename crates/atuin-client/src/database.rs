@@ -377,12 +377,14 @@ impl Database for Sqlite {
         let mut out = Vec::with_capacity(ids.len());
 
         for chunk in ids.chunks(CHUNK) {
-            let placeholders = ["?"].repeat(chunk.len()).join(",");
-            let sql = format!(
-                "select * from history where id in ({placeholders}) and deleted_at is null"
+            let mut query = sql::query(
+                format!(
+                    "select * from history where id in ({}) and deleted_at is null",
+                    ["?"].repeat(chunk.len()).join(",")
+                )
+                .as_str(),
             );
 
-            let mut query = sqlx::query(sql.as_str());
             for id in chunk {
                 query = query.bind(id.0.as_str());
             }
