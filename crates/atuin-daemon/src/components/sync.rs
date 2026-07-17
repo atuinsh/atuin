@@ -2,7 +2,7 @@
 //!
 //! Handles periodic synchronization with the Atuin cloud server.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use eyre::Result;
 use futures::{StreamExt, TryStreamExt, stream::TryChunksError};
@@ -10,7 +10,11 @@ use rand::Rng;
 use tokio::sync::mpsc;
 use tokio::time::{self, MissedTickBehavior};
 
-use atuin_client::{history::store::HistoryStore, record::sync, settings::Settings};
+use atuin_client::{
+    history::{HistoryId, store::HistoryStore},
+    record::sync,
+    settings::Settings,
+};
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
 
 use crate::{
@@ -270,7 +274,9 @@ async fn do_sync_tick(
                 };
 
                 if !histories.is_empty() {
-                    handle.emit(DaemonEvent::HistorySynced(histories.into()));
+                    // Only the IDs go on the bus; the rows themselves are already in sqlite.
+                    let ids: Arc<[HistoryId]> = histories.iter().map(|h| h.id.clone()).collect();
+                    handle.emit(DaemonEvent::HistorySynced(ids));
                 }
 
                 if let Some(e) = failure {

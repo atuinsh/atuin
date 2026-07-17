@@ -29,10 +29,11 @@ pub enum DaemonEvent {
     ///
     /// The search component uses this to update its index with the new history.
     ///
-    /// Held behind an `Arc` so the broadcast bus shares one allocation across all
-    /// receivers instead of deep-cloning the batch (potentially the entire history
-    /// on a first full sync) once per subscriber.
-    HistorySynced(Arc<[History]>),
+    /// Carries IDs, not entries. The rows are already committed to sqlite before this
+    /// is emitted, and the broadcast bus retains every event until all receivers have
+    /// seen it -- so a full ring of 5000-entry batches would pin tens of MB of history
+    /// we already have on disk. IDs cost ~40 bytes each instead of a few hundred.
+    HistorySynced(Arc<[HistoryId]>),
 
     /// Sync completed successfully.
     SyncCompleted {

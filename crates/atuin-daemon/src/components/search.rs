@@ -181,11 +181,17 @@ impl Component for SearchComponent {
 
     async fn handle_event(&mut self, event: &DaemonEvent) -> Result<()> {
         match event {
-            DaemonEvent::HistorySynced(histories) => {
-                debug!(
-                    count = histories.len(),
-                    "Indexing synced history entries into search index"
-                );
+            DaemonEvent::HistorySynced(ids) => {
+                debug!(count = ids.len(), "Indexing synced history entries");
+
+                let handle_guard = self.handle.read().await;
+                let Some(handle) = handle_guard.as_ref() else {
+                    return Ok(());
+                };
+
+                // Propagates rather than unwrap_or_default: a read failure here means the
+                // index is silently missing entries, which is exactly #3627's symptom.
+                let histories = handle.history_db().load_bulk(ids).await?;
 
                 span!(
                     Level::TRACE,
@@ -193,7 +199,7 @@ impl Component for SearchComponent {
                     count = histories.len()
                 )
                 .in_scope(async || {
-                    self.index.read().await.add_histories(histories);
+                    self.index.read().await.add_histories(&histories);
                 })
                 .await;
             }
@@ -394,5 +400,121 @@ pub fn with_trailing_slash(s: &str) -> String {
         s.to_string()
     } else {
         format!("{}/", s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use atuin_client::database::{Database, Sqlite};
+    use atuin_client::history::{History, HistoryId};
+    use atuin_client::record::sqlite_store::SqliteStore;
+    use atuin_client::settings::{Settings, init_meta_config_for_testing};
+    use tempfile::TempDir;
+    use time::OffsetDateTime;
+
+    use super::*;
+    use crate::Daemon;
+
+    async fn test_handle(tmp: &TempDir) -> (DaemonHandle, Sqlite) {
+        let db_path = tmp.path().join("history.db");
+        let record_path = tmp.path().join("records.db");
+        let key_path = tmp.path().join("key");
+        let meta_path = tmp.path().join("meta.db");
+
+        init_meta_config_for_testing(meta_path.to_str().unwrap(), 5.0);
+
+        let settings: Settings = Settings::builder()
+            .expect("could not build settings builder")
+            .set_override("db_path", db_path.to_str().unwrap())
+            .expect("failed to set db_path")
+            .set_override("record_store_path", record_path.to_str().unwrap())
+            .expect("failed to set record_store_path")
+            .set_override("key_path", key_path.to_str().unwrap())
+            .expect("failed to set key_path")
+            .set_override("meta.db_path", meta_path.to_str().unwrap())
+            .expect("failed to set meta.db_path")
+            .build()
+            .expect("could not build settings")
+            .try_deserialize()
+            .expect("could not deserialize settings");
+
+        let history_db = Sqlite::new(&db_path, 5.0).await.unwrap();
+        let store = SqliteStore::new(&record_path, 5.0).await.unwrap();
+
+        let daemon = Daemon::builder(settings)
+            .store(store)
+            .history_db(history_db.clone())
+            .build()
+            .await
+            .unwrap();
+
+        (daemon.handle(), history_db)
+    }
+
+    async fn save_history(db: &Sqlite, cmd: &str) -> History {
+        let mut captured: History = History::capture()
+            .timestamp(OffsetDateTime::now_utc())
+            .command(cmd)
+            .cwd("/home/ellie")
+            .build()
+            .into();
+
+        captured.exit = 0;
+        captured.duration = 1;
+        // Deliberately not overriding `session` (unlike the copy-pasted helper this was
+        // based on in atuin-client's database.rs tests): the search index only counts a
+        // history entry if its session parses as a UUID (see
+        // SearchIndex::add_history -> CommandData::new -> parse_uuid_bytes), and
+        // History::new() already gives `captured` a valid random session. Overwriting it
+        // with a non-UUID placeholder silently drops the entry from the index and makes
+        // this test's command_count assertions fail for reasons unrelated to the handler
+        // under test.
+        captured.hostname = "booop".to_string();
+
+        db.save(&captured).await.unwrap();
+        captured
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn history_synced_indexes_the_named_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (handle, db) = test_handle(&tmp).await;
+
+        let alpha = save_history(&db, "echo alpha").await;
+        let bravo = save_history(&db, "echo bravo").await;
+        let _not_in_the_event = save_history(&db, "echo charlie").await;
+
+        let mut component = SearchComponent::new();
+        // Injected rather than start()ed: start() spawns a loader that pages the whole
+        // db into the index, which would index charlie too and hide a broken handler.
+        *component.handle.write().await = Some(handle);
+
+        let ids: Arc<[HistoryId]> = vec![alpha.id.clone(), bravo.id.clone()].into();
+        component
+            .handle_event(&DaemonEvent::HistorySynced(ids))
+            .await
+            .unwrap();
+
+        assert_eq!(component.index.read().await.command_count(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn history_synced_with_no_ids_is_a_no_op() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (handle, db) = test_handle(&tmp).await;
+        save_history(&db, "echo alpha").await;
+
+        let mut component = SearchComponent::new();
+        *component.handle.write().await = Some(handle);
+
+        let ids: Arc<[HistoryId]> = Vec::new().into();
+        component
+            .handle_event(&DaemonEvent::HistorySynced(ids))
+            .await
+            .unwrap();
+
+        assert_eq!(component.index.read().await.command_count(), 0);
     }
 }
