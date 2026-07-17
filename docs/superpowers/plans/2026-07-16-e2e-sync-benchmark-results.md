@@ -45,11 +45,19 @@ Corpus: 10,000 records, ~600 bytes each on the wire.
   call per row, plus an `insert ... on conflict do nothing` with 10 bind parameters) is heavier
   than the client's `push_batch` path. Read as an observation, not a proven cause: at rtt=0, the
   server's write path — not the client's — appears to dominate.
-- **Don't over-read precision on the page=1000 numbers.** page=1000 completes in only 10
-  round-trips at `sample_count = 5`, so its per-round-trip overhead is noisy: dividing the rtt=20ms
-  and rtt=100ms gaps above by 90 gives ~2.5ms/rt and ~14.9ms/rt respectively, versus page=100's
-  much more stable ~4ms/rt implied overhead. Treat the page=1000 rows as accurate to ratios and
-  orders of magnitude, not to four significant figures.
+- **Don't over-read precision on the page=1000 numbers.** Decomposing each row as
+  `(median − round_trips × rtt) / round_trips` gives the implied per-round-trip overhead.
+  For page=1000 (10 round-trips): upload rtt=20 → (407.1−200)/10 = 20.7ms/rt; upload rtt=100 →
+  (1345−1000)/10 = 34.5ms/rt; download rtt=20 → (362.3−200)/10 = 16.2ms/rt; download rtt=100 →
+  (1216−1000)/10 = 21.6ms/rt — a noisy ~16–35ms/rt range. For page=100 (100 round-trips): upload
+  rtt=20 → (2628−2000)/100 = 6.3ms/rt; upload rtt=100 → (10800−10000)/100 = 8.0ms/rt; download
+  rtt=20 → (2595−2000)/100 = 6.0ms/rt; download rtt=100 → (10460−10000)/100 = 4.6ms/rt — a much
+  more stable ~4.6–8.0ms/rt. The main reason isn't just sampling noise, it's structural: the
+  ~200ms of fixed per-sample work visible directly in the rtt=0 rows gets amortized over only 10
+  round-trips at page=1000 versus 100 at page=100, which inflates and destabilizes the
+  per-round-trip figure — and each page=1000 request also carries roughly 10x the bytes. The
+  per-round-trip decomposition is therefore not a meaningful unit for page=1000. Treat the
+  page=1000 rows as accurate to ratios and orders of magnitude, not to four significant figures.
 
 ## Caveats
 
@@ -60,8 +68,12 @@ Corpus: 10,000 records, ~600 bytes each on the wire.
 - The server runs SQLite, not the Postgres that production uses. This keeps server-side variance
   out of the measurement, but it means these numbers do not predict server-side load.
 - Payloads are random bytes, not real PASETO ciphertext. Nothing on the sync path decrypts, so
-  this is invisible to the code under test — but it does mean record size is a fixed ~600-byte
-  assumption rather than a real distribution.
+  this is invisible to the code under test — but it does mean the encrypted-data payload is a
+  fixed 300-byte assumption (`PAYLOAD_SIZE` in `crates/atuin-client/benches/_util/record.rs:25`,
+  plus a 150-byte `KEY_SIZE` wrapped key at line 28) rather than a real distribution. That's the
+  fixed assumption a reader checking the source will find; it's smaller than the ~600-byte total
+  on-the-wire record size quoted elsewhere in this document, which also includes the UUIDs and
+  JSON framing around the payload.
 
 ## Follow-ups this benchmark surfaced
 
