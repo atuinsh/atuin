@@ -614,6 +614,7 @@ fn log_record(record: &SemanticCommandRecord, message: &'static str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
     use time::OffsetDateTime;
 
     fn history(id: &str, session: &str, command: &str) -> History {
@@ -802,23 +803,49 @@ mod tests {
         assert_eq!(reply.output_observed_bytes, 1024);
     }
 
-    #[test]
-    fn output_ranges_are_line_based_inclusive_and_support_negative_offsets() {
-        let output = "zero\none\ntwo\nthree\nfour";
-        let ranges = vec![
+    #[rstest]
+    #[case::line_based_inclusive_with_negative_offsets(
+        "zero\none\ntwo\nthree\nfour",
+        vec![
             crate::semantic::OutputRange { start: 1, end: 2 },
             crate::semantic::OutputRange { start: -2, end: -1 },
-        ];
-
-        assert_eq!(
-            select_output_ranges(output, &ranges),
-            vec![
-                output_line(2, "one"),
-                output_line(3, "two"),
-                output_line(4, "three"),
-                output_line(5, "four"),
-            ]
-        );
+        ],
+        vec![
+            output_line(2, "one"),
+            output_line(3, "two"),
+            output_line(4, "three"),
+            output_line(5, "four"),
+        ]
+    )]
+    #[case::can_leave_gaps_for_client_formatting(
+        "zero\none\ntwo\nthree\nfour",
+        vec![
+            crate::semantic::OutputRange { start: 0, end: 1 },
+            crate::semantic::OutputRange { start: 4, end: 4 },
+        ],
+        vec![
+            output_line(1, "zero"),
+            output_line(2, "one"),
+            output_line(5, "four"),
+        ]
+    )]
+    #[case::skip_ranges_fully_outside_output(
+        "zero\none\ntwo",
+        vec![
+            crate::semantic::OutputRange { start: 10, end: 20 },
+            crate::semantic::OutputRange {
+                start: -20,
+                end: -10,
+            },
+        ],
+        Vec::new()
+    )]
+    fn selects_output_ranges(
+        #[case] output: &str,
+        #[case] ranges: Vec<crate::semantic::OutputRange>,
+        #[case] expected: Vec<OutputLine>,
+    ) {
+        assert_eq!(select_output_ranges(output, &ranges), expected);
     }
 
     #[test]
@@ -843,24 +870,6 @@ mod tests {
     }
 
     #[test]
-    fn output_ranges_can_leave_gaps_for_client_formatting() {
-        let output = "zero\none\ntwo\nthree\nfour";
-        let ranges = vec![
-            crate::semantic::OutputRange { start: 0, end: 1 },
-            crate::semantic::OutputRange { start: 4, end: 4 },
-        ];
-
-        assert_eq!(
-            select_output_ranges(output, &ranges),
-            vec![
-                output_line(1, "zero"),
-                output_line(2, "one"),
-                output_line(5, "four"),
-            ]
-        );
-    }
-
-    #[test]
     fn empty_output_ranges_default_to_first_thousand_lines() {
         let output = (0..1001)
             .map(|n| format!("line {n}"))
@@ -872,19 +881,5 @@ mod tests {
         assert_eq!(selected.len(), 1000);
         assert_eq!(selected.first(), Some(&output_line(1, "line 0")));
         assert_eq!(selected.last(), Some(&output_line(1000, "line 999")));
-    }
-
-    #[test]
-    fn output_ranges_skip_ranges_fully_outside_output() {
-        let output = "zero\none\ntwo";
-        let ranges = vec![
-            crate::semantic::OutputRange { start: 10, end: 20 },
-            crate::semantic::OutputRange {
-                start: -20,
-                end: -10,
-            },
-        ];
-
-        assert_eq!(select_output_ranges(output, &ranges), Vec::new());
     }
 }

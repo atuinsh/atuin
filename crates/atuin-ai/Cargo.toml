@@ -74,3 +74,4 @@ rmcp = { version = "2.1.0", default-features = false, features = ["server", "tra
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+rstest = { workspace = true }
