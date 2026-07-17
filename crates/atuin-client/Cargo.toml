@@ -85,6 +85,7 @@ tokio = { version = "1", features = ["full"] }
 pretty_assertions = { workspace = true }
 divan = "0.1.14"
 tempfile = "3"
+rstest = { workspace = true }
 
 # This crate's tests require the `test-utils` feature in atuin-common.
 [dev-dependencies.atuin-common]

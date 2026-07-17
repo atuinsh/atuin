@@ -359,6 +359,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rmp",
+ "rstest",
  "rusty_paserk",
  "rusty_paseto",
  "semver",

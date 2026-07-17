@@ -1789,37 +1789,42 @@ mod tests {
     use std::str::FromStr;
 
     use eyre::Result;
+    use rstest::rstest;
 
     use super::Timezone;
 
-    #[test]
-    fn can_parse_offset_timezone_spec() -> Result<()> {
-        assert_eq!(Timezone::from_str("+02")?.0.as_hms(), (2, 0, 0));
-        assert_eq!(Timezone::from_str("-04")?.0.as_hms(), (-4, 0, 0));
-        assert_eq!(Timezone::from_str("+05:30")?.0.as_hms(), (5, 30, 0));
-        assert_eq!(Timezone::from_str("-09:30")?.0.as_hms(), (-9, -30, 0));
-
-        // single digit hours are allowed
-        assert_eq!(Timezone::from_str("+2")?.0.as_hms(), (2, 0, 0));
-        assert_eq!(Timezone::from_str("-4")?.0.as_hms(), (-4, 0, 0));
-        assert_eq!(Timezone::from_str("+5:30")?.0.as_hms(), (5, 30, 0));
-        assert_eq!(Timezone::from_str("-9:30")?.0.as_hms(), (-9, -30, 0));
-
-        // fully qualified form
-        assert_eq!(Timezone::from_str("+09:30:00")?.0.as_hms(), (9, 30, 0));
-        assert_eq!(Timezone::from_str("-09:30:00")?.0.as_hms(), (-9, -30, 0));
-
-        // these offsets don't really exist but are supported anyway
-        assert_eq!(Timezone::from_str("+0:5")?.0.as_hms(), (0, 5, 0));
-        assert_eq!(Timezone::from_str("-0:5")?.0.as_hms(), (0, -5, 0));
-        assert_eq!(Timezone::from_str("+01:23:45")?.0.as_hms(), (1, 23, 45));
-        assert_eq!(Timezone::from_str("-01:23:45")?.0.as_hms(), (-1, -23, -45));
-
-        // require a leading sign for clarity
-        assert!(Timezone::from_str("5").is_err());
-        assert!(Timezone::from_str("10:30").is_err());
-
+    #[rstest]
+    #[case::plus_two_digit_hours("+02", (2, 0, 0))]
+    #[case::minus_two_digit_hours("-04", (-4, 0, 0))]
+    #[case::plus_hours_minutes("+05:30", (5, 30, 0))]
+    #[case::minus_hours_minutes("-09:30", (-9, -30, 0))]
+    // single digit hours are allowed
+    #[case::plus_single_digit_hour("+2", (2, 0, 0))]
+    #[case::minus_single_digit_hour("-4", (-4, 0, 0))]
+    #[case::plus_single_digit_hour_minutes("+5:30", (5, 30, 0))]
+    #[case::minus_single_digit_hour_minutes("-9:30", (-9, -30, 0))]
+    // fully qualified form
+    #[case::plus_fully_qualified("+09:30:00", (9, 30, 0))]
+    #[case::minus_fully_qualified("-09:30:00", (-9, -30, 0))]
+    // these offsets don't really exist but are supported anyway
+    #[case::plus_zero_hour_minutes("+0:5", (0, 5, 0))]
+    #[case::minus_zero_hour_minutes("-0:5", (0, -5, 0))]
+    #[case::plus_with_seconds("+01:23:45", (1, 23, 45))]
+    #[case::minus_with_seconds("-01:23:45", (-1, -23, -45))]
+    fn can_parse_offset_timezone_spec(
+        #[case] input: &str,
+        #[case] expected: (i8, i8, i8),
+    ) -> Result<()> {
+        assert_eq!(Timezone::from_str(input)?.0.as_hms(), expected);
         Ok(())
+    }
+
+    /// A leading sign is required, for clarity.
+    #[rstest]
+    #[case::bare_hour("5")]
+    #[case::bare_hour_minutes("10:30")]
+    fn rejects_timezone_spec_without_leading_sign(#[case] input: &str) {
+        assert!(Timezone::from_str(input).is_err());
     }
 
     #[test]
