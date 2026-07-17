@@ -60,6 +60,7 @@ pub struct OptFilters {
     pub include_duplicates: bool,
     /// Author filter. Supports special values `$all-user` and `$all-agent`.
     pub authors: Vec<String>,
+    pub shells: Vec<String>,
 }
 
 /// Build a query [`Context`] without requiring a live shell session.
@@ -134,6 +135,31 @@ fn apply_author_filter(sql: &mut SqlBuilder, authors: &[String]) {
 
     if !conditions.is_empty() {
         sql.and_where(format!("({})", conditions.join(" OR ")));
+    }
+}
+
+fn apply_shell_filter<S>(sql: &mut SqlBuilder, shells: S)
+where
+    S: IntoIterator,
+    S::Item: AsRef<str>,
+{
+    let mut include_null = false;
+    let nonempty_shells = shells.into_iter().filter(|s| {
+        let is_empty = s.as_ref().is_empty();
+        if is_empty {
+            include_null = true;
+        }
+        !is_empty
+    });
+
+    let shell_list = nonempty_shells.map(|s| quote(s.as_ref())).join(", ");
+    let mut cond = (!shell_list.is_empty()).then(|| format!("shell in ({shell_list})"));
+
+    if include_null {
+        cond = Some(cond.map_or_else(String::new, |s| s + " OR ") + "shell IS NULL");
+    }
+    if let Some(cond) = cond {
+        sql.and_where(cond);
     }
 }
 
@@ -670,6 +696,7 @@ impl Database for Sqlite {
         if !filter_options.authors.is_empty() {
             apply_author_filter(&mut sql, &filter_options.authors);
         }
+        apply_shell_filter(&mut sql, &filter_options.shells);
 
         sql.and_where_is_null("deleted_at");
 
