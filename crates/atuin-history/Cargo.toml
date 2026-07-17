@@ -24,6 +24,7 @@ unicode-segmentation = "1.11.0"
 [dev-dependencies]
 divan = "0.1.14"
 rand = { workspace = true }
+rstest = { workspace = true }
 
 [[bench]]
 name = "smart_sort"
