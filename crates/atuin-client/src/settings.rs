@@ -2019,4 +2019,21 @@ mod tests {
         assert!(config.vim_insert.is_empty());
         assert!(config.prefix.is_empty());
     }
+
+    #[test]
+    fn config_deserializes_string_into_pathbuf() {
+        #[derive(serde::Deserialize)]
+        struct Probe {
+            p: std::path::PathBuf,
+        }
+
+        let cfg = config::Config::builder()
+            .set_default("p", "/tmp/atuin-probe/history.db")
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let probe: Probe = cfg.try_deserialize().unwrap();
+        assert_eq!(probe.p, std::path::PathBuf::from("/tmp/atuin-probe/history.db"));
+    }
 }
