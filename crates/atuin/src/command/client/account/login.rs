@@ -241,7 +241,7 @@ impl Cmd {
                 bail!("The specified key is invalid");
             }
 
-            let mut file = File::create(&key_path).await?;
+            let mut file = File::create(key_path).await?;
             file.write_all(key.as_bytes()).await?;
         } else {
             // we now know that the user has logged in specifying a key, AND that the key path
@@ -262,7 +262,7 @@ impl Cmd {
                 store.re_encrypt(&current_key, &new_key).await?;
 
                 println!("Writing new key");
-                let mut file = File::create(&key_path).await?;
+                let mut file = File::create(key_path).await?;
                 file.write_all(encoded.as_bytes()).await?;
             }
         }
