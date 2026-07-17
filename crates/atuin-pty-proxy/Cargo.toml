@@ -19,3 +19,6 @@ eyre = { workspace = true }
 portable-pty = "0.9"
 signal-hook = "0.3"
 vt100 = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }

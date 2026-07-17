@@ -527,6 +527,7 @@ dependencies = [
  "crossterm",
  "eyre",
  "portable-pty",
+ "rstest",
  "signal-hook",
  "vt100",
 ]
