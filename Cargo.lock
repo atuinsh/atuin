@@ -251,6 +251,7 @@ dependencies = [
  "ratatui",
  "regex",
  "rpassword",
+ "rstest",
  "runtime-format",
  "rustix",
  "semver",

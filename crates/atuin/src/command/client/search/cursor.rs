@@ -281,6 +281,7 @@ impl Cursor {
 mod cursor_tests {
     use super::Cursor;
     use super::*;
+    use rstest::rstest;
 
     static EMACS_WORD_JUMPER: WordJumper = WordJumper {
         word_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
@@ -315,43 +316,56 @@ mod cursor_tests {
         }
     }
 
+    const JUMPER_SUBJECT: &str = "   aaa   ((()))bbb   ((()))   ";
+
+    #[rstest]
+    #[case(0, 6)]
+    #[case(3, 6)]
+    #[case(7, 18)]
+    #[case(19, 30)]
+    fn emacs_get_next_word_pos(#[case] src: usize, #[case] dest: usize) {
+        let s = String::from(JUMPER_SUBJECT);
+        assert_eq!(EMACS_WORD_JUMPER.get_next_word_pos(&s, src), dest);
+    }
+
+    #[rstest]
+    #[case(30, 15)]
+    #[case(29, 15)]
+    #[case(15, 3)]
+    #[case(3, 0)]
+    fn emacs_get_prev_word_pos(#[case] src: usize, #[case] dest: usize) {
+        let s = String::from(JUMPER_SUBJECT);
+        assert_eq!(EMACS_WORD_JUMPER.get_prev_word_pos(&s, src), dest);
+    }
+
+    #[rstest]
+    #[case(0, 3)]
+    #[case(1, 3)]
+    #[case(3, 9)]
+    #[case(9, 15)]
+    #[case(15, 21)]
+    #[case(21, 30)]
+    fn subl_get_next_word_pos(#[case] src: usize, #[case] dest: usize) {
+        let s = String::from(JUMPER_SUBJECT);
+        assert_eq!(SUBL_WORD_JUMPER.get_next_word_pos(&s, src), dest);
+    }
+
+    #[rstest]
+    #[case(30, 21)]
+    #[case(21, 15)]
+    #[case(15, 9)]
+    #[case(9, 3)]
+    #[case(3, 0)]
+    fn subl_get_prev_word_pos(#[case] src: usize, #[case] dest: usize) {
+        let s = String::from(JUMPER_SUBJECT);
+        assert_eq!(SUBL_WORD_JUMPER.get_prev_word_pos(&s, src), dest);
+    }
+
     #[test]
-    fn test_emacs_get_next_word_pos() {
-        let s = String::from("   aaa   ((()))bbb   ((()))   ");
-        let indices = [(0, 6), (3, 6), (7, 18), (19, 30)];
-        for (i_src, i_dest) in indices {
-            assert_eq!(EMACS_WORD_JUMPER.get_next_word_pos(&s, i_src), i_dest);
-        }
+    fn word_jumpers_handle_empty_string() {
         assert_eq!(EMACS_WORD_JUMPER.get_next_word_pos("", 0), 0);
-    }
-
-    #[test]
-    fn test_emacs_get_prev_word_pos() {
-        let s = String::from("   aaa   ((()))bbb   ((()))   ");
-        let indices = [(30, 15), (29, 15), (15, 3), (3, 0)];
-        for (i_src, i_dest) in indices {
-            assert_eq!(EMACS_WORD_JUMPER.get_prev_word_pos(&s, i_src), i_dest);
-        }
         assert_eq!(EMACS_WORD_JUMPER.get_prev_word_pos("", 0), 0);
-    }
-
-    #[test]
-    fn test_subl_get_next_word_pos() {
-        let s = String::from("   aaa   ((()))bbb   ((()))   ");
-        let indices = [(0, 3), (1, 3), (3, 9), (9, 15), (15, 21), (21, 30)];
-        for (i_src, i_dest) in indices {
-            assert_eq!(SUBL_WORD_JUMPER.get_next_word_pos(&s, i_src), i_dest);
-        }
         assert_eq!(SUBL_WORD_JUMPER.get_next_word_pos("", 0), 0);
-    }
-
-    #[test]
-    fn test_subl_get_prev_word_pos() {
-        let s = String::from("   aaa   ((()))bbb   ((()))   ");
-        let indices = [(30, 21), (21, 15), (15, 9), (9, 3), (3, 0)];
-        for (i_src, i_dest) in indices {
-            assert_eq!(SUBL_WORD_JUMPER.get_prev_word_pos(&s, i_src), i_dest);
-        }
         assert_eq!(SUBL_WORD_JUMPER.get_prev_word_pos("", 0), 0);
     }
 
