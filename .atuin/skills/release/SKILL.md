@@ -72,6 +72,13 @@ gh pr list --repo atuinsh/atuin --state open \
 
 If both come back empty, say so and continue to Step 3. No checkpoint needed.
 
+The two labels are mutually exclusive: they name opposite sides of the tag. If a
+PR number comes back in **both** lists, that is a labelling mistake — the two
+queries are independent, so it would otherwise be approved twice, merged at Step
+7.5, then merged again at Step 8.5 against an already-closed PR. **Stop** and ask
+the user which single timing applies, then treat it as carrying only that label
+for the rest of the release. Do not guess, and do not carry it into both steps.
+
 If either is non-empty:
 
 1. Show the user every PR found, grouped by label, with its number, title, and
@@ -266,21 +273,40 @@ live while the release it points at is still building.
    ```bash
    gh run list --repo atuinsh/atuin --workflow release.yml \
        --branch "v<VERSION>" --limit 1
-   gh run watch <run-id> --repo atuinsh/atuin
+   gh run watch <run-id> --repo atuinsh/atuin --exit-status
    ```
+   `--exit-status` is what makes a failed run exit non-zero. Without it
+   `gh run watch` prints the failure but still exits `0`, and a broken release
+   sails through into the merges below. If it exits non-zero, **stop** here —
+   do not go on to the release lookup.
 
 2. Confirm the release exists and has assets attached:
    ```bash
    gh release view "v<VERSION>" --repo atuinsh/atuin --json assets,isDraft
    ```
-   If the workflow failed, or the release has no assets, **stop**. Report it and
-   merge nothing — these PRs keep until the release is actually out.
+   If the release is missing, is still a draft, or has no assets, **stop**.
+   Report it and merge nothing — these PRs keep until the release is actually
+   out. A release object alone is not evidence: it may predate this run or have
+   been left half-built by a failed workflow. What clears this gate is a
+   non-draft release with assets attached.
 
-3. **Checkpoint:** For each approved PR, show its number and title and ask the
+3. Re-check that each approved PR is still mergeable and its checks are green:
+   ```bash
+   gh pr view <N> --repo atuinsh/atuin \
+       --json mergeable,mergeStateStatus,statusCheckRollup
+   ```
+   Step 2.5 surveyed these PRs before the release was even built, so its
+   findings are now many minutes stale — long enough for a PR to pick up a
+   conflict or a red check. If it is not mergeable, or checks are red, report
+   that and ask the user how to proceed. Do not force it through. These PRs
+   deploy the instant they merge, so there is no CI gate downstream to catch a
+   bad one.
+
+4. **Checkpoint:** For each approved PR, show its number and title and ask the
    user to confirm this specific merge. Step 2.5 approved the *timing*; this
    confirms merging *now*.
 
-4. Merge each PR the user confirms:
+5. Merge each PR the user confirms:
    ```bash
    gh pr merge <N> --repo atuinsh/atuin --squash
    ```
