@@ -7,9 +7,10 @@ use atuin_client::settings::AiCapabilities;
 
 use crate::context::history_output_capability_available;
 use atuin_common::tls::ensure_crypto_provider;
+use atuin_common::url::UrlAppendExt;
 
 use eventsource_stream::Eventsource;
-use eyre::{Context, Result};
+use eyre::Result;
 use futures::StreamExt;
 use reqwest::Url;
 use reqwest::header::USER_AGENT;
@@ -117,7 +118,7 @@ impl ChatRequest {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn create_chat_stream(
-    hub_address: String,
+    hub_address: Url,
     token: String,
     token_from_hub_session: bool,
     request: ChatRequest,
@@ -130,10 +131,10 @@ pub(crate) fn create_chat_stream(
 ) -> std::pin::Pin<Box<dyn futures::Stream<Item = Result<StreamFrame>> + Send>> {
     Box::pin(async_stream::stream! {
         ensure_crypto_provider();
-        let endpoint = match hub_url(&hub_address, "/api/cli/chat") {
+        let endpoint = match hub_address.append_path("api/cli/chat") {
             Ok(url) => url,
             Err(e) => {
-                yield Err(e);
+                yield Err(e.into());
                 return;
             }
         };
@@ -300,16 +301,4 @@ pub(crate) fn create_chat_stream(
             }
         }
     })
-}
-
-pub(crate) fn hub_url(base: &str, path: &str) -> Result<Url> {
-    let base_with_slash = if base.ends_with('/') {
-        base.to_string()
-    } else {
-        format!("{base}/")
-    };
-    let stripped = path.strip_prefix('/').unwrap_or(path);
-    Url::parse(&base_with_slash)?
-        .join(stripped)
-        .context("failed to build hub URL")
 }

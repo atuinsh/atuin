@@ -248,6 +248,7 @@ dependencies = [
  "itertools",
  "norm",
  "open",
+ "proptest",
  "ratatui",
  "regex",
  "rpassword",
@@ -270,6 +271,7 @@ dependencies = [
  "tracing-subscriber",
  "tracing-tree",
  "unicode-width 0.2.2",
+ "url",
  "uuid",
  "windows-sys 0.61.2",
 ]
@@ -381,6 +383,7 @@ dependencies = [
  "tokio",
  "tracing",
  "typed-builder",
+ "url",
  "uuid",
  "whoami 2.1.1",
 ]
@@ -409,6 +412,7 @@ dependencies = [
  "typed-builder",
  "unicode-segmentation",
  "unicode-width 0.2.2",
+ "url",
  "uuid",
 ]
 
@@ -582,6 +586,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
@@ -592,6 +597,7 @@ dependencies = [
  "atuin-common",
  "derive_more",
  "eyre",
+ "rstest",
  "serde",
  "sqlx",
  "time",
@@ -5975,6 +5981,7 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
+ "serde_derive",
 ]
 
 [[package]]

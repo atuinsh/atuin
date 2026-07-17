@@ -135,7 +135,7 @@ impl Cmd {
             }
 
             let session = atuin_client::api_client::register(
-                settings.sync_address.as_str(),
+                &settings.sync_address,
                 &username,
                 &email,
                 &password,

@@ -1,3 +1,4 @@
+use super::StaticInitOptions;
 use atuin_client::settings::Tmux;
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
 use eyre::Result;
@@ -13,34 +14,33 @@ fn print_tmux_config(tmux: &Tmux) {
 
 fn print_bindings(
     indent: &str,
-    disable_up_arrow: bool,
-    disable_ctrl_r: bool,
+    options: &StaticInitOptions<'_>,
     bind_ctrl_r: &str,
     bind_up_arrow: &str,
     bind_ctrl_r_ins: &str,
     bind_up_arrow_ins: &str,
 ) {
-    if !disable_ctrl_r {
+    if options.enable_ctrl_r {
         println!("{indent}{bind_ctrl_r}");
     }
-    if !disable_up_arrow {
+    if options.enable_up_arrow {
         println!("{indent}{bind_up_arrow}");
     }
 
     println!("{indent}if bind -M insert >/dev/null 2>&1");
-    if !disable_ctrl_r {
+    if options.enable_ctrl_r {
         println!("{indent}{indent}{bind_ctrl_r_ins}");
     }
-    if !disable_up_arrow {
+    if options.enable_up_arrow {
         println!("{indent}{indent}{bind_up_arrow_ins}");
     }
     println!("{indent}end");
 }
 
-pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool, disable_ai: bool, tmux: &Tmux) {
+pub fn init_static(options: &StaticInitOptions<'_>) {
     let indent = " ".repeat(4);
 
-    print_tmux_config(tmux);
+    print_tmux_config(options.tmux);
     println!("{}", crate::shell::FISH);
 
     if std::env::var("ATUIN_NOBIND").is_err() {
@@ -50,8 +50,7 @@ pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool, disable_ai: boo
         // instead we can use key names and modifiers directly.
         print_bindings(
             &indent,
-            disable_up_arrow,
-            disable_ctrl_r,
+            options,
             "bind ctrl-r _atuin_search",
             "bind up _atuin_bind_up",
             "bind -M insert ctrl-r _atuin_search",
@@ -63,8 +62,7 @@ pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool, disable_ai: boo
         // We keep these for compatibility with fish 3.x
         print_bindings(
             &indent,
-            disable_up_arrow,
-            disable_ctrl_r,
+            options,
             r"bind \cr _atuin_search",
             &[
                 r"bind -k up _atuin_bind_up",
@@ -84,7 +82,7 @@ pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool, disable_ai: boo
         println!("end");
 
         #[cfg(feature = "ai")]
-        if !disable_ai {
+        if options.enable_ai {
             let bind_ai = atuin_ai::commands::init::generate_fish_integration();
             println!("{bind_ai}");
         }
@@ -94,12 +92,9 @@ pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool, disable_ai: boo
 pub async fn init(
     aliases: AliasStore,
     vars: VarStore,
-    disable_up_arrow: bool,
-    disable_ctrl_r: bool,
-    disable_ai: bool,
-    tmux: &Tmux,
+    options: &StaticInitOptions<'_>,
 ) -> Result<()> {
-    init_static(disable_up_arrow, disable_ctrl_r, disable_ai, tmux);
+    init_static(options);
 
     let aliases = atuin_dotfiles::shell::fish::alias_config(&aliases).await;
     let vars = atuin_dotfiles::shell::fish::var_config(&vars).await;

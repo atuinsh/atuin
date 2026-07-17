@@ -12,9 +12,16 @@ use regex::RegexSet;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_with::DeserializeFromStr;
-use std::{collections::HashMap, io::prelude::*, path::PathBuf, str::FromStr, sync::OnceLock};
+use std::{
+    collections::HashMap,
+    io::prelude::*,
+    path::PathBuf,
+    str::FromStr,
+    sync::{LazyLock, OnceLock},
+};
 use time::{OffsetDateTime, UtcOffset, format_description::FormatItem, macros::format_description};
 use tokio::sync::OnceCell;
+use url::Url;
 
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
@@ -28,21 +35,13 @@ pub(crate) mod meta;
 mod scripts;
 pub mod watcher;
 
-#[derive(derive_more::AsRef)]
-#[as_ref(str)]
-pub struct HubEndpoint(String);
+/// Default sync address for Atuin's hosted service, parsed once.
+pub static DEFAULT_SYNC_URL: LazyLock<Url> =
+    LazyLock::new(|| Url::parse("https://api.atuin.sh").expect("default sync address is valid"));
 
-/// Default sync address for Atuin's hosted service
-pub const DEFAULT_SYNC_ADDRESS: &str = "https://api.atuin.sh";
-
-/// Default Hub web/API endpoint for Atuin's hosted service
-pub const DEFAULT_HUB_ENDPOINT: &str = "https://hub.atuin.sh";
-
-impl Default for HubEndpoint {
-    fn default() -> Self {
-        HubEndpoint(DEFAULT_HUB_ENDPOINT.to_string())
-    }
-}
+/// Default Hub web/API endpoint for Atuin's hosted service, parsed once.
+pub static DEFAULT_HUB_URL: LazyLock<Url> =
+    LazyLock::new(|| Url::parse("https://hub.atuin.sh").expect("default hub endpoint is valid"));
 
 #[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq, Serialize)]
 pub enum SearchMode {
@@ -649,7 +648,7 @@ pub struct Ai {
 
     /// The address of the Atuin AI endpoint. Used for AI features like command generation.
     /// Only necessary for custom AI endpoints.
-    pub endpoint: Option<String>,
+    pub endpoint: Option<Url>,
 
     /// How to talk to `endpoint`. See [`AiEndpointProtocol`].
     #[serde(default)]
@@ -1001,7 +1000,7 @@ pub struct Settings {
     pub update_check: bool,
 
     /// The sync address for atuin.
-    pub sync_address: String,
+    pub sync_address: Url,
 
     /// Sync protocol for authentication. When set to "auto" (default), the protocol
     /// is inferred from sync_address. Set to "hub" to force Hub auth with a custom
@@ -1191,16 +1190,10 @@ impl Settings {
         }
     }
 
-    /// Normalize a URL for comparison by trimming trailing slashes
-    fn normalize_url(url: &str) -> &str {
-        url.trim_end_matches('/')
-    }
-
-    /// Check if a URL matches one of Atuin's official hosted addresses
-    fn is_official_address(url: &str) -> bool {
-        let normalized = Self::normalize_url(url);
-        normalized == Self::normalize_url(DEFAULT_SYNC_ADDRESS)
-            || normalized == Self::normalize_url(DEFAULT_HUB_ENDPOINT)
+    /// Check if a URL matches one of Atuin's official hosted addresses.
+    fn is_official_address(url: &Url) -> bool {
+        let origin = url.origin();
+        origin == DEFAULT_SYNC_URL.origin() || origin == DEFAULT_HUB_URL.origin()
     }
 
     /// Returns whether this configuration uses Hub-style sync.
@@ -1224,7 +1217,7 @@ impl Settings {
     /// `endpoint` is the resolved AI endpoint — the `--api-endpoint` flag or
     /// `ai.endpoint` setting, after defaults are applied — which is why it's a
     /// parameter rather than read from `self.ai.endpoint`.
-    pub fn is_hub_ai_endpoint(&self, endpoint: &str) -> bool {
+    pub fn is_hub_ai_endpoint(&self, endpoint: &Url) -> bool {
         match self.ai.endpoint_protocol {
             AiEndpointProtocol::Hub => true,
             AiEndpointProtocol::Oss => false,
@@ -1232,20 +1225,16 @@ impl Settings {
         }
     }
 
-    /// Returns the base URL for the Hub endpoint.
+    /// The base URL for the Hub endpoint.
     ///
-    /// For Atuin's official hosted service, this always returns `https://hub.atuin.sh`
+    /// For Atuin's official hosted service this is always `https://hub.atuin.sh`,
     /// regardless of whether `sync_address` is `api.atuin.sh` or `hub.atuin.sh`.
-    /// For self-hosted instances, returns the configured `sync_address`.
-    pub fn active_hub_endpoint(&self) -> Option<HubEndpoint> {
-        if self.is_hub_sync() {
-            if Self::is_official_address(&self.sync_address) {
-                Some(HubEndpoint::default())
-            } else {
-                Some(HubEndpoint(self.sync_address.clone()))
-            }
+    /// For a self-hosted Hub, it is the configured `sync_address`.
+    pub fn hub_endpoint(&self) -> Url {
+        if self.is_hub_sync() && !Self::is_official_address(&self.sync_address) {
+            self.sync_address.clone()
         } else {
-            None
+            DEFAULT_HUB_URL.clone()
         }
     }
 
@@ -1429,7 +1418,7 @@ impl Settings {
             .set_default("timezone", "local")?
             .set_default("auto_sync", true)?
             .set_default("update_check", cfg!(feature = "check-update"))?
-            .set_default("sync_address", "https://api.atuin.sh")?
+            .set_default("sync_address", DEFAULT_SYNC_URL.as_str())?
             .set_default("sync_frequency", "5m")?
             .set_default("search_mode", "fuzzy")?
             .set_default("filter_mode", None::<String>)?
@@ -1791,7 +1780,8 @@ mod tests {
     use eyre::Result;
     use rstest::rstest;
 
-    use super::Timezone;
+    use super::{AiEndpointProtocol, Settings, Timezone};
+    use url::Url;
 
     #[rstest]
     #[case::plus_two_digit_hours("+02", (2, 0, 0))]
@@ -1827,22 +1817,35 @@ mod tests {
         assert!(Timezone::from_str(input).is_err());
     }
 
+    #[rstest]
+    // Auto: official addresses are Hub, anything else is OSS
+    #[case::auto_hub_address(AiEndpointProtocol::Auto, "https://hub.atuin.sh", true)]
+    #[case::auto_api_address(AiEndpointProtocol::Auto, "https://api.atuin.sh", true)]
+    #[case::auto_third_party_address(AiEndpointProtocol::Auto, "https://ai.example.com", false)]
+    #[case::auto_localhost(AiEndpointProtocol::Auto, "http://localhost:4000", false)]
+    // An explicit protocol overrides the address check
+    #[case::explicit_hub_overrides_address(AiEndpointProtocol::Hub, "http://localhost:4000", true)]
+    #[case::explicit_oss_overrides_address(AiEndpointProtocol::Oss, "https://hub.atuin.sh", false)]
+    fn ai_endpoint_protocol_resolution(
+        #[case] protocol: AiEndpointProtocol,
+        #[case] endpoint: &str,
+        #[case] expected: bool,
+    ) {
+        let mut settings = Settings::default();
+        settings.ai.endpoint_protocol = protocol;
+
+        assert_eq!(
+            settings.is_hub_ai_endpoint(&Url::parse(endpoint).unwrap()),
+            expected,
+        );
+    }
+
+    /// Forces both `LazyLock`s, so a typo in either constant fails here rather
+    /// than panicking at runtime.
     #[test]
-    fn ai_endpoint_protocol_resolution() {
-        let mut settings = super::Settings::default();
-
-        // Auto: official addresses are Hub, anything else is OSS
-        assert!(settings.is_hub_ai_endpoint("https://hub.atuin.sh"));
-        assert!(settings.is_hub_ai_endpoint("https://api.atuin.sh"));
-        assert!(!settings.is_hub_ai_endpoint("https://ai.example.com"));
-        assert!(!settings.is_hub_ai_endpoint("http://localhost:4000"));
-
-        // Explicit settings override the address check
-        settings.ai.endpoint_protocol = super::AiEndpointProtocol::Hub;
-        assert!(settings.is_hub_ai_endpoint("http://localhost:4000"));
-
-        settings.ai.endpoint_protocol = super::AiEndpointProtocol::Oss;
-        assert!(!settings.is_hub_ai_endpoint("https://hub.atuin.sh"));
+    fn default_addresses_parse() {
+        assert_eq!(super::DEFAULT_SYNC_URL.host_str(), Some("api.atuin.sh"));
+        assert_eq!(super::DEFAULT_HUB_URL.host_str(), Some("hub.atuin.sh"));
     }
 
     #[test]
