@@ -35,7 +35,7 @@ pub struct Cmd {
     cwd: Option<String>,
 
     /// Exclude directory from results
-    #[arg(long = "exclude-cwd")]
+    #[arg(long)]
     exclude_cwd: Option<String>,
 
     /// Filter search result by exit code
@@ -43,7 +43,7 @@ pub struct Cmd {
     exit: Option<i64>,
 
     /// Exclude results with this exit code
-    #[arg(long = "exclude-exit")]
+    #[arg(long)]
     exclude_exit: Option<i64>,
 
     /// Only include results added before this date
@@ -67,19 +67,19 @@ pub struct Cmd {
     interactive: bool,
 
     /// Allow overriding filter mode over config
-    #[arg(long = "filter-mode")]
+    #[arg(long)]
     filter_mode: Option<FilterMode>,
 
     /// Allow overriding search mode over config
-    #[arg(long = "search-mode")]
+    #[arg(long)]
     search_mode: Option<SearchMode>,
 
     /// Marker argument used to inform atuin that it was invoked from a shell up-key binding (hidden from help to avoid confusion)
-    #[arg(long = "shell-up-key-binding", hide = true)]
+    #[arg(long, hide = true)]
     shell_up_key_binding: bool,
 
     /// Notify the keymap at the shell's side
-    #[arg(long = "keymap-mode", default_value = "auto")]
+    #[arg(long, default_value = "auto")]
     keymap_mode: KeymapMode,
 
     /// Use human-readable formatting for time
@@ -131,7 +131,7 @@ pub struct Cmd {
     format: Option<String>,
 
     /// Set the maximum number of lines Atuin's interface should take up.
-    #[arg(long = "inline-height")]
+    #[arg(long)]
     inline_height: Option<u16>,
 
     /// Filter by author. Supports $all-user (non-agents), $all-agent, or literal names.
@@ -145,8 +145,16 @@ pub struct Cmd {
     include_duplicates: bool,
 
     /// File name to write the result to (hidden from help as this is meant to be used from a script)
-    #[arg(long = "result-file", hide = true)]
+    #[arg(long, hide = true)]
     result_file: Option<String>,
+
+    /// Filter by the shell that was used to run the command
+    ///
+    /// If passed multiple times, commands from any of the shells will be shown.
+    ///
+    /// `--shell ""` will include commands for which the shell is unknown.
+    #[arg(long)]
+    shell: Vec<String>,
 }
 
 impl Cmd {
@@ -260,7 +268,8 @@ impl Cmd {
                 offset: self.offset,
                 reverse: self.reverse,
                 include_duplicates: self.include_duplicates,
-                authors: self.author.clone(),
+                authors: self.author,
+                shells: self.shell,
             };
 
             let mut entries =
@@ -309,7 +318,6 @@ impl Cmd {
 
 // This is supposed to more-or-less mirror the command line version, so ofc
 // it is going to have a lot of args
-#[allow(clippy::too_many_arguments, clippy::cast_possible_truncation)]
 async fn run_non_interactive(
     settings: &Settings,
     filter_options: OptFilters,
