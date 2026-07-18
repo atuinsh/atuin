@@ -66,6 +66,5 @@ pub mod string;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
 pub mod tls;
-pub mod trailing_slash;
 pub mod url;
 pub mod utils;
