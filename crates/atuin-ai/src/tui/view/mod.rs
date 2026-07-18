@@ -836,17 +836,10 @@ const MAX_GROUP_ENTRIES: usize = 5;
 /// - Tilde-prefixed (`~` + platform separator) if the path is under the user's home directory
 /// - Absolute otherwise (and relative paths pass through unchanged)
 fn format_path_for_display(path: &std::path::Path) -> String {
-    let mut rich = path.display_rich();
-
-    if let Ok(cwd) = std::env::current_dir() {
-        rich = rich.relative_to(cwd);
-    }
-
-    if let Some(base_dirs) = directories::BaseDirs::new() {
-        rich = rich.tilde(base_dirs.home_dir());
-    }
-
-    rich.to_string()
+    path.display_rich()
+        .relative_to_cwd()
+        .tilde_me()
+        .to_string()
 }
 
 fn filter_mode_label(mode: &HistorySearchFilterMode) -> &'static str {

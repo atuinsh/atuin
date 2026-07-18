@@ -1,5 +1,6 @@
+use std::borrow::Cow;
 use std::fmt;
-use std::path::{MAIN_SEPARATOR, MAIN_SEPARATOR_STR, Path, PathBuf};
+use std::path::{MAIN_SEPARATOR, MAIN_SEPARATOR_STR, Path};
 
 /// A [`Display`](fmt::Display) adapter for a path with optional enrichments, built via
 /// [`DisplayRichExt::display_rich`].
@@ -16,8 +17,8 @@ use std::path::{MAIN_SEPARATOR, MAIN_SEPARATOR_STR, Path, PathBuf};
 pub struct RichDisplay<'a> {
     path: &'a Path,
     trailing_slash: bool,
-    relative_to: Option<PathBuf>,
-    tilde: Option<PathBuf>,
+    relative_to: Option<Cow<'a, Path>>,
+    tilde: Option<Cow<'a, Path>>,
 }
 
 impl<'a> RichDisplay<'a> {
@@ -38,21 +39,48 @@ impl<'a> RichDisplay<'a> {
         }
     }
 
+    /// Render the path relative to `base` when it is under it. Borrows `base`
+    /// for the lifetime of this `RichDisplay`, so no allocation occurs.
     #[must_use]
-    pub fn relative_to(self, base: impl AsRef<Path>) -> Self {
+    pub fn relative_to<P: AsRef<Path> + ?Sized>(self, base: &'a P) -> Self {
         Self {
-            relative_to: Some(base.as_ref().to_path_buf()),
+            relative_to: Some(Cow::Borrowed(base.as_ref())),
             ..self
         }
     }
 
-    /// If the path is under `home` (and no `relative_to` base matched), render it
-    /// as `~` + separator + remainder. Off by default.
+    /// Attempt to print it out relative to the current working directory.
     #[must_use]
-    pub fn tilde(self, home: impl AsRef<Path>) -> Self {
+    pub fn relative_to_cwd(self) -> Self {
+        match std::env::current_dir() {
+            Ok(cwd) => Self {
+                relative_to: Some(Cow::Owned(cwd)),
+                ..self
+            },
+            Err(_) => self,
+        }
+    }
+
+    /// Abbreviate the path as `~` + separator + remainder when it is under
+    /// `home`. Borrows `home` for the lifetime of this `RichDisplay`, so no
+    /// allocation occurs.
+    #[must_use]
+    pub fn tilde<P: AsRef<Path> + ?Sized>(self, home: &'a P) -> Self {
         Self {
-            tilde: Some(home.as_ref().to_path_buf()),
+            tilde: Some(Cow::Borrowed(home.as_ref())),
             ..self
+        }
+    }
+
+    /// Abbreviate the path relative to the current user's home directory.
+    #[must_use]
+    pub fn tilde_me(self) -> Self {
+        match directories::BaseDirs::new() {
+            Some(dirs) => Self {
+                tilde: Some(Cow::Owned(dirs.home_dir().to_owned())),
+                ..self
+            },
+            None => self,
         }
     }
 
@@ -81,13 +109,13 @@ impl<'a> RichDisplay<'a> {
 impl fmt::Display for RichDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // `relative_to` wins over `tilde`; otherwise render the raw path.
-        if let Some(base) = &self.relative_to
+        if let Some(base) = self.relative_to.as_deref()
             && let Ok(relative) = self.path.strip_prefix(base)
         {
             return self.render(f, false, relative);
         }
 
-        if let Some(home) = &self.tilde
+        if let Some(home) = self.tilde.as_deref()
             && let Ok(relative) = self.path.strip_prefix(home)
         {
             return self.render(f, true, relative);
