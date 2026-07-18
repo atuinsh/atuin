@@ -74,6 +74,9 @@ impl<'a> RichDisplay<'a> {
     /// Abbreviate the path relative to the current user's home directory.
     #[must_use]
     pub fn tilde_me(self) -> Self {
+        // TODO(markovejnovic): Do not call BaseDirs here. It does a lot of work. This is a massive
+        //                      amount of work. We should lazily initialize, but this pattern is
+        //                      spread throughout the code everywhere.
         match directories::BaseDirs::new() {
             Some(dirs) => Self {
                 tilde: Some(Cow::Owned(dirs.home_dir().to_owned())),
@@ -82,45 +85,38 @@ impl<'a> RichDisplay<'a> {
             None => self,
         }
     }
-
-    /// Writes `body`, optionally prefixed with `~` + separator (when `tilde`)
-    /// and/or suffixed with a trailing separator (when `trailing_slash` is set
-    /// and `body` isn't already separator-terminated).
-    fn render(&self, f: &mut fmt::Formatter<'_>, tilde: bool, body: &Path) -> fmt::Result {
-        if tilde {
-            f.write_str("~")?;
-            f.write_str(MAIN_SEPARATOR_STR)?;
-        }
-        write!(f, "{}", body.display())?;
-
-        let already_terminated = match body.as_os_str().as_encoded_bytes().last() {
-            Some(&byte) => byte == MAIN_SEPARATOR as u8,
-            None => tilde,
-        };
-        if self.trailing_slash && !already_terminated {
-            f.write_str(MAIN_SEPARATOR_STR)?;
-        }
-
-        Ok(())
-    }
 }
 
 impl fmt::Display for RichDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // `relative_to` wins over `tilde`; otherwise render the raw path.
+        let maybe_write_terminal_slash = |f: &mut fmt::Formatter<'_>, p: &Path| {
+            if self.trailing_slash
+                && p.as_os_str().as_encoded_bytes().last() != Some(&(MAIN_SEPARATOR as u8))
+            {
+                write!(f, "{}", MAIN_SEPARATOR_STR)?;
+            }
+
+            Ok(())
+        };
+
         if let Some(base) = self.relative_to.as_deref()
-            && let Ok(relative) = self.path.strip_prefix(base)
+            && let Ok(stripped) = self.path.strip_prefix(base)
         {
-            return self.render(f, false, relative);
+            write!(f, "{}", stripped.display())?;
+            maybe_write_terminal_slash(f, stripped)?;
+        } else if let Some(home) = self.tilde.as_deref()
+            && let Ok(stripped) = self.path.strip_prefix(home)
+        {
+            write!(f, "~{}{}", MAIN_SEPARATOR_STR, stripped.display())?;
+            if !stripped.as_os_str().is_empty() {
+                maybe_write_terminal_slash(f, stripped)?;
+            }
+        } else {
+            write!(f, "{}", self.path.display())?;
+            maybe_write_terminal_slash(f, self.path)?;
         }
 
-        if let Some(home) = self.tilde.as_deref()
-            && let Ok(relative) = self.path.strip_prefix(home)
-        {
-            return self.render(f, true, relative);
-        }
-
-        self.render(f, false, self.path)
+        Ok(())
     }
 }
 
@@ -272,6 +268,15 @@ mod tests {
         None,
         Some(Path::new("home").join("user")),
         format!("~{MAIN_SEPARATOR_STR}proj{MAIN_SEPARATOR_STR}")
+    )]
+    // The tilde render for `home` itself already ends in a separator (`~/`), so
+    // `trailing_slash` must not add a second one. This exercises the tilde branch,
+    // where the rendered text differs from `self.path`.
+    #[case::tilde_home_root_is_idempotent(
+        Path::new("home").join("user"),
+        None,
+        Some(Path::new("home").join("user")),
+        format!("~{MAIN_SEPARATOR_STR}")
     )]
     #[case::relative_to_base_itself(
         Path::new("home").join("user"),
