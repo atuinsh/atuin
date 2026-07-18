@@ -442,6 +442,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn read_optional_nil_string_advances_to_next_field() {
+        // A nil optional-string field followed by a u64. The nil read must consume
+        // exactly the marker so the following field decodes correctly.
+        let mut out = Vec::new();
+        out.write_optional::<&str, _>(None, rmp::encode::write_str)
+            .unwrap();
+        rmp::encode::write_u64(&mut out, 1234).unwrap();
+
+        let mut b = Bytes::new(&out);
+        assert_eq!(b.read_optional(|b| b.read_string()).unwrap(), None);
+        assert_eq!(b.read_with(rmp::decode::read_u64).unwrap(), 1234);
+        assert!(b.expect_eof().is_ok());
+    }
+
     use proptest::prelude::*;
 
     proptest! {
@@ -472,6 +487,7 @@ mod tests {
             out.write_optional(v.as_deref(), rmp::encode::write_str).unwrap();
             let mut b = Bytes::new(&out);
             prop_assert_eq!(b.read_optional(|b| b.read_string()).unwrap(), v);
+            prop_assert!(b.remaining_slice().is_empty());
         }
 
         // A full array record (len + fields + optional tail) round trips, and the
