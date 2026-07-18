@@ -272,4 +272,19 @@ mod tests {
             format!("~{MAIN_SEPARATOR_STR}proj{MAIN_SEPARATOR_STR}")
         );
     }
+
+    #[test]
+    fn relative_to_base_itself_with_trailing_slash_is_bare_separator() {
+        // Relativizing a path to itself yields an empty body; `trailing_slash`
+        // then renders a bare separator. No current caller combines these two
+        // options — this pins the edge so a future change is deliberate.
+        let base = Path::new("home").join("user");
+        assert_eq!(
+            base.display_rich()
+                .relative_to(&base)
+                .trailing_slash(true)
+                .to_string(),
+            MAIN_SEPARATOR_STR
+        );
+    }
 }
