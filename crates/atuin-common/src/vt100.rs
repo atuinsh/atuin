@@ -42,9 +42,9 @@ const MAX_ROWS: usize = 10_000;
 ///   `ONLCR` behavior. This is a no-op for input that already uses `\r\n`.
 /// - Trailing whitespace on each line and trailing blank lines are trimmed.
 ///
-/// The result contains no terminal control characters. The only C0 controls that
-/// may remain are `\n` (line separators) and `\t` (if the emulator preserved a
-/// literal tab; tabs are typically expanded to spaces).
+/// The result contains no terminal control characters. The only C0 control that
+/// remains is `\n` (line separators); the emulator resolves tabs to spaces, so no
+/// literal `\t` survives.
 ///
 /// # Cost
 ///
@@ -196,6 +196,17 @@ mod tests {
         assert_eq!(b"hi\r\n\r\n\r\n".to_plain_text(80), "hi");
     }
 
+    #[test]
+    fn long_lines_wrap_at_the_column_boundary() {
+        // A 10-character line laid out on a 4-wide terminal occupies three grid
+        // rows ("abcd" / "efgh" / "ij"), proving the emulator autowraps at the
+        // column boundary rather than truncating or overflowing. vt100 marks the
+        // continuation rows as soft-wrapped, so `Screen::contents()` rejoins them
+        // into the single logical line the user originally typed.
+        let wrapped = b"abcdefghij".to_plain_text(4);
+        assert_eq!(wrapped, "abcdefghij");
+    }
+
     proptest! {
         /// For ANY bytes and ANY width, rendering must not panic and must not
         /// leave terminal control characters behind.
@@ -205,19 +216,23 @@ mod tests {
             prop_assert!(!out.chars().any(|c| c.is_control() && c != '\n' && c != '\t'));
         }
 
-        /// Output never exceeds the row cap, no matter how many newlines the
-        /// input contains.
+        /// Output never exceeds the row cap, even when every input line carries
+        /// content (so blank-line collapsing cannot mask an unbounded grid).
         #[test]
-        fn respects_row_cap(newlines in 0usize..50_000) {
-            let bytes = vec![b'\n'; newlines];
+        fn respects_row_cap(lines in (super::MAX_ROWS + 1)..(super::MAX_ROWS + 5_000)) {
+            let mut bytes = Vec::with_capacity(lines * 2);
+            for _ in 0..lines {
+                bytes.extend_from_slice(b"x\n");
+            }
             let out = bytes.to_plain_text(80);
             prop_assert!(out.lines().count() <= super::MAX_ROWS);
         }
 
-        /// Rendering already-clean single-line printable ASCII (shorter than the
-        /// width, so no wrapping) is idempotent.
+        /// Rendering already-plain single-line printable ASCII (no wrapping) is
+        /// idempotent: the first pass trims any trailing spaces, and a second pass
+        /// over that output changes nothing.
         #[test]
-        fn idempotent_on_clean_single_line(s in "[ -~]{0,80}") {
+        fn to_plain_text_is_idempotent_on_clean_single_line(s in "[ -~]{0,80}") {
             let once = s.as_bytes().to_plain_text(200);
             let twice = once.as_bytes().to_plain_text(200);
             prop_assert_eq!(once, twice);
