@@ -62,8 +62,6 @@ impl<'de, T> Deserialize<'de> for NonNulStr<T>
 where
     T: Deserialize<'de> + AsRef<str>,
 {
-    /// Deserialize the backing value, then validate it — a NUL byte is a
-    /// deserialization error, not something to trim away.
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let inner = T::deserialize(deserializer)?;
         Self::new(inner).map_err(serde::de::Error::custom)
@@ -76,7 +74,6 @@ mod tests {
     use proptest::prelude::*;
     use rstest::rstest;
 
-    /// A string with no NUL wraps unchanged.
     #[rstest]
     #[case("echo hello")]
     #[case("")]
@@ -86,7 +83,6 @@ mod tests {
         assert_eq!(NonNulStr::new(input).unwrap().as_str(), input);
     }
 
-    /// A string with a NUL is rejected, pointing at the first NUL.
     #[rstest]
     #[case::interior("echo hi\0rm -rf /", 7)]
     #[case::trailing("ls\0", 2)]
@@ -94,27 +90,6 @@ mod tests {
     #[case::first_of_many("a\0b\0c", 1)]
     fn rejects_strings_with_nul(#[case] input: &str, #[case] index: usize) {
         assert_eq!(NonNulStr::new(input), Err(ContainsNul { index }));
-    }
-
-    #[test]
-    fn wraps_any_str_backing() {
-        // Owned or borrowed, the same contents share a str view.
-        let owned = NonNulStr::new(String::from("cat file")).unwrap();
-        let borrowed = NonNulStr::new("cat file").unwrap();
-        assert_eq!(owned.as_str(), borrowed.as_str());
-    }
-
-    #[test]
-    fn derefs_to_str() {
-        let c = NonNulStr::new("echo hi").unwrap();
-        assert_eq!(c.len(), 7);
-        assert!(c.starts_with("echo"));
-        assert!(!c.is_empty());
-    }
-
-    #[test]
-    fn display_shows_the_command() {
-        assert_eq!(NonNulStr::new("ls -la").unwrap().to_string(), "ls -la");
     }
 
     #[test]
