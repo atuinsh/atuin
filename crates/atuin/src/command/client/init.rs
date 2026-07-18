@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use atuin_client::{
     encryption,
     record::sqlite_store::SqliteStore,
@@ -86,7 +84,7 @@ impl Cmd {
     }
 
     async fn dotfiles_init(&self, settings: &Settings) -> Result<()> {
-        let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+        let record_store_path = &settings.record_store_path;
         let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
         let encryption_key: [u8; 32] = encryption::load_key(settings)

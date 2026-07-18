@@ -14,6 +14,7 @@ use std::{
 
 use atuin_client::history::{History, is_known_agent};
 use atuin_client::settings::Search;
+use atuin_common::path::DisplayRichExt;
 use atuin_nucleo::{Injector, Nucleo, pattern};
 use dashmap::DashMap;
 use lasso::{Spur, ThreadedRodeo};
@@ -21,8 +22,6 @@ use time::OffsetDateTime;
 use tokio::sync::RwLock;
 use tracing::{Level, instrument};
 use uuid::Uuid;
-
-use crate::components::search::with_trailing_slash;
 
 /// Parse a UUID string into a 16-byte array.
 /// Returns None if the string is not a valid UUID.
@@ -124,7 +123,8 @@ impl CommandData {
         let session = parse_uuid_bytes(&history.session)?;
         let timestamp = history.timestamp.unix_timestamp();
 
-        let dir_key = interner.get_or_intern(with_trailing_slash(&history.cwd));
+        let dir_key =
+            interner.get_or_intern(history.cwd.display_rich().trailing_slash(true).to_string());
         let host_key = interner.get_or_intern(&history.hostname);
 
         let mut directories = HashSet::new();
@@ -165,7 +165,8 @@ impl CommandData {
         self.global_frecency.record_use(timestamp);
 
         // Update pre-computed indexes for O(1) filter lookups
-        let dir_key = interner.get_or_intern(with_trailing_slash(&history.cwd));
+        let dir_key =
+            interner.get_or_intern(history.cwd.display_rich().trailing_slash(true).to_string());
         self.directories.insert(dir_key);
         self.hosts.insert(interner.get_or_intern(&history.hostname));
         self.sessions.insert(session);
@@ -604,15 +605,33 @@ mod tests {
 
         let (check1, check2, check3) = if cfg!(windows) {
             (
-                with_trailing_slash("C:\\Users\\User\\project"),
-                with_trailing_slash("C:\\Users\\User\\other"),
-                with_trailing_slash("C:\\Users\\User\\missing"),
+                "C:\\Users\\User\\project"
+                    .display_rich()
+                    .trailing_slash(true)
+                    .to_string(),
+                "C:\\Users\\User\\other"
+                    .display_rich()
+                    .trailing_slash(true)
+                    .to_string(),
+                "C:\\Users\\User\\missing"
+                    .display_rich()
+                    .trailing_slash(true)
+                    .to_string(),
             )
         } else {
             (
-                with_trailing_slash("/home/user/project"),
-                with_trailing_slash("/home/user/other"),
-                with_trailing_slash("/home/user/missing"),
+                "/home/user/project"
+                    .display_rich()
+                    .trailing_slash(true)
+                    .to_string(),
+                "/home/user/other"
+                    .display_rich()
+                    .trailing_slash(true)
+                    .to_string(),
+                "/home/user/missing"
+                    .display_rich()
+                    .trailing_slash(true)
+                    .to_string(),
             )
         };
 
@@ -622,15 +641,21 @@ mod tests {
 
         let (check1, check2, check3) = if cfg!(windows) {
             (
-                with_trailing_slash("C:\\Users\\User"),
-                with_trailing_slash("C:\\Users"),
-                with_trailing_slash("C:\\Users\\User\\var"),
+                "C:\\Users\\User"
+                    .display_rich()
+                    .trailing_slash(true)
+                    .to_string(),
+                "C:\\Users".display_rich().trailing_slash(true).to_string(),
+                "C:\\Users\\User\\var"
+                    .display_rich()
+                    .trailing_slash(true)
+                    .to_string(),
             )
         } else {
             (
-                with_trailing_slash("/home/user"),
-                with_trailing_slash("/home"),
-                with_trailing_slash("/var"),
+                "/home/user".display_rich().trailing_slash(true).to_string(),
+                "/home".display_rich().trailing_slash(true).to_string(),
+                "/var".display_rich().trailing_slash(true).to_string(),
             )
         };
 
@@ -675,7 +700,12 @@ mod tests {
         let results = index
             .search(
                 "",
-                IndexFilterMode::Directory(with_trailing_slash("/home/user/project")),
+                IndexFilterMode::Directory(
+                    "/home/user/project"
+                        .display_rich()
+                        .trailing_slash(true)
+                        .to_string(),
+                ),
                 &QueryContext::default(),
                 10,
             )

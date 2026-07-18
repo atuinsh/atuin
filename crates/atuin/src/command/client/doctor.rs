@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::Command;
 use std::{env, str::FromStr};
 
@@ -297,9 +298,9 @@ impl SyncInfo {
 
 #[derive(Debug)]
 struct SettingPaths {
-    db: String,
-    record_store: String,
-    key: String,
+    db: PathBuf,
+    record_store: PathBuf,
+    key: PathBuf,
 }
 
 impl SettingPaths {
@@ -319,9 +320,10 @@ impl SettingPaths {
         ];
 
         for (path_env_var, path) in paths {
-            if utils::broken_symlink(path) {
+            if utils::broken_symlink(path.as_path()) {
                 eprintln!(
-                    "{path} (${path_env_var}) is a broken symlink. This may cause issues with Atuin."
+                    "{} (${path_env_var}) is a broken symlink. This may cause issues with Atuin.",
+                    path.display()
                 );
             }
         }

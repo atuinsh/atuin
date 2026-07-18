@@ -6,6 +6,7 @@
 use std::{pin::Pin, sync::Arc};
 
 use atuin_client::database::Database;
+use atuin_common::path::DisplayRichExt;
 use eyre::Result;
 use tokio::sync::RwLock;
 use tokio_stream::Stream;
@@ -299,8 +300,10 @@ impl SearchSvc for SearchGrpcService {
                         // Build QueryContext from proto context
                         let query_context = proto_context
                             .map(|ctx| QueryContext {
-                                cwd: Some(with_trailing_slash(&ctx.cwd)),
-                                git_root: ctx.git_root.map(|s| with_trailing_slash(&s)),
+                                cwd: Some(ctx.cwd.display_rich().trailing_slash(true).to_string()),
+                                git_root: ctx
+                                    .git_root
+                                    .map(|s| s.display_rich().trailing_slash(true).to_string()),
                                 hostname: Some(ctx.hostname),
                                 session_id: Some(ctx.session_id),
                             })
@@ -353,14 +356,14 @@ fn convert_filter_mode(
     match (mode, context) {
         (FilterMode::Global, _) => IndexFilterMode::Global,
         (FilterMode::Directory, Some(ctx)) => {
-            IndexFilterMode::Directory(with_trailing_slash(&ctx.cwd))
+            IndexFilterMode::Directory(ctx.cwd.display_rich().trailing_slash(true).to_string())
         }
         (FilterMode::Workspace, Some(ctx)) => {
             if let Some(ref git_root) = ctx.git_root {
-                IndexFilterMode::Workspace(with_trailing_slash(git_root))
+                IndexFilterMode::Workspace(git_root.display_rich().trailing_slash(true).to_string())
             } else {
                 // Fall back to directory if no git root
-                IndexFilterMode::Directory(with_trailing_slash(&ctx.cwd))
+                IndexFilterMode::Directory(ctx.cwd.display_rich().trailing_slash(true).to_string())
             }
         }
         (FilterMode::Host, Some(ctx)) => IndexFilterMode::Host(ctx.hostname.clone()),
@@ -371,23 +374,5 @@ fn convert_filter_mode(
         }
         // If no context provided, fall back to global
         _ => IndexFilterMode::Global,
-    }
-}
-
-#[cfg(windows)]
-pub fn with_trailing_slash(s: &str) -> String {
-    if s.ends_with('\\') {
-        s.to_string()
-    } else {
-        format!("{}\\", s)
-    }
-}
-
-#[cfg(not(windows))]
-pub fn with_trailing_slash(s: &str) -> String {
-    if s.ends_with('/') {
-        s.to_string()
-    } else {
-        format!("{}/", s)
     }
 }

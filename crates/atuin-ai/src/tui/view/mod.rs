@@ -1,9 +1,13 @@
 //! View function that builds the eye-declare element tree from app state.
 
+use std::fmt::Display;
+
 use eye_declare::{
     Cells, Column, Elements, HStack, Span, Spinner, Text, View, Viewport, WidthConstraint, element,
 };
 use ratatui_core::style::{Color, Modifier, Style};
+
+use atuin_common::path::DisplayRichExt;
 
 use crate::driver::ViewState;
 use crate::fsm::{AgentState, ModelPicker, StreamPhase};
@@ -828,25 +832,8 @@ fn file_write_tool_view(
 /// count in the header line tells the full story.
 const MAX_GROUP_ENTRIES: usize = 5;
 
-/// Format a filesystem path for display in tool rows.
-///
-/// - Relative to the current working directory if the path is under it
-/// - `~/...` prefix if the path is under the user's home directory
-/// - Absolute otherwise (and relative paths pass through unchanged)
-fn format_path_for_display(path: &std::path::Path) -> String {
-    if let Ok(cwd) = std::env::current_dir()
-        && let Ok(relative) = path.strip_prefix(&cwd)
-    {
-        return relative.display().to_string();
-    }
-
-    if let Ok(home) = std::env::var("HOME")
-        && let Ok(relative) = path.strip_prefix(&home)
-    {
-        return format!("~/{}", relative.display());
-    }
-
-    path.display().to_string()
+fn format_path_for_display(path: &std::path::Path) -> impl Display {
+    path.display_rich().relative_to_cwd().tilde_me()
 }
 
 fn filter_mode_label(mode: &HistorySearchFilterMode) -> &'static str {
@@ -934,7 +921,7 @@ fn file_read_group_view(group: &turn::ToolGroup) -> Elements {
 
 fn file_read_row(is_first: bool, details: &turn::ToolCallDetails) -> Elements {
     let path_str = match &details.render_data {
-        turn::ToolRenderData::FileRead { path } => format_path_for_display(path),
+        turn::ToolRenderData::FileRead { path } => format_path_for_display(path).to_string(),
         _ => String::new(),
     };
 

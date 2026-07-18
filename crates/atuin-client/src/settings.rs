@@ -15,7 +15,7 @@ use serde_with::DeserializeFromStr;
 use std::{
     collections::HashMap,
     io::prelude::*,
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::{LazyLock, OnceLock},
 };
@@ -1009,9 +1009,9 @@ pub struct Settings {
     pub sync_protocol: SyncProtocol,
 
     pub sync_frequency: String,
-    pub db_path: String,
-    pub record_store_path: String,
-    pub key_path: String,
+    pub db_path: PathBuf,
+    pub record_store_path: PathBuf,
+    pub key_path: PathBuf,
     pub search_mode: SearchMode,
     pub filter_mode: Option<FilterMode>,
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
@@ -1726,13 +1726,13 @@ impl Settings {
     }
 
     pub fn paths_ok(&self) -> bool {
-        let paths = [
-            &self.db_path,
-            &self.record_store_path,
-            &self.key_path,
-            &self.meta.db_path,
+        let paths: [&Path; 4] = [
+            self.db_path.as_path(),
+            self.record_store_path.as_path(),
+            self.key_path.as_path(),
+            Path::new(&self.meta.db_path),
         ];
-        paths.iter().all(|p| !utils::broken_symlink(p))
+        paths.iter().all(|p| !utils::broken_symlink(*p))
     }
 }
 
