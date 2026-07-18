@@ -10,6 +10,7 @@ use crate::{
     record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store},
 };
 use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
+use atuin_common::rmp::RmpDecodeExt as _;
 
 use super::{HISTORY_TAG, History, HistoryId, Version};
 
@@ -73,20 +74,16 @@ impl HistoryRecord {
     pub fn deserialize(bytes: &DecryptedData, version: &str) -> Result<Self> {
         use rmp::decode;
 
-        fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
-            eyre!("{err:?}")
-        }
-
         let mut bytes = Bytes::new(&bytes.0);
 
-        let record_type = decode::read_u8(&mut bytes).map_err(error_report)?;
+        let record_type = bytes.read_with(decode::read_u8)?;
 
         match record_type {
             // 0 -> HistoryRecord::Create
             0 => {
                 // not super useful to us atm, but perhaps in the future
                 // written by write_bin above
-                let _ = decode::read_bin_len(&mut bytes).map_err(error_report)?;
+                let _ = bytes.read_with(decode::read_bin_len)?;
 
                 let record = History::deserialize(bytes.remaining_slice(), version)?;
 
@@ -95,16 +92,10 @@ impl HistoryRecord {
 
             // 1 -> HistoryRecord::Delete
             1 => {
-                let bytes = bytes.remaining_slice();
-                let (id, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
+                let id = bytes.read_string()?;
+                bytes.expect_eof()?;
 
-                if !bytes.is_empty() {
-                    bail!(
-                        "trailing bytes decoding HistoryRecord::Delete - malformed? got {bytes:?}"
-                    );
-                }
-
-                Ok(HistoryRecord::Delete(id.to_string().into()))
+                Ok(HistoryRecord::Delete(id.into()))
             }
 
             n => {

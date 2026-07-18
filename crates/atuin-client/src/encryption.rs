@@ -13,9 +13,11 @@ use std::io::prelude::*;
 use base64::prelude::{BASE64_STANDARD, Engine};
 pub use crypto_secretbox::Key;
 use crypto_secretbox::{KeyInit, XSalsa20Poly1305, aead::OsRng};
-use eyre::{Context, Result, bail, ensure, eyre};
+use eyre::{Context, Result, bail, ensure};
 use fs_err as fs;
 use rmp::Marker;
+
+use atuin_common::rmp::RmpDecodeExt as _;
 
 use crate::settings::Settings;
 
@@ -84,19 +86,18 @@ pub fn decode_key(key: String) -> Result<Key> {
 
             match Marker::from_u8(buf[0]) {
                 Marker::Bin8 => {
-                    let len = decode::read_bin_len(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
+                    let len = bytes.read_with(decode::read_bin_len)?;
                     ensure!(len == 32, "encryption key is not the correct size");
                     let key = <[u8; 32]>::try_from(bytes.remaining_slice())
                         .context("could not decode encryption key")?;
                     Ok(key.into())
                 }
                 Marker::Array16 => {
-                    let len = decode::read_array_len(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
-                    ensure!(len == 32, "encryption key is not the correct size");
+                    bytes.expect_array_len(32)?;
 
                     let mut key = Key::default();
                     for i in &mut key {
-                        *i = rmp::decode::read_int(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
+                        *i = bytes.read_with(decode::read_int)?;
                     }
                     Ok(key)
                 }
