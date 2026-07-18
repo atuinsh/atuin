@@ -59,6 +59,7 @@ macro_rules! new_uuid {
 
 pub mod api;
 pub mod logs;
+pub mod path;
 pub mod record;
 pub mod shell;
 pub mod string;
