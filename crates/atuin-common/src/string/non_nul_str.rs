@@ -70,7 +70,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{NonNulStr, ContainsNul};
+    use super::{ContainsNul, NonNulStr};
     use proptest::prelude::*;
     use rstest::rstest;
 
