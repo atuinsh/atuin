@@ -532,6 +532,7 @@ dependencies = [
 name = "atuin-pty-proxy"
 version = "18.17.1"
 dependencies = [
+ "atuin-common",
  "clap",
  "crossterm",
  "eyre",
