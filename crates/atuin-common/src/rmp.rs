@@ -397,4 +397,28 @@ mod tests {
             other => panic!("expected TrailingBytes, got {other:?}"),
         }
     }
+
+    #[test]
+    fn write_optional_some_then_read_back() {
+        let mut out = Vec::new();
+        out.write_optional(Some(99u64), rmp::encode::write_u64).unwrap();
+        let mut b = Bytes::new(&out);
+        assert_eq!(b.read_optional(rmp::decode::read_u64).unwrap(), Some(99));
+    }
+
+    #[test]
+    fn write_optional_none_writes_nil() {
+        let mut out = Vec::new();
+        out.write_optional::<u64, _>(None, rmp::encode::write_u64).unwrap();
+        let mut b = Bytes::new(&out);
+        assert_eq!(b.read_optional(rmp::decode::read_u64).unwrap(), None);
+    }
+
+    #[test]
+    fn write_optional_str() {
+        let mut out = Vec::new();
+        out.write_optional(Some("hi"), rmp::encode::write_str).unwrap();
+        let mut b = Bytes::new(&out);
+        assert_eq!(b.read_optional(|b| b.read_string()).unwrap(), Some("hi".to_string()));
+    }
 }
