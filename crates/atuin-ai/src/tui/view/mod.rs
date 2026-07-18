@@ -830,11 +830,6 @@ fn file_write_tool_view(
 /// count in the header line tells the full story.
 const MAX_GROUP_ENTRIES: usize = 5;
 
-/// Format a filesystem path for display in tool rows.
-///
-/// - Relative to the current working directory if the path is under it
-/// - Tilde-prefixed (`~` + platform separator) if the path is under the user's home directory
-/// - Absolute otherwise (and relative paths pass through unchanged)
 fn format_path_for_display(path: &std::path::Path) -> String {
     path.display_rich()
         .relative_to_cwd()
