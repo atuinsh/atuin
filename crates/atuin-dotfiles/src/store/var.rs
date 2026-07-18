@@ -409,6 +409,16 @@ mod tests {
         assert_eq!(decoded, record);
     }
 
+    #[test]
+    fn encode_decode_delete() {
+        let record = VarRecord::Delete("BEEP".to_owned());
+
+        let encoded = record.serialize().unwrap();
+        let decoded = VarRecord::deserialize(&encoded, DOTFILES_VAR_VERSION).unwrap();
+
+        assert_eq!(decoded, record);
+    }
+
     #[rstest]
     // Simple values should not be quoted
     #[case::simple("simple", "simple")]
