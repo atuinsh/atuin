@@ -682,25 +682,32 @@ impl Database for Sqlite {
             .exclude_cwd
             .map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
 
-        filter_options.before.map(|before| {
-            interim::parse_date_string(
+        // Parse failures must surface: a silently-dropped bound returns *unfiltered*
+        // results, which for `--before`/`--after` (and stats' date ranges) is worse
+        // than an error the user can see and correct.
+        if let Some(before) = filter_options.before {
+            let parsed = interim::parse_date_string(
                 before.as_str(),
                 OffsetDateTime::now_utc(),
                 interim::Dialect::Uk,
             )
-            .map(|before| {
-                sql.and_where_lt("timestamp", quote(before.unix_timestamp_nanos() as i64))
-            })
-        });
+            .map_err(|e| {
+                sqlx::Error::Decode(format!("invalid `before` filter {before:?}: {e}").into())
+            })?;
+            sql.and_where_lt("timestamp", quote(parsed.unix_timestamp_nanos() as i64));
+        }
 
-        filter_options.after.map(|after| {
-            interim::parse_date_string(
+        if let Some(after) = filter_options.after {
+            let parsed = interim::parse_date_string(
                 after.as_str(),
                 OffsetDateTime::now_utc(),
                 interim::Dialect::Uk,
             )
-            .map(|after| sql.and_where_gt("timestamp", quote(after.unix_timestamp_nanos() as i64)))
-        });
+            .map_err(|e| {
+                sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
+            })?;
+            sql.and_where_gt("timestamp", quote(parsed.unix_timestamp_nanos() as i64));
+        }
 
         if !filter_options.authors.is_empty() {
             apply_author_filter(&mut sql, &filter_options.authors);
@@ -1518,6 +1525,36 @@ mod test {
             .unwrap();
 
         assert_eq!(hits.len(), expected);
+    }
+
+    #[rstest]
+    #[case::before("before")]
+    #[case::after("after")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_rejects_unparseable_date_filter(#[case] which: &str) {
+        let db = db_with(&["ls"]).await;
+        let context = new_context();
+
+        let mut filters = OptFilters::default();
+        // Not a date `interim` can parse. It must surface as an error rather than being
+        // dropped, which would silently return unfiltered results.
+        match which {
+            "before" => filters.before = Some("not a date".to_string()),
+            "after" => filters.after = Some("not a date".to_string()),
+            _ => unreachable!(),
+        }
+
+        let result = db
+            .search(
+                SearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "",
+                filters,
+            )
+            .await;
+
+        assert!(result.is_err(), "unparseable `{which}` filter must error");
     }
 
     #[rstest]
