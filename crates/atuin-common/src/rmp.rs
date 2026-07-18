@@ -348,4 +348,53 @@ mod tests {
         let mut b = Bytes::new(&buf);
         assert!(b.read_optional(rmp::decode::read_u64).is_err());
     }
+
+    fn array_of(len: u32) -> Vec<u8> {
+        enc(|v| {
+            rmp::encode::write_array_len(v, len).unwrap();
+        })
+    }
+
+    #[test]
+    fn expect_array_len_exact_ok() {
+        let buf = array_of(3);
+        let mut b = Bytes::new(&buf);
+        assert_eq!(b.expect_array_len(3).unwrap(), 3);
+    }
+
+    #[test]
+    fn expect_array_len_mismatch_reports_expected_and_actual() {
+        let buf = array_of(5);
+        let mut b = Bytes::new(&buf);
+        match b.expect_array_len(3) {
+            Err(DecodeError::UnexpectedArrayLen { expected, actual }) => {
+                assert_eq!((expected, actual), (3, 5));
+            }
+            other => panic!("expected UnexpectedArrayLen, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_array_len_returns_count_for_manual_range_checks() {
+        let buf = array_of(9);
+        let mut b = Bytes::new(&buf);
+        assert_eq!(b.read_array_len().unwrap(), 9);
+    }
+
+    #[test]
+    fn expect_eof_ok_when_consumed() {
+        let buf = enc(|v| rmp::encode::write_u8(v, 1).unwrap());
+        let mut b = Bytes::new(&buf);
+        b.read_with(rmp::decode::read_u8).unwrap();
+        assert!(b.expect_eof().is_ok());
+    }
+
+    #[test]
+    fn expect_eof_reports_remaining() {
+        let b = Bytes::new(&[0x01, 0x02, 0x03]);
+        match b.expect_eof() {
+            Err(DecodeError::TrailingBytes { remaining }) => assert_eq!(remaining, 3),
+            other => panic!("expected TrailingBytes, got {other:?}"),
+        }
+    }
 }
