@@ -55,40 +55,45 @@ impl<'a> RichDisplay<'a> {
             ..self
         }
     }
-}
 
-impl fmt::Display for RichDisplay<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Resolve the body to render: the (possibly stripped) path, and whether
-        // a `~` prefix precedes it. `relative_to` wins over `tilde`.
-        let (tilde, body) = if let Some(base) = &self.relative_to
-            && let Ok(rel) = self.path.strip_prefix(base)
-        {
-            (false, rel)
-        } else if let Some(home) = &self.tilde
-            && let Ok(rel) = self.path.strip_prefix(home)
-        {
-            (true, rel)
-        } else {
-            (false, self.path)
-        };
-
+    /// Writes `body`, optionally prefixed with `~` + separator (when `tilde`)
+    /// and/or suffixed with a trailing separator (when `trailing_slash` is set
+    /// and `body` isn't already separator-terminated).
+    fn render(&self, f: &mut fmt::Formatter<'_>, tilde: bool, body: &Path) -> fmt::Result {
         if tilde {
             f.write_str("~")?;
             f.write_str(MAIN_SEPARATOR_STR)?;
         }
         write!(f, "{}", body.display())?;
 
-        let ends_with_separator = match body.as_os_str().as_encoded_bytes().last() {
+        let already_terminated = match body.as_os_str().as_encoded_bytes().last() {
             Some(&byte) => byte == MAIN_SEPARATOR as u8,
             None => tilde,
         };
-
-        if self.trailing_slash && !ends_with_separator {
+        if self.trailing_slash && !already_terminated {
             f.write_str(MAIN_SEPARATOR_STR)?;
         }
 
         Ok(())
+    }
+}
+
+impl fmt::Display for RichDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // `relative_to` wins over `tilde`; otherwise render the raw path.
+        if let Some(base) = &self.relative_to
+            && let Ok(relative) = self.path.strip_prefix(base)
+        {
+            return self.render(f, false, relative);
+        }
+
+        if let Some(home) = &self.tilde
+            && let Ok(relative) = self.path.strip_prefix(home)
+        {
+            return self.render(f, true, relative);
+        }
+
+        self.render(f, false, self.path)
     }
 }
 
