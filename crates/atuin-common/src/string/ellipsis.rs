@@ -114,6 +114,19 @@ pub trait EllipsizeExt: AsRef<str> {
             }
         }
     }
+
+    /// Truncate to `width` display columns with `indicator` on `side` when the
+    /// string is too wide, otherwise left-pad it to `width` columns. Always
+    /// returns an owned string.
+    fn ellipsize_or_pad(&self, width: usize, side: Pos, indicator: Indicator<'_>) -> String {
+        let s = self.as_ref();
+        if s.width() > width {
+            self.ellipsize(Budget::Columns(width), side, indicator)
+                .to_string()
+        } else {
+            format!("{s:width$}")
+        }
+    }
 }
 
 impl<T: AsRef<str>> EllipsizeExt for T {}
@@ -443,6 +456,24 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(input.ellipsize(budget, side, ellipsis), *expected);
+    }
+
+    #[rstest]
+    #[case::pads_when_shorter_than_width("hi", 5, Pos::End, "hi   ")]
+    #[case::unchanged_when_exact_width("hello", 5, Pos::End, "hello")]
+    #[case::ellipsizes_end_when_too_wide("hello world", 6, Pos::End, "hello…")]
+    #[case::ellipsizes_start_when_too_wide("hello world", 6, Pos::Start, "…world")]
+    #[case::empty_pads_to_width("", 3, Pos::End, "   ")]
+    fn ellipsize_or_pad_table(
+        #[case] input: &str,
+        #[case] width: usize,
+        #[case] side: Pos,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            input.ellipsize_or_pad(width, side, Indicator::UNICODE),
+            expected
+        );
     }
 
     fn any_pos() -> impl Strategy<Value = Pos> {
