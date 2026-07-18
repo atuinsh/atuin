@@ -290,4 +290,62 @@ mod tests {
             "expected a MessagePack array of length 3, found 5",
         );
     }
+
+    // Encode helpers used only by tests, to build inputs.
+    fn enc<F: FnOnce(&mut Vec<u8>)>(f: F) -> Vec<u8> {
+        let mut v = Vec::new();
+        f(&mut v);
+        v
+    }
+
+    #[test]
+    fn read_string_round_trips() {
+        let buf = enc(|v| rmp::encode::write_str(v, "héllo 🦀").unwrap());
+        let mut bytes = Bytes::new(&buf);
+        assert_eq!(bytes.read_string().unwrap(), "héllo 🦀");
+        assert!(bytes.remaining_slice().is_empty());
+    }
+
+    #[test]
+    fn read_string_on_wrong_type_errors_and_consumes_marker() {
+        // A lone nil marker: read_string must fail *and* consume the marker so a
+        // following read_optional can observe end-of-input correctly.
+        let mut bytes = Bytes::new(&[0xc0]);
+        assert!(bytes.read_string().is_err());
+        assert!(bytes.remaining_slice().is_empty(), "marker byte must be consumed");
+    }
+
+    #[test]
+    fn read_with_converts_rmp_errors() {
+        let buf = enc(|v| rmp::encode::write_u64(v, 42).unwrap());
+        let mut bytes = Bytes::new(&buf);
+        assert_eq!(bytes.read_with(rmp::decode::read_u64).unwrap(), 42);
+    }
+
+    #[test]
+    fn read_optional_some_and_none() {
+        let some = enc(|v| rmp::encode::write_u64(v, 7).unwrap());
+        let mut b = Bytes::new(&some);
+        assert_eq!(b.read_optional(rmp::decode::read_u64).unwrap(), Some(7));
+
+        let none = enc(|v| rmp::encode::write_nil(v).unwrap());
+        let mut b = Bytes::new(&none);
+        assert_eq!(b.read_optional(rmp::decode::read_u64).unwrap(), None);
+        assert!(b.remaining_slice().is_empty());
+    }
+
+    #[test]
+    fn read_optional_string_via_closure() {
+        let buf = enc(|v| rmp::encode::write_str(v, "x").unwrap());
+        let mut b = Bytes::new(&buf);
+        assert_eq!(b.read_optional(|b| b.read_string()).unwrap(), Some("x".to_string()));
+    }
+
+    #[test]
+    fn read_optional_forwards_non_nil_errors() {
+        // A bool where a u64 is expected is a type mismatch that is NOT nil.
+        let buf = enc(|v| rmp::encode::write_bool(v, true).unwrap());
+        let mut b = Bytes::new(&buf);
+        assert!(b.read_optional(rmp::decode::read_u64).is_err());
+    }
 }
