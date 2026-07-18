@@ -1434,8 +1434,8 @@ mod test {
     // item sits at `now_utc()`, far outside every window below, so it only appears
     // in the `None` (no filter) case.
     //
-    // `atuin stats` depends on these bounds actually being applied: it resolves a
-    // period to two instants and hands them to `search` as RFC3339 strings.
+    // `atuin search --before/--after` hands these to `search` as RFC3339 strings, so
+    // pin that the bounds are actually applied.
     #[rstest]
     #[case::window_spans_the_item(Some((-1, 1)), 1, true)]
     #[case::after_bound_is_exclusive(Some((0, 1)), 0, false)]
@@ -1496,9 +1496,8 @@ mod test {
     }
 
     #[rstest]
-    // `atuin stats` counts every execution and relies on `include_duplicates: true`.
-    // If that flag is ever dropped, stats totals silently collapse and no compiler
-    // catches it, so pin both sides of the contract here.
+    // `include_duplicates: true` returns every execution; `false` collapses repeats to
+    // the newest row. No compiler catches a regression here, so pin both sides.
     #[case::with_duplicates_counts_every_execution(true, 2)]
     #[case::without_duplicates_collapses_to_newest_row(false, 1)]
     #[tokio::test(flavor = "multi_thread")]
