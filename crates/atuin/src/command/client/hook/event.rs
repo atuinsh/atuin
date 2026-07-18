@@ -122,6 +122,11 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
+    /// Build the `CommandStr` a `HookEvent::Start` carries.
+    fn cmd(s: &str) -> CommandStr {
+        CommandStr::new(s.to_owned()).unwrap()
+    }
+
     #[rstest]
     #[case::pre_tool_use_with_intent(
         json!({
@@ -133,7 +138,7 @@ mod tests {
             "cwd": "/tmp"
         }),
         Some(HookEvent::Start {
-            command: "echo hello".into(),
+            command: cmd("echo hello"),
             intent: Some("Test greeting".into()),
             tool_use_id: "toolu_abc123".into(),
         })
@@ -145,7 +150,7 @@ mod tests {
             "tool_input": {"command": "ls"},
             "tool_use_id": "toolu_abc123"
         }),
-        Some(HookEvent::Start { command: "ls".into(), intent: None, tool_use_id: "toolu_abc123".into() })
+        Some(HookEvent::Start { command: cmd("ls"), intent: None, tool_use_id: "toolu_abc123".into() })
     )]
     #[case::post_tool_use_uses_exit_code(
         json!({
@@ -226,23 +231,19 @@ mod tests {
         }),
         None
     )]
-    // A command carrying a NUL is truncated at ingest; the trailing garbage
-    // (issue #3589) never reaches history.
-    #[case::command_truncated_at_nul(
+    // A command carrying a NUL fails to deserialize, so the whole event is
+    // dropped rather than recording a mangled command (issue #3589).
+    #[case::command_with_nul_rejected(
         json!({
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
             "tool_input": {"command": "echo hi\0rm -rf /"},
             "tool_use_id": "toolu_abc123"
         }),
-        Some(HookEvent::Start {
-            command: "echo hi".into(),
-            intent: None,
-            tool_use_id: "toolu_abc123".into(),
-        })
+        None
     )]
-    // A command that is nothing but a NUL prefix truncates to empty → skipped.
-    #[case::command_only_nul_skipped(
+    // A command that is nothing but a NUL prefix is likewise rejected.
+    #[case::command_only_nul_rejected(
         json!({
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
@@ -347,7 +348,7 @@ mod tests {
 
             prop_assert_eq!(
                 HookEvent::from_json_str(&input.to_string()).unwrap(),
-                Some(HookEvent::Start { command: command.into(), intent: description, tool_use_id })
+                Some(HookEvent::Start { command: CommandStr::new(command).unwrap(), intent: description, tool_use_id })
             );
         }
 
