@@ -113,6 +113,8 @@ pub struct CommandData {
     hosts: HashSet<Spur>,
     /// All sessions where this command has been run (as 16-byte UUIDs).
     sessions: HashSet<[u8; 16]>,
+    /// All shells that have run this command (interned keys).
+    shells: HashSet<Spur>,
 }
 
 impl CommandData {
@@ -127,15 +129,6 @@ impl CommandData {
             interner.get_or_intern(history.cwd.display_rich().trailing_slash(true).to_string());
         let host_key = interner.get_or_intern(&history.hostname);
 
-        let mut directories = HashSet::new();
-        directories.insert(dir_key);
-
-        let mut hosts = HashSet::new();
-        hosts.insert(host_key);
-
-        let mut sessions = HashSet::new();
-        sessions.insert(session);
-
         let mut global_frecency = FrecencyData::default();
         global_frecency.record_use(timestamp);
 
@@ -143,9 +136,10 @@ impl CommandData {
             most_recent_id: history_id,
             most_recent_timestamp: timestamp,
             global_frecency,
-            directories,
-            hosts,
-            sessions,
+            directories: HashSet::from([dir_key]),
+            hosts: HashSet::from([host_key]),
+            sessions: HashSet::from([session]),
+            shells: HashSet::from([Self::intern_shell(history, interner)]),
         })
     }
 
@@ -170,6 +164,7 @@ impl CommandData {
         self.directories.insert(dir_key);
         self.hosts.insert(interner.get_or_intern(&history.hostname));
         self.sessions.insert(session);
+        self.shells.insert(Self::intern_shell(history, interner));
 
         // Update most recent if this invocation is newer
         if timestamp > self.most_recent_timestamp {
@@ -214,6 +209,38 @@ impl CommandData {
     pub fn has_invocation_in_session(&self, session: &str) -> bool {
         parse_uuid_bytes(session).is_some_and(|bytes| self.sessions.contains(&bytes))
     }
+
+    fn intern_shell(history: &History, interner: &ThreadedRodeo) -> Spur {
+        interner.get_or_intern(history.shell.as_deref().unwrap_or_default())
+    }
+
+    /// Check if any invocation matches the list of allowed shells.
+    ///
+    /// An empty `shell_filter` allows all shells.
+    ///
+    /// # Time complexity
+    ///
+    /// O(`shell_filter.len()`)
+    pub fn matches_shell_filter<S>(&self, shell_filter: S, interner: &ThreadedRodeo) -> bool
+    where
+        S: IntoIterator<Item: AsRef<str>>,
+    {
+        use std::ops::ControlFlow::{Break, Continue};
+
+        match shell_filter.into_iter().try_fold(true, |_, shell| {
+            if interner
+                .get(shell.as_ref())
+                .is_some_and(|spur| self.shells.contains(&spur))
+            {
+                Break(())
+            } else {
+                Continue(false)
+            }
+        }) {
+            Continue(filter_was_empty) => filter_was_empty,
+            Break(()) => true,
+        }
+    }
 }
 
 /// Filter mode for search queries.
@@ -229,15 +256,6 @@ pub enum IndexFilterMode {
     Host(String),
     /// Filter to commands run in a specific session.
     Session(String),
-}
-
-/// Context for search queries.
-#[derive(Debug, Clone, Default)]
-pub struct QueryContext {
-    pub cwd: Option<String>,
-    pub git_root: Option<String>,
-    pub hostname: Option<String>,
-    pub session_id: Option<String>,
 }
 
 /// Shareable frecency map: command -> frecency score.
@@ -338,20 +356,23 @@ impl SearchIndex {
     /// Returns a list of history IDs (most recent invocation per command).
     /// Uses precomputed global frecency for scoring if available.
     #[instrument(skip_all, level = tracing::Level::TRACE, name = "index_search", fields(query = %query))]
-    pub async fn search(
+    pub async fn search<S>(
         &self,
         query: &str,
         filter_mode: IndexFilterMode,
-        _context: &QueryContext,
+        shell_filter: S,
         limit: u32,
-    ) -> Vec<String> {
+    ) -> Vec<String>
+    where
+        S: IntoIterator<Item: AsRef<str>> + Clone,
+    {
         let mut nucleo = self.nucleo.write().await;
 
         // Get precomputed frecency map (may be None if not yet computed)
         let frecency_map = self.frecency_map.read().await.clone();
 
-        // Build filter based on mode
-        let filter = self.build_filter(&filter_mode);
+        // Build filter based on mode and shells
+        let filter = self.build_filter(&filter_mode, shell_filter);
         nucleo.set_filter(filter);
 
         // Build scorer from precomputed frecency (or None if not available)
@@ -423,10 +444,19 @@ impl SearchIndex {
         *self.frecency_map.write().await = Some(Arc::new(frecency_map));
     }
 
-    /// Build filter predicate for the given mode.
-    fn build_filter(&self, mode: &IndexFilterMode) -> Option<atuin_nucleo::Filter<String>> {
-        // For Global mode, no filter needed
-        if matches!(mode, IndexFilterMode::Global) {
+    /// Build filter predicate for the given mode and shell filter.
+    fn build_filter<S>(
+        &self,
+        mode: &IndexFilterMode,
+        shell_filter: S,
+    ) -> Option<atuin_nucleo::Filter<String>>
+    where
+        S: IntoIterator<Item: AsRef<str>> + Clone,
+    {
+        // Nothing to filter on
+        if matches!(mode, IndexFilterMode::Global)
+            && shell_filter.clone().into_iter().next().is_none()
+        {
             return None;
         }
 
@@ -435,8 +465,8 @@ impl SearchIndex {
         let passing_commands: Arc<HashSet<String>> = {
             let mut set = HashSet::new();
             for entry in self.commands.iter() {
-                let passes = match mode {
-                    IndexFilterMode::Global => unreachable!(),
+                let mode_passes = match mode {
+                    IndexFilterMode::Global => true,
                     IndexFilterMode::Directory(dir) => {
                         entry.has_invocation_in_dir(dir, &self.interner)
                     }
@@ -448,10 +478,14 @@ impl SearchIndex {
                     }
                     IndexFilterMode::Session(session) => entry.has_invocation_in_session(session),
                 };
-                if passes {
-                    // Convert Arc<str> to String for filter lookup
-                    set.insert(entry.key().to_string());
+                if !mode_passes {
+                    continue;
                 }
+                if !entry.matches_shell_filter(shell_filter.clone(), &self.interner) {
+                    continue;
+                }
+                // Convert Arc<str> to String for filter lookup
+                set.insert(entry.key().to_string());
             }
             Arc::new(set)
         };
@@ -481,6 +515,7 @@ impl Default for SearchIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
     use time::macros::datetime;
 
     fn make_history(command: &str, cwd: &str, timestamp: OffsetDateTime) -> History {
@@ -692,7 +727,12 @@ mod tests {
 
         // Search for "git" - should match 2 commands
         let results = index
-            .search("git", IndexFilterMode::Global, &QueryContext::default(), 10)
+            .search(
+                "git",
+                IndexFilterMode::Global,
+                std::iter::empty::<&str>(),
+                10,
+            )
             .await;
         assert_eq!(results.len(), 2);
 
@@ -706,10 +746,42 @@ mod tests {
                         .trailing_slash(true)
                         .to_string(),
                 ),
-                &QueryContext::default(),
+                std::iter::empty::<&str>(),
                 10,
             )
             .await;
         assert_eq!(results.len(), 2); // git status and git commit
+    }
+
+    #[tokio::test]
+    #[rstest]
+    #[case::empty_filter(&[], 7)]
+    #[case::bash(&["bash"], 1)]
+    #[case::bash_unknown(&["bash", ""], 5)]
+    #[case::bash_zsh(&["bash", "zsh"], 3)]
+    #[case::unknown(&[""], 4)]
+    #[case::fish(&["fish"], 0)]
+    #[case::fish_unknown(&["fish", ""], 4)]
+    async fn test_shell_filter(#[case] shell_filter: &[&str], #[case] expected_count: usize) {
+        let index = SearchIndex::new();
+
+        for (command, shell) in [
+            ("echo unknown1", None),
+            ("echo zsh1", Some("zsh")),
+            ("echo unknown2", None),
+            ("echo bash", Some("bash")),
+            ("echo unknown3", None),
+            ("echo unknown4", None),
+            ("echo zsh2", Some("zsh")),
+        ] {
+            let mut history = make_history(command, "/tmp", OffsetDateTime::now_utc());
+            history.shell = shell.map(str::to_owned);
+            index.add_history(&history);
+        }
+
+        let results = index
+            .search("echo", IndexFilterMode::Global, shell_filter, 100)
+            .await;
+        assert_eq!(results.len(), expected_count, "{results:?}");
     }
 }

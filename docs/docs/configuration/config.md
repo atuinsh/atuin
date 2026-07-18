@@ -699,6 +699,37 @@ authors = ["$all-user"]
 # authors = ["$all-user", "claude-code"]
 ```
 
+#### `shells`
+
+Atuin version: >= 18.18
+
+Default: `"auto"`
+
+Filter interactive search results by the shell that was used to run each command.
+
+| Value  | Meaning |
+|--------|---------|
+| `"all"` | Show commands from all shells. |
+| `"auto"` | Show commands from the current shell, or commands that have no recorded shell (e.g., from an older version of Atuin). |
+| array of strings | Show commands run by any shell in the array. `""` includes commands that have no shell recorded. |
+
+The current shell is detected from the `ATUIN_SHELL` environment variable (set by the shell init script).
+
+```toml
+[search]
+# Default: show commands from the current shell. Atuin will show Bash commands
+# when invoked from Bash, Zsh commands when invoked from Zsh, etc. Also
+# includes commands that have no shell recorded (most likely from an older
+# version of Atuin).
+shells = "auto"
+
+# Show commands from all shells.
+# shells = "all"
+
+# Show only Bash and Zsh commands.
+# shells = ["bash", "zsh"]
+```
+
 ## Stats
 
 This section of client config is specifically for configuring Atuin stats calculations

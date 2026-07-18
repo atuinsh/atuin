@@ -309,6 +309,17 @@
 ## Default filter mode can be overridden with the filter_mode setting.
 # filters = ["global", "host", "session", "workspace", "directory", "session-preload"]
 
+## Filter interactive search results by the shell used to run the command:
+##
+## - "all": show all commands
+##
+## - "auto": show commands run by the current type of shell, or commands that
+##   have no shell recorded (e.g., from before Atuin started tracking it)
+##
+## - array of strings: show commands run by any shell in the array; "" includes
+##   commands that have no recorded shell
+# shells = "auto"
+
 [tmux]
 ## Enable using atuin with tmux popup (requires tmux >= 3.2)
 ## When enabled and running inside tmux, Atuin will use a popup window for interactive search.

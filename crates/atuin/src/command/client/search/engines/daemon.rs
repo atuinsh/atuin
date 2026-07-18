@@ -4,7 +4,7 @@ use atuin_client::{
     history::{AUTHOR_FILTER_ALL_USER, History},
     settings::{SearchMode, Settings},
 };
-use atuin_daemon::client::{DaemonClientErrorKind, SearchClient, classify_error};
+use atuin_daemon::client::{DaemonClientErrorKind, SearchClient, SearchParams, classify_error};
 use atuin_nucleo_matcher::{
     Config, Matcher, Utf32Str,
     pattern::{CaseMatching, Normalization, Pattern},
@@ -92,7 +92,8 @@ impl Search {
                 state.input.as_str(),
                 OptFilters {
                     limit: Some(200),
-                    authors: vec![AUTHOR_FILTER_ALL_USER.to_string()],
+                    authors: &[AUTHOR_FILTER_ALL_USER.to_owned()],
+                    shells: &state.shell_filter,
                     ..Default::default()
                 },
             )
@@ -133,18 +134,19 @@ impl SearchEngine for Search {
         let span =
             span!(Level::TRACE, "daemon_search.req_resp", query = %query, query_id = query_id);
 
+        let params = || SearchParams {
+            query: query.clone(),
+            query_id,
+            filter_mode: state.filter_mode,
+            shell_filter: state.shell_filter.clone(),
+            context: Some(state.context.clone()),
+        };
+
         // Try to connect and search; if it fails with a retriable error,
         // auto-start the daemon and retry once.
         let first_attempt = async {
             let client = self.get_client().await?;
-            client
-                .search(
-                    query.clone(),
-                    query_id,
-                    state.filter_mode,
-                    Some(state.context.clone()),
-                )
-                .await
+            client.search(params()).await
         }
         .await;
 
@@ -157,14 +159,7 @@ impl SearchEngine for Search {
                 daemon::ensure_daemon_running(&self.settings).await?;
 
                 let client = self.get_client().await?;
-                client
-                    .search(
-                        query.clone(),
-                        query_id,
-                        state.filter_mode,
-                        Some(state.context.clone()),
-                    )
-                    .await?
+                client.search(params()).await?
             }
             Err(err) => return Err(err),
         };

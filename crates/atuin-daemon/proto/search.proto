@@ -23,6 +23,9 @@ message SearchRequest {
   uint64 query_id = 2;  // Incrementing ID to match responses to queries
   FilterMode filter_mode = 3;
   SearchContext context = 4;
+  // Only include commands run by these shells. Empty string includes commands
+  // with no recorded shell; empty list returns results from all shells.
+  repeated string shells = 5;
 }
 
 message SearchResponse {

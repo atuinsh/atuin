@@ -1154,7 +1154,7 @@ impl AtuinHistoryToolCall {
         let filter_options = OptFilters {
             limit: Some(self.limit),
             only_failed: self.only_failed,
-            authors: self.authors.clone(),
+            authors: &self.authors,
             ..Default::default()
         };
 

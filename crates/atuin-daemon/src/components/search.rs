@@ -18,7 +18,7 @@ use crate::{
     daemon::{Component, DaemonHandle},
     events::DaemonEvent,
     search::{
-        FilterMode, IndexFilterMode, QueryContext, SearchIndex, SearchRequest, SearchResponse,
+        FilterMode, IndexFilterMode, SearchIndex, SearchRequest, SearchResponse,
         search_server::{Search as SearchSvc, SearchServer},
     },
 };
@@ -285,6 +285,7 @@ impl SearchSvc for SearchGrpcService {
                             .try_into()
                             .unwrap_or(FilterMode::Global);
                         let proto_context = search_req.context;
+                        let shells = search_req.shells;
 
                         debug!(
                             "search request: query = {}, query_id = {}, filter_mode = {}, context = {:?}",
@@ -297,25 +298,13 @@ impl SearchSvc for SearchGrpcService {
                         // Convert proto FilterMode + context to IndexFilterMode
                         let index_filter = convert_filter_mode(filter_mode, &proto_context);
 
-                        // Build QueryContext from proto context
-                        let query_context = proto_context
-                            .map(|ctx| QueryContext {
-                                cwd: Some(ctx.cwd.display_rich().trailing_slash(true).to_string()),
-                                git_root: ctx
-                                    .git_root
-                                    .map(|s| s.display_rich().trailing_slash(true).to_string()),
-                                hostname: Some(ctx.hostname),
-                                session_id: Some(ctx.session_id),
-                            })
-                            .unwrap_or_default();
-
                         // Perform the search
                         let history_ids =
                             span!(Level::TRACE, "daemon_search_query", %query, query_id)
                                 .in_scope(|| async {
                                     let index = index.read().await;
                                     index
-                                        .search(&query, index_filter, &query_context, RESULTS_LIMIT)
+                                        .search(&query, index_filter, &shells, RESULTS_LIMIT)
                                         .await
                                 })
                                 .await;

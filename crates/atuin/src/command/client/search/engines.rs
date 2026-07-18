@@ -33,6 +33,9 @@ pub struct SearchState {
     pub filter_mode: FilterMode,
     pub context: Context,
     pub custom_context: Option<HistoryId>,
+    /// If nonempty, include commands only from these shells. Like [`OptFilters::shell`], an empty
+    /// string includes commands for which the shell is unknown.
+    pub shell_filter: Vec<String>,
 }
 
 impl SearchState {
@@ -80,7 +83,8 @@ pub trait SearchEngine: Send + Sync + 'static {
                     "",
                     OptFilters {
                         limit: Some(200),
-                        authors: vec![AUTHOR_FILTER_ALL_USER.to_string()],
+                        authors: &[AUTHOR_FILTER_ALL_USER.to_owned()],
+                        shells: &state.shell_filter,
                         ..Default::default()
                     },
                 )

@@ -8,4 +8,4 @@ mod index;
 tonic::include_proto!("search");
 
 // Re-export the service and index
-pub use index::{IndexFilterMode, QueryContext, SearchIndex};
+pub use index::{IndexFilterMode, SearchIndex};

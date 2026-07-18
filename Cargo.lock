@@ -381,6 +381,7 @@ dependencies = [
  "time",
  "tiny-bip39",
  "tokio",
+ "toml",
  "tracing",
  "typed-builder",
  "url",

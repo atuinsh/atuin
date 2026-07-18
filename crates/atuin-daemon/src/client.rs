@@ -166,6 +166,27 @@ impl HistoryClient {
     }
 }
 
+#[derive(Clone)]
+pub struct SearchParams {
+    pub query: String,
+    pub query_id: u64,
+    pub filter_mode: FilterMode,
+    pub shell_filter: Vec<String>,
+    pub context: Option<Context>,
+}
+
+impl From<SearchParams> for SearchRequest {
+    fn from(params: SearchParams) -> Self {
+        Self {
+            query: params.query,
+            query_id: params.query_id,
+            filter_mode: RpcFilterMode::from(params.filter_mode).into(),
+            context: params.context.map(RpcSearchContext::from),
+            shells: params.shell_filter,
+        }
+    }
+}
+
 pub struct SearchClient {
     client: SearchServiceClient<Channel>,
 }
@@ -217,20 +238,17 @@ impl SearchClient {
         Ok(SearchClient { client })
     }
 
-    #[instrument(skip_all, level = Level::TRACE, name = "daemon_client_search", fields(query = %query, query_id = query_id))]
+    #[instrument(
+        skip_all,
+        level = Level::TRACE,
+        name = "daemon_client_search",
+        fields(query = %params.query, query_id = params.query_id),
+    )]
     pub async fn search(
         &mut self,
-        query: String,
-        query_id: u64,
-        filter_mode: FilterMode,
-        context: Option<Context>,
+        params: SearchParams,
     ) -> Result<tonic::Streaming<SearchResponse>> {
-        let request = SearchRequest {
-            query,
-            query_id,
-            filter_mode: RpcFilterMode::from(filter_mode).into(),
-            context: context.map(RpcSearchContext::from),
-        };
+        let request = SearchRequest::from(params);
         let request_stream = tokio_stream::once(request);
         let response = span!(Level::TRACE, "daemon_client_search.request")
             .in_scope(async || self.client.search(request_stream).await)
