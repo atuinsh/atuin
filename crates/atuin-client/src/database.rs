@@ -1531,7 +1531,7 @@ mod test {
     #[case::before("before")]
     #[case::after("after")]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_rejects_unparseable_date_filter(#[case] which: &str) {
+    async fn test_search_rejects_unparsable_date_filter(#[case] which: &str) {
         let db = db_with(&["ls"]).await;
         let context = new_context();
 
@@ -1554,7 +1554,7 @@ mod test {
             )
             .await;
 
-        assert!(result.is_err(), "unparseable `{which}` filter must error");
+        assert!(result.is_err(), "unparsable `{which}` filter must error");
     }
 
     #[rstest]
