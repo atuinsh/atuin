@@ -1,9 +1,4 @@
-//! A command string proven to contain no NUL bytes.
-//!
-//! Coding agents occasionally hand `atuin hook` a command carrying a NUL byte
-//! and trailing junk. Rather than record a mangled command, we refuse it: a
-//! `CommandStr` can only be built from a string with no NUL, so the parts of
-//! Atuin that treat a command as text never see one.
+//! A string proven to contain no NUL bytes.
 
 use std::fmt;
 use std::ops::Deref;
