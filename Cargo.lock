@@ -414,6 +414,7 @@ dependencies = [
  "unicode-width 0.2.2",
  "url",
  "uuid",
+ "vt100",
 ]
 
 [[package]]

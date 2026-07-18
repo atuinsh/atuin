@@ -60,11 +60,67 @@ pub trait Vt100PlainTextExt: AsRef<[u8]> {
     ///
     /// See the [trait docs](Vt100PlainTextExt) for the full list of transforms.
     fn to_plain_text(&self, cols: u16) -> String {
-        todo!("implemented in Task 3")
+        let bytes = self.as_ref();
+        if bytes.is_empty() {
+            return String::new();
+        }
+
+        let cols = cols.max(1);
+        let normalized = normalize_newlines(bytes);
+        let rows = estimated_rows(&normalized, cols);
+
+        let mut parser = vt100::Parser::new(rows, cols, 0);
+        parser.process(&normalized);
+
+        normalize_screen_contents(&parser.screen().contents())
     }
 }
 
 impl<T: AsRef<[u8]> + ?Sized> Vt100PlainTextExt for T {}
+
+/// Insert a carriage return before any line feed that is not already preceded by
+/// one, mimicking a terminal driver's `ONLCR` flag.
+///
+/// Pipe-captured output uses bare `\n`; in a real terminal a line feed only moves
+/// the cursor down without returning to column 0, so without this every line
+/// would start further right than the last and eventually wrap into garbage.
+/// Input that already uses `\r\n` is returned unchanged (the insert never fires),
+/// which is why this is safe to apply unconditionally to PTY-sourced input too.
+fn normalize_newlines(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len() + bytes.len() / 8);
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'\n' && (i == 0 || bytes[i - 1] != b'\r') {
+            out.push(b'\r');
+        }
+        out.push(b);
+    }
+    out
+}
+
+/// Estimate how many rows the emulated screen needs to hold `bytes` without
+/// losing content off the top, capped at [`MAX_ROWS`].
+///
+/// Real terminal output tends to have short lines, so a `bytes / cols` estimate
+/// alone badly under-counts; we add the newline count. The extra `+1` leaves a
+/// row of headroom for a final partial line.
+fn estimated_rows(bytes: &[u8], cols: u16) -> u16 {
+    let newline_rows = bytes.iter().filter(|&&b| b == b'\n').count() + 1;
+    let wrapped_rows = bytes.len() / cols as usize;
+    newline_rows
+        .saturating_add(wrapped_rows)
+        .saturating_add(1)
+        .clamp(1, MAX_ROWS) as u16
+}
+
+/// Trim trailing whitespace from each line and drop trailing blank lines,
+/// then rejoin with `\n`.
+fn normalize_screen_contents(contents: &str) -> String {
+    let mut lines = contents.lines().map(str::trim_end).collect::<Vec<_>>();
+    while lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    lines.join("\n")
+}
 
 #[cfg(test)]
 mod tests {
