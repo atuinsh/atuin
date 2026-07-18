@@ -115,17 +115,20 @@ pub trait EllipsizeExt: AsRef<str> {
         }
     }
 
-    /// Truncate to `width` display columns with `indicator` on `side` when the
-    /// string is too wide, otherwise right-pad it with spaces to a minimum
-    /// field width of `width` chars (char count, not display columns). Always
-    /// returns an owned string.
-    fn ellipsize_or_pad(&self, width: usize, side: Pos, indicator: Indicator<'_>) -> String {
+    /// Fit `self` to `budget`: ellipsize it on `side` with `indicator` when it
+    /// exceeds the budget, otherwise right-pad it with spaces up to the
+    /// budget's amount, in the budget's own unit (display columns or bytes).
+    /// Always returns an owned string.
+    fn pad_ellipsize(&self, budget: Budget, side: Pos, indicator: Indicator<'_>) -> String {
         let s = self.as_ref();
-        if s.width() > width {
-            self.ellipsize(Budget::Columns(width), side, indicator)
-                .to_string()
+        let cost = budget.cost(s);
+        let amount = budget.amount();
+        if cost > amount {
+            self.ellipsize(budget, side, indicator).to_string()
         } else {
-            format!("{s:width$}")
+            // Right-pad with spaces to the budget's amount, in its own unit.
+            let pad = amount - cost;
+            format!("{s}{:pad$}", "")
         }
     }
 }
@@ -460,20 +463,22 @@ mod tests {
     }
 
     #[rstest]
-    #[case::pads_when_shorter_than_width("hi", 5, Pos::End, "hi   ")]
-    #[case::unchanged_when_exact_width("hello", 5, Pos::End, "hello")]
-    #[case::ellipsizes_end_when_too_wide("hello world", 6, Pos::End, "hello…")]
-    #[case::ellipsizes_start_when_too_wide("hello world", 6, Pos::Start, "…world")]
-    #[case::empty_pads_to_width("", 3, Pos::End, "   ")]
-    #[case::wide_glyph_pads_by_char_count("世", 2, Pos::End, "世 ")]
-    fn ellipsize_or_pad_table(
+    #[case::pads_when_shorter_than_budget("hi", Budget::Columns(5), Pos::End, "hi   ")]
+    #[case::unchanged_when_exact_budget("hello", Budget::Columns(5), Pos::End, "hello")]
+    #[case::ellipsizes_end_when_too_wide("hello world", Budget::Columns(6), Pos::End, "hello…")]
+    #[case::ellipsizes_start_when_too_wide("hello world", Budget::Columns(6), Pos::Start, "…world")]
+    #[case::empty_pads_to_budget("", Budget::Columns(3), Pos::End, "   ")]
+    #[case::wide_glyph_exact_column_budget("世", Budget::Columns(2), Pos::End, "世")]
+    #[case::wide_glyph_pads_by_display_columns("世", Budget::Columns(3), Pos::End, "世 ")]
+    #[case::pads_by_bytes_under_byte_budget("世", Budget::Bytes(4), Pos::End, "世 ")]
+    fn pad_ellipsize_table(
         #[case] input: &str,
-        #[case] width: usize,
+        #[case] budget: Budget,
         #[case] side: Pos,
         #[case] expected: &str,
     ) {
         assert_eq!(
-            input.ellipsize_or_pad(width, side, Indicator::UNICODE),
+            input.pad_ellipsize(budget, side, Indicator::UNICODE),
             expected
         );
     }
