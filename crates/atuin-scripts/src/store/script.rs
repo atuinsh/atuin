@@ -1,11 +1,8 @@
 use atuin_common::record::DecryptedData;
-use eyre::{Result, bail, ensure};
+use eyre::Result;
 use uuid::Uuid;
 
-use rmp::{
-    decode::{self, Bytes},
-    encode,
-};
+use rmp::{decode, encode};
 use typed_builder::TypedBuilder;
 
 pub const SCRIPT_VERSION: &str = "v0";
@@ -63,43 +60,36 @@ impl Script {
     }
 
     pub fn deserialize(bytes: &[u8]) -> Result<Self> {
+        use atuin_common::rmp::RmpDecodeExt as _;
+
         let mut bytes = decode::Bytes::new(bytes);
-        let nfields = decode::read_array_len(&mut bytes).unwrap();
 
-        ensure!(nfields == 6, "too many entries in v0 script record");
+        bytes.expect_array_len(6)?;
 
-        let bytes = bytes.remaining_slice();
+        let id = bytes.read_string()?;
+        let name = bytes.read_string()?;
+        let description = bytes.read_string()?;
+        let shebang = bytes.read_string()?;
 
-        let (id, bytes) = decode::read_str_from_slice(bytes).unwrap();
-        let (name, bytes) = decode::read_str_from_slice(bytes).unwrap();
-        let (description, bytes) = decode::read_str_from_slice(bytes).unwrap();
-        let (shebang, bytes) = decode::read_str_from_slice(bytes).unwrap();
-
-        let mut bytes = Bytes::new(bytes);
-        let tags_len = decode::read_array_len(&mut bytes).unwrap();
-
-        let mut bytes = bytes.remaining_slice();
+        let tags_len = bytes.read_array_len()?;
 
         let mut tags = Vec::new();
         for _ in 0..tags_len {
-            let (tag, remaining) = decode::read_str_from_slice(bytes).unwrap();
-            tags.push(tag.to_owned());
-            bytes = remaining;
+            let tag = bytes.read_string()?;
+            tags.push(tag);
         }
 
-        let (script, bytes) = decode::read_str_from_slice(bytes).unwrap();
+        let script = bytes.read_string()?;
 
-        if !bytes.is_empty() {
-            bail!("trailing bytes in encoded script record. malformed")
-        }
+        bytes.expect_eof()?;
 
         Ok(Script {
-            id: Uuid::parse_str(id).unwrap(),
-            name: name.to_owned(),
-            description: description.to_owned(),
-            shebang: shebang.to_owned(),
+            id: Uuid::parse_str(&id)?,
+            name,
+            description,
+            shebang,
             tags,
-            script: script.to_owned(),
+            script,
         })
     }
 }

@@ -15,7 +15,7 @@ readme.workspace = true
 
 [dependencies]
 atuin-client = { path = "../atuin-client", version = "18.17.1" }
-atuin-common = { path = "../atuin-common", version = "18.17.1" }
+atuin-common = { path = "../atuin-common", version = "18.17.1", features = ["rmp"] }
 derive_more = { workspace = true }
 
 tracing = { workspace = true }

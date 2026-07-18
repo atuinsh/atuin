@@ -47,38 +47,34 @@ impl ScriptRecord {
     }
 
     pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
+        use atuin_common::rmp::RmpDecodeExt as _;
         use rmp::decode;
-
-        fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
-            eyre!("{err:?}")
-        }
 
         match version {
             SCRIPT_VERSION => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
-                let record_type = decode::read_u8(&mut bytes).map_err(error_report)?;
+                let record_type = bytes.read_with(decode::read_u8)?;
 
                 match record_type {
                     // create
                     0 => {
                         // written by encode::write_bin above
-                        let _ = decode::read_bin_len(&mut bytes).map_err(error_report)?;
+                        let _ = bytes.read_with(decode::read_bin_len)?;
                         let script = Script::deserialize(bytes.remaining_slice())?;
                         Ok(ScriptRecord::Create(script))
                     }
 
                     // delete
                     1 => {
-                        let bytes = bytes.remaining_slice();
-                        let (id, _) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-                        Ok(ScriptRecord::Delete(Uuid::parse_str(id)?))
+                        let id = bytes.read_string()?;
+                        Ok(ScriptRecord::Delete(Uuid::parse_str(&id)?))
                     }
 
                     // update
                     2 => {
                         // written by encode::write_bin above
-                        let _ = decode::read_bin_len(&mut bytes).map_err(error_report)?;
+                        let _ = bytes.read_with(decode::read_bin_len)?;
                         let script = Script::deserialize(bytes.remaining_slice())?;
                         Ok(ScriptRecord::Update(script))
                     }
