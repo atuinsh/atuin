@@ -1,23 +1,17 @@
 use std::{
     env,
     path::{Path, PathBuf},
-    str::FromStr,
-    time::Duration,
 };
 
 use crate::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNOWN_AGENTS};
 use async_trait::async_trait;
 use atuin_common::utils;
-use fs_err as fs;
 use itertools::Itertools;
 use rand::{Rng, distributions::Alphanumeric};
 use sql_builder::{SqlBuilder, SqlName, bind::Bind, esc, quote};
 use sqlx::{
     Result, Row,
-    sqlite::{
-        SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
-        SqliteSynchronous,
-    },
+    sqlite::{SqlitePool, SqliteRow, SqliteSynchronous},
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -244,29 +238,10 @@ impl Sqlite {
         let path = path.as_ref();
         debug!("opening sqlite database at {path:?}");
 
-        if utils::broken_symlink(path) {
-            eprintln!(
-                "Atuin: Sqlite db path ({path:?}) is a broken symlink. Unable to read or create replacement."
-            );
-            std::process::exit(1);
-        }
-
-        if !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            fs::create_dir_all(dir)?;
-        }
-
-        let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
-            .journal_mode(SqliteJournalMode::Wal)
-            .optimize_on_close(true, None)
+        let pool = atuin_common::sqlite::pool(path, timeout)
             .synchronous(SqliteSynchronous::Normal)
-            .with_regexp()
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::from_secs_f64(timeout))
-            .connect_with(opts)
+            .regexp(true)
+            .open()
             .await?;
 
         Self::setup_db(&pool).await?;
@@ -274,9 +249,7 @@ impl Sqlite {
     }
 
     pub async fn sqlite_version(&self) -> Result<String> {
-        sqlx::query_scalar("SELECT sqlite_version()")
-            .fetch_one(&self.pool)
-            .await
+        atuin_common::sqlite::version(&self.pool).await
     }
 
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
