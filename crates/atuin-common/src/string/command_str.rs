@@ -11,10 +11,6 @@ use std::ops::Deref;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A string proven to contain no NUL byte.
-///
-/// Generic over the backing storage `T` (`String`, `&str`, `Box<str>`, …). The
-/// wrapped value is validated once at construction; nothing afterwards can
-/// introduce a NUL, so every reader sees NUL-free text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CommandStr<T = String>(T);
 
