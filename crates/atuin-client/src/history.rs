@@ -10,7 +10,7 @@ use eyre::{Result, bail};
 use crate::secrets::SECRET_PATTERNS_RE;
 use crate::settings::Settings;
 use crate::utils::get_host_user;
-use crate::utils::rmp::{DecodeError, EncodeError, read_optional, read_string, write_optional};
+use atuin_common::rmp::{EncodeError, RmpDecodeExt as _, RmpEncodeExt as _};
 use time::OffsetDateTime;
 
 pub(crate) mod builder;
@@ -230,14 +230,13 @@ impl History {
         encode::write_str(&mut output, &self.session)?;
         encode::write_str(&mut output, &self.hostname)?;
 
-        write_optional(
-            &mut output,
+        output.write_optional(
             self.deleted_at.map(|d| d.unix_timestamp_nanos() as u64),
             encode::write_u64,
         )?;
         encode::write_str(&mut output, self.author.as_str())?;
-        write_optional(&mut output, self.intent.as_deref(), encode::write_str)?;
-        write_optional(&mut output, self.shell.as_deref(), encode::write_str)?;
+        output.write_optional(self.intent.as_deref(), encode::write_str)?;
+        output.write_optional(self.shell.as_deref(), encode::write_str)?;
         Ok(DecryptedData(output))
     }
 
@@ -248,30 +247,30 @@ impl History {
 
         let mut bytes = Bytes::new(bytes);
 
-        let real_version = decode::read_u16(&mut bytes).map_err(DecodeError::from)?;
+        let real_version = bytes.read_with(decode::read_u16)?;
         if real_version != version.as_int() {
             bail!("expected to decode {version} record, found v{real_version}");
         }
 
-        let nfields = decode::read_array_len(&mut bytes).map_err(DecodeError::from)?;
+        let nfields = bytes.read_array_len()?;
         let min_fields = version.min_fields();
         if nfields < min_fields || version.max_fields().is_some_and(|max| nfields > max) {
             bail!("unexpected number of fields ({nfields}) for history version {version}");
         }
 
-        let id = read_string(&mut bytes)?;
-        let timestamp = decode::read_u64(&mut bytes).map_err(DecodeError::from)?;
-        let duration = decode::read_int(&mut bytes).map_err(DecodeError::from)?;
-        let exit = decode::read_int(&mut bytes).map_err(DecodeError::from)?;
+        let id = bytes.read_string()?;
+        let timestamp = bytes.read_with(decode::read_u64)?;
+        let duration = bytes.read_with(decode::read_int)?;
+        let exit = bytes.read_with(decode::read_int)?;
 
-        let command = read_string(&mut bytes)?;
-        let cwd = read_string(&mut bytes)?;
-        let session = read_string(&mut bytes)?;
-        let hostname = read_string(&mut bytes)?;
-        let deleted_at = read_optional(&mut bytes, decode::read_u64)?;
+        let command = bytes.read_string()?;
+        let cwd = bytes.read_string()?;
+        let session = bytes.read_string()?;
+        let hostname = bytes.read_string()?;
+        let deleted_at = bytes.read_optional(decode::read_u64)?;
 
         let author = if version >= Version::One {
-            read_optional(&mut bytes, read_string)?
+            bytes.read_optional(|b| b.read_string())?
         } else {
             None
         };
@@ -281,13 +280,13 @@ impl History {
             Version::One => nfields > min_fields,
             Version::Two => true,
         } {
-            read_optional(&mut bytes, read_string)?
+            bytes.read_optional(|b| b.read_string())?
         } else {
             None
         };
 
         let shell = if version >= Version::Two {
-            read_optional(&mut bytes, read_string)?
+            bytes.read_optional(|b| b.read_string())?
         } else {
             None
         };
