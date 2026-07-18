@@ -158,7 +158,10 @@ impl HistorySvc for HistoryGrpcService {
         // rather than record garbage (issue #3589). This is a second ingress
         // path, independent of the `atuin hook` JSON boundary.
         let command = NonNulStr::new(req.command).map_err(|err| {
-            Status::invalid_argument(format!("command contains a NUL byte at index {}", err.index))
+            Status::invalid_argument(format!(
+                "command contains a NUL byte at index {}",
+                err.index
+            ))
         })?;
 
         // A NUL in the intent drops just the intent (an empty string normalizes
