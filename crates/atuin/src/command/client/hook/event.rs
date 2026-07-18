@@ -35,7 +35,7 @@ pub enum HookEvent {
     /// A Bash command is about to run; open a history entry.
     Start {
         command: NonNulStr,
-        intent: Option<String>,
+        intent: Option<NonNulStr>,
         tool_use_id: String,
     },
     /// A Bash command finished; close the matching history entry.
@@ -63,13 +63,17 @@ impl From<WireHookEvent> for Option<HookEvent> {
 
         match wire.hook_event_name {
             HookEventName::PreToolUse => {
-                let (command, intent) = match wire.tool_input {
+                let (command, description) = match wire.tool_input {
                     Some(input) => (input.command, input.description),
                     None => (None, None),
                 };
 
                 // A missing or empty command has nothing to record.
                 let command = command.filter(|command| !command.is_empty())?;
+
+                // A NUL in the description drops just the intent — the command
+                // is still recorded.
+                let intent = description.and_then(|description| NonNulStr::new(description).ok());
 
                 Some(HookEvent::Start {
                     command,
@@ -122,8 +126,8 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
-    /// Build the `NonNulStr` a `HookEvent::Start` carries.
-    fn cmd(s: &str) -> NonNulStr {
+    /// Build a `NonNulStr` for a test expectation.
+    fn non_nul(s: &str) -> NonNulStr {
         NonNulStr::new(s.to_owned()).unwrap()
     }
 
@@ -138,8 +142,8 @@ mod tests {
             "cwd": "/tmp"
         }),
         Some(HookEvent::Start {
-            command: cmd("echo hello"),
-            intent: Some("Test greeting".into()),
+            command: non_nul("echo hello"),
+            intent: Some(non_nul("Test greeting")),
             tool_use_id: "toolu_abc123".into(),
         })
     )]
@@ -150,7 +154,21 @@ mod tests {
             "tool_input": {"command": "ls"},
             "tool_use_id": "toolu_abc123"
         }),
-        Some(HookEvent::Start { command: cmd("ls"), intent: None, tool_use_id: "toolu_abc123".into() })
+        Some(HookEvent::Start { command: non_nul("ls"), intent: None, tool_use_id: "toolu_abc123".into() })
+    )]
+    // A NUL in the description drops just the intent; the command is still recorded.
+    #[case::description_with_nul_drops_intent(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "echo hi", "description": "greet\0evil"},
+            "tool_use_id": "toolu_abc123"
+        }),
+        Some(HookEvent::Start {
+            command: non_nul("echo hi"),
+            intent: None,
+            tool_use_id: "toolu_abc123".into(),
+        })
     )]
     #[case::post_tool_use_uses_exit_code(
         json!({
@@ -348,7 +366,11 @@ mod tests {
 
             prop_assert_eq!(
                 HookEvent::from_json_str(&input.to_string()).unwrap(),
-                Some(HookEvent::Start { command: NonNulStr::new(command).unwrap(), intent: description, tool_use_id })
+                Some(HookEvent::Start {
+                    command: NonNulStr::new(command).unwrap(),
+                    intent: description.map(|d| NonNulStr::new(d).unwrap()),
+                    tool_use_id,
+                })
             );
         }
 

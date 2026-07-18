@@ -9,6 +9,7 @@ use atuin_client::{
     history::{History, HistoryId, store::HistoryStore},
     settings::Settings,
 };
+use atuin_common::string::NonNulStr;
 use dashmap::DashMap;
 use eyre::Result;
 use time::OffsetDateTime;
@@ -153,14 +154,27 @@ impl HistorySvc for HistoryGrpcService {
                 )
             })?;
 
+        // A command carrying a NUL byte is malformed — reject the request
+        // rather than record garbage (issue #3589). This is a second ingress
+        // path, independent of the `atuin hook` JSON boundary.
+        let command = NonNulStr::new(req.command).map_err(|err| {
+            Status::invalid_argument(format!("command contains a NUL byte at index {}", err.index))
+        })?;
+
+        // A NUL in the intent drops just the intent (an empty string normalizes
+        // to `None`); the command is still recorded.
+        let intent = NonNulStr::new(req.intent)
+            .map(|intent| intent.as_str().to_owned())
+            .unwrap_or_default();
+
         let h: History = History::daemon()
             .timestamp(timestamp)
-            .command(req.command)
+            .command(command.as_str())
             .cwd(req.cwd)
             .session(req.session)
             .hostname(req.hostname)
             .author(req.author)
-            .intent(req.intent)
+            .intent(intent)
             .shell(req.shell)
             .build()
             .into();
