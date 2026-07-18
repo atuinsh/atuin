@@ -116,7 +116,8 @@ pub trait EllipsizeExt: AsRef<str> {
     }
 
     /// Truncate to `width` display columns with `indicator` on `side` when the
-    /// string is too wide, otherwise left-pad it to `width` columns. Always
+    /// string is too wide, otherwise right-pad it with spaces to a minimum
+    /// field width of `width` chars (char count, not display columns). Always
     /// returns an owned string.
     fn ellipsize_or_pad(&self, width: usize, side: Pos, indicator: Indicator<'_>) -> String {
         let s = self.as_ref();
@@ -464,6 +465,7 @@ mod tests {
     #[case::ellipsizes_end_when_too_wide("hello world", 6, Pos::End, "hello…")]
     #[case::ellipsizes_start_when_too_wide("hello world", 6, Pos::Start, "…world")]
     #[case::empty_pads_to_width("", 3, Pos::End, "   ")]
+    #[case::wide_glyph_pads_by_char_count("世", 2, Pos::End, "世 ")]
     fn ellipsize_or_pad_table(
         #[case] input: &str,
         #[case] width: usize,
