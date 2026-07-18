@@ -831,10 +831,7 @@ fn file_write_tool_view(
 const MAX_GROUP_ENTRIES: usize = 5;
 
 fn format_path_for_display(path: &std::path::Path) -> String {
-    path.display_rich()
-        .relative_to_cwd()
-        .tilde_me()
-        .to_string()
+    path.display_rich().relative_to_cwd().tilde_me().to_string()
 }
 
 fn filter_mode_label(mode: &HistorySearchFilterMode) -> &'static str {

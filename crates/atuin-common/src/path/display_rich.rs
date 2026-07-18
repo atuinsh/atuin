@@ -5,8 +5,7 @@ use std::path::{MAIN_SEPARATOR, MAIN_SEPARATOR_STR, Path};
 /// A [`Display`](fmt::Display) adapter for a path with optional enrichments, built via
 /// [`DisplayRichExt::display_rich`].
 ///
-/// With no options set, the `Display` output is byte-identical to [`Path::display`]. Options layer
-/// on top, in precedence order:
+/// With no options set, the `Display` output is byte-identical to [`Path::display`]. You can also:
 ///
 /// - [`relative_to`](Self::relative_to): if the path is under `base`, render relative to `base`.
 /// - [`tilde`](Self::tilde): if the path is under `home`, render it as `~` + separator + remainder.
