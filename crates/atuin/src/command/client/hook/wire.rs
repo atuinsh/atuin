@@ -5,7 +5,7 @@
 
 use serde::Deserialize;
 
-use atuin_common::string::CommandStr;
+use atuin_common::string::NonNulStr;
 
 #[derive(Debug, Deserialize)]
 pub enum WireToolName {
@@ -52,7 +52,7 @@ pub enum HookEventName {
 #[derive(Debug, Deserialize)]
 pub struct WireToolInput {
     #[serde(default)]
-    pub command: Option<CommandStr>,
+    pub command: Option<NonNulStr>,
     #[serde(default)]
     pub description: Option<String>,
 }

@@ -6,7 +6,7 @@
 
 use serde_json::error::Category;
 
-use atuin_common::string::CommandStr;
+use atuin_common::string::NonNulStr;
 
 use super::wire::{HookEventName, WireHookEvent, WireToolName};
 
@@ -34,7 +34,7 @@ pub enum ParseError {
 pub enum HookEvent {
     /// A Bash command is about to run; open a history entry.
     Start {
-        command: CommandStr,
+        command: NonNulStr,
         intent: Option<String>,
         tool_use_id: String,
     },
@@ -122,9 +122,9 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
-    /// Build the `CommandStr` a `HookEvent::Start` carries.
-    fn cmd(s: &str) -> CommandStr {
-        CommandStr::new(s.to_owned()).unwrap()
+    /// Build the `NonNulStr` a `HookEvent::Start` carries.
+    fn cmd(s: &str) -> NonNulStr {
+        NonNulStr::new(s.to_owned()).unwrap()
     }
 
     #[rstest]
@@ -348,7 +348,7 @@ mod tests {
 
             prop_assert_eq!(
                 HookEvent::from_json_str(&input.to_string()).unwrap(),
-                Some(HookEvent::Start { command: CommandStr::new(command).unwrap(), intent: description, tool_use_id })
+                Some(HookEvent::Start { command: NonNulStr::new(command).unwrap(), intent: description, tool_use_id })
             );
         }
 
