@@ -1,10 +1,9 @@
 use std::path::Path;
 use std::str::FromStr;
-use std::time::Duration;
 
 use atuin_common::record::HostId;
 use eyre::{Result, eyre};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteJournalMode, SqlitePool};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::OnceCell;
 use uuid::Uuid;
@@ -32,49 +31,29 @@ pub struct MetaStore {
 impl MetaStore {
     pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
         let path = path.as_ref();
-        let path_str = path
-            .as_os_str()
-            .to_str()
-            .ok_or_else(|| eyre!("meta database path is not valid UTF-8: {path:?}"))?;
         debug!("opening meta sqlite database at {path:?}");
 
-        let is_memory = path_str.contains(":memory:");
-
-        if !is_memory
-            && !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            fs_err::create_dir_all(dir)?;
-        }
-
-        // Use DELETE journal mode instead of WAL. This is a small, infrequently-
-        // written KV store — WAL's concurrency benefits aren't needed, and DELETE
-        // mode avoids creating auxiliary -wal/-shm files that complicate
-        // permission handling.
-        let opts = SqliteConnectOptions::from_str(path_str)?
+        // DELETE journal mode (not WAL): this is a small, infrequently-written
+        // KV store, so WAL's concurrency wins aren't needed, and DELETE avoids
+        // the auxiliary -wal/-shm files that complicate permission handling.
+        // Session tokens live here, so restrict the file to 0o600.
+        let pool = atuin_common::sqlite::pool(path, timeout)
             .journal_mode(SqliteJournalMode::Delete)
-            .optimize_on_close(true, None)
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::from_secs_f64(timeout))
-            .connect_with(opts)
+            .restrict_permissions(true)
+            .open()
             .await?;
 
         sqlx::migrate!("./meta-migrations").run(&pool).await?;
-
-        // Session tokens are stored in this database, so restrict permissions.
-        #[cfg(unix)]
-        if !is_memory {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        }
 
         let store = Self {
             pool,
             cached_host_id: OnceCell::const_new(),
         };
 
+        let is_memory = path
+            .as_os_str()
+            .to_str()
+            .is_some_and(|s| s.contains(":memory:"));
         if !is_memory {
             store.migrate_files().await?;
         }
