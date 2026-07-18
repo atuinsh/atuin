@@ -1,5 +1,7 @@
 //! View function that builds the eye-declare element tree from app state.
 
+use std::fmt::Display;
+
 use eye_declare::{
     Cells, Column, Elements, HStack, Span, Spinner, Text, View, Viewport, WidthConstraint, element,
 };
@@ -830,8 +832,8 @@ fn file_write_tool_view(
 /// count in the header line tells the full story.
 const MAX_GROUP_ENTRIES: usize = 5;
 
-fn format_path_for_display(path: &std::path::Path) -> String {
-    path.display_rich().relative_to_cwd().tilde_me().to_string()
+fn format_path_for_display(path: &std::path::Path) -> impl Display {
+    path.display_rich().relative_to_cwd().tilde_me()
 }
 
 fn filter_mode_label(mode: &HistorySearchFilterMode) -> &'static str {
@@ -919,7 +921,7 @@ fn file_read_group_view(group: &turn::ToolGroup) -> Elements {
 
 fn file_read_row(is_first: bool, details: &turn::ToolCallDetails) -> Elements {
     let path_str = match &details.render_data {
-        turn::ToolRenderData::FileRead { path } => format_path_for_display(path),
+        turn::ToolRenderData::FileRead { path } => format_path_for_display(path).to_string(),
         _ => String::new(),
     };
 
