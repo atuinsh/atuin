@@ -5,6 +5,8 @@ use eye_declare::{
 };
 use ratatui_core::style::{Color, Modifier, Style};
 
+use atuin_common::path::DisplayRichExt;
+
 use crate::driver::ViewState;
 use crate::fsm::{AgentState, ModelPicker, StreamPhase};
 use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview};
@@ -834,19 +836,17 @@ const MAX_GROUP_ENTRIES: usize = 5;
 /// - `~/...` prefix if the path is under the user's home directory
 /// - Absolute otherwise (and relative paths pass through unchanged)
 fn format_path_for_display(path: &std::path::Path) -> String {
-    if let Ok(cwd) = std::env::current_dir()
-        && let Ok(relative) = path.strip_prefix(&cwd)
-    {
-        return relative.display().to_string();
+    let mut rich = path.display_rich();
+
+    if let Ok(cwd) = std::env::current_dir() {
+        rich = rich.relative_to(cwd);
     }
 
-    if let Ok(home) = std::env::var("HOME")
-        && let Ok(relative) = path.strip_prefix(&home)
-    {
-        return format!("~/{}", relative.display());
+    if let Some(base_dirs) = directories::BaseDirs::new() {
+        rich = rich.tilde(base_dirs.home_dir());
     }
 
-    path.display().to_string()
+    rich.to_string()
 }
 
 fn filter_mode_label(mode: &HistorySearchFilterMode) -> &'static str {
