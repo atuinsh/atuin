@@ -164,12 +164,6 @@ impl HistorySvc for HistoryGrpcService {
             ))
         })?;
 
-        // A NUL in the intent drops just the intent (an empty string normalizes
-        // to `None`); the command is still recorded.
-        let intent = NonNulStr::new(req.intent)
-            .map(|intent| intent.as_str().to_owned())
-            .unwrap_or_default();
-
         let h: History = History::daemon()
             .timestamp(timestamp)
             .command(command.as_str())
@@ -177,7 +171,7 @@ impl HistorySvc for HistoryGrpcService {
             .session(req.session)
             .hostname(req.hostname)
             .author(req.author)
-            .intent(intent)
+            .intent(req.intent)
             .shell(req.shell)
             .build()
             .into();
