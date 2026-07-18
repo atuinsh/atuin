@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::record::{DecryptedData, Host, HostId};
-use eyre::{Result, bail, ensure, eyre};
+use atuin_common::rmp::RmpDecodeExt as _;
+use eyre::{Result, bail, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;
 use atuin_client::record::store::Store;
@@ -49,15 +50,11 @@ impl VarRecord {
     pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
         use rmp::decode;
 
-        fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
-            eyre!("{err:?}")
-        }
-
         match version {
             DOTFILES_VAR_VERSION => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
-                let record_type = decode::read_u8(&mut bytes).map_err(error_report)?;
+                let record_type = bytes.read_with(decode::read_u8)?;
 
                 match record_type {
                     // create
@@ -68,22 +65,13 @@ impl VarRecord {
 
                     // delete
                     1 => {
-                        let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
-                        ensure!(
-                            nfields == 1,
-                            "too many entries in v0 dotfiles var delete record"
-                        );
+                        bytes.expect_array_len(1)?;
 
-                        let bytes = bytes.remaining_slice();
+                        let key = bytes.read_string()?;
 
-                        let (key, bytes) =
-                            decode::read_str_from_slice(bytes).map_err(error_report)?;
+                        bytes.expect_eof()?;
 
-                        if !bytes.is_empty() {
-                            bail!("trailing bytes in encoded dotfiles var record. malformed")
-                        }
-
-                        Ok(VarRecord::Delete(key.to_owned()))
+                        Ok(VarRecord::Delete(key))
                     }
 
                     n => {

@@ -6,8 +6,9 @@ use atuin_client::record::sqlite_store::SqliteStore;
 // While we will support a range of shell config, I'd rather have a larger number of small records
 // + stores, rather than one mega config store.
 use atuin_common::record::{DecryptedData, Host, HostId};
+use atuin_common::rmp::RmpDecodeExt as _;
 use atuin_common::utils::unquote;
-use eyre::{Result, bail, ensure, eyre};
+use eyre::{Result, bail, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;
 use atuin_client::record::store::Store;
@@ -55,60 +56,34 @@ impl AliasRecord {
     pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
         use rmp::decode;
 
-        fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
-            eyre!("{err:?}")
-        }
-
         match version {
             CONFIG_SHELL_ALIAS_VERSION => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
-                let record_type = decode::read_u8(&mut bytes).map_err(error_report)?;
+                let record_type = bytes.read_with(decode::read_u8)?;
 
                 match record_type {
                     // create
                     0 => {
-                        let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
-                        ensure!(
-                            nfields == 2,
-                            "too many entries in v0 shell alias create record"
-                        );
+                        bytes.expect_array_len(2)?;
 
-                        let bytes = bytes.remaining_slice();
+                        let name = bytes.read_string()?;
+                        let value = bytes.read_string()?;
 
-                        let (key, bytes) =
-                            decode::read_str_from_slice(bytes).map_err(error_report)?;
-                        let (value, bytes) =
-                            decode::read_str_from_slice(bytes).map_err(error_report)?;
+                        bytes.expect_eof()?;
 
-                        if !bytes.is_empty() {
-                            bail!("trailing bytes in encoded shell alias record. malformed")
-                        }
-
-                        Ok(AliasRecord::Create(Alias {
-                            name: key.to_owned(),
-                            value: value.to_owned(),
-                        }))
+                        Ok(AliasRecord::Create(Alias { name, value }))
                     }
 
                     // delete
                     1 => {
-                        let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
-                        ensure!(
-                            nfields == 1,
-                            "too many entries in v0 shell alias delete record"
-                        );
+                        bytes.expect_array_len(1)?;
 
-                        let bytes = bytes.remaining_slice();
+                        let key = bytes.read_string()?;
 
-                        let (key, bytes) =
-                            decode::read_str_from_slice(bytes).map_err(error_report)?;
+                        bytes.expect_eof()?;
 
-                        if !bytes.is_empty() {
-                            bail!("trailing bytes in encoded shell alias record. malformed")
-                        }
-
-                        Ok(AliasRecord::Delete(key.to_owned()))
+                        Ok(AliasRecord::Delete(key))
                     }
 
                     n => {

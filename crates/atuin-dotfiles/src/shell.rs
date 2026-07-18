@@ -1,7 +1,8 @@
-use eyre::{Result, ensure, eyre};
+use eyre::Result;
 use rmp::{decode, encode};
 use serde::Serialize;
 
+use atuin_common::rmp::RmpDecodeExt as _;
 use atuin_common::shell::{Shell, ShellError};
 
 use crate::store::AliasStore;
@@ -42,35 +43,17 @@ impl Var {
     }
 
     pub fn deserialize(bytes: &mut decode::Bytes) -> Result<Self> {
-        fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
-            eyre!("{err:?}")
-        }
+        bytes.expect_array_len(3)?;
 
-        let nfields = decode::read_array_len(bytes).map_err(error_report)?;
+        let name = bytes.read_string()?;
+        let value = bytes.read_string()?;
+        let export = bytes.read_with(decode::read_bool)?;
 
-        ensure!(
-            nfields == 3,
-            "too many entries in v0 dotfiles env create record, got {}, expected {}",
-            nfields,
-            3
-        );
-
-        let bytes = bytes.remaining_slice();
-
-        let (key, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-        let (value, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-
-        let mut bytes = decode::Bytes::new(bytes);
-        let export = decode::read_bool(&mut bytes).map_err(error_report)?;
-
-        ensure!(
-            bytes.remaining_slice().is_empty(),
-            "trailing bytes in encoded dotfiles env record, malformed"
-        );
+        bytes.expect_eof()?;
 
         Ok(Var {
-            name: key.to_owned(),
-            value: value.to_owned(),
+            name,
+            value,
             export,
         })
     }
