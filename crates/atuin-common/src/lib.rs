@@ -68,3 +68,5 @@ pub mod test_utils;
 pub mod tls;
 pub mod url;
 pub mod utils;
+#[cfg(feature = "vt100")]
+pub mod vt100;
