@@ -1,5 +1,6 @@
 use atuin_common::record::DecryptedData;
-use eyre::{Result, bail, ensure, eyre};
+use atuin_common::rmp::RmpDecodeExt as _;
+use eyre::{Result, bail};
 use typed_builder::TypedBuilder;
 
 pub const KV_VERSION: &str = "v1";
@@ -36,62 +37,44 @@ impl KvRecord {
     pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
         use rmp::decode;
 
-        fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
-            eyre!("{err:?}")
-        }
-
         match version {
             "v0" => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
-                let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
-                ensure!(nfields == 3, "too many entries in v0 kv record");
+                bytes.expect_array_len(3)?;
 
-                let bytes = bytes.remaining_slice();
+                let namespace = bytes.read_string()?;
+                let key = bytes.read_string()?;
+                let value = bytes.read_string()?;
 
-                let (namespace, bytes) =
-                    decode::read_str_from_slice(bytes).map_err(error_report)?;
-                let (key, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-                let (value, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-
-                if !bytes.is_empty() {
-                    bail!("trailing bytes in encoded kvrecord. malformed")
-                }
+                bytes.expect_eof()?;
 
                 Ok(KvRecord {
-                    namespace: namespace.to_owned(),
-                    key: key.to_owned(),
-                    value: Some(value.to_owned()),
+                    namespace,
+                    key,
+                    value: Some(value),
                 })
             }
             KV_VERSION => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
-                let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
-                ensure!(nfields == 4, "too many entries in v1 kv record");
+                bytes.expect_array_len(4)?;
 
-                let bytes = bytes.remaining_slice();
+                let namespace = bytes.read_string()?;
+                let key = bytes.read_string()?;
+                let has_value = bytes.read_with(decode::read_bool)?;
 
-                let (namespace, bytes) =
-                    decode::read_str_from_slice(bytes).map_err(error_report)?;
-                let (key, mut bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-                let has_value = decode::read_bool(&mut bytes).map_err(error_report)?;
-
-                let (value, bytes) = if has_value {
-                    let (value, bytes) =
-                        decode::read_str_from_slice(bytes).map_err(error_report)?;
-                    (Some(value.to_owned()), bytes)
+                let value = if has_value {
+                    Some(bytes.read_string()?)
                 } else {
-                    (None, bytes)
+                    None
                 };
 
-                if !bytes.is_empty() {
-                    bail!("trailing bytes in encoded kvrecord. malformed")
-                }
+                bytes.expect_eof()?;
 
                 Ok(KvRecord {
-                    namespace: namespace.to_owned(),
-                    key: key.to_owned(),
+                    namespace,
+                    key,
                     value,
                 })
             }
