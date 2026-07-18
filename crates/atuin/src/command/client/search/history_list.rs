@@ -20,7 +20,6 @@ use ratatui::{
     widgets::{Block, StatefulWidget, Widget},
 };
 use time::OffsetDateTime;
-use unicode_width::UnicodeWidthStr;
 
 pub struct HistoryHighlighter<'a> {
     pub engine: &'a dyn SearchEngine,
@@ -360,14 +359,9 @@ impl DrawState<'_> {
         let style = self.theme.as_style(Meaning::Annotation);
         let w = width as usize;
         let cwd = &h.cwd;
-        // Elide from the left with "..." so the leaf directory stays visible;
+        // Elide from the left with "…" so the leaf directory stays visible;
         // pad to the column width when it already fits.
-        let display = if cwd.width() > w {
-            cwd.ellipsize(Budget::Columns(w), Pos::Start, Indicator::UNICODE)
-                .to_string()
-        } else {
-            format!("{cwd:w$}")
-        };
+        let display = cwd.ellipsize_or_pad(w, Pos::Start, Indicator::UNICODE);
         self.draw(&display, Style::from_crossterm(style));
     }
 
@@ -377,12 +371,7 @@ impl DrawState<'_> {
         let w = width as usize;
         // Database stores hostname as "hostname:username"
         let host = h.hostname.split(':').next().unwrap_or(&h.hostname);
-        let display = if host.width() > w {
-            host.ellipsize(Budget::Columns(w), Pos::End, Indicator::UNICODE)
-                .to_string()
-        } else {
-            format!("{host:w$}")
-        };
+        let display = host.ellipsize_or_pad(w, Pos::End, Indicator::UNICODE);
         self.draw(&display, Style::from_crossterm(style));
     }
 
@@ -392,12 +381,7 @@ impl DrawState<'_> {
         let w = width as usize;
         // Database stores hostname as "hostname:username"
         let user = h.hostname.split(':').nth(1).unwrap_or("");
-        let display = if user.width() > w {
-            user.ellipsize(Budget::Columns(w), Pos::End, Indicator::UNICODE)
-                .to_string()
-        } else {
-            format!("{user:w$}")
-        };
+        let display = user.ellipsize_or_pad(w, Pos::End, Indicator::UNICODE);
         self.draw(&display, Style::from_crossterm(style));
     }
 
