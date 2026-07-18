@@ -1,4 +1,25 @@
 use atuin_client::settings::WordJumpMode;
+use itertools::Itertools;
+use std::ops::Range;
+
+/// Like [`str::char_indices`], but only yields characters whose byte positions
+/// are in `start..end`.
+///
+/// # Panics
+///
+/// This function does not panic.
+fn chars_within(
+    string: &str,
+    range: Range<usize>,
+) -> impl DoubleEndedIterator<Item = (usize, char)> + use<'_> {
+    let start = string.ceil_char_boundary(range.start);
+    // `ceil_char_boundary` clamps to `string.len()` if out of bounds. Use
+    // `.max` to prevent `end` from being less than `start`.
+    let end = string.ceil_char_boundary(range.end).max(start);
+    string[start..end]
+        .char_indices()
+        .map(move |(i, c)| (start + i, c))
+}
 
 pub struct Cursor {
     source: String,
@@ -25,94 +46,50 @@ impl WordJumper<'_> {
     }
 
     fn emacs_get_next_word_pos(&self, source: &str, index: usize) -> usize {
-        let mut valid_range = source.char_indices().filter(|&(char_position, _)| {
-            index < char_position && char_position < source.len().saturating_sub(1)
-        });
-        let index = valid_range
-            .find(|&(_, char_value)| self.word_chars.contains(char_value))
-            .unwrap_or((source.len(), '\0'))
-            .0;
-        source
-            .char_indices()
-            .filter(|&(char_position, _)| {
-                index < char_position && char_position < source.len().saturating_sub(1)
-            })
-            .find(|&(_, char_value)| !self.word_chars.contains(char_value))
-            .unwrap_or((source.len(), '\0'))
-            .0
+        let end = source.len().saturating_sub(1);
+        let index = chars_within(source, index + 1..end)
+            .find_map(|(i, c)| self.word_chars.contains(c).then_some(i))
+            .unwrap_or(source.len());
+        chars_within(source, index + 1..end)
+            .find_map(|(i, c)| (!self.word_chars.contains(c)).then_some(i))
+            .unwrap_or(source.len())
     }
 
     fn emacs_get_prev_word_pos(&self, source: &str, index: usize) -> usize {
-        let valid_range = source
-            .char_indices()
-            .filter(|&(char_position, _)| 1 <= char_position && char_position < index);
-        let index_pair = valid_range
+        let index = chars_within(source, 1..index)
             .rev()
-            .find(|&(_, char_value)| self.word_chars.contains(char_value))
-            .unwrap_or_default();
-        source
-            .char_indices()
-            .filter(|&(char_position, _)| 1 <= char_position && char_position < index_pair.0)
+            .find_map(|(i, c)| self.word_chars.contains(c).then_some(i))
+            .unwrap_or(0);
+        chars_within(source, 1..index)
             .rev()
-            .find(|&(_, char_value)| !self.word_chars.contains(char_value))
-            .map_or(0, |(t, c)| t + c.len_utf8())
+            .find_map(|(i, c)| (!self.word_chars.contains(c)).then_some(i + c.len_utf8()))
+            .unwrap_or(0)
     }
 
     fn subl_get_next_word_pos(&self, source: &str, index: usize) -> usize {
-        let mut iterator = source
-            .char_indices()
-            .filter(|&(char_index, _)| {
-                index <= char_index && char_index < source.len().saturating_sub(1)
-            })
-            .peekable();
-        let index: Option<usize> = loop {
-            if let Some((char_index, char_value)) = iterator.next() {
-                if let Some(&(_, next_char_value)) = iterator.peek()
-                    && self.is_word_boundary(char_value, next_char_value)
-                {
-                    break Some(char_index);
-                }
-            } else {
-                break None;
-            }
-        };
-        if index.is_none() {
+        let Some(index) = chars_within(source, index..source.len())
+            .tuple_windows()
+            .find_map(|((i1, c1), (_, c2))| self.is_word_boundary(c1, c2).then_some(i1))
+        else {
             return source.len();
-        }
-        source
-            .char_indices()
-            .filter(|&(char_index, _)| index.unwrap() < char_index && char_index < source.len())
-            .find(|(_, char_value)| !char_value.is_whitespace())
-            .unwrap_or((source.len(), '\0'))
-            .0
+        };
+        chars_within(source, index + 1..source.len())
+            .find_map(|(i, c)| (!c.is_whitespace()).then_some(i))
+            .unwrap_or(source.len())
     }
 
     fn subl_get_prev_word_pos(&self, source: &str, index: usize) -> usize {
-        let index = source
-            .char_indices()
-            .filter(|&(char_index, _)| 1 <= char_index && char_index < index)
+        let Some(index) = chars_within(source, 1..index)
             .rev()
-            .find(|(_, char_value)| !char_value.is_whitespace());
-        if index.is_none() {
+            .find_map(|(i, c)| (!c.is_whitespace()).then_some(i))
+        else {
             return 0;
-        }
-
-        let mut iter = source
-            .char_indices()
-            .filter(|&(char_index, _)| 1 <= char_index && char_index < index.unwrap().0)
+        };
+        chars_within(source, 0..index)
             .rev()
-            .peekable();
-        loop {
-            if let Some((char_index, char_value)) = iter.next()
-                && let Some(&(_, prev_word)) = iter.peek()
-            {
-                if self.is_word_boundary(prev_word, char_value) {
-                    break char_index;
-                }
-            } else {
-                break 0;
-            }
-        }
+            .tuple_windows()
+            .find_map(|((i1, c1), (_, c2))| self.is_word_boundary(c2, c1).then_some(i1))
+            .unwrap_or(0)
     }
 
     fn get_next_word_pos(&self, source: &str, index: usize) -> usize {
@@ -355,88 +332,66 @@ mod cursor_tests {
     }
 
     const JUMPER_SUBJECT: &str = "   aaa   ((()))bbb   ((()))   ";
+    const EMACS_SUBJECT: &str = " 😀 test";
+    const SUBL_SUBJECT: &str = " hi 😀 ((test";
+    const TRAILING_MULTIBYTE_SUBJECT: &str = "aa bb😀";
 
     #[rstest]
-    #[case::from_start_to_end_of_aaa(0, 6)]
-    #[case::from_within_aaa_to_end_of_aaa(3, 6)]
-    #[case::from_gap_skips_parens_to_end_of_bbb(7, 18)]
-    #[case::from_after_bbb_to_end_of_string(19, 30)]
-    fn emacs_get_next_word_pos(#[case] src: usize, #[case] dest: usize) {
-        let s = String::from(JUMPER_SUBJECT);
-        assert_eq!(EMACS_WORD_JUMPER.get_next_word_pos(&s, src), dest);
-    }
-    #[test]
-    fn test_emacs_get_next_word_pos_non_ascii() {
-        let s = String::from(" 😀 test");
-        let indices = [(0, 10), (1, 10)];
-        for (i_src, i_dest) in indices {
-            assert_eq!(EMACS_WORD_JUMPER.get_next_word_pos(&s, i_src), i_dest);
-        }
+    #[case::from_start_to_end_of_aaa(JUMPER_SUBJECT, 0, 6)]
+    #[case::from_within_aaa_to_end_of_aaa(JUMPER_SUBJECT, 3, 6)]
+    #[case::from_gap_skips_parens_to_end_of_bbb(JUMPER_SUBJECT, 7, 18)]
+    #[case::from_after_bbb_to_end_of_string(JUMPER_SUBJECT, 19, 30)]
+    #[case::non_ascii_from_start_to_test(EMACS_SUBJECT, 0, 10)]
+    #[case::non_ascii_from_emoji_to_test(EMACS_SUBJECT, 1, 10)]
+    #[case::trailing_multibyte(TRAILING_MULTIBYTE_SUBJECT, 3, 5)]
+    #[case::empty_string("", 0, 0)]
+    fn emacs_get_next_word_pos(#[case] subject: &str, #[case] from: usize, #[case] to: usize) {
+        assert_eq!(EMACS_WORD_JUMPER.get_next_word_pos(subject, from), to);
     }
 
     #[rstest]
-    #[case::from_end_of_string_to_start_of_bbb(30, 15)]
-    #[case::from_trailing_space_to_start_of_bbb(29, 15)]
-    #[case::from_start_of_bbb_to_start_of_aaa(15, 3)]
-    #[case::from_start_of_aaa_to_string_start(3, 0)]
-    fn emacs_get_prev_word_pos(#[case] src: usize, #[case] dest: usize) {
-        let s = String::from(JUMPER_SUBJECT);
-        assert_eq!(EMACS_WORD_JUMPER.get_prev_word_pos(&s, src), dest);
-    }
-    #[test]
-    fn test_emacs_get_prev_word_pos_non_ascii() {
-        let s = String::from(" 😀 test");
-        let indices = [(6, 0), (1, 0)];
-        for (i_src, i_dest) in indices {
-            assert_eq!(EMACS_WORD_JUMPER.get_prev_word_pos(&s, i_src), i_dest);
-        }
+    #[case::from_end_of_string_to_start_of_bbb(JUMPER_SUBJECT, 30, 15)]
+    #[case::from_trailing_space_to_start_of_bbb(JUMPER_SUBJECT, 29, 15)]
+    #[case::from_start_of_bbb_to_start_of_aaa(JUMPER_SUBJECT, 15, 3)]
+    #[case::from_start_of_aaa_to_string_start(JUMPER_SUBJECT, 3, 0)]
+    #[case::non_ascii_from_test_to_start(EMACS_SUBJECT, 6, 0)]
+    #[case::non_ascii_from_emoji_to_start(EMACS_SUBJECT, 1, 0)]
+    #[case::trailing_multibyte(TRAILING_MULTIBYTE_SUBJECT, 5, 3)]
+    #[case::empty_string("", 0, 0)]
+    fn emacs_get_prev_word_pos(#[case] subject: &str, #[case] from: usize, #[case] to: usize) {
+        assert_eq!(EMACS_WORD_JUMPER.get_prev_word_pos(subject, from), to);
     }
 
     #[rstest]
-    #[case::from_string_start_to_start_of_aaa(0, 3)]
-    #[case::from_within_leading_spaces_to_start_of_aaa(1, 3)]
-    #[case::from_start_of_aaa_to_first_parens_block(3, 9)]
-    #[case::from_first_parens_block_to_start_of_bbb(9, 15)]
-    #[case::from_start_of_bbb_to_second_parens_block(15, 21)]
-    #[case::from_second_parens_block_to_end_of_string(21, 30)]
-    fn subl_get_next_word_pos(#[case] src: usize, #[case] dest: usize) {
-        let s = String::from(JUMPER_SUBJECT);
-        assert_eq!(SUBL_WORD_JUMPER.get_next_word_pos(&s, src), dest);
+    #[case::from_string_start_to_start_of_aaa(JUMPER_SUBJECT, 0, 3)]
+    #[case::from_within_leading_spaces_to_start_of_aaa(JUMPER_SUBJECT, 1, 3)]
+    #[case::from_start_of_aaa_to_first_parens_block(JUMPER_SUBJECT, 3, 9)]
+    #[case::from_first_parens_block_to_start_of_bbb(JUMPER_SUBJECT, 9, 15)]
+    #[case::from_start_of_bbb_to_second_parens_block(JUMPER_SUBJECT, 15, 21)]
+    #[case::from_second_parens_block_to_end_of_string(JUMPER_SUBJECT, 21, 30)]
+    #[case::non_ascii_from_start_to_hi(SUBL_SUBJECT, 0, 1)]
+    #[case::non_ascii_from_hi_to_emoji(SUBL_SUBJECT, 1, 4)]
+    #[case::non_ascii_from_emoji_to_paren(SUBL_SUBJECT, 4, 9)]
+    #[case::trailing_multibyte(TRAILING_MULTIBYTE_SUBJECT, 3, 9)]
+    #[case::boundary_at_last_char("a.", 0, 1)]
+    #[case::empty_string("", 0, 0)]
+    fn subl_get_next_word_pos(#[case] subject: &str, #[case] from: usize, #[case] to: usize) {
+        assert_eq!(SUBL_WORD_JUMPER.get_next_word_pos(subject, from), to);
     }
 
     #[rstest]
-    #[case::from_end_of_string_to_second_parens_block(30, 21)]
-    #[case::from_second_parens_block_to_start_of_bbb(21, 15)]
-    #[case::from_start_of_bbb_to_first_parens_block(15, 9)]
-    #[case::from_first_parens_block_to_start_of_aaa(9, 3)]
-    #[case::from_start_of_aaa_to_string_start(3, 0)]
-    fn subl_get_prev_word_pos(#[case] src: usize, #[case] dest: usize) {
-        let s = String::from(JUMPER_SUBJECT);
-        assert_eq!(SUBL_WORD_JUMPER.get_prev_word_pos(&s, src), dest);
-    }
-    #[test]
-    fn test_subl_get_next_word_pos_non_ascii() {
-        let s = String::from(" hi 😀 ((test");
-        let indices = [(0, 1), (1, 4), (4, 9)];
-        for (i_src, i_dest) in indices {
-            assert_eq!(SUBL_WORD_JUMPER.get_next_word_pos(&s, i_src), i_dest);
-        }
-    }
-
-    #[test]
-    fn word_jumpers_handle_empty_string() {
-        assert_eq!(EMACS_WORD_JUMPER.get_next_word_pos("", 0), 0);
-        assert_eq!(EMACS_WORD_JUMPER.get_prev_word_pos("", 0), 0);
-        assert_eq!(SUBL_WORD_JUMPER.get_next_word_pos("", 0), 0);
-        assert_eq!(SUBL_WORD_JUMPER.get_prev_word_pos("", 0), 0);
-    }
-    #[test]
-    fn test_subl_get_prev_word_pos_non_ascii() {
-        let s = String::from(" hi 😀 ((test");
-        let indices = [(1, 0), (9, 3)];
-        for (i_src, i_dest) in indices {
-            assert_eq!(SUBL_WORD_JUMPER.get_prev_word_pos(&s, i_src), i_dest);
-        }
+    #[case::from_end_of_string_to_second_parens_block(JUMPER_SUBJECT, 30, 21)]
+    #[case::from_second_parens_block_to_start_of_bbb(JUMPER_SUBJECT, 21, 15)]
+    #[case::from_start_of_bbb_to_first_parens_block(JUMPER_SUBJECT, 15, 9)]
+    #[case::from_first_parens_block_to_start_of_aaa(JUMPER_SUBJECT, 9, 3)]
+    #[case::from_start_of_aaa_to_string_start(JUMPER_SUBJECT, 3, 0)]
+    #[case::non_ascii_from_hi_to_start(SUBL_SUBJECT, 1, 0)]
+    #[case::non_ascii_from_paren_to_after_hi(SUBL_SUBJECT, 9, 3)]
+    #[case::trailing_multibyte(TRAILING_MULTIBYTE_SUBJECT, 5, 3)]
+    #[case::boundary_at_first_char(".aa", 3, 1)]
+    #[case::empty_string("", 0, 0)]
+    fn subl_get_prev_word_pos(#[case] subject: &str, #[case] from: usize, #[case] to: usize) {
+        assert_eq!(SUBL_WORD_JUMPER.get_prev_word_pos(subject, from), to);
     }
     #[test]
     fn pop() {
