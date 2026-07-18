@@ -69,6 +69,10 @@ impl Entry {
         if let Some((time, duration, command)) = line.strip_prefix(": ").and_then(|rest| {
             let (time, rest) = rest.split_once(':')?;
             let (duration, command) = rest.split_once(';')?;
+            // Require numeric EXTENDED_HISTORY metadata. A plain command like
+            // `: foo:bar;baz` also contains ':' and ';', but must stay intact.
+            time.parse::<i64>().ok()?;
+            duration.parse::<i64>().ok()?;
             Some((time, duration, command))
         }) {
             let time = time
@@ -239,6 +243,12 @@ mod test {
         // Has a colon (so the timestamp split succeeds) but no `;` separator.
         let parsed = Entry::parse(": 1613322469:no semicolon here");
         assert_eq!(parsed.command, ": 1613322469:no semicolon here");
+        assert_eq!(parsed.timestamp, None);
+        assert_eq!(parsed.duration, None);
+
+        // Both separators present but non-numeric metadata: keep the whole line.
+        let parsed = Entry::parse(": foo:bar;baz");
+        assert_eq!(parsed.command, ": foo:bar;baz");
         assert_eq!(parsed.timestamp, None);
         assert_eq!(parsed.duration, None);
     }
