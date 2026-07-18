@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use atuin_common::vt100::Vt100PlainTextExt;
 use eyre::Result;
 use uuid::Uuid;
 
@@ -893,32 +894,6 @@ fn vt100_screen_lines(screen: &vt100::Screen) -> Vec<String> {
     lines
 }
 
-/// Strip ANSI escape sequences from raw bytes using a VT100 parser.
-///
-/// Uses a large virtual screen so scrollback is preserved, then extracts
-/// the plain text contents. This handles all escape sequences (colors,
-/// cursor movement, progress bars, etc.) not just simple SGR codes.
-fn strip_ansi_via_vt100(raw: &[u8]) -> String {
-    if raw.is_empty() {
-        return String::new();
-    }
-    // Normalize bare LF to CR+LF so lines start at column 0 in the VT100 screen.
-    let normalized = normalize_newlines_for_vt100(raw);
-    // Feed bytes into a VT100 parser large enough to hold all output, then
-    // read back the plain text. We estimate rows from the number of newlines
-    // (not total byte length) because real output typically has short lines
-    // that would be severely under-counted by a bytes÷width estimate.
-    let newline_count = normalized.iter().filter(|&&b| b == b'\n').count();
-    let wrap_estimate = normalized.len() / PREVIEW_WIDTH as usize;
-    let estimated_rows = (newline_count + wrap_estimate + 1).min(10_000) as u16;
-    let mut parser = vt100::Parser::new(estimated_rows, PREVIEW_WIDTH, 0);
-    parser.process(&normalized);
-    let screen = parser.screen();
-    // screen.contents() returns the full plain-text content with trailing
-    // whitespace trimmed per line and trailing blank lines removed.
-    screen.contents()
-}
-
 /// Execute a shell command with VT100 emulation and streaming output.
 ///
 /// Feeds stdout+stderr into a `vt100::Parser` so that ANSI escape sequences,
@@ -1048,8 +1023,8 @@ pub(crate) async fn execute_shell_command_streaming(
 
     // Strip ANSI escape sequences for clean LLM output by running
     // the raw bytes through a VT100 parser and extracting plain text.
-    let stdout_text = strip_ansi_via_vt100(&full_stdout);
-    let stderr_text = strip_ansi_via_vt100(&full_stderr);
+    let stdout_text = full_stdout.to_plain_text(PREVIEW_WIDTH);
+    let stderr_text = full_stderr.to_plain_text(PREVIEW_WIDTH);
 
     ToolOutcome::Structured {
         stdout: stdout_text,
