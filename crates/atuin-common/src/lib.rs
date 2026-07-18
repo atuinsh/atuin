@@ -61,6 +61,8 @@ pub mod api;
 pub mod logs;
 pub mod path;
 pub mod record;
+#[cfg(feature = "rmp")]
+pub mod rmp;
 pub mod shell;
 pub mod string;
 #[cfg(feature = "test-utils")]
