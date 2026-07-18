@@ -2,25 +2,20 @@
 // Multiple stores of multiple types are all stored in one chonky table (for now), and we just index
 // by tag/host
 
+use std::path::Path;
 use std::str::FromStr;
-use std::{path::Path, time::Duration};
 
 use async_trait::async_trait;
 use eyre::{Result, eyre};
-use fs_err as fs;
 
 use sqlx::{
     Row,
-    sqlite::{
-        SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
-        SqliteSynchronous,
-    },
+    sqlite::{SqlitePool, SqliteRow, SqliteSynchronous},
 };
 
 use atuin_common::record::{
     EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordStatus,
 };
-use atuin_common::utils;
 use uuid::Uuid;
 
 use super::encryption::PASETO_V4;
@@ -34,32 +29,12 @@ pub struct SqliteStore {
 impl SqliteStore {
     pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
         let path = path.as_ref();
-
         debug!("opening sqlite database at {path:?}");
 
-        if utils::broken_symlink(path) {
-            eprintln!(
-                "Atuin: Sqlite db path ({path:?}) is a broken symlink. Unable to read or create replacement."
-            );
-            std::process::exit(1);
-        }
-
-        if !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            fs::create_dir_all(dir)?;
-        }
-
-        let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
-            .journal_mode(SqliteJournalMode::Wal)
-            .optimize_on_close(true, None)
+        let pool = atuin_common::sqlite::pool(path, timeout)
             .synchronous(SqliteSynchronous::Normal)
             .foreign_keys(true)
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::from_secs_f64(timeout))
-            .connect_with(opts)
+            .open()
             .await?;
 
         Self::setup_db(&pool).await?;

@@ -79,7 +79,7 @@ strum = { version = "0.27", features = ["strum_macros"] }
 [dependencies.atuin-common]
 path = "../atuin-common"
 version = "18.17.1"
-features = ["tracing"]
+features = ["tracing", "sqlite"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
