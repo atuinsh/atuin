@@ -16,7 +16,9 @@
 
 use rmp::Marker;
 use rmp::decode::bytes::{Bytes, BytesReadError};
-use rmp::decode::{self, DecodeStringError, NumValueReadError, RmpRead, RmpReadErr, ValueReadError};
+use rmp::decode::{
+    self, DecodeStringError, NumValueReadError, RmpRead, RmpReadErr, ValueReadError,
+};
 use rmp::encode::{self, RmpWrite, RmpWriteErr, ValueWriteError};
 
 /// An error encountered while encoding a MessagePack value.
@@ -259,7 +261,10 @@ mod tests {
 
     #[test]
     fn type_mismatch_exposes_marker() {
-        assert_eq!(type_mismatch_error().type_mismatch(), Some(rmp::Marker::Null));
+        assert_eq!(
+            type_mismatch_error().type_mismatch(),
+            Some(rmp::Marker::Null)
+        );
     }
 
     #[rstest]
@@ -285,8 +290,11 @@ mod tests {
     #[test]
     fn display_messages_are_legible() {
         assert_eq!(
-            DecodeError::<'static, BytesReadError>::UnexpectedArrayLen { expected: 3, actual: 5 }
-                .to_string(),
+            DecodeError::<'static, BytesReadError>::UnexpectedArrayLen {
+                expected: 3,
+                actual: 5
+            }
+            .to_string(),
             "expected a MessagePack array of length 3, found 5",
         );
     }
@@ -312,7 +320,10 @@ mod tests {
         // following read_optional can observe end-of-input correctly.
         let mut bytes = Bytes::new(&[0xc0]);
         assert!(bytes.read_string().is_err());
-        assert!(bytes.remaining_slice().is_empty(), "marker byte must be consumed");
+        assert!(
+            bytes.remaining_slice().is_empty(),
+            "marker byte must be consumed"
+        );
     }
 
     #[test]
@@ -338,7 +349,10 @@ mod tests {
     fn read_optional_string_via_closure() {
         let buf = enc(|v| rmp::encode::write_str(v, "x").unwrap());
         let mut b = Bytes::new(&buf);
-        assert_eq!(b.read_optional(|b| b.read_string()).unwrap(), Some("x".to_string()));
+        assert_eq!(
+            b.read_optional(|b| b.read_string()).unwrap(),
+            Some("x".to_string())
+        );
     }
 
     #[test]
@@ -401,7 +415,8 @@ mod tests {
     #[test]
     fn write_optional_some_then_read_back() {
         let mut out = Vec::new();
-        out.write_optional(Some(99u64), rmp::encode::write_u64).unwrap();
+        out.write_optional(Some(99u64), rmp::encode::write_u64)
+            .unwrap();
         let mut b = Bytes::new(&out);
         assert_eq!(b.read_optional(rmp::decode::read_u64).unwrap(), Some(99));
     }
@@ -409,7 +424,8 @@ mod tests {
     #[test]
     fn write_optional_none_writes_nil() {
         let mut out = Vec::new();
-        out.write_optional::<u64, _>(None, rmp::encode::write_u64).unwrap();
+        out.write_optional::<u64, _>(None, rmp::encode::write_u64)
+            .unwrap();
         let mut b = Bytes::new(&out);
         assert_eq!(b.read_optional(rmp::decode::read_u64).unwrap(), None);
     }
@@ -417,8 +433,78 @@ mod tests {
     #[test]
     fn write_optional_str() {
         let mut out = Vec::new();
-        out.write_optional(Some("hi"), rmp::encode::write_str).unwrap();
+        out.write_optional(Some("hi"), rmp::encode::write_str)
+            .unwrap();
         let mut b = Bytes::new(&out);
-        assert_eq!(b.read_optional(|b| b.read_string()).unwrap(), Some("hi".to_string()));
+        assert_eq!(
+            b.read_optional(|b| b.read_string()).unwrap(),
+            Some("hi".to_string())
+        );
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1024))]
+
+        // A string survives an encode -> read_string round trip exactly.
+        #[test]
+        fn string_round_trips(s in r"(?s).*") {
+            let buf = enc(|v| rmp::encode::write_str(v, &s).unwrap());
+            let mut b = Bytes::new(&buf);
+            prop_assert_eq!(b.read_string().unwrap(), s);
+            prop_assert!(b.remaining_slice().is_empty());
+        }
+
+        // Option<u64> survives write_optional -> read_optional.
+        #[test]
+        fn optional_u64_round_trips(v in proptest::option::of(any::<u64>())) {
+            let mut out = Vec::new();
+            out.write_optional(v, rmp::encode::write_u64).unwrap();
+            let mut b = Bytes::new(&out);
+            prop_assert_eq!(b.read_optional(rmp::decode::read_u64).unwrap(), v);
+        }
+
+        // Option<String> survives the closure-based optional round trip.
+        #[test]
+        fn optional_string_round_trips(v in proptest::option::of(r"(?s).*")) {
+            let mut out = Vec::new();
+            out.write_optional(v.as_deref(), rmp::encode::write_str).unwrap();
+            let mut b = Bytes::new(&out);
+            prop_assert_eq!(b.read_optional(|b| b.read_string()).unwrap(), v);
+        }
+
+        // A full array record (len + fields + optional tail) round trips, and the
+        // cursor is exactly exhausted afterwards.
+        #[test]
+        fn record_round_trips(
+            id in r"[a-z]{0,16}",
+            ts in any::<u64>(),
+            deleted in proptest::option::of(any::<u64>()),
+        ) {
+            let mut out = Vec::new();
+            rmp::encode::write_array_len(&mut out, 3).unwrap();
+            rmp::encode::write_str(&mut out, &id).unwrap();
+            rmp::encode::write_u64(&mut out, ts).unwrap();
+            out.write_optional(deleted, rmp::encode::write_u64).unwrap();
+
+            let mut b = Bytes::new(&out);
+            prop_assert_eq!(b.expect_array_len(3).unwrap(), 3);
+            prop_assert_eq!(b.read_string().unwrap(), id);
+            prop_assert_eq!(b.read_with(rmp::decode::read_u64).unwrap(), ts);
+            prop_assert_eq!(b.read_optional(rmp::decode::read_u64).unwrap(), deleted);
+            prop_assert!(b.expect_eof().is_ok());
+        }
+
+        // Reads never panic on arbitrary bytes — they return Err instead.
+        #[test]
+        fn reads_never_panic(raw in proptest::collection::vec(any::<u8>(), 0..64)) {
+            let mut b = Bytes::new(&raw);
+            let _ = b.read_string();
+            let mut b = Bytes::new(&raw);
+            let _ = b.read_array_len();
+            let mut b = Bytes::new(&raw);
+            let _ = b.read_optional(rmp::decode::read_u64);
+        }
     }
 }
