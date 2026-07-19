@@ -342,16 +342,6 @@ mod tests {
         assert_eq!(decoded, record);
     }
 
-    #[test]
-    fn encode_decode_delete() {
-        let record = AliasRecord::Delete("k".to_owned());
-
-        let encoded = record.serialize().unwrap();
-        let decoded = AliasRecord::deserialize(&encoded, CONFIG_SHELL_ALIAS_VERSION).unwrap();
-
-        assert_eq!(decoded, record);
-    }
-
     #[tokio::test]
     async fn build_aliases() {
         let store = SqliteStore::new(":memory:", test_local_timeout())

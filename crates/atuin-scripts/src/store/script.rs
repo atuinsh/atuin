@@ -70,13 +70,7 @@ impl Script {
 
             // Nested array: read its own length header and elements. Nested
             // arrays are not `read_total_array` — they have no eof of their own.
-            let tags_len = rmp::decode::read_array_len(b)?;
-
-            let mut tags = Vec::new();
-            for _ in 0..tags_len {
-                let tag = rmp::decode::read_string(b)?;
-                tags.push(tag);
-            }
+            let tags = rmp::decode::read_array_of(b, rmp::decode::read_string)?;
 
             let script = rmp::decode::read_string(b)?;
 

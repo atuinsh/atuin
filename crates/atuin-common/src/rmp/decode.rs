@@ -184,6 +184,23 @@ where
     Ok(value)
 }
 
+/// Read a length-prefixed MessagePack array, decoding each element with
+/// `read_elem`, and collect the results into a [`Vec`].
+///
+/// Unlike [`read_total_array`], this does not assert end-of-input — use it for
+/// nested arrays that are followed by more data. `read_elem` may return any
+/// error a [`DecodeError`] converts into (e.g. `eyre::Report`).
+pub fn read_array_of<'a, T, E>(
+    bytes: &mut Bytes<'a>,
+    mut read_elem: impl FnMut(&mut Bytes<'a>) -> Result<T, E>,
+) -> Result<Vec<T>, E>
+where
+    E: From<DecodeError<'a>>,
+{
+    let len = read_array_len(bytes).map_err(E::from)?;
+    (0..len).map(|_| read_elem(bytes)).collect()
+}
+
 /// Read an array-length header and require it to equal `expected`, else
 /// [`DecodeError::UnexpectedArrayLen`]. For a forward-compatible field count,
 /// use [`read_array_len`] and range-check yourself. For a record that is exactly
@@ -494,6 +511,65 @@ mod tests {
         assert!(expect_eof(&b).is_ok());
     }
 
+    #[test]
+    fn read_array_of_happy_path_reads_elements_and_consumes_array() {
+        let buf = enc(|v| {
+            encode::write_array_len(v, 3).unwrap();
+            encode::write_str(v, "a").unwrap();
+            encode::write_str(v, "b").unwrap();
+            encode::write_str(v, "c").unwrap();
+        });
+        let mut b = Bytes::new(&buf);
+        let elems: Vec<String> = read_array_of(&mut b, read_string).unwrap();
+        assert_eq!(elems, vec!["a", "b", "c"]);
+        assert!(b.remaining_slice().is_empty());
+    }
+
+    #[test]
+    fn read_array_of_empty_array_yields_empty_vec() {
+        let buf = array_of(0);
+        let mut b = Bytes::new(&buf);
+        let elems: Vec<String> = read_array_of(&mut b, read_string).unwrap();
+        assert_eq!(elems, Vec::<String>::new());
+    }
+
+    #[test]
+    fn read_array_of_propagates_element_error_at_failing_element() {
+        // Second element is a u64 where read_string expects a string, so decoding
+        // must fail on that element (not the first).
+        let buf = enc(|v| {
+            encode::write_array_len(v, 2).unwrap();
+            encode::write_str(v, "a").unwrap();
+            encode::write_u64(v, 7).unwrap();
+        });
+        let mut b = Bytes::new(&buf);
+        let result: Result<Vec<String>, DecodeError> = read_array_of(&mut b, read_string);
+        assert!(result.is_err());
+
+        // Prove the first element decoded and the second is the one that errored:
+        // re-run element-by-element to observe where the failure lands.
+        let mut b = Bytes::new(&buf);
+        assert_eq!(read_array_len(&mut b).unwrap(), 2);
+        assert_eq!(read_string(&mut b).unwrap(), "a");
+        assert!(read_string(&mut b).is_err());
+    }
+
+    #[test]
+    fn read_array_of_composes_with_non_decode_error_closure() {
+        // The closure returns eyre::Report, not DecodeError, exercising the
+        // `E: From<DecodeError>` generic on a nested array.
+        let buf = enc(|v| {
+            encode::write_array_len(v, 2).unwrap();
+            encode::write_u64(v, 10).unwrap();
+            encode::write_u64(v, 20).unwrap();
+        });
+        let mut b = Bytes::new(&buf);
+        let elems: Vec<u64> =
+            read_array_of(&mut b, |b| -> eyre::Result<u64> { Ok(read_u64(b)?) }).unwrap();
+        assert_eq!(elems, vec![10, 20]);
+        assert!(b.remaining_slice().is_empty());
+    }
+
     use proptest::prelude::*;
 
     proptest! {
@@ -547,6 +623,20 @@ mod tests {
             prop_assert_eq!(read_u64(&mut b).unwrap(), ts);
             prop_assert_eq!(read_optional(&mut b, read_u64).unwrap(), deleted);
             prop_assert!(expect_eof(&b).is_ok());
+        }
+
+        // A Vec<String> survives write_array_len + N write_str -> read_array_of.
+        #[test]
+        fn read_array_of_round_trips(v in proptest::collection::vec(r"(?s).*", 0..16)) {
+            let mut out = Vec::new();
+            encode::write_array_len(&mut out, v.len() as u32).unwrap();
+            for s in &v {
+                encode::write_str(&mut out, s).unwrap();
+            }
+            let mut b = Bytes::new(&out);
+            let decoded: Vec<String> = read_array_of(&mut b, read_string).unwrap();
+            prop_assert_eq!(decoded, v);
+            prop_assert!(b.remaining_slice().is_empty());
         }
 
         // Reads never panic on arbitrary bytes — they return Err instead.
