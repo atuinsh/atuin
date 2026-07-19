@@ -14,7 +14,7 @@ repository = { workspace = true }
 clap = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-atuin-common = { workspace = true, features = ["vt100"] }
+atuin-common = { workspace = true, features = ["ansi"] }
 crossterm = { workspace = true }
 eyre = { workspace = true }
 portable-pty = "0.9"

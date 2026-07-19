@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use atuin_common::vt100::Vt100PlainTextExt;
+use atuin_common::ansi;
 use eyre::Result;
 use uuid::Uuid;
 
@@ -1023,8 +1023,8 @@ pub(crate) async fn execute_shell_command_streaming(
 
     // Strip ANSI escape sequences for clean LLM output by running
     // the raw bytes through a VT100 parser and extracting plain text.
-    let stdout_text = full_stdout.to_plain_text(PREVIEW_WIDTH.into());
-    let stderr_text = full_stderr.to_plain_text(PREVIEW_WIDTH.into());
+    let stdout_text = ansi::to_plain_text(&full_stdout, PREVIEW_WIDTH);
+    let stderr_text = ansi::to_plain_text(&full_stderr, PREVIEW_WIDTH);
 
     ToolOutcome::Structured {
         stdout: stdout_text,

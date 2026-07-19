@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 
-use atuin_common::vt100::Vt100PlainTextExt;
+use atuin_common::ansi;
 
 use crate::osc133::{Event, Params, Parser, Zone};
 
@@ -140,14 +140,12 @@ impl CommandCaptureTracker {
     fn finish_capture(&mut self) -> Option<CommandCapture> {
         let buffers = std::mem::take(&mut self.buffers);
         // `to_plain_text` clamps the width itself, so no `.max(1)` is needed here.
-        let cols = usize::from(self.cols.load(Ordering::Relaxed));
-        let prompt = buffers.prompt.to_plain_text(cols);
-        let command = buffers
-            .command
-            .to_plain_text(cols)
+        let cols = self.cols.load(Ordering::Relaxed);
+        let prompt = ansi::to_plain_text(&buffers.prompt, cols);
+        let command = ansi::to_plain_text(&buffers.command, cols)
             .trim_matches(|c| c == '\r' || c == '\n')
             .to_string();
-        let output = buffers.output.to_plain_text(cols);
+        let output = ansi::to_plain_text(&buffers.output, cols);
         let output_truncated = buffers.output_truncated;
         let output_observed_bytes = buffers.output_observed_bytes;
         let exit_code = buffers.exit_code;

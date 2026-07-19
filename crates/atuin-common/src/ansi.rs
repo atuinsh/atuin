@@ -1,88 +1,64 @@
-//! Rendering raw terminal byte streams into clean plain text.
+//! Rendering ANSI-encoded terminal output into clean plain text.
 //!
-//! Terminal programs emit far more than the characters you see: ANSI SGR color
-//! codes, cursor-movement escapes, carriage returns that rewrite the current
-//! line, backspaces that erase already-typed characters, progress bars, and
-//! bracketed-paste / OSC sequences. Naively stripping "escape-looking" bytes
-//! with a regex gets this wrong constantly.
+//! Terminal programs emit **ANSI escape sequences** (ECMA-48 / ISO 6429: the
+//! CSI, SGR, and OSC codes for color, cursor motion, screen clears, progress
+//! bars, and so on) interleaved with the visible characters. Recovering just the
+//! text a user would *see* is not a matter of deleting "escape-looking" bytes —
+//! carriage returns rewrite lines, backspaces erase characters, and cursor moves
+//! reorder them.
 //!
-//! [`Vt100PlainTextExt`] takes the correct approach: it feeds the bytes through
-//! an actual VT100 terminal emulator ([`vt100`]) and reads back the resulting
-//! screen contents. Whatever a real terminal would *display* is what you get —
-//! nothing more, nothing less.
+//! [`to_plain_text`] does it correctly: it drives the bytes through a real VT100
+//! terminal emulator and reads back the resulting screen. The emulator is an
+//! implementation detail — the input is *terminal output*, not "vt100 text".
 
 /// Upper bound on the emulated screen height, in rows.
 ///
-/// The row count is estimated from the input so scrollback is preserved without
-/// wrapping, but a pathological input (millions of newlines) must not be able to
-/// make us allocate an unbounded grid. Output is therefore capped at this many
-/// lines.
+/// Rows are estimated from the input so scrollback is preserved without
+/// wrapping, but pathological input (millions of newlines) must not allocate an
+/// unbounded grid, so output is capped at this many lines.
 const MAX_ROWS: usize = 10_000;
 
-/// Extension trait that renders raw terminal byte streams into clean plain text.
+/// Render ANSI-encoded terminal output to plain text, as it would appear on a
+/// `cols`-wide terminal.
 ///
-/// Implemented for anything that is `AsRef<[u8]>` (e.g. `Vec<u8>`, `&[u8]`,
-/// `[u8; N]`), so you can call [`to_plain_text`](Vt100PlainTextExt::to_plain_text)
-/// directly on captured output buffers.
-///
-/// # What it does
-///
-/// The bytes are fed through a [`vt100`] terminal emulator sized to hold the
-/// full output (bounded by [`MAX_ROWS`]), and the emulator's final screen
-/// contents are returned. This means:
+/// `bytes` is a raw terminal byte stream (e.g. captured stdout/stderr or PTY
+/// output) containing ANSI escape sequences. The returned string is what the
+/// terminal would display:
 ///
 /// - ANSI escape sequences (colors, cursor motion, screen clears, OSC/DCS) are
-///   interpreted and removed, leaving only displayed text.
-/// - Carriage returns (`\r`) that rewrite a line — as used by progress bars —
-///   resolve to the final line contents.
-/// - Backspaces (`\x08`) erase the preceding character, so terminal echo edits
-///   collapse to what the user actually left on screen.
-/// - Bare line feeds (`\n`) are treated as newlines even when the source did not
-///   emit a carriage return (pipe-captured output), matching a terminal driver's
-///   `ONLCR` behavior. This is a no-op for input that already uses `\r\n`.
-/// - Trailing whitespace on each line and trailing blank lines are trimmed.
+///   interpreted and removed.
+/// - Carriage-return line rewrites (progress bars) resolve to the final text.
+/// - Backspaces erase the preceding character, so terminal echo edits collapse
+///   to what the user actually left on screen.
+/// - Bare line feeds are treated as newlines even without a carriage return
+///   (pipe-captured output), matching a terminal driver's `ONLCR`; a no-op for
+///   input that already uses `\r\n`.
+/// - Trailing whitespace per line and trailing blank lines are trimmed.
 ///
-/// The result contains no terminal control characters. The only C0 control that
-/// remains is `\n` (line separators); the emulator resolves tabs to spaces, so no
-/// literal `\t` survives.
+/// `cols` is the terminal width; long lines wrap at this boundary, and a `cols`
+/// of `0` is treated as `1`. The result contains no terminal control characters
+/// other than `\n` line separators; the emulator resolves tabs to spaces, so no
+/// literal `\t` survives. Empty input yields an empty string.
 ///
 /// # Cost
 ///
-/// This parses the entire input through a terminal emulator and allocates a grid
-/// up to `cols * MAX_ROWS` cells. It is intended for post-hoc cleanup of captured
+/// This drives a full terminal emulator and allocates a grid up to
+/// `cols * MAX_ROWS` cells. It is intended for post-hoc cleanup of captured
 /// command output, not for hot loops.
-pub trait Vt100PlainTextExt: AsRef<[u8]> {
-    /// Render the bytes to plain text as they would appear on a `cols`-wide
-    /// terminal.
-    ///
-    /// `cols` is the emulated terminal width; long lines wrap at this boundary.
-    /// A `cols` of `0` is treated as `1`, and any value above `u16::MAX` (the
-    /// widest grid the emulator supports) is capped at `u16::MAX`. Empty input
-    /// yields an empty string.
-    ///
-    /// The width is a `usize` purely for caller convenience — terminal column
-    /// counts are usually held as `usize` — so no lossy pre-cast is needed at the
-    /// call site.
-    ///
-    /// See the [trait docs](Vt100PlainTextExt) for the full list of transforms.
-    fn to_plain_text(&self, cols: usize) -> String {
-        let bytes = self.as_ref();
-        if bytes.is_empty() {
-            return String::new();
-        }
-
-        let cols = cols.clamp(1, u16::MAX as usize);
-        let normalized = normalize_newlines(bytes);
-        let rows = estimated_rows(&normalized, cols);
-
-        let mut parser = vt100::Parser::new(rows, cols as u16, 0);
-        parser.process(&normalized);
-
-        normalize_screen_contents(&parser.screen().contents())
+pub fn to_plain_text(bytes: &[u8], cols: u16) -> String {
+    if bytes.is_empty() {
+        return String::new();
     }
-}
 
-impl<T: AsRef<[u8]> + ?Sized> Vt100PlainTextExt for T {}
+    let cols = cols.max(1);
+    let normalized = normalize_newlines(bytes);
+    let rows = estimated_rows(&normalized, cols);
+
+    let mut parser = vt100::Parser::new(rows, cols, 0);
+    parser.process(&normalized);
+
+    normalize_screen_contents(&parser.screen().contents())
+}
 
 /// Insert a carriage return before any line feed that is not already preceded by
 /// one, mimicking a terminal driver's `ONLCR` flag.
@@ -109,9 +85,9 @@ fn normalize_newlines(bytes: &[u8]) -> Vec<u8> {
 /// Real terminal output tends to have short lines, so a `bytes / cols` estimate
 /// alone badly under-counts; we add the newline count. The extra `+1` leaves a
 /// row of headroom for a final partial line.
-fn estimated_rows(bytes: &[u8], cols: usize) -> u16 {
+fn estimated_rows(bytes: &[u8], cols: u16) -> u16 {
     let newline_rows = bytes.iter().filter(|&&b| b == b'\n').count() + 1;
-    let wrapped_rows = bytes.len() / cols;
+    let wrapped_rows = bytes.len() / cols as usize;
     newline_rows
         .saturating_add(wrapped_rows)
         .saturating_add(1)
@@ -135,7 +111,7 @@ mod tests {
     use rstest::rstest;
 
     /// Assert the rendered text carries no terminal control characters other
-    /// than the line/column separators a plain-text document legitimately uses.
+    /// than the line separators a plain-text document legitimately uses.
     fn assert_no_terminal_controls(text: &str) {
         assert!(
             !text
@@ -171,47 +147,26 @@ mod tests {
     // Bare LF (pipe capture) is treated as a newline, so lines start at column 0.
     #[case::bare_lf_is_newline("line one\nline two", "line one\nline two")]
     fn renders_expected_plain_text(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(input.as_bytes().to_plain_text(80), expected);
-        assert_no_terminal_controls(&input.as_bytes().to_plain_text(80));
+        assert_eq!(to_plain_text(input.as_bytes(), 80), expected);
+        assert_no_terminal_controls(&to_plain_text(input.as_bytes(), 80));
     }
 
     #[test]
     fn empty_input_is_empty_regardless_of_cols() {
-        assert_eq!(b"".to_plain_text(0), "");
-        assert_eq!(b"".to_plain_text(1), "");
-        assert_eq!(b"".to_plain_text(u16::MAX as usize), "");
-        // Widths beyond the emulator's `u16` grid are capped, not truncated.
-        assert_eq!(b"".to_plain_text(usize::MAX), "");
-    }
-
-    #[test]
-    fn oversized_cols_is_capped_not_truncated() {
-        // A `usize` width past `u16::MAX` must be clamped to a valid grid rather
-        // than wrapping via a lossy `as u16` cast (which would turn, e.g.,
-        // `u16::MAX as usize + 1` into a zero-width grid). Rendering must still
-        // succeed and preserve the content.
-        assert_eq!(b"echo hi".to_plain_text(usize::MAX), "echo hi");
-        assert_eq!(b"echo hi".to_plain_text(u16::MAX as usize + 1), "echo hi");
+        assert_eq!(to_plain_text(b"", 0), "");
+        assert_eq!(to_plain_text(b"", 1), "");
+        assert_eq!(to_plain_text(b"", u16::MAX), "");
     }
 
     #[test]
     fn zero_cols_is_treated_as_one() {
         // Must not panic (no divide-by-zero, no zero-width grid).
-        let _ = b"anything at all".to_plain_text(0);
-    }
-
-    #[test]
-    fn works_on_vec_and_array_receivers() {
-        // Trait is available on owned and array receivers, not just &[u8].
-        let owned: Vec<u8> = b"echo hi".to_vec();
-        assert_eq!(owned.to_plain_text(80), "echo hi");
-        let arr: [u8; 7] = *b"echo hi";
-        assert_eq!(arr.to_plain_text(80), "echo hi");
+        let _ = to_plain_text(b"anything at all", 0);
     }
 
     #[test]
     fn trailing_blank_lines_are_trimmed() {
-        assert_eq!(b"hi\r\n\r\n\r\n".to_plain_text(80), "hi");
+        assert_eq!(to_plain_text(b"hi\r\n\r\n\r\n", 80), "hi");
     }
 
     #[test]
@@ -221,7 +176,7 @@ mod tests {
         // column boundary rather than truncating or overflowing. vt100 marks the
         // continuation rows as soft-wrapped, so `Screen::contents()` rejoins them
         // into the single logical line the user originally typed.
-        let wrapped = b"abcdefghij".to_plain_text(4);
+        let wrapped = to_plain_text(b"abcdefghij", 4);
         assert_eq!(wrapped, "abcdefghij");
     }
 
@@ -229,8 +184,8 @@ mod tests {
         /// For ANY bytes and ANY width, rendering must not panic and must not
         /// leave terminal control characters behind.
         #[test]
-        fn never_panics_and_strips_controls(bytes in proptest::collection::vec(any::<u8>(), 0..4096), cols in any::<usize>()) {
-            let out = bytes.to_plain_text(cols);
+        fn never_panics_and_strips_controls(bytes in proptest::collection::vec(any::<u8>(), 0..4096), cols in any::<u16>()) {
+            let out = to_plain_text(&bytes, cols);
             prop_assert!(!out.chars().any(|c| c.is_control() && c != '\n' && c != '\t'));
         }
 
@@ -242,7 +197,7 @@ mod tests {
             for _ in 0..lines {
                 bytes.extend_from_slice(b"x\n");
             }
-            let out = bytes.to_plain_text(80);
+            let out = to_plain_text(&bytes, 80);
             prop_assert!(out.lines().count() <= super::MAX_ROWS);
         }
 
@@ -251,8 +206,8 @@ mod tests {
         /// over that output changes nothing.
         #[test]
         fn to_plain_text_is_idempotent_on_clean_single_line(s in "[ -~]{0,80}") {
-            let once = s.as_bytes().to_plain_text(200);
-            let twice = once.as_bytes().to_plain_text(200);
+            let once = to_plain_text(s.as_bytes(), 200);
+            let twice = to_plain_text(once.as_bytes(), 200);
             prop_assert_eq!(once, twice);
         }
     }

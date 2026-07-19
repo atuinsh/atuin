@@ -18,10 +18,10 @@ test-utils = ["tracing", "dep:tracing-subscriber"]
 # The `string::ellipsis` module: budget-aware, grapheme/display-width-correct
 # string truncation. The module is compiled only when this feature is enabled.
 unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
-# The `vt100` module: `Vt100PlainTextExt`, which renders raw terminal byte
-# streams (ANSI escapes, backspaces, carriage returns, cursor motion) into
-# clean plain text via a `vt100` terminal emulator. Compiled only when enabled.
-vt100 = ["dep:vt100"]
+# The `ansi` module: renders raw terminal byte streams (ANSI/ECMA-48 escape
+# sequences, backspaces, carriage returns, cursor motion) into clean plain text
+# via a `vt100` terminal emulator. Compiled only when enabled.
+ansi = ["dep:vt100"]
 
 [dependencies]
 derive_more = { workspace = true }

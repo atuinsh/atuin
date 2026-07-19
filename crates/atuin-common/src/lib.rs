@@ -57,6 +57,8 @@ macro_rules! new_uuid {
     };
 }
 
+#[cfg(feature = "ansi")]
+pub mod ansi;
 pub mod api;
 pub mod logs;
 pub mod path;
@@ -68,5 +70,3 @@ pub mod test_utils;
 pub mod tls;
 pub mod url;
 pub mod utils;
-#[cfg(feature = "vt100")]
-pub mod vt100;
