@@ -143,14 +143,10 @@ where
     }
 }
 
-/// Decode a MessagePack array that is expected to be the entire remaining
-/// input: asserts the next value is an array of exactly `len` elements, runs
-/// `read` to decode them, then asserts no trailing bytes remain.
+/// Decode a MessagePack array that is expected to be the entire remaining input.
 ///
-/// This bundles the array-length precondition and the end-of-input postcondition
-/// around a record's field reads. `read` may return any error that a
-/// [`DecodeError`] converts into (e.g. `eyre::Report`), so field decoding can mix
-/// `rmp::decode::read_*` with other fallible work.
+/// Asserts the next value is an array of exactly `len` elements, runs `read` to decode them, then
+/// asserts no trailing bytes remain.
 pub fn read_total_array<'a, T, E>(
     bytes: &mut Bytes<'a>,
     len: u32,
@@ -166,6 +162,7 @@ where
 }
 
 /// Read a length-prefixed MessagePack array, decoding each element with `read_elem`.
+///
 /// Unlike [`read_total_array`], this does not assert end-of-input.
 pub fn read_array_of<'a, T, E>(
     bytes: &mut Bytes<'a>,
@@ -179,10 +176,10 @@ where
 }
 
 /// Read an array-length header and require it to equal `expected`, else
-/// [`DecodeError::UnexpectedArrayLen`]. For a forward-compatible field count,
-/// use [`read_array_len`] and range-check yourself. For a record that is exactly
-/// a whole top-level array, prefer [`read_total_array`], which also checks for
-/// trailing bytes.
+/// [`DecodeError::UnexpectedArrayLen`].
+///
+/// For a forward-compatible field count, use [`read_array_len`] and range-check yourself. For a
+/// record that is exactly a whole top-level array, prefer [`read_total_array`].
 pub fn expect_array_len<'a>(bytes: &mut Bytes<'a>, expected: u32) -> Result<u32, DecodeError<'a>> {
     let actual = read_array_len(bytes)?;
     if actual == expected {
@@ -193,9 +190,8 @@ pub fn expect_array_len<'a>(bytes: &mut Bytes<'a>, expected: u32) -> Result<u32,
 }
 
 /// Succeed only if the cursor is at end-of-input, else [`DecodeError::TrailingBytes`].
-/// For a record that is exactly a whole top-level array, prefer
-/// [`read_total_array`], which bundles this postcondition with the array-length
-/// precondition.
+///
+/// For a record that is exactly a whole top-level array, prefer [`read_total_array`].
 pub fn expect_eof<'a>(bytes: &Bytes<'a>) -> Result<(), DecodeError<'a>> {
     let remaining = bytes.remaining_slice().len();
     if remaining == 0 {
