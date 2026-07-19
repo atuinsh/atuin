@@ -90,8 +90,11 @@ features = ["json", "rustls-no-provider", "stream"]
 default-features = false
 
 [workspace.dependencies.sqlx]
-version = "0.8"
-features = ["runtime-tokio-rustls", "time", "postgres", "uuid"]
+version = "0.9"
+# Deliberately excludes `postgres` and TLS: the client binary only ever talks to
+# a local SQLite file. Crates that need the Postgres driver (and TLS to reach a
+# remote server) opt in individually -- see atuin-server-postgres.
+features = ["runtime-tokio", "time", "uuid"]
 
 # The profile that 'cargo dist' will build with
 [profile.dist]
