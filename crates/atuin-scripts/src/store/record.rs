@@ -47,34 +47,33 @@ impl ScriptRecord {
     }
 
     pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
-        use atuin_common::rmp::{read_string, read_with};
-        use rmp::decode;
+        use atuin_common::rmp::{Bytes, decode, decode_bin_len};
 
         match version {
             SCRIPT_VERSION => {
-                let mut bytes = decode::Bytes::new(&data.0);
+                let mut bytes = Bytes::new(&data.0);
 
-                let record_type = read_with(&mut bytes, decode::read_u8)?;
+                let record_type = decode::<u8>(&mut bytes)?;
 
                 match record_type {
                     // create
                     0 => {
                         // written by encode::write_bin above
-                        let _ = read_with(&mut bytes, decode::read_bin_len)?;
+                        let _ = decode_bin_len(&mut bytes)?;
                         let script = Script::deserialize(bytes.remaining_slice())?;
                         Ok(ScriptRecord::Create(script))
                     }
 
                     // delete
                     1 => {
-                        let id = read_string(&mut bytes)?;
+                        let id = decode::<String>(&mut bytes)?;
                         Ok(ScriptRecord::Delete(Uuid::parse_str(&id)?))
                     }
 
                     // update
                     2 => {
                         // written by encode::write_bin above
-                        let _ = read_with(&mut bytes, decode::read_bin_len)?;
+                        let _ = decode_bin_len(&mut bytes)?;
                         let script = Script::deserialize(bytes.remaining_slice())?;
                         Ok(ScriptRecord::Update(script))
                     }

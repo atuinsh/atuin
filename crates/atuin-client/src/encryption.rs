@@ -17,7 +17,7 @@ use eyre::{Context, Result, bail, ensure};
 use fs_err as fs;
 use rmp::Marker;
 
-use atuin_common::rmp::{expect_array_len, read_with};
+use atuin_common::rmp::{Bytes, decode, decode_bin_len, expect_array_len};
 
 use crate::settings::Settings;
 
@@ -71,8 +71,6 @@ pub fn encode_key(key: &Key) -> Result<String> {
 }
 
 pub fn decode_key(key: String) -> Result<Key> {
-    use rmp::decode;
-
     let buf = BASE64_STANDARD
         .decode(key.trim_end())
         .wrap_err("encryption key is not a valid base64 encoding")?;
@@ -82,11 +80,11 @@ pub fn decode_key(key: String) -> Result<Key> {
     match <[u8; 32]>::try_from(&*buf) {
         Ok(key) => Ok(key.into()),
         Err(_) => {
-            let mut bytes = rmp::decode::Bytes::new(&buf);
+            let mut bytes = Bytes::new(&buf);
 
             match Marker::from_u8(buf[0]) {
                 Marker::Bin8 => {
-                    let len = read_with(&mut bytes, decode::read_bin_len)?;
+                    let len = decode_bin_len(&mut bytes)?;
                     ensure!(len == 32, "encryption key is not the correct size");
                     let key = <[u8; 32]>::try_from(bytes.remaining_slice())
                         .context("could not decode encryption key")?;
@@ -97,7 +95,7 @@ pub fn decode_key(key: String) -> Result<Key> {
 
                     let mut key = Key::default();
                     for i in &mut key {
-                        *i = read_with(&mut bytes, decode::read_int)?;
+                        *i = decode::<u8>(&mut bytes)?;
                     }
                     Ok(key)
                 }

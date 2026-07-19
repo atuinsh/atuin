@@ -1,4 +1,3 @@
-use rmp::decode::{self, Bytes};
 use rmp::encode;
 use std::env;
 
@@ -10,9 +9,7 @@ use eyre::{Result, bail};
 use crate::secrets::SECRET_PATTERNS_RE;
 use crate::settings::Settings;
 use crate::utils::get_host_user;
-use atuin_common::rmp::{
-    EncodeError, read_array_len, read_optional, read_string, read_with, write_optional,
-};
+use atuin_common::rmp::{Bytes, EncodeError, decode, decode_array_len, write_optional};
 use time::OffsetDateTime;
 
 pub(crate) mod builder;
@@ -250,30 +247,30 @@ impl History {
 
         let mut bytes = Bytes::new(bytes);
 
-        let real_version = read_with(&mut bytes, decode::read_u16)?;
+        let real_version = decode::<u16>(&mut bytes)?;
         if real_version != version.as_int() {
             bail!("expected to decode {version} record, found v{real_version}");
         }
 
-        let nfields = read_array_len(&mut bytes)?;
+        let nfields = decode_array_len(&mut bytes)?;
         let min_fields = version.min_fields();
         if nfields < min_fields || version.max_fields().is_some_and(|max| nfields > max) {
             bail!("unexpected number of fields ({nfields}) for history version {version}");
         }
 
-        let id = read_string(&mut bytes)?;
-        let timestamp = read_with(&mut bytes, decode::read_u64)?;
-        let duration = read_with(&mut bytes, decode::read_int)?;
-        let exit = read_with(&mut bytes, decode::read_int)?;
+        let id = decode::<String>(&mut bytes)?;
+        let timestamp = decode::<u64>(&mut bytes)?;
+        let duration = decode::<i64>(&mut bytes)?;
+        let exit = decode::<i64>(&mut bytes)?;
 
-        let command = read_string(&mut bytes)?;
-        let cwd = read_string(&mut bytes)?;
-        let session = read_string(&mut bytes)?;
-        let hostname = read_string(&mut bytes)?;
-        let deleted_at = read_optional(&mut bytes, decode::read_u64)?;
+        let command = decode::<String>(&mut bytes)?;
+        let cwd = decode::<String>(&mut bytes)?;
+        let session = decode::<String>(&mut bytes)?;
+        let hostname = decode::<String>(&mut bytes)?;
+        let deleted_at = decode::<Option<u64>>(&mut bytes)?;
 
         let author = if version >= Version::One {
-            read_optional(&mut bytes, read_string)?
+            decode::<Option<String>>(&mut bytes)?
         } else {
             None
         };
@@ -283,13 +280,13 @@ impl History {
             Version::One => nfields > min_fields,
             Version::Two => true,
         } {
-            read_optional(&mut bytes, read_string)?
+            decode::<Option<String>>(&mut bytes)?
         } else {
             None
         };
 
         let shell = if version >= Version::Two {
-            read_optional(&mut bytes, read_string)?
+            decode::<Option<String>>(&mut bytes)?
         } else {
             None
         };

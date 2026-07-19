@@ -3,14 +3,13 @@ use std::{collections::HashSet, fmt::Write, time::Duration};
 use eyre::{Result, bail, eyre};
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
-use rmp::decode::Bytes;
 
 use crate::{
     database::{Database, current_context},
     record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store},
 };
 use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
-use atuin_common::rmp::{expect_eof, read_string, read_with};
+use atuin_common::rmp::{Bytes, decode, decode_bin_len, expect_eof};
 
 use super::{HISTORY_TAG, History, HistoryId, Version};
 
@@ -72,18 +71,16 @@ impl HistoryRecord {
     }
 
     pub fn deserialize(bytes: &DecryptedData, version: &str) -> Result<Self> {
-        use rmp::decode;
-
         let mut bytes = Bytes::new(&bytes.0);
 
-        let record_type = read_with(&mut bytes, decode::read_u8)?;
+        let record_type = decode::<u8>(&mut bytes)?;
 
         match record_type {
             // 0 -> HistoryRecord::Create
             0 => {
                 // not super useful to us atm, but perhaps in the future
                 // written by write_bin above
-                let _ = read_with(&mut bytes, decode::read_bin_len)?;
+                let _ = decode_bin_len(&mut bytes)?;
 
                 let record = History::deserialize(bytes.remaining_slice(), version)?;
 
@@ -92,7 +89,7 @@ impl HistoryRecord {
 
             // 1 -> HistoryRecord::Delete
             1 => {
-                let id = read_string(&mut bytes)?;
+                let id = decode::<String>(&mut bytes)?;
                 expect_eof(&bytes)?;
 
                 Ok(HistoryRecord::Delete(id.into()))

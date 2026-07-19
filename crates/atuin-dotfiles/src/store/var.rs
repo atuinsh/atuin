@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::record::{DecryptedData, Host, HostId};
-use atuin_common::rmp::{expect_array_len, expect_eof, read_string, read_with};
+use atuin_common::rmp::{Bytes, decode, expect_array_len, expect_eof};
 use eyre::{Result, bail, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;
@@ -48,13 +48,11 @@ impl VarRecord {
     }
 
     pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
-        use rmp::decode;
-
         match version {
             DOTFILES_VAR_VERSION => {
-                let mut bytes = decode::Bytes::new(&data.0);
+                let mut bytes = Bytes::new(&data.0);
 
-                let record_type = read_with(&mut bytes, decode::read_u8)?;
+                let record_type = decode::<u8>(&mut bytes)?;
 
                 match record_type {
                     // create
@@ -67,7 +65,7 @@ impl VarRecord {
                     1 => {
                         expect_array_len(&mut bytes, 1)?;
 
-                        let key = read_string(&mut bytes)?;
+                        let key = decode::<String>(&mut bytes)?;
 
                         expect_eof(&bytes)?;
 

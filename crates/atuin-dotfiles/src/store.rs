@@ -6,7 +6,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 // While we will support a range of shell config, I'd rather have a larger number of small records
 // + stores, rather than one mega config store.
 use atuin_common::record::{DecryptedData, Host, HostId};
-use atuin_common::rmp::{expect_array_len, expect_eof, read_string, read_with};
+use atuin_common::rmp::{Bytes, decode, expect_array_len, expect_eof};
 use atuin_common::utils::unquote;
 use eyre::{Result, bail, eyre};
 
@@ -54,21 +54,19 @@ impl AliasRecord {
     }
 
     pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
-        use rmp::decode;
-
         match version {
             CONFIG_SHELL_ALIAS_VERSION => {
-                let mut bytes = decode::Bytes::new(&data.0);
+                let mut bytes = Bytes::new(&data.0);
 
-                let record_type = read_with(&mut bytes, decode::read_u8)?;
+                let record_type = decode::<u8>(&mut bytes)?;
 
                 match record_type {
                     // create
                     0 => {
                         expect_array_len(&mut bytes, 2)?;
 
-                        let name = read_string(&mut bytes)?;
-                        let value = read_string(&mut bytes)?;
+                        let name = decode::<String>(&mut bytes)?;
+                        let value = decode::<String>(&mut bytes)?;
 
                         expect_eof(&bytes)?;
 
@@ -79,7 +77,7 @@ impl AliasRecord {
                     1 => {
                         expect_array_len(&mut bytes, 1)?;
 
-                        let key = read_string(&mut bytes)?;
+                        let key = decode::<String>(&mut bytes)?;
 
                         expect_eof(&bytes)?;
 

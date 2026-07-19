@@ -3,12 +3,15 @@
 //! `rmp`'s own error types are awkward: some don't implement [`Display`] for
 //! every `E`, none say which variant they are, and the decode cursor offers no
 //! owned-string read, no nil-aware optional read, and no structural checks
-//! (array length, end-of-input). This module fills those gaps with a set of
-//! free functions — [`read_with`], [`read_string`], [`read_optional`],
-//! [`read_array_len`], [`expect_array_len`] and [`expect_eof`] for reading a
-//! [`Bytes`] cursor, and [`write_optional`] for writing — plus [`DecodeError`] /
-//! [`EncodeError`], which carry legible messages and convert cleanly into
-//! [`eyre::Report`].
+//! (array length, end-of-input). This module fills those gaps.
+//!
+//! Values are read through the generic [`decode()`] function, backed by the
+//! [`Decode`] trait: `decode::<String>(&mut bytes)?`,
+//! `decode::<Option<u64>>(&mut bytes)?`. Structural markers that aren't values
+//! have their own functions — [`decode_array_len`], [`decode_bin_len`],
+//! [`expect_array_len`] and [`expect_eof`] — and [`write_optional`] handles the
+//! encode side. All of these return [`DecodeError`] / [`EncodeError`], which
+//! carry legible messages and convert cleanly into [`eyre::Report`].
 //!
 //! Because every decode read returns [`DecodeError`], a decoder can use `?`
 //! throughout and convert once at the boundary, rather than hand-rolling a
@@ -17,11 +20,14 @@
 //! [`Display`]: std::fmt::Display
 
 use rmp::Marker;
-use rmp::decode::bytes::{Bytes, BytesReadError};
+use rmp::decode::bytes::BytesReadError;
 use rmp::decode::{
     self, DecodeStringError, NumValueReadError, RmpRead, RmpReadErr, ValueReadError,
 };
 use rmp::encode::{self, RmpWrite, RmpWriteErr, ValueWriteError};
+
+/// Re-exported so decoders need only depend on this module, not `rmp::decode`.
+pub use rmp::decode::bytes::Bytes;
 
 /// An error encountered while encoding a MessagePack value.
 ///
@@ -85,7 +91,8 @@ impl<E: RmpReadErr> From<ValueReadError<E>> for DecodeError<'_, E> {
 
 impl<E: RmpReadErr> DecodeError<'_, E> {
     /// If this is a type mismatch, the [`Marker`] found instead of the expected
-    /// type. [`read_optional`] uses this to recognise nil.
+    /// type. The [`Option`] implementation of [`Decode`] uses this to recognise
+    /// nil.
     pub fn type_mismatch(&self) -> Option<Marker> {
         match self {
             Self::DecodeString(DecodeStringError::TypeMismatch(m))
@@ -102,77 +109,91 @@ impl<E: RmpReadErr> From<DecodeError<'_, E>> for eyre::Report {
     }
 }
 
-/// Run an `rmp` decode function, converting its error into [`DecodeError`].
+/// A value decodable from a MessagePack [`Bytes`] cursor.
 ///
-/// Lets raw `rmp::decode` functions compose with `?`:
-/// `read_with(&mut bytes, rmp::decode::read_u64)?`.
-pub fn read_with<'a, T, E>(
-    bytes: &mut Bytes<'a>,
-    read: impl FnOnce(&mut Bytes<'a>) -> Result<T, E>,
-) -> Result<T, DecodeError<'a>>
-where
-    E: Into<DecodeError<'a>>,
-{
-    read(bytes).map_err(Into::into)
+/// Implemented for the scalars atuin's record formats use and for [`Option`]
+/// (nil ⇒ [`None`]). Call it through the generic [`decode()`] function; structural
+/// markers that aren't values have their own functions ([`decode_array_len`],
+/// [`decode_bin_len`]).
+pub trait Decode: Sized {
+    fn decode<'a>(bytes: &mut Bytes<'a>) -> Result<Self, DecodeError<'a>>;
 }
 
-/// Read an owned [`String`].
-pub fn read_string<'a>(bytes: &mut Bytes<'a>) -> Result<String, DecodeError<'a>> {
-    let slice = bytes.remaining_slice();
-    let (string, rest) = match decode::read_str_from_slice(slice) {
-        Ok(pair) => pair,
-        Err(e) => {
-            if let DecodeStringError::TypeMismatch(_) = e {
-                // rmp's decode functions consume the marker byte on a type
-                // mismatch; do the same so `read_optional` can detect nil.
-                bytes
-                    .read_u8()
-                    .expect("TypeMismatch implies the stream contains a marker byte");
+/// Decode a [`Decode`] value: `decode::<String>(&mut bytes)?`,
+/// `decode::<Option<u64>>(&mut bytes)?`.
+pub fn decode<'a, T: Decode>(bytes: &mut Bytes<'a>) -> Result<T, DecodeError<'a>> {
+    T::decode(bytes)
+}
+
+impl Decode for String {
+    fn decode<'a>(bytes: &mut Bytes<'a>) -> Result<Self, DecodeError<'a>> {
+        let slice = bytes.remaining_slice();
+        let (string, rest) = match decode::read_str_from_slice(slice) {
+            Ok(pair) => pair,
+            Err(e) => {
+                if let DecodeStringError::TypeMismatch(_) = e {
+                    // rmp consumes the marker byte on a type mismatch; match that
+                    // so `Option::decode` can detect nil.
+                    bytes
+                        .read_u8()
+                        .expect("TypeMismatch implies the stream contains a marker byte");
+                }
+                return Err(e.into());
             }
-            return Err(e.into());
-        }
-    };
-    *bytes = Bytes::new(rest);
-    Ok(string.into())
+        };
+        *bytes = Bytes::new(rest);
+        Ok(string.into())
+    }
 }
 
-/// Read a value that may be encoded as nil, returning [`None`] for nil.
-///
-/// `read` decodes a `T`; if it fails specifically because it found
-/// [`Marker::Null`], this yields [`None`] with the cursor left just past the
-/// nil. Any other error is forwarded unchanged.
-pub fn read_optional<'a, T, E>(
-    bytes: &mut Bytes<'a>,
-    read: impl FnOnce(&mut Bytes<'a>) -> Result<T, E>,
-) -> Result<Option<T>, DecodeError<'a>>
-where
-    E: Into<DecodeError<'a>>,
-{
-    match read(bytes) {
-        Ok(v) => Ok(Some(v)),
-        Err(e) => {
-            let e = e.into();
-            if let Some(Marker::Null) = e.type_mismatch() {
-                Ok(None)
-            } else {
-                Err(e)
+impl Decode for bool {
+    fn decode<'a>(bytes: &mut Bytes<'a>) -> Result<Self, DecodeError<'a>> {
+        decode::read_bool(bytes).map_err(Into::into)
+    }
+}
+
+macro_rules! impl_decode_int {
+    ($($t:ty),+ $(,)?) => {$(
+        impl Decode for $t {
+            fn decode<'a>(bytes: &mut Bytes<'a>) -> Result<Self, DecodeError<'a>> {
+                decode::read_int(bytes).map_err(Into::into)
+            }
+        }
+    )+};
+}
+impl_decode_int!(u8, u16, u64, i64);
+
+impl<T: Decode> Decode for Option<T> {
+    /// Decodes a `T`, mapping a nil marker to [`None`].
+    fn decode<'a>(bytes: &mut Bytes<'a>) -> Result<Self, DecodeError<'a>> {
+        match T::decode(bytes) {
+            Ok(v) => Ok(Some(v)),
+            Err(e) => {
+                if let Some(Marker::Null) = e.type_mismatch() {
+                    Ok(None)
+                } else {
+                    Err(e)
+                }
             }
         }
     }
 }
 
-/// Read an array-length marker.
-pub fn read_array_len<'a>(bytes: &mut Bytes<'a>) -> Result<u32, DecodeError<'a>> {
+/// Decode an array-length marker (the header count, not a value).
+pub fn decode_array_len<'a>(bytes: &mut Bytes<'a>) -> Result<u32, DecodeError<'a>> {
     decode::read_array_len(bytes).map_err(Into::into)
 }
 
-/// Read an array-length marker and require it to equal `expected`.
-///
-/// Returns [`DecodeError::UnexpectedArrayLen`] otherwise. For a
-/// forward-compatible field count, use [`read_array_len`] and range-check the
-/// value yourself.
+/// Decode a binary-length marker (the header, before the raw payload bytes).
+pub fn decode_bin_len<'a>(bytes: &mut Bytes<'a>) -> Result<u32, DecodeError<'a>> {
+    decode::read_bin_len(bytes).map_err(Into::into)
+}
+
+/// Decode an array-length marker and require it to equal `expected`, else
+/// [`DecodeError::UnexpectedArrayLen`]. For a forward-compatible field count,
+/// use [`decode_array_len`] and range-check yourself.
 pub fn expect_array_len<'a>(bytes: &mut Bytes<'a>, expected: u32) -> Result<u32, DecodeError<'a>> {
-    let actual = read_array_len(bytes)?;
+    let actual = decode_array_len(bytes)?;
     if actual == expected {
         Ok(actual)
     } else {
@@ -180,8 +201,7 @@ pub fn expect_array_len<'a>(bytes: &mut Bytes<'a>, expected: u32) -> Result<u32,
     }
 }
 
-/// Succeed only if the cursor is at end-of-input, else
-/// [`DecodeError::TrailingBytes`].
+/// Succeed only if the cursor is at end-of-input, else [`DecodeError::TrailingBytes`].
 pub fn expect_eof<'a>(bytes: &Bytes<'a>) -> Result<(), DecodeError<'a>> {
     let remaining = bytes.remaining_slice().len();
     if remaining == 0 {
@@ -268,19 +288,19 @@ mod tests {
     }
 
     #[test]
-    fn read_string_round_trips() {
+    fn decode_string_round_trips() {
         let buf = enc(|v| rmp::encode::write_str(v, "héllo 🦀").unwrap());
         let mut bytes = Bytes::new(&buf);
-        assert_eq!(read_string(&mut bytes).unwrap(), "héllo 🦀");
+        assert_eq!(decode::<String>(&mut bytes).unwrap(), "héllo 🦀");
         assert!(bytes.remaining_slice().is_empty());
     }
 
     #[test]
-    fn read_string_on_wrong_type_errors_and_consumes_marker() {
-        // A lone nil marker: read_string must fail *and* consume the marker so a
-        // following read_optional can observe end-of-input correctly.
+    fn decode_string_on_wrong_type_errors_and_consumes_marker() {
+        // A lone nil marker: decode::<String> must fail *and* consume the marker
+        // so a following decode::<Option<_>> can observe end-of-input correctly.
         let mut bytes = Bytes::new(&[0xc0]);
-        assert!(read_string(&mut bytes).is_err());
+        assert!(decode::<String>(&mut bytes).is_err());
         assert!(
             bytes.remaining_slice().is_empty(),
             "marker byte must be consumed"
@@ -288,43 +308,75 @@ mod tests {
     }
 
     #[test]
-    fn read_with_converts_rmp_errors() {
+    fn decode_converts_rmp_errors() {
         let buf = enc(|v| rmp::encode::write_u64(v, 42).unwrap());
         let mut bytes = Bytes::new(&buf);
-        assert_eq!(read_with(&mut bytes, rmp::decode::read_u64).unwrap(), 42);
+        assert_eq!(decode::<u64>(&mut bytes).unwrap(), 42);
     }
 
-    #[test]
-    fn read_optional_some_and_none() {
-        let some = enc(|v| rmp::encode::write_u64(v, 7).unwrap());
-        let mut b = Bytes::new(&some);
-        assert_eq!(
-            read_optional(&mut b, rmp::decode::read_u64).unwrap(),
-            Some(7)
-        );
-
-        let none = enc(|v| rmp::encode::write_nil(v).unwrap());
-        let mut b = Bytes::new(&none);
-        assert_eq!(read_optional(&mut b, rmp::decode::read_u64).unwrap(), None);
+    #[rstest]
+    #[case::bool_true(enc(|v| rmp::encode::write_bool(v, true).unwrap()), true)]
+    #[case::bool_false(enc(|v| rmp::encode::write_bool(v, false).unwrap()), false)]
+    fn decode_bool_round_trips(#[case] buf: Vec<u8>, #[case] expected: bool) {
+        let mut b = Bytes::new(&buf);
+        assert_eq!(decode::<bool>(&mut b).unwrap(), expected);
         assert!(b.remaining_slice().is_empty());
     }
 
     #[test]
-    fn read_optional_string_via_closure() {
+    fn decode_u8_round_trips() {
+        let buf = enc(|v| rmp::encode::write_u8(v, 200).unwrap());
+        let mut b = Bytes::new(&buf);
+        assert_eq!(decode::<u8>(&mut b).unwrap(), 200);
+        assert!(b.remaining_slice().is_empty());
+    }
+
+    #[test]
+    fn decode_u16_round_trips() {
+        let buf = enc(|v| rmp::encode::write_u16(v, 40000).unwrap());
+        let mut b = Bytes::new(&buf);
+        assert_eq!(decode::<u16>(&mut b).unwrap(), 40000);
+        assert!(b.remaining_slice().is_empty());
+    }
+
+    #[test]
+    fn decode_i64_round_trips() {
+        let buf = enc(|v| {
+            rmp::encode::write_sint(v, -123456789).unwrap();
+        });
+        let mut b = Bytes::new(&buf);
+        assert_eq!(decode::<i64>(&mut b).unwrap(), -123456789);
+        assert!(b.remaining_slice().is_empty());
+    }
+
+    #[test]
+    fn decode_optional_some_and_none() {
+        let some = enc(|v| rmp::encode::write_u64(v, 7).unwrap());
+        let mut b = Bytes::new(&some);
+        assert_eq!(decode::<Option<u64>>(&mut b).unwrap(), Some(7));
+
+        let none = enc(|v| rmp::encode::write_nil(v).unwrap());
+        let mut b = Bytes::new(&none);
+        assert_eq!(decode::<Option<u64>>(&mut b).unwrap(), None);
+        assert!(b.remaining_slice().is_empty());
+    }
+
+    #[test]
+    fn decode_optional_string() {
         let buf = enc(|v| rmp::encode::write_str(v, "x").unwrap());
         let mut b = Bytes::new(&buf);
         assert_eq!(
-            read_optional(&mut b, read_string).unwrap(),
+            decode::<Option<String>>(&mut b).unwrap(),
             Some("x".to_string())
         );
     }
 
     #[test]
-    fn read_optional_forwards_non_nil_errors() {
+    fn decode_optional_forwards_non_nil_errors() {
         // A bool where a u64 is expected is a type mismatch that is NOT nil.
         let buf = enc(|v| rmp::encode::write_bool(v, true).unwrap());
         let mut b = Bytes::new(&buf);
-        assert!(read_optional(&mut b, rmp::decode::read_u64).is_err());
+        assert!(decode::<Option<u64>>(&mut b).is_err());
     }
 
     fn array_of(len: u32) -> Vec<u8> {
@@ -353,17 +405,17 @@ mod tests {
     }
 
     #[test]
-    fn read_array_len_returns_count_for_manual_range_checks() {
+    fn decode_array_len_returns_count_for_manual_range_checks() {
         let buf = array_of(9);
         let mut b = Bytes::new(&buf);
-        assert_eq!(read_array_len(&mut b).unwrap(), 9);
+        assert_eq!(decode_array_len(&mut b).unwrap(), 9);
     }
 
     #[test]
     fn expect_eof_ok_when_consumed() {
         let buf = enc(|v| rmp::encode::write_u8(v, 1).unwrap());
         let mut b = Bytes::new(&buf);
-        read_with(&mut b, rmp::decode::read_u8).unwrap();
+        decode::<u8>(&mut b).unwrap();
         assert!(expect_eof(&b).is_ok());
     }
 
@@ -381,10 +433,7 @@ mod tests {
         let mut out = Vec::new();
         write_optional(&mut out, Some(99u64), rmp::encode::write_u64).unwrap();
         let mut b = Bytes::new(&out);
-        assert_eq!(
-            read_optional(&mut b, rmp::decode::read_u64).unwrap(),
-            Some(99)
-        );
+        assert_eq!(decode::<Option<u64>>(&mut b).unwrap(), Some(99));
     }
 
     #[test]
@@ -392,7 +441,7 @@ mod tests {
         let mut out = Vec::new();
         write_optional::<_, u64>(&mut out, None, rmp::encode::write_u64).unwrap();
         let mut b = Bytes::new(&out);
-        assert_eq!(read_optional(&mut b, rmp::decode::read_u64).unwrap(), None);
+        assert_eq!(decode::<Option<u64>>(&mut b).unwrap(), None);
     }
 
     #[test]
@@ -401,13 +450,13 @@ mod tests {
         write_optional(&mut out, Some("hi"), rmp::encode::write_str).unwrap();
         let mut b = Bytes::new(&out);
         assert_eq!(
-            read_optional(&mut b, read_string).unwrap(),
+            decode::<Option<String>>(&mut b).unwrap(),
             Some("hi".to_string())
         );
     }
 
     #[test]
-    fn read_optional_nil_string_advances_to_next_field() {
+    fn decode_optional_nil_string_advances_to_next_field() {
         // A nil optional-string field followed by a u64. The nil read must consume
         // exactly the marker so the following field decodes correctly.
         let mut out = Vec::new();
@@ -415,8 +464,8 @@ mod tests {
         rmp::encode::write_u64(&mut out, 1234).unwrap();
 
         let mut b = Bytes::new(&out);
-        assert_eq!(read_optional(&mut b, read_string).unwrap(), None);
-        assert_eq!(read_with(&mut b, rmp::decode::read_u64).unwrap(), 1234);
+        assert_eq!(decode::<Option<String>>(&mut b).unwrap(), None);
+        assert_eq!(decode::<u64>(&mut b).unwrap(), 1234);
         assert!(expect_eof(&b).is_ok());
     }
 
@@ -425,31 +474,31 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(1024))]
 
-        // A string survives an encode -> read_string round trip exactly.
+        // A string survives an encode -> decode::<String> round trip exactly.
         #[test]
-        fn string_round_trips(s in r"(?s).*") {
+        fn decode_string_proptest_round_trips(s in r"(?s).*") {
             let buf = enc(|v| rmp::encode::write_str(v, &s).unwrap());
             let mut b = Bytes::new(&buf);
-            prop_assert_eq!(read_string(&mut b).unwrap(), s);
+            prop_assert_eq!(decode::<String>(&mut b).unwrap(), s);
             prop_assert!(b.remaining_slice().is_empty());
         }
 
-        // Option<u64> survives write_optional -> read_optional.
+        // Option<u64> survives write_optional -> decode::<Option<u64>>.
         #[test]
-        fn optional_u64_round_trips(v in proptest::option::of(any::<u64>())) {
+        fn decode_optional_u64_round_trips(v in proptest::option::of(any::<u64>())) {
             let mut out = Vec::new();
             write_optional(&mut out, v, rmp::encode::write_u64).unwrap();
             let mut b = Bytes::new(&out);
-            prop_assert_eq!(read_optional(&mut b, rmp::decode::read_u64).unwrap(), v);
+            prop_assert_eq!(decode::<Option<u64>>(&mut b).unwrap(), v);
         }
 
-        // Option<String> survives the closure-based optional round trip.
+        // Option<String> survives the optional round trip.
         #[test]
-        fn optional_string_round_trips(v in proptest::option::of(r"(?s).*")) {
+        fn decode_optional_string_round_trips(v in proptest::option::of(r"(?s).*")) {
             let mut out = Vec::new();
             write_optional(&mut out, v.as_deref(), rmp::encode::write_str).unwrap();
             let mut b = Bytes::new(&out);
-            prop_assert_eq!(read_optional(&mut b, read_string).unwrap(), v);
+            prop_assert_eq!(decode::<Option<String>>(&mut b).unwrap(), v);
             prop_assert!(b.remaining_slice().is_empty());
         }
 
@@ -469,9 +518,9 @@ mod tests {
 
             let mut b = Bytes::new(&out);
             prop_assert_eq!(expect_array_len(&mut b, 3).unwrap(), 3);
-            prop_assert_eq!(read_string(&mut b).unwrap(), id);
-            prop_assert_eq!(read_with(&mut b, rmp::decode::read_u64).unwrap(), ts);
-            prop_assert_eq!(read_optional(&mut b, rmp::decode::read_u64).unwrap(), deleted);
+            prop_assert_eq!(decode::<String>(&mut b).unwrap(), id);
+            prop_assert_eq!(decode::<u64>(&mut b).unwrap(), ts);
+            prop_assert_eq!(decode::<Option<u64>>(&mut b).unwrap(), deleted);
             prop_assert!(expect_eof(&b).is_ok());
         }
 
@@ -479,11 +528,11 @@ mod tests {
         #[test]
         fn reads_never_panic(raw in proptest::collection::vec(any::<u8>(), 0..64)) {
             let mut b = Bytes::new(&raw);
-            let _ = read_string(&mut b);
+            let _ = decode::<String>(&mut b);
             let mut b = Bytes::new(&raw);
-            let _ = read_array_len(&mut b);
+            let _ = decode_array_len(&mut b);
             let mut b = Bytes::new(&raw);
-            let _ = read_optional(&mut b, rmp::decode::read_u64);
+            let _ = decode::<Option<u64>>(&mut b);
         }
     }
 }
