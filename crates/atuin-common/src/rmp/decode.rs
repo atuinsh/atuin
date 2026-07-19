@@ -61,49 +61,20 @@ impl<E: RmpReadErr> DecodeError<'_, E> {
     }
 }
 
-impl<E: RmpReadErr> From<DecodeError<'_, E>> for eyre::Report {
-    fn from(e: DecodeError<'_, E>) -> Self {
-        eyre::eyre!("{e}")
+pub trait DecodeExt<'a, T> {
+    fn decode(self) -> Result<T, DecodeError<'a>>;
+}
+
+impl<'a, T, E: Into<DecodeError<'a>>> DecodeExt<'a, T> for Result<T, E> {
+    fn decode(self) -> Result<T, DecodeError<'a>> {
+        self.map_err(Into::into)
     }
 }
 
-macro_rules! read_int {
-    ($($(#[$meta:meta])* $name:ident -> $t:ty),+ $(,)?) => {$(
-        $(#[$meta])*
-        pub fn $name<'a>(bytes: &mut Bytes<'a>) -> Result<$t, DecodeError<'a>> {
-            mp::read_int(bytes).map_err(Into::into)
-        }
-    )+};
-}
-
-read_int! {
-    /// Read a `u8` value. Accepts any in-range MessagePack integer encoding.
-    read_u8 -> u8,
-    /// Read a `u16` value. Accepts any in-range MessagePack integer encoding.
-    read_u16 -> u16,
-    /// Read a `u64` value. Accepts any in-range MessagePack integer encoding.
-    read_u64 -> u64,
-    /// Read an `i64` value. Accepts any in-range MessagePack integer encoding.
-    read_i64 -> i64,
-}
-
-/// Read a `bool`.
-pub fn read_bool<'a>(bytes: &mut Bytes<'a>) -> Result<bool, DecodeError<'a>> {
-    mp::read_bool(bytes).map_err(Into::into)
-}
-
-/// Read a binary-blob length header (before the raw payload).
-pub fn read_bin_len<'a>(bytes: &mut Bytes<'a>) -> Result<u32, DecodeError<'a>> {
-    mp::read_bin_len(bytes).map_err(Into::into)
-}
-
-/// Read an array-length header.
-pub fn read_array_len<'a>(bytes: &mut Bytes<'a>) -> Result<u32, DecodeError<'a>> {
-    mp::read_array_len(bytes).map_err(Into::into)
-}
-
 /// Read an owned [`String`].
-pub fn read_string<'a>(bytes: &mut Bytes<'a>) -> Result<String, DecodeError<'a>> {
+pub fn read_string<'a>(
+    bytes: &mut Bytes<'a>,
+) -> Result<String, DecodeStringError<'a, BytesReadError>> {
     let slice = bytes.remaining_slice();
     let (string, rest) = match mp::read_str_from_slice(slice) {
         Ok(pair) => pair,
@@ -115,7 +86,7 @@ pub fn read_string<'a>(bytes: &mut Bytes<'a>) -> Result<String, DecodeError<'a>>
                     .read_u8()
                     .expect("TypeMismatch implies the stream contains a marker byte");
             }
-            return Err(e.into());
+            return Err(e);
         }
     };
     *bytes = Bytes::new(rest);
@@ -171,17 +142,18 @@ pub fn read_array_of<'a, T, E>(
 where
     E: From<DecodeError<'a>>,
 {
-    let len = read_array_len(bytes).map_err(E::from)?;
+    let len = mp::read_array_len(bytes).decode().map_err(E::from)?;
     (0..len).map(|_| read_elem(bytes)).collect()
 }
 
 /// Read an array-length header and require it to equal `expected`, else
 /// [`DecodeError::UnexpectedArrayLen`].
 ///
-/// For a forward-compatible field count, use [`read_array_len`] and range-check yourself. For a
+/// For a forward-compatible field count, use [`rmp::decode::read_array_len`] and range-check
+/// yourself. For a
 /// record that is exactly a whole top-level array, prefer [`read_total_array`].
 pub fn expect_array_len<'a>(bytes: &mut Bytes<'a>, expected: u32) -> Result<u32, DecodeError<'a>> {
-    let actual = read_array_len(bytes)?;
+    let actual = mp::read_array_len(bytes)?;
     if actual == expected {
         Ok(actual)
     } else {

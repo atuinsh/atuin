@@ -8,7 +8,8 @@ use eyre::{Result, bail};
 use crate::secrets::SECRET_PATTERNS_RE;
 use crate::settings::Settings;
 use crate::utils::get_host_user;
-use atuin_common::rmp;
+use atuin_common::rmp as atu_rmp;
+use atuin_common::rmp::decode::DecodeExt;
 use time::OffsetDateTime;
 
 pub(crate) mod builder;
@@ -212,30 +213,38 @@ impl History {
     /// V2 is designed to allow new fields to be added without incrementing the version. V1 cannot
     /// accommodate this because its deserialization routine errors if more than 11 fields are
     /// provided.
-    pub fn serialize(&self) -> Result<DecryptedData, rmp::encode::EncodeError> {
+    pub fn serialize(&self) -> Result<DecryptedData, atu_rmp::encode::EncodeError> {
         let mut output = vec![];
 
         // write the version
-        rmp::encode::write_u16(&mut output, Version::LATEST.as_int())?;
-        rmp::encode::write_array_len(&mut output, Version::LATEST.min_fields())?;
+        atu_rmp::encode::write_u16(&mut output, Version::LATEST.as_int())?;
+        atu_rmp::encode::write_array_len(&mut output, Version::LATEST.min_fields())?;
 
-        rmp::encode::write_str(&mut output, &self.id.0)?;
-        rmp::encode::write_u64(&mut output, self.timestamp.unix_timestamp_nanos() as u64)?;
-        rmp::encode::write_sint(&mut output, self.duration)?;
-        rmp::encode::write_sint(&mut output, self.exit)?;
-        rmp::encode::write_str(&mut output, &self.command)?;
-        rmp::encode::write_str(&mut output, &self.cwd)?;
-        rmp::encode::write_str(&mut output, &self.session)?;
-        rmp::encode::write_str(&mut output, &self.hostname)?;
+        atu_rmp::encode::write_str(&mut output, &self.id.0)?;
+        atu_rmp::encode::write_u64(&mut output, self.timestamp.unix_timestamp_nanos() as u64)?;
+        atu_rmp::encode::write_sint(&mut output, self.duration)?;
+        atu_rmp::encode::write_sint(&mut output, self.exit)?;
+        atu_rmp::encode::write_str(&mut output, &self.command)?;
+        atu_rmp::encode::write_str(&mut output, &self.cwd)?;
+        atu_rmp::encode::write_str(&mut output, &self.session)?;
+        atu_rmp::encode::write_str(&mut output, &self.hostname)?;
 
-        rmp::encode::write_optional(
+        atu_rmp::encode::write_optional(
             &mut output,
             self.deleted_at.map(|d| d.unix_timestamp_nanos() as u64),
-            rmp::encode::write_u64,
+            atu_rmp::encode::write_u64,
         )?;
-        rmp::encode::write_str(&mut output, self.author.as_str())?;
-        rmp::encode::write_optional(&mut output, self.intent.as_deref(), rmp::encode::write_str)?;
-        rmp::encode::write_optional(&mut output, self.shell.as_deref(), rmp::encode::write_str)?;
+        atu_rmp::encode::write_str(&mut output, self.author.as_str())?;
+        atu_rmp::encode::write_optional(
+            &mut output,
+            self.intent.as_deref(),
+            atu_rmp::encode::write_str,
+        )?;
+        atu_rmp::encode::write_optional(
+            &mut output,
+            self.shell.as_deref(),
+            atu_rmp::encode::write_str,
+        )?;
         Ok(DecryptedData(output))
     }
 
@@ -244,32 +253,33 @@ impl History {
             bail!("unknown version {version:?}");
         };
 
-        let mut bytes = rmp::decode::Bytes::new(bytes);
+        let mut bytes = atu_rmp::decode::Bytes::new(bytes);
 
-        let real_version = rmp::decode::read_u16(&mut bytes)?;
+        let real_version = rmp::decode::read_int::<u16, _>(&mut bytes).decode()?;
         if real_version != version.as_int() {
             bail!("expected to decode {version} record, found v{real_version}");
         }
 
-        let nfields = rmp::decode::read_array_len(&mut bytes)?;
+        let nfields = rmp::decode::read_array_len(&mut bytes).decode()?;
         let min_fields = version.min_fields();
         if nfields < min_fields || version.max_fields().is_some_and(|max| nfields > max) {
             bail!("unexpected number of fields ({nfields}) for history version {version}");
         }
 
-        let id = rmp::decode::read_string(&mut bytes)?;
-        let timestamp = rmp::decode::read_u64(&mut bytes)?;
-        let duration = rmp::decode::read_i64(&mut bytes)?;
-        let exit = rmp::decode::read_i64(&mut bytes)?;
+        let id = atu_rmp::decode::read_string(&mut bytes).decode()?;
+        let timestamp = rmp::decode::read_int::<u64, _>(&mut bytes).decode()?;
+        let duration = rmp::decode::read_int::<i64, _>(&mut bytes).decode()?;
+        let exit = rmp::decode::read_int::<i64, _>(&mut bytes).decode()?;
 
-        let command = rmp::decode::read_string(&mut bytes)?;
-        let cwd = rmp::decode::read_string(&mut bytes)?;
-        let session = rmp::decode::read_string(&mut bytes)?;
-        let hostname = rmp::decode::read_string(&mut bytes)?;
-        let deleted_at = rmp::decode::read_optional(&mut bytes, rmp::decode::read_u64)?;
+        let command = atu_rmp::decode::read_string(&mut bytes).decode()?;
+        let cwd = atu_rmp::decode::read_string(&mut bytes).decode()?;
+        let session = atu_rmp::decode::read_string(&mut bytes).decode()?;
+        let hostname = atu_rmp::decode::read_string(&mut bytes).decode()?;
+        let deleted_at =
+            atu_rmp::decode::read_optional(&mut bytes, rmp::decode::read_int::<u64, _>)?;
 
         let author = if version >= Version::One {
-            rmp::decode::read_optional(&mut bytes, rmp::decode::read_string)?
+            atu_rmp::decode::read_optional(&mut bytes, atu_rmp::decode::read_string)?
         } else {
             None
         };
@@ -279,13 +289,13 @@ impl History {
             Version::One => nfields > min_fields,
             Version::Two => true,
         } {
-            rmp::decode::read_optional(&mut bytes, rmp::decode::read_string)?
+            atu_rmp::decode::read_optional(&mut bytes, atu_rmp::decode::read_string)?
         } else {
             None
         };
 
         let shell = if version >= Version::Two {
-            rmp::decode::read_optional(&mut bytes, rmp::decode::read_string)?
+            atu_rmp::decode::read_optional(&mut bytes, atu_rmp::decode::read_string)?
         } else {
             None
         };

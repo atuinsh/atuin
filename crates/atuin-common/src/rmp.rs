@@ -1,11 +1,15 @@
 pub mod decode;
 pub mod encode;
 
+#[cfg(feature = "eyre")]
+mod eyre;
+
 pub use decode::DecodeError;
 pub use encode::EncodeError;
 
 #[cfg(test)]
 mod tests {
+    use super::decode::DecodeExt;
     use super::{decode, encode};
     use decode::{Bytes, DecodeError};
     use proptest::prelude::*;
@@ -22,7 +26,7 @@ mod tests {
         fn u8_loopback(x in any::<u8>()) {
             let buf = enc(|v| { encode::write_u8(v, x).unwrap(); });
             let mut b = Bytes::new(&buf);
-            prop_assert_eq!(decode::read_u8(&mut b).unwrap(), x);
+            prop_assert_eq!(rmp::decode::read_int::<u8, _>(&mut b).decode().unwrap(), x);
             prop_assert!(b.remaining_slice().is_empty());
         }
 
@@ -30,7 +34,7 @@ mod tests {
         fn u16_loopback(x in any::<u16>()) {
             let buf = enc(|v| { encode::write_u16(v, x).unwrap(); });
             let mut b = Bytes::new(&buf);
-            prop_assert_eq!(decode::read_u16(&mut b).unwrap(), x);
+            prop_assert_eq!(rmp::decode::read_int::<u16, _>(&mut b).decode().unwrap(), x);
             prop_assert!(b.remaining_slice().is_empty());
         }
 
@@ -38,7 +42,7 @@ mod tests {
         fn u64_loopback(x in any::<u64>()) {
             let buf = enc(|v| { encode::write_u64(v, x).unwrap(); });
             let mut b = Bytes::new(&buf);
-            prop_assert_eq!(decode::read_u64(&mut b).unwrap(), x);
+            prop_assert_eq!(rmp::decode::read_int::<u64, _>(&mut b).decode().unwrap(), x);
             prop_assert!(b.remaining_slice().is_empty());
         }
 
@@ -46,7 +50,7 @@ mod tests {
         fn i64_loopback(x in any::<i64>()) {
             let buf = enc(|v| { encode::write_sint(v, x).unwrap(); });
             let mut b = Bytes::new(&buf);
-            prop_assert_eq!(decode::read_i64(&mut b).unwrap(), x);
+            prop_assert_eq!(rmp::decode::read_int::<i64, _>(&mut b).decode().unwrap(), x);
             prop_assert!(b.remaining_slice().is_empty());
         }
 
@@ -54,7 +58,7 @@ mod tests {
         fn bool_loopback(x in any::<bool>()) {
             let buf = enc(|v| { encode::write_bool(v, x).unwrap(); });
             let mut b = Bytes::new(&buf);
-            prop_assert_eq!(decode::read_bool(&mut b).unwrap(), x);
+            prop_assert_eq!(rmp::decode::read_bool(&mut b).decode().unwrap(), x);
             prop_assert!(b.remaining_slice().is_empty());
         }
 
@@ -62,7 +66,7 @@ mod tests {
         fn string_loopback(x in "(?s).*") {
             let buf = enc(|v| { encode::write_str(v, &x).unwrap(); });
             let mut b = Bytes::new(&buf);
-            prop_assert_eq!(decode::read_string(&mut b).unwrap(), x);
+            prop_assert_eq!(decode::read_string(&mut b).decode().unwrap(), x);
             prop_assert!(b.remaining_slice().is_empty());
         }
 
@@ -70,7 +74,7 @@ mod tests {
         fn optional_u64_loopback(x in proptest::option::of(any::<u64>())) {
             let buf = enc(|v| { encode::write_optional(v, x, encode::write_u64).unwrap(); });
             let mut b = Bytes::new(&buf);
-            prop_assert_eq!(decode::read_optional(&mut b, decode::read_u64).unwrap(), x);
+            prop_assert_eq!(decode::read_optional(&mut b, rmp::decode::read_int::<u64, _>).unwrap(), x);
             prop_assert!(b.remaining_slice().is_empty());
         }
 
@@ -91,7 +95,7 @@ mod tests {
                 }
             });
             let mut b = Bytes::new(&buf);
-            prop_assert_eq!(decode::read_array_of(&mut b, decode::read_string).unwrap(), xs);
+            prop_assert_eq!(decode::read_array_of(&mut b, |b| decode::read_string(b).decode()).unwrap(), xs);
             prop_assert!(b.remaining_slice().is_empty());
         }
 
@@ -107,8 +111,8 @@ mod tests {
             let out = decode::read_total_array(&mut b, 3, |b| {
                 Ok::<_, DecodeError>((
                     decode::read_string(b)?,
-                    decode::read_u64(b)?,
-                    decode::read_bool(b)?,
+                    rmp::decode::read_int::<u64, _>(b)?,
+                    rmp::decode::read_bool(b)?,
                 ))
             })
             .unwrap();

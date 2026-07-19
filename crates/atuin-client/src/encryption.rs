@@ -17,7 +17,8 @@ use eyre::{Context, Result, bail, ensure};
 use fs_err as fs;
 
 use crate::settings::Settings;
-use atuin_common::rmp;
+use atuin_common::rmp as atu_rmp;
+use atuin_common::rmp::decode::DecodeExt;
 
 pub fn generate_encoded_key() -> Result<(Key, String)> {
     let key = XSalsa20Poly1305::generate_key(&mut OsRng);
@@ -57,10 +58,10 @@ pub fn load_key(settings: &Settings) -> Result<Key> {
 
 pub fn encode_key(key: &Key) -> Result<String> {
     let mut buf = vec![];
-    rmp::encode::write_array_len(&mut buf, key.len() as u32)
+    atu_rmp::encode::write_array_len(&mut buf, key.len() as u32)
         .wrap_err("could not encode key to message pack")?;
     for b in key {
-        rmp::encode::write_uint(&mut buf, *b as u64)
+        atu_rmp::encode::write_uint(&mut buf, *b as u64)
             .wrap_err("could not encode key to message pack")?;
     }
     let buf = BASE64_STANDARD.encode(buf);
@@ -78,22 +79,22 @@ pub fn decode_key(key: String) -> Result<Key> {
     match <[u8; 32]>::try_from(&*buf) {
         Ok(key) => Ok(key.into()),
         Err(_) => {
-            let mut bytes = rmp::decode::Bytes::new(&buf);
+            let mut bytes = atu_rmp::decode::Bytes::new(&buf);
 
-            match rmp::decode::Marker::from_u8(buf[0]) {
-                rmp::decode::Marker::Bin8 => {
-                    let len = rmp::decode::read_bin_len(&mut bytes)?;
+            match atu_rmp::decode::Marker::from_u8(buf[0]) {
+                atu_rmp::decode::Marker::Bin8 => {
+                    let len = rmp::decode::read_bin_len(&mut bytes).decode()?;
                     ensure!(len == 32, "encryption key is not the correct size");
                     let key = <[u8; 32]>::try_from(bytes.remaining_slice())
                         .context("could not decode encryption key")?;
                     Ok(key.into())
                 }
-                rmp::decode::Marker::Array16 => {
-                    rmp::decode::expect_array_len(&mut bytes, 32)?;
+                atu_rmp::decode::Marker::Array16 => {
+                    atu_rmp::decode::expect_array_len(&mut bytes, 32)?;
 
                     let mut key = Key::default();
                     for i in &mut key {
-                        *i = rmp::decode::read_u8(&mut bytes)?;
+                        *i = rmp::decode::read_int::<u8, _>(&mut bytes).decode()?;
                     }
                     Ok(key)
                 }

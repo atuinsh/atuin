@@ -2,7 +2,8 @@ use atuin_common::record::DecryptedData;
 use eyre::Result;
 use uuid::Uuid;
 
-use atuin_common::rmp;
+use atuin_common::rmp as atu_rmp;
+use atuin_common::rmp::decode::DecodeExt;
 use typed_builder::TypedBuilder;
 
 pub const SCRIPT_VERSION: &str = "v0";
@@ -43,34 +44,35 @@ impl Script {
 
         let mut output = vec![];
 
-        rmp::encode::write_array_len(&mut output, 6)?;
-        rmp::encode::write_str(&mut output, &self.id.to_string())?;
-        rmp::encode::write_str(&mut output, &self.name)?;
-        rmp::encode::write_str(&mut output, &self.description)?;
-        rmp::encode::write_str(&mut output, &self.shebang)?;
-        rmp::encode::write_array_len(&mut output, self.tags.len() as u32)?;
+        atu_rmp::encode::write_array_len(&mut output, 6)?;
+        atu_rmp::encode::write_str(&mut output, &self.id.to_string())?;
+        atu_rmp::encode::write_str(&mut output, &self.name)?;
+        atu_rmp::encode::write_str(&mut output, &self.description)?;
+        atu_rmp::encode::write_str(&mut output, &self.shebang)?;
+        atu_rmp::encode::write_array_len(&mut output, self.tags.len() as u32)?;
 
         for tag in &tags {
-            rmp::encode::write_str(&mut output, tag)?;
+            atu_rmp::encode::write_str(&mut output, tag)?;
         }
 
-        rmp::encode::write_str(&mut output, &self.script)?;
+        atu_rmp::encode::write_str(&mut output, &self.script)?;
 
         Ok(DecryptedData(output))
     }
 
     pub fn deserialize(bytes: &[u8]) -> Result<Self> {
-        let mut bytes = rmp::decode::Bytes::new(bytes);
+        let mut bytes = atu_rmp::decode::Bytes::new(bytes);
 
-        rmp::decode::read_total_array(&mut bytes, 6, |b| -> eyre::Result<Script> {
-            let id = rmp::decode::read_string(b)?;
-            let name = rmp::decode::read_string(b)?;
-            let description = rmp::decode::read_string(b)?;
-            let shebang = rmp::decode::read_string(b)?;
+        atu_rmp::decode::read_total_array(&mut bytes, 6, |b| -> eyre::Result<Script> {
+            let id = atu_rmp::decode::read_string(b).decode()?;
+            let name = atu_rmp::decode::read_string(b).decode()?;
+            let description = atu_rmp::decode::read_string(b).decode()?;
+            let shebang = atu_rmp::decode::read_string(b).decode()?;
 
-            let tags = rmp::decode::read_array_of(b, rmp::decode::read_string)?;
+            let tags =
+                atu_rmp::decode::read_array_of(b, |b| atu_rmp::decode::read_string(b).decode())?;
 
-            let script = rmp::decode::read_string(b)?;
+            let script = atu_rmp::decode::read_string(b).decode()?;
 
             Ok(Script {
                 id: Uuid::parse_str(&id)?,

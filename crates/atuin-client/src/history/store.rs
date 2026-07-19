@@ -11,7 +11,8 @@ use crate::{
 use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
 
 use super::{HISTORY_TAG, History, HistoryId, Version};
-use atuin_common::rmp;
+use atuin_common::rmp as atu_rmp;
+use atuin_common::rmp::decode::DecodeExt;
 
 #[derive(Debug, Clone)]
 pub struct HistoryStore {
@@ -53,16 +54,16 @@ impl HistoryRecord {
         match self {
             HistoryRecord::Create(history) => {
                 // 0 -> a history create
-                rmp::encode::write_u8(&mut output, 0)?;
+                atu_rmp::encode::write_u8(&mut output, 0)?;
 
                 let bytes = history.serialize()?;
 
-                rmp::encode::write_bin(&mut output, &bytes.0)?;
+                atu_rmp::encode::write_bin(&mut output, &bytes.0)?;
             }
             HistoryRecord::Delete(id) => {
                 // 1 -> a history delete
-                rmp::encode::write_u8(&mut output, 1)?;
-                rmp::encode::write_str(&mut output, id.0.as_str())?;
+                atu_rmp::encode::write_u8(&mut output, 1)?;
+                atu_rmp::encode::write_str(&mut output, id.0.as_str())?;
             }
         };
 
@@ -70,16 +71,16 @@ impl HistoryRecord {
     }
 
     pub fn deserialize(bytes: &DecryptedData, version: &str) -> Result<Self> {
-        let mut bytes = rmp::decode::Bytes::new(&bytes.0);
+        let mut bytes = atu_rmp::decode::Bytes::new(&bytes.0);
 
-        let record_type = rmp::decode::read_u8(&mut bytes)?;
+        let record_type = rmp::decode::read_int::<u8, _>(&mut bytes).decode()?;
 
         match record_type {
             // 0 -> HistoryRecord::Create
             0 => {
                 // not super useful to us atm, but perhaps in the future
                 // written by write_bin above
-                let _ = rmp::decode::read_bin_len(&mut bytes)?;
+                let _ = rmp::decode::read_bin_len(&mut bytes).decode()?;
 
                 let record = History::deserialize(bytes.remaining_slice(), version)?;
 
@@ -88,8 +89,8 @@ impl HistoryRecord {
 
             // 1 -> HistoryRecord::Delete
             1 => {
-                let id = rmp::decode::read_string(&mut bytes)?;
-                rmp::decode::expect_eof(&bytes)?;
+                let id = atu_rmp::decode::read_string(&mut bytes).decode()?;
+                atu_rmp::decode::expect_eof(&bytes)?;
 
                 Ok(HistoryRecord::Delete(id.into()))
             }

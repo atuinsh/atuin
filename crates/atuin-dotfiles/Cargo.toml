@@ -14,8 +14,9 @@ readme.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.17.1", features = ["rmp"] }
+atuin-common = { path = "../atuin-common", version = "18.17.1", features = ["rmp", "eyre"] }
 atuin-client = { path = "../atuin-client", version = "18.17.1" }
+rmp = { version = "0.8.14" }
 derive_more = { workspace = true }
 
 eyre = { workspace = true }

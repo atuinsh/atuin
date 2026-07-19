@@ -74,11 +74,12 @@ crossterm = { workspace = true, features = ["serde"] }
 palette = { version = "0.7.5", features = ["serializing"] }
 strum_macros = "0.27"
 strum = { version = "0.27", features = ["strum_macros"] }
+rmp = { version = "0.8.14" }
 
 [dependencies.atuin-common]
 path = "../atuin-common"
 version = "18.17.1"
-features = ["tracing", "rmp"]
+features = ["tracing", "rmp", "eyre"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

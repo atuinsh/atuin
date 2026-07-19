@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::record::{DecryptedData, Host, HostId};
-use atuin_common::rmp;
+use atuin_common::rmp as atu_rmp;
+use atuin_common::rmp::decode::DecodeExt;
 use eyre::{Result, bail, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;
@@ -30,15 +31,15 @@ impl VarRecord {
 
         match self {
             VarRecord::Create(env) => {
-                rmp::encode::write_u8(&mut output, 0)?; // create
+                atu_rmp::encode::write_u8(&mut output, 0)?; // create
 
                 env.serialize(&mut output)?;
             }
             VarRecord::Delete(env) => {
-                rmp::encode::write_u8(&mut output, 1)?; // delete
-                rmp::encode::write_array_len(&mut output, 1)?; // 1 field
+                atu_rmp::encode::write_u8(&mut output, 1)?; // delete
+                atu_rmp::encode::write_array_len(&mut output, 1)?; // 1 field
 
-                rmp::encode::write_str(&mut output, env.as_str())?;
+                atu_rmp::encode::write_str(&mut output, env.as_str())?;
             }
         }
 
@@ -48,9 +49,9 @@ impl VarRecord {
     pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
         match version {
             DOTFILES_VAR_VERSION => {
-                let mut bytes = rmp::decode::Bytes::new(&data.0);
+                let mut bytes = atu_rmp::decode::Bytes::new(&data.0);
 
-                let record_type = rmp::decode::read_u8(&mut bytes)?;
+                let record_type = rmp::decode::read_int::<u8, _>(&mut bytes).decode()?;
 
                 match record_type {
                     // create
@@ -60,8 +61,8 @@ impl VarRecord {
                     }
 
                     // delete
-                    1 => rmp::decode::read_total_array(&mut bytes, 1, |b| {
-                        Ok(VarRecord::Delete(rmp::decode::read_string(b)?))
+                    1 => atu_rmp::decode::read_total_array(&mut bytes, 1, |b| {
+                        Ok(VarRecord::Delete(atu_rmp::decode::read_string(b).decode()?))
                     }),
 
                     n => {

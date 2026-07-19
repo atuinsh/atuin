@@ -1,5 +1,6 @@
 use atuin_common::record::DecryptedData;
-use atuin_common::rmp;
+use atuin_common::rmp as atu_rmp;
+use atuin_common::rmp::decode::DecodeExt;
 use eyre::{Result, bail};
 use typed_builder::TypedBuilder;
 
@@ -19,14 +20,14 @@ impl KvRecord {
         let mut output = vec![];
 
         // INFO: ensure this is updated when adding new fields
-        rmp::encode::write_array_len(&mut output, 4)?;
+        atu_rmp::encode::write_array_len(&mut output, 4)?;
 
-        rmp::encode::write_str(&mut output, &self.namespace)?;
-        rmp::encode::write_str(&mut output, &self.key)?;
-        rmp::encode::write_bool(&mut output, self.value.is_some())?;
+        atu_rmp::encode::write_str(&mut output, &self.namespace)?;
+        atu_rmp::encode::write_str(&mut output, &self.key)?;
+        atu_rmp::encode::write_bool(&mut output, self.value.is_some())?;
 
         if let Some(value) = &self.value {
-            rmp::encode::write_str(&mut output, value)?;
+            atu_rmp::encode::write_str(&mut output, value)?;
         }
 
         Ok(DecryptedData(output))
@@ -35,26 +36,26 @@ impl KvRecord {
     pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
         match version {
             "v0" => {
-                let mut bytes = rmp::decode::Bytes::new(&data.0);
+                let mut bytes = atu_rmp::decode::Bytes::new(&data.0);
 
-                rmp::decode::read_total_array(&mut bytes, 3, |b| {
+                atu_rmp::decode::read_total_array(&mut bytes, 3, |b| {
                     Ok(KvRecord {
-                        namespace: rmp::decode::read_string(b)?,
-                        key: rmp::decode::read_string(b)?,
-                        value: Some(rmp::decode::read_string(b)?),
+                        namespace: atu_rmp::decode::read_string(b).decode()?,
+                        key: atu_rmp::decode::read_string(b).decode()?,
+                        value: Some(atu_rmp::decode::read_string(b).decode()?),
                     })
                 })
             }
             KV_VERSION => {
-                let mut bytes = rmp::decode::Bytes::new(&data.0);
+                let mut bytes = atu_rmp::decode::Bytes::new(&data.0);
 
-                rmp::decode::read_total_array(&mut bytes, 4, |b| {
-                    let namespace = rmp::decode::read_string(b)?;
-                    let key = rmp::decode::read_string(b)?;
-                    let has_value = rmp::decode::read_bool(b)?;
+                atu_rmp::decode::read_total_array(&mut bytes, 4, |b| {
+                    let namespace = atu_rmp::decode::read_string(b).decode()?;
+                    let key = atu_rmp::decode::read_string(b).decode()?;
+                    let has_value = rmp::decode::read_bool(b).decode()?;
 
                     let value = if has_value {
-                        Some(rmp::decode::read_string(b)?)
+                        Some(atu_rmp::decode::read_string(b).decode()?)
                     } else {
                         None
                     };

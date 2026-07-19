@@ -20,6 +20,8 @@ test-utils = ["tracing", "dep:tracing-subscriber"]
 unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
 # The `rmp` module: MessagePack encode/decode extension traits and error types.
 rmp = ["dep:rmp"]
+# `From<DecodeError> for eyre::Report` in the `rmp::eyre` module.
+eyre = []
 
 [dependencies]
 derive_more = { workspace = true }
