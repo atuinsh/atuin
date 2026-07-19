@@ -21,8 +21,9 @@ const MAX_ROWS: usize = 10_000;
 /// Render ANSI-encoded terminal output to plain text, as it would appear on a
 /// `cols`-wide terminal.
 ///
-/// `bytes` is a raw terminal byte stream (e.g. captured stdout/stderr or PTY
-/// output) containing ANSI escape sequences. The returned string is what the
+/// `input` is a raw terminal byte stream — anything viewable as bytes, such as
+/// `&[u8]`, `Vec<u8>`, `&str`, or `String` (e.g. captured stdout/stderr or PTY
+/// output) — containing ANSI escape sequences. The returned string is what the
 /// terminal would display:
 ///
 /// - ANSI escape sequences (colors, cursor motion, screen clears, OSC/DCS) are
@@ -45,7 +46,8 @@ const MAX_ROWS: usize = 10_000;
 /// This drives a full terminal emulator and allocates a grid up to
 /// `cols * MAX_ROWS` cells. It is intended for post-hoc cleanup of captured
 /// command output, not for hot loops.
-pub fn to_plain_text(bytes: &[u8], cols: u16) -> String {
+pub fn to_plain_text(input: impl AsRef<[u8]>, cols: u16) -> String {
+    let bytes = input.as_ref();
     if bytes.is_empty() {
         return String::new();
     }
@@ -149,6 +151,20 @@ mod tests {
     fn renders_expected_plain_text(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(to_plain_text(input.as_bytes(), 80), expected);
         assert_no_terminal_controls(&to_plain_text(input.as_bytes(), 80));
+    }
+
+    #[test]
+    // Passing owned `Vec<u8>`/`String` is the point of this test — exercising the
+    // owned-input paths — not an accidental allocation clippy should "simplify".
+    #[allow(clippy::unnecessary_to_owned)]
+    fn accepts_any_byte_view() {
+        // The generic `AsRef<[u8]>` bound lets callers pass whichever owned or
+        // borrowed byte/text type they already hold, with no conversion.
+        assert_eq!(to_plain_text(b"echo hi", 80), "echo hi"); // &[u8; N]
+        assert_eq!(to_plain_text(b"echo hi".as_slice(), 80), "echo hi"); // &[u8]
+        assert_eq!(to_plain_text(b"echo hi".to_vec(), 80), "echo hi"); // Vec<u8>
+        assert_eq!(to_plain_text("echo hi", 80), "echo hi"); // &str
+        assert_eq!(to_plain_text(String::from("echo hi"), 80), "echo hi"); // String
     }
 
     #[test]
