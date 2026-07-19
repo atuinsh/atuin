@@ -13,6 +13,9 @@ use thiserror::Error;
 
 mod posix;
 
+#[cfg(test)]
+mod testgen;
+
 pub mod bash;
 pub mod fish;
 pub mod sh;
