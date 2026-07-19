@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::record::{DecryptedData, Host, HostId};
-use atuin_common::rmp::decode::{self, Bytes};
+use atuin_common::rmp;
 use eyre::{Result, bail, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;
@@ -26,21 +26,19 @@ pub enum VarRecord {
 
 impl VarRecord {
     pub fn serialize(&self) -> Result<DecryptedData> {
-        use atuin_common::rmp::encode;
-
         let mut output = vec![];
 
         match self {
             VarRecord::Create(env) => {
-                encode::write_u8(&mut output, 0)?; // create
+                rmp::encode::write_u8(&mut output, 0)?; // create
 
                 env.serialize(&mut output)?;
             }
             VarRecord::Delete(env) => {
-                encode::write_u8(&mut output, 1)?; // delete
-                encode::write_array_len(&mut output, 1)?; // 1 field
+                rmp::encode::write_u8(&mut output, 1)?; // delete
+                rmp::encode::write_array_len(&mut output, 1)?; // 1 field
 
-                encode::write_str(&mut output, env.as_str())?;
+                rmp::encode::write_str(&mut output, env.as_str())?;
             }
         }
 
@@ -50,9 +48,9 @@ impl VarRecord {
     pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
         match version {
             DOTFILES_VAR_VERSION => {
-                let mut bytes = Bytes::new(&data.0);
+                let mut bytes = rmp::decode::Bytes::new(&data.0);
 
-                let record_type = decode::read_u8(&mut bytes)?;
+                let record_type = rmp::decode::read_u8(&mut bytes)?;
 
                 match record_type {
                     // create
@@ -63,11 +61,11 @@ impl VarRecord {
 
                     // delete
                     1 => {
-                        decode::expect_array_len(&mut bytes, 1)?;
+                        rmp::decode::expect_array_len(&mut bytes, 1)?;
 
-                        let key = decode::read_string(&mut bytes)?;
+                        let key = rmp::decode::read_string(&mut bytes)?;
 
-                        decode::expect_eof(&bytes)?;
+                        rmp::decode::expect_eof(&bytes)?;
 
                         Ok(VarRecord::Delete(key))
                     }

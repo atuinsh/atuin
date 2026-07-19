@@ -1,8 +1,7 @@
-use atuin_common::rmp::encode;
 use eyre::Result;
 use serde::Serialize;
 
-use atuin_common::rmp::decode::{self, Bytes};
+use atuin_common::rmp;
 use atuin_common::shell::{Shell, ShellError};
 
 use crate::store::AliasStore;
@@ -33,23 +32,23 @@ impl Var {
     /// Serialize into the given vec
     /// This is intended to be called by the store
     pub fn serialize(&self, output: &mut Vec<u8>) -> Result<()> {
-        encode::write_array_len(output, 3)?; // 3 fields
+        rmp::encode::write_array_len(output, 3)?; // 3 fields
 
-        encode::write_str(output, self.name.as_str())?;
-        encode::write_str(output, self.value.as_str())?;
-        encode::write_bool(output, self.export)?;
+        rmp::encode::write_str(output, self.name.as_str())?;
+        rmp::encode::write_str(output, self.value.as_str())?;
+        rmp::encode::write_bool(output, self.export)?;
 
         Ok(())
     }
 
-    pub fn deserialize(bytes: &mut Bytes) -> Result<Self> {
-        decode::expect_array_len(bytes, 3)?;
+    pub fn deserialize(bytes: &mut rmp::decode::Bytes) -> Result<Self> {
+        rmp::decode::expect_array_len(bytes, 3)?;
 
-        let name = decode::read_string(bytes)?;
-        let value = decode::read_string(bytes)?;
-        let export = decode::read_bool(bytes)?;
+        let name = rmp::decode::read_string(bytes)?;
+        let value = rmp::decode::read_string(bytes)?;
+        let export = rmp::decode::read_bool(bytes)?;
 
-        decode::expect_eof(bytes)?;
+        rmp::decode::expect_eof(bytes)?;
 
         Ok(Var {
             name,

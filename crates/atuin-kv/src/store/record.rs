@@ -1,5 +1,5 @@
 use atuin_common::record::DecryptedData;
-use atuin_common::rmp::decode::{self, Bytes};
+use atuin_common::rmp;
 use eyre::{Result, bail};
 use typed_builder::TypedBuilder;
 
@@ -16,19 +16,17 @@ pub struct KvRecord {
 
 impl KvRecord {
     pub fn serialize(&self) -> Result<DecryptedData> {
-        use atuin_common::rmp::encode;
-
         let mut output = vec![];
 
         // INFO: ensure this is updated when adding new fields
-        encode::write_array_len(&mut output, 4)?;
+        rmp::encode::write_array_len(&mut output, 4)?;
 
-        encode::write_str(&mut output, &self.namespace)?;
-        encode::write_str(&mut output, &self.key)?;
-        encode::write_bool(&mut output, self.value.is_some())?;
+        rmp::encode::write_str(&mut output, &self.namespace)?;
+        rmp::encode::write_str(&mut output, &self.key)?;
+        rmp::encode::write_bool(&mut output, self.value.is_some())?;
 
         if let Some(value) = &self.value {
-            encode::write_str(&mut output, value)?;
+            rmp::encode::write_str(&mut output, value)?;
         }
 
         Ok(DecryptedData(output))
@@ -37,15 +35,15 @@ impl KvRecord {
     pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
         match version {
             "v0" => {
-                let mut bytes = Bytes::new(&data.0);
+                let mut bytes = rmp::decode::Bytes::new(&data.0);
 
-                decode::expect_array_len(&mut bytes, 3)?;
+                rmp::decode::expect_array_len(&mut bytes, 3)?;
 
-                let namespace = decode::read_string(&mut bytes)?;
-                let key = decode::read_string(&mut bytes)?;
-                let value = decode::read_string(&mut bytes)?;
+                let namespace = rmp::decode::read_string(&mut bytes)?;
+                let key = rmp::decode::read_string(&mut bytes)?;
+                let value = rmp::decode::read_string(&mut bytes)?;
 
-                decode::expect_eof(&bytes)?;
+                rmp::decode::expect_eof(&bytes)?;
 
                 Ok(KvRecord {
                     namespace,
@@ -54,21 +52,21 @@ impl KvRecord {
                 })
             }
             KV_VERSION => {
-                let mut bytes = Bytes::new(&data.0);
+                let mut bytes = rmp::decode::Bytes::new(&data.0);
 
-                decode::expect_array_len(&mut bytes, 4)?;
+                rmp::decode::expect_array_len(&mut bytes, 4)?;
 
-                let namespace = decode::read_string(&mut bytes)?;
-                let key = decode::read_string(&mut bytes)?;
-                let has_value = decode::read_bool(&mut bytes)?;
+                let namespace = rmp::decode::read_string(&mut bytes)?;
+                let key = rmp::decode::read_string(&mut bytes)?;
+                let has_value = rmp::decode::read_bool(&mut bytes)?;
 
                 let value = if has_value {
-                    Some(decode::read_string(&mut bytes)?)
+                    Some(rmp::decode::read_string(&mut bytes)?)
                 } else {
                     None
                 };
 
-                decode::expect_eof(&bytes)?;
+                rmp::decode::expect_eof(&bytes)?;
 
                 Ok(KvRecord {
                     namespace,

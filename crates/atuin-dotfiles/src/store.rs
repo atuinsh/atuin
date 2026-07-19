@@ -6,7 +6,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 // While we will support a range of shell config, I'd rather have a larger number of small records
 // + stores, rather than one mega config store.
 use atuin_common::record::{DecryptedData, Host, HostId};
-use atuin_common::rmp::decode::{self, Bytes};
+use atuin_common::rmp;
 use atuin_common::utils::unquote;
 use eyre::{Result, bail, eyre};
 
@@ -30,23 +30,21 @@ pub enum AliasRecord {
 
 impl AliasRecord {
     pub fn serialize(&self) -> Result<DecryptedData> {
-        use atuin_common::rmp::encode;
-
         let mut output = vec![];
 
         match self {
             AliasRecord::Create(alias) => {
-                encode::write_u8(&mut output, 0)?; // create
-                encode::write_array_len(&mut output, 2)?; // 2 fields
+                rmp::encode::write_u8(&mut output, 0)?; // create
+                rmp::encode::write_array_len(&mut output, 2)?; // 2 fields
 
-                encode::write_str(&mut output, alias.name.as_str())?;
-                encode::write_str(&mut output, alias.value.as_str())?;
+                rmp::encode::write_str(&mut output, alias.name.as_str())?;
+                rmp::encode::write_str(&mut output, alias.value.as_str())?;
             }
             AliasRecord::Delete(name) => {
-                encode::write_u8(&mut output, 1)?; // delete
-                encode::write_array_len(&mut output, 1)?; // 1 field
+                rmp::encode::write_u8(&mut output, 1)?; // delete
+                rmp::encode::write_array_len(&mut output, 1)?; // 1 field
 
-                encode::write_str(&mut output, name.as_str())?;
+                rmp::encode::write_str(&mut output, name.as_str())?;
             }
         }
 
@@ -56,30 +54,30 @@ impl AliasRecord {
     pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
         match version {
             CONFIG_SHELL_ALIAS_VERSION => {
-                let mut bytes = Bytes::new(&data.0);
+                let mut bytes = rmp::decode::Bytes::new(&data.0);
 
-                let record_type = decode::read_u8(&mut bytes)?;
+                let record_type = rmp::decode::read_u8(&mut bytes)?;
 
                 match record_type {
                     // create
                     0 => {
-                        decode::expect_array_len(&mut bytes, 2)?;
+                        rmp::decode::expect_array_len(&mut bytes, 2)?;
 
-                        let name = decode::read_string(&mut bytes)?;
-                        let value = decode::read_string(&mut bytes)?;
+                        let name = rmp::decode::read_string(&mut bytes)?;
+                        let value = rmp::decode::read_string(&mut bytes)?;
 
-                        decode::expect_eof(&bytes)?;
+                        rmp::decode::expect_eof(&bytes)?;
 
                         Ok(AliasRecord::Create(Alias { name, value }))
                     }
 
                     // delete
                     1 => {
-                        decode::expect_array_len(&mut bytes, 1)?;
+                        rmp::decode::expect_array_len(&mut bytes, 1)?;
 
-                        let key = decode::read_string(&mut bytes)?;
+                        let key = rmp::decode::read_string(&mut bytes)?;
 
-                        decode::expect_eof(&bytes)?;
+                        rmp::decode::expect_eof(&bytes)?;
 
                         Ok(AliasRecord::Delete(key))
                     }

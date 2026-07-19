@@ -2,7 +2,7 @@ use atuin_common::record::DecryptedData;
 use eyre::Result;
 use uuid::Uuid;
 
-use atuin_common::rmp::encode;
+use atuin_common::rmp;
 use typed_builder::TypedBuilder;
 
 pub const SCRIPT_VERSION: &str = "v0";
@@ -43,45 +43,43 @@ impl Script {
 
         let mut output = vec![];
 
-        encode::write_array_len(&mut output, 6)?;
-        encode::write_str(&mut output, &self.id.to_string())?;
-        encode::write_str(&mut output, &self.name)?;
-        encode::write_str(&mut output, &self.description)?;
-        encode::write_str(&mut output, &self.shebang)?;
-        encode::write_array_len(&mut output, self.tags.len() as u32)?;
+        rmp::encode::write_array_len(&mut output, 6)?;
+        rmp::encode::write_str(&mut output, &self.id.to_string())?;
+        rmp::encode::write_str(&mut output, &self.name)?;
+        rmp::encode::write_str(&mut output, &self.description)?;
+        rmp::encode::write_str(&mut output, &self.shebang)?;
+        rmp::encode::write_array_len(&mut output, self.tags.len() as u32)?;
 
         for tag in &tags {
-            encode::write_str(&mut output, tag)?;
+            rmp::encode::write_str(&mut output, tag)?;
         }
 
-        encode::write_str(&mut output, &self.script)?;
+        rmp::encode::write_str(&mut output, &self.script)?;
 
         Ok(DecryptedData(output))
     }
 
     pub fn deserialize(bytes: &[u8]) -> Result<Self> {
-        use atuin_common::rmp::decode::{self, Bytes};
+        let mut bytes = rmp::decode::Bytes::new(bytes);
 
-        let mut bytes = Bytes::new(bytes);
+        rmp::decode::expect_array_len(&mut bytes, 6)?;
 
-        decode::expect_array_len(&mut bytes, 6)?;
+        let id = rmp::decode::read_string(&mut bytes)?;
+        let name = rmp::decode::read_string(&mut bytes)?;
+        let description = rmp::decode::read_string(&mut bytes)?;
+        let shebang = rmp::decode::read_string(&mut bytes)?;
 
-        let id = decode::read_string(&mut bytes)?;
-        let name = decode::read_string(&mut bytes)?;
-        let description = decode::read_string(&mut bytes)?;
-        let shebang = decode::read_string(&mut bytes)?;
-
-        let tags_len = decode::read_array_len(&mut bytes)?;
+        let tags_len = rmp::decode::read_array_len(&mut bytes)?;
 
         let mut tags = Vec::new();
         for _ in 0..tags_len {
-            let tag = decode::read_string(&mut bytes)?;
+            let tag = rmp::decode::read_string(&mut bytes)?;
             tags.push(tag);
         }
 
-        let script = decode::read_string(&mut bytes)?;
+        let script = rmp::decode::read_string(&mut bytes)?;
 
-        decode::expect_eof(&bytes)?;
+        rmp::decode::expect_eof(&bytes)?;
 
         Ok(Script {
             id: Uuid::parse_str(&id)?,

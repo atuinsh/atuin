@@ -9,9 +9,9 @@ use crate::{
     record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store},
 };
 use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
-use atuin_common::rmp::decode::{self, Bytes};
 
 use super::{HISTORY_TAG, History, HistoryId, Version};
+use atuin_common::rmp;
 
 #[derive(Debug, Clone)]
 pub struct HistoryStore {
@@ -47,23 +47,22 @@ impl HistoryRecord {
     pub fn serialize(&self) -> Result<DecryptedData> {
         // probably don't actually need to use rmp here, but if we ever need to extend it, it's a
         // nice wrapper around raw byte stuff
-        use atuin_common::rmp::encode;
 
         let mut output = vec![];
 
         match self {
             HistoryRecord::Create(history) => {
                 // 0 -> a history create
-                encode::write_u8(&mut output, 0)?;
+                rmp::encode::write_u8(&mut output, 0)?;
 
                 let bytes = history.serialize()?;
 
-                encode::write_bin(&mut output, &bytes.0)?;
+                rmp::encode::write_bin(&mut output, &bytes.0)?;
             }
             HistoryRecord::Delete(id) => {
                 // 1 -> a history delete
-                encode::write_u8(&mut output, 1)?;
-                encode::write_str(&mut output, id.0.as_str())?;
+                rmp::encode::write_u8(&mut output, 1)?;
+                rmp::encode::write_str(&mut output, id.0.as_str())?;
             }
         };
 
@@ -71,16 +70,16 @@ impl HistoryRecord {
     }
 
     pub fn deserialize(bytes: &DecryptedData, version: &str) -> Result<Self> {
-        let mut bytes = Bytes::new(&bytes.0);
+        let mut bytes = rmp::decode::Bytes::new(&bytes.0);
 
-        let record_type = decode::read_u8(&mut bytes)?;
+        let record_type = rmp::decode::read_u8(&mut bytes)?;
 
         match record_type {
             // 0 -> HistoryRecord::Create
             0 => {
                 // not super useful to us atm, but perhaps in the future
                 // written by write_bin above
-                let _ = decode::read_bin_len(&mut bytes)?;
+                let _ = rmp::decode::read_bin_len(&mut bytes)?;
 
                 let record = History::deserialize(bytes.remaining_slice(), version)?;
 
@@ -89,8 +88,8 @@ impl HistoryRecord {
 
             // 1 -> HistoryRecord::Delete
             1 => {
-                let id = decode::read_string(&mut bytes)?;
-                decode::expect_eof(&bytes)?;
+                let id = rmp::decode::read_string(&mut bytes)?;
+                rmp::decode::expect_eof(&bytes)?;
 
                 Ok(HistoryRecord::Delete(id.into()))
             }

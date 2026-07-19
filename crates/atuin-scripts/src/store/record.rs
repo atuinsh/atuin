@@ -3,6 +3,7 @@ use eyre::{Result, eyre};
 use uuid::Uuid;
 
 use crate::store::script::SCRIPT_VERSION;
+use atuin_common::rmp;
 
 use super::script::Script;
 
@@ -15,31 +16,29 @@ pub enum ScriptRecord {
 
 impl ScriptRecord {
     pub fn serialize(&self) -> Result<DecryptedData> {
-        use atuin_common::rmp::encode;
-
         let mut output = vec![];
 
         match self {
             ScriptRecord::Create(script) => {
                 // 0 -> a script create
-                encode::write_u8(&mut output, 0)?;
+                rmp::encode::write_u8(&mut output, 0)?;
 
                 let bytes = script.serialize()?;
 
-                encode::write_bin(&mut output, &bytes.0)?;
+                rmp::encode::write_bin(&mut output, &bytes.0)?;
             }
 
             ScriptRecord::Delete(id) => {
                 // 1 -> a script delete
-                encode::write_u8(&mut output, 1)?;
-                encode::write_str(&mut output, id.to_string().as_str())?;
+                rmp::encode::write_u8(&mut output, 1)?;
+                rmp::encode::write_str(&mut output, id.to_string().as_str())?;
             }
 
             ScriptRecord::Update(script) => {
                 // 2 -> a script update
-                encode::write_u8(&mut output, 2)?;
+                rmp::encode::write_u8(&mut output, 2)?;
                 let bytes = script.serialize()?;
-                encode::write_bin(&mut output, &bytes.0)?;
+                rmp::encode::write_bin(&mut output, &bytes.0)?;
             }
         };
 
@@ -47,33 +46,31 @@ impl ScriptRecord {
     }
 
     pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
-        use atuin_common::rmp::decode::{self, Bytes};
-
         match version {
             SCRIPT_VERSION => {
-                let mut bytes = Bytes::new(&data.0);
+                let mut bytes = rmp::decode::Bytes::new(&data.0);
 
-                let record_type = decode::read_u8(&mut bytes)?;
+                let record_type = rmp::decode::read_u8(&mut bytes)?;
 
                 match record_type {
                     // create
                     0 => {
-                        // written by encode::write_bin above
-                        let _ = decode::read_bin_len(&mut bytes)?;
+                        // written by rmp::encode::write_bin above
+                        let _ = rmp::decode::read_bin_len(&mut bytes)?;
                         let script = Script::deserialize(bytes.remaining_slice())?;
                         Ok(ScriptRecord::Create(script))
                     }
 
                     // delete
                     1 => {
-                        let id = decode::read_string(&mut bytes)?;
+                        let id = rmp::decode::read_string(&mut bytes)?;
                         Ok(ScriptRecord::Delete(Uuid::parse_str(&id)?))
                     }
 
                     // update
                     2 => {
-                        // written by encode::write_bin above
-                        let _ = decode::read_bin_len(&mut bytes)?;
+                        // written by rmp::encode::write_bin above
+                        let _ = rmp::decode::read_bin_len(&mut bytes)?;
                         let script = Script::deserialize(bytes.remaining_slice())?;
                         Ok(ScriptRecord::Update(script))
                     }

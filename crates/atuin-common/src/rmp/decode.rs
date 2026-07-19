@@ -7,13 +7,15 @@
 //! [`read_array_len`]/[`expect_array_len`] and [`expect_eof`] that `rmp` does
 //! not perform itself.
 
-use rmp::Marker;
 use rmp::decode as mp;
 use rmp::decode::bytes::BytesReadError;
 use rmp::decode::{DecodeStringError, NumValueReadError, RmpRead, RmpReadErr, ValueReadError};
 
 /// Re-exported so decoders need only depend on this module, not `rmp::decode`.
 pub use rmp::decode::bytes::Bytes;
+
+/// Re-exported so decoders can match on markers via this module, not `rmp`.
+pub use rmp::Marker;
 
 /// An error encountered while decoding a MessagePack value.
 ///
