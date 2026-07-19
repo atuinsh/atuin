@@ -3,7 +3,6 @@ use std::{collections::HashSet, fmt::Write, time::Duration};
 use eyre::{Result, bail, eyre};
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
-use rmp::decode::Bytes;
 
 use crate::{
     database::{Database, current_context},
@@ -12,6 +11,8 @@ use crate::{
 use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
 
 use super::{HISTORY_TAG, History, HistoryId, Version};
+use atuin_common::rmp as atu_rmp;
+use atuin_common::rmp::decode::DecodeExt;
 
 #[derive(Debug, Clone)]
 pub struct HistoryStore {
@@ -47,23 +48,22 @@ impl HistoryRecord {
     pub fn serialize(&self) -> Result<DecryptedData> {
         // probably don't actually need to use rmp here, but if we ever need to extend it, it's a
         // nice wrapper around raw byte stuff
-        use rmp::encode;
 
         let mut output = vec![];
 
         match self {
             HistoryRecord::Create(history) => {
                 // 0 -> a history create
-                encode::write_u8(&mut output, 0)?;
+                atu_rmp::encode::write_u8(&mut output, 0)?;
 
                 let bytes = history.serialize()?;
 
-                encode::write_bin(&mut output, &bytes.0)?;
+                atu_rmp::encode::write_bin(&mut output, &bytes.0)?;
             }
             HistoryRecord::Delete(id) => {
                 // 1 -> a history delete
-                encode::write_u8(&mut output, 1)?;
-                encode::write_str(&mut output, id.0.as_str())?;
+                atu_rmp::encode::write_u8(&mut output, 1)?;
+                atu_rmp::encode::write_str(&mut output, id.0.as_str())?;
             }
         };
 
@@ -71,22 +71,16 @@ impl HistoryRecord {
     }
 
     pub fn deserialize(bytes: &DecryptedData, version: &str) -> Result<Self> {
-        use rmp::decode;
+        let mut bytes = atu_rmp::decode::Bytes::new(&bytes.0);
 
-        fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
-            eyre!("{err:?}")
-        }
-
-        let mut bytes = Bytes::new(&bytes.0);
-
-        let record_type = decode::read_u8(&mut bytes).map_err(error_report)?;
+        let record_type = rmp::decode::read_int::<u8, _>(&mut bytes).decode()?;
 
         match record_type {
             // 0 -> HistoryRecord::Create
             0 => {
                 // not super useful to us atm, but perhaps in the future
                 // written by write_bin above
-                let _ = decode::read_bin_len(&mut bytes).map_err(error_report)?;
+                let _ = rmp::decode::read_bin_len(&mut bytes).decode()?;
 
                 let record = History::deserialize(bytes.remaining_slice(), version)?;
 
@@ -95,16 +89,10 @@ impl HistoryRecord {
 
             // 1 -> HistoryRecord::Delete
             1 => {
-                let bytes = bytes.remaining_slice();
-                let (id, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
+                let id = atu_rmp::decode::read_string(&mut bytes).decode()?;
+                atu_rmp::decode::expect_eof(&bytes)?;
 
-                if !bytes.is_empty() {
-                    bail!(
-                        "trailing bytes decoding HistoryRecord::Delete - malformed? got {bytes:?}"
-                    );
-                }
-
-                Ok(HistoryRecord::Delete(id.to_string().into()))
+                Ok(HistoryRecord::Delete(id.into()))
             }
 
             n => {

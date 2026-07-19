@@ -1,5 +1,7 @@
 use atuin_common::record::DecryptedData;
-use eyre::{Result, bail, ensure, eyre};
+use atuin_common::rmp as atu_rmp;
+use atuin_common::rmp::decode::DecodeExt;
+use eyre::{Result, bail};
 use typed_builder::TypedBuilder;
 
 pub const KV_VERSION: &str = "v1";
@@ -15,84 +17,54 @@ pub struct KvRecord {
 
 impl KvRecord {
     pub fn serialize(&self) -> Result<DecryptedData> {
-        use rmp::encode;
-
         let mut output = vec![];
 
         // INFO: ensure this is updated when adding new fields
-        encode::write_array_len(&mut output, 4)?;
+        atu_rmp::encode::write_array_len(&mut output, 4)?;
 
-        encode::write_str(&mut output, &self.namespace)?;
-        encode::write_str(&mut output, &self.key)?;
-        encode::write_bool(&mut output, self.value.is_some())?;
+        atu_rmp::encode::write_str(&mut output, &self.namespace)?;
+        atu_rmp::encode::write_str(&mut output, &self.key)?;
+        atu_rmp::encode::write_bool(&mut output, self.value.is_some())?;
 
         if let Some(value) = &self.value {
-            encode::write_str(&mut output, value)?;
+            atu_rmp::encode::write_str(&mut output, value)?;
         }
 
         Ok(DecryptedData(output))
     }
 
     pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
-        use rmp::decode;
-
-        fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
-            eyre!("{err:?}")
-        }
-
         match version {
             "v0" => {
-                let mut bytes = decode::Bytes::new(&data.0);
+                let mut bytes = atu_rmp::decode::Bytes::new(&data.0);
 
-                let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
-                ensure!(nfields == 3, "too many entries in v0 kv record");
-
-                let bytes = bytes.remaining_slice();
-
-                let (namespace, bytes) =
-                    decode::read_str_from_slice(bytes).map_err(error_report)?;
-                let (key, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-                let (value, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-
-                if !bytes.is_empty() {
-                    bail!("trailing bytes in encoded kvrecord. malformed")
-                }
-
-                Ok(KvRecord {
-                    namespace: namespace.to_owned(),
-                    key: key.to_owned(),
-                    value: Some(value.to_owned()),
+                atu_rmp::decode::read_total_array(&mut bytes, 3, |b| {
+                    Ok(KvRecord {
+                        namespace: atu_rmp::decode::read_string(b).decode()?,
+                        key: atu_rmp::decode::read_string(b).decode()?,
+                        value: Some(atu_rmp::decode::read_string(b).decode()?),
+                    })
                 })
             }
             KV_VERSION => {
-                let mut bytes = decode::Bytes::new(&data.0);
+                let mut bytes = atu_rmp::decode::Bytes::new(&data.0);
 
-                let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
-                ensure!(nfields == 4, "too many entries in v1 kv record");
+                atu_rmp::decode::read_total_array(&mut bytes, 4, |b| {
+                    let namespace = atu_rmp::decode::read_string(b).decode()?;
+                    let key = atu_rmp::decode::read_string(b).decode()?;
+                    let has_value = rmp::decode::read_bool(b).decode()?;
 
-                let bytes = bytes.remaining_slice();
+                    let value = if has_value {
+                        Some(atu_rmp::decode::read_string(b).decode()?)
+                    } else {
+                        None
+                    };
 
-                let (namespace, bytes) =
-                    decode::read_str_from_slice(bytes).map_err(error_report)?;
-                let (key, mut bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-                let has_value = decode::read_bool(&mut bytes).map_err(error_report)?;
-
-                let (value, bytes) = if has_value {
-                    let (value, bytes) =
-                        decode::read_str_from_slice(bytes).map_err(error_report)?;
-                    (Some(value.to_owned()), bytes)
-                } else {
-                    (None, bytes)
-                };
-
-                if !bytes.is_empty() {
-                    bail!("trailing bytes in encoded kvrecord. malformed")
-                }
-
-                Ok(KvRecord {
-                    namespace: namespace.to_owned(),
-                    key: key.to_owned(),
-                    value,
+                    Ok(KvRecord {
+                        namespace,
+                        key,
+                        value,
+                    })
                 })
             }
             _ => {

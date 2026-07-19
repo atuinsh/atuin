@@ -1,7 +1,8 @@
-use eyre::{Result, ensure, eyre};
-use rmp::{decode, encode};
+use eyre::Result;
 use serde::Serialize;
 
+use atuin_common::rmp as atu_rmp;
+use atuin_common::rmp::decode::DecodeExt;
 use atuin_common::shell::{Shell, ShellError};
 
 use crate::store::AliasStore;
@@ -32,46 +33,22 @@ impl Var {
     /// Serialize into the given vec
     /// This is intended to be called by the store
     pub fn serialize(&self, output: &mut Vec<u8>) -> Result<()> {
-        encode::write_array_len(output, 3)?; // 3 fields
+        atu_rmp::encode::write_array_len(output, 3)?; // 3 fields
 
-        encode::write_str(output, self.name.as_str())?;
-        encode::write_str(output, self.value.as_str())?;
-        encode::write_bool(output, self.export)?;
+        atu_rmp::encode::write_str(output, self.name.as_str())?;
+        atu_rmp::encode::write_str(output, self.value.as_str())?;
+        atu_rmp::encode::write_bool(output, self.export)?;
 
         Ok(())
     }
 
-    pub fn deserialize(bytes: &mut decode::Bytes) -> Result<Self> {
-        fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
-            eyre!("{err:?}")
-        }
-
-        let nfields = decode::read_array_len(bytes).map_err(error_report)?;
-
-        ensure!(
-            nfields == 3,
-            "too many entries in v0 dotfiles env create record, got {}, expected {}",
-            nfields,
-            3
-        );
-
-        let bytes = bytes.remaining_slice();
-
-        let (key, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-        let (value, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-
-        let mut bytes = decode::Bytes::new(bytes);
-        let export = decode::read_bool(&mut bytes).map_err(error_report)?;
-
-        ensure!(
-            bytes.remaining_slice().is_empty(),
-            "trailing bytes in encoded dotfiles env record, malformed"
-        );
-
-        Ok(Var {
-            name: key.to_owned(),
-            value: value.to_owned(),
-            export,
+    pub fn deserialize(bytes: &mut atu_rmp::decode::Bytes) -> Result<Self> {
+        atu_rmp::decode::read_total_array(bytes, 3, |b| {
+            Ok(Var {
+                name: atu_rmp::decode::read_string(b).decode()?,
+                value: atu_rmp::decode::read_string(b).decode()?,
+                export: rmp::decode::read_bool(b).decode()?,
+            })
         })
     }
 }

@@ -6,8 +6,10 @@ use atuin_client::record::sqlite_store::SqliteStore;
 // While we will support a range of shell config, I'd rather have a larger number of small records
 // + stores, rather than one mega config store.
 use atuin_common::record::{DecryptedData, Host, HostId};
+use atuin_common::rmp as atu_rmp;
+use atuin_common::rmp::decode::DecodeExt;
 use atuin_common::utils::unquote;
-use eyre::{Result, bail, ensure, eyre};
+use eyre::{Result, bail, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;
 use atuin_client::record::store::Store;
@@ -29,23 +31,21 @@ pub enum AliasRecord {
 
 impl AliasRecord {
     pub fn serialize(&self) -> Result<DecryptedData> {
-        use rmp::encode;
-
         let mut output = vec![];
 
         match self {
             AliasRecord::Create(alias) => {
-                encode::write_u8(&mut output, 0)?; // create
-                encode::write_array_len(&mut output, 2)?; // 2 fields
+                atu_rmp::encode::write_u8(&mut output, 0)?; // create
+                atu_rmp::encode::write_array_len(&mut output, 2)?; // 2 fields
 
-                encode::write_str(&mut output, alias.name.as_str())?;
-                encode::write_str(&mut output, alias.value.as_str())?;
+                atu_rmp::encode::write_str(&mut output, alias.name.as_str())?;
+                atu_rmp::encode::write_str(&mut output, alias.value.as_str())?;
             }
             AliasRecord::Delete(name) => {
-                encode::write_u8(&mut output, 1)?; // delete
-                encode::write_array_len(&mut output, 1)?; // 1 field
+                atu_rmp::encode::write_u8(&mut output, 1)?; // delete
+                atu_rmp::encode::write_array_len(&mut output, 1)?; // 1 field
 
-                encode::write_str(&mut output, name.as_str())?;
+                atu_rmp::encode::write_str(&mut output, name.as_str())?;
             }
         }
 
@@ -53,63 +53,27 @@ impl AliasRecord {
     }
 
     pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
-        use rmp::decode;
-
-        fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
-            eyre!("{err:?}")
-        }
-
         match version {
             CONFIG_SHELL_ALIAS_VERSION => {
-                let mut bytes = decode::Bytes::new(&data.0);
+                let mut bytes = atu_rmp::decode::Bytes::new(&data.0);
 
-                let record_type = decode::read_u8(&mut bytes).map_err(error_report)?;
+                let record_type = rmp::decode::read_int::<u8, _>(&mut bytes).decode()?;
 
                 match record_type {
                     // create
-                    0 => {
-                        let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
-                        ensure!(
-                            nfields == 2,
-                            "too many entries in v0 shell alias create record"
-                        );
-
-                        let bytes = bytes.remaining_slice();
-
-                        let (key, bytes) =
-                            decode::read_str_from_slice(bytes).map_err(error_report)?;
-                        let (value, bytes) =
-                            decode::read_str_from_slice(bytes).map_err(error_report)?;
-
-                        if !bytes.is_empty() {
-                            bail!("trailing bytes in encoded shell alias record. malformed")
-                        }
-
+                    0 => atu_rmp::decode::read_total_array(&mut bytes, 2, |b| {
                         Ok(AliasRecord::Create(Alias {
-                            name: key.to_owned(),
-                            value: value.to_owned(),
+                            name: atu_rmp::decode::read_string(b).decode()?,
+                            value: atu_rmp::decode::read_string(b).decode()?,
                         }))
-                    }
+                    }),
 
                     // delete
-                    1 => {
-                        let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
-                        ensure!(
-                            nfields == 1,
-                            "too many entries in v0 shell alias delete record"
-                        );
-
-                        let bytes = bytes.remaining_slice();
-
-                        let (key, bytes) =
-                            decode::read_str_from_slice(bytes).map_err(error_report)?;
-
-                        if !bytes.is_empty() {
-                            bail!("trailing bytes in encoded shell alias record. malformed")
-                        }
-
-                        Ok(AliasRecord::Delete(key.to_owned()))
-                    }
+                    1 => atu_rmp::decode::read_total_array(&mut bytes, 1, |b| {
+                        Ok(AliasRecord::Delete(
+                            atu_rmp::decode::read_string(b).decode()?,
+                        ))
+                    }),
 
                     n => {
                         bail!("unknown AliasRecord type {n}")

@@ -15,12 +15,12 @@ readme.workspace = true
 
 [dependencies]
 atuin-client = { path = "../atuin-client", version = "18.17.1" }
-atuin-common = { path = "../atuin-common", version = "18.17.1" }
+atuin-common = { path = "../atuin-common", version = "18.17.1", features = ["rmp", "eyre"] }
+rmp = { version = "0.8.14" }
 derive_more = { workspace = true }
 
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-rmp = { version = "0.8.14" }
 eyre = { workspace = true }
 tokio = { workspace = true }
 typed-builder = { workspace = true }

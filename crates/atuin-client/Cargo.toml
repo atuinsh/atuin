@@ -47,7 +47,6 @@ serde_regex = "1.1.0"
 fs-err = { workspace = true }
 sql-builder = { workspace = true }
 memchr = "2.7"
-rmp = { version = "0.8.14" }
 typed-builder = { workspace = true }
 tokio = { workspace = true }
 semver = { workspace = true }
@@ -75,11 +74,12 @@ crossterm = { workspace = true, features = ["serde"] }
 palette = { version = "0.7.5", features = ["serializing"] }
 strum_macros = "0.27"
 strum = { version = "0.27", features = ["strum_macros"] }
+rmp = { version = "0.8.14" }
 
 [dependencies.atuin-common]
 path = "../atuin-common"
 version = "18.17.1"
-features = ["tracing"]
+features = ["tracing", "rmp", "eyre"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

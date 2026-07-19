@@ -1,11 +1,9 @@
 use atuin_common::record::DecryptedData;
-use eyre::{Result, bail, ensure};
+use eyre::Result;
 use uuid::Uuid;
 
-use rmp::{
-    decode::{self, Bytes},
-    encode,
-};
+use atuin_common::rmp as atu_rmp;
+use atuin_common::rmp::decode::DecodeExt;
 use typed_builder::TypedBuilder;
 
 pub const SCRIPT_VERSION: &str = "v0";
@@ -46,60 +44,44 @@ impl Script {
 
         let mut output = vec![];
 
-        encode::write_array_len(&mut output, 6)?;
-        encode::write_str(&mut output, &self.id.to_string())?;
-        encode::write_str(&mut output, &self.name)?;
-        encode::write_str(&mut output, &self.description)?;
-        encode::write_str(&mut output, &self.shebang)?;
-        encode::write_array_len(&mut output, self.tags.len() as u32)?;
+        atu_rmp::encode::write_array_len(&mut output, 6)?;
+        atu_rmp::encode::write_str(&mut output, &self.id.to_string())?;
+        atu_rmp::encode::write_str(&mut output, &self.name)?;
+        atu_rmp::encode::write_str(&mut output, &self.description)?;
+        atu_rmp::encode::write_str(&mut output, &self.shebang)?;
+        atu_rmp::encode::write_array_len(&mut output, self.tags.len() as u32)?;
 
         for tag in &tags {
-            encode::write_str(&mut output, tag)?;
+            atu_rmp::encode::write_str(&mut output, tag)?;
         }
 
-        encode::write_str(&mut output, &self.script)?;
+        atu_rmp::encode::write_str(&mut output, &self.script)?;
 
         Ok(DecryptedData(output))
     }
 
     pub fn deserialize(bytes: &[u8]) -> Result<Self> {
-        let mut bytes = decode::Bytes::new(bytes);
-        let nfields = decode::read_array_len(&mut bytes).unwrap();
+        let mut bytes = atu_rmp::decode::Bytes::new(bytes);
 
-        ensure!(nfields == 6, "too many entries in v0 script record");
+        atu_rmp::decode::read_total_array(&mut bytes, 6, |b| -> eyre::Result<Script> {
+            let id = atu_rmp::decode::read_string(b).decode()?;
+            let name = atu_rmp::decode::read_string(b).decode()?;
+            let description = atu_rmp::decode::read_string(b).decode()?;
+            let shebang = atu_rmp::decode::read_string(b).decode()?;
 
-        let bytes = bytes.remaining_slice();
+            let tags =
+                atu_rmp::decode::read_array_of(b, |b| atu_rmp::decode::read_string(b).decode())?;
 
-        let (id, bytes) = decode::read_str_from_slice(bytes).unwrap();
-        let (name, bytes) = decode::read_str_from_slice(bytes).unwrap();
-        let (description, bytes) = decode::read_str_from_slice(bytes).unwrap();
-        let (shebang, bytes) = decode::read_str_from_slice(bytes).unwrap();
+            let script = atu_rmp::decode::read_string(b).decode()?;
 
-        let mut bytes = Bytes::new(bytes);
-        let tags_len = decode::read_array_len(&mut bytes).unwrap();
-
-        let mut bytes = bytes.remaining_slice();
-
-        let mut tags = Vec::new();
-        for _ in 0..tags_len {
-            let (tag, remaining) = decode::read_str_from_slice(bytes).unwrap();
-            tags.push(tag.to_owned());
-            bytes = remaining;
-        }
-
-        let (script, bytes) = decode::read_str_from_slice(bytes).unwrap();
-
-        if !bytes.is_empty() {
-            bail!("trailing bytes in encoded script record. malformed")
-        }
-
-        Ok(Script {
-            id: Uuid::parse_str(id).unwrap(),
-            name: name.to_owned(),
-            description: description.to_owned(),
-            shebang: shebang.to_owned(),
-            tags,
-            script: script.to_owned(),
+            Ok(Script {
+                id: Uuid::parse_str(&id)?,
+                name,
+                description,
+                shebang,
+                tags,
+                script,
+            })
         })
     }
 }

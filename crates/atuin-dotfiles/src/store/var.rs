@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::record::{DecryptedData, Host, HostId};
-use eyre::{Result, bail, ensure, eyre};
+use atuin_common::rmp as atu_rmp;
+use atuin_common::rmp::decode::DecodeExt;
+use eyre::{Result, bail, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;
 use atuin_client::record::store::Store;
@@ -25,21 +27,19 @@ pub enum VarRecord {
 
 impl VarRecord {
     pub fn serialize(&self) -> Result<DecryptedData> {
-        use rmp::encode;
-
         let mut output = vec![];
 
         match self {
             VarRecord::Create(env) => {
-                encode::write_u8(&mut output, 0)?; // create
+                atu_rmp::encode::write_u8(&mut output, 0)?; // create
 
                 env.serialize(&mut output)?;
             }
             VarRecord::Delete(env) => {
-                encode::write_u8(&mut output, 1)?; // delete
-                encode::write_array_len(&mut output, 1)?; // 1 field
+                atu_rmp::encode::write_u8(&mut output, 1)?; // delete
+                atu_rmp::encode::write_array_len(&mut output, 1)?; // 1 field
 
-                encode::write_str(&mut output, env.as_str())?;
+                atu_rmp::encode::write_str(&mut output, env.as_str())?;
             }
         }
 
@@ -47,17 +47,11 @@ impl VarRecord {
     }
 
     pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
-        use rmp::decode;
-
-        fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
-            eyre!("{err:?}")
-        }
-
         match version {
             DOTFILES_VAR_VERSION => {
-                let mut bytes = decode::Bytes::new(&data.0);
+                let mut bytes = atu_rmp::decode::Bytes::new(&data.0);
 
-                let record_type = decode::read_u8(&mut bytes).map_err(error_report)?;
+                let record_type = rmp::decode::read_int::<u8, _>(&mut bytes).decode()?;
 
                 match record_type {
                     // create
@@ -67,24 +61,9 @@ impl VarRecord {
                     }
 
                     // delete
-                    1 => {
-                        let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
-                        ensure!(
-                            nfields == 1,
-                            "too many entries in v0 dotfiles var delete record"
-                        );
-
-                        let bytes = bytes.remaining_slice();
-
-                        let (key, bytes) =
-                            decode::read_str_from_slice(bytes).map_err(error_report)?;
-
-                        if !bytes.is_empty() {
-                            bail!("trailing bytes in encoded dotfiles var record. malformed")
-                        }
-
-                        Ok(VarRecord::Delete(key.to_owned()))
-                    }
+                    1 => atu_rmp::decode::read_total_array(&mut bytes, 1, |b| {
+                        Ok(VarRecord::Delete(atu_rmp::decode::read_string(b).decode()?))
+                    }),
 
                     n => {
                         bail!("unknown Dotfiles var record type {n}")
@@ -418,6 +397,16 @@ mod tests {
         let decoded = VarRecord::deserialize(&encoded, DOTFILES_VAR_VERSION).unwrap();
 
         assert_eq!(encoded.0, &snapshot);
+        assert_eq!(decoded, record);
+    }
+
+    #[test]
+    fn encode_decode_delete() {
+        let record = VarRecord::Delete("BEEP".to_owned());
+
+        let encoded = record.serialize().unwrap();
+        let decoded = VarRecord::deserialize(&encoded, DOTFILES_VAR_VERSION).unwrap();
+
         assert_eq!(decoded, record);
     }
 

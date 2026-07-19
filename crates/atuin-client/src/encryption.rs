@@ -13,11 +13,12 @@ use std::io::prelude::*;
 use base64::prelude::{BASE64_STANDARD, Engine};
 pub use crypto_secretbox::Key;
 use crypto_secretbox::{KeyInit, XSalsa20Poly1305, aead::OsRng};
-use eyre::{Context, Result, bail, ensure, eyre};
+use eyre::{Context, Result, bail, ensure};
 use fs_err as fs;
-use rmp::Marker;
 
 use crate::settings::Settings;
+use atuin_common::rmp as atu_rmp;
+use atuin_common::rmp::decode::DecodeExt;
 
 pub fn generate_encoded_key() -> Result<(Key, String)> {
     let key = XSalsa20Poly1305::generate_key(&mut OsRng);
@@ -57,10 +58,10 @@ pub fn load_key(settings: &Settings) -> Result<Key> {
 
 pub fn encode_key(key: &Key) -> Result<String> {
     let mut buf = vec![];
-    rmp::encode::write_array_len(&mut buf, key.len() as u32)
+    atu_rmp::encode::write_array_len(&mut buf, key.len() as u32)
         .wrap_err("could not encode key to message pack")?;
     for b in key {
-        rmp::encode::write_uint(&mut buf, *b as u64)
+        atu_rmp::encode::write_uint(&mut buf, *b as u64)
             .wrap_err("could not encode key to message pack")?;
     }
     let buf = BASE64_STANDARD.encode(buf);
@@ -69,8 +70,6 @@ pub fn encode_key(key: &Key) -> Result<String> {
 }
 
 pub fn decode_key(key: String) -> Result<Key> {
-    use rmp::decode;
-
     let buf = BASE64_STANDARD
         .decode(key.trim_end())
         .wrap_err("encryption key is not a valid base64 encoding")?;
@@ -80,23 +79,22 @@ pub fn decode_key(key: String) -> Result<Key> {
     match <[u8; 32]>::try_from(&*buf) {
         Ok(key) => Ok(key.into()),
         Err(_) => {
-            let mut bytes = rmp::decode::Bytes::new(&buf);
+            let mut bytes = atu_rmp::decode::Bytes::new(&buf);
 
-            match Marker::from_u8(buf[0]) {
-                Marker::Bin8 => {
-                    let len = decode::read_bin_len(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
+            match atu_rmp::decode::Marker::from_u8(buf[0]) {
+                atu_rmp::decode::Marker::Bin8 => {
+                    let len = rmp::decode::read_bin_len(&mut bytes).decode()?;
                     ensure!(len == 32, "encryption key is not the correct size");
                     let key = <[u8; 32]>::try_from(bytes.remaining_slice())
                         .context("could not decode encryption key")?;
                     Ok(key.into())
                 }
-                Marker::Array16 => {
-                    let len = decode::read_array_len(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
-                    ensure!(len == 32, "encryption key is not the correct size");
+                atu_rmp::decode::Marker::Array16 => {
+                    atu_rmp::decode::expect_array_len(&mut bytes, 32)?;
 
                     let mut key = Key::default();
                     for i in &mut key {
-                        *i = rmp::decode::read_int(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
+                        *i = rmp::decode::read_int::<u8, _>(&mut bytes).decode()?;
                     }
                     Ok(key)
                 }

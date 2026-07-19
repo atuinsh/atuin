@@ -3,6 +3,8 @@ use eyre::{Result, eyre};
 use uuid::Uuid;
 
 use crate::store::script::SCRIPT_VERSION;
+use atuin_common::rmp as atu_rmp;
+use atuin_common::rmp::decode::DecodeExt;
 
 use super::script::Script;
 
@@ -15,31 +17,29 @@ pub enum ScriptRecord {
 
 impl ScriptRecord {
     pub fn serialize(&self) -> Result<DecryptedData> {
-        use rmp::encode;
-
         let mut output = vec![];
 
         match self {
             ScriptRecord::Create(script) => {
                 // 0 -> a script create
-                encode::write_u8(&mut output, 0)?;
+                atu_rmp::encode::write_u8(&mut output, 0)?;
 
                 let bytes = script.serialize()?;
 
-                encode::write_bin(&mut output, &bytes.0)?;
+                atu_rmp::encode::write_bin(&mut output, &bytes.0)?;
             }
 
             ScriptRecord::Delete(id) => {
                 // 1 -> a script delete
-                encode::write_u8(&mut output, 1)?;
-                encode::write_str(&mut output, id.to_string().as_str())?;
+                atu_rmp::encode::write_u8(&mut output, 1)?;
+                atu_rmp::encode::write_str(&mut output, id.to_string().as_str())?;
             }
 
             ScriptRecord::Update(script) => {
                 // 2 -> a script update
-                encode::write_u8(&mut output, 2)?;
+                atu_rmp::encode::write_u8(&mut output, 2)?;
                 let bytes = script.serialize()?;
-                encode::write_bin(&mut output, &bytes.0)?;
+                atu_rmp::encode::write_bin(&mut output, &bytes.0)?;
             }
         };
 
@@ -47,38 +47,31 @@ impl ScriptRecord {
     }
 
     pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
-        use rmp::decode;
-
-        fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
-            eyre!("{err:?}")
-        }
-
         match version {
             SCRIPT_VERSION => {
-                let mut bytes = decode::Bytes::new(&data.0);
+                let mut bytes = atu_rmp::decode::Bytes::new(&data.0);
 
-                let record_type = decode::read_u8(&mut bytes).map_err(error_report)?;
+                let record_type = rmp::decode::read_int::<u8, _>(&mut bytes).decode()?;
 
                 match record_type {
                     // create
                     0 => {
-                        // written by encode::write_bin above
-                        let _ = decode::read_bin_len(&mut bytes).map_err(error_report)?;
+                        // written by rmp::encode::write_bin above
+                        let _ = rmp::decode::read_bin_len(&mut bytes).decode()?;
                         let script = Script::deserialize(bytes.remaining_slice())?;
                         Ok(ScriptRecord::Create(script))
                     }
 
                     // delete
                     1 => {
-                        let bytes = bytes.remaining_slice();
-                        let (id, _) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-                        Ok(ScriptRecord::Delete(Uuid::parse_str(id)?))
+                        let id = atu_rmp::decode::read_string(&mut bytes).decode()?;
+                        Ok(ScriptRecord::Delete(Uuid::parse_str(&id)?))
                     }
 
                     // update
                     2 => {
-                        // written by encode::write_bin above
-                        let _ = decode::read_bin_len(&mut bytes).map_err(error_report)?;
+                        // written by rmp::encode::write_bin above
+                        let _ = rmp::decode::read_bin_len(&mut bytes).decode()?;
                         let script = Script::deserialize(bytes.remaining_slice())?;
                         Ok(ScriptRecord::Update(script))
                     }
