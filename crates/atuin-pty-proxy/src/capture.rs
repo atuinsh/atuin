@@ -1,3 +1,4 @@
+use std::num::NonZeroU16;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 
@@ -139,8 +140,8 @@ impl CommandCaptureTracker {
 
     fn finish_capture(&mut self) -> Option<CommandCapture> {
         let buffers = std::mem::take(&mut self.buffers);
-        // `to_plain_text` clamps the width itself, so no `.max(1)` is needed here.
-        let cols = self.cols.load(Ordering::Relaxed);
+        // A terminal width of 0 (e.g. before the size is known) falls back to 1.
+        let cols = NonZeroU16::new(self.cols.load(Ordering::Relaxed)).unwrap_or(NonZeroU16::MIN);
         let prompt = ansi::to_plain_text(&buffers.prompt, cols);
         let command = ansi::to_plain_text(&buffers.command, cols)
             .trim_matches(|c| c == '\r' || c == '\n')

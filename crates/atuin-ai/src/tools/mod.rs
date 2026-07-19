@@ -1,5 +1,6 @@
 use std::{
     io::BufRead,
+    num::NonZeroU16,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -848,27 +849,6 @@ const PREVIEW_HEIGHT: u16 = 10;
 /// Default terminal width for VT100 emulation.
 const PREVIEW_WIDTH: u16 = 120;
 
-/// Normalize newlines for VT100 processing.
-///
-/// When subprocess output is captured via pipes (no PTY), bare `\n` (LF) bytes
-/// are not translated to `\r\n` (CR+LF) the way a kernel terminal driver would
-/// with the `ONLCR` flag. In VT100, LF only moves the cursor down without
-/// returning to column 0. This causes lines to start at progressively higher
-/// column offsets and eventually wrap, producing garbled output.
-///
-/// This function inserts `\r` before any `\n` that isn't already preceded by
-/// `\r`, mimicking the terminal driver's ONLCR behavior.
-fn normalize_newlines_for_vt100(data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len() + data.len() / 8);
-    for (i, &b) in data.iter().enumerate() {
-        if b == b'\n' && (i == 0 || data[i - 1] != b'\r') {
-            out.push(b'\r');
-        }
-        out.push(b);
-    }
-    out
-}
-
 /// Extract plain text lines from a VT100 screen buffer.
 ///
 /// Strips trailing blank lines so the result only contains rows with actual
@@ -969,7 +949,7 @@ pub(crate) async fn execute_shell_command_streaming(
                     Ok(0) => stdout_done = true,
                     Ok(n) => {
                         full_stdout.extend_from_slice(&stdout_buf[..n]);
-                        let normalized = normalize_newlines_for_vt100(&stdout_buf[..n]);
+                        let normalized = ansi::onlcr(&stdout_buf[..n]).collect::<Vec<u8>>();
                         parser.process(&normalized);
                     }
                     Err(_) => stdout_done = true,
@@ -983,7 +963,7 @@ pub(crate) async fn execute_shell_command_streaming(
                     Ok(n) => {
                         full_stderr.extend_from_slice(&stderr_buf[..n]);
                         // Feed stderr to the preview parser too, so it shows in the VT100 screen
-                        let normalized = normalize_newlines_for_vt100(&stderr_buf[..n]);
+                        let normalized = ansi::onlcr(&stderr_buf[..n]).collect::<Vec<u8>>();
                         parser.process(&normalized);
                     }
                     Err(_) => stderr_done = true,
@@ -1023,8 +1003,9 @@ pub(crate) async fn execute_shell_command_streaming(
 
     // Strip ANSI escape sequences for clean LLM output by running
     // the raw bytes through a VT100 parser and extracting plain text.
-    let stdout_text = ansi::to_plain_text(&full_stdout, PREVIEW_WIDTH);
-    let stderr_text = ansi::to_plain_text(&full_stderr, PREVIEW_WIDTH);
+    let cols = NonZeroU16::new(PREVIEW_WIDTH).expect("PREVIEW_WIDTH is nonzero");
+    let stdout_text = ansi::to_plain_text(&full_stdout, cols);
+    let stderr_text = ansi::to_plain_text(&full_stderr, cols);
 
     ToolOutcome::Structured {
         stdout: stdout_text,
