@@ -186,11 +186,6 @@ impl Cmd {
         store: SqliteStore,
         theme: &Theme,
     ) -> Result<()> {
-        if let Some(search_mode) = self.search_mode {
-            settings.search_mode = search_mode;
-        }
-        self.validate_search_mode(settings)?;
-
         let query = if self.query.is_empty() {
             std::env::var("ATUIN_QUERY").map_or_else(
                 |_| vec![],
