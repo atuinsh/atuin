@@ -106,3 +106,83 @@ pub(super) fn parse_aliases(input: &[u8]) -> Result<Aliases, AliasesError> {
         .parse(input)
         .map_err(|error| parse_error(input, error.offset()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn map(pairs: &[(&[u8], &[u8])]) -> Aliases {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_vec(), v.to_vec()))
+            .collect()
+    }
+
+    #[test]
+    fn decodes_bash_escaped_quote() {
+        assert_eq!(
+            parse_aliases(br"alias whoops='echo it'\''s fine'").unwrap(),
+            map(&[(b"whoops", b"echo it's fine")])
+        );
+    }
+
+    #[test]
+    fn decodes_dash_double_quoted_quote() {
+        assert_eq!(
+            parse_aliases(br#"whoops='echo it'"'"'s fine'"#).unwrap(),
+            map(&[(b"whoops", b"echo it's fine")])
+        );
+    }
+
+    #[test]
+    fn accepts_dash_missing_alias_prefix() {
+        assert_eq!(
+            parse_aliases(b"ll='ls -l'\n").unwrap(),
+            map(&[(b"ll", b"ls -l")])
+        );
+    }
+
+    #[test]
+    fn preserves_embedded_newline() {
+        assert_eq!(
+            parse_aliases(b"alias multi='line one\nline two'\nalias after='x'\n").unwrap(),
+            map(&[(b"multi", b"line one\nline two"), (b"after", b"x")])
+        );
+    }
+
+    #[test]
+    fn preserves_non_utf8() {
+        assert_eq!(
+            parse_aliases(b"alias bin='\xff\xfe'").unwrap(),
+            map(&[(b"bin", &[0xff, 0xfe])])
+        );
+    }
+
+    #[test]
+    fn name_does_not_run_across_a_newline() {
+        // Regression: `take_while(|b| b != b'=')` without excluding `\n` made this return
+        // Ok({"to use foo\nalias a": "b"}) -- a WRONG map, not an error.
+        let result = parse_aliases(b"alias to use foo\nalias a='b'\n");
+        assert!(result.is_err(), "expected Err, got {result:?}");
+    }
+
+    #[test]
+    fn rejects_trailing_garbage_rather_than_truncating() {
+        assert!(parse_aliases(b"alias ll='ls -l'\nnot an alias line\n").is_err());
+    }
+
+    #[test]
+    fn parses_empty_input_and_empty_values() {
+        assert_eq!(parse_aliases(b"").unwrap(), Aliases::new());
+        assert_eq!(parse_aliases(b"alias e=''").unwrap(), map(&[(b"e", b"")]));
+    }
+
+    #[test]
+    fn last_duplicate_definition_wins() {
+        assert_eq!(
+            parse_aliases(b"alias a='first'\nalias a='second'\n").unwrap(),
+            map(&[(b"a", b"second")])
+        );
+    }
+}
