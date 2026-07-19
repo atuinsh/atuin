@@ -9,7 +9,8 @@ use atuin_client::{
 };
 use atuin_common::string::EllipsizeExt as _;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
-use atuin_common::string::ellipsis::{Alignment, Budget, Indicator, Pos};
+use atuin_common::string::align::Alignment;
+use atuin_common::string::ellipsis::{Budget, Indicator, Pos};
 use itertools::Itertools;
 use ratatui::{
     backend::FromCrossterm,

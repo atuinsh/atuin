@@ -7,6 +7,8 @@ use std::fmt;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+use super::align::{AlignExt, Alignment};
+
 /// Which side of the string to elide when it does not fit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pos {
@@ -15,17 +17,6 @@ pub enum Pos {
     /// Keep both ends, elide the middle: `he…ld`.
     Middle,
     /// Keep the head, elide the tail: `hello…`.
-    End,
-}
-
-/// Which side to pad toward when the string is shorter than the budget.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Alignment {
-    /// Content flush to the start, padding on the end (left-aligned).
-    Start,
-    /// Content centered, padding split across both sides.
-    Center,
-    /// Content flush to the end, padding on the start (right-aligned).
     End,
 }
 
@@ -66,14 +57,14 @@ pub enum Budget {
 
 impl Budget {
     /// The numeric limit, in this budget's own unit.
-    fn amount(self) -> usize {
+    pub(crate) fn amount(self) -> usize {
         match self {
             Budget::Bytes(n) | Budget::Columns(n) => n,
         }
     }
 
     /// Total cost of `s` in this budget's unit.
-    fn cost(self, s: &str) -> usize {
+    pub(crate) fn cost(self, s: &str) -> usize {
         match self {
             Budget::Bytes(_) => s.len(),
             Budget::Columns(_) => s.width(),
@@ -134,33 +125,17 @@ pub trait EllipsizeExt: AsRef<str> {
         side: Pos,
         indicator: Indicator<'a>,
         align: Alignment,
-    ) -> Cow<'a, str> {
+    ) -> Cow<'a, str>
+    where
+        Self: Sized,
+    {
         let s = self.as_ref();
-        let cost = budget.cost(s);
-        let amount = budget.amount();
-        if cost > amount {
+        if budget.cost(s) > budget.amount() {
             // Too wide: elide. The result already fills the budget, so `align` is moot.
             return self.ellipsize(budget, side, indicator).into();
         }
-        let pad = amount - cost;
-        if pad == 0 {
-            return Cow::Borrowed(s);
-        }
-        // Split the padding across the two sides per `align`, in the budget's unit.
-        let (left, right) = match align {
-            Alignment::Start => (0, pad),
-            Alignment::End => (pad, 0),
-            Alignment::Center => (pad / 2, pad - pad / 2),
-        };
-        let mut out = String::with_capacity(s.len() + pad);
-        for _ in 0..left {
-            out.push(' ');
-        }
-        out.push_str(s);
-        for _ in 0..right {
-            out.push(' ');
-        }
-        Cow::Owned(out)
+        // Fits: pad it out to the budget, aligned per `align`.
+        self.pad_to(budget, align)
     }
 }
 
@@ -321,7 +296,8 @@ fn suffix_boundary(s: &str, max: usize, cost: impl Fn(&str) -> usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{Alignment, Budget, EllipsizeExt, Indicator, Pos};
+    use super::{Budget, EllipsizeExt, Indicator, Pos};
+    use crate::string::align::Alignment;
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
     use rstest::rstest;
