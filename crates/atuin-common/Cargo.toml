@@ -31,6 +31,7 @@ derive_more = { workspace = true }
 time = { workspace = true, features = ["formatting", "parsing"] }
 serde = { workspace = true }
 serde_with = "3.8.1"
+serde_json = { workspace = true }
 uuid = { workspace = true }
 eyre = { workspace = true }
 url = { workspace = true }

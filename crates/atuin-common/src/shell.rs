@@ -11,7 +11,13 @@ use serde::Serialize;
 use sysinfo::{Process, System, get_current_pid};
 use thiserror::Error;
 
+mod posix;
+
 pub mod bash;
+pub mod fish;
+pub mod sh;
+pub mod xonsh;
+pub mod zsh;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum RunError {

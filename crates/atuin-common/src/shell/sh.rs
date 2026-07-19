@@ -17,13 +17,13 @@ use super::{
 
 type Probe<T, E> = Shared<BoxFuture<'static, Result<T, E>>>;
 
-/// The `bash` executable itself, and the ability to invoke it.
+/// The `sh` executable itself, and the ability to invoke it.
 #[derive(Debug)]
-struct BashExe {
+struct ShExe {
     path: PathBuf,
 }
 
-impl BashExe {
+impl ShExe {
     fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
@@ -65,27 +65,30 @@ struct Inner {
 }
 
 #[derive(Debug, Clone, derive_more::Display)]
-#[display("bash")]
-pub struct Bash {
-    exe: Arc<BashExe>,
+#[display("sh")]
+pub struct Sh {
+    exe: Arc<ShExe>,
     inner: Arc<Inner>,
 }
 
-impl Bash {
-    /// Create a new Bash shell object.
+impl Sh {
+    /// Create a new Sh shell object.
     ///
     /// This will kick off background tokio tasks to eagerly probe information. Resolving the
     /// asynchronous methods will block on said probe tasks.
+    ///
+    /// `/bin/sh` is bash on macOS, dash on Debian and busybox ash elsewhere; their alias listings
+    /// differ, so the shared POSIX parser is deliberately lenient about which dialect it is given.
     pub fn new(path: &Path) -> Self {
         let config_path = directories::BaseDirs::new()
-            .map(|dirs| dirs.home_dir().join(".bashrc"))
-            .unwrap_or_else(|| PathBuf::from(".bashrc"));
+            .map(|dirs| dirs.home_dir().join(".profile"))
+            .unwrap_or_else(|| PathBuf::from(".profile"));
 
-        let exe = Arc::new(BashExe::new(path));
+        let exe = Arc::new(ShExe::new(path));
 
         let probe_exe = exe.clone();
         let probe = tokio::spawn(async move {
-            let output = probe_exe.run("alias -p").await?;
+            let output = probe_exe.run("alias").await?;
             posix::parse_aliases(&output.stdout)
         });
 
@@ -101,12 +104,11 @@ impl Bash {
             }),
         }
     }
-
 }
 
-impl IsShell for Bash {
+impl IsShell for Sh {
     fn canonical_name(&self) -> &'static str {
-        "bash"
+        "sh"
     }
 
     fn is_posix(&self) -> bool {
