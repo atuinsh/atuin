@@ -9,7 +9,7 @@ use crate::{
     record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store},
 };
 use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
-use atuin_common::rmp::{Bytes, decode, decode_bin_len, expect_eof};
+use atuin_common::rmp::decode::{self, Bytes};
 
 use super::{HISTORY_TAG, History, HistoryId, Version};
 
@@ -47,7 +47,7 @@ impl HistoryRecord {
     pub fn serialize(&self) -> Result<DecryptedData> {
         // probably don't actually need to use rmp here, but if we ever need to extend it, it's a
         // nice wrapper around raw byte stuff
-        use rmp::encode;
+        use atuin_common::rmp::encode;
 
         let mut output = vec![];
 
@@ -73,14 +73,14 @@ impl HistoryRecord {
     pub fn deserialize(bytes: &DecryptedData, version: &str) -> Result<Self> {
         let mut bytes = Bytes::new(&bytes.0);
 
-        let record_type = decode::<u8>(&mut bytes)?;
+        let record_type = decode::read_u8(&mut bytes)?;
 
         match record_type {
             // 0 -> HistoryRecord::Create
             0 => {
                 // not super useful to us atm, but perhaps in the future
                 // written by write_bin above
-                let _ = decode_bin_len(&mut bytes)?;
+                let _ = decode::read_bin_len(&mut bytes)?;
 
                 let record = History::deserialize(bytes.remaining_slice(), version)?;
 
@@ -89,8 +89,8 @@ impl HistoryRecord {
 
             // 1 -> HistoryRecord::Delete
             1 => {
-                let id = decode::<String>(&mut bytes)?;
-                expect_eof(&bytes)?;
+                let id = decode::read_string(&mut bytes)?;
+                decode::expect_eof(&bytes)?;
 
                 Ok(HistoryRecord::Delete(id.into()))
             }

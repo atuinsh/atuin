@@ -17,7 +17,8 @@ use eyre::{Context, Result, bail, ensure};
 use fs_err as fs;
 use rmp::Marker;
 
-use atuin_common::rmp::{Bytes, decode, decode_bin_len, expect_array_len};
+use atuin_common::rmp::decode::{self, Bytes};
+use atuin_common::rmp::encode;
 
 use crate::settings::Settings;
 
@@ -59,11 +60,10 @@ pub fn load_key(settings: &Settings) -> Result<Key> {
 
 pub fn encode_key(key: &Key) -> Result<String> {
     let mut buf = vec![];
-    rmp::encode::write_array_len(&mut buf, key.len() as u32)
+    encode::write_array_len(&mut buf, key.len() as u32)
         .wrap_err("could not encode key to message pack")?;
     for b in key {
-        rmp::encode::write_uint(&mut buf, *b as u64)
-            .wrap_err("could not encode key to message pack")?;
+        encode::write_uint(&mut buf, *b as u64).wrap_err("could not encode key to message pack")?;
     }
     let buf = BASE64_STANDARD.encode(buf);
 
@@ -84,18 +84,18 @@ pub fn decode_key(key: String) -> Result<Key> {
 
             match Marker::from_u8(buf[0]) {
                 Marker::Bin8 => {
-                    let len = decode_bin_len(&mut bytes)?;
+                    let len = decode::read_bin_len(&mut bytes)?;
                     ensure!(len == 32, "encryption key is not the correct size");
                     let key = <[u8; 32]>::try_from(bytes.remaining_slice())
                         .context("could not decode encryption key")?;
                     Ok(key.into())
                 }
                 Marker::Array16 => {
-                    expect_array_len(&mut bytes, 32)?;
+                    decode::expect_array_len(&mut bytes, 32)?;
 
                     let mut key = Key::default();
                     for i in &mut key {
-                        *i = decode::<u8>(&mut bytes)?;
+                        *i = decode::read_u8(&mut bytes)?;
                     }
                     Ok(key)
                 }

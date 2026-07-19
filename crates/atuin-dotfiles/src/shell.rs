@@ -1,8 +1,8 @@
+use atuin_common::rmp::encode;
 use eyre::Result;
-use rmp::encode;
 use serde::Serialize;
 
-use atuin_common::rmp::{Bytes, decode, expect_array_len, expect_eof};
+use atuin_common::rmp::decode::{self, Bytes};
 use atuin_common::shell::{Shell, ShellError};
 
 use crate::store::AliasStore;
@@ -43,13 +43,13 @@ impl Var {
     }
 
     pub fn deserialize(bytes: &mut Bytes) -> Result<Self> {
-        expect_array_len(bytes, 3)?;
+        decode::expect_array_len(bytes, 3)?;
 
-        let name = decode::<String>(bytes)?;
-        let value = decode::<String>(bytes)?;
-        let export = decode::<bool>(bytes)?;
+        let name = decode::read_string(bytes)?;
+        let value = decode::read_string(bytes)?;
+        let export = decode::read_bool(bytes)?;
 
-        expect_eof(bytes)?;
+        decode::expect_eof(bytes)?;
 
         Ok(Var {
             name,

@@ -1,4 +1,3 @@
-use rmp::encode;
 use std::env;
 
 use atuin_common::record::DecryptedData;
@@ -9,7 +8,8 @@ use eyre::{Result, bail};
 use crate::secrets::SECRET_PATTERNS_RE;
 use crate::settings::Settings;
 use crate::utils::get_host_user;
-use atuin_common::rmp::{Bytes, EncodeError, decode, decode_array_len, write_optional};
+use atuin_common::rmp::decode::{self, Bytes};
+use atuin_common::rmp::encode::{self, EncodeError};
 use time::OffsetDateTime;
 
 pub(crate) mod builder;
@@ -229,14 +229,14 @@ impl History {
         encode::write_str(&mut output, &self.session)?;
         encode::write_str(&mut output, &self.hostname)?;
 
-        write_optional(
+        encode::write_optional(
             &mut output,
             self.deleted_at.map(|d| d.unix_timestamp_nanos() as u64),
             encode::write_u64,
         )?;
         encode::write_str(&mut output, self.author.as_str())?;
-        write_optional(&mut output, self.intent.as_deref(), encode::write_str)?;
-        write_optional(&mut output, self.shell.as_deref(), encode::write_str)?;
+        encode::write_optional(&mut output, self.intent.as_deref(), encode::write_str)?;
+        encode::write_optional(&mut output, self.shell.as_deref(), encode::write_str)?;
         Ok(DecryptedData(output))
     }
 
@@ -247,30 +247,30 @@ impl History {
 
         let mut bytes = Bytes::new(bytes);
 
-        let real_version = decode::<u16>(&mut bytes)?;
+        let real_version = decode::read_u16(&mut bytes)?;
         if real_version != version.as_int() {
             bail!("expected to decode {version} record, found v{real_version}");
         }
 
-        let nfields = decode_array_len(&mut bytes)?;
+        let nfields = decode::read_array_len(&mut bytes)?;
         let min_fields = version.min_fields();
         if nfields < min_fields || version.max_fields().is_some_and(|max| nfields > max) {
             bail!("unexpected number of fields ({nfields}) for history version {version}");
         }
 
-        let id = decode::<String>(&mut bytes)?;
-        let timestamp = decode::<u64>(&mut bytes)?;
-        let duration = decode::<i64>(&mut bytes)?;
-        let exit = decode::<i64>(&mut bytes)?;
+        let id = decode::read_string(&mut bytes)?;
+        let timestamp = decode::read_u64(&mut bytes)?;
+        let duration = decode::read_i64(&mut bytes)?;
+        let exit = decode::read_i64(&mut bytes)?;
 
-        let command = decode::<String>(&mut bytes)?;
-        let cwd = decode::<String>(&mut bytes)?;
-        let session = decode::<String>(&mut bytes)?;
-        let hostname = decode::<String>(&mut bytes)?;
-        let deleted_at = decode::<Option<u64>>(&mut bytes)?;
+        let command = decode::read_string(&mut bytes)?;
+        let cwd = decode::read_string(&mut bytes)?;
+        let session = decode::read_string(&mut bytes)?;
+        let hostname = decode::read_string(&mut bytes)?;
+        let deleted_at = decode::read_optional(&mut bytes, decode::read_u64)?;
 
         let author = if version >= Version::One {
-            decode::<Option<String>>(&mut bytes)?
+            decode::read_optional(&mut bytes, decode::read_string)?
         } else {
             None
         };
@@ -280,13 +280,13 @@ impl History {
             Version::One => nfields > min_fields,
             Version::Two => true,
         } {
-            decode::<Option<String>>(&mut bytes)?
+            decode::read_optional(&mut bytes, decode::read_string)?
         } else {
             None
         };
 
         let shell = if version >= Version::Two {
-            decode::<Option<String>>(&mut bytes)?
+            decode::read_optional(&mut bytes, decode::read_string)?
         } else {
             None
         };

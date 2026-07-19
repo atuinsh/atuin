@@ -1,5 +1,5 @@
 use atuin_common::record::DecryptedData;
-use atuin_common::rmp::{Bytes, decode, expect_array_len, expect_eof};
+use atuin_common::rmp::decode::{self, Bytes};
 use eyre::{Result, bail};
 use typed_builder::TypedBuilder;
 
@@ -16,7 +16,7 @@ pub struct KvRecord {
 
 impl KvRecord {
     pub fn serialize(&self) -> Result<DecryptedData> {
-        use rmp::encode;
+        use atuin_common::rmp::encode;
 
         let mut output = vec![];
 
@@ -39,13 +39,13 @@ impl KvRecord {
             "v0" => {
                 let mut bytes = Bytes::new(&data.0);
 
-                expect_array_len(&mut bytes, 3)?;
+                decode::expect_array_len(&mut bytes, 3)?;
 
-                let namespace = decode::<String>(&mut bytes)?;
-                let key = decode::<String>(&mut bytes)?;
-                let value = decode::<String>(&mut bytes)?;
+                let namespace = decode::read_string(&mut bytes)?;
+                let key = decode::read_string(&mut bytes)?;
+                let value = decode::read_string(&mut bytes)?;
 
-                expect_eof(&bytes)?;
+                decode::expect_eof(&bytes)?;
 
                 Ok(KvRecord {
                     namespace,
@@ -56,19 +56,19 @@ impl KvRecord {
             KV_VERSION => {
                 let mut bytes = Bytes::new(&data.0);
 
-                expect_array_len(&mut bytes, 4)?;
+                decode::expect_array_len(&mut bytes, 4)?;
 
-                let namespace = decode::<String>(&mut bytes)?;
-                let key = decode::<String>(&mut bytes)?;
-                let has_value = decode::<bool>(&mut bytes)?;
+                let namespace = decode::read_string(&mut bytes)?;
+                let key = decode::read_string(&mut bytes)?;
+                let has_value = decode::read_bool(&mut bytes)?;
 
                 let value = if has_value {
-                    Some(decode::<String>(&mut bytes)?)
+                    Some(decode::read_string(&mut bytes)?)
                 } else {
                     None
                 };
 
-                expect_eof(&bytes)?;
+                decode::expect_eof(&bytes)?;
 
                 Ok(KvRecord {
                     namespace,

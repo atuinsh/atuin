@@ -6,7 +6,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 // While we will support a range of shell config, I'd rather have a larger number of small records
 // + stores, rather than one mega config store.
 use atuin_common::record::{DecryptedData, Host, HostId};
-use atuin_common::rmp::{Bytes, decode, expect_array_len, expect_eof};
+use atuin_common::rmp::decode::{self, Bytes};
 use atuin_common::utils::unquote;
 use eyre::{Result, bail, eyre};
 
@@ -30,7 +30,7 @@ pub enum AliasRecord {
 
 impl AliasRecord {
     pub fn serialize(&self) -> Result<DecryptedData> {
-        use rmp::encode;
+        use atuin_common::rmp::encode;
 
         let mut output = vec![];
 
@@ -58,28 +58,28 @@ impl AliasRecord {
             CONFIG_SHELL_ALIAS_VERSION => {
                 let mut bytes = Bytes::new(&data.0);
 
-                let record_type = decode::<u8>(&mut bytes)?;
+                let record_type = decode::read_u8(&mut bytes)?;
 
                 match record_type {
                     // create
                     0 => {
-                        expect_array_len(&mut bytes, 2)?;
+                        decode::expect_array_len(&mut bytes, 2)?;
 
-                        let name = decode::<String>(&mut bytes)?;
-                        let value = decode::<String>(&mut bytes)?;
+                        let name = decode::read_string(&mut bytes)?;
+                        let value = decode::read_string(&mut bytes)?;
 
-                        expect_eof(&bytes)?;
+                        decode::expect_eof(&bytes)?;
 
                         Ok(AliasRecord::Create(Alias { name, value }))
                     }
 
                     // delete
                     1 => {
-                        expect_array_len(&mut bytes, 1)?;
+                        decode::expect_array_len(&mut bytes, 1)?;
 
-                        let key = decode::<String>(&mut bytes)?;
+                        let key = decode::read_string(&mut bytes)?;
 
-                        expect_eof(&bytes)?;
+                        decode::expect_eof(&bytes)?;
 
                         Ok(AliasRecord::Delete(key))
                     }
