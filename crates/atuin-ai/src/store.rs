@@ -1,9 +1,7 @@
 use std::path::Path;
-use std::str::FromStr;
-use std::time::Duration;
 
-use eyre::{Result, eyre};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
+use eyre::Result;
+use sqlx::sqlite::SqlitePool;
 use time::OffsetDateTime;
 
 use crate::{session::CachedUsageSnapshot, usage::UsageSnapshot};
@@ -57,37 +55,14 @@ pub(crate) struct AiSessionStore {
 impl AiSessionStore {
     pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
         let path = path.as_ref();
-        let path_str = path
-            .as_os_str()
-            .to_str()
-            .ok_or_else(|| eyre!("AI session database path is not valid UTF-8: {path:?}"))?;
 
-        let is_memory = path_str.contains(":memory:");
-
-        if !is_memory
-            && !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            fs_err::create_dir_all(dir)?;
-        }
-
-        let opts = SqliteConnectOptions::from_str(path_str)?
-            .journal_mode(SqliteJournalMode::Wal)
-            .optimize_on_close(true, None)
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::from_secs_f64(timeout))
-            .connect_with(opts)
+        // AI session tokens/content live here, so restrict the file to 0o600.
+        let pool = atuin_common::sqlite::pool(path, timeout)
+            .restrict_permissions(true)
+            .open()
             .await?;
 
         sqlx::migrate!("./migrations").run(&pool).await?;
-
-        #[cfg(unix)]
-        if !is_memory {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        }
 
         Ok(Self { pool })
     }

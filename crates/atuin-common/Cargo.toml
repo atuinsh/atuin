@@ -18,6 +18,8 @@ test-utils = ["tracing", "dep:tracing-subscriber"]
 # The `string::ellipsis` module: budget-aware, grapheme/display-width-correct
 # string truncation. The module is compiled only when this feature is enabled.
 unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
+# The `sqlite` module: shared SQLite pool setup for Atuin's SQLite stores.
+sqlite = ["sqlx/sqlite", "sqlx/regexp"]
 
 [dependencies]
 derive_more = { workspace = true }
@@ -44,3 +46,5 @@ unicode-segmentation = { version = "1.11.0", optional = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
+tokio = { workspace = true }
+tempfile = { workspace = true }

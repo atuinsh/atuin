@@ -62,6 +62,8 @@ pub mod logs;
 pub mod path;
 pub mod record;
 pub mod shell;
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
 pub mod string;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
