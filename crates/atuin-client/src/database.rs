@@ -923,10 +923,11 @@ impl Database for Sqlite {
             .fetch_all(&self.pool)
             .await?;
 
-        let duration_over_time: Vec<(String, f64)> = sqlx::query_as(sqlx::AssertSqlSafe(duration_over_time))
-            .bind(&h.command)
-            .fetch_all(&self.pool)
-            .await?;
+        let duration_over_time: Vec<(String, f64)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(duration_over_time))
+                .bind(&h.command)
+                .fetch_all(&self.pool)
+                .await?;
 
         let duration_over_time = duration_over_time
             .iter()
