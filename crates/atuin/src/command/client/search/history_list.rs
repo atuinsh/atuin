@@ -9,8 +9,9 @@ use atuin_client::{
 };
 use atuin_common::string::EllipsizeExt as _;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
+use atuin_common::string::GlyphWidth;
 use atuin_common::string::align::Alignment;
-use atuin_common::string::ellipsis::{Budget, Indicator, Pos};
+use atuin_common::string::ellipsis::{Indicator, Pos};
 use itertools::Itertools;
 use ratatui::{
     backend::FromCrossterm,
@@ -264,7 +265,7 @@ impl DrawState<'_> {
         let w = width as usize;
         // Right-align within the column, ellipsizing if it somehow overflows.
         let display = formatted.pad_ellipsize(
-            Budget::Columns(w),
+            GlyphWidth::Columns(w),
             Pos::End,
             Indicator::UNICODE,
             Alignment::End,
@@ -288,7 +289,7 @@ impl DrawState<'_> {
         let time_str = format!("{time} ago");
 
         let display = time_str.pad_ellipsize(
-            Budget::Columns(w),
+            GlyphWidth::Columns(w),
             Pos::End,
             Indicator::UNICODE,
             Alignment::End,
@@ -324,7 +325,7 @@ impl DrawState<'_> {
         // Truncate long commands from the middle to show both start and end,
         // so users can identify commands even in narrow terminals (issue #3596).
         let ellipsized =
-            normalized.ellipsize(Budget::Columns(avail), Pos::Middle, Indicator::UNICODE);
+            normalized.ellipsize(GlyphWidth::Columns(avail), Pos::Middle, Indicator::UNICODE);
         let display = ellipsized.to_string();
         for (i, ch) in display.char_indices() {
             if self.x > self.list_area.width {
@@ -362,7 +363,7 @@ impl DrawState<'_> {
             .unwrap_or_else(|_| "????-??-?? ??:??".to_string());
         let w = width as usize;
         let display = formatted.pad_ellipsize(
-            Budget::Columns(w),
+            GlyphWidth::Columns(w),
             Pos::End,
             Indicator::UNICODE,
             Alignment::Start,
@@ -378,7 +379,7 @@ impl DrawState<'_> {
         // Elide from the left with "…" so the leaf directory stays visible;
         // pad to the column width when it already fits.
         let display = cwd.pad_ellipsize(
-            Budget::Columns(w),
+            GlyphWidth::Columns(w),
             Pos::Start,
             Indicator::UNICODE,
             Alignment::Start,
@@ -393,7 +394,7 @@ impl DrawState<'_> {
         // Database stores hostname as "hostname:username"
         let host = h.hostname.split(':').next().unwrap_or(&h.hostname);
         let display = host.pad_ellipsize(
-            Budget::Columns(w),
+            GlyphWidth::Columns(w),
             Pos::End,
             Indicator::UNICODE,
             Alignment::Start,
@@ -408,7 +409,7 @@ impl DrawState<'_> {
         // Database stores hostname as "hostname:username"
         let user = h.hostname.split(':').nth(1).unwrap_or("");
         let display = user.pad_ellipsize(
-            Budget::Columns(w),
+            GlyphWidth::Columns(w),
             Pos::End,
             Indicator::UNICODE,
             Alignment::Start,

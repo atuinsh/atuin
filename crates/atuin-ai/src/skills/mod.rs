@@ -10,7 +10,8 @@ pub(crate) mod walker;
 use std::path::Path;
 
 use atuin_common::string::EllipsizeExt as _;
-use atuin_common::string::ellipsis::{Budget, Indicator, Pos};
+use atuin_common::string::GlyphWidth;
+use atuin_common::string::ellipsis::{Indicator, Pos};
 use eyre::{Result, eyre};
 
 use crate::user_context::interpolate;
@@ -139,7 +140,7 @@ impl SkillRegistry {
             let truncated_desc = skill
                 .description
                 .ellipsize(
-                    Budget::Bytes(MAX_DESCRIPTION_LEN),
+                    GlyphWidth::Bytes(MAX_DESCRIPTION_LEN),
                     Pos::End,
                     Indicator::ASCII,
                 )
