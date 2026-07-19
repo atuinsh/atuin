@@ -261,8 +261,13 @@ impl DrawState<'_> {
         let duration = Duration::from_nanos(u64::try_from(h.duration).unwrap_or(0));
         let formatted = format_duration(duration);
         let w = width as usize;
-        // Right-align duration within its column width, plus trailing space
-        let display = format!("{formatted:>w$}");
+        // Right-align within the column, ellipsizing if it somehow overflows.
+        let display = formatted.pad_ellipsize(
+            Budget::Columns(w),
+            Pos::End,
+            Indicator::UNICODE,
+            Alignment::End,
+        );
         self.draw(&display, Style::from_crossterm(style));
     }
 
@@ -281,7 +286,12 @@ impl DrawState<'_> {
         let w = width as usize;
         let time_str = format!("{time} ago");
 
-        let display = format!("{time_str:>w$}");
+        let display = time_str.pad_ellipsize(
+            Budget::Columns(w),
+            Pos::End,
+            Indicator::UNICODE,
+            Alignment::End,
+        );
         self.draw(&display, Style::from_crossterm(style));
     }
 
@@ -350,7 +360,12 @@ impl DrawState<'_> {
             )
             .unwrap_or_else(|_| "????-??-?? ??:??".to_string());
         let w = width as usize;
-        let display = format!("{formatted:w$}");
+        let display = formatted.pad_ellipsize(
+            Budget::Columns(w),
+            Pos::End,
+            Indicator::UNICODE,
+            Alignment::Start,
+        );
         self.draw(&display, Style::from_crossterm(style));
     }
 
