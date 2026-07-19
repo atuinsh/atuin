@@ -1,13 +1,6 @@
 //! MessagePack encode helpers built on [`rmp::encode`].
 
-use rmp::encode as mp;
-use rmp::encode::{RmpWrite, RmpWriteErr, ValueWriteError};
-
-// Re-export rmp's write primitives so decoders/encoders depend only on this module.
-pub use rmp::encode::{
-    write_array_len, write_bin, write_bool, write_sint, write_str, write_u8, write_u16, write_u64,
-    write_uint,
-};
+pub use rmp::encode::*;
 
 /// An error encountered while encoding a MessagePack value.
 #[derive(Debug, derive_more::Display, derive_more::From, thiserror::Error)]
@@ -22,7 +15,8 @@ pub fn write_optional<W: RmpWrite, T>(
 ) -> Result<(), EncodeError<W::Error>> {
     match value {
         Some(v) => write(out, v).map_err(EncodeError::from),
-        None => mp::write_nil(out)
-            .map_err(|e| EncodeError::from(ValueWriteError::InvalidMarkerWrite(e))),
+        None => {
+            write_nil(out).map_err(|e| EncodeError::from(ValueWriteError::InvalidMarkerWrite(e)))
+        }
     }
 }
