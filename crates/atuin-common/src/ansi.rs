@@ -3,6 +3,9 @@
 use std::borrow::Borrow;
 use std::num::NonZeroU16;
 
+/// Arbitrary upper bound on the emulated screen height, in rows. Mitigates OOMs with long output.
+const MAX_ROWS: usize = 16_384;
+
 /// Render ANSI-encoded terminal output to plain text, as it would appear on a `cols`-wide terminal.
 ///
 /// Uses [`vt100::Parser`] under the hood meaning that backspaces, ANSI codes, etc. are gracefully
@@ -10,11 +13,6 @@ use std::num::NonZeroU16;
 ///
 /// **Note** that this function is not cheap. It drives a full terminal emulator.
 pub fn to_plain_text(input: impl AsRef<[u8]>, cols: NonZeroU16) -> String {
-    /// Arbitrary upper bound on the emulated screen height, in rows.
-    ///
-    /// Helps mitigate some weird OOMs we could hit with long output.
-    const MAX_ROWS: usize = 16_384;
-
     let bytes = input.as_ref();
     if bytes.is_empty() {
         return String::new();
