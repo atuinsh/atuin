@@ -17,7 +17,7 @@ use unicode_width::UnicodeWidthStr;
 /// How much room to truncate or pad into, and the unit it is measured in.
 #[cfg(feature = "unicode")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GlyphWidth {
+pub enum Measure {
     /// A UTF-8 byte budget.
     Bytes(usize),
     /// A display-column budget via `unicode-width` - a double-width glyph such
@@ -26,19 +26,19 @@ pub enum GlyphWidth {
 }
 
 #[cfg(feature = "unicode")]
-impl GlyphWidth {
+impl Measure {
     /// The numeric limit, in this budget's own unit.
     pub(crate) fn amount(self) -> usize {
         match self {
-            GlyphWidth::Bytes(n) | GlyphWidth::Columns(n) => n,
+            Measure::Bytes(n) | Measure::Columns(n) => n,
         }
     }
 
     /// Total cost of `s` in this budget's unit.
     pub(crate) fn cost(self, s: &str) -> usize {
         match self {
-            GlyphWidth::Bytes(_) => s.len(),
-            GlyphWidth::Columns(_) => s.width(),
+            Measure::Bytes(_) => s.len(),
+            Measure::Columns(_) => s.width(),
         }
     }
 }
