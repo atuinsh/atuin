@@ -9,7 +9,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d122413f284cf2d62fb1b7db97e02edb8cda96d769b16e443a4f6195e35662b0"
 dependencies = [
  "crypto-common",
- "generic-array 0.14.7",
+ "generic-array",
 ]
 
 [[package]]
@@ -349,7 +349,6 @@ dependencies = [
  "eyre",
  "fs-err",
  "futures",
- "generic-array 1.4.4",
  "humantime",
  "indicatif",
  "interim",
@@ -776,7 +775,7 @@ version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
- "generic-array 0.14.7",
+ "generic-array",
 ]
 
 [[package]]
@@ -1209,7 +1208,7 @@ version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
- "generic-array 0.14.7",
+ "generic-array",
  "rand_core 0.6.4",
  "typenum",
 ]
@@ -1222,7 +1221,7 @@ checksum = "b9d6cf87adf719ddf43a805e92c6870a531aedda35ff640442cbaf8674e141e1"
 dependencies = [
  "aead",
  "cipher",
- "generic-array 0.14.7",
+ "generic-array",
  "poly1305",
  "salsa20",
  "subtle",
@@ -1933,17 +1932,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "generic-array"
-version = "1.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab4e5aa225bc56696909483320f0ff9b600f1a971b52e07a17d70f3d9b43254b"
-dependencies = [
- "rustversion",
- "serde_core",
- "typenum",
-]
-
-[[package]]
 name = "gethostname"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2468,7 +2456,7 @@ version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
- "generic-array 0.14.7",
+ "generic-array",
 ]
 
 [[package]]
@@ -4426,7 +4414,7 @@ dependencies = [
  "curve25519-dalek",
  "digest",
  "ed25519-dalek",
- "generic-array 0.14.7",
+ "generic-array",
  "rand 0.8.7",
  "rusty_paseto",
  "serde",
@@ -4983,7 +4971,7 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-util",
- "generic-array 0.14.7",
+ "generic-array",
  "hex",
  "hkdf",
  "hmac",
