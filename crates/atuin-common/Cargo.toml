@@ -13,6 +13,9 @@ repository = { workspace = true }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
+# `tracing` is now an unconditional dependency, but the feature is kept so that
+# `#[cfg(feature = "tracing")]` gating and dependents that enable it still work.
+tracing = []
 # Enables the `test_utils` module.
 test-utils = ["dep:tracing-subscriber"]
 # The `string::ellipsis` module: budget-aware, grapheme/display-width-correct
@@ -43,6 +46,7 @@ unicode-segmentation = { version = "1.11.0", optional = true }
 vt100 = { workspace = true, optional = true }
 itertools = { workspace = true }
 tokio.workspace = true
+futures = "0.3"
 winnow = "1.0.4"
 
 [dev-dependencies]

@@ -1,19 +1,67 @@
 use std::{
     collections::HashMap,
-    ffi::{OsStr, OsString},
+    ffi::OsStr,
     io,
     path::Path,
-    process::{self, Command, ExitCode, Output},
+    process::{self, Command, ExitStatus},
+    sync::Arc,
 };
 
-use eyre::Ok;
 use serde::Serialize;
 use sysinfo::{Process, System, get_current_pid};
 use thiserror::Error;
-use tokio::{self, io::AsyncBufReadExt, task::JoinHandle};
-use tracing::instrument;
 
-mod bash;
+pub mod bash;
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum RunError {
+    #[error("'{command}' encountered an IO error: {error}")]
+    Io {
+        command: String,
+        error: Arc<io::Error>,
+    },
+    #[error("'{command}' failed with {status}")]
+    Exec {
+        command: String,
+        status: ExitStatus,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+    },
+    #[error("the output of '{command}' was not delimited as expected")]
+    Delimiter { command: String },
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum AliasesError {
+    #[error("could not query the shell's aliases: {0}")]
+    Run(#[from] RunError),
+    #[error("could not parse the shell's alias list at byte {offset}, near {near:?}")]
+    Parse { offset: usize, near: String },
+    #[error("the alias probe did not run to completion")]
+    Probe,
+}
+
+pub trait IsShell {
+    /// Get the name of this shell that we use internal to atuin.
+    fn canonical_name(&self) -> &'static str;
+
+    /// Return whether the shell is POSIX-compliant.
+    fn is_posix(&self) -> bool;
+
+    /// Query the aliases defined in the current shell.
+    async fn aliases(&self) -> Result<HashMap<Vec<u8>, Vec<u8>>, AliasesError>;
+
+    /// Invoke the given shell command, interactively, in this shell.
+    ///
+    /// Returns `Ok` if `exit_code == 0`, otherwise `Err`.
+    async fn run_interactive(&self, s: impl AsRef<str>) -> Result<process::Output, RunError>;
+
+    /// Get the full path to this shell, if it is installed.
+    fn installed_path(&self) -> Option<&Path>;
+
+    /// Return the path to the user configuration path of this shell.
+    fn user_config_path(&self) -> &Path;
+}
 
 #[derive(PartialEq, derive_more::Display)]
 pub enum Shell {
