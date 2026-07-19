@@ -1,8 +1,19 @@
-use std::{ffi::OsStr, path::Path, process::Command};
+use std::{
+    collections::HashMap,
+    ffi::{OsStr, OsString},
+    io,
+    path::Path,
+    process::{self, Command, ExitCode, Output},
+};
 
+use eyre::Ok;
 use serde::Serialize;
 use sysinfo::{Process, System, get_current_pid};
 use thiserror::Error;
+use tokio::{self, io::AsyncBufReadExt, task::JoinHandle};
+use tracing::instrument;
+
+mod bash;
 
 #[derive(PartialEq, derive_more::Display)]
 pub enum Shell {

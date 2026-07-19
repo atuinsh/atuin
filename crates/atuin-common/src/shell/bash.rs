@@ -1,5 +1,17 @@
-use std::{collections::HashMap, ffi::{OsStr, OsString}, io, path::Path, process::{self, Command, ExitCode, Output}};
-use tokio;
+use std::{
+    collections::HashMap,
+    ffi::{OsStr, OsString},
+    io,
+    path::Path,
+    process::{self, Command, ExitCode, Output},
+    sync::Arc,
+};
+use tokio::{self, task::JoinHandle};
+use winnow::{
+    ModalResult, Parser,
+    combinator::{alt, delimited, opt, preceded, repeat, terminated},
+    token::{literal, take_while},
+};
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum RunError {
@@ -33,24 +45,89 @@ pub trait IsShell {
     fn user_config_path(&self) -> &Path;
 }
 
-#[derive(Debug, Clone, Copy, derive_more::Display("bash"))]
-pub struct Bash;
+struct Inner {
+    aliases: JoinHandle<Result<HashMap<Vec<u8>, Vec<u8>>, RunError>>,
+}
+
+#[derive(Debug, Clone, derive_more::Display("bash"))]
+pub struct Bash {
+    inner: Arc<Inner>,
+}
+
+impl Bash {
+    /// Create a new Bash shell object.
+    ///
+    /// This will kick off background tokio tasks to eagerly probe information. Resolving the
+    /// asynchronous methods will block on said probe tasks.
+    pub fn new() -> Self {
+        let inner = Inner {
+            aliases: tokio::spawn(async || {
+                self.run_interactive("alias -p")
+                    .await
+                    .map(|o| Self::parse_aliases(o.stdout))
+            }),
+        };
+
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Parse the output of `alias -p` into a name → value map.
+    fn parse_aliases(input: &[u8]) -> Result<HashMap<Vec<u8>, Vec<u8>>, RunError> {
+        fn piece<'a>(input: &mut &'a [u8]) -> ModalResult<&'a [u8]> {
+            alt((
+                preceded(b'\\', literal(b"'".as_slice())),
+                delimited(b'\'', take_while(0.., |b: u8| b != b'\''), b'\''),
+            ))
+            .parse_next(input)
+        }
+
+        fn alias_value(input: &mut &[u8]) -> ModalResult<Vec<u8>> {
+            repeat(0.., piece)
+                .fold(Vec::new, |mut acc: Vec<u8>, seg: &[u8]| {
+                    acc.extend_from_slice(seg);
+                    acc
+                })
+                .parse_next(input)
+        }
+
+        fn alias_line(input: &mut &[u8]) -> ModalResult<(Vec<u8>, Vec<u8>)> {
+            (
+                literal(b"alias ".as_slice()),
+                take_while(1.., |b: u8| b != b'='),
+                literal(b"=".as_slice()),
+                alias_value,
+            )
+                .map(|(_, name, _, value): (_, &[u8], _, Vec<u8>)| (name.to_vec(), value))
+                .parse_next(input)
+        }
+
+        let mut records = repeat(0.., terminated(alias_line, opt(literal(b"\n".as_slice())))).fold(
+            HashMap::new,
+            |mut acc: HashMap<Vec<u8>, Vec<u8>>, (name, value)| {
+                acc.insert(name, value);
+                acc
+            },
+        );
+
+        records
+            .parse(input)
+            .map_err(|_| RunError::Parse("alias -p".to_owned()))
+    }
+}
 
 impl IsShell for Bash {
-    fn canonical_name(&self) -> &'static str { "bash" }
+    fn canonical_name(&self) -> &'static str {
+        "bash"
+    }
 
-    fn is_posix(&self) -> bool { true }
+    fn is_posix(&self) -> bool {
+        true
+    }
 
     #[instrument]
-    async fn aliases(&self) -> Result<HashMap<Vec<u8>, Vec<u8>>, RunError> {
-        self.run_interactive("alias -p")
-            .await
-            .map(|o| {
-                // Unfortunately, naively parsing aliases won't work. Bash can potentially return
-                // `\n` characters as part of the output of `alias`, so we need a complex
-                // combinatorial parser.
-            })
-    }
+    async fn aliases(&self) -> Result<HashMap<Vec<u8>, Vec<u8>>, RunError> {}
 
     #[instrument]
     async fn run_interactive(&self, s: impl AsRef<str>) -> Result<process::Output, RunError> {
@@ -67,9 +144,7 @@ impl IsShell for Bash {
             })
     }
 
-    fn installed_path(&self) -> Option<&Path> {
-    }
+    fn installed_path(&self) -> Option<&Path> {}
 
-    fn user_config_path(&self) -> &Path {
-    }
+    fn user_config_path(&self) -> &Path {}
 }
