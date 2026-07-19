@@ -214,3 +214,30 @@ impl IsShell for Xonsh {
         &self.inner.config_path
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn parse(input: &[u8]) -> Aliases {
+        Xonsh::parse_aliases(input).unwrap()
+    }
+
+    #[test]
+    fn parses_string_and_list_values() {
+        let m = parse(br#"{"a": "ls -l", "b": ["git", "status"]}"#);
+        assert_eq!(m[b"a".as_slice()], b"ls -l".to_vec());
+        assert_eq!(m[b"b".as_slice()], b"git status".to_vec());
+    }
+
+    #[test]
+    fn parses_empty_object() {
+        assert_eq!(parse(b"{}"), Aliases::new());
+    }
+
+    #[test]
+    fn rejects_malformed_json() {
+        assert!(Xonsh::parse_aliases(b"{not json").is_err());
+    }
+}

@@ -227,3 +227,45 @@ impl IsShell for Fish {
         &self.inner.config_path
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn parse(input: &[u8]) -> Aliases {
+        Fish::parse_aliases(input).unwrap()
+    }
+
+    #[test]
+    fn parses_bare_and_quoted() {
+        assert_eq!(
+            parse(b"alias plain man\n")[b"plain".as_slice()],
+            b"man".to_vec()
+        );
+        assert_eq!(
+            parse(b"alias ll 'ls -l'\n")[b"ll".as_slice()],
+            b"ls -l".to_vec()
+        );
+    }
+
+    #[test]
+    fn decodes_backslash_escapes() {
+        assert_eq!(
+            parse(br"alias q 'it\'s'")[b"q".as_slice()],
+            b"it's".to_vec()
+        );
+        assert_eq!(parse(br"alias b 'a\\b'")[b"b".as_slice()], br"a\b".to_vec());
+    }
+
+    #[test]
+    fn does_not_use_equals_as_separator() {
+        // fish records are `alias NAME VALUE`; an `=` is just an ordinary byte.
+        assert_eq!(parse(b"alias k 'a=b'\n")[b"k".as_slice()], b"a=b".to_vec());
+    }
+
+    #[test]
+    fn rejects_trailing_garbage() {
+        assert!(Fish::parse_aliases(b"alias ll 'ls -l'\nnonsense\n").is_err());
+    }
+}

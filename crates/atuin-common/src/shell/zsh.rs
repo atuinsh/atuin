@@ -328,3 +328,54 @@ impl IsShell for Zsh {
         &self.inner.config_path
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn parse(input: &[u8]) -> Aliases {
+        Zsh::parse_aliases(input).unwrap()
+    }
+
+    #[test]
+    fn parses_bare_value() {
+        assert_eq!(
+            parse(b"alias plain=man\n")[b"plain".as_slice()],
+            b"man".to_vec()
+        );
+    }
+
+    #[test]
+    fn parses_single_quoted_with_escaped_quote() {
+        assert_eq!(
+            parse(br"alias whoops='echo it'\''s fine'")[b"whoops".as_slice()],
+            b"echo it's fine".to_vec()
+        );
+    }
+
+    #[test]
+    fn decodes_ansi_c_newline() {
+        assert_eq!(
+            parse(b"alias multi=$'line one\\nline two'\n")[b"multi".as_slice()],
+            b"line one\nline two".to_vec()
+        );
+    }
+
+    #[test]
+    fn decodes_ansi_c_octal_and_hex_and_backslash() {
+        assert_eq!(parse(b"alias a=$'\\101'\n")[b"a".as_slice()], b"A".to_vec());
+        assert_eq!(parse(b"alias b=$'\\x41'\n")[b"b".as_slice()], b"A".to_vec());
+        assert_eq!(parse(b"alias c=$'\\\\'\n")[b"c".as_slice()], b"\\".to_vec());
+    }
+
+    #[test]
+    fn name_does_not_run_across_a_newline() {
+        assert!(Zsh::parse_aliases(b"alias to use foo\nalias a=b\n").is_err());
+    }
+
+    #[test]
+    fn rejects_trailing_garbage() {
+        assert!(Zsh::parse_aliases(b"alias ll='ls -l'\nnonsense\n").is_err());
+    }
+}
