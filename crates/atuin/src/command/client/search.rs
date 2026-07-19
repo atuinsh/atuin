@@ -163,6 +163,18 @@ impl Cmd {
         self.interactive
     }
 
+    fn validate_search_mode(&self, settings: &Settings) -> Result<SearchMode> {
+        let search_mode = self.search_mode.unwrap_or(settings.search_mode);
+
+        if !self.interactive && search_mode == SearchMode::DaemonFuzzy {
+            eyre::bail!(
+                "search mode 'daemon-fuzzy' is only supported with --interactive; use '--search-mode fuzzy' for non-interactive search"
+            );
+        }
+
+        Ok(search_mode)
+    }
+
     // clippy: please write this instead
     // clippy: now it has too many lines
     // me: I'll do it later OKAY
@@ -174,6 +186,11 @@ impl Cmd {
         store: SqliteStore,
         theme: &Theme,
     ) -> Result<()> {
+        if let Some(search_mode) = self.search_mode {
+            settings.search_mode = search_mode;
+        }
+        self.validate_search_mode(settings)?;
+
         let query = if self.query.is_empty() {
             std::env::var("ATUIN_QUERY").map_or_else(
                 |_| vec![],
@@ -214,9 +231,6 @@ impl Cmd {
             return Ok(());
         }
 
-        if let Some(search_mode) = self.search_mode {
-            settings.search_mode = search_mode;
-        }
         if let Some(filter_mode) = self.filter_mode {
             settings.filter_mode = Some(filter_mode);
         }
@@ -355,7 +369,15 @@ async fn run_non_interactive(
 #[cfg(test)]
 mod tests {
     use super::Cmd;
+    use atuin_client::settings::{SearchMode, Settings};
     use clap::Parser;
+
+    fn settings_with_search_mode(search_mode: SearchMode) -> Settings {
+        Settings {
+            search_mode,
+            ..Settings::default()
+        }
+    }
 
     #[test]
     fn search_for_triple_dash() {
@@ -380,5 +402,55 @@ mod tests {
         let cmd =
             Cmd::try_parse_from(["search", "--author", "codex", "--author", "ellie"]).unwrap();
         assert_eq!(cmd.author, vec!["codex".to_string(), "ellie".to_string()]);
+    }
+
+    #[test]
+    fn interactive_daemon_fuzzy_is_valid() {
+        let cmd = Cmd::try_parse_from(["search", "--interactive"]).unwrap();
+        let settings = settings_with_search_mode(SearchMode::DaemonFuzzy);
+
+        assert_eq!(
+            cmd.validate_search_mode(&settings).unwrap(),
+            SearchMode::DaemonFuzzy
+        );
+    }
+
+    #[test]
+    fn non_interactive_daemon_fuzzy_is_invalid() {
+        let cmd = Cmd::try_parse_from(["search"]).unwrap();
+        let settings = settings_with_search_mode(SearchMode::DaemonFuzzy);
+
+        let error = cmd.validate_search_mode(&settings).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "search mode 'daemon-fuzzy' is only supported with --interactive; use '--search-mode fuzzy' for non-interactive search"
+        );
+    }
+
+    #[test]
+    fn non_interactive_fuzzy_is_valid() {
+        let cmd = Cmd::try_parse_from(["search"]).unwrap();
+        let settings = settings_with_search_mode(SearchMode::Fuzzy);
+
+        assert_eq!(
+            cmd.validate_search_mode(&settings).unwrap(),
+            SearchMode::Fuzzy
+        );
+    }
+
+    #[test]
+    fn cli_search_mode_overrides_config_before_validation() {
+        let cmd = Cmd::try_parse_from(["search", "--search-mode", "fuzzy"]).unwrap();
+        let settings = settings_with_search_mode(SearchMode::DaemonFuzzy);
+
+        assert_eq!(
+            cmd.validate_search_mode(&settings).unwrap(),
+            SearchMode::Fuzzy
+        );
+
+        let cmd = Cmd::try_parse_from(["search", "--search-mode", "daemon-fuzzy"]).unwrap();
+        let settings = settings_with_search_mode(SearchMode::Fuzzy);
+
+        assert!(cmd.validate_search_mode(&settings).is_err());
     }
 }
