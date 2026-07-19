@@ -102,13 +102,11 @@ pub trait EllipsizeExt: AsRef<str> {
     where
         Self: Sized,
     {
-        let s = self.as_ref();
-        if budget.cost(s) > budget.amount() {
-            // Too wide: elide. The result already fills the budget, so `align` is moot.
-            return self.ellipsize(budget, side, indicator).into();
+        if budget.cost(self.as_ref()) > budget.amount() {
+            self.ellipsize(budget, side, indicator).into()
+        } else {
+            self.pad_to(budget, align)
         }
-        // Fits: pad it out to the budget, aligned per `align`.
-        self.pad_to(budget, align)
     }
 }
 
