@@ -1,11 +1,4 @@
 //! MessagePack decode helpers built on [`rmp::decode`].
-//!
-//! Mirrors `rmp::decode`'s `read_*` shape, but every read returns our own
-//! [`DecodeError`] (which converts cleanly into [`eyre::Report`]) so a decoder
-//! can use `?` throughout and convert once at the boundary. Adds an owned
-//! [`read_string`], a nil-aware [`read_optional`], and the structural checks
-//! [`read_array_len`]/[`expect_array_len`] and [`expect_eof`] that `rmp` does
-//! not perform itself.
 
 use rmp::decode as mp;
 use rmp::decode::bytes::BytesReadError;
@@ -18,17 +11,6 @@ pub use rmp::decode::bytes::Bytes;
 pub use rmp::Marker;
 
 /// An error encountered while decoding a MessagePack value.
-///
-/// Wraps the three error types `rmp`'s decode functions return, and adds two
-/// structural variants for checks `rmp` does not perform itself:
-/// [`UnexpectedArrayLen`](Self::UnexpectedArrayLen) and
-/// [`TrailingBytes`](Self::TrailingBytes).
-///
-/// Converts into [`eyre::Report`] via a manual `From` rather than a
-/// [`std::error::Error`] impl, because a [`DecodeError`] is not, in general,
-/// `'static`.
-///
-/// [`Display`]: std::fmt::Display
 #[derive(Debug, derive_more::Display)]
 pub enum DecodeError<'a, E: RmpReadErr = BytesReadError> {
     /// The next value was not a valid UTF-8 string.
@@ -140,8 +122,7 @@ pub fn read_string<'a>(bytes: &mut Bytes<'a>) -> Result<String, DecodeError<'a>>
     Ok(string.into())
 }
 
-/// Read a value that may be nil, returning [`None`] for nil. `read` decodes the
-/// inner value (e.g. [`read_u64`] or [`read_string`]).
+/// Read a value that may be nil, returning [`None`] for nil.
 pub fn read_optional<'a, T, E>(
     bytes: &mut Bytes<'a>,
     read: impl FnOnce(&mut Bytes<'a>) -> Result<T, E>,
@@ -184,12 +165,8 @@ where
     Ok(value)
 }
 
-/// Read a length-prefixed MessagePack array, decoding each element with
-/// `read_elem`, and collect the results into a [`Vec`].
-///
-/// Unlike [`read_total_array`], this does not assert end-of-input — use it for
-/// nested arrays that are followed by more data. `read_elem` may return any
-/// error a [`DecodeError`] converts into (e.g. `eyre::Report`).
+/// Read a length-prefixed MessagePack array, decoding each element with `read_elem`.
+/// Unlike [`read_total_array`], this does not assert end-of-input.
 pub fn read_array_of<'a, T, E>(
     bytes: &mut Bytes<'a>,
     mut read_elem: impl FnMut(&mut Bytes<'a>) -> Result<T, E>,
