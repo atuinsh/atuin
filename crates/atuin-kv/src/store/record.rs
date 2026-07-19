@@ -37,41 +37,33 @@ impl KvRecord {
             "v0" => {
                 let mut bytes = rmp::decode::Bytes::new(&data.0);
 
-                rmp::decode::expect_array_len(&mut bytes, 3)?;
-
-                let namespace = rmp::decode::read_string(&mut bytes)?;
-                let key = rmp::decode::read_string(&mut bytes)?;
-                let value = rmp::decode::read_string(&mut bytes)?;
-
-                rmp::decode::expect_eof(&bytes)?;
-
-                Ok(KvRecord {
-                    namespace,
-                    key,
-                    value: Some(value),
+                rmp::decode::read_total_array(&mut bytes, 3, |b| {
+                    Ok(KvRecord {
+                        namespace: rmp::decode::read_string(b)?,
+                        key: rmp::decode::read_string(b)?,
+                        value: Some(rmp::decode::read_string(b)?),
+                    })
                 })
             }
             KV_VERSION => {
                 let mut bytes = rmp::decode::Bytes::new(&data.0);
 
-                rmp::decode::expect_array_len(&mut bytes, 4)?;
+                rmp::decode::read_total_array(&mut bytes, 4, |b| {
+                    let namespace = rmp::decode::read_string(b)?;
+                    let key = rmp::decode::read_string(b)?;
+                    let has_value = rmp::decode::read_bool(b)?;
 
-                let namespace = rmp::decode::read_string(&mut bytes)?;
-                let key = rmp::decode::read_string(&mut bytes)?;
-                let has_value = rmp::decode::read_bool(&mut bytes)?;
+                    let value = if has_value {
+                        Some(rmp::decode::read_string(b)?)
+                    } else {
+                        None
+                    };
 
-                let value = if has_value {
-                    Some(rmp::decode::read_string(&mut bytes)?)
-                } else {
-                    None
-                };
-
-                rmp::decode::expect_eof(&bytes)?;
-
-                Ok(KvRecord {
-                    namespace,
-                    key,
-                    value,
+                    Ok(KvRecord {
+                        namespace,
+                        key,
+                        value,
+                    })
                 })
             }
             _ => {

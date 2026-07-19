@@ -60,15 +60,9 @@ impl VarRecord {
                     }
 
                     // delete
-                    1 => {
-                        rmp::decode::expect_array_len(&mut bytes, 1)?;
-
-                        let key = rmp::decode::read_string(&mut bytes)?;
-
-                        rmp::decode::expect_eof(&bytes)?;
-
-                        Ok(VarRecord::Delete(key))
-                    }
+                    1 => rmp::decode::read_total_array(&mut bytes, 1, |b| {
+                        Ok(VarRecord::Delete(rmp::decode::read_string(b)?))
+                    }),
 
                     n => {
                         bail!("unknown Dotfiles var record type {n}")

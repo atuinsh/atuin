@@ -42,18 +42,12 @@ impl Var {
     }
 
     pub fn deserialize(bytes: &mut rmp::decode::Bytes) -> Result<Self> {
-        rmp::decode::expect_array_len(bytes, 3)?;
-
-        let name = rmp::decode::read_string(bytes)?;
-        let value = rmp::decode::read_string(bytes)?;
-        let export = rmp::decode::read_bool(bytes)?;
-
-        rmp::decode::expect_eof(bytes)?;
-
-        Ok(Var {
-            name,
-            value,
-            export,
+        rmp::decode::read_total_array(bytes, 3, |b| {
+            Ok(Var {
+                name: rmp::decode::read_string(b)?,
+                value: rmp::decode::read_string(b)?,
+                export: rmp::decode::read_bool(b)?,
+            })
         })
     }
 }

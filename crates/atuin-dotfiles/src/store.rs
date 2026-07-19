@@ -60,27 +60,17 @@ impl AliasRecord {
 
                 match record_type {
                     // create
-                    0 => {
-                        rmp::decode::expect_array_len(&mut bytes, 2)?;
-
-                        let name = rmp::decode::read_string(&mut bytes)?;
-                        let value = rmp::decode::read_string(&mut bytes)?;
-
-                        rmp::decode::expect_eof(&bytes)?;
-
-                        Ok(AliasRecord::Create(Alias { name, value }))
-                    }
+                    0 => rmp::decode::read_total_array(&mut bytes, 2, |b| {
+                        Ok(AliasRecord::Create(Alias {
+                            name: rmp::decode::read_string(b)?,
+                            value: rmp::decode::read_string(b)?,
+                        }))
+                    }),
 
                     // delete
-                    1 => {
-                        rmp::decode::expect_array_len(&mut bytes, 1)?;
-
-                        let key = rmp::decode::read_string(&mut bytes)?;
-
-                        rmp::decode::expect_eof(&bytes)?;
-
-                        Ok(AliasRecord::Delete(key))
-                    }
+                    1 => rmp::decode::read_total_array(&mut bytes, 1, |b| {
+                        Ok(AliasRecord::Delete(rmp::decode::read_string(b)?))
+                    }),
 
                     n => {
                         bail!("unknown AliasRecord type {n}")

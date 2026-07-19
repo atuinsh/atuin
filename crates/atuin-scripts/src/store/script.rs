@@ -62,32 +62,32 @@ impl Script {
     pub fn deserialize(bytes: &[u8]) -> Result<Self> {
         let mut bytes = rmp::decode::Bytes::new(bytes);
 
-        rmp::decode::expect_array_len(&mut bytes, 6)?;
+        rmp::decode::read_total_array(&mut bytes, 6, |b| -> eyre::Result<Script> {
+            let id = rmp::decode::read_string(b)?;
+            let name = rmp::decode::read_string(b)?;
+            let description = rmp::decode::read_string(b)?;
+            let shebang = rmp::decode::read_string(b)?;
 
-        let id = rmp::decode::read_string(&mut bytes)?;
-        let name = rmp::decode::read_string(&mut bytes)?;
-        let description = rmp::decode::read_string(&mut bytes)?;
-        let shebang = rmp::decode::read_string(&mut bytes)?;
+            // Nested array: read its own length header and elements. Nested
+            // arrays are not `read_total_array` — they have no eof of their own.
+            let tags_len = rmp::decode::read_array_len(b)?;
 
-        let tags_len = rmp::decode::read_array_len(&mut bytes)?;
+            let mut tags = Vec::new();
+            for _ in 0..tags_len {
+                let tag = rmp::decode::read_string(b)?;
+                tags.push(tag);
+            }
 
-        let mut tags = Vec::new();
-        for _ in 0..tags_len {
-            let tag = rmp::decode::read_string(&mut bytes)?;
-            tags.push(tag);
-        }
+            let script = rmp::decode::read_string(b)?;
 
-        let script = rmp::decode::read_string(&mut bytes)?;
-
-        rmp::decode::expect_eof(&bytes)?;
-
-        Ok(Script {
-            id: Uuid::parse_str(&id)?,
-            name,
-            description,
-            shebang,
-            tags,
-            script,
+            Ok(Script {
+                id: Uuid::parse_str(&id)?,
+                name,
+                description,
+                shebang,
+                tags,
+                script,
+            })
         })
     }
 }

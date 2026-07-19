@@ -162,9 +162,33 @@ where
     }
 }
 
+/// Decode a MessagePack array that is expected to be the entire remaining
+/// input: asserts the next value is an array of exactly `len` elements, runs
+/// `read` to decode them, then asserts no trailing bytes remain.
+///
+/// This bundles the array-length precondition and the end-of-input postcondition
+/// around a record's field reads. `read` may return any error that a
+/// [`DecodeError`] converts into (e.g. `eyre::Report`), so field decoding can mix
+/// `rmp::decode::read_*` with other fallible work.
+pub fn read_total_array<'a, T, E>(
+    bytes: &mut Bytes<'a>,
+    len: u32,
+    read: impl FnOnce(&mut Bytes<'a>) -> Result<T, E>,
+) -> Result<T, E>
+where
+    E: From<DecodeError<'a>>,
+{
+    expect_array_len(bytes, len).map_err(E::from)?;
+    let value = read(bytes)?;
+    expect_eof(bytes).map_err(E::from)?;
+    Ok(value)
+}
+
 /// Read an array-length header and require it to equal `expected`, else
 /// [`DecodeError::UnexpectedArrayLen`]. For a forward-compatible field count,
-/// use [`read_array_len`] and range-check yourself.
+/// use [`read_array_len`] and range-check yourself. For a record that is exactly
+/// a whole top-level array, prefer [`read_total_array`], which also checks for
+/// trailing bytes.
 pub fn expect_array_len<'a>(bytes: &mut Bytes<'a>, expected: u32) -> Result<u32, DecodeError<'a>> {
     let actual = read_array_len(bytes)?;
     if actual == expected {
@@ -175,6 +199,9 @@ pub fn expect_array_len<'a>(bytes: &mut Bytes<'a>, expected: u32) -> Result<u32,
 }
 
 /// Succeed only if the cursor is at end-of-input, else [`DecodeError::TrailingBytes`].
+/// For a record that is exactly a whole top-level array, prefer
+/// [`read_total_array`], which bundles this postcondition with the array-length
+/// precondition.
 pub fn expect_eof<'a>(bytes: &Bytes<'a>) -> Result<(), DecodeError<'a>> {
     let remaining = bytes.remaining_slice().len();
     if remaining == 0 {
@@ -392,6 +419,65 @@ mod tests {
             Err(DecodeError::TrailingBytes { remaining }) => assert_eq!(remaining, 3),
             other => panic!("expected TrailingBytes, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn read_total_array_happy_path_reads_fields_and_consumes_all() {
+        let buf = enc(|v| {
+            encode::write_array_len(v, 2).unwrap();
+            encode::write_str(v, "a").unwrap();
+            encode::write_str(v, "b").unwrap();
+        });
+        let mut b = Bytes::new(&buf);
+        let (first, second): (String, String) = read_total_array(&mut b, 2, |b| {
+            Ok::<_, DecodeError>((read_string(b)?, read_string(b)?))
+        })
+        .unwrap();
+        assert_eq!((first, second), ("a".to_string(), "b".to_string()));
+        assert!(b.remaining_slice().is_empty());
+    }
+
+    #[test]
+    fn read_total_array_wrong_len_reports_unexpected_array_len() {
+        let buf = array_of(3);
+        let mut b = Bytes::new(&buf);
+        let result: Result<(), DecodeError> = read_total_array(&mut b, 2, |_| Ok(()));
+        match result {
+            Err(DecodeError::UnexpectedArrayLen { expected, actual }) => {
+                assert_eq!((expected, actual), (2, 3));
+            }
+            other => panic!("expected UnexpectedArrayLen, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_total_array_trailing_bytes_reports_trailing() {
+        let mut buf = enc(|v| {
+            encode::write_array_len(v, 1).unwrap();
+            encode::write_str(v, "x").unwrap();
+        });
+        buf.push(0x01); // an extra byte after the array
+        let mut b = Bytes::new(&buf);
+        let result: Result<String, DecodeError> = read_total_array(&mut b, 1, |b| read_string(b));
+        match result {
+            Err(DecodeError::TrailingBytes { remaining }) => assert_eq!(remaining, 1),
+            other => panic!("expected TrailingBytes, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_total_array_supports_eyre_error_closure() {
+        // The closure returns eyre::Report, not DecodeError, exercising the
+        // `E: From<DecodeError>` generic. read_u64's DecodeError must convert in.
+        let buf = enc(|v| {
+            encode::write_array_len(v, 1).unwrap();
+            encode::write_u64(v, 99).unwrap();
+        });
+        let mut b = Bytes::new(&buf);
+        let value: u64 =
+            read_total_array(&mut b, 1, |b| -> eyre::Result<u64> { Ok(read_u64(b)?) }).unwrap();
+        assert_eq!(value, 99);
+        assert!(b.remaining_slice().is_empty());
     }
 
     #[test]
