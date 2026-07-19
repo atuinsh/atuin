@@ -18,6 +18,17 @@ pub enum Pos {
     End,
 }
 
+/// Which side to pad toward when the string is shorter than the budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Alignment {
+    /// Content flush to the start, padding on the end (left-aligned).
+    Start,
+    /// Content centered, padding split across both sides.
+    Center,
+    /// Content flush to the end, padding on the start (right-aligned).
+    End,
+}
+
 /// The marker spliced in where content was dropped: [`Indicator::ASCII`]
 /// (`...`), [`Indicator::UNICODE`] (`…`), or any custom string via
 /// [`Indicator::new`] (e.g. `[output truncated]`).
@@ -115,21 +126,41 @@ pub trait EllipsizeExt: AsRef<str> {
         }
     }
 
-    /// Fit `self` to `budget`: ellipsize it on `side` with `indicator` when it
-    /// exceeds the budget, otherwise right-pad it with spaces up to the
-    /// budget's amount, in the budget's own unit (display columns or bytes).
-    /// Always returns an owned string.
-    fn pad_ellipsize(&self, budget: Budget, side: Pos, indicator: Indicator<'_>) -> String {
+    /// Fit `self` to `budget`: ellipsize it on `side` with `indicator` when it exceeds the budget,
+    /// otherwise pad it with spaces, aligned per `align`.
+    fn pad_ellipsize<'a>(
+        &'a self,
+        budget: Budget,
+        side: Pos,
+        indicator: Indicator<'a>,
+        align: Alignment,
+    ) -> Cow<'a, str> {
         let s = self.as_ref();
         let cost = budget.cost(s);
         let amount = budget.amount();
         if cost > amount {
-            self.ellipsize(budget, side, indicator).to_string()
-        } else {
-            // Right-pad with spaces to the budget's amount, in its own unit.
-            let pad = amount - cost;
-            format!("{s}{:pad$}", "")
+            // Too wide: elide. The result already fills the budget, so `align` is moot.
+            return self.ellipsize(budget, side, indicator).into();
         }
+        let pad = amount - cost;
+        if pad == 0 {
+            return Cow::Borrowed(s);
+        }
+        // Split the padding across the two sides per `align`, in the budget's unit.
+        let (left, right) = match align {
+            Alignment::Start => (0, pad),
+            Alignment::End => (pad, 0),
+            Alignment::Center => (pad / 2, pad - pad / 2),
+        };
+        let mut out = String::with_capacity(s.len() + pad);
+        for _ in 0..left {
+            out.push(' ');
+        }
+        out.push_str(s);
+        for _ in 0..right {
+            out.push(' ');
+        }
+        Cow::Owned(out)
     }
 }
 
@@ -290,7 +321,7 @@ fn suffix_boundary(s: &str, max: usize, cost: impl Fn(&str) -> usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{Budget, EllipsizeExt, Indicator, Pos};
+    use super::{Alignment, Budget, EllipsizeExt, Indicator, Pos};
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
     use rstest::rstest;
@@ -463,24 +494,103 @@ mod tests {
     }
 
     #[rstest]
-    #[case::pads_when_shorter_than_budget("hi", Budget::Columns(5), Pos::End, "hi   ")]
-    #[case::unchanged_when_exact_budget("hello", Budget::Columns(5), Pos::End, "hello")]
-    #[case::ellipsizes_end_when_too_wide("hello world", Budget::Columns(6), Pos::End, "hello…")]
-    #[case::ellipsizes_start_when_too_wide("hello world", Budget::Columns(6), Pos::Start, "…world")]
-    #[case::empty_pads_to_budget("", Budget::Columns(3), Pos::End, "   ")]
-    #[case::wide_glyph_exact_column_budget("世", Budget::Columns(2), Pos::End, "世")]
-    #[case::wide_glyph_pads_by_display_columns("世", Budget::Columns(3), Pos::End, "世 ")]
-    #[case::pads_by_bytes_under_byte_budget("世", Budget::Bytes(4), Pos::End, "世 ")]
+    #[case::start_pads_when_shorter("hi", Budget::Columns(5), Pos::End, Alignment::Start, "hi   ")]
+    #[case::unchanged_when_exact_budget(
+        "hello",
+        Budget::Columns(5),
+        Pos::End,
+        Alignment::Start,
+        "hello"
+    )]
+    #[case::ellipsizes_end_when_too_wide(
+        "hello world",
+        Budget::Columns(6),
+        Pos::End,
+        Alignment::Start,
+        "hello…"
+    )]
+    #[case::ellipsizes_start_when_too_wide(
+        "hello world",
+        Budget::Columns(6),
+        Pos::Start,
+        Alignment::Start,
+        "…world"
+    )]
+    #[case::empty_pads_to_budget("", Budget::Columns(3), Pos::End, Alignment::Start, "   ")]
+    #[case::wide_glyph_exact_column_budget(
+        "世",
+        Budget::Columns(2),
+        Pos::End,
+        Alignment::Start,
+        "世"
+    )]
+    #[case::wide_glyph_pads_by_display_columns(
+        "世",
+        Budget::Columns(3),
+        Pos::End,
+        Alignment::Start,
+        "世 "
+    )]
+    #[case::pads_by_bytes_under_byte_budget(
+        "世",
+        Budget::Bytes(4),
+        Pos::End,
+        Alignment::Start,
+        "世 "
+    )]
+    #[case::end_align_left_pads("hi", Budget::Columns(5), Pos::End, Alignment::End, "   hi")]
+    #[case::center_even_split("hi", Budget::Columns(6), Pos::End, Alignment::Center, "  hi  ")]
+    #[case::center_odd_extra_on_right(
+        "hi",
+        Budget::Columns(5),
+        Pos::End,
+        Alignment::Center,
+        " hi  "
+    )]
+    #[case::align_ignored_when_elided(
+        "hello world",
+        Budget::Columns(6),
+        Pos::End,
+        Alignment::End,
+        "hello…"
+    )]
     fn pad_ellipsize_table(
         #[case] input: &str,
         #[case] budget: Budget,
         #[case] side: Pos,
+        #[case] align: Alignment,
         #[case] expected: &str,
     ) {
         assert_eq!(
-            input.pad_ellipsize(budget, side, Indicator::UNICODE),
+            input
+                .pad_ellipsize(budget, side, Indicator::UNICODE, align)
+                .as_ref(),
             expected
         );
+    }
+
+    #[test]
+    fn pad_ellipsize_borrows_only_when_no_alloc_needed() {
+        // Exact fit: no padding, no elision -> borrowed.
+        assert!(matches!(
+            "hello".pad_ellipsize(
+                Budget::Columns(5),
+                Pos::End,
+                Indicator::UNICODE,
+                Alignment::Start
+            ),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        // Padding needed -> owned.
+        assert!(matches!(
+            "hi".pad_ellipsize(
+                Budget::Columns(5),
+                Pos::End,
+                Indicator::UNICODE,
+                Alignment::Start
+            ),
+            std::borrow::Cow::Owned(_)
+        ));
     }
 
     fn any_pos() -> impl Strategy<Value = Pos> {

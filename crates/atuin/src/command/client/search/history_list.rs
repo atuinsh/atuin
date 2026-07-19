@@ -9,7 +9,7 @@ use atuin_client::{
 };
 use atuin_common::string::EllipsizeExt as _;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
-use atuin_common::string::ellipsis::{Budget, Indicator, Pos};
+use atuin_common::string::ellipsis::{Alignment, Budget, Indicator, Pos};
 use itertools::Itertools;
 use ratatui::{
     backend::FromCrossterm,
@@ -361,7 +361,12 @@ impl DrawState<'_> {
         let cwd = &h.cwd;
         // Elide from the left with "…" so the leaf directory stays visible;
         // pad to the column width when it already fits.
-        let display = cwd.pad_ellipsize(Budget::Columns(w), Pos::Start, Indicator::UNICODE);
+        let display = cwd.pad_ellipsize(
+            Budget::Columns(w),
+            Pos::Start,
+            Indicator::UNICODE,
+            Alignment::Start,
+        );
         self.draw(&display, Style::from_crossterm(style));
     }
 
@@ -371,7 +376,12 @@ impl DrawState<'_> {
         let w = width as usize;
         // Database stores hostname as "hostname:username"
         let host = h.hostname.split(':').next().unwrap_or(&h.hostname);
-        let display = host.pad_ellipsize(Budget::Columns(w), Pos::End, Indicator::UNICODE);
+        let display = host.pad_ellipsize(
+            Budget::Columns(w),
+            Pos::End,
+            Indicator::UNICODE,
+            Alignment::Start,
+        );
         self.draw(&display, Style::from_crossterm(style));
     }
 
@@ -381,7 +391,12 @@ impl DrawState<'_> {
         let w = width as usize;
         // Database stores hostname as "hostname:username"
         let user = h.hostname.split(':').nth(1).unwrap_or("");
-        let display = user.pad_ellipsize(Budget::Columns(w), Pos::End, Indicator::UNICODE);
+        let display = user.pad_ellipsize(
+            Budget::Columns(w),
+            Pos::End,
+            Indicator::UNICODE,
+            Alignment::Start,
+        );
         self.draw(&display, Style::from_crossterm(style));
     }
 
