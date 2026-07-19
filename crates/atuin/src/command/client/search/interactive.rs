@@ -1222,7 +1222,9 @@ pub async fn history(
         InputAction::ReturnOriginal => Ok(String::new()),
         InputAction::Copy(index) => {
             let cmd = results.swap_remove(index).command;
-            set_clipboard(cmd);
+            if let Err(e) = set_clipboard(cmd) {
+                tracing::warn!(?e, "failed to copy to clipboard");
+            }
             Ok(String::new())
         }
         InputAction::ReturnQuery | InputAction::Accept(_) => {
@@ -1243,20 +1245,21 @@ pub async fn history(
     feature = "clipboard",
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 ))]
-fn set_clipboard(s: String) {
-    // Do nothing if clipboard cannot be accessed
-    if let Ok(mut ctx) = arboard::Clipboard::new() {
-        ctx.set_text(s).unwrap();
-        // Use the clipboard context to make sure it is saved
-        ctx.get_text().unwrap();
-    }
+fn set_clipboard(s: String) -> Result<(), arboard::Error> {
+    let mut ctx = arboard::Clipboard::new()?;
+    ctx.set_text(s)?;
+    // Use the clipboard context to make sure it is saved
+    ctx.get_text()?;
+    Ok(())
 }
 
 #[cfg(not(all(
     feature = "clipboard",
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 )))]
-fn set_clipboard(_s: String) {}
+fn set_clipboard(_s: String) -> Result<(), std::convert::Infallible> {
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
