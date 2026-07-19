@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use eyre::{Result, eyre};
 
 use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine};
-use getrandom::getrandom;
+use getrandom::fill;
 use uuid::Uuid;
 
 /// Generate N random bytes, using a cryptographically secure source
@@ -13,7 +13,7 @@ pub fn crypto_random_bytes<const N: usize>() -> [u8; N] {
     // idea to use getrandom for things such as passwords.
     let mut ret = [0u8; N];
 
-    getrandom(&mut ret).expect("Failed to generate random bytes!");
+    fill(&mut ret).expect("Failed to generate random bytes!");
 
     ret
 }
