@@ -139,7 +139,8 @@ impl CommandCaptureTracker {
 
     fn finish_capture(&mut self) -> Option<CommandCapture> {
         let buffers = std::mem::take(&mut self.buffers);
-        let cols = self.cols.load(Ordering::Relaxed).max(1);
+        // `to_plain_text` clamps the width itself, so no `.max(1)` is needed here.
+        let cols = usize::from(self.cols.load(Ordering::Relaxed));
         let prompt = buffers.prompt.to_plain_text(cols);
         let command = buffers
             .command

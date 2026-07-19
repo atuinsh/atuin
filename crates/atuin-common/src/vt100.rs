@@ -56,20 +56,26 @@ pub trait Vt100PlainTextExt: AsRef<[u8]> {
     /// terminal.
     ///
     /// `cols` is the emulated terminal width; long lines wrap at this boundary.
-    /// A `cols` of `0` is treated as `1`. Empty input yields an empty string.
+    /// A `cols` of `0` is treated as `1`, and any value above `u16::MAX` (the
+    /// widest grid the emulator supports) is capped at `u16::MAX`. Empty input
+    /// yields an empty string.
+    ///
+    /// The width is a `usize` purely for caller convenience — terminal column
+    /// counts are usually held as `usize` — so no lossy pre-cast is needed at the
+    /// call site.
     ///
     /// See the [trait docs](Vt100PlainTextExt) for the full list of transforms.
-    fn to_plain_text(&self, cols: u16) -> String {
+    fn to_plain_text(&self, cols: usize) -> String {
         let bytes = self.as_ref();
         if bytes.is_empty() {
             return String::new();
         }
 
-        let cols = cols.max(1);
+        let cols = cols.clamp(1, u16::MAX as usize);
         let normalized = normalize_newlines(bytes);
         let rows = estimated_rows(&normalized, cols);
 
-        let mut parser = vt100::Parser::new(rows, cols, 0);
+        let mut parser = vt100::Parser::new(rows, cols as u16, 0);
         parser.process(&normalized);
 
         normalize_screen_contents(&parser.screen().contents())
@@ -103,9 +109,9 @@ fn normalize_newlines(bytes: &[u8]) -> Vec<u8> {
 /// Real terminal output tends to have short lines, so a `bytes / cols` estimate
 /// alone badly under-counts; we add the newline count. The extra `+1` leaves a
 /// row of headroom for a final partial line.
-fn estimated_rows(bytes: &[u8], cols: u16) -> u16 {
+fn estimated_rows(bytes: &[u8], cols: usize) -> u16 {
     let newline_rows = bytes.iter().filter(|&&b| b == b'\n').count() + 1;
-    let wrapped_rows = bytes.len() / cols as usize;
+    let wrapped_rows = bytes.len() / cols;
     newline_rows
         .saturating_add(wrapped_rows)
         .saturating_add(1)
@@ -173,7 +179,19 @@ mod tests {
     fn empty_input_is_empty_regardless_of_cols() {
         assert_eq!(b"".to_plain_text(0), "");
         assert_eq!(b"".to_plain_text(1), "");
-        assert_eq!(b"".to_plain_text(u16::MAX), "");
+        assert_eq!(b"".to_plain_text(u16::MAX as usize), "");
+        // Widths beyond the emulator's `u16` grid are capped, not truncated.
+        assert_eq!(b"".to_plain_text(usize::MAX), "");
+    }
+
+    #[test]
+    fn oversized_cols_is_capped_not_truncated() {
+        // A `usize` width past `u16::MAX` must be clamped to a valid grid rather
+        // than wrapping via a lossy `as u16` cast (which would turn, e.g.,
+        // `u16::MAX as usize + 1` into a zero-width grid). Rendering must still
+        // succeed and preserve the content.
+        assert_eq!(b"echo hi".to_plain_text(usize::MAX), "echo hi");
+        assert_eq!(b"echo hi".to_plain_text(u16::MAX as usize + 1), "echo hi");
     }
 
     #[test]
@@ -211,7 +229,7 @@ mod tests {
         /// For ANY bytes and ANY width, rendering must not panic and must not
         /// leave terminal control characters behind.
         #[test]
-        fn never_panics_and_strips_controls(bytes in proptest::collection::vec(any::<u8>(), 0..4096), cols in any::<u16>()) {
+        fn never_panics_and_strips_controls(bytes in proptest::collection::vec(any::<u8>(), 0..4096), cols in any::<usize>()) {
             let out = bytes.to_plain_text(cols);
             prop_assert!(!out.chars().any(|c| c.is_control() && c != '\n' && c != '\t'));
         }
