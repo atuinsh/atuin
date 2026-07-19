@@ -3,13 +3,6 @@
 use std::borrow::Borrow;
 use std::num::NonZeroU16;
 
-/// Upper bound on the emulated screen height, in rows.
-///
-/// Rows are estimated from the input so scrollback is preserved without
-/// wrapping, but pathological input (millions of newlines) must not allocate an
-/// unbounded grid, so output is capped at this many lines.
-const MAX_ROWS: usize = 10_000;
-
 /// Render ANSI-encoded terminal output to plain text, as it would appear on a `cols`-wide terminal.
 ///
 /// Uses [`vt100::Parser`] under the hood meaning that backspaces, ANSI codes, etc. are gracefully
@@ -17,19 +10,56 @@ const MAX_ROWS: usize = 10_000;
 ///
 /// **Note** that this function is not cheap. It drives a full terminal emulator.
 pub fn to_plain_text(input: impl AsRef<[u8]>, cols: NonZeroU16) -> String {
+    /// Arbitrary upper bound on the emulated screen height, in rows.
+    ///
+    /// Helps mitigate some weird OOMs we could hit with long output.
+    const MAX_ROWS: usize = 16_384;
+
     let bytes = input.as_ref();
     if bytes.is_empty() {
         return String::new();
     }
 
     let cols = cols.get();
-    let normalized = onlcr(bytes).collect::<Vec<u8>>();
-    let rows = estimated_rows(&normalized, cols);
+
+    let mut newlines = 0usize;
+    let normalized: Vec<u8> = onlcr(bytes)
+        .inspect(|&b| {
+            if b == b'\n' {
+                newlines += 1;
+            }
+        })
+        .collect();
+
+    // Size the grid to fit all output.
+    // Terminal output tends to have short lines. `bytes / cols` under-counts because not all lines
+    // have the same length. That's why we count newlines (and add one for the last).
+    // We then add the bytes/cols case for the extra rows created due to soft-wrapping.
+    // Note this overshoots, but that's OK, we'll clean up later.
+    let newline_rows = newlines + 1;
+    let wrapped_rows = normalized.len() / cols as usize;
+    let rows = newline_rows
+        .saturating_add(wrapped_rows)
+        .saturating_add(1)
+        .clamp(1, MAX_ROWS.min(u16::MAX as usize)) as u16;
 
     let mut parser = vt100::Parser::new(rows, cols, 0);
     parser.process(&normalized);
 
-    normalize_screen_contents(&parser.screen().contents())
+    // The emulator renders onto a fixed grid, so `contents()` comes back with each row right-padded
+    // and blank rows at the bottom. Gotta clean those up.
+    let contents = parser.screen().contents();
+    let trimmed = contents.trim_end();
+    let mut out = String::with_capacity(trimmed.len());
+    let mut first = true;
+    for line in trimmed.lines() {
+        if !first {
+            out.push('\n');
+        }
+        first = false;
+        out.push_str(line.trim_end());
+    }
+    out
 }
 
 /// Insert a `\r` before any `\n` that is not already preceded by one, mimicking
@@ -44,30 +74,6 @@ pub fn onlcr<B: Borrow<u8>>(bytes: impl IntoIterator<Item = B>) -> impl Iterator
     })
 }
 
-/// Estimate how many rows the emulated screen needs to hold `bytes` without
-/// losing content off the top, capped at [`MAX_ROWS`].
-///
-/// Real terminal output tends to have short lines, so a `bytes / cols` estimate
-/// alone badly under-counts; we add the newline count. The extra `+1` leaves a
-/// row of headroom for a final partial line.
-fn estimated_rows(bytes: &[u8], cols: u16) -> u16 {
-    let newline_rows = bytes.iter().filter(|&&b| b == b'\n').count() + 1;
-    let wrapped_rows = bytes.len() / cols as usize;
-    newline_rows
-        .saturating_add(wrapped_rows)
-        .saturating_add(1)
-        .clamp(1, MAX_ROWS) as u16
-}
-
-/// Trim trailing whitespace from each line and drop trailing blank lines, then rejoin with `\n`.
-fn normalize_screen_contents(contents: &str) -> String {
-    let mut lines = contents.lines().map(str::trim_end).collect::<Vec<_>>();
-    while lines.last().is_some_and(|line| line.is_empty()) {
-        lines.pop();
-    }
-    lines.join("\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,7 +81,6 @@ mod tests {
     use rstest::rstest;
     use std::num::NonZeroU16;
 
-    // Build a NonZeroU16 column width for tests; panics on zero.
     fn nz(cols: u16) -> NonZeroU16 {
         NonZeroU16::new(cols).expect("test column width must be nonzero")
     }
