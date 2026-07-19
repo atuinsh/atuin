@@ -60,28 +60,28 @@ impl Script {
     }
 
     pub fn deserialize(bytes: &[u8]) -> Result<Self> {
-        use atuin_common::rmp::RmpDecodeExt as _;
+        use atuin_common::rmp::{expect_array_len, expect_eof, read_array_len, read_string};
 
         let mut bytes = decode::Bytes::new(bytes);
 
-        bytes.expect_array_len(6)?;
+        expect_array_len(&mut bytes, 6)?;
 
-        let id = bytes.read_string()?;
-        let name = bytes.read_string()?;
-        let description = bytes.read_string()?;
-        let shebang = bytes.read_string()?;
+        let id = read_string(&mut bytes)?;
+        let name = read_string(&mut bytes)?;
+        let description = read_string(&mut bytes)?;
+        let shebang = read_string(&mut bytes)?;
 
-        let tags_len = bytes.read_array_len()?;
+        let tags_len = read_array_len(&mut bytes)?;
 
         let mut tags = Vec::new();
         for _ in 0..tags_len {
-            let tag = bytes.read_string()?;
+            let tag = read_string(&mut bytes)?;
             tags.push(tag);
         }
 
-        let script = bytes.read_string()?;
+        let script = read_string(&mut bytes)?;
 
-        bytes.expect_eof()?;
+        expect_eof(&bytes)?;
 
         Ok(Script {
             id: Uuid::parse_str(&id)?,

@@ -10,7 +10,7 @@ use crate::{
     record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store},
 };
 use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
-use atuin_common::rmp::RmpDecodeExt as _;
+use atuin_common::rmp::{expect_eof, read_string, read_with};
 
 use super::{HISTORY_TAG, History, HistoryId, Version};
 
@@ -76,14 +76,14 @@ impl HistoryRecord {
 
         let mut bytes = Bytes::new(&bytes.0);
 
-        let record_type = bytes.read_with(decode::read_u8)?;
+        let record_type = read_with(&mut bytes, decode::read_u8)?;
 
         match record_type {
             // 0 -> HistoryRecord::Create
             0 => {
                 // not super useful to us atm, but perhaps in the future
                 // written by write_bin above
-                let _ = bytes.read_with(decode::read_bin_len)?;
+                let _ = read_with(&mut bytes, decode::read_bin_len)?;
 
                 let record = History::deserialize(bytes.remaining_slice(), version)?;
 
@@ -92,8 +92,8 @@ impl HistoryRecord {
 
             // 1 -> HistoryRecord::Delete
             1 => {
-                let id = bytes.read_string()?;
-                bytes.expect_eof()?;
+                let id = read_string(&mut bytes)?;
+                expect_eof(&bytes)?;
 
                 Ok(HistoryRecord::Delete(id.into()))
             }

@@ -6,7 +6,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 // While we will support a range of shell config, I'd rather have a larger number of small records
 // + stores, rather than one mega config store.
 use atuin_common::record::{DecryptedData, Host, HostId};
-use atuin_common::rmp::RmpDecodeExt as _;
+use atuin_common::rmp::{expect_array_len, expect_eof, read_string, read_with};
 use atuin_common::utils::unquote;
 use eyre::{Result, bail, eyre};
 
@@ -60,28 +60,28 @@ impl AliasRecord {
             CONFIG_SHELL_ALIAS_VERSION => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
-                let record_type = bytes.read_with(decode::read_u8)?;
+                let record_type = read_with(&mut bytes, decode::read_u8)?;
 
                 match record_type {
                     // create
                     0 => {
-                        bytes.expect_array_len(2)?;
+                        expect_array_len(&mut bytes, 2)?;
 
-                        let name = bytes.read_string()?;
-                        let value = bytes.read_string()?;
+                        let name = read_string(&mut bytes)?;
+                        let value = read_string(&mut bytes)?;
 
-                        bytes.expect_eof()?;
+                        expect_eof(&bytes)?;
 
                         Ok(AliasRecord::Create(Alias { name, value }))
                     }
 
                     // delete
                     1 => {
-                        bytes.expect_array_len(1)?;
+                        expect_array_len(&mut bytes, 1)?;
 
-                        let key = bytes.read_string()?;
+                        let key = read_string(&mut bytes)?;
 
-                        bytes.expect_eof()?;
+                        expect_eof(&bytes)?;
 
                         Ok(AliasRecord::Delete(key))
                     }

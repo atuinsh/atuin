@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::record::{DecryptedData, Host, HostId};
-use atuin_common::rmp::RmpDecodeExt as _;
+use atuin_common::rmp::{expect_array_len, expect_eof, read_string, read_with};
 use eyre::{Result, bail, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;
@@ -54,7 +54,7 @@ impl VarRecord {
             DOTFILES_VAR_VERSION => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
-                let record_type = bytes.read_with(decode::read_u8)?;
+                let record_type = read_with(&mut bytes, decode::read_u8)?;
 
                 match record_type {
                     // create
@@ -65,11 +65,11 @@ impl VarRecord {
 
                     // delete
                     1 => {
-                        bytes.expect_array_len(1)?;
+                        expect_array_len(&mut bytes, 1)?;
 
-                        let key = bytes.read_string()?;
+                        let key = read_string(&mut bytes)?;
 
-                        bytes.expect_eof()?;
+                        expect_eof(&bytes)?;
 
                         Ok(VarRecord::Delete(key))
                     }

@@ -1,5 +1,5 @@
 use atuin_common::record::DecryptedData;
-use atuin_common::rmp::RmpDecodeExt as _;
+use atuin_common::rmp::{expect_array_len, expect_eof, read_string, read_with};
 use eyre::{Result, bail};
 use typed_builder::TypedBuilder;
 
@@ -41,13 +41,13 @@ impl KvRecord {
             "v0" => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
-                bytes.expect_array_len(3)?;
+                expect_array_len(&mut bytes, 3)?;
 
-                let namespace = bytes.read_string()?;
-                let key = bytes.read_string()?;
-                let value = bytes.read_string()?;
+                let namespace = read_string(&mut bytes)?;
+                let key = read_string(&mut bytes)?;
+                let value = read_string(&mut bytes)?;
 
-                bytes.expect_eof()?;
+                expect_eof(&bytes)?;
 
                 Ok(KvRecord {
                     namespace,
@@ -58,19 +58,19 @@ impl KvRecord {
             KV_VERSION => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
-                bytes.expect_array_len(4)?;
+                expect_array_len(&mut bytes, 4)?;
 
-                let namespace = bytes.read_string()?;
-                let key = bytes.read_string()?;
-                let has_value = bytes.read_with(decode::read_bool)?;
+                let namespace = read_string(&mut bytes)?;
+                let key = read_string(&mut bytes)?;
+                let has_value = read_with(&mut bytes, decode::read_bool)?;
 
                 let value = if has_value {
-                    Some(bytes.read_string()?)
+                    Some(read_string(&mut bytes)?)
                 } else {
                     None
                 };
 
-                bytes.expect_eof()?;
+                expect_eof(&bytes)?;
 
                 Ok(KvRecord {
                     namespace,

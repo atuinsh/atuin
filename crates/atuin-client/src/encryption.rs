@@ -17,7 +17,7 @@ use eyre::{Context, Result, bail, ensure};
 use fs_err as fs;
 use rmp::Marker;
 
-use atuin_common::rmp::RmpDecodeExt as _;
+use atuin_common::rmp::{expect_array_len, read_with};
 
 use crate::settings::Settings;
 
@@ -86,18 +86,18 @@ pub fn decode_key(key: String) -> Result<Key> {
 
             match Marker::from_u8(buf[0]) {
                 Marker::Bin8 => {
-                    let len = bytes.read_with(decode::read_bin_len)?;
+                    let len = read_with(&mut bytes, decode::read_bin_len)?;
                     ensure!(len == 32, "encryption key is not the correct size");
                     let key = <[u8; 32]>::try_from(bytes.remaining_slice())
                         .context("could not decode encryption key")?;
                     Ok(key.into())
                 }
                 Marker::Array16 => {
-                    bytes.expect_array_len(32)?;
+                    expect_array_len(&mut bytes, 32)?;
 
                     let mut key = Key::default();
                     for i in &mut key {
-                        *i = bytes.read_with(decode::read_int)?;
+                        *i = read_with(&mut bytes, decode::read_int)?;
                     }
                     Ok(key)
                 }
