@@ -49,7 +49,8 @@ uuid = { workspace = true }
 tui-textarea-2 = "0.10.2"
 unicode-width = "0.2"
 # Path dependency until eye_declare 0.6.0 publishes; then just a version.
-eye_declare = { path = "../../../eye_declare/crates/eye_declare" }
+eye_declare = "0.6.1"
+eye_declare_engine = { version = "0.6.1", features = ["test-util"] }
 ratatui-core = "0.1"
 ratatui-widgets = "0.3"
 thiserror = { workspace = true }
@@ -76,4 +77,3 @@ rmcp = { version = "2.1.0", default-features = false, features = ["server", "tra
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 rstest = { workspace = true }
-eye_declare_engine = { path = "../../../eye_declare/crates/eye_declare_engine", features = ["test-util"] }

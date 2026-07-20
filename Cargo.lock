@@ -1621,7 +1621,9 @@ dependencies = [
 
 [[package]]
 name = "eye_declare"
-version = "0.6.0"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5693ee53b3e59a1f2fbd1cc7eeebe8f843759c7b6730091ea130727536389995"
 dependencies = [
  "crossterm",
  "eye_declare_engine",
@@ -1636,7 +1638,9 @@ dependencies = [
 
 [[package]]
 name = "eye_declare_engine"
-version = "0.1.0"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d025cca4225f033a206e4b09b832fd82276547a45baffd98bce9042d5e07ab4"
 dependencies = [
  "ratatui-core",
  "ratatui-widgets",
