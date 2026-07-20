@@ -2,6 +2,9 @@ name: Deploy docs to GitHub Pages
 
 on:
   push:
+    # NOTE: `paths` filters apply ONLY to the `branches` pushes, not to tag
+    # pushes. A release tag deploys even though the version-bump commit may
+    # not touch docs/**. Do not "simplify" by merging these filters.
     branches: [main]
     paths:
       - "docs/**"
@@ -73,6 +76,13 @@ jobs:
 
           if [ -n "$VERSION" ]; then
             # Release path.
+            # Guard against a malformed manual dispatch input (real cargo-dist
+            # tags are always X.Y.Z, but the dispatch field is free text). The
+            # prerelease suffix, if any, is allowed here and caught just below.
+            if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+              echo "Version '$VERSION' is not X.Y.Z - refusing to deploy." >&2
+              exit 1
+            fi
             if [[ "$VERSION" == *-* ]]; then
               echo "Prerelease ($VERSION) - skipping docs deploy."
               exit 0
