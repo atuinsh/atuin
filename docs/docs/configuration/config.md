@@ -224,6 +224,7 @@ With workspace filtering enabled, Atuin will filter for commands executed in any
 within a git repository tree.
 
 Filter modes can still be toggled via ctrl-r.
+
 ```toml
 workspaces = false
 ```
@@ -317,6 +318,7 @@ Atuin version: >= 18.0
 Default: `true`
 
 Configure whether or not to show tabs for search and inspect.
+
 ```toml
 show_tabs = true
 ```
@@ -476,7 +478,7 @@ remote sync server. Any longer than this and the request will fail.
 
 ```toml
 network_connect_timeout = 5
-``` 
+```
 
 ### `local_timeout`
 
