@@ -311,7 +311,7 @@ async fn run_inline_tui(
     // ─── IO context ─────────────────────────────────────────────
     // The persist worker owns the SessionManager and applies snapshots in
     // channel order.
-    let persist = crate::tui::persist::spawn_persist_worker(session_mgr);
+    let (persist, persist_worker) = crate::tui::persist::spawn_persist_worker(session_mgr);
     let io = IoContext {
         app_ctx: ctx.clone(),
         client_ctx: client_ctx.clone(),
@@ -340,6 +340,11 @@ async fn run_inline_tui(
     let outcome = eye_declare::driver_tokio::run_with(app, options)
         .await
         .context("failed running AI TUI")?;
+
+    // The app (and with it the last persist sender) dropped when the run
+    // loop returned; wait for the worker to drain its queue so the final
+    // session snapshot is on disk before the process can exit.
+    let _ = persist_worker.await;
 
     // v1 emitted one extra newline at exit; keep the shell handoff spacing.
     println!();

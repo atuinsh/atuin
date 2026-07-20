@@ -212,8 +212,11 @@ impl AiApp {
         self.input.borrow().is_empty()
     }
 
-    fn has_executing_preview(&self) -> bool {
-        self.fsm.ctx.tools.has_executing_preview()
+    /// A shell command is executing (its interrupt sender is live). This —
+    /// not preview visibility — is what Ctrl+C/Esc policy keys on: a
+    /// command exists from the moment it's spawned, before any output.
+    fn shell_executing(&self) -> bool {
+        !self.tool_interrupts.is_empty()
     }
 
     /// Whether the visible conversation carries a suggested command.
@@ -294,6 +297,9 @@ impl AiApp {
 
     /// Feed an event to the FSM and act on its effects.
     fn handle_fsm(&mut self, event: Event, ctx: &mut Ctx<'_, Self>) {
+        if let Event::ToolExecutionDone { tool_id, .. } = &event {
+            self.tool_interrupts.remove(tool_id);
+        }
         let effects = self.fsm.handle(event);
         tracing::trace!(?effects, state = ?self.fsm.state, "FSM transition");
         // The event list only shrinks when the FSM resets the session
@@ -1083,7 +1089,7 @@ impl App for AiApp {
         // Ctrl+C: interrupt a running tool execution, else exit.
         km = km.on_override(
             key(KeyCode::Char('c')).ctrl(),
-            if self.has_executing_preview() {
+            if self.shell_executing() {
                 Msg::Interrupt
             } else {
                 Msg::Quit
@@ -1095,7 +1101,7 @@ impl App for AiApp {
         // clear a confirmation, abort the stream, or exit).
         km = km.on(
             key(KeyCode::Esc),
-            if self.has_executing_preview() {
+            if self.shell_executing() {
                 Msg::Interrupt
             } else {
                 Msg::Cancel
@@ -1560,22 +1566,38 @@ mod tests {
     }
 
     #[test]
-    fn interrupt_drains_the_interrupt_sender() {
+    fn ctrl_c_interrupts_from_the_moment_a_shell_spawns() {
         let mut h = harness_awaiting_shell_permission();
         h.press(KeyCode::Enter); // Allow → executing
         assert!(h.app().tool_interrupts.contains_key("tool-1"));
 
-        // Preview output arrives (as the detached shell stream would send);
-        // only then does Ctrl+C mean "interrupt" rather than "quit".
-        h.stream(Event::ToolPreviewUpdate {
-            tool_id: "tool-1".into(),
-            lines: vec!["hi".into()],
-            exit_code: None,
-        });
-        h.press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        // No preview output yet — the command just spawned. Ctrl+C must
+        // interrupt it, not exit the TUI on top of a running command.
+        let exit = h.press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(exit, None, "must not quit while a command runs");
         assert!(
             h.app().tool_interrupts.is_empty(),
             "Ctrl+C should fire and drop the interrupt sender"
+        );
+    }
+
+    #[test]
+    fn finished_shell_releases_ctrl_c_back_to_quit() {
+        let mut h = harness_awaiting_shell_permission();
+        h.press(KeyCode::Enter); // Allow → executing
+        h.stream(Event::ToolExecutionDone {
+            tool_id: "tool-1".into(),
+            outcome: crate::tools::ToolOutcome::Success("done".into()),
+            preview: None,
+        });
+        assert!(
+            h.app().tool_interrupts.is_empty(),
+            "completion must prune the interrupt sender"
+        );
+        // With nothing executing, Ctrl+C means quit again.
+        assert_eq!(
+            h.press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            Some(ExitOutcome::Cancel)
         );
     }
 

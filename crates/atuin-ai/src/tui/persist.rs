@@ -32,10 +32,14 @@ pub(crate) enum PersistJob {
 }
 
 /// Spawn the worker on the ambient tokio runtime. Dropping the returned
-/// sender (with the app) ends the worker after it drains pending jobs.
-pub(crate) fn spawn_persist_worker(mut session_mgr: SessionManager) -> UnboundedSender<PersistJob> {
+/// sender (with the app) ends the worker after it drains pending jobs;
+/// await the returned handle to guarantee the drain completed — the
+/// process must not exit between a queued session snapshot and its write.
+pub(crate) fn spawn_persist_worker(
+    mut session_mgr: SessionManager,
+) -> (UnboundedSender<PersistJob>, tokio::task::JoinHandle<()>) {
     let (tx, mut rx) = unbounded_channel();
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         while let Some(job) = rx.recv().await {
             match job {
                 PersistJob::Session {
@@ -80,5 +84,5 @@ pub(crate) fn spawn_persist_worker(mut session_mgr: SessionManager) -> Unbounded
             }
         }
     });
-    tx
+    (tx, handle)
 }
