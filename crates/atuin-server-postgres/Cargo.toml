@@ -18,7 +18,7 @@ eyre = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
 serde = { workspace = true }
-sqlx = { workspace = true }
+sqlx = { workspace = true, features = ["postgres", "tls-rustls"] }
 async-trait = { workspace = true }
 uuid = { workspace = true }
 metrics = "0.24"

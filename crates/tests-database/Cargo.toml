@@ -20,7 +20,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
 serde = { workspace = true }
-sqlx = { workspace = true, features = ["sqlite", "regexp"] }
+sqlx = { workspace = true, features = ["sqlite", "regexp", "postgres", "tls-rustls"] }
 async-trait = { workspace = true }
 uuid = { workspace = true }
 metrics = "0.24"

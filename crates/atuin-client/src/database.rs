@@ -410,7 +410,7 @@ impl Database for Sqlite {
                 "select * from history where id in ({placeholders}) and deleted_at is null"
             );
 
-            let mut query = sqlx::query(sql.as_str());
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
             for id in chunk {
                 query = query.bind(id.0.as_str());
             }
@@ -499,7 +499,7 @@ impl Database for Sqlite {
 
         let query = query.sql().expect("bug in list query. please report");
 
-        let res = sqlx::query(&query)
+        let res = sqlx::query(sqlx::AssertSqlSafe(query))
             .map(Self::query_history)
             .fetch_all(&self.pool)
             .await?;
@@ -740,7 +740,7 @@ impl Database for Sqlite {
             )
         };
 
-        let res = sqlx::query(&query)
+        let res = sqlx::query(sqlx::AssertSqlSafe(query))
             .map(Self::query_history)
             .fetch_all(&self.pool)
             .await?;
@@ -749,7 +749,7 @@ impl Database for Sqlite {
     }
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>> {
-        let res = sqlx::query(query)
+        let res = sqlx::query(sqlx::AssertSqlSafe(query))
             .map(Self::query_history)
             .fetch_all(&self.pool)
             .await?;
@@ -784,7 +784,7 @@ impl Database for Sqlite {
 
         let query = query.sql().expect("bug in list query. please report");
 
-        let res = sqlx::query(&query)
+        let res = sqlx::query(sqlx::AssertSqlSafe(query))
             .map(|row: SqliteRow| {
                 let count: i32 = row.get("count");
                 (Self::query_history(row), count)
@@ -889,44 +889,45 @@ impl Database for Sqlite {
             .sql()
             .expect("issue in stats duration over time query");
 
-        let prev = sqlx::query(&prev)
+        let prev = sqlx::query(sqlx::AssertSqlSafe(prev))
             .bind(h.timestamp.unix_timestamp_nanos() as i64)
             .bind(&h.session)
             .map(Self::query_history)
             .fetch_optional(&self.pool)
             .await?;
 
-        let next = sqlx::query(&next)
+        let next = sqlx::query(sqlx::AssertSqlSafe(next))
             .bind(h.timestamp.unix_timestamp_nanos() as i64)
             .bind(&h.session)
             .map(Self::query_history)
             .fetch_optional(&self.pool)
             .await?;
 
-        let total: (i64,) = sqlx::query_as(&total)
+        let total: (i64,) = sqlx::query_as(sqlx::AssertSqlSafe(total))
             .bind(&h.command)
             .fetch_one(&self.pool)
             .await?;
 
-        let average: (f64,) = sqlx::query_as(&average)
+        let average: (f64,) = sqlx::query_as(sqlx::AssertSqlSafe(average))
             .bind(&h.command)
             .fetch_one(&self.pool)
             .await?;
 
-        let exits: Vec<(i64, i64)> = sqlx::query_as(&exits)
+        let exits: Vec<(i64, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(exits))
             .bind(&h.command)
             .fetch_all(&self.pool)
             .await?;
 
-        let day_of_week: Vec<(String, i64)> = sqlx::query_as(&day_of_week)
+        let day_of_week: Vec<(String, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(day_of_week))
             .bind(&h.command)
             .fetch_all(&self.pool)
             .await?;
 
-        let duration_over_time: Vec<(String, f64)> = sqlx::query_as(&duration_over_time)
-            .bind(&h.command)
-            .fetch_all(&self.pool)
-            .await?;
+        let duration_over_time: Vec<(String, f64)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(duration_over_time))
+                .bind(&h.command)
+                .fetch_all(&self.pool)
+                .await?;
 
         let duration_over_time = duration_over_time
             .iter()
