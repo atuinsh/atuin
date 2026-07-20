@@ -19,7 +19,7 @@ pub trait AlignExt: AsRef<str> {
     /// Pad `self` with spaces to fill `budget`, distributing the padding per `align`.
     ///
     /// Does not truncate.
-    fn pad_to<'a>(&'a self, budget: Measure, align: Alignment) -> Cow<'a, str> {
+    fn pad_to(&self, budget: Measure, align: Alignment) -> Cow<'_, str> {
         let s = self.as_ref();
         let pad = budget.amount().saturating_sub(budget.cost(s));
         if pad == 0 {
