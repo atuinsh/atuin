@@ -205,7 +205,6 @@ pub(crate) enum ToolResultStatus {
 
 #[derive(Debug)]
 pub(crate) struct UiTurn {
-    pub(crate) id: usize,
     pub(crate) kind: UiTurnKind,
 }
 
@@ -220,7 +219,6 @@ pub(crate) struct TurnBuilder<'a> {
     turns: Vec<UiTurnKind>,
     current_turn: Option<UiTurnKind>,
     tracker: &'a ToolManager,
-    next_id: usize,
 }
 
 /// A struct to iteratively build [UiTurn] events from [ConversationEvent]s.
@@ -230,16 +228,6 @@ impl<'a> TurnBuilder<'a> {
             turns: Vec::new(),
             current_turn: None,
             tracker,
-            next_id: 0,
-        }
-    }
-
-    pub(crate) fn new_starting_at(tracker: &'a ToolManager, start_id: usize) -> Self {
-        Self {
-            turns: Vec::new(),
-            current_turn: None,
-            tracker,
-            next_id: start_id,
         }
     }
 
@@ -340,14 +328,7 @@ impl<'a> TurnBuilder<'a> {
         }
 
         let kinds = std::mem::take(&mut self.turns);
-        kinds
-            .into_iter()
-            .enumerate()
-            .map(|(i, kind)| UiTurn {
-                id: self.next_id + i,
-                kind,
-            })
-            .collect()
+        kinds.into_iter().map(|kind| UiTurn { kind }).collect()
     }
 
     fn commit_turn(&mut self) {

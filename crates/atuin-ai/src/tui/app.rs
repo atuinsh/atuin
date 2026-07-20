@@ -121,10 +121,9 @@ pub(crate) struct AiApp {
     resume_notice: Option<String>,
     /// The editor as a plain model value; see `view::input` for why RefCell.
     input: RefCell<TextArea<'static>>,
-    /// Focus system; only the editor takes focus today, but keymap
-    /// fallthrough is focus-scoped by design.
-    #[allow(dead_code)]
-    focus: Focus,
+    /// The editor's focus handle (keymap fallthrough is focus-scoped).
+    /// Handles share their `Focus`'s cell via Arc, so the factory itself
+    /// isn't retained; re-add one when a second focusable appears.
     input_focus: FocusHandle,
     slash_registry: SlashCommandRegistry,
     skill_names: HashSet<String>,
@@ -167,8 +166,7 @@ impl AiApp {
         slash_registry: SlashCommandRegistry,
         skill_names: HashSet<String>,
     ) -> Self {
-        let focus = Focus::new();
-        let input_focus = focus.handle();
+        let input_focus = Focus::new().handle();
         input_focus.focus();
         Self {
             fsm,
@@ -184,7 +182,6 @@ impl AiApp {
             usage: None,
             resume_notice,
             input: RefCell::new(view::input::new_textarea()),
-            focus,
             input_focus,
             slash_registry,
             skill_names,
