@@ -299,6 +299,15 @@ impl AiApp {
     fn handle_fsm(&mut self, event: Event, ctx: &mut Ctx<'_, Self>) {
         let effects = self.fsm.handle(event);
         tracing::trace!(?effects, state = ?self.fsm.state, "FSM transition");
+        // The event list only shrinks when the FSM resets the session
+        // (/new archives and clears it). What was pushed stays in
+        // scrollback; the frontier restarts for the new list — a stale
+        // frontier would slice away new events entirely (invisible /new
+        // notice; a streamed response vanishing when its text commits
+        // into the sliced-off region on stream end).
+        if self.pushed_events > self.fsm.ctx.events.len() {
+            self.pushed_events = 0;
+        }
         for effect in effects {
             match effect {
                 Effect::ExitApp(action) => ctx.exit(match action {
@@ -1739,6 +1748,63 @@ mod tests {
         assert!(
             screen.contains("resets in"),
             "reset delta missing:\n{screen}"
+        );
+    }
+
+    /// Run one full exchange so the frontier is past zero, then /new.
+    fn harness_after_new_session() -> Harness {
+        let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
+        h.type_str("first question");
+        h.press(KeyCode::Enter);
+        h.stream(Event::StreamStarted);
+        h.stream(Event::StreamChunk("first answer".into()));
+        h.stream(Event::StreamDone {
+            session_id: "s1".into(),
+        });
+        assert!(h.app().pushed_events > 0, "exchange should have pushed");
+        h.type_str("/new");
+        h.press(KeyCode::Enter);
+        h
+    }
+
+    #[test]
+    fn new_session_notice_renders() {
+        let h = harness_after_new_session();
+        let all = h.all_lines();
+        assert!(
+            all.contains("Started a new session."),
+            "/new notice missing:\n{all}"
+        );
+    }
+
+    #[test]
+    fn response_after_new_session_survives_stream_end() {
+        let mut h = harness_after_new_session();
+
+        h.type_str("second question");
+        h.press(KeyCode::Enter);
+        // The user's own message must be visible while waiting.
+        assert!(
+            h.all_lines().contains("second question"),
+            "submitted question missing:\n{}",
+            h.all_lines()
+        );
+
+        h.stream(Event::StreamStarted);
+        h.stream(Event::StreamChunk("the second answer".into()));
+        assert!(
+            h.screen().contains("the second answer"),
+            "streaming text missing mid-stream:\n{}",
+            h.screen()
+        );
+
+        h.stream(Event::StreamDone {
+            session_id: "s2".into(),
+        });
+        let all = h.all_lines();
+        assert!(
+            all.contains("the second answer"),
+            "response vanished on stream end:\n{all}"
         );
     }
 
