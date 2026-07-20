@@ -1,5 +1,5 @@
-site_name: Atuin CLI Docs
-site_url: https://docs.atuin.sh/cli/
+site_name: Atuin Docs
+site_url: https://docs.atuin.sh/
 
 repo_name: atuinsh/atuin
 repo_url: https://github.com/atuinsh/atuin
@@ -7,6 +7,7 @@ edit_uri: edit/main/docs/docs/
 
 theme:
   name: material
+  custom_dir: overrides
   palette:
     - scheme: default
       primary: deep purple
@@ -29,22 +30,60 @@ theme:
     - content.action.edit
     - content.action.view
 
-# NOTE: to enable ToC and heading anchor links in local (non-multirepo) development,
-# comment out the `multirepo` plugin and all its settings.
-# Note that this changes the top-level directory when developing locally
-# from `/cli/CLI/` to `/cli/.
-
 plugins:
   - search
-  - multirepo:
-      imported_repo: true
-      url: https://github.com/atuinsh/docs
-      section_name: CLI
-      paths: ["mkdocs.yml", "docs/index.md", "docs/stylesheets/*"]
-      yml_file: mkdocs.yml
-      branch: mkt/docs-migration
+  - git-revision-date-localized:
+      enable_creation_date: true
+  - redirects:
+      redirect_maps:
+        "cli/ai/command-output.md": "ai/command-output.md"
+        "cli/ai/introduction.md": "ai/introduction.md"
+        "cli/ai/mcp.md": "ai/mcp.md"
+        "cli/ai/self-hosting.md": "ai/self-hosting.md"
+        "cli/ai/settings.md": "ai/settings.md"
+        "cli/ai/skills.md": "ai/skills.md"
+        "cli/ai/slash-commands.md": "ai/slash-commands.md"
+        "cli/ai/tools-permissions.md": "ai/tools-permissions.md"
+        "cli/ai/user-context.md": "ai/user-context.md"
+        "cli/configuration/advanced-key-binding.md": "configuration/advanced-key-binding.md"
+        "cli/configuration/config.md": "configuration/config.md"
+        "cli/configuration/key-binding.md": "configuration/key-binding.md"
+        "cli/faq.md": "faq.md"
+        "cli/guide/advanced-usage.md": "guide/advanced-usage.md"
+        "cli/guide/agent-hooks.md": "guide/agent-hooks.md"
+        "cli/guide/basic-usage.md": "guide/basic-usage.md"
+        "cli/guide/delete-history.md": "guide/delete-history.md"
+        "cli/guide/dotfiles.md": "guide/dotfiles.md"
+        "cli/guide/getting-started.md": "guide/getting-started.md"
+        "cli/guide/import.md": "guide/import.md"
+        "cli/guide/installation.md": "guide/installation.md"
+        "cli/guide/shell-integration.md": "guide/shell-integration.md"
+        "cli/guide/sync.md": "guide/sync.md"
+        "cli/guide/theming.md": "guide/theming.md"
+        "cli/index.md": "index.md"
+        "cli/integrations.md": "integrations.md"
+        "cli/known-issues.md": "known-issues.md"
+        "cli/reference/config.md": "reference/config.md"
+        "cli/reference/daemon.md": "reference/daemon.md"
+        "cli/reference/doctor.md": "reference/doctor.md"
+        "cli/reference/gen-completions.md": "reference/gen-completions.md"
+        "cli/reference/hex.md": "reference/hex.md"
+        "cli/reference/import.md": "reference/import.md"
+        "cli/reference/info.md": "reference/info.md"
+        "cli/reference/list.md": "reference/list.md"
+        "cli/reference/prune.md": "reference/prune.md"
+        "cli/reference/pty-proxy.md": "reference/pty-proxy.md"
+        "cli/reference/search.md": "reference/search.md"
+        "cli/reference/stats.md": "reference/stats.md"
+        "cli/reference/sync.md": "reference/sync.md"
+        "cli/self-hosting/docker.md": "self-hosting/docker.md"
+        "cli/self-hosting/kubernetes.md": "self-hosting/kubernetes.md"
+        "cli/self-hosting/server-setup.md": "self-hosting/server-setup.md"
+        "cli/self-hosting/systemd.md": "self-hosting/systemd.md"
+        "cli/self-hosting/usage.md": "self-hosting/usage.md"
+        "cli/uninstall.md": "uninstall.md"
   - llmstxt:
-      base_url: https://docs.atuin.sh/cli
+      base_url: https://docs.atuin.sh
       full_output: llms-full.txt
       markdown_description: |
         Atuin replaces your shell's built-in history with a SQLite database, adding context
@@ -121,6 +160,16 @@ markdown_extensions:
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/atuinsh/atuin
+    - icon: fontawesome/brands/discord
+      link: https://discord.gg/jR3tfchVvW
 
 nav:
   - Home: index.md
