@@ -108,7 +108,7 @@ impl HistoryRecord {
             }
 
             n => {
-                bail!("unknown HistoryRecord type {n}")
+                bail!("unknown HistoryRecord type {n}");
             }
         }
     }
@@ -374,7 +374,7 @@ impl HistoryStore {
         pb.set_message("Fetching history from old database");
 
         let context = current_context().await?;
-        let history = db.list(&[], &context, None, false, true).await?;
+        let history = db.list(&[], &context, None, false, true, None).await?;
 
         pb.set_message("Fetching history already in store");
         let store_ids = self.history_ids().await?;

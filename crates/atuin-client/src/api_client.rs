@@ -143,7 +143,9 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
     let version = if let Some(version) = version {
         match version.to_str() {
             Ok(v) => Version::parse(v),
-            Err(e) => bail!("failed to parse server version: {:?}", e),
+            Err(e) => {
+                bail!("failed to parse server version: {:?}", e);
+            }
         }
     } else {
         bail!("Server not reporting its version: it is either too old or unhealthy");
@@ -182,17 +184,17 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
             let reason = error.reason;
 
             if status.is_client_error() {
-                bail!("Invalid request to the service at {url}, {status} - {reason}.")
+                bail!("Invalid request to the service at {url}, {status} - {reason}.");
             }
 
             bail!(
                 "There was an error with the atuin sync service at {url}, server error {status}: {reason}.\nIf the problem persists, contact the host"
-            )
+            );
         }
 
         bail!(
             "There was an error with the atuin sync service at {url}, Status {status:?}.\nIf the problem persists, contact the host"
-        )
+        );
     }
 
     Ok(resp)
@@ -328,7 +330,7 @@ impl<'a> Client<'a> {
             .await?;
 
         if resp.status() == 401 {
-            bail!("current password is incorrect")
+            bail!("current password is incorrect");
         } else if resp.status() == 403 {
             bail!("invalid login details");
         } else if resp.status() == 200 {

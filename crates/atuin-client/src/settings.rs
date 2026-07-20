@@ -196,7 +196,7 @@ impl FromStr for Timezone {
         // that we currently use - `time`. If ever we migrate to using `chrono`, this would
         // be a good feature to add.
 
-        bail!(r#""{s}" is not a valid timezone spec"#)
+        bail!(r#""{s}" is not a valid timezone spec"#);
     }
 }
 

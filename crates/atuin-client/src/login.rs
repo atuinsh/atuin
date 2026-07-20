@@ -25,12 +25,12 @@ pub async fn login(
                 // assume they copied in the base64 key
                 bip39::ErrorKind::InvalidWord(_) => key,
                 bip39::ErrorKind::InvalidChecksum => {
-                    bail!("key mnemonic was not valid")
+                    bail!("key mnemonic was not valid");
                 }
                 bip39::ErrorKind::InvalidKeysize(_)
                 | bip39::ErrorKind::InvalidWordLength(_)
                 | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
-                    bail!("key was not the correct length")
+                    bail!("key was not the correct length");
                 }
             }
         }

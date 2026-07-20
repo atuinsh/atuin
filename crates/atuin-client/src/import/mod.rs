@@ -107,7 +107,7 @@ fn is_file(p: PathBuf) -> Result<PathBuf> {
         bail!(
             "Could not find history file {:?}. Try setting and exporting $HISTFILE",
             p
-        )
+        );
     }
 }
 fn is_dir(p: PathBuf) -> Result<PathBuf> {
@@ -117,7 +117,7 @@ fn is_dir(p: PathBuf) -> Result<PathBuf> {
         bail!(
             "Could not find history directory {:?}. Try setting and exporting $HISTFILE",
             p
-        )
+        );
     }
 }
 

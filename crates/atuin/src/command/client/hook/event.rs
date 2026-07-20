@@ -6,6 +6,8 @@
 
 use serde_json::error::Category;
 
+use atuin_common::string::NonNulStr;
+
 use super::wire::{HookEventName, WireHookEvent, WireToolName};
 
 /// Why a hook payload could not be parsed.
@@ -32,7 +34,7 @@ pub enum ParseError {
 pub enum HookEvent {
     /// A Bash command is about to run; open a history entry.
     Start {
-        command: String,
+        command: NonNulStr,
         intent: Option<String>,
         tool_use_id: String,
     },
@@ -62,13 +64,12 @@ impl From<WireHookEvent> for Option<HookEvent> {
         match wire.hook_event_name {
             HookEventName::PreToolUse => {
                 let (command, intent) = match wire.tool_input {
-                    Some(input) => (input.command.unwrap_or_default(), input.description),
-                    None => (String::new(), None),
+                    Some(input) => (input.command, input.description),
+                    None => (None, None),
                 };
 
-                if command.is_empty() {
-                    return None;
-                }
+                // A missing or empty command has nothing to record.
+                let command = command.filter(|command| !command.is_empty())?;
 
                 Some(HookEvent::Start {
                     command,
@@ -121,6 +122,10 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
+    fn non_nul(s: &str) -> NonNulStr {
+        NonNulStr::new(s.to_owned()).unwrap()
+    }
+
     #[rstest]
     #[case::pre_tool_use_with_intent(
         json!({
@@ -132,7 +137,7 @@ mod tests {
             "cwd": "/tmp"
         }),
         Some(HookEvent::Start {
-            command: "echo hello".into(),
+            command: non_nul("echo hello"),
             intent: Some("Test greeting".into()),
             tool_use_id: "toolu_abc123".into(),
         })
@@ -144,7 +149,7 @@ mod tests {
             "tool_input": {"command": "ls"},
             "tool_use_id": "toolu_abc123"
         }),
-        Some(HookEvent::Start { command: "ls".into(), intent: None, tool_use_id: "toolu_abc123".into() })
+        Some(HookEvent::Start { command: non_nul("ls"), intent: None, tool_use_id: "toolu_abc123".into() })
     )]
     #[case::post_tool_use_uses_exit_code(
         json!({
@@ -221,6 +226,27 @@ mod tests {
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
             "tool_input": {"command": ""},
+            "tool_use_id": "toolu_abc123"
+        }),
+        None
+    )]
+    // A command carrying a NUL fails to deserialize, so the whole event is
+    // dropped rather than recording a mangled command (issue #3589).
+    #[case::command_with_nul_rejected(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "echo hi\0rm -rf /"},
+            "tool_use_id": "toolu_abc123"
+        }),
+        None
+    )]
+    // A command that is nothing but a NUL prefix is likewise rejected.
+    #[case::command_only_nul_rejected(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "\0rm -rf /"},
             "tool_use_id": "toolu_abc123"
         }),
         None
@@ -321,7 +347,11 @@ mod tests {
 
             prop_assert_eq!(
                 HookEvent::from_json_str(&input.to_string()).unwrap(),
-                Some(HookEvent::Start { command, intent: description, tool_use_id })
+                Some(HookEvent::Start {
+                    command: NonNulStr::new(command).unwrap(),
+                    intent: description,
+                    tool_use_id,
+                })
             );
         }
 

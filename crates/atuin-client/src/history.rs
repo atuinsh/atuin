@@ -293,7 +293,7 @@ impl History {
         };
 
         if version < Version::Two && !bytes.remaining_slice().is_empty() {
-            bail!("trailing bytes in encoded history. malformed")
+            bail!("trailing bytes in encoded history. malformed");
         }
 
         Ok(History {

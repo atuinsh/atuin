@@ -169,7 +169,7 @@
 ## whereas tab will put the command in the prompt for editing.
 ## If set to false, both enter and tab will place the command in the prompt for editing.
 ## This applies for new installs. Old installs will keep the old behaviour unless configured otherwise.
-enter_accept = true
+# enter_accept = true
 
 ## Defaults to false. If enabled, when triggered after &&, || or |, Atuin will complete commands to chain rather than replace the current line.
 # command_chaining = false
@@ -195,6 +195,9 @@ enter_accept = true
 ## Set this to true and Atuin will minimize motion in the UI - timers will not update live, etc.
 ## Alternatively, set env NO_MOTION=true
 # prefers_reduced_motion = false
+
+## Defaults to true. Configures whether to store commands that failed (those with non-zero exit status) or not.
+# store_failed = true
 
 [stats]
 ## Set commands where we should consider the subcommand for statistics. Eg, kubectl get vs just kubectl

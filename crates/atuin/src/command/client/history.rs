@@ -5,7 +5,10 @@ use std::{
 };
 
 use atuin_common::logs::LogConfig;
-use atuin_common::{string::EscapeNonPrintablePosixExt as _, utils};
+use atuin_common::{
+    string::{EscapeNonPrintablePosixExt as _, NonNulStr},
+    utils,
+};
 use clap::Subcommand;
 use eyre::{Context, Result, bail};
 use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
@@ -426,6 +429,17 @@ fn make_starting_history(
     // store whatever is ran, than to throw an error to the terminal
     let cwd = utils::get_current_dir();
     let command = normalize_command_for_storage(command, settings);
+
+    // A command containing a NUL byte could never have been executed by a shell
+    // (argv entries are C strings), so it can only come from a broken caller such
+    // as an agent hook. Drop it rather than committing garbage to history.
+    if let Err(err) = NonNulStr::new(command) {
+        debug!(
+            "dropping command containing a NUL byte at index {}",
+            err.index
+        );
+        return None;
+    }
 
     let h: History = History::capture()
         .timestamp(OffsetDateTime::now_utc())
@@ -950,7 +964,7 @@ impl Cmd {
         };
 
         let history = db
-            .list(&filters, &context, None, false, include_deleted)
+            .list(&filters, &context, None, false, include_deleted, None)
             .await?;
 
         print_list(
@@ -978,7 +992,7 @@ impl Cmd {
         // Grab all executed commands and filter them using History::should_save.
         // We could iterate or paginate here if memory usage becomes an issue.
         let matches: Vec<History> = db
-            .list(&[Global], &context, None, false, false)
+            .list(&[Global], &context, None, false, false, None)
             .await?
             .into_iter()
             .filter(|h| !h.should_save(settings))
@@ -1283,6 +1297,25 @@ mod tests {
             .pop()
             .unwrap();
         assert_eq!(history.command, "ls   \t");
+    }
+
+    #[tokio::test]
+    async fn handle_start_drops_command_with_nul_byte() {
+        let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
+        let settings = Settings::utc();
+
+        // A command containing a NUL byte can never have been executed by a shell;
+        // it should be dropped rather than committed to history.
+        let id = handle_start(&db, &settings, "hello\0world", None, None)
+            .await
+            .unwrap();
+        assert!(id.is_none());
+
+        let stored = db
+            .before(OffsetDateTime::now_utc() + time::Duration::SECOND, 1)
+            .await
+            .unwrap();
+        assert!(stored.is_empty());
     }
 
     #[test]

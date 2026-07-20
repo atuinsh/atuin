@@ -48,7 +48,7 @@ macro_rules! new_uuid {
         {
             fn encode_by_ref(
                 &self,
-                buf: &mut DB::ArgumentBuffer<'q>,
+                buf: &mut DB::ArgumentBuffer,
             ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync + 'static>>
             {
                 self.0.encode_by_ref(buf)
@@ -57,6 +57,8 @@ macro_rules! new_uuid {
     };
 }
 
+#[cfg(feature = "ansi")]
+pub mod ansi;
 pub mod api;
 pub mod logs;
 pub mod path;
