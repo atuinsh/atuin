@@ -748,7 +748,7 @@ impl State {
             && tab_index == 0
             && !results.is_empty()
         {
-            let length_current_cmd = results[selected].command.len() as u16;
+            let length_current_cmd = results[selected].command.width() as u16;
             // calculate the number of newlines in the command
             let num_newlines = results[selected]
                 .command
