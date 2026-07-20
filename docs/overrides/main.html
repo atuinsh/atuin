@@ -6,3 +6,12 @@
     posthog.init('phc_rXjtykrfkeyppPRiqpcwsp62mszskk2sQs5UKND2yhBp',{api_host:'https://ev.atuin.sh', ui_host: "https://us.posthog.com", defaults:'2026-01-30', })
 </script>
 {% endblock %}
+
+{% block outdated %}
+  You're viewing docs for a version that is <strong>not the current release</strong>.
+  This may be an older release or the in-development <code>main</code> branch, which is
+  not what <code>install.sh</code> gives you.
+  <a href="{{ '../' ~ base_url }}">
+    <strong>Switch to the latest release &rarr;</strong>
+  </a>
+{% endblock %}
