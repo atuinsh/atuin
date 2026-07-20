@@ -414,6 +414,7 @@ dependencies = [
  "unicode-width 0.2.2",
  "url",
  "uuid",
+ "vt100",
 ]
 
 [[package]]
@@ -531,6 +532,7 @@ dependencies = [
 name = "atuin-pty-proxy"
 version = "18.17.1"
 dependencies = [
+ "atuin-common",
  "clap",
  "crossterm",
  "eyre",

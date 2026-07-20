@@ -57,6 +57,8 @@ macro_rules! new_uuid {
     };
 }
 
+#[cfg(feature = "ansi")]
+pub mod ansi;
 pub mod api;
 pub mod logs;
 pub mod path;
