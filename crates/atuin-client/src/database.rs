@@ -682,25 +682,29 @@ impl Database for Sqlite {
             .exclude_cwd
             .map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
 
-        filter_options.before.map(|before| {
-            interim::parse_date_string(
+        if let Some(before) = filter_options.before {
+            let parsed = interim::parse_date_string(
                 before.as_str(),
                 OffsetDateTime::now_utc(),
                 interim::Dialect::Uk,
             )
-            .map(|before| {
-                sql.and_where_lt("timestamp", quote(before.unix_timestamp_nanos() as i64))
-            })
-        });
+            .map_err(|e| {
+                sqlx::Error::Decode(format!("invalid `before` filter {before:?}: {e}").into())
+            })?;
+            sql.and_where_lt("timestamp", quote(parsed.unix_timestamp_nanos() as i64));
+        }
 
-        filter_options.after.map(|after| {
-            interim::parse_date_string(
+        if let Some(after) = filter_options.after {
+            let parsed = interim::parse_date_string(
                 after.as_str(),
                 OffsetDateTime::now_utc(),
                 interim::Dialect::Uk,
             )
-            .map(|after| sql.and_where_gt("timestamp", quote(after.unix_timestamp_nanos() as i64)))
-        });
+            .map_err(|e| {
+                sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
+            })?;
+            sql.and_where_gt("timestamp", quote(parsed.unix_timestamp_nanos() as i64));
+        }
 
         if !filter_options.authors.is_empty() {
             apply_author_filter(&mut sql, &filter_options.authors);
@@ -1175,7 +1179,19 @@ mod test {
     use crate::settings::test_local_timeout;
 
     use super::*;
+    use rstest::rstest;
     use std::time::{Duration, Instant};
+    use time::format_description::well_known::Rfc3339;
+
+    fn new_context() -> Context {
+        Context {
+            hostname: "test:host".to_string(),
+            session: "beepboopiamasession".to_string(),
+            cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
+            git_root: None,
+        }
+    }
 
     async fn assert_search_eq(
         db: &impl Database,
@@ -1184,13 +1200,7 @@ mod test {
         query: &str,
         expected: usize,
     ) -> Result<Vec<History>> {
-        let context = Context {
-            hostname: "test:host".to_string(),
-            session: "beepboopiamasession".to_string(),
-            cwd: "/home/ellie".to_string(),
-            host_id: "test-host".to_string(),
-            git_root: None,
-        };
+        let context = new_context();
 
         let results = db
             .search(
@@ -1229,8 +1239,16 @@ mod test {
     }
 
     async fn new_history_item(db: &mut impl Database, cmd: &str) -> Result<()> {
+        new_history_item_at(db, cmd, None).await
+    }
+
+    async fn new_history_item_at(
+        db: &mut impl Database,
+        cmd: &str,
+        timestamp: Option<OffsetDateTime>,
+    ) -> Result<()> {
         let mut captured: History = History::capture()
-            .timestamp(OffsetDateTime::now_utc())
+            .timestamp(timestamp.unwrap_or_else(OffsetDateTime::now_utc))
             .command(cmd)
             .cwd("/home/ellie")
             .build()
@@ -1395,209 +1413,212 @@ mod test {
         assert_eq!(loaded.len(), 1200);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_prefix() {
+    async fn db_with(commands: &[&str]) -> Sqlite {
         let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
             .await
             .unwrap();
-        new_history_item(&mut db, "ls /home/ellie").await.unwrap();
 
-        assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, "ls", 1)
+        for command in commands {
+            new_history_item(&mut db, command).await.unwrap();
+        }
+
+        db
+    }
+
+    #[rstest]
+    #[case::window_spans_the_item(Some((-1, 1)), 1, true)]
+    #[case::after_bound_is_exclusive(Some((0, 1)), 0, false)]
+    #[case::before_bound_is_exclusive(Some((-1, 0)), 0, false)]
+    #[case::window_entirely_after_the_item(Some((1, 2)), 0, false)]
+    #[case::window_entirely_before_the_item(Some((-2, -1)), 0, false)]
+    #[case::no_date_filter(None, 2, false)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_before_after(
+        #[case] offsets: Option<(i64, i64)>,
+        #[case] expected: usize,
+        #[case] expect_ellie_match: bool,
+    ) {
+        let t = OffsetDateTime::from_unix_timestamp(1708330400).unwrap();
+
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
             .await
             .unwrap();
-        assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, "/home", 0)
+        new_history_item_at(&mut db, "ls /home/ellie", Some(t))
             .await
             .unwrap();
-        assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, "ls  ", 0)
+        new_history_item_at(&mut db, "ls /home/frank", None)
+            .await
+            .unwrap();
+
+        let context = new_context();
+
+        let stamp = |seconds: i64| {
+            (t + time::Duration::seconds(seconds))
+                .format(&Rfc3339)
+                .unwrap()
+        };
+        let (after, before) = match offsets {
+            Some((after, before)) => (Some(stamp(after)), Some(stamp(before))),
+            None => (None, None),
+        };
+
+        let results = db
+            .search(
+                SearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "",
+                OptFilters {
+                    after,
+                    before,
+                    include_duplicates: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), expected);
+        if expect_ellie_match {
+            assert_eq!(results[0].command, "ls /home/ellie");
+        }
+    }
+
+    #[rstest]
+    #[case::with_duplicates_counts_every_execution(true, 2)]
+    #[case::without_duplicates_collapses_to_newest_row(false, 1)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_include_duplicates(
+        #[case] include_duplicates: bool,
+        #[case] expected: usize,
+    ) {
+        // The same command, run twice.
+        let db = db_with(&["ls", "ls"]).await;
+        let context = new_context();
+
+        let hits = db
+            .search(
+                SearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "",
+                OptFilters {
+                    include_duplicates,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(hits.len(), expected);
+    }
+
+    #[rstest]
+    #[case::before("before")]
+    #[case::after("after")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_rejects_unparsable_date_filter(#[case] which: &str) {
+        let db = db_with(&["ls"]).await;
+        let context = new_context();
+
+        let mut filters = OptFilters::default();
+        match which {
+            "before" => filters.before = Some("not a date".to_string()),
+            "after" => filters.after = Some("not a date".to_string()),
+            _ => unreachable!(),
+        }
+
+        let result = db
+            .search(
+                SearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "",
+                filters,
+            )
+            .await;
+
+        assert!(result.is_err(), "unparsable `{which}` filter must error");
+    }
+
+    #[rstest]
+    #[case::matches_prefix("ls", 1)]
+    #[case::not_a_prefix("/home", 0)]
+    #[case::trailing_whitespace("ls  ", 0)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_prefix(#[case] query: &str, #[case] expected: usize) {
+        let db = db_with(&["ls /home/ellie"]).await;
+
+        assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, query, expected)
             .await
             .unwrap();
     }
 
+    #[rstest]
+    #[case::matches_command("ls", 1)]
+    #[case::matches_arg("/home", 1)]
+    #[case::matches_multiple_words("ls ho", 1)]
+    #[case::no_match("hm", 0)]
+    // regex
+    #[case::regex_anchored_start("r/^ls ", 1)]
+    #[case::regex_anchored_end("r/ls / ie$", 1)]
+    #[case::regex_negated_no_match("r/ls / !ie", 0)]
+    #[case::regex_mixed_with_plain_term("meow r/ls/", 0)]
+    #[case::regex_single_slash("r//hom/", 1)]
+    #[case::regex_double_slash("r//home//", 1)]
+    #[case::regex_triple_slash("r//home///", 0)]
+    #[case::plain_query_looks_like_regex("/home.*e", 0)]
+    #[case::regex_wildcard("r/home.*e", 1)]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_fulltext() {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
-        new_history_item(&mut db, "ls /home/ellie").await.unwrap();
+    async fn test_search_fulltext(#[case] query: &str, #[case] expected: usize) {
+        let db = db_with(&["ls /home/ellie"]).await;
 
-        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "ls", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "/home", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "ls ho", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "hm", 0)
-            .await
-            .unwrap();
-
-        // regex
-        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "r/^ls ", 1)
-            .await
-            .unwrap();
         assert_search_eq(
             &db,
             SearchMode::FullText,
             FilterMode::Global,
-            "r/ls / ie$",
-            1,
-        )
-        .await
-        .unwrap();
-        assert_search_eq(
-            &db,
-            SearchMode::FullText,
-            FilterMode::Global,
-            "r/ls / !ie",
-            0,
-        )
-        .await
-        .unwrap();
-        assert_search_eq(
-            &db,
-            SearchMode::FullText,
-            FilterMode::Global,
-            "meow r/ls/",
-            0,
-        )
-        .await
-        .unwrap();
-        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "r//hom/", 1)
-            .await
-            .unwrap();
-        assert_search_eq(
-            &db,
-            SearchMode::FullText,
-            FilterMode::Global,
-            "r//home//",
-            1,
-        )
-        .await
-        .unwrap();
-        assert_search_eq(
-            &db,
-            SearchMode::FullText,
-            FilterMode::Global,
-            "r//home///",
-            0,
-        )
-        .await
-        .unwrap();
-        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "/home.*e", 0)
-            .await
-            .unwrap();
-        assert_search_eq(
-            &db,
-            SearchMode::FullText,
-            FilterMode::Global,
-            "r/home.*e",
-            1,
+            query,
+            expected,
         )
         .await
         .unwrap();
     }
 
+    #[rstest]
+    #[case::term_with_trailing_slash("ls /", 3)]
+    #[case::adjacent_terms_no_space("ls/", 2)]
+    #[case::short_terms("l/h/", 2)]
+    #[case::partial_match("/h/e", 3)]
+    #[case::typo_no_match("/hmoe/", 0)]
+    #[case::wrong_order_no_match("ellie/home", 0)]
+    #[case::concatenated_terms("lsellie", 1)]
+    #[case::bare_space_matches_all(" ", 4)]
+    #[case::starts_with("^ls", 2)]
+    #[case::exact_word("'ls", 2)]
+    #[case::ends_with("ellie$", 2)]
+    #[case::negated_starts_with("!^ls", 2)]
+    #[case::negated_term("!ellie", 1)]
+    #[case::negated_ends_with("!ellie$", 2)]
+    #[case::term_and_negated_term("ls !ellie", 1)]
+    #[case::starts_with_and_negated_ends_with("^ls !e$", 1)]
+    #[case::term_and_negated_starts_with("home !^ls", 2)]
+    #[case::or_exact_terms("'frank | 'rustup", 2)]
+    #[case::or_with_and_term("'frank | 'rustup 'ls", 1)]
+    #[case::case_insensitive_match("Ellie", 1)]
+    #[case::regex_anchored_start("r/^ls ", 2)]
+    #[case::regex_character_class("r/[Ee]llie", 3)]
+    #[case::regex_combined_with_fuzzy_term("/h/e r/^ls ", 1)]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_fuzzy() {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
-        new_history_item(&mut db, "ls /home/ellie").await.unwrap();
-        new_history_item(&mut db, "ls /home/frank").await.unwrap();
-        new_history_item(&mut db, "cd /home/Ellie").await.unwrap();
-        new_history_item(&mut db, "/home/ellie/.bin/rustup")
-            .await
-            .unwrap();
+    async fn test_search_fuzzy(#[case] query: &str, #[case] expected: usize) {
+        let db = db_with(&[
+            "ls /home/ellie",
+            "ls /home/frank",
+            "cd /home/Ellie",
+            "/home/ellie/.bin/rustup",
+        ])
+        .await;
 
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ls /", 3)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ls/", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "l/h/", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "/h/e", 3)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "/hmoe/", 0)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ellie/home", 0)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "lsellie", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, " ", 4)
-            .await
-            .unwrap();
-
-        // single term operators
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "^ls", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "'ls", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ellie$", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "!^ls", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "!ellie", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "!ellie$", 2)
-            .await
-            .unwrap();
-
-        // multiple terms
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ls !ellie", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "^ls !e$", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "home !^ls", 2)
-            .await
-            .unwrap();
-        assert_search_eq(
-            &db,
-            SearchMode::Fuzzy,
-            FilterMode::Global,
-            "'frank | 'rustup",
-            2,
-        )
-        .await
-        .unwrap();
-        assert_search_eq(
-            &db,
-            SearchMode::Fuzzy,
-            FilterMode::Global,
-            "'frank | 'rustup 'ls",
-            1,
-        )
-        .await
-        .unwrap();
-
-        // case matching
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "Ellie", 1)
-            .await
-            .unwrap();
-
-        // regex
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "r/^ls ", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "r/[Ee]llie", 3)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "/h/e r/^ls ", 1)
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, query, expected)
             .await
             .unwrap();
     }
