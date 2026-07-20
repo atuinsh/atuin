@@ -292,8 +292,8 @@ dependencies = [
  "derive_more",
  "directories",
  "eventsource-stream",
+ "eye_declare",
  "eye_declare_engine",
- "eye_declare_next",
  "eyre",
  "fs-err",
  "futures",
@@ -1620,18 +1620,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "eye_declare_engine"
-version = "0.1.0"
-dependencies = [
- "ratatui-core",
- "ratatui-widgets",
- "unicode-width 0.2.2",
- "vte",
-]
-
-[[package]]
-name = "eye_declare_next"
-version = "0.0.0"
+name = "eye_declare"
+version = "0.6.0"
 dependencies = [
  "crossterm",
  "eye_declare_engine",
@@ -1642,6 +1632,16 @@ dependencies = [
  "tokio",
  "unicode-segmentation",
  "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "eye_declare_engine"
+version = "0.1.0"
+dependencies = [
+ "ratatui-core",
+ "ratatui-widgets",
+ "unicode-width 0.2.2",
+ "vte",
 ]
 
 [[package]]
