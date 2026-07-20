@@ -110,6 +110,10 @@ Prefix mode searches for "query\*"; fulltext mode searches for "\*query\*";
 "fuzzy" applies the [fuzzy search syntax](#fuzzy-search-syntax);
 "skim" applies the [skim search syntax](https://github.com/lotabout/skim#search-syntax).
 
+```toml
+search_mode = "fuzzy"
+```
+
 !!! note "daemon-fuzzy search mode"
 
     The "daemon-fuzzy" mode is new as of Atuin 18.13. This search mode uses an in-memory index, stored in the daemon, to perform fast and customizable searches.
@@ -211,6 +215,10 @@ The accepted values are identical to those of `inline_height`.
 
 When unset, the value from `inline_height` is used.
 
+```toml
+inline_height_shell_up_key_binding = 10
+```
+
 ### `workspaces`
 
 Atuin version: >= 17.0
@@ -224,6 +232,10 @@ With workspace filtering enabled, Atuin will filter for commands executed in any
 within a git repository tree.
 
 Filter modes can still be toggled via ctrl-r.
+
+```toml
+workspaces = false
+```
 
 ### `style`
 
@@ -240,6 +252,10 @@ Which style to use. Possible values: `auto`, `full` and `compact`.
 ![full](https://user-images.githubusercontent.com/1710904/161623547-42afbfa7-a3ef-4820-bacd-fcaf1e324969.png)
 
 This means that Atuin will automatically switch to `compact` mode when the terminal window is too short for `full` to display properly.
+
+```toml
+style = "compact"
+```
 
 ### `invert`
 
@@ -261,6 +277,10 @@ Set the maximum number of lines Atuin's interface should take up.
 
 If set to `0`, Atuin will always take up as many lines as available (full screen).
 
+```toml
+inline_height = 40
+```
+
 ### `show_preview`
 
 Default: `true`
@@ -268,6 +288,10 @@ Default: `true`
 Configure whether or not to show a preview of the selected command.
 
 Useful when the command is longer than the terminal width and is cut off.
+
+```toml
+show_preview = true
+```
 
 ### `max_preview_height`
 
@@ -279,6 +303,10 @@ Configure the maximum height of the preview to show.
 
 Useful when you have long scripts in your history that you want to distinguish by more than the first few lines.
 
+```toml
+max_preview_height = 4
+```
+
 ### `show_help`
 
 Atuin version: >= 17.0
@@ -287,6 +315,10 @@ Default: `true`
 
 Configure whether or not to show the help row, which includes the current Atuin version (and whether an update is available), a keymap hint, and the total amount of commands in your history.
 
+```toml
+show_help = true
+```
+
 ### `show_tabs`
 
 Atuin version: >= 18.0
@@ -294,6 +326,10 @@ Atuin version: >= 18.0
 Default: `true`
 
 Configure whether or not to show tabs for search and inspect.
+
+```toml
+show_tabs = true
+```
 
 ### `auto_hide_height`
 
@@ -304,6 +340,10 @@ Default: `8`
 Set Atuin to hide lines when a minimum number of rows is subceeded. This has no effect except
 when `compact` style is being used (see `style` above), and currently applies to only the
 interactive search and inspector. It can be turned off entirely by setting to `0`.
+
+```toml
+auto_hide_height = 8
+```
 
 ### `exit_mode`
 
@@ -331,6 +371,10 @@ The history format allows you to configure the default `history list` format - w
 The specified --format arg will prioritize the config when both are present
 
 More on [history list](../reference/list.md)
+
+```toml
+history_format = "{time}\t{command}\t{duration}"
+```
 
 ### `history_filter`
 
@@ -417,6 +461,10 @@ Default: `true`
 
 Whether to show numeric shortcuts (1..9) beside list items in the TUI. Set this to `false` to hide the moving numbers if you find them distracting.
 
+```toml
+show_numeric_shortcuts = true
+```
+
 ### `network_timeout`
 
 Atuin version: >= 18.0
@@ -427,6 +475,10 @@ The max amount of time (in seconds) to wait for a network request. If any
 operations with a sync server take longer than this, the code will fail -
 rather than wait indefinitely.
 
+```toml
+network_timeout = 30
+```
+
 ### `network_connect_timeout`
 
 Atuin version: >= 18.0
@@ -436,6 +488,10 @@ Default: `5`
 The max time (in seconds) we wait for a connection to become established with a
 remote sync server. Any longer than this and the request will fail.
 
+```toml
+network_connect_timeout = 5
+```
+
 ### `local_timeout`
 
 Atuin version: >= 18.0
@@ -444,6 +500,10 @@ Default: `5`
 
 Timeout (in seconds) for acquiring a local database connection (sqlite).
 
+```toml
+local_timeout = 5
+```
+
 ### `command_chaining`
 
 Atuin version: >= 18.8
@@ -451,6 +511,10 @@ Atuin version: >= 18.8
 Default: `false`
 
 Allows building a command chain with the `&&` or `||` operator. When enabled, opening atuin will search for the next command in the chain, and append to the current buffer.
+
+```toml
+command_chaining = false
+```
 
 ### `enter_accept`
 
@@ -465,6 +529,10 @@ shell and give the user a chance to edit.
 This technically defaults to true for new users, but false for existing. We
 have set `enter_accept = true` in the default config file. This is likely to
 change to be the default for everyone in a later release.
+
+```toml
+enter_accept = false
+```
 
 ### `keymap_mode`
 
@@ -484,6 +552,10 @@ switches the keymap mode to `"vim-normal"`. When set to `"auto"`, the initial
 keymap mode is automatically determined based on the shell's keymap that triggered
 the Atuin search. `"auto"` is not supported by NuShell at present, where it will
 always trigger the Atuin search with the keymap mode `"emacs"`.
+
+```toml
+keymap_mode = "emacs"
+```
 
 ### `keymap_cursor`
 
@@ -518,6 +590,10 @@ Enable this, and Atuin will reduce motion in the TUI as much as possible. Users
 with motion sensitivity can find the live-updating timestamps distracting.
 
 Alternatively, set env var NO_MOTION
+
+```toml
+prefers_reduced_motion = false
+```
 
 ## search
 
@@ -557,17 +633,29 @@ Default: `1.0`
 
 The multiplier to apply to the frequency score in the frecency calculation. Setting this to `0` disables the frequency portion of the frecency scoring altogether.
 
+```toml
+frequency_score_multiplier = 1.0
+```
+
 #### `recency_score_multiplier`
 
 Default: `1.0`
 
 The multiplier to apply to the recency score in the frecency calculation. Setting this to `0` disables the recency portion of the frecency scoring altogether.
 
+```toml
+recency_score_multiplier = 1.0
+```
+
 #### `frecency_score_multiplier`
 
 Default: `1.0`
 
 The multiplier used for the final frecency score. Setting this to `0` disables frecency scoring altogether, relying solely on the fuzzy matcher's score.
+
+```toml
+frecency_score_multiplier = 1.0
+```
 
 Example:
 
@@ -615,7 +703,7 @@ authors = ["$all-user"]
 
 This section of client config is specifically for configuring Atuin stats calculations
 
-```
+```toml
 [stats]
 common_subcommands = [...]
 common_prefix = [...]
@@ -700,7 +788,7 @@ After setting an alias, you will either need to restart your shell or source the
 
 This section of the client config is specifically for configuring key-related settings.
 
-```
+```toml
 [keys]
 scroll_exits = [...]
 prefix = 'a'
@@ -714,6 +802,10 @@ Default: `true`
 
 Configures whether the TUI exits, when scrolled past the last or first entry.
 
+```toml
+scroll_exits = true
+```
+
 ### `prefix`
 
 Atuin version: > 18.3
@@ -724,6 +816,10 @@ Which key to use as the prefix. Prefix mode is a two-step shortcut system: you p
 
 See the [key binding page](key-binding.md#prefix-mode) for the full list of default prefix shortcuts, or the [advanced key binding page](advanced-key-binding.md#custom-prefix-bindings) to customize them.
 
+```toml
+prefix = "a"
+```
+
 ### `exit_past_line_start`
 
 Atuin version: >= 18.5
@@ -731,6 +827,10 @@ Atuin version: >= 18.5
 Default: `true`
 
 Exits the TUI when scrolling left while the cursor is at the start of the line.
+
+```toml
+exit_past_line_start = true
+```
 
 ### `accept_past_line_end`
 
@@ -741,6 +841,10 @@ Default: `true`
 The right arrow key performs the same functionality as Tab and copies the selected line to the command line to be
 modified.
 
+```toml
+accept_past_line_end = true
+```
+
 ### `accept_past_line_start`
 
 Atuin version: >= 18.9
@@ -749,6 +853,10 @@ Default: `false`
 
 The left arrow key performs the same functionality as Tab and copies the selected line to the command line to be
 modified.
+
+```toml
+accept_past_line_start = false
+```
 
 ### `accept_with_backspace`
 
@@ -759,12 +867,16 @@ Default: `false`
 The backspace key performs the same functionality as Tab and copies the selected line to the command line to be
 modified.
 
+```toml
+accept_with_backspace = false
+```
+
 ## preview
 
 This section of the client config is specifically for configuring preview-related settings.
 (In the future the other 2 preview settings will be moved here.)
 
-```
+```toml
 [preview]
 strategy = [...]
 ```
@@ -784,6 +896,10 @@ Which preview strategy is used to calculate the preview height. It respects `max
 | fixed          | use `max_preview_height` as fixed value             |
 
 By using `auto` a preview is shown, if the command is longer than the width of the terminal.
+
+```toml
+strategy = "auto"
+```
 
 ## Daemon
 
@@ -872,11 +988,23 @@ Atuin version: >= 18.13
 
 Behavior of log files.
 
+```toml
+[logs]
+enabled = true
+dir = "~/.atuin/logs"
+level = "info"
+retention = 4
+```
+
 ### enabled
 
 Default: `true`
 
 Whether or not to enable file-based logging.
+
+```toml
+enabled = true
+```
 
 ### dir
 
@@ -884,17 +1012,29 @@ Default: `"~/.atuin/logs"`
 
 The directory in which to store log files.
 
+```toml
+dir = "~/.atuin/logs"
+```
+
 ### level
 
 Default: `"info"`
 
 The logging level to use. Valid values are `"trace"`, `"debug"`, `"info"`, `"warn"`, and `"error"`, in order of highest-to-lowest verbosity.
 
+```toml
+level = "info"
+```
+
 ### retention
 
 Default: `4`
 
 How many days of log files to keep (per file type). Files older than this will be removed.
+
+```toml
+retention = 4
+```
 
 ### ai
 
@@ -905,6 +1045,14 @@ A sub-object with specific options for AI logging:
 * `level` - override the log level for the AI logs; defaults to `logs.level`
 * `retention` - how many days to store AI logs; defaults to `logs.retention`
 
+```toml
+[logs.ai]
+enabled = true
+file = "ai.log"
+level = "info"
+retention = 4
+```
+
 ### daemon
 
 A sub-object with specific options for daemon logging:
@@ -914,6 +1062,14 @@ A sub-object with specific options for daemon logging:
 * `level` - override the log level for the daemon logs; defaults to `logs.level`
 * `retention` - how many days to store daemon logs; defaults to `logs.retention`
 
+```toml
+[logs.daemon]
+enabled = true
+file = "daemon.log"
+level = "info"
+retention = 4
+```
+
 ### search
 
 A sub-object with specific options for search logging:
@@ -922,6 +1078,14 @@ A sub-object with specific options for search logging:
 * `file` - the filename to use for the search logs; defaults to `"search.log"`. Always relative to `logs.dir`.
 * `level` - override the log level for the search logs; defaults to `logs.level`
 * `retention` - how many days to store search logs; defaults to `logs.retention`
+
+```toml
+[logs.search]
+enabled = true
+file = "search.log"
+level = "info"
+retention = 4
+```
 
 ## theme
 
