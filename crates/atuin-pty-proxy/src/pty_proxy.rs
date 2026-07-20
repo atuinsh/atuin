@@ -167,9 +167,17 @@ fn render_init(shell: Shell) -> &'static str {
       # Prefer ZSH_ARGZERO (zsh 5.3+) — it preserves the path zsh was
       # invoked with — and fall back to PATH lookup otherwise. Login shells
       # set argv[0] to "-zsh", and ZSH_ARGZERO keeps that leading dash, so
-      # strip it (${var#-}) before passing the path along.
+      # strip it (${var#-}) before passing the path along. Some hosts (e.g.
+      # terminal multiplexers) set argv[0] to a bare "zsh" rather than a
+      # path; that is not a usable interpreter path, so resolve it via PATH.
+      # Otherwise the spawned proxy would set $SHELL to a non-executable
+      # value and warn.
       _atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}"
-      exec atuin pty-proxy --shell "${_atuin_pty_proxy_zsh#-}"
+      _atuin_pty_proxy_zsh="${_atuin_pty_proxy_zsh#-}"
+      if [[ "$_atuin_pty_proxy_zsh" != /* ]]; then
+        _atuin_pty_proxy_zsh="$(command -v zsh)"
+      fi
+      exec atuin pty-proxy --shell "$_atuin_pty_proxy_zsh"
     else
       exec atuin pty-proxy
     fi
@@ -252,10 +260,15 @@ mod tests {
     fn init_scripts_forward_shell_path() {
         let posix = render_init(Shell::Bash);
         assert!(posix.contains(r#"exec atuin pty-proxy --shell "$BASH""#));
-        // zsh: capture ZSH_ARGZERO (with PATH fallback), then strip the
-        // leading dash present on login shells before forwarding the path.
+        // zsh: capture ZSH_ARGZERO (with PATH fallback), strip the leading
+        // dash present on login shells, then resolve to an absolute path via
+        // PATH when it is a bare name (e.g. "zsh"). Forwarding a bare name
+        // would leave the spawned proxy's $SHELL non-executable.
         assert!(posix.contains(r#"_atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}""#));
-        assert!(posix.contains(r#"exec atuin pty-proxy --shell "${_atuin_pty_proxy_zsh#-}""#));
+        assert!(posix.contains(r#"_atuin_pty_proxy_zsh="${_atuin_pty_proxy_zsh#-}""#));
+        assert!(posix.contains(r#"if [[ "$_atuin_pty_proxy_zsh" != /* ]]; then"#));
+        assert!(posix.contains(r#"_atuin_pty_proxy_zsh="$(command -v zsh)""#));
+        assert!(posix.contains(r#"exec atuin pty-proxy --shell "$_atuin_pty_proxy_zsh""#));
 
         let fish = render_init(Shell::Fish);
         assert!(fish.contains("exec atuin pty-proxy --shell (status fish-path)"));
