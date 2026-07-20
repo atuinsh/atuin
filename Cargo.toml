@@ -96,5 +96,6 @@ features = ["runtime-tokio", "time", "uuid"]
 # The profile that 'cargo dist' will build with
 [profile.dist]
 inherits = "release"
-lto = "thin"
+lto = "fat"
 strip = "symbols"
+codegen-units = 1
