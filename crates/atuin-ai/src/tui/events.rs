@@ -1,6 +1,5 @@
-// Used again when the permission prompt lands in the v2 port (tools slice).
-#![allow(dead_code)]
-
+/// A user's answer to a permission prompt, in UI vocabulary. Mapped to the
+/// FSM's `PermissionChoice` at dispatch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PermissionResult {
     Allow,

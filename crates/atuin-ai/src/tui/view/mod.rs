@@ -5,14 +5,16 @@
 //! pushed to scrollback with the same code. Message emission lives in the
 //! app's keymap, not here — elements are display-only.
 
+use atuin_common::path::DisplayRichExt;
 use eye_declare::{
     AnyElement, Element, ElementExt, Fluent, col, empty, markdown, row, spinner, text, viewport,
 };
-use atuin_common::path::DisplayRichExt;
 use ratatui_core::style::{Color, Modifier, Style};
 
-use crate::fsm::tools::InterruptReason;
-use crate::tools::{HistorySearchFilterMode, ToolPreview};
+use crate::fsm::tools::{InterruptReason, TrackedTool};
+use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview};
+use crate::tui::events::PermissionResult;
+use crate::tui::select;
 
 pub(crate) mod input;
 pub(crate) mod turn;
@@ -599,6 +601,74 @@ fn suggested_command_view(details: &SuggestedCommandDetails) -> AnyElement<'stat
             low_confidence.then_some(confidence_notes).flatten(),
             |c, notes| c.child(row().fixed(2, text("└")).fill(markdown(notes)).pad_left(2)),
         )
+        .any()
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Permission prompt
+// ───────────────────────────────────────────────────────────────────
+
+/// The permission options offered for a tool call, in display order.
+///
+/// Edit/Write tools get a per-file session-scoped option instead of the
+/// workspace-level "Always allow in this directory"; other tools keep the
+/// standard set, with the directory label reflecting git-project status.
+pub(crate) fn permission_options(
+    tool: &ClientToolCall,
+    in_git_project: bool,
+) -> Vec<(&'static str, PermissionResult)> {
+    match tool {
+        ClientToolCall::Edit(_) | ClientToolCall::Write(_) => vec![
+            ("Allow", PermissionResult::Allow),
+            (
+                "Allow this file for this session",
+                PermissionResult::AllowFileForSession,
+            ),
+            ("Always allow", PermissionResult::AlwaysAllow),
+            ("Deny", PermissionResult::Deny),
+        ],
+        _ => vec![
+            ("Allow", PermissionResult::Allow),
+            (
+                if in_git_project {
+                    "Always allow in this workspace"
+                } else {
+                    "Always allow in this directory"
+                },
+                PermissionResult::AlwaysAllowInDir,
+            ),
+            ("Always allow", PermissionResult::AlwaysAllow),
+            ("Deny", PermissionResult::Deny),
+        ],
+    }
+}
+
+/// "Atuin AI would like to <verb>: <target>" plus the options list.
+pub(crate) fn permission_prompt_view(
+    tool_call: &TrackedTool,
+    in_git_project: bool,
+    cursor: usize,
+) -> AnyElement<'static> {
+    let verb = tool_call.tool.descriptor().display_verb;
+    let tool_desc = match &tool_call.tool {
+        ClientToolCall::Read(tool) => tool.path.display().to_string(),
+        ClientToolCall::Edit(tool) => tool.path.display().to_string(),
+        ClientToolCall::Write(tool) => tool.path.display().to_string(),
+        ClientToolCall::Shell(tool) => tool.command.clone(),
+        ClientToolCall::AtuinHistory(tool) => tool.query.clone(),
+        ClientToolCall::AtuinOutput(tool) => tool.history_id.to_string(),
+        ClientToolCall::LoadSkill(tool) => format!("skill: {}", tool.name),
+    };
+    let options = permission_options(&tool_call.tool, in_git_project);
+
+    col()
+        .child(
+            text(format!("Atuin AI would like to {verb}: "))
+                .span(tool_desc, Style::default().fg(Color::Yellow)),
+        )
+        .child(select::select_view(options.iter().map(|(label, _)| *label), cursor).pad_left(2))
+        .pad_left(2)
+        .pad_top(1)
         .any()
 }
 

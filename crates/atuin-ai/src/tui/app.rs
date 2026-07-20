@@ -2,7 +2,8 @@
 //! loop, and the live tail is a view over the not-yet-committed turns.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use crossterm::event::KeyCode;
 use eye_declare::{
@@ -13,10 +14,14 @@ use ratatui_core::style::{Color, Modifier, Style};
 use tokio::sync::mpsc::UnboundedSender;
 use tui_textarea::TextArea;
 
-use crate::fsm::effects::{Effect, ExitAction, TimeoutKind};
-use crate::fsm::events::Event;
+use crate::fsm::effects::{Effect, ExitAction, PermissionTarget, TimeoutKind};
+use crate::fsm::events::{Event, PermissionChoice, PermissionResponse};
+use crate::fsm::tools::ToolPreviewData;
 use crate::fsm::{AgentFsm, AgentState};
+use crate::tools::ClientToolCall;
+use crate::tui::events::PermissionResult;
 use crate::tui::persist::PersistJob;
+use crate::tui::select::{SelectMsg, SelectState};
 use crate::tui::slash::{SlashCommandRegistry, SlashCommandSearchResult};
 use crate::tui::state::ConversationEvent;
 use crate::tui::view;
@@ -35,7 +40,6 @@ pub(crate) enum ExitOutcome {
 /// IO resources the app's effects need. Not part of the FSM's state.
 /// Session persistence goes through the [`crate::tui::persist`] worker,
 /// which owns the `SessionManager`.
-// TODO(v2 port, tools slice): trackers + snapshot store reconnect there.
 pub(crate) struct IoContext {
     pub app_ctx: crate::context::AppContext,
     pub client_ctx: crate::context::ClientContext,
@@ -64,6 +68,10 @@ pub(crate) enum Msg {
     ExecuteCommand,
     /// Exit with the suggested command inserted, not executed (Tab).
     InsertCommand,
+    /// Move the permission-prompt cursor (Up/Down while asking).
+    PermissionSelect(SelectMsg),
+    /// Answer the permission prompt with the highlighted option (Enter).
+    ConfirmPermission,
     /// Cancel: generation, or a pending confirmation (Esc).
     Cancel,
     /// Interrupt a running tool execution (Ctrl+C / Esc while executing).
@@ -86,6 +94,14 @@ pub(crate) struct AiApp {
     /// The in-flight stream turn; dropping it (Esc, replacement) cancels
     /// the HTTP request.
     streaming: Option<Task>,
+    /// Interrupt senders for executing shell tools. Firing one kills the
+    /// child process; the detached tool stream still reports its outcome.
+    tool_interrupts: HashMap<String, tokio::sync::oneshot::Sender<()>>,
+    /// Cursor for the permission prompt, reset when the asked tool changes.
+    permission_select: SelectState,
+    /// Which tool the current prompt (and cursor) belongs to.
+    permission_prompt_for: Option<String>,
+    in_git_project: bool,
     /// Latest known credit usage (cached at startup, refreshed from Done
     /// frames). Rendered by the status bar (pickers slice).
     usage: Option<UsageSnapshot>,
@@ -118,6 +134,7 @@ impl AiApp {
         usage: Option<UsageSnapshot>,
     ) -> Self {
         Self {
+            in_git_project: io.app_ctx.git_root.is_some(),
             io: Some(io),
             usage,
             ..Self::headless(fsm, resume_notice, slash_registry, skill_names)
@@ -140,6 +157,10 @@ impl AiApp {
             fsm,
             io: None,
             streaming: None,
+            tool_interrupts: HashMap::new(),
+            permission_select: SelectState::default(),
+            permission_prompt_for: None,
+            in_git_project: false,
             usage: None,
             resume_notice,
             input: RefCell::new(view::input::new_textarea()),
@@ -298,12 +319,326 @@ impl AiApp {
                     })
                     .detach();
                 }
-                // TODO(v2 port): tools + permissions + model fetch reconnect
-                // in the next slices.
+                Effect::CheckPermission { tool_id, tool } => {
+                    self.check_permission(tool_id, tool, ctx)
+                }
+                Effect::ExecuteTool { tool_id, tool } => self.execute_tool(tool_id, tool, ctx),
+                Effect::AbortTool { tool_id } => {
+                    if let Some(interrupt_tx) = self.tool_interrupts.remove(&tool_id) {
+                        let _ = interrupt_tx.send(());
+                    }
+                }
+                Effect::CacheSessionGrant { path } => {
+                    if let Some(io) = &mut self.io {
+                        io.edit_permissions.grant(path);
+                    }
+                }
+                Effect::WritePermissionRule {
+                    target,
+                    rule,
+                    disposition,
+                } => {
+                    let Some(io) = &self.io else { continue };
+                    let file_path = match target {
+                        PermissionTarget::Project => {
+                            let project_root = io
+                                .app_ctx
+                                .git_root
+                                .clone()
+                                .or_else(|| std::env::current_dir().ok())
+                                .unwrap_or_else(|| PathBuf::from("."));
+                            crate::permissions::writer::project_permissions_path(&project_root)
+                        }
+                        PermissionTarget::Global => {
+                            crate::permissions::writer::global_permissions_path()
+                        }
+                    };
+                    tokio::spawn(async move {
+                        if let Err(e) =
+                            crate::permissions::writer::write_rule(&file_path, &rule, disposition)
+                                .await
+                        {
+                            tracing::error!("Failed to write permission rule: {e}");
+                        }
+                    });
+                }
+                Effect::LoadSkill { name, arguments } => {
+                    let Some(io) = &self.io else { continue };
+                    let registry = io.skill_registry.clone();
+                    let shell = io
+                        .client_ctx
+                        .shell
+                        .clone()
+                        .unwrap_or_else(|| "sh".to_string());
+                    ctx.perform(async move {
+                        let content = crate::tui::tools_exec::load_skill_content(
+                            &registry,
+                            &name,
+                            &shell,
+                            arguments.as_deref(),
+                        )
+                        .await;
+                        Msg::Fsm(Event::SkillLoaded {
+                            name,
+                            arguments,
+                            content,
+                        })
+                    })
+                    .detach();
+                }
+                // TODO(v2 port, pickers slice): FetchModels + SaveModelSelection.
                 other => tracing::debug!(effect = ?other, "effect deferred (v2 port)"),
             }
         }
+        self.sync_permission_prompt();
         self.push_ready_turns(ctx);
+    }
+
+    /// Keep the prompt cursor tied to the tool being asked about: a new
+    /// question starts from the top.
+    fn sync_permission_prompt(&mut self) {
+        let current = self
+            .fsm
+            .ctx
+            .tools
+            .awaiting_permission()
+            .map(|t| t.id.clone());
+        if current != self.permission_prompt_for {
+            self.permission_prompt_for = current;
+            self.permission_select = SelectState::default();
+        }
+    }
+
+    /// Resolve a permission check: fast paths synchronously (yolo,
+    /// auto-approved tools, cached per-session grants), the rules resolver
+    /// as a spawned future. Without IO (headless), everything resolves to
+    /// Ask — the same fallback the resolver uses on errors.
+    fn check_permission(&mut self, tool_id: String, tool: ClientToolCall, ctx: &mut Ctx<'_, Self>) {
+        let Some(io) = &self.io else {
+            self.handle_fsm(
+                Event::PermissionResolved {
+                    tool_id,
+                    response: PermissionResponse::Ask,
+                },
+                ctx,
+            );
+            return;
+        };
+
+        if io.app_ctx.yolo || tool.is_auto_approved() {
+            self.handle_fsm(
+                Event::PermissionResolved {
+                    tool_id,
+                    response: PermissionResponse::Allowed,
+                },
+                ctx,
+            );
+            return;
+        }
+
+        if let Some(resolved) = tool.resolved_file_path()
+            && io.edit_permissions.has_valid_grant(&resolved)
+        {
+            self.handle_fsm(
+                Event::PermissionResolved {
+                    tool_id,
+                    response: PermissionResponse::SessionGranted,
+                },
+                ctx,
+            );
+            return;
+        }
+
+        let working_dir = tool
+            .target_dir()
+            .map(|p| p.to_path_buf())
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+
+        ctx.perform(async move {
+            use crate::permissions::check::PermissionResponse as Check;
+            let response =
+                match crate::permissions::resolver::PermissionResolver::new(working_dir).await {
+                    Ok(resolver) => match resolver.check(&tool).await {
+                        Ok(Check::Allowed) => PermissionResponse::Allowed,
+                        Ok(Check::Denied) => PermissionResponse::Denied,
+                        Ok(Check::Ask) | Err(_) => PermissionResponse::Ask,
+                    },
+                    Err(_) => PermissionResponse::Ask,
+                };
+            Msg::Fsm(Event::PermissionResolved { tool_id, response })
+        })
+        .detach();
+    }
+
+    /// Execute an approved tool. Shell commands stream previews from a
+    /// detached task (interrupt ≠ cancel: the outcome must still arrive);
+    /// file tools are fast and run inline, as in v1; the rest are one-shot
+    /// futures.
+    fn execute_tool(&mut self, tool_id: String, tool: ClientToolCall, ctx: &mut Ctx<'_, Self>) {
+        match tool {
+            ClientToolCall::Shell(shell_call) => {
+                let (interrupt_tx, interrupt_rx) = tokio::sync::oneshot::channel();
+                self.tool_interrupts.insert(tool_id.clone(), interrupt_tx);
+                ctx.spawn(crate::tui::tools_exec::shell_stream(
+                    tool_id,
+                    shell_call,
+                    interrupt_rx,
+                ))
+                .detach();
+            }
+            ClientToolCall::Edit(edit_call) => {
+                let resolved = edit_call.resolved_path();
+
+                let old_content = std::fs::read(&resolved).ok();
+                if let Some(content) = &old_content
+                    && let Some(io) = &mut self.io
+                    && let Some(store) = &mut io.snapshot_store
+                    && let Err(e) = store.ensure_snapshot(&resolved, content)
+                {
+                    tracing::warn!("Failed to snapshot before edit: {e}");
+                }
+
+                let (outcome, new_content) = match &self.io {
+                    Some(io) => edit_call.execute(&resolved, &io.file_tracker),
+                    None => edit_call.execute(&resolved, &Default::default()),
+                };
+
+                if let Some(new_bytes) = &new_content
+                    && let Some(io) = &mut self.io
+                    && let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified())
+                {
+                    io.file_tracker
+                        .update_after_edit(&resolved, new_bytes, mtime);
+                }
+
+                let preview = match (&old_content, &new_content) {
+                    (Some(old_bytes), Some(new_bytes)) => {
+                        let old_str = String::from_utf8_lossy(old_bytes);
+                        let new_str = String::from_utf8_lossy(new_bytes);
+                        let diff = crate::diff::EditPreview::compute(&old_str, &new_str);
+                        (!diff.hunks.is_empty()).then_some(ToolPreviewData::Edit(diff))
+                    }
+                    _ => None,
+                };
+
+                self.handle_fsm(
+                    Event::ToolExecutionDone {
+                        tool_id,
+                        outcome,
+                        preview,
+                    },
+                    ctx,
+                );
+            }
+            ClientToolCall::Write(write_call) => {
+                let resolved = write_call.resolved_path();
+
+                if let Ok(content) = std::fs::read(&resolved)
+                    && let Some(io) = &mut self.io
+                    && let Some(store) = &mut io.snapshot_store
+                    && let Err(e) = store.ensure_snapshot(&resolved, &content)
+                {
+                    tracing::warn!("Failed to snapshot before write: {e}");
+                }
+
+                let (outcome, written_bytes) = write_call.execute(&resolved);
+
+                if let Some(new_bytes) = &written_bytes
+                    && let Some(io) = &mut self.io
+                    && let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified())
+                {
+                    io.file_tracker
+                        .update_after_edit(&resolved, new_bytes, mtime);
+                }
+
+                let preview = (!outcome.is_error()).then(|| {
+                    ToolPreviewData::Write(crate::diff::WritePreview::from_content(
+                        &write_call.content,
+                    ))
+                });
+
+                self.handle_fsm(
+                    Event::ToolExecutionDone {
+                        tool_id,
+                        outcome,
+                        preview,
+                    },
+                    ctx,
+                );
+            }
+            ClientToolCall::Read(read_call) => {
+                let outcome = read_call.execute();
+
+                if !outcome.is_error() {
+                    let resolved = read_call.resolved_path();
+                    if resolved.is_file()
+                        && let Some(io) = &mut self.io
+                        && let Ok(content) = std::fs::read(&resolved)
+                        && let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified())
+                    {
+                        io.file_tracker.record_read(resolved, &content, mtime);
+                    }
+                }
+
+                self.handle_fsm(
+                    Event::ToolExecutionDone {
+                        tool_id,
+                        outcome,
+                        preview: None,
+                    },
+                    ctx,
+                );
+            }
+            ClientToolCall::AtuinHistory(history_call) => {
+                let Some(io) = &self.io else { return };
+                let db = io.app_ctx.history_db.clone();
+                ctx.perform(async move {
+                    let outcome = history_call.execute(&db).await;
+                    Msg::Fsm(Event::ToolExecutionDone {
+                        tool_id,
+                        outcome,
+                        preview: None,
+                    })
+                })
+                .detach();
+            }
+            ClientToolCall::AtuinOutput(output_call) => {
+                ctx.perform(async move {
+                    let outcome = output_call.execute().await;
+                    Msg::Fsm(Event::ToolExecutionDone {
+                        tool_id,
+                        outcome,
+                        preview: None,
+                    })
+                })
+                .detach();
+            }
+            ClientToolCall::LoadSkill(skill_call) => {
+                let Some(io) = &self.io else { return };
+                let registry = io.skill_registry.clone();
+                let shell = io
+                    .client_ctx
+                    .shell
+                    .clone()
+                    .unwrap_or_else(|| "sh".to_string());
+                ctx.perform(async move {
+                    let content = crate::tui::tools_exec::load_skill_content(
+                        &registry,
+                        &skill_call.name,
+                        &shell,
+                        None,
+                    )
+                    .await;
+                    Msg::Fsm(Event::ToolExecutionDone {
+                        tool_id,
+                        outcome: crate::tools::ToolOutcome::Success(content),
+                        preview: None,
+                    })
+                })
+                .detach();
+            }
+        }
     }
 
     /// Launch the chat stream as a spawned message stream, replacing (and
@@ -511,6 +846,34 @@ impl App for AiApp {
                 }
             }
             Msg::Submit => self.submit(ctx),
+            Msg::PermissionSelect(sel) => {
+                let len = self
+                    .fsm
+                    .ctx
+                    .tools
+                    .awaiting_permission()
+                    .map(|t| view::permission_options(&t.tool, self.in_git_project).len())
+                    .unwrap_or(0);
+                self.permission_select.handle(sel, len);
+            }
+            Msg::ConfirmPermission => {
+                let Some(tool) = self.fsm.ctx.tools.awaiting_permission() else {
+                    return;
+                };
+                let tool_id = tool.id.clone();
+                let options = view::permission_options(&tool.tool, self.in_git_project);
+                let Some((_, result)) = options.get(self.permission_select.cursor) else {
+                    return;
+                };
+                let choice = match result {
+                    PermissionResult::Allow => PermissionChoice::Allow,
+                    PermissionResult::AllowFileForSession => PermissionChoice::AllowForSession,
+                    PermissionResult::AlwaysAllowInDir => PermissionChoice::AlwaysAllowInProject,
+                    PermissionResult::AlwaysAllow => PermissionChoice::AlwaysAllow,
+                    PermissionResult::Deny => PermissionChoice::Deny,
+                };
+                self.handle_fsm(Event::PermissionUserChoice { tool_id, choice }, ctx);
+            }
             Msg::ExecuteCommand => self.handle_fsm(Event::ExecuteCommand, ctx),
             Msg::InsertCommand => self.handle_fsm(Event::InsertCommand, ctx),
             Msg::Cancel => self.handle_fsm(Event::Cancel, ctx),
@@ -534,6 +897,7 @@ impl App for AiApp {
         let turns = self.live_turns();
         let busy = self.is_busy();
         let last = turns.len().saturating_sub(1);
+        let asking = self.fsm.ctx.tools.awaiting_permission();
         let needs_pending_banner = busy
             && !matches!(
                 turns.last().map(|t| &t.kind),
@@ -560,11 +924,11 @@ impl App for AiApp {
                     turn,
                     self.pushed_turns == 0 && i == 0,
                     busy && i == last,
-                    false,
+                    asking.is_some(),
                 )
             }))
             .when(needs_pending_banner, |c| {
-                c.child(view::agent_turn_view(&[], true, false))
+                c.child(view::agent_turn_view(&[], true, asking.is_some()))
             })
             .when_some(
                 match &self.fsm.state {
@@ -581,13 +945,22 @@ impl App for AiApp {
                     )
                 },
             )
-            .child(view::input::input_area(
-                &self.input,
-                self.input_active(),
-                self.footer_text(),
-                self.is_input_blank() && self.has_command() && self.input_active(),
-                &self.slash_results,
-            ))
+            .when_some(asking, |c, tool| {
+                c.child(view::permission_prompt_view(
+                    tool,
+                    self.in_git_project,
+                    self.permission_select.cursor,
+                ))
+            })
+            .when(asking.is_none(), |c| {
+                c.child(view::input::input_area(
+                    &self.input,
+                    self.input_active(),
+                    self.footer_text(),
+                    self.is_input_blank() && self.has_command() && self.input_active(),
+                    &self.slash_results,
+                ))
+            })
     }
 
     fn keymap(&self) -> Keymap<Msg> {
@@ -625,6 +998,12 @@ impl App for AiApp {
 
         if self.has_confirmation() {
             km = km.on(key(KeyCode::Enter), Msg::ExecuteCommand);
+        }
+
+        if self.fsm.ctx.tools.awaiting_permission().is_some() {
+            km = km
+                .on(key(KeyCode::Enter), Msg::ConfirmPermission)
+                .merge(SelectState::keymap().map(Msg::PermissionSelect));
         }
 
         if self.input_active() {
@@ -968,6 +1347,150 @@ mod tests {
         };
         h.process(Msg::Usage(snapshot.clone()));
         assert_eq!(h.app().usage, Some(snapshot));
+    }
+
+    /// Drive a turn to the point where a shell tool awaits permission.
+    /// Headless permission checks resolve to Ask (no rules to consult),
+    /// which is exactly the prompt path.
+    fn harness_awaiting_shell_permission() -> Harness {
+        let mut h = Harness::new(app_with(AgentFsm::new(
+            vec!["client_v1_execute_shell_command".into()],
+            "t".into(),
+        )));
+        h.type_str("run something");
+        h.press(KeyCode::Enter);
+        h.stream(Event::StreamStarted);
+        h.stream(Event::StreamToolCall {
+            id: "tool-1".into(),
+            name: "execute_shell_command".into(),
+            input: serde_json::json!({ "command": "echo hi" }),
+        });
+        h.stream(Event::StreamDone {
+            session_id: "s1".into(),
+        });
+        assert!(
+            h.app().fsm.ctx.tools.awaiting_permission().is_some(),
+            "fixture should end awaiting permission"
+        );
+        h
+    }
+
+    #[test]
+    fn permission_prompt_renders_and_replaces_input() {
+        let h = harness_awaiting_shell_permission();
+        let screen = h.screen();
+        assert!(
+            screen.contains("Atuin AI would like to run: "),
+            "prompt line missing:\n{screen}"
+        );
+        assert!(screen.contains("echo hi"), "tool desc missing:\n{screen}");
+        assert!(screen.contains("Allow"), "options missing:\n{screen}");
+        assert!(
+            !screen.contains("Generate a command or ask a question"),
+            "input panel should be hidden while asking:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn permission_cursor_moves_and_wraps() {
+        let mut h = harness_awaiting_shell_permission();
+        assert_eq!(h.app().permission_select.cursor, 0);
+        h.press(KeyCode::Down);
+        assert_eq!(h.app().permission_select.cursor, 1);
+        h.press(KeyCode::Up);
+        h.press(KeyCode::Up);
+        // 4 options: wraps to the last (Deny).
+        assert_eq!(h.app().permission_select.cursor, 3);
+    }
+
+    #[test]
+    fn allowing_starts_execution_with_an_interrupt_handle() {
+        let mut h = harness_awaiting_shell_permission();
+        h.press(KeyCode::Enter); // cursor 0 = Allow
+
+        let app = h.app();
+        assert!(app.fsm.ctx.tools.awaiting_permission().is_none());
+        assert!(
+            app.tool_interrupts.contains_key("tool-1"),
+            "shell execution should register an interrupt sender"
+        );
+    }
+
+    #[test]
+    fn denying_resolves_the_tool_without_executing() {
+        let mut h = harness_awaiting_shell_permission();
+        h.press(KeyCode::Up); // wrap to Deny
+        assert_eq!(h.app().permission_select.cursor, 3);
+        h.press(KeyCode::Enter);
+
+        let app = h.app();
+        assert!(app.fsm.ctx.tools.awaiting_permission().is_none());
+        assert!(
+            app.tool_interrupts.is_empty(),
+            "denied tool must not execute"
+        );
+        assert!(
+            app.fsm
+                .ctx
+                .events
+                .iter()
+                .any(|e| matches!(e, ConversationEvent::ToolResult { is_error: true, .. })),
+            "denial should record an error tool result"
+        );
+    }
+
+    #[test]
+    fn interrupt_drains_the_interrupt_sender() {
+        let mut h = harness_awaiting_shell_permission();
+        h.press(KeyCode::Enter); // Allow → executing
+        assert!(h.app().tool_interrupts.contains_key("tool-1"));
+
+        // Preview output arrives (as the detached shell stream would send);
+        // only then does Ctrl+C mean "interrupt" rather than "quit".
+        h.stream(Event::ToolPreviewUpdate {
+            tool_id: "tool-1".into(),
+            lines: vec!["hi".into()],
+            exit_code: None,
+        });
+        h.press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(
+            h.app().tool_interrupts.is_empty(),
+            "Ctrl+C should fire and drop the interrupt sender"
+        );
+    }
+
+    #[test]
+    fn allowed_read_tool_executes_inline() {
+        use std::io::Write as _;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(file, "hello from the file").unwrap();
+
+        let mut h = Harness::new(app_with(AgentFsm::new(
+            vec!["client_v1_read_file".into()],
+            "t".into(),
+        )));
+        h.type_str("read it");
+        h.press(KeyCode::Enter);
+        h.stream(Event::StreamStarted);
+        h.stream(Event::StreamToolCall {
+            id: "tool-r".into(),
+            name: "read_file".into(),
+            input: serde_json::json!({ "file_path": file.path().to_str().unwrap() }),
+        });
+        h.stream(Event::StreamDone {
+            session_id: "s1".into(),
+        });
+        h.press(KeyCode::Enter); // Allow
+
+        let app = h.app();
+        assert!(
+            app.fsm.ctx.events.iter().any(|e| matches!(
+                e,
+                ConversationEvent::ToolResult { content, is_error: false, .. }
+                    if content.contains("hello from the file")
+            )),
+            "read result should carry the file content"
+        );
     }
 
     #[test]
