@@ -83,7 +83,12 @@ pub(crate) async fn load_skill_content(
     }
 }
 
-#[cfg(test)]
+// Unix-gated per the repo convention for tests that spawn real shell
+// subprocesses: these exercise the stream plumbing (select loop, preview
+// batching, interrupt delivery), which is identical Rust on every
+// platform — `bash -c` is just the vehicle, and it isn't reliably
+// present on Windows runners.
+#[cfg(all(test, unix))]
 mod tests {
     use futures::StreamExt;
 
