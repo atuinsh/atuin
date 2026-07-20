@@ -5,20 +5,26 @@ on:
     branches: [main]
     paths:
       - "docs/**"
+    tags:
+      - "v*"
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Full release version to deploy as latest (e.g. 18.17.1). Leave blank to deploy the main version."
+        required: false
+        default: ""
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
-# Allow only one concurrent deployment
+# Serialize all writes to the gh-pages branch so a main push and a tag
+# release never race each other pushing to the same branch.
 concurrency:
-  group: pages
+  group: docs-pages
   cancel-in-progress: false
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -40,21 +46,66 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Build site
-        run: uv run mkdocs build
+      - name: Configure git identity for mike
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: docs/site
+      - name: Deploy versioned docs
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_VERSION: ${{ github.event.inputs.release_version }}
+        run: |
+          set -euo pipefail
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5
+          # Decide what to deploy.
+          #   - tag push          -> release path (version from tag)
+          #   - workflow_dispatch with release_version -> release path
+          #   - anything else (main push, blank dispatch) -> main version
+          VERSION=""
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$DISPATCH_VERSION" ]; then
+            VERSION="$DISPATCH_VERSION"
+          elif [ "$EVENT_NAME" = "push" ] && [ "$REF_TYPE" = "tag" ]; then
+            VERSION="${REF_NAME#v}"
+          fi
+
+          if [ -n "$VERSION" ]; then
+            # Release path.
+            if [[ "$VERSION" == *-* ]]; then
+              echo "Prerelease ($VERSION) - skipping docs deploy."
+              exit 0
+            fi
+            MINOR="${VERSION%.*}"
+            echo "Deploying release docs: version=$MINOR alias=latest (from $VERSION)"
+            uv run mike deploy --push --update-aliases "$MINOR" latest
+            uv run mike set-default --push latest
+          else
+            # main path.
+            echo "Deploying main (unreleased) docs"
+            uv run mike deploy --push --title "main (unreleased)" main
+          fi
+
+      - name: Ensure custom-domain CNAME on gh-pages
+        # Runs at repo root, NOT the job-level `docs` working-directory, so the
+        # worktree lands at <workspace>/gh-pages-wt.
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          # gh-pages may not exist yet (e.g. the very first trigger is a
+          # prerelease tag, whose deploy step skips without creating it).
+          # No branch -> nothing to guard; exit cleanly.
+          if ! git ls-remote --exit-code origin gh-pages >/dev/null 2>&1; then
+            echo "gh-pages does not exist yet - skipping CNAME guard."
+            exit 0
+          fi
+          git fetch origin gh-pages
+          git worktree add gh-pages-wt gh-pages
+          if [ ! -f gh-pages-wt/CNAME ]; then
+            echo "docs.atuin.sh" > gh-pages-wt/CNAME
+            git -C gh-pages-wt add CNAME
+            git -C gh-pages-wt commit -m "chore(docs): ensure CNAME for custom domain"
+            git -C gh-pages-wt push origin gh-pages
+          fi
+          git worktree remove gh-pages-wt
