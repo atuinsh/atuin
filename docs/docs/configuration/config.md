@@ -110,6 +110,10 @@ Prefix mode searches for "query\*"; fulltext mode searches for "\*query\*";
 "fuzzy" applies the [fuzzy search syntax](#fuzzy-search-syntax);
 "skim" applies the [skim search syntax](https://github.com/lotabout/skim#search-syntax).
 
+```toml
+search_mode = "fuzzy"
+```
+
 !!! note "daemon-fuzzy search mode"
 
     The "daemon-fuzzy" mode is new as of Atuin 18.13. This search mode uses an in-memory index, stored in the daemon, to perform fast and customizable searches.
@@ -210,6 +214,10 @@ The maximum number of lines the interface should take up when atuin is invoked f
 The accepted values are identical to those of `inline_height`.
 
 When unset, the value from `inline_height` is used.
+
+```toml
+inline_height_shell_up_key_binding = 10
+```
 
 ### `workspaces`
 
@@ -363,6 +371,10 @@ The history format allows you to configure the default `history list` format - w
 The specified --format arg will prioritize the config when both are present
 
 More on [history list](../reference/list.md)
+
+```toml
+history_format = "{time}\t{command}\t{duration}"
+```
 
 ### `history_filter`
 
@@ -541,6 +553,10 @@ keymap mode is automatically determined based on the shell's keymap that trigger
 the Atuin search. `"auto"` is not supported by NuShell at present, where it will
 always trigger the Atuin search with the keymap mode `"emacs"`.
 
+```toml
+keymap_mode = "emacs"
+```
+
 ### `keymap_cursor`
 
 Atuin version: >= 18.0
@@ -617,17 +633,29 @@ Default: `1.0`
 
 The multiplier to apply to the frequency score in the frecency calculation. Setting this to `0` disables the frequency portion of the frecency scoring altogether.
 
+```toml
+frequency_score_multiplier = 1.0
+```
+
 #### `recency_score_multiplier`
 
 Default: `1.0`
 
 The multiplier to apply to the recency score in the frecency calculation. Setting this to `0` disables the recency portion of the frecency scoring altogether.
 
+```toml
+recency_score_multiplier = 1.0
+```
+
 #### `frecency_score_multiplier`
 
 Default: `1.0`
 
 The multiplier used for the final frecency score. Setting this to `0` disables frecency scoring altogether, relying solely on the fuzzy matcher's score.
+
+```toml
+frecency_score_multiplier = 1.0
+```
 
 Example:
 
@@ -675,7 +703,7 @@ authors = ["$all-user"]
 
 This section of client config is specifically for configuring Atuin stats calculations
 
-```
+```toml
 [stats]
 common_subcommands = [...]
 common_prefix = [...]
@@ -775,7 +803,7 @@ After setting an alias, you will either need to restart your shell or source the
 
 This section of the client config is specifically for configuring key-related settings.
 
-```
+```toml
 [keys]
 scroll_exits = [...]
 prefix = 'a'
@@ -789,6 +817,10 @@ Default: `true`
 
 Configures whether the TUI exits, when scrolled past the last or first entry.
 
+```toml
+scroll_exits = true
+```
+
 ### `prefix`
 
 Atuin version: > 18.3
@@ -798,6 +830,10 @@ Default: `a`
 Which key to use as the prefix. Prefix mode is a two-step shortcut system: you press ++ctrl++ and the prefix key to enter prefix mode, then press a second key to trigger an action. For example, with the default prefix `a`, pressing ++ctrl+a++ then ++d++ deletes the selected entry.
 
 See the [key binding page](key-binding.md#prefix-mode) for the full list of default prefix shortcuts, or the [advanced key binding page](advanced-key-binding.md#custom-prefix-bindings) to customize them.
+
+```toml
+prefix = "a"
+```
 
 ### `exit_past_line_start`
 
@@ -981,11 +1017,19 @@ Default: `true`
 
 Whether or not to enable file-based logging.
 
+```toml
+enabled = true
+```
+
 ### dir
 
 Default: `"~/.atuin/logs"`
 
 The directory in which to store log files.
+
+```toml
+dir = "~/.atuin/logs"
+```
 
 ### level
 
@@ -993,11 +1037,19 @@ Default: `"info"`
 
 The logging level to use. Valid values are `"trace"`, `"debug"`, `"info"`, `"warn"`, and `"error"`, in order of highest-to-lowest verbosity.
 
+```toml
+level = "info"
+```
+
 ### retention
 
 Default: `4`
 
 How many days of log files to keep (per file type). Files older than this will be removed.
+
+```toml
+retention = 4
+```
 
 ### ai
 
@@ -1008,6 +1060,14 @@ A sub-object with specific options for AI logging:
 * `level` - override the log level for the AI logs; defaults to `logs.level`
 * `retention` - how many days to store AI logs; defaults to `logs.retention`
 
+```toml
+[logs.ai]
+enabled = true
+file = "ai.log"
+level = "info"
+retention = 4
+```
+
 ### daemon
 
 A sub-object with specific options for daemon logging:
@@ -1017,6 +1077,14 @@ A sub-object with specific options for daemon logging:
 * `level` - override the log level for the daemon logs; defaults to `logs.level`
 * `retention` - how many days to store daemon logs; defaults to `logs.retention`
 
+```toml
+[logs.daemon]
+enabled = true
+file = "daemon.log"
+level = "info"
+retention = 4
+```
+
 ### search
 
 A sub-object with specific options for search logging:
@@ -1025,6 +1093,14 @@ A sub-object with specific options for search logging:
 * `file` - the filename to use for the search logs; defaults to `"search.log"`. Always relative to `logs.dir`.
 * `level` - override the log level for the search logs; defaults to `logs.level`
 * `retention` - how many days to store search logs; defaults to `logs.retention`
+
+```toml
+[logs.search]
+enabled = true
+file = "search.log"
+level = "info"
+retention = 4
+```
 
 ## theme
 
