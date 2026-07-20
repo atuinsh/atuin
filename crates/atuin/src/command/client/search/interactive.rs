@@ -1450,6 +1450,49 @@ fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
     })
 }
 
+/// Decide whether a screen snapshot from atuin pty-proxy describes the
+/// terminal surface this process is drawing on.
+///
+/// `ATUIN_PTY_PROXY_SOCKET` is inherited through the environment, so it can
+/// leak across terminal surfaces — e.g. into the panes of a terminal
+/// multiplexer launched from a proxied shell. Restoring such a snapshot
+/// would paint another surface's contents (sidebars, other panes) into this
+/// one. The snapshot is only trusted when the proxy's PTY device matches the
+/// tty this process runs on (when both are known) and the snapshot
+/// dimensions match the live terminal size. Sizes are `(rows, cols)`.
+#[cfg(unix)]
+fn popup_screen_is_current(
+    proxy_tty: Option<&str>,
+    client_tty: Option<&str>,
+    saved_size: (u16, u16),
+    term_size: (u16, u16),
+) -> bool {
+    if let (Some(proxy_tty), Some(client_tty)) = (proxy_tty, client_tty)
+        && !proxy_tty.is_empty()
+        && proxy_tty != client_tty
+    {
+        return false;
+    }
+    saved_size == term_size
+}
+
+/// The tty device this process is attached to, from the first standard
+/// stream that is a terminal. Returns `None` when no standard stream is a
+/// tty (in which case popup mode is not usable anyway).
+#[cfg(unix)]
+fn client_tty_name() -> Option<String> {
+    let stdout = std::io::stdout();
+    let stdin = std::io::stdin();
+    let stderr = std::io::stderr();
+    let streams: [&dyn std::os::fd::AsFd; 3] = [&stdout, &stdin, &stderr];
+    for stream in streams {
+        if let Ok(name) = rustix::termios::ttyname(stream, Vec::new()) {
+            return name.into_string().ok();
+        }
+    }
+    None
+}
+
 /// Restore the screen area that was covered by the popup.
 ///
 /// Writes the pre-formatted per-row ANSI bytes received from atuin pty-proxy
@@ -1657,7 +1700,21 @@ pub async fn history(
             && inline_height > 0
         {
             let saved = fetch_screen_state(path);
-            if let Some(ref s) = saved {
+            // A snapshot describing some other terminal surface — e.g. a
+            // socket inherited across a multiplexer boundary — must not be
+            // used: restoring it would paint foreign content into this
+            // surface. Fall back to plain inline mode instead.
+            let usable = saved.as_ref().is_some_and(|s| {
+                let (term_cols, term_rows) = terminal::size().unwrap_or((s.cols, s.rows));
+                let proxy_tty = std::env::var("ATUIN_PTY_PROXY_TTY").ok();
+                popup_screen_is_current(
+                    proxy_tty.as_deref(),
+                    client_tty_name().as_deref(),
+                    (s.rows, s.cols),
+                    (term_rows, term_cols),
+                )
+            });
+            if usable && let Some(ref s) = saved {
                 let (term_cols, term_rows) = terminal::size().unwrap_or((s.cols, s.rows));
                 let (popup_rect, scroll) =
                     compute_popup_placement(s.cursor_row, term_rows, term_cols, inline_height);
@@ -3205,5 +3262,72 @@ mod tests {
             matches!(result, super::InputAction::ReturnQuery),
             "Tab configured as return-query should return InputAction::ReturnQuery"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn popup_screen_current_when_tty_and_size_match() {
+        assert!(super::popup_screen_is_current(
+            Some("/dev/ttys009"),
+            Some("/dev/ttys009"),
+            (40, 120),
+            (40, 120),
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn popup_screen_stale_when_proxy_tty_differs() {
+        // A multiplexer pane (e.g. herdr) inherits the proxy environment of
+        // an outer shell but runs on its own PTY. The snapshot describes the
+        // outer surface and must not be used here.
+        assert!(!super::popup_screen_is_current(
+            Some("/dev/ttys001"),
+            Some("/dev/ttys014"),
+            (40, 120),
+            (40, 120),
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn popup_screen_stale_when_size_differs() {
+        assert!(!super::popup_screen_is_current(
+            Some("/dev/ttys009"),
+            Some("/dev/ttys009"),
+            (60, 200),
+            (40, 120),
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn popup_screen_falls_back_to_size_when_a_tty_is_unknown() {
+        // Older proxies don't export ATUIN_PTY_PROXY_TTY, and the client tty
+        // may be undeterminable; in those cases only the size check applies.
+        assert!(super::popup_screen_is_current(
+            None,
+            Some("/dev/ttys009"),
+            (40, 120),
+            (40, 120),
+        ));
+        assert!(super::popup_screen_is_current(
+            Some("/dev/ttys009"),
+            None,
+            (40, 120),
+            (40, 120),
+        ));
+        assert!(super::popup_screen_is_current(
+            Some(""),
+            Some("/dev/ttys009"),
+            (40, 120),
+            (40, 120),
+        ));
+        assert!(!super::popup_screen_is_current(
+            None,
+            Some("/dev/ttys009"),
+            (60, 200),
+            (40, 120),
+        ));
     }
 }
