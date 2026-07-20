@@ -595,6 +595,26 @@ Alternatively, set env var NO_MOTION
 prefers_reduced_motion = false
 ```
 
+### `smart_sort`
+
+Atuin version: >= 18.0
+
+Default: `false`
+
+When enabled, interactive search reorders returned history after the active
+search mode runs. Ranking prefers:
+
+1. Commands that are **prefixed** by the query
+2. Commands that contain the query as a **whole substring**
+3. More **recent** commands (lightly — time does not dominate match quality)
+
+This applies on top of prefix, fulltext, fuzzy, skim, and daemon-fuzzy modes in
+the interactive TUI. It does not change non-interactive `atuin search` output.
+
+```toml
+smart_sort = true
+```
+
 ## search
 
 ### `filters`
@@ -698,6 +718,43 @@ authors = ["$all-user"]
 # Show commands from you and Claude Code
 # authors = ["$all-user", "claude-code"]
 ```
+
+## tmux
+
+```toml
+[tmux]
+enabled = false
+width = "80%"
+height = "60%"
+```
+
+### `enabled`
+
+Atuin version: >= 18.12
+
+Default: `false`
+
+When `true` and Atuin is started inside a tmux session (tmux >= 3.2), interactive
+search uses `tmux display-popup` instead of drawing inline in the current pane.
+Supported shell integrations: zsh, bash, and fish.
+
+`atuin init` exports `ATUIN_TMUX_POPUP` / `ATUIN_TMUX_POPUP_WIDTH` /
+`ATUIN_TMUX_POPUP_HEIGHT` from this section. You can also override those env vars
+in your shell (set `ATUIN_TMUX_POPUP=false` to force-disable).
+
+!!! note "iTerm2 native tmux"
+
+    iTerm2's native tmux integration does not support `display-popup`. Leave
+    `enabled = false` (the default) if you rely on that integration.
+
+### `width` / `height`
+
+Atuin version: >= 18.12
+
+Defaults: `width = "80%"`, `height = "60%"`
+
+Popup size. Each value may be a percentage string (for example `"80%"`) or an
+integer character/line count (for example `"100"`).
 
 ## Stats
 
