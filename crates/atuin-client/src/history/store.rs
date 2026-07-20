@@ -108,7 +108,7 @@ impl HistoryRecord {
             }
 
             n => {
-                bail!("unknown HistoryRecord type {n}")
+                bail!("unknown HistoryRecord type {n}");
             }
         }
     }

@@ -80,19 +80,19 @@ impl VarRecord {
                             decode::read_str_from_slice(bytes).map_err(error_report)?;
 
                         if !bytes.is_empty() {
-                            bail!("trailing bytes in encoded dotfiles var record. malformed")
+                            bail!("trailing bytes in encoded dotfiles var record. malformed");
                         }
 
                         Ok(VarRecord::Delete(key.to_owned()))
                     }
 
                     n => {
-                        bail!("unknown Dotfiles var record type {n}")
+                        bail!("unknown Dotfiles var record type {n}");
                     }
                 }
             }
             _ => {
-                bail!("unknown version {version:?}")
+                bail!("unknown version {version:?}");
             }
         }
     }

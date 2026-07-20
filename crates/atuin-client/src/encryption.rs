@@ -100,7 +100,9 @@ pub fn decode_key(key: String) -> Result<Key> {
                     }
                     Ok(key)
                 }
-                _ => bail!("could not decode encryption key"),
+                _ => {
+                    bail!("could not decode encryption key");
+                }
             }
         }
     }
