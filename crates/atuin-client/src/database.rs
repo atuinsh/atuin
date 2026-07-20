@@ -682,9 +682,6 @@ impl Database for Sqlite {
             .exclude_cwd
             .map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
 
-        // Parse failures must surface: a silently-dropped bound returns *unfiltered*
-        // results, which for `--before`/`--after` (and stats' date ranges) is worse
-        // than an error the user can see and correct.
         if let Some(before) = filter_options.before {
             let parsed = interim::parse_date_string(
                 before.as_str(),
@@ -1428,14 +1425,6 @@ mod test {
         db
     }
 
-    // `after`/`before` are *exclusive* bounds (`timestamp > after`, `timestamp <
-    // before`). `offsets` are seconds relative to the timestamped item (`t`), so
-    // e.g. `Some((-1, 1))` means the window `(t - 1s, t + 1s)`. The second history
-    // item sits at `now_utc()`, far outside every window below, so it only appears
-    // in the `None` (no filter) case.
-    //
-    // `atuin search --before/--after` hands these to `search` as RFC3339 strings, so
-    // pin that the bounds are actually applied.
     #[rstest]
     #[case::window_spans_the_item(Some((-1, 1)), 1, true)]
     #[case::after_bound_is_exclusive(Some((0, 1)), 0, false)]
@@ -1496,8 +1485,6 @@ mod test {
     }
 
     #[rstest]
-    // `include_duplicates: true` returns every execution; `false` collapses repeats to
-    // the newest row. No compiler catches a regression here, so pin both sides.
     #[case::with_duplicates_counts_every_execution(true, 2)]
     #[case::without_duplicates_collapses_to_newest_row(false, 1)]
     #[tokio::test(flavor = "multi_thread")]
@@ -1535,8 +1522,6 @@ mod test {
         let context = new_context();
 
         let mut filters = OptFilters::default();
-        // Not a date `interim` can parse. It must surface as an error rather than being
-        // dropped, which would silently return unfiltered results.
         match which {
             "before" => filters.before = Some("not a date".to_string()),
             "after" => filters.after = Some("not a date".to_string()),
@@ -1608,22 +1593,18 @@ mod test {
     #[case::wrong_order_no_match("ellie/home", 0)]
     #[case::concatenated_terms("lsellie", 1)]
     #[case::bare_space_matches_all(" ", 4)]
-    // single term operators
     #[case::starts_with("^ls", 2)]
     #[case::exact_word("'ls", 2)]
     #[case::ends_with("ellie$", 2)]
     #[case::negated_starts_with("!^ls", 2)]
     #[case::negated_term("!ellie", 1)]
     #[case::negated_ends_with("!ellie$", 2)]
-    // multiple terms
     #[case::term_and_negated_term("ls !ellie", 1)]
     #[case::starts_with_and_negated_ends_with("^ls !e$", 1)]
     #[case::term_and_negated_starts_with("home !^ls", 2)]
     #[case::or_exact_terms("'frank | 'rustup", 2)]
     #[case::or_with_and_term("'frank | 'rustup 'ls", 1)]
-    // case matching
     #[case::case_insensitive_match("Ellie", 1)]
-    // regex
     #[case::regex_anchored_start("r/^ls ", 2)]
     #[case::regex_character_class("r/[Ee]llie", 3)]
     #[case::regex_combined_with_fuzzy_term("/h/e r/^ls ", 1)]
