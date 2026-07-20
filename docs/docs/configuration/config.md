@@ -738,9 +738,11 @@ When `true` and Atuin is started inside a tmux session (tmux >= 3.2), interactiv
 search uses `tmux display-popup` instead of drawing inline in the current pane.
 Supported shell integrations: zsh, bash, and fish.
 
-`atuin init` exports `ATUIN_TMUX_POPUP` / `ATUIN_TMUX_POPUP_WIDTH` /
-`ATUIN_TMUX_POPUP_HEIGHT` from this section. You can also override those env vars
-in your shell (set `ATUIN_TMUX_POPUP=false` to force-disable).
+`atuin init` reflects this section into the shell environment: when `enabled =
+true` it exports `ATUIN_TMUX_POPUP_WIDTH` / `ATUIN_TMUX_POPUP_HEIGHT`; when
+`enabled = false` it exports `ATUIN_TMUX_POPUP=false`. You can also override these
+env vars in your shell (set `ATUIN_TMUX_POPUP=false` to force-disable, or set
+`ATUIN_TMUX_POPUP_WIDTH` / `ATUIN_TMUX_POPUP_HEIGHT` to resize).
 
 !!! note "iTerm2 native tmux"
 
