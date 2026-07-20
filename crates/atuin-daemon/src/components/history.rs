@@ -154,9 +154,6 @@ impl HistorySvc for HistoryGrpcService {
                 )
             })?;
 
-        // A command carrying a NUL byte is malformed — reject the request
-        // rather than record garbage (issue #3589). This is a second ingress
-        // path, independent of the `atuin hook` JSON boundary.
         let command = NonNulStr::new(req.command).map_err(|err| {
             Status::invalid_argument(format!(
                 "command contains a NUL byte at index {}",

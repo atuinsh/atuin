@@ -122,7 +122,6 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
-    /// Build a `NonNulStr` for a test expectation.
     fn non_nul(s: &str) -> NonNulStr {
         NonNulStr::new(s.to_owned()).unwrap()
     }
