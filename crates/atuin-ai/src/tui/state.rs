@@ -1,8 +1,7 @@
 //! Core state types for the conversation protocol.
 //!
 //! ConversationEvent and events_to_messages are the canonical representations
-//! used by both the FSM and the context window builder. AppMode is used by
-//! the view layer for component prop derivation.
+//! used by both the FSM and the context window builder.
 
 /// Conversation event types matching the API protocol.
 #[derive(Debug, Clone)]
@@ -70,21 +69,6 @@ impl ConversationEvent {
         }
         None
     }
-}
-
-/// Application mode for key handling and component props.
-///
-/// Derived from AgentState in the view layer via `From<&AgentState>`.
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
-pub(crate) enum AppMode {
-    /// User is typing input
-    Input,
-    /// Waiting for generation (showing spinner)
-    Generating,
-    /// Streaming SSE response
-    Streaming,
-    /// Error state, can retry
-    Error,
 }
 
 /// Convert a slice of conversation events to Claude API message format.

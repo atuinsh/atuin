@@ -1,15 +1,9 @@
-use std::sync::mpsc;
-
 use crate::context::{AppContext, ClientContext};
-use crate::driver::{DriverEvent, IoContext, ViewState, run_driver};
 use crate::fsm::AgentFsm;
-use crate::fsm::effects::ExitAction;
 use crate::session::{LocalSessionService, SessionManager, SessionService};
-use crate::tui::events::AiTuiEvent;
+use crate::tui::app::{AiApp, ExitOutcome, IoContext};
 use crate::tui::state::ConversationEvent;
-use crate::tui::view::ai_view;
 use atuin_client::database::{Database, Sqlite};
-use eye_declare::{Application, CtrlCBehavior};
 use eyre::{Context as _, Result, bail};
 use tracing::{debug, info};
 
@@ -31,11 +25,11 @@ pub(crate) async fn run(
             }
             SetupChoice::DisableKeybind => {
                 set_ai_enabled(false).await?;
-                emit_shell_result(Action::Cancel, output_for_hook);
+                emit_shell_result(ExitOutcome::Cancel, output_for_hook);
                 return Ok(());
             }
             SetupChoice::Cancel => {
-                emit_shell_result(Action::Cancel, output_for_hook);
+                emit_shell_result(ExitOutcome::Cancel, output_for_hook);
                 return Ok(());
             }
         }
@@ -161,7 +155,7 @@ async fn run_inline_tui(
     ctx: AppContext,
     initial_prompt: Option<String>,
     settings: &atuin_client::settings::Settings,
-) -> Result<Action> {
+) -> Result<ExitOutcome> {
     let client_ctx = ClientContext::detect();
 
     // Open the session service and check for a resumable session
@@ -285,8 +279,6 @@ async fn run_inline_tui(
         .join(session_mgr.session_id());
     let snapshot_store = crate::snapshots::SnapshotStore::open(snapshot_dir).ok();
 
-    let in_git_project = ctx.git_root.is_some();
-
     // ─── Discover skills ───────────────────────────────────────
     let project_root = ctx
         .git_root
@@ -294,118 +286,18 @@ async fn run_inline_tui(
         .or_else(|| std::env::current_dir().ok());
     let skill_registry = crate::skills::SkillRegistry::discover(project_root.as_deref()).await;
 
-    // ─── Build initial ViewState from FSM ───────────────────────
-    let mut initial_view = build_view_state(&fsm, in_git_project, &skill_registry);
-    initial_view.usage = cached_usage;
-
-    // ─── Build IoContext ────────────────────────────────────────
-    let io = IoContext {
-        app_ctx: ctx.clone(),
-        client_ctx: client_ctx.clone(),
-        session_mgr,
-        file_tracker,
-        edit_permissions,
-        snapshot_store,
-        skill_registry,
-        user_context_cache: Default::default(),
-    };
-
-    // ─── Channel + Application ──────────────────────────────────
-    // Components emit DriverEvent::Tui(AiTuiEvent) via a wrapping sender.
-    // Spawned tasks emit DriverEvent::Fsm(Event) directly.
-    let (tx, rx) = mpsc::channel::<DriverEvent>();
-
-    // Wrap sender for components: they send AiTuiEvent, we wrap it
-    let tui_tx = DriverEventSender(tx.clone());
-
-    if !usage_is_fresh {
-        let endpoint = ctx.endpoint.clone();
-        let token = ctx.token.clone();
-        let usage_tx = tx.clone();
-        tokio::spawn(async move {
-            match crate::usage::fetch_usage(&endpoint, &token).await {
-                Ok(snapshot) => {
-                    let _ = usage_tx.send(DriverEvent::Usage(snapshot));
-                }
-                Err(e) => debug!("background usage fetch failed: {e}"),
-            }
-        });
-    }
-
-    println!();
-
-    if let Some(prompt) = initial_prompt {
-        let _ = tui_tx
-            .0
-            .send(DriverEvent::Tui(AiTuiEvent::SubmitInput(prompt)));
-    }
-
-    let (mut app, handle) = Application::builder()
-        .state(initial_view)
-        .view(ai_view)
-        .ctrl_c(CtrlCBehavior::Deliver)
-        .keyboard_protocol(eye_declare::KeyboardProtocol::Enhanced)
-        .bracketed_paste(true)
-        .with_context(tui_tx)
-        .extra_newlines_at_exit(1)
-        .on_commit(|committed, state| {
-            if let Some(key) = &committed.key
-                && let Some(id_str) = key.strip_prefix("turn-")
-                && let Ok(id) = id_str.parse::<usize>()
-            {
-                let new_count = id + 1;
-                if new_count > state.committed_turn_count {
-                    state.committed_turn_count = new_count;
-                }
-            }
-        })
-        .build()?;
-
-    // ─── Driver loop ────────────────────────────────────────────
-    let h = handle.clone();
-    let exiting = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let exiting_clone = exiting.clone();
-    let dispatch_handle = tokio::task::spawn_blocking(move || {
-        run_driver(fsm, io, h, rx, tx, exiting_clone, in_git_project);
+    // ─── Resume notice (frozen at startup) ──────────────────────
+    let resume_notice = fsm.ctx.is_resumed.then(|| match fsm.ctx.last_event_time {
+        Some(t) => {
+            let human = chrono_humanize::HumanTime::from(t - chrono::Utc::now());
+            format!(
+                "  Continuing previous session (last active {human}) - type /new to start a new session"
+            )
+        }
+        None => "  Continuing previous session - type /new to start a new session".to_string(),
     });
 
-    let run_result = app.run_loop().await;
-    let _ = dispatch_handle.await;
-    run_result?;
-
-    let result = match app.state().exit_action {
-        Some(ExitAction::Execute(ref cmd)) => Action::Execute(cmd.clone()),
-        Some(ExitAction::Insert(ref cmd)) => Action::Insert(cmd.clone()),
-        _ => Action::Cancel,
-    };
-
-    Ok(result)
-}
-
-/// Wrapper around `mpsc::Sender<DriverEvent>` that components use as context.
-///
-/// Components call `tx.send(AiTuiEvent::...)` via eye-declare's context system.
-/// This wrapper implements the same interface but wraps events in `DriverEvent::Tui`.
-#[derive(Debug, Clone)]
-pub(crate) struct DriverEventSender(pub mpsc::Sender<DriverEvent>);
-
-impl DriverEventSender {
-    pub fn send(&self, event: AiTuiEvent) -> Result<(), mpsc::SendError<AiTuiEvent>> {
-        self.0
-            .send(DriverEvent::Tui(event))
-            .map_err(|_| mpsc::SendError(AiTuiEvent::Exit))
-    }
-}
-
-/// Build a ViewState snapshot from FSM state. Used for the initial view
-/// and by the driver for ongoing sync.
-fn build_view_state(
-    fsm: &AgentFsm,
-    in_git_project: bool,
-    skill_registry: &crate::skills::SkillRegistry,
-) -> ViewState {
-    let safe_start = fsm.ctx.view_start_index.min(fsm.ctx.events.len());
-
+    // ─── Slash commands + skills ────────────────────────────────
     let mut slash_registry = crate::tui::slash::SlashCommandRegistry::default();
     let mut skill_names = std::collections::HashSet::new();
     for skill in skill_registry.all() {
@@ -416,58 +308,48 @@ fn build_view_state(
         skill_names.insert(skill.name.clone());
     }
 
-    let tools = fsm.ctx.tools.clone();
-    let visible_events = fsm.ctx.events[safe_start..].to_vec();
-    let archived_events = fsm.ctx.archived_events.clone();
+    // ─── IO context ─────────────────────────────────────────────
+    // The persist worker owns the SessionManager and applies snapshots in
+    // channel order.
+    let (persist, persist_worker) = crate::tui::persist::spawn_persist_worker(session_mgr);
+    let io = IoContext {
+        app_ctx: ctx.clone(),
+        client_ctx: client_ctx.clone(),
+        persist,
+        file_tracker,
+        edit_permissions,
+        snapshot_store,
+        skill_registry,
+        user_context_cache: Default::default(),
+    };
 
-    let mut archived_builder = crate::tui::view::turn::TurnBuilder::new(&tools);
-    for event in &archived_events {
-        archived_builder.add_event(event);
-    }
-    let archived_turns = archived_builder.build();
-    let archived_turn_count = archived_turns.len();
+    println!();
 
-    let mut visible_builder =
-        crate::tui::view::turn::TurnBuilder::new_starting_at(&tools, archived_turn_count);
-    for event in &visible_events {
-        visible_builder.add_event(event);
-    }
-    let visible_turns = visible_builder.build();
-
-    let mut turns = archived_turns;
-    turns.extend(visible_turns);
-
-    let has_command = visible_events.iter().any(|e| {
-        matches!(e, ConversationEvent::ToolCall { name, input, .. }
-            if name == "suggest_command"
-                && input.get("command").and_then(|v| v.as_str()).is_some())
-    });
-
-    ViewState {
-        agent_state: fsm.state.clone(),
-        visible_events,
-        all_events: fsm.ctx.events.clone(),
-        session_id: fsm.ctx.session_id.clone(),
-        tools,
-        current_response: fsm.ctx.current_response.clone(),
-        is_resumed: fsm.ctx.is_resumed,
-        last_event_time: fsm.ctx.last_event_time,
-        in_git_project,
-        archived_events,
-        model_picker: fsm.ctx.model_picker.clone(),
-        model: fsm.ctx.model.clone(),
-        usage: None,
-        turns,
-        has_command,
-        committed_turn_count: 0,
-        archived_turn_count,
-        is_input_blank: true,
-        slash_command_input: None,
-        slash_command_search_results: Vec::new(),
-        exit_action: None,
+    let app = AiApp::new(
+        fsm,
+        io,
+        resume_notice,
         slash_registry,
         skill_names,
-    }
+        cached_usage,
+        initial_prompt,
+        !usage_is_fresh,
+    );
+    let options =
+        eye_declare::RunOptions::default().keyboard(eye_declare::KeyboardProtocol::Enhanced);
+    let outcome = eye_declare::driver_tokio::run_with(app, options)
+        .await
+        .context("failed running AI TUI")?;
+
+    // The app (and with it the last persist sender) dropped when the run
+    // loop returned; wait for the worker to drain its queue so the final
+    // session snapshot is on disk before the process can exit.
+    let _ = persist_worker.await;
+
+    // v1 emitted one extra newline at exit; keep the shell handoff spacing.
+    println!();
+
+    Ok(outcome)
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -623,26 +505,19 @@ fn wait_for_login_confirmation() -> Result<bool> {
     }
 }
 
-#[derive(Clone)]
-enum Action {
-    Execute(String),
-    Insert(String),
-    Cancel,
-}
-
-fn emit_shell_result(action: Action, output_for_hook: bool) {
+fn emit_shell_result(outcome: ExitOutcome, output_for_hook: bool) {
     if output_for_hook {
-        match action {
-            Action::Execute(output) => eprintln!("__atuin_ai_execute__:{output}"),
-            Action::Insert(output) => eprintln!("__atuin_ai_insert__:{output}"),
-            Action::Cancel => eprintln!("__atuin_ai_cancel__"),
+        match outcome {
+            ExitOutcome::Execute(output) => eprintln!("__atuin_ai_execute__:{output}"),
+            ExitOutcome::Insert(output) => eprintln!("__atuin_ai_insert__:{output}"),
+            ExitOutcome::Cancel => eprintln!("__atuin_ai_cancel__"),
         }
     } else {
-        match action {
-            Action::Execute(output) | Action::Insert(output) => {
+        match outcome {
+            ExitOutcome::Execute(output) | ExitOutcome::Insert(output) => {
                 println!("{output}");
             }
-            Action::Cancel => {}
+            ExitOutcome::Cancel => {}
         }
     }
 }

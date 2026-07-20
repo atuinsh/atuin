@@ -48,7 +48,9 @@ async-stream = "0.3"
 uuid = { workspace = true }
 tui-textarea-2 = "0.10.2"
 unicode-width = "0.2"
-eye_declare = "0.5.1"
+# Path dependency until eye_declare 0.6.0 publishes; then just a version.
+eye_declare = "0.6.1"
+eye_declare_engine = { version = "0.6.1", features = ["test-util"] }
 ratatui-core = "0.1"
 ratatui-widgets = "0.3"
 thiserror = { workspace = true }

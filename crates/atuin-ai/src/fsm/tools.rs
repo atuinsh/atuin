@@ -167,12 +167,4 @@ impl ToolManager {
             .map(|t| t.id.clone())
             .collect()
     }
-
-    /// True if any tool has a shell preview with live output.
-    pub fn has_executing_preview(&self) -> bool {
-        self.tools.iter().any(|t| {
-            t.state == ToolState::Executing
-                && matches!(t.preview, Some(ToolPreviewData::Shell { .. }))
-        })
-    }
 }

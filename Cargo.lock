@@ -293,6 +293,7 @@ dependencies = [
  "directories",
  "eventsource-stream",
  "eye_declare",
+ "eye_declare_engine",
  "eyre",
  "fs-err",
  "futures",
@@ -1665,29 +1666,31 @@ dependencies = [
 
 [[package]]
 name = "eye_declare"
-version = "0.5.1"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e4caff9f5574315258489ecb2d27aad2cc057521f4b0bc6819a1cd82a648f40"
+checksum = "5693ee53b3e59a1f2fbd1cc7eeebe8f843759c7b6730091ea130727536389995"
 dependencies = [
  "crossterm",
- "eye_declare_macros",
- "futures",
+ "eye_declare_engine",
+ "futures-core",
+ "pulldown-cmark",
  "ratatui-core",
  "ratatui-widgets",
  "tokio",
- "typed-builder",
+ "unicode-segmentation",
  "unicode-width 0.2.2",
 ]
 
 [[package]]
-name = "eye_declare_macros"
-version = "0.5.1"
+name = "eye_declare_engine"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb8ac27b19f79b61a8afc0a55a3148eb2dafc2aaec66c1103432e3e76e7c25af"
+checksum = "2d025cca4225f033a206e4b09b832fd82276547a45baffd98bce9042d5e07ab4"
 dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
+ "ratatui-core",
+ "ratatui-widgets",
+ "unicode-width 0.2.2",
+ "vte",
 ]
 
 [[package]]

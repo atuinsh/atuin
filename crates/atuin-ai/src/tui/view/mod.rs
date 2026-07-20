@@ -1,631 +1,225 @@
-//! View function that builds the eye-declare element tree from app state.
+//! View functions that build eye-declare elements from turn data.
+//!
+//! Every function here is pure and returns an element that owns its strings
+//! (`AnyElement<'static>`), so turns can be rendered into the live tail or
+//! pushed to scrollback with the same code. Message emission lives in the
+//! app's keymap, not here — elements are display-only.
 
-use std::fmt::Display;
-
+use atuin_common::path::DisplayRichExt;
 use eye_declare::{
-    Cells, Column, Elements, HStack, Span, Spinner, Text, View, Viewport, WidthConstraint, element,
+    AnyElement, Element, ElementExt, Fluent, col, empty, markdown, row, spinner, text, viewport,
 };
 use ratatui_core::style::{Color, Modifier, Style};
 
-use atuin_common::path::DisplayRichExt;
-
-use crate::driver::ViewState;
-use crate::fsm::{AgentState, ModelPicker, StreamPhase};
+use crate::fsm::tools::{InterruptReason, TrackedTool};
 use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview};
-use crate::tui::components::select::SelectOption;
-use crate::tui::components::session_continue::SessionContinue;
-use crate::tui::events::{AiTuiEvent, PermissionResult};
+use crate::tui::events::PermissionResult;
+use crate::tui::select;
 
-use super::components::atuin_ai::AtuinAi;
-use super::components::input_box::InputBox;
-use super::components::markdown::Markdown;
-use super::components::select::Select;
-use super::state::AppMode;
-
+pub(crate) mod input;
 pub(crate) mod turn;
 
-impl From<&AgentState> for AppMode {
-    fn from(state: &AgentState) -> Self {
-        match state {
-            AgentState::Idle { .. } => AppMode::Input,
-            AgentState::Turn {
-                stream: StreamPhase::Connecting,
-            } => AppMode::Generating,
-            AgentState::Turn { .. } => AppMode::Streaming,
-            AgentState::Error(_) => AppMode::Error,
-        }
-    }
-}
-
-/// Build the element tree from current state.
-///
-/// Layout (top to bottom):
-/// - Conversation messages (user messages, agent responses, tool status)
-/// - Streaming content (if actively streaming)
-/// - Error display (if in error state)
-/// - Spacer
-/// - Input box (bordered, with contextual keybindings)
-pub(crate) fn ai_view(state: &ViewState) -> Elements {
-    let committed = state.committed_turn_count;
-    let turns: Vec<&turn::UiTurn> = state.turns.iter().filter(|t| t.id >= committed).collect();
-    let busy = state.is_busy();
-    let last_index = turns.len().saturating_sub(1);
-
-    // Turns are direct children of the root VStack so that eye_declare's
-    // on_commit can detect them scrolling into terminal scrollback and
-    // prune them from the tree. AtuinAi wraps only the interactive footer
-    // (input box, error display, pending banner) so its event capture/bubble
-    // handlers still fire for keyboard events.
-    element! {
-        #(if state.is_resumed && (!state.is_exiting() || !turns.is_empty()) {
-            SessionContinue(key: "continuation-notice", continued_at: state.last_event_time)
-        })
-
-        #(for (index, turn) in turns.iter().enumerate() {
-            #(match &turn.kind {
-                turn::UiTurnKind::User { events } => {
-                    user_turn_view(events, index == 0, turn.id)
-                }
-                turn::UiTurnKind::Agent { events } => {
-                    agent_turn_view(events, busy && index == last_index, state.tools.awaiting_permission().is_some(), turn.id)
-                }
-                turn::UiTurnKind::OutOfBand { events } => {
-                    out_of_band_turn_view(events, turn.id)
-                }
-            })
-        })
-
-        AtuinAi(
-            key: "footer",
-            mode: AppMode::from(&state.agent_state),
-            has_command: state.has_command,
-            is_input_blank: state.is_input_blank,
-            pending_confirmation: state.has_confirmation(),
-            has_executing_preview: state.tools.has_executing_preview(),
-        ) {
-            #({
-                let needs_pending_banner = busy && !matches!(turns.last(), Some(turn::UiTurn { kind: turn::UiTurnKind::Agent { .. }, .. }));
-                if needs_pending_banner {
-                    let empty: &[turn::UiEvent] = &[];
-                    agent_turn_view(empty, true, false, usize::MAX)
-                } else {
-                    element! {}
-                }
-            })
-
-            #(if let AgentState::Error(ref msg) = state.agent_state {
-                View(key: "error-display", padding_left: Cells::from(2), padding_top: Cells::from(1)) {
-                    Text {
-                        Span(text: "Error: ", style: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-                        Span(text: msg, style: Style::default().fg(Color::Red))
-                    }
-                }
-            })
-
-            #(if !state.is_exiting() {
-                #(input_view(state))
-            })
-        }
-    }
-}
-
-fn input_view(state: &ViewState) -> Elements {
-    let asking_tool = state.tools.awaiting_permission();
-    let in_git_project = state.in_git_project;
-    let slash_results = state
-        .slash_command_search_results
-        .iter()
-        .take(4)
-        .collect::<Vec<_>>();
-    let first_slash_result = slash_results.first().cloned();
-
-    // While the model list loads, the input box stays up (with a spinner
-    // line) so a focusable component always exists; once Ready, the Select
-    // replaces the input box like the permission prompt does.
-    let ready_picker = match &state.model_picker {
-        Some(ModelPicker::Ready(list)) => Some(list),
-        _ => None,
-    };
-    let picker_loading = matches!(state.model_picker, Some(ModelPicker::Loading));
-
-    element! {
-        #(if let Some(tc) = asking_tool {
-            #(tool_call_view(tc, in_git_project))
-        })
-
-        #(if let Some(list) = ready_picker {
-            #(if asking_tool.is_none() {
-                #(model_picker_view(list, state.model.as_deref()))
-            })
-        })
-
-        #(if picker_loading {
-            View(key: "model-picker-loading", padding_top: Cells::from(1)) {
-                Spinner(
-                    label: "Loading models…",
-                    label_style: Style::default().fg(Color::Gray),
-                )
-            }
-        })
-
-        #(if asking_tool.is_none() && ready_picker.is_none() {
-            View(key: "input-box", padding_top: Cells::from(1)) {
-                InputBox(
-                    key: "input",
-                    title: "Generate a command or ask a question",
-                    title_right: "Atuin AI",
-                    footer: state.footer_text(),
-                    active: state.is_input_active(),
-                    slash_suggestion: first_slash_result.cloned()
-                )
-
-                #(if state.is_input_blank && state.has_command && state.is_input_active() {
-                    #(if state.has_confirmation() {
-                        Text { Span(text: "[Enter] Confirm dangerous command  [Esc] Cancel", style: Style::default().fg(Color::Gray)) }
-                    } else {
-                        Text { Span(text: "[Enter] Execute suggested command  [Tab] Insert Command", style: Style::default().fg(Color::Gray)) }
-                    })
-                })
-
-                #(if !slash_results.is_empty() {
-                    #(for (i, result) in slash_results.iter().enumerate() {
-                        Text {
-                            Span(text: format!("/{}", &result.command.name[..result.span.0]), style: Style::default().fg(Color::Blue))
-                            Span(text: &result.command.name[result.span.0..result.span.1], style: Style::default().fg(Color::Blue).add_modifier(Modifier::UNDERLINED))
-                            Span(text: format!("{}", &result.command.name[result.span.1..]), style: Style::default().fg(Color::Blue))
-                            Span(text: " - ")
-                            Span(text: &result.command.description)
-
-                            #(if i == 0 {
-                                Span(text: " [Tab] Insert", style: Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC).dim())
-                            })
-                        }
-
-                    })
-                })
-
-                #(status_bar_view(state))
-            }
-        })
-    }
-}
-
-/// Usage below this percentage isn't worth a status-bar warning.
-const USAGE_BAR_THRESHOLD_PCT: f64 = 50.0;
-
-/// Width of the usage bar in cells.
-const USAGE_BAR_WIDTH: usize = 5;
-
-/// One-line status bar under the input box: current model on the left;
-/// on the right, once usage crosses the threshold, a small bar chart with
-/// the percentage and time until the period resets.
-fn status_bar_view(state: &ViewState) -> Elements {
-    let model_label = format!(" Model: {}", state.model.as_deref().unwrap_or("default"));
-
-    let usage = state.usage.as_ref().and_then(|snapshot| {
-        let pct = snapshot.as_percentage()?;
-        if pct < USAGE_BAR_THRESHOLD_PCT {
-            return None;
-        }
-        Some((pct, snapshot.resets_in()))
-    });
-
-    element! {
-        HStack(key: "status-bar") {
-            View(width: WidthConstraint::Fill) {
-                Text {
-                    Span(text: model_label, style: Style::default().fg(Color::DarkGray))
-                }
-            }
-            #(if let Some((pct, resets_in)) = usage {
-                #({
-                    let filled = ((pct / 100.0).clamp(0.0, 1.0) * USAGE_BAR_WIDTH as f64).round() as usize;
-                    let bar_filled = "█".repeat(filled);
-                    let bar_empty = "░".repeat(USAGE_BAR_WIDTH - filled);
-                    let pct_text = format!(" {}%", pct.round() as i64);
-                    let resets_text = resets_in
-                        .map(|d| format!(" · resets in {} ", crate::usage::format_reset_delta(d)))
-                        .unwrap_or_default();
-
-                    let bar_color = if pct >= 90.0 {
-                        Color::Red
-                    } else if pct >= 70.0 {
-                        Color::Yellow
-                    } else {
-                        Color::Green
-                    };
-
-                    let width = (USAGE_BAR_WIDTH
-                        + pct_text.chars().count()
-                        + resets_text.chars().count()) as u16;
-
-                    element! {
-                        View(width: WidthConstraint::Fixed(width)) {
-                            Text {
-                                Span(text: bar_filled, style: Style::default().fg(bar_color))
-                                Span(text: bar_empty, style: Style::default().fg(Color::DarkGray))
-                                Span(text: pct_text, style: Style::default().fg(Color::Gray))
-                                Span(text: resets_text, style: Style::default().fg(Color::DarkGray))
-                            }
-                        }
-                    }
-                })
-            })
-        }
-    }
-}
-
-/// Render the /model picker: one row per model, the in-use model marked.
-/// `current` is the session's explicit selection; when unset, the server
-/// default is what's actually in use, so mark that row instead.
-fn model_picker_view(list: &crate::models::ModelList, current: Option<&str>) -> Elements {
-    let in_use = current.unwrap_or(&list.default);
-    let options: Vec<SelectOption> = list
-        .models
-        .iter()
-        .map(|m| {
-            let marker = if m.alias == in_use { " (current)" } else { "" };
-            SelectOption::builder()
-                .label(format!("{} — {}{}", m.name, m.description, marker))
-                .value(m.alias.clone())
-                .build()
-        })
-        .collect();
-
-    element! {
-        View(key: "model-picker", padding_left: Cells::from(2), padding_top: Cells::from(1)) {
-            Text {
-                Span(text: "Select a model:", style: Style::default().add_modifier(Modifier::BOLD))
-            }
-            View(padding_left: Cells::from(2)) {
-                Select(options: options, on_select: Box::new(move |option: &SelectOption| {
-                    Some(AiTuiEvent::SelectModel(option.value.clone()))
-                }) as Box<dyn Fn(&SelectOption) -> Option<AiTuiEvent> + Send + Sync>)
-            }
-            Text {
-                Span(text: "[Esc] Cancel", style: Style::default().fg(Color::DarkGray))
-            }
-        }
-    }
-}
-
-fn tool_call_view(tool_call: &crate::fsm::tools::TrackedTool, in_git_project: bool) -> Elements {
-    let verb = tool_call.tool.descriptor().display_verb;
-    let tool_desc = match &tool_call.tool {
-        ClientToolCall::Read(tool) => tool.path.display().to_string(),
-        ClientToolCall::Edit(tool) => tool.path.display().to_string(),
-        ClientToolCall::Write(tool) => tool.path.display().to_string(),
-        ClientToolCall::Shell(tool) => tool.command.clone(),
-        ClientToolCall::AtuinHistory(tool) => tool.query.clone(),
-        ClientToolCall::AtuinOutput(tool) => tool.history_id.to_string(),
-        ClientToolCall::LoadSkill(tool) => format!("skill: {}", tool.name),
-    };
-
-    let select_options = permission_options_for_tool(&tool_call.tool, in_git_project);
-
-    element! {
-        View(key: format!("tool-call-{}", tool_call.id), padding_left: Cells::from(2), padding_top: Cells::from(1)) {
-            Text {
-                Span(text: format!("Atuin AI would like to {}: ", verb), style: Style::default())
-                Span(text: &tool_desc, style: Style::default().fg(Color::Yellow))
-            }
-            View(padding_left: Cells::from(2)) {
-                Select(options: select_options, on_select: Box::new(move |option: &SelectOption| {
-                    PermissionResult::from_value_str(option.value.as_str())
-                        .map(AiTuiEvent::SelectPermission)
-                }) as Box<dyn Fn(&SelectOption) -> Option<AiTuiEvent> + Send + Sync>)
-            }
-        }
-    }
-}
-
-/// Build the permission SelectOptions appropriate for a tool call.
-///
-/// Edit tools get a per-file session-scoped option instead of the
-/// workspace-level "Always allow in this directory". Other tools
-/// keep the standard set.
-fn permission_options_for_tool(tool: &ClientToolCall, in_git_project: bool) -> Vec<SelectOption> {
-    match tool {
-        ClientToolCall::Edit(_) | ClientToolCall::Write(_) => vec![
-            SelectOption::builder()
-                .label("Allow")
-                .value(PermissionResult::Allow.as_value_str())
-                .build(),
-            SelectOption::builder()
-                .label("Allow this file for this session")
-                .value(PermissionResult::AllowFileForSession.as_value_str())
-                .build(),
-            SelectOption::builder()
-                .label("Always allow")
-                .value(PermissionResult::AlwaysAllow.as_value_str())
-                .build(),
-            SelectOption::builder()
-                .label("Deny")
-                .value(PermissionResult::Deny.as_value_str())
-                .build(),
-        ],
-        _ => {
-            let dir_label = if in_git_project {
-                "Always allow in this workspace"
-            } else {
-                "Always allow in this directory"
-            };
-            vec![
-                SelectOption::builder()
-                    .label("Allow")
-                    .value(PermissionResult::Allow.as_value_str())
-                    .build(),
-                SelectOption::builder()
-                    .label(dir_label)
-                    .value(PermissionResult::AlwaysAllowInDir.as_value_str())
-                    .build(),
-                SelectOption::builder()
-                    .label("Always allow")
-                    .value(PermissionResult::AlwaysAllow.as_value_str())
-                    .build(),
-                SelectOption::builder()
-                    .label("Deny")
-                    .value(PermissionResult::Deny.as_value_str())
-                    .build(),
-            ]
-        }
-    }
-}
-
-fn user_turn_view(events: &[turn::UiEvent], first_turn: bool, turn_id: usize) -> Elements {
-    let label_style = Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::BOLD);
-
-    let padding = if first_turn { 0 } else { 1 };
-
-    element! {
-        View(key: format!("turn-{turn_id}"), padding_top: Cells::from(padding)) {
-            Text {
-                Span(text: " You ", style: label_style.reversed())
-            }
-            #(for event in events {
-                #(match event {
-                    turn::UiEvent::Text { content } => {
-                        element! {
-                            View(padding_left: Cells::from(2)) {
-                                Text {
-                                    Span(text: content, style: Style::default())
-                                }
-                            }
-                        }
-                    },
-                    _ => element!{}
-                })
-            })
-        }
-    }
-}
-
-fn agent_turn_view(
-    events: &[turn::UiEvent],
-    busy: bool,
-    showing_ui: bool,
-    turn_id: usize,
-) -> Elements {
-    let label_style = Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD);
-
-    element! {
-        View(key: format!("turn-{turn_id}")) {
-            Text {
-                Span(text: " Atuin AI ", style: label_style.reversed())
-            }
-            #(for (i, event) in events.iter().enumerate() {
-                #(if i > 0 {
-                    Text { Span(text: "") }
-                })
-                #(match event {
-                    turn::UiEvent::Text { content } => {
-                        element! {
-                            View(padding_left: Cells::from(2)) {
-                                Markdown(source: content)
-                            }
-                        }
-                    },
-                    turn::UiEvent::ToolSummary(summary) => {
-                        tool_summary_view(summary)
-                    },
-                    turn::UiEvent::SuggestedCommand(details) => {
-                        suggested_command_view(details)
-                    },
-                    turn::UiEvent::ToolCall(details) => {
-                        let tool_key = details.tool_use_id.clone();
-
-                        element! {
-                            View(key: format!("tool-output-{tool_key}"), padding_left: Cells::from(2)) {
-                                #(match &details.render_data {
-                                    turn::ToolRenderData::Shell { command, preview } => {
-                                        shell_tool_view(&tool_key, command, preview.as_ref())
-                                    },
-                                    turn::ToolRenderData::FileEdit { path, preview } => {
-                                        file_edit_tool_view(&tool_key, &details.status, path, preview.as_ref())
-                                    },
-                                    turn::ToolRenderData::FileWrite { path, preview } => {
-                                        file_write_tool_view(&tool_key, &details.status, path, preview.as_ref())
-                                    },
-                                    turn::ToolRenderData::Remote => {
-                                        tool_status_view(&details.name, &details.status)
-                                    },
-                                    turn::ToolRenderData::FileRead { .. }
-                                    | turn::ToolRenderData::HistorySearch { .. }
-                                    | turn::ToolRenderData::SkillLoad { .. } => {
-                                        element!{}
-                                    },
-                                })
-                            }
-                        }
-                    }
-                    turn::UiEvent::ToolGroup(group) => {
-                        let group_key = group.calls
-                            .first()
-                            .map(|c| c.tool_use_id.as_str())
-                            .unwrap_or("empty");
-
-                        element! {
-                            View(key: format!("group-{group_key}"), padding_left: Cells::from(2)) {
-                                #(match group.kind {
-                                    turn::ToolGroupKind::FileRead => file_read_group_view(group),
-                                    turn::ToolGroupKind::HistorySearch => history_search_group_view(group),
-                                })
-                            }
-                        }
-                    }
-                    _ => element!{}
-                })
-            })
-
-            #(if busy && !showing_ui {
-                View(key: "agent-working-spinner", padding_left: Cells::from(2), padding_top: Cells::from(1)) {
-                    Spinner(
-                        label: "",
-                        spinner_style: Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                    )
-                }
-            })
-        }
-    }
-}
-
-fn out_of_band_turn_view(events: &[turn::UiEvent], turn_id: usize) -> Elements {
-    element! {
-        View(key: format!("turn-{turn_id}")) {
-            Text {
-                Span(text: " System ", style: Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD).add_modifier(Modifier::REVERSED))
-            }
-            #(for event in events {
-                #(match event {
-                    turn::UiEvent::OutOfBandOutput(details) => {
-                        out_of_band_output_view(details)
-                    }
-                    _ => element!{}
-                })
-            })
-        }
-    }
-}
-
-fn out_of_band_output_view(details: &turn::OutOfBandOutputDetails) -> Elements {
-    element! {
-        View(padding_left: Cells::from(2)) {
-            #(if details.command.is_some() {
-                Text {
-                    Span(text: details.command.as_ref().unwrap(), style: Style::default().fg(Color::Blue))
-                }
-            })
-            Markdown(source: details.content.clone())
-        }
-    }
-}
-
-fn tool_summary_view(summary: &turn::ToolSummary) -> Elements {
-    element! {
-        Spinner(label: summary.summary(), done: !summary.any_pending())
-    }
-}
-
-/// Render a status indicator for a non-preview tool call (e.g. atuin_history, read_file).
-fn tool_status_view(name: &str, status: &turn::ToolResultStatus) -> Elements {
-    match status {
-        turn::ToolResultStatus::Pending => {
-            element! {
-                Spinner(
-                    label: format!("Running: {name}"),
-                    label_style: Style::default().fg(Color::Yellow),
-                    done: false,
-                )
-            }
-        }
-        turn::ToolResultStatus::Success => {
-            element! {
-                Spinner(
-                    label: format!("Ran: {name}"),
-                    done: true,
-                )
-            }
-        }
-        turn::ToolResultStatus::Error => {
-            element! {
-                Text {
-                    Span(text: "✗ ", style: Style::default().fg(Color::Red))
-                    Span(text: format!("{name}: denied"), style: Style::default().fg(Color::Red))
-                }
-            }
-        }
-    }
-}
-
-// ───────────────────────────────────────────────────────────────────
-// Per-tool view functions
-// ───────────────────────────────────────────────────────────────────
+use turn::{
+    ConfidenceLevel, DangerLevel, OutOfBandOutputDetails, SuggestedCommandDetails, ToolCallDetails,
+    ToolGroup, ToolGroupKind, ToolRenderData, ToolResultStatus, ToolSummary, UiEvent, UiTurn,
+    UiTurnKind,
+};
 
 /// Max output lines shown for a shell command preview.
 const MAX_SHELL_PREVIEW_LINES: u16 = 5;
 
-/// Render a shell command execution with live VT100 output viewport.
-fn shell_tool_view(tool_key: &str, command: &str, preview: Option<&ToolPreview>) -> Elements {
-    let preview_done = preview.is_some_and(|p| p.exit_code.is_some() || p.interrupted.is_some());
+/// Max entries shown under a tool group header. When the group holds more,
+/// only the most recent entries are displayed; the header count tells the
+/// full story.
+const MAX_GROUP_ENTRIES: usize = 5;
 
-    element! {
-        #(if let Some(preview) = preview {
-            View(key: format!("preview-{tool_key}")) {
-                Spinner(
-                    label: if preview_done { format!("Ran: {command}") } else { format!("Running: {command}") },
-                    done: preview_done,
-                    hide_checkmark: true,
-                )
-                HStack {
-                    View(width: WidthConstraint::Fixed(2)) {
-                        Text { Span(text: "└ ") }
-                    }
-                    Column {
-                        Viewport(
-                            key: format!("viewport-{tool_key}"),
-                            lines: preview.lines.clone(),
-                            height: (preview.lines.len() as u16).clamp(1, MAX_SHELL_PREVIEW_LINES),
-                            style: Style::default().fg(Color::Gray),
-                            wrap: false,
-                        )
-                    }
-                }
-                #(shell_tool_footer(preview, preview_done))
-            }
-        } else {
-            Spinner(
-                label: format!("Running: {command}"),
-                label_style: Style::default().fg(Color::Yellow),
-                done: false,
-            )
-        })
+/// Render one turn. `first` suppresses the leading blank row; `busy` shows
+/// the working spinner on the last agent turn; `showing_ui` suppresses it
+/// while a prompt (e.g. permission select) is on screen.
+pub(crate) fn turn_view(
+    turn: &UiTurn,
+    first: bool,
+    busy: bool,
+    showing_ui: bool,
+) -> AnyElement<'static> {
+    match &turn.kind {
+        UiTurnKind::User { events } => user_turn_view(events, first),
+        UiTurnKind::Agent { events } => agent_turn_view(events, busy, showing_ui),
+        UiTurnKind::OutOfBand { events } => out_of_band_turn_view(events),
     }
 }
 
-fn shell_tool_footer(preview: &ToolPreview, preview_done: bool) -> Elements {
-    use crate::fsm::tools::InterruptReason;
+pub(crate) fn user_turn_view(events: &[UiEvent], first_turn: bool) -> AnyElement<'static> {
+    let label_style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD)
+        .add_modifier(Modifier::REVERSED);
 
+    col()
+        .child(text(" You ").style(label_style))
+        .children(events.iter().filter_map(|event| match event {
+            UiEvent::Text { content } => Some(text(content.clone()).pad_left(2)),
+            _ => None,
+        }))
+        .pad_top(if first_turn { 0 } else { 1 })
+        .any()
+}
+
+pub(crate) fn agent_turn_view(
+    events: &[UiEvent],
+    busy: bool,
+    showing_ui: bool,
+) -> AnyElement<'static> {
+    let label_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD)
+        .add_modifier(Modifier::REVERSED);
+
+    col()
+        .child(text(" Atuin AI ").style(label_style))
+        .children(events.iter().enumerate().map(|(i, event)| {
+            col()
+                .when(i > 0, |c| c.child(text("")))
+                .child(event_view(event))
+        }))
+        .when(busy && !showing_ui, |c| {
+            c.child(
+                spinner("")
+                    .spinner_style(
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .pad_left(2)
+                    .pad_top(1),
+            )
+        })
+        .any()
+}
+
+pub(crate) fn out_of_band_turn_view(events: &[UiEvent]) -> AnyElement<'static> {
+    let label_style = Style::default()
+        .fg(Color::Blue)
+        .add_modifier(Modifier::BOLD)
+        .add_modifier(Modifier::REVERSED);
+
+    col()
+        .child(text(" System ").style(label_style))
+        .children(events.iter().filter_map(|event| match event {
+            UiEvent::OutOfBandOutput(details) => Some(out_of_band_output_view(details)),
+            _ => None,
+        }))
+        .any()
+}
+
+fn out_of_band_output_view(details: &OutOfBandOutputDetails) -> AnyElement<'static> {
+    col()
+        .when_some(details.command.clone(), |c, command| {
+            c.child(text(command).style(Style::default().fg(Color::Blue)))
+        })
+        .child(markdown(details.content.clone()))
+        .pad_left(2)
+        .any()
+}
+
+fn event_view(event: &UiEvent) -> AnyElement<'static> {
+    match event {
+        UiEvent::Text { content } => markdown(content.clone()).pad_left(2).any(),
+        UiEvent::ToolSummary(summary) => tool_summary_view(summary),
+        UiEvent::SuggestedCommand(details) => suggested_command_view(details),
+        UiEvent::ToolCall(details) => tool_call_view(details).pad_left(2).any(),
+        UiEvent::ToolGroup(group) => group_view(group).pad_left(2).any(),
+        UiEvent::OutOfBandOutput(_) => empty().any(),
+    }
+}
+
+fn tool_summary_view(summary: &ToolSummary) -> AnyElement<'static> {
+    spinner(summary.summary())
+        .done(!summary.any_pending())
+        .any()
+}
+
+fn tool_call_view(details: &ToolCallDetails) -> AnyElement<'static> {
+    match &details.render_data {
+        ToolRenderData::Shell { command, preview } => shell_tool_view(command, preview.as_ref()),
+        ToolRenderData::FileEdit { path, preview } => {
+            file_edit_tool_view(&details.status, path, preview.as_ref())
+        }
+        ToolRenderData::FileWrite { path, preview } => {
+            file_write_tool_view(&details.status, path, preview.as_ref())
+        }
+        ToolRenderData::Remote => tool_status_view(&details.name, &details.status),
+        ToolRenderData::FileRead { .. }
+        | ToolRenderData::HistorySearch { .. }
+        | ToolRenderData::SkillLoad { .. } => empty().any(),
+    }
+}
+
+/// Status indicator for a non-preview tool call (e.g. a server-side tool).
+fn tool_status_view(name: &str, status: &ToolResultStatus) -> AnyElement<'static> {
+    match status {
+        ToolResultStatus::Pending => spinner(format!("Running: {name}"))
+            .label_style(Style::default().fg(Color::Yellow))
+            .done(false)
+            .any(),
+        ToolResultStatus::Success => spinner(format!("Ran: {name}")).done(true).any(),
+        ToolResultStatus::Error => text("✗ ")
+            .style(Style::default().fg(Color::Red))
+            .span(format!("{name}: denied"), Style::default().fg(Color::Red))
+            .any(),
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Shell tool
+// ───────────────────────────────────────────────────────────────────
+
+/// Shell command execution with live output viewport.
+fn shell_tool_view(command: &str, preview: Option<&ToolPreview>) -> AnyElement<'static> {
+    let done = preview.is_some_and(|p| p.exit_code.is_some() || p.interrupted.is_some());
+
+    match preview {
+        Some(preview) => col()
+            .child(
+                spinner(if done {
+                    format!("Ran: {command}")
+                } else {
+                    format!("Running: {command}")
+                })
+                .done(done)
+                .hide_checkmark(),
+            )
+            .child(
+                row().fixed(2, text("└ ")).fill(
+                    viewport(preview.lines.iter().cloned())
+                        .height((preview.lines.len() as u16).clamp(1, MAX_SHELL_PREVIEW_LINES))
+                        .style(Style::default().fg(Color::Gray))
+                        .wrap(false),
+                ),
+            )
+            .child(shell_tool_footer(preview, done))
+            .any(),
+        None => spinner(format!("Running: {command}"))
+            .label_style(Style::default().fg(Color::Yellow))
+            .done(false)
+            .any(),
+    }
+}
+
+fn shell_tool_footer(preview: &ToolPreview, done: bool) -> AnyElement<'static> {
     if let Some(reason) = &preview.interrupted {
-        let text = match reason {
+        let label = match reason {
             InterruptReason::User => "Interrupted".to_string(),
             InterruptReason::Timeout(secs) => format!("Timed out ({secs}s)"),
         };
-        return element! {
-            Text {
-                Span(text: text, style: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-            }
-        };
+        return text(label)
+            .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+            .any();
     }
-    if !preview_done {
-        return element! {
-            Text {
-                Span(text: "[Ctrl+C] Interrupt", style: Style::default().fg(Color::DarkGray))
-            }
-        };
+    if !done {
+        return text("[Ctrl+C] Interrupt")
+            .style(Style::default().fg(Color::DarkGray))
+            .any();
     }
     if let Some(code) = preview.exit_code {
         let style = if code == 0 {
@@ -633,50 +227,24 @@ fn shell_tool_footer(preview: &ToolPreview, preview_done: bool) -> Elements {
         } else {
             Style::default().fg(Color::Red)
         };
-        return element! {
-            Text { Span(text: format!("Exit code: {code}"), style: style) }
-        };
+        return text(format!("Exit code: {code}")).style(style).any();
     }
-    element! {}
+    empty().any()
 }
 
-/// Render a file edit tool call with diff preview.
+// ───────────────────────────────────────────────────────────────────
+// File edit / write tools
+// ───────────────────────────────────────────────────────────────────
+
+/// File edit tool call with diff preview.
 fn file_edit_tool_view(
-    key: &str,
-    status: &turn::ToolResultStatus,
+    status: &ToolResultStatus,
     path: &std::path::Path,
     preview: Option<&crate::diff::EditPreview>,
-) -> Elements {
-    use crate::diff::DiffLine;
-
+) -> AnyElement<'static> {
     let display_path = format_path_for_display(path);
+    let status_line = tool_status_line(status, "Editing", "Edited", "Edit", &display_path, "");
 
-    let status_line = match status {
-        turn::ToolResultStatus::Pending => {
-            element! {
-                Spinner(
-                    label: format!("Editing: {display_path}"),
-                    label_style: Style::default().fg(Color::Yellow),
-                    done: false,
-                )
-            }
-        }
-        turn::ToolResultStatus::Success => {
-            element! {
-                Spinner(label: format!("Edited: {display_path}"), done: true)
-            }
-        }
-        turn::ToolResultStatus::Error => {
-            element! {
-                Text {
-                    Span(text: "✗ ", style: Style::default().fg(Color::Red))
-                    Span(text: format!("Edit {display_path}: failed"), style: Style::default().fg(Color::Red))
-                }
-            }
-        }
-    };
-
-    // If no preview, just show the status line
     let Some(preview) = preview else {
         return status_line;
     };
@@ -684,102 +252,72 @@ fn file_edit_tool_view(
         return status_line;
     }
 
-    // Calculate the line number gutter width from the highest line number
-    let max_line_num = preview.max_line_number();
-    let gutter_width = max_line_num.to_string().len().max(2) as u16 + 1; // +1 for spacing
+    let gutter_w = gutter_width(preview.max_line_number() as usize);
 
-    element! {
-        View(key: key.to_string()) {
-            #(status_line)
-
-            View(key: format!("{key}-diff"), padding_left: Cells::from(2)) {
-                #(for (hunk_idx, hunk) in preview.hunks.iter().enumerate() {
-                    #({
-                        let gutter_w = gutter_width;
-                        let mut before_pos = hunk.before_start;
-                        let mut after_pos = hunk.after_start;
-                        let lines_rendered: Vec<_> = hunk.lines.iter().enumerate().map(|(line_idx, line)| {
-                            let (prefix, text, style, gutter_text, gutter_style) = match line {
-                                DiffLine::Context(t) => {
-                                    let num = format!("{:>width$}", after_pos, width = (gutter_w - 1) as usize);
-                                    before_pos += 1;
-                                    after_pos += 1;
-                                    (" ", t.as_str(), Style::default().fg(Color::DarkGray), num, Style::default().fg(Color::DarkGray))
-                                }
-                                DiffLine::Removed(t) => {
-                                    let num = format!("{:>width$}", before_pos, width = (gutter_w - 1) as usize);
-                                    before_pos += 1;
-                                    ("-", t.as_str(), Style::default().fg(Color::Red), num, Style::default().fg(Color::Red))
-                                }
-                                DiffLine::Added(t) => {
-                                    let num = format!("{:>width$}", after_pos, width = (gutter_w - 1) as usize);
-                                    after_pos += 1;
-                                    ("+", t.as_str(), Style::default().fg(Color::Green), num, Style::default().fg(Color::Green))
-                                }
-                            };
-                            (line_idx, prefix, text.to_string(), style, gutter_text, gutter_style)
-                        }).collect();
-
-                        element! {
-                            View(key: format!("{key}-hunk-{hunk_idx}")) {
-                                #(for (line_idx, prefix, text, style, gutter_text, gutter_style) in &lines_rendered {
-                                    HStack(key: format!("{key}-hunk-{hunk_idx}-line-{line_idx}")) {
-                                        View(width: WidthConstraint::Fixed(gutter_w)) {
-                                            Text { Span(text: gutter_text, style: *gutter_style) }
-                                        }
-                                        View {
-                                            Text {
-                                                Span(text: *prefix, style: *style)
-                                                Span(text: text, style: *style)
-                                            }
-                                        }
-                                    }
-                                })
-                            }
-                        }
-                    })
-                })
-            }
-        }
-    }
+    col()
+        .child(status_line)
+        .child(
+            col()
+                .children(preview.hunks.iter().map(|hunk| hunk_view(hunk, gutter_w)))
+                .pad_left(2),
+        )
+        .any()
 }
 
-/// Render a file write tool call with content preview.
+/// One diff hunk: gutter-numbered context/removed/added lines. The
+/// before/after line counters mutate directly inside the `map` closure.
+fn hunk_view(hunk: &crate::diff::DiffHunk, gutter_w: u16) -> impl Element + use<> {
+    use crate::diff::DiffLine;
+
+    let mut before_pos = hunk.before_start;
+    let mut after_pos = hunk.after_start;
+    let num_w = (gutter_w - 1) as usize;
+
+    col().children(hunk.lines.iter().map(move |line| {
+        let (prefix, content, style, gutter) = match line {
+            DiffLine::Context(t) => {
+                let num = format!("{after_pos:>num_w$}");
+                before_pos += 1;
+                after_pos += 1;
+                (" ", t, Style::default().fg(Color::DarkGray), num)
+            }
+            DiffLine::Removed(t) => {
+                let num = format!("{before_pos:>num_w$}");
+                before_pos += 1;
+                ("-", t, Style::default().fg(Color::Red), num)
+            }
+            DiffLine::Added(t) => {
+                let num = format!("{after_pos:>num_w$}");
+                after_pos += 1;
+                ("+", t, Style::default().fg(Color::Green), num)
+            }
+        };
+
+        row()
+            .fixed(gutter_w, text(gutter).style(style))
+            .fill(text(prefix).style(style).span(content.clone(), style))
+    }))
+}
+
+/// File write tool call with content preview.
 fn file_write_tool_view(
-    key: &str,
-    status: &turn::ToolResultStatus,
+    status: &ToolResultStatus,
     path: &std::path::Path,
     preview: Option<&crate::diff::WritePreview>,
-) -> Elements {
+) -> AnyElement<'static> {
     let display_path = format_path_for_display(path);
-
-    let status_line = match status {
-        turn::ToolResultStatus::Pending => {
-            element! {
-                Spinner(
-                    label: format!("Writing: {display_path}"),
-                    label_style: Style::default().fg(Color::Yellow),
-                    done: false,
-                )
-            }
-        }
-        turn::ToolResultStatus::Success => {
-            let line_info = preview
-                .map(|p| format!(" ({} lines)", p.total_lines))
-                .unwrap_or_default();
-            element! {
-                Spinner(label: format!("Wrote: {display_path}{line_info}"), done: true)
-            }
-        }
-        turn::ToolResultStatus::Error => {
-            element! {
-                Text {
-                    Span(text: "✗ ", style: Style::default().fg(Color::Red))
-                    Span(text: format!("Write {display_path}: failed"), style: Style::default().fg(Color::Red))
-                }
-            }
-        }
+    let line_info = match (status, preview) {
+        (ToolResultStatus::Success, Some(p)) => format!(" ({} lines)", p.total_lines),
+        _ => String::new(),
     };
+    let status_line = tool_status_line(
+        status,
+        "Writing",
+        "Wrote",
+        "Write",
+        &display_path,
+        &line_info,
+    );
 
     let Some(preview) = preview else {
         return status_line;
@@ -788,52 +326,182 @@ fn file_write_tool_view(
         return status_line;
     }
 
-    let gutter_width = preview.total_lines.to_string().len().max(2) as u16 + 1;
+    let gutter_w = gutter_width(preview.total_lines);
+    let num_w = (gutter_w - 1) as usize;
     let remaining = preview.remaining_lines();
+    let dim = Style::default().fg(Color::DarkGray);
 
-    element! {
-        View(key: key.to_string()) {
-            #(status_line)
-
-            View(key: format!("{key}-content"), padding_left: Cells::from(2)) {
-                #(for (idx, line) in preview.lines.iter().enumerate() {
-                    HStack(key: format!("{key}-line-{idx}")) {
-                        View(width: WidthConstraint::Fixed(gutter_width)) {
-                            Text { Span(
-                                text: format!("{:>width$}", idx + 1, width = (gutter_width - 1) as usize),
-                                style: Style::default().fg(Color::DarkGray)
-                            ) }
-                        }
-                        View {
-                            Text { Span(text: line, style: Style::default().fg(Color::DarkGray)) }
-                        }
-                    }
+    col()
+        .child(status_line)
+        .child(
+            col()
+                .children(preview.lines.iter().enumerate().map(|(idx, line)| {
+                    row()
+                        .fixed(gutter_w, text(format!("{:>num_w$}", idx + 1)).style(dim))
+                        .fill(text(line.clone()).style(dim))
+                }))
+                .when(remaining > 0, |c| {
+                    c.child(text(format!("     ... +{remaining} more lines")).style(dim))
                 })
+                .pad_left(2),
+        )
+        .any()
+}
 
-                #(if remaining > 0 {
-                    Text {
-                        Span(
-                            text: format!("     ... +{remaining} more lines"),
-                            style: Style::default().fg(Color::DarkGray)
-                        )
-                    }
-                })
-            }
-        }
+/// Line-number gutter width for the highest displayed number, plus spacing.
+fn gutter_width(max_line_num: usize) -> u16 {
+    max_line_num.to_string().len().max(2) as u16 + 1
+}
+
+/// Shared pending/success/error status line for edit and write.
+fn tool_status_line(
+    status: &ToolResultStatus,
+    doing: &str,
+    did: &str,
+    noun: &str,
+    display_path: &str,
+    suffix: &str,
+) -> AnyElement<'static> {
+    match status {
+        ToolResultStatus::Pending => spinner(format!("{doing}: {display_path}"))
+            .label_style(Style::default().fg(Color::Yellow))
+            .done(false)
+            .any(),
+        ToolResultStatus::Success => spinner(format!("{did}: {display_path}{suffix}"))
+            .done(true)
+            .any(),
+        ToolResultStatus::Error => text("✗ ")
+            .style(Style::default().fg(Color::Red))
+            .span(
+                format!("{noun} {display_path}: failed"),
+                Style::default().fg(Color::Red),
+            )
+            .any(),
     }
 }
 
 // ───────────────────────────────────────────────────────────────────
-// Tool group view functions
+// Tool groups
 // ───────────────────────────────────────────────────────────────────
 
-/// Max entries shown under a tool group header. When the group holds more
-/// than this, only the most recent `MAX_GROUP_ENTRIES` are displayed; the
-/// count in the header line tells the full story.
-const MAX_GROUP_ENTRIES: usize = 5;
+fn group_view(group: &ToolGroup) -> AnyElement<'static> {
+    match group.kind {
+        ToolGroupKind::FileRead => file_read_group_view(group),
+        ToolGroupKind::HistorySearch => history_search_group_view(group),
+    }
+}
 
-fn format_path_for_display(path: &std::path::Path) -> impl Display {
-    path.display_rich().relative_to_cwd().tilde_me()
+/// Tree-connector marker: `└ ` for the first visible row, spaces after.
+fn tree_marker(is_first: bool) -> &'static str {
+    if is_first { "└ " } else { "  " }
+}
+
+/// 2-char status marker column: ✓ / ✗ / blank.
+fn status_marker_view(status: &ToolResultStatus) -> AnyElement<'static> {
+    match status {
+        ToolResultStatus::Pending => text("  ").any(),
+        ToolResultStatus::Success => text("✓ ").style(Style::default().fg(Color::Green)).any(),
+        ToolResultStatus::Error => text("✗ ").style(Style::default().fg(Color::Red)).any(),
+    }
+}
+
+/// The most recent `MAX_GROUP_ENTRIES` calls.
+fn visible_group_calls(group: &ToolGroup) -> &[ToolCallDetails] {
+    let start = group.calls.len().saturating_sub(MAX_GROUP_ENTRIES);
+    &group.calls[start..]
+}
+
+/// One row in a grouped list: `[tree marker][status][content]`.
+fn group_row_view(
+    is_first: bool,
+    status: &ToolResultStatus,
+    content: AnyElement<'static>,
+) -> AnyElement<'static> {
+    row()
+        .fixed(2, text(tree_marker(is_first)))
+        .fixed(2, status_marker_view(status))
+        .fill(content)
+        .any()
+}
+
+fn file_read_group_view(group: &ToolGroup) -> AnyElement<'static> {
+    let count = group.calls.len();
+    let label = if count == 1 {
+        "Read 1 file".to_string()
+    } else {
+        format!("Read {count} files")
+    };
+
+    col()
+        .child(spinner(label).done(!group.any_pending()).hide_checkmark())
+        .children(
+            visible_group_calls(group)
+                .iter()
+                .enumerate()
+                .map(|(i, details)| file_read_row(i == 0, details)),
+        )
+        .any()
+}
+
+fn file_read_row(is_first: bool, details: &ToolCallDetails) -> AnyElement<'static> {
+    let path_str = match &details.render_data {
+        ToolRenderData::FileRead { path } => format_path_for_display(path),
+        _ => String::new(),
+    };
+
+    group_row_view(is_first, &details.status, text(path_str).any())
+}
+
+fn history_search_group_view(group: &ToolGroup) -> AnyElement<'static> {
+    col()
+        .child(
+            spinner("Searched Atuin history:")
+                .done(!group.any_pending())
+                .hide_checkmark(),
+        )
+        .children(
+            visible_group_calls(group)
+                .iter()
+                .enumerate()
+                .map(|(i, details)| history_search_row(i == 0, details)),
+        )
+        .any()
+}
+
+fn history_search_row(is_first: bool, details: &ToolCallDetails) -> AnyElement<'static> {
+    let (query, filter_modes) = match &details.render_data {
+        turn::ToolRenderData::HistorySearch {
+            query,
+            filter_modes,
+        } => (query.as_str(), filter_modes.as_slice()),
+        _ => ("", [].as_slice()),
+    };
+
+    let filter_label = format_filter_modes(filter_modes);
+    let filter_style = Style::default().fg(Color::DarkGray);
+
+    let content = if query.trim().is_empty() {
+        text("recent commands")
+            .style(
+                Style::default()
+                    .fg(Color::Gray)
+                    .add_modifier(Modifier::ITALIC),
+            )
+            .when(!filter_label.is_empty(), |t| {
+                t.span(" ", Style::default())
+                    .span(&filter_label, filter_style)
+            })
+            .any()
+    } else {
+        text(query)
+            .when(!filter_label.is_empty(), |t| {
+                t.span(" ", Style::default())
+                    .span(&filter_label, filter_style)
+            })
+            .any()
+    };
+
+    group_row_view(is_first, &details.status, content)
 }
 
 fn filter_mode_label(mode: &HistorySearchFilterMode) -> &'static str {
@@ -856,235 +524,251 @@ fn format_filter_modes(modes: &[HistorySearchFilterMode]) -> String {
     format!("({})", parts.join(", "))
 }
 
-/// Tree-connector marker for a row in a grouped list: `└ ` for the first
-/// visible row, two spaces for subsequent rows.
-fn tree_marker(is_first: bool) -> &'static str {
-    if is_first { "└ " } else { "  " }
-}
+// ───────────────────────────────────────────────────────────────────
+// Suggested command
+// ───────────────────────────────────────────────────────────────────
 
-/// 2-char status marker column: ✓ / ✗ / blank.
-fn status_marker_view(status: &turn::ToolResultStatus) -> Elements {
-    match status {
-        turn::ToolResultStatus::Pending => element! {
-            Text { Span(text: "  ") }
-        },
-        turn::ToolResultStatus::Success => element! {
-            Text { Span(text: "✓ ", style: Style::default().fg(Color::Green)) }
-        },
-        turn::ToolResultStatus::Error => element! {
-            Text { Span(text: "✗ ", style: Style::default().fg(Color::Red)) }
-        },
-    }
-}
-
-/// Compute the slice of calls to show — the most recent `MAX_GROUP_ENTRIES`.
-fn visible_group_calls(group: &turn::ToolGroup) -> &[turn::ToolCallDetails] {
-    let start = group.calls.len().saturating_sub(MAX_GROUP_ENTRIES);
-    &group.calls[start..]
-}
-
-/// Render a single row in a grouped list: `[tree marker][status][content]`.
-fn group_row_view(is_first: bool, status: &turn::ToolResultStatus, content: Elements) -> Elements {
-    element! {
-        HStack {
-            View(width: WidthConstraint::Fixed(2)) {
-                Text { Span(text: tree_marker(is_first)) }
-            }
-            View(width: WidthConstraint::Fixed(2)) {
-                #(status_marker_view(status))
-            }
-            Column {
-                #(content)
-            }
-        }
-    }
-}
-
-/// Render a group of consecutive `read_file` tool calls.
-fn file_read_group_view(group: &turn::ToolGroup) -> Elements {
-    let count = group.calls.len();
-    let label = if count == 1 {
-        "Read 1 file".to_string()
-    } else {
-        format!("Read {count} files")
-    };
-    let done = !group.any_pending();
-    let visible = visible_group_calls(group);
-
-    element! {
-        Spinner(label: label, done: done, hide_checkmark: true)
-        #(for (i, details) in visible.iter().enumerate() {
-            #(file_read_row(i == 0, details))
-        })
-    }
-}
-
-fn file_read_row(is_first: bool, details: &turn::ToolCallDetails) -> Elements {
-    let path_str = match &details.render_data {
-        turn::ToolRenderData::FileRead { path } => format_path_for_display(path).to_string(),
-        _ => String::new(),
-    };
-
-    let content = element! {
-        Text { Span(text: path_str) }
-    };
-
-    group_row_view(is_first, &details.status, content)
-}
-
-/// Render a group of consecutive `atuin_history` tool calls.
-fn history_search_group_view(group: &turn::ToolGroup) -> Elements {
-    let done = !group.any_pending();
-    let visible = visible_group_calls(group);
-
-    element! {
-        Spinner(label: "Searched Atuin history:", done: done, hide_checkmark: true)
-        #(for (i, details) in visible.iter().enumerate() {
-            #(history_search_row(i == 0, details))
-        })
-    }
-}
-
-fn history_search_row(is_first: bool, details: &turn::ToolCallDetails) -> Elements {
-    let (query, filter_modes) = match &details.render_data {
-        turn::ToolRenderData::HistorySearch {
-            query,
-            filter_modes,
-        } => (query.as_str(), filter_modes.as_slice()),
-        _ => ("", [].as_slice()),
-    };
-
-    let is_empty_query = query.trim().is_empty();
-    let filter_label = format_filter_modes(filter_modes);
-
-    let content = if is_empty_query {
-        element! {
-            Text {
-                Span(
-                    text: "recent commands",
-                    style: Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC),
-                )
-                #(if !filter_label.is_empty() {
-                    Span(text: " ")
-                    Span(text: filter_label, style: Style::default().fg(Color::DarkGray))
-                })
-            }
-        }
-    } else {
-        element! {
-            Text {
-                Span(text: query.to_string())
-                #(if !filter_label.is_empty() {
-                    Span(text: " ")
-                    Span(text: filter_label, style: Style::default().fg(Color::DarkGray))
-                })
-            }
-        }
-    };
-
-    group_row_view(is_first, &details.status, content)
-}
-
-fn suggested_command_view(details: &turn::SuggestedCommandDetails) -> Elements {
+fn suggested_command_view(details: &SuggestedCommandDetails) -> AnyElement<'static> {
     let is_dangerous = matches!(
         details.danger_level,
-        turn::DangerLevel::High(_) | turn::DangerLevel::Medium(_)
+        DangerLevel::High(_) | DangerLevel::Medium(_)
     );
-    let danger_notes = details.danger_level.notes();
+    let danger_notes = details.danger_level.notes().cloned();
     let danger_style = match details.danger_level {
-        turn::DangerLevel::High(_) => Style::default().fg(Color::Red),
-        turn::DangerLevel::Medium(_) => Style::default().fg(Color::Yellow),
-        turn::DangerLevel::Low(_) => Style::default().fg(Color::Green),
-        turn::DangerLevel::Unknown(_) => Style::default().fg(Color::Green),
+        DangerLevel::High(_) => Style::default().fg(Color::Red),
+        DangerLevel::Medium(_) => Style::default().fg(Color::Yellow),
+        DangerLevel::Low(_) | DangerLevel::Unknown(_) => Style::default().fg(Color::Green),
     };
     let danger_text = match details.danger_level {
-        turn::DangerLevel::High(_) => "High",
-        turn::DangerLevel::Medium(_) => "Medium",
-        turn::DangerLevel::Low(_) => "Low",
-        turn::DangerLevel::Unknown(_) => "Unknown",
+        DangerLevel::High(_) => "High",
+        DangerLevel::Medium(_) => "Medium",
+        DangerLevel::Low(_) => "Low",
+        DangerLevel::Unknown(_) => "Unknown",
     };
 
     let low_confidence = matches!(
         details.confidence_level,
-        turn::ConfidenceLevel::Low(_) | turn::ConfidenceLevel::Medium(_)
+        ConfidenceLevel::Low(_) | ConfidenceLevel::Medium(_)
     );
-
     let confidence_level = match details.confidence_level {
-        turn::ConfidenceLevel::Low(_) => "Low",
-        turn::ConfidenceLevel::Medium(_) => "Medium",
-        turn::ConfidenceLevel::High(_) => "High",
-        turn::ConfidenceLevel::Unknown(_) => "Unknown",
+        ConfidenceLevel::Low(_) => "Low",
+        ConfidenceLevel::Medium(_) => "Medium",
+        ConfidenceLevel::High(_) => "High",
+        ConfidenceLevel::Unknown(_) => "Unknown",
     };
+    let confidence_notes = details.confidence_level.notes().cloned();
 
-    let confidence_notes = details.confidence_level.notes();
+    col()
+        .child(text("  Suggested command:").style(Style::default().fg(Color::Cyan)))
+        .child(
+            row()
+                .fixed(
+                    2,
+                    if is_dangerous || low_confidence {
+                        text("! ").style(Style::default().fg(Color::Yellow))
+                    } else {
+                        text("$ ").style(Style::default().fg(Color::Blue))
+                    },
+                )
+                .fill(text(details.command.clone()).style(Style::default().fg(Color::Green))),
+        )
+        .when(is_dangerous, |c| {
+            c.child(
+                text("Danger: ")
+                    .style(danger_style)
+                    .span(danger_text, danger_style.add_modifier(Modifier::BOLD))
+                    .pad_left(2),
+            )
+        })
+        .when_some(
+            is_dangerous.then_some(danger_notes).flatten(),
+            |c, notes| c.child(row().fixed(2, text("└")).fill(markdown(notes)).pad_left(2)),
+        )
+        .when(low_confidence, |c| {
+            c.child(
+                text("Confidence: ")
+                    .style(Style::default().fg(Color::Blue))
+                    .span(
+                        confidence_level,
+                        Style::default()
+                            .fg(Color::Blue)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .pad_left(2),
+            )
+        })
+        .when_some(
+            low_confidence.then_some(confidence_notes).flatten(),
+            |c, notes| c.child(row().fixed(2, text("└")).fill(markdown(notes)).pad_left(2)),
+        )
+        .any()
+}
 
-    element! {
-        View {
-            Text {
-                Span(text: "  Suggested command:", style: Style::default().fg(Color::Cyan))
-            }
-            HStack {
-                View(width: WidthConstraint::Fixed(2)) {
-                    Text {
-                        #(if is_dangerous || low_confidence {
-                            Span(text: "! ", style: Style::default().fg(Color::Yellow))
-                        } else {
-                            Span(text: "$ ", style: Style::default().fg(Color::Blue))
-                        })
-                    }
-                }
-                Column {
-                    Text {
-                        Span(text: &details.command, style: Style::default().fg(Color::Green))
-                    }
-                }
-            }
-            #(if is_dangerous {
-                View(padding_left: Cells::from(2)) {
-                    Text {
-                        Span(text: "Danger: ", style: danger_style)
-                        Span(text: danger_text, style: danger_style.add_modifier(Modifier::BOLD))
-                    }
-                }
-            })
-            #(if is_dangerous && danger_notes.is_some() {
-                View(padding_left: Cells::from(2)) {
-                    HStack {
-                        View(width: WidthConstraint::Fixed(2)) {
-                            Text {
-                                Span(text: "└")
-                            }
-                        }
-                        View(width: WidthConstraint::Fill) {
-                            Markdown(source: danger_notes.unwrap())
-                        }
-                    }
-                }
-            })
-            #(if low_confidence {
-                View(padding_left: Cells::from(2)) {
-                    Text {
-                        Span(text: "Confidence: ", style: Style::default().fg(Color::Blue))
-                        Span(text: confidence_level, style: Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD))
-                    }
-                }
-            })
-            #(if low_confidence && confidence_notes.is_some() {
-                View(padding_left: Cells::from(2)) {
-                    HStack {
-                        View(width: WidthConstraint::Fixed(2)) {
-                            Text {
-                                Span(text: "└")
-                            }
-                        }
-                        View(width: WidthConstraint::Fill) {
-                            Markdown(source: confidence_notes.unwrap())
-                        }
-                    }
-                }
-            })
-        }
+// ───────────────────────────────────────────────────────────────────
+// Permission prompt
+// ───────────────────────────────────────────────────────────────────
+
+/// The permission options offered for a tool call, in display order.
+///
+/// Edit/Write tools get a per-file session-scoped option instead of the
+/// workspace-level "Always allow in this directory"; other tools keep the
+/// standard set, with the directory label reflecting git-project status.
+pub(crate) fn permission_options(
+    tool: &ClientToolCall,
+    in_git_project: bool,
+) -> Vec<(&'static str, PermissionResult)> {
+    match tool {
+        ClientToolCall::Edit(_) | ClientToolCall::Write(_) => vec![
+            ("Allow", PermissionResult::Allow),
+            (
+                "Allow this file for this session",
+                PermissionResult::AllowFileForSession,
+            ),
+            ("Always allow", PermissionResult::AlwaysAllow),
+            ("Deny", PermissionResult::Deny),
+        ],
+        _ => vec![
+            ("Allow", PermissionResult::Allow),
+            (
+                if in_git_project {
+                    "Always allow in this workspace"
+                } else {
+                    "Always allow in this directory"
+                },
+                PermissionResult::AlwaysAllowInDir,
+            ),
+            ("Always allow", PermissionResult::AlwaysAllow),
+            ("Deny", PermissionResult::Deny),
+        ],
     }
 }
 
-// ai_view_old removed — superseded by ai_view above
+/// "Atuin AI would like to <verb>: <target>" plus the options list.
+pub(crate) fn permission_prompt_view(
+    tool_call: &TrackedTool,
+    in_git_project: bool,
+    cursor: usize,
+) -> AnyElement<'static> {
+    let verb = tool_call.tool.descriptor().display_verb;
+    let tool_desc = match &tool_call.tool {
+        ClientToolCall::Read(tool) => tool.path.display().to_string(),
+        ClientToolCall::Edit(tool) => tool.path.display().to_string(),
+        ClientToolCall::Write(tool) => tool.path.display().to_string(),
+        ClientToolCall::Shell(tool) => tool.command.clone(),
+        ClientToolCall::AtuinHistory(tool) => tool.query.clone(),
+        ClientToolCall::AtuinOutput(tool) => tool.history_id.to_string(),
+        ClientToolCall::LoadSkill(tool) => format!("skill: {}", tool.name),
+    };
+    let options = permission_options(&tool_call.tool, in_git_project);
+
+    col()
+        .child(
+            text(format!("Atuin AI would like to {verb}: "))
+                .span(tool_desc, Style::default().fg(Color::Yellow)),
+        )
+        .child(select::select_view(options.iter().map(|(label, _)| *label), cursor).pad_left(2))
+        .pad_left(2)
+        .pad_top(1)
+        .any()
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Model picker + status bar
+// ───────────────────────────────────────────────────────────────────
+
+/// The /model picker: one row per model, the in-use model marked.
+/// `current` is the session's explicit selection; when unset, the server
+/// default is what's actually in use, so mark that row instead.
+pub(crate) fn model_picker_view(
+    list: &crate::models::ModelList,
+    current: Option<&str>,
+    cursor: usize,
+) -> AnyElement<'static> {
+    let in_use = current.unwrap_or(&list.default);
+    let labels: Vec<String> = list
+        .models
+        .iter()
+        .map(|m| {
+            let marker = if m.alias == in_use { " (current)" } else { "" };
+            format!("{} — {}{}", m.name, m.description, marker)
+        })
+        .collect();
+
+    col()
+        .child(text("Select a model:").style(Style::default().add_modifier(Modifier::BOLD)))
+        .child(select::select_view(labels.iter().map(String::as_str), cursor).pad_left(2))
+        .child(text("[Esc] Cancel").style(Style::default().fg(Color::DarkGray)))
+        .pad_left(2)
+        .pad_top(1)
+        .any()
+}
+
+/// Usage below this percentage isn't worth a status-bar warning.
+const USAGE_BAR_THRESHOLD_PCT: f64 = 50.0;
+
+/// Width of the usage bar in cells.
+const USAGE_BAR_WIDTH: usize = 5;
+
+/// One-line status bar under the input box: current model on the left;
+/// on the right, once usage crosses the threshold, a small bar chart with
+/// the percentage and time until the period resets.
+pub(crate) fn status_bar_view(
+    model: Option<&str>,
+    usage: Option<&crate::usage::UsageSnapshot>,
+) -> AnyElement<'static> {
+    let model_label = format!(" Model: {}", model.unwrap_or("default"));
+
+    let usage = usage.and_then(|snapshot| {
+        let pct = snapshot.as_percentage()?;
+        if pct < USAGE_BAR_THRESHOLD_PCT {
+            return None;
+        }
+        Some((pct, snapshot.resets_in()))
+    });
+
+    let left = text(model_label).style(Style::default().fg(Color::DarkGray));
+
+    let Some((pct, resets_in)) = usage else {
+        return left.any();
+    };
+
+    let filled = ((pct / 100.0).clamp(0.0, 1.0) * USAGE_BAR_WIDTH as f64).round() as usize;
+    let bar_filled = "█".repeat(filled);
+    let bar_empty = "░".repeat(USAGE_BAR_WIDTH - filled);
+    let pct_text = format!(" {}%", pct.round() as i64);
+    let resets_text = resets_in
+        .map(|d| format!(" · resets in {} ", crate::usage::format_reset_delta(d)))
+        .unwrap_or_default();
+
+    let bar_color = if pct >= 90.0 {
+        Color::Red
+    } else if pct >= 70.0 {
+        Color::Yellow
+    } else {
+        Color::Green
+    };
+
+    let width = (USAGE_BAR_WIDTH + pct_text.chars().count() + resets_text.chars().count()) as u16;
+
+    row()
+        .fill(left)
+        .fixed(
+            width,
+            text(bar_filled)
+                .style(Style::default().fg(bar_color))
+                .span(bar_empty, Style::default().fg(Color::DarkGray))
+                .span(pct_text, Style::default().fg(Color::Gray))
+                .span(resets_text, Style::default().fg(Color::DarkGray)),
+        )
+        .any()
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Helpers
+// ───────────────────────────────────────────────────────────────────
+
+/// Format a filesystem path for display in tool rows (cwd-relative,
+/// `~`-abbreviated).
+fn format_path_for_display(path: &std::path::Path) -> String {
+    path.display_rich().relative_to_cwd().tilde_me().to_string()
+}
