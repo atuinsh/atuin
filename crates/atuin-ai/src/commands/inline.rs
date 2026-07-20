@@ -279,8 +279,6 @@ async fn run_inline_tui(
         .join(session_mgr.session_id());
     let snapshot_store = crate::snapshots::SnapshotStore::open(snapshot_dir).ok();
 
-    let in_git_project = ctx.git_root.is_some();
-
     // ─── Discover skills ───────────────────────────────────────
     let project_root = ctx
         .git_root
@@ -325,12 +323,6 @@ async fn run_inline_tui(
         user_context_cache: Default::default(),
     };
 
-    // TODO(v2 port, pickers slice): in_git_project shapes permission options.
-    // TODO(v2 port): the background usage refresh and the initial prompt
-    // both need startup effects (App::init) upstream.
-    let _ = (usage_is_fresh, in_git_project);
-    let _ = initial_prompt;
-
     println!();
 
     let app = AiApp::new(
@@ -340,6 +332,8 @@ async fn run_inline_tui(
         slash_registry,
         skill_names,
         cached_usage,
+        initial_prompt,
+        !usage_is_fresh,
     );
     let options =
         eye_declare::RunOptions::default().keyboard(eye_declare::KeyboardProtocol::Enhanced);

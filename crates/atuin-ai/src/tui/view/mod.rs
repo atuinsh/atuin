@@ -673,6 +673,97 @@ pub(crate) fn permission_prompt_view(
 }
 
 // ───────────────────────────────────────────────────────────────────
+// Model picker + status bar
+// ───────────────────────────────────────────────────────────────────
+
+/// The /model picker: one row per model, the in-use model marked.
+/// `current` is the session's explicit selection; when unset, the server
+/// default is what's actually in use, so mark that row instead.
+pub(crate) fn model_picker_view(
+    list: &crate::models::ModelList,
+    current: Option<&str>,
+    cursor: usize,
+) -> AnyElement<'static> {
+    let in_use = current.unwrap_or(&list.default);
+    let labels: Vec<String> = list
+        .models
+        .iter()
+        .map(|m| {
+            let marker = if m.alias == in_use { " (current)" } else { "" };
+            format!("{} — {}{}", m.name, m.description, marker)
+        })
+        .collect();
+
+    col()
+        .child(text("Select a model:").style(Style::default().add_modifier(Modifier::BOLD)))
+        .child(select::select_view(labels.iter().map(String::as_str), cursor).pad_left(2))
+        .child(text("[Esc] Cancel").style(Style::default().fg(Color::DarkGray)))
+        .pad_left(2)
+        .pad_top(1)
+        .any()
+}
+
+/// Usage below this percentage isn't worth a status-bar warning.
+const USAGE_BAR_THRESHOLD_PCT: f64 = 50.0;
+
+/// Width of the usage bar in cells.
+const USAGE_BAR_WIDTH: usize = 5;
+
+/// One-line status bar under the input box: current model on the left;
+/// on the right, once usage crosses the threshold, a small bar chart with
+/// the percentage and time until the period resets.
+pub(crate) fn status_bar_view(
+    model: Option<&str>,
+    usage: Option<&crate::usage::UsageSnapshot>,
+) -> AnyElement<'static> {
+    let model_label = format!(" Model: {}", model.unwrap_or("default"));
+
+    let usage = usage.and_then(|snapshot| {
+        let pct = snapshot.as_percentage()?;
+        if pct < USAGE_BAR_THRESHOLD_PCT {
+            return None;
+        }
+        Some((pct, snapshot.resets_in()))
+    });
+
+    let left = text(model_label).style(Style::default().fg(Color::DarkGray));
+
+    let Some((pct, resets_in)) = usage else {
+        return left.any();
+    };
+
+    let filled = ((pct / 100.0).clamp(0.0, 1.0) * USAGE_BAR_WIDTH as f64).round() as usize;
+    let bar_filled = "█".repeat(filled);
+    let bar_empty = "░".repeat(USAGE_BAR_WIDTH - filled);
+    let pct_text = format!(" {}%", pct.round() as i64);
+    let resets_text = resets_in
+        .map(|d| format!(" · resets in {} ", crate::usage::format_reset_delta(d)))
+        .unwrap_or_default();
+
+    let bar_color = if pct >= 90.0 {
+        Color::Red
+    } else if pct >= 70.0 {
+        Color::Yellow
+    } else {
+        Color::Green
+    };
+
+    let width = (USAGE_BAR_WIDTH + pct_text.chars().count() + resets_text.chars().count()) as u16;
+
+    row()
+        .fill(left)
+        .fixed(
+            width,
+            text(bar_filled)
+                .style(Style::default().fg(bar_color))
+                .span(bar_empty, Style::default().fg(Color::DarkGray))
+                .span(pct_text, Style::default().fg(Color::Gray))
+                .span(resets_text, Style::default().fg(Color::DarkGray)),
+        )
+        .any()
+}
+
+// ───────────────────────────────────────────────────────────────────
 // Helpers
 // ───────────────────────────────────────────────────────────────────
 

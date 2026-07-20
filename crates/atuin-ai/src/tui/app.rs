@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use crossterm::event::KeyCode;
 use eye_declare::{
     App, Ctx, Element, ElementExt, Fluent, Focus, FocusHandle, InputEvent, Keymap, Task, col, key,
-    keymap, text,
+    keymap, spinner, text,
 };
 use ratatui_core::style::{Color, Modifier, Style};
 use tokio::sync::mpsc::UnboundedSender;
@@ -80,10 +80,16 @@ pub(crate) enum Msg {
     Retry,
     /// Leave the TUI without a command.
     Quit,
+    /// Move the model-picker cursor (Up/Down while picking).
+    ModelSelect(SelectMsg),
+    /// Choose the highlighted model (Enter while picking).
+    ConfirmModel,
     /// An FSM event from spawned work (stream frames, timeouts).
     Fsm(Event),
     /// Fresh credit-usage snapshot. Never reaches the FSM.
     Usage(UsageSnapshot),
+    /// The background usage refresh failed; logged, never shown.
+    UsageFetchFailed(String),
 }
 
 pub(crate) struct AiApp {
@@ -101,7 +107,13 @@ pub(crate) struct AiApp {
     permission_select: SelectState,
     /// Which tool the current prompt (and cursor) belongs to.
     permission_prompt_for: Option<String>,
+    /// Cursor for the /model picker, reset whenever the picker closes.
+    model_select: SelectState,
     in_git_project: bool,
+    /// Submitted by `init` as if typed (the `atuin ai "question"` path).
+    initial_prompt: Option<String>,
+    /// Whether `init` should refresh usage in the background.
+    usage_stale: bool,
     /// Latest known credit usage (cached at startup, refreshed from Done
     /// frames). Rendered by the status bar (pickers slice).
     usage: Option<UsageSnapshot>,
@@ -125,6 +137,7 @@ pub(crate) struct AiApp {
 }
 
 impl AiApp {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         fsm: AgentFsm,
         io: IoContext,
@@ -132,11 +145,15 @@ impl AiApp {
         slash_registry: SlashCommandRegistry,
         skill_names: HashSet<String>,
         usage: Option<UsageSnapshot>,
+        initial_prompt: Option<String>,
+        usage_stale: bool,
     ) -> Self {
         Self {
             in_git_project: io.app_ctx.git_root.is_some(),
             io: Some(io),
             usage,
+            initial_prompt,
+            usage_stale,
             ..Self::headless(fsm, resume_notice, slash_registry, skill_names)
         }
     }
@@ -160,7 +177,10 @@ impl AiApp {
             tool_interrupts: HashMap::new(),
             permission_select: SelectState::default(),
             permission_prompt_for: None,
+            model_select: SelectState::default(),
             in_git_project: false,
+            initial_prompt: None,
+            usage_stale: false,
             usage: None,
             resume_notice,
             input: RefCell::new(view::input::new_textarea()),
@@ -386,11 +406,33 @@ impl AiApp {
                     })
                     .detach();
                 }
-                // TODO(v2 port, pickers slice): FetchModels + SaveModelSelection.
-                other => tracing::debug!(effect = ?other, "effect deferred (v2 port)"),
+                Effect::FetchModels => {
+                    let Some(io) = &self.io else { continue };
+                    let endpoint = io.app_ctx.endpoint.clone();
+                    let token = io.app_ctx.token.clone();
+                    ctx.perform(async move {
+                        let result = crate::models::fetch_models(&endpoint, &token)
+                            .await
+                            .map_err(|e| e.to_string());
+                        Msg::Fsm(Event::ModelListLoaded(result))
+                    })
+                    .detach();
+                }
+                Effect::SaveModelSelection { alias } => {
+                    let Some(_io) = &self.io else { continue };
+                    tokio::spawn(async move {
+                        if let Err(e) = crate::models::save_model_selection(&alias).await {
+                            tracing::error!("Failed to save model selection: {e}");
+                        }
+                    });
+                }
             }
         }
         self.sync_permission_prompt();
+        // A closed picker starts fresh next time.
+        if self.fsm.ctx.model_picker.is_none() {
+            self.model_select = SelectState::default();
+        }
         self.push_ready_turns(ctx);
     }
 
@@ -815,6 +857,27 @@ impl App for AiApp {
     type Msg = Msg;
     type Output = ExitOutcome;
 
+    fn init(&mut self, ctx: &mut Ctx<'_, Self>) {
+        if self.usage_stale
+            && let Some(io) = &self.io
+        {
+            let endpoint = io.app_ctx.endpoint.clone();
+            let token = io.app_ctx.token.clone();
+            ctx.perform(async move {
+                match crate::usage::fetch_usage(&endpoint, &token).await {
+                    Ok(snapshot) => Msg::Usage(snapshot),
+                    Err(e) => Msg::UsageFetchFailed(e.to_string()),
+                }
+            })
+            .detach();
+        }
+
+        if let Some(prompt) = self.initial_prompt.take() {
+            let event = self.dispatch_submit(prompt.trim().to_string());
+            self.handle_fsm(event, ctx);
+        }
+    }
+
     fn update(&mut self, msg: Msg, ctx: &mut Ctx<'_, Self>) {
         match msg {
             Msg::Input(event) => {
@@ -880,7 +943,25 @@ impl App for AiApp {
             Msg::Interrupt => self.handle_fsm(Event::InterruptTools, ctx),
             Msg::Retry => self.handle_fsm(Event::Retry, ctx),
             Msg::Quit => ctx.exit(ExitOutcome::Cancel),
+            Msg::ModelSelect(sel) => {
+                let len = match &self.fsm.ctx.model_picker {
+                    Some(crate::fsm::ModelPicker::Ready(list)) => list.models.len(),
+                    _ => 0,
+                };
+                self.model_select.handle(sel, len);
+            }
+            Msg::ConfirmModel => {
+                let Some(crate::fsm::ModelPicker::Ready(list)) = &self.fsm.ctx.model_picker else {
+                    return;
+                };
+                let Some(model) = list.models.get(self.model_select.cursor) else {
+                    return;
+                };
+                let alias = model.alias.clone();
+                self.handle_fsm(Event::ModelSelected(alias), ctx);
+            }
             Msg::Fsm(event) => self.handle_fsm(event, ctx),
+            Msg::UsageFetchFailed(e) => tracing::debug!("background usage fetch failed: {e}"),
             Msg::Usage(snapshot) => {
                 if let Some(io) = &self.io {
                     let _ = io.persist.send(PersistJob::Usage {
@@ -898,6 +979,15 @@ impl App for AiApp {
         let busy = self.is_busy();
         let last = turns.len().saturating_sub(1);
         let asking = self.fsm.ctx.tools.awaiting_permission();
+        let ready_picker = match &self.fsm.ctx.model_picker {
+            Some(crate::fsm::ModelPicker::Ready(list)) if asking.is_none() => Some(list),
+            _ => None,
+        };
+        let picker_loading = matches!(
+            self.fsm.ctx.model_picker,
+            Some(crate::fsm::ModelPicker::Loading)
+        );
+        let show_input = asking.is_none() && ready_picker.is_none();
         let needs_pending_banner = busy
             && !matches!(
                 turns.last().map(|t| &t.kind),
@@ -952,13 +1042,31 @@ impl App for AiApp {
                     self.permission_select.cursor,
                 ))
             })
-            .when(asking.is_none(), |c| {
+            .when_some(ready_picker, |c, list| {
+                c.child(view::model_picker_view(
+                    list,
+                    self.fsm.ctx.model.as_deref(),
+                    self.model_select.cursor,
+                ))
+            })
+            .when(picker_loading, |c| {
+                c.child(
+                    spinner("Loading models…")
+                        .label_style(Style::default().fg(Color::Gray))
+                        .pad_top(1),
+                )
+            })
+            .when(show_input, |c| {
                 c.child(view::input::input_area(
                     &self.input,
                     self.input_active(),
                     self.footer_text(),
                     self.is_input_blank() && self.has_command() && self.input_active(),
                     &self.slash_results,
+                ))
+                .child(view::status_bar_view(
+                    self.fsm.ctx.model.as_deref(),
+                    self.usage.as_ref(),
                 ))
             })
     }
@@ -976,17 +1084,15 @@ impl App for AiApp {
             },
         );
 
-        // Esc: mode-dependent — the old AppMode match, as data.
+        // Esc: interrupt a live tool preview; otherwise Cancel — the FSM
+        // resolves what cancelling means in every state (close the picker,
+        // clear a confirmation, abort the stream, or exit).
         km = km.on(
             key(KeyCode::Esc),
-            if self.is_busy() {
-                Msg::Cancel
-            } else if self.has_executing_preview() {
+            if self.has_executing_preview() {
                 Msg::Interrupt
-            } else if self.has_confirmation() {
-                Msg::Cancel
             } else {
-                Msg::Quit
+                Msg::Cancel
             },
         );
 
@@ -1004,9 +1110,17 @@ impl App for AiApp {
             km = km
                 .on(key(KeyCode::Enter), Msg::ConfirmPermission)
                 .merge(SelectState::keymap().map(Msg::PermissionSelect));
+        } else if matches!(
+            self.fsm.ctx.model_picker,
+            Some(crate::fsm::ModelPicker::Ready(_))
+        ) {
+            km = km
+                .on(key(KeyCode::Enter), Msg::ConfirmModel)
+                .merge(SelectState::keymap().map(Msg::ModelSelect));
         }
 
-        if self.input_active() {
+        let picker_open = self.fsm.ctx.model_picker.is_some();
+        if self.input_active() && !picker_open {
             if !self.slash_results.is_empty() {
                 km = km.on(key(KeyCode::Tab), Msg::AcceptSlashSuggestion);
             }
@@ -1490,6 +1604,141 @@ mod tests {
                     if content.contains("hello from the file")
             )),
             "read result should carry the file content"
+        );
+    }
+
+    #[test]
+    fn init_submits_the_initial_prompt_and_pushes_the_turn() {
+        let mut app = app_with(AgentFsm::new(vec![], "t".into()));
+        app.initial_prompt = Some("what is atuin?".into());
+
+        let mut rt = Runtime::new(app, 60, 24);
+        let mut term = TestTerminal::new(60, 24);
+        let (bytes, exit) = rt.startup();
+        assert!(exit.is_none());
+        term.feed(&bytes);
+
+        assert!(rt.app().is_busy(), "initial prompt should start a turn");
+        assert!(rt.app().pushed_turns > 0, "user turn should be pushed");
+        let all = [term.scrollback_lines(), term.viewport_lines()]
+            .concat()
+            .join("\n");
+        assert!(all.contains("what is atuin?"), "prompt missing:\n{all}");
+    }
+
+    fn model_list() -> crate::models::ModelList {
+        crate::models::ModelList {
+            default: "smart".into(),
+            models: vec![
+                crate::models::ModelInfo {
+                    alias: "smart".into(),
+                    name: "Smart".into(),
+                    description: "balanced".into(),
+                },
+                crate::models::ModelInfo {
+                    alias: "fast".into(),
+                    name: "Fast".into(),
+                    description: "quick answers".into(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn model_picker_flow_selects_a_model() {
+        let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
+        h.type_str("/model");
+        h.press(KeyCode::Enter);
+
+        // Headless: FetchModels degrades, picker sits in Loading.
+        assert!(
+            h.screen().contains("Loading models…"),
+            "loading spinner missing:\n{}",
+            h.screen()
+        );
+
+        h.stream(Event::ModelListLoaded(Ok(model_list())));
+        let screen = h.screen();
+        assert!(
+            screen.contains("Select a model:"),
+            "picker missing:\n{screen}"
+        );
+        assert!(
+            screen.contains("Smart — balanced (current)"),
+            "server default should be marked current:\n{screen}"
+        );
+        assert!(
+            !screen.contains("Generate a command or ask a question"),
+            "input should be hidden while picking:\n{screen}"
+        );
+
+        h.press(KeyCode::Down);
+        h.press(KeyCode::Enter);
+
+        let app = h.app();
+        assert!(app.fsm.ctx.model_picker.is_none(), "picker should close");
+        assert_eq!(app.fsm.ctx.model.as_deref(), Some("fast"));
+        // Input returns, and the status bar reflects the selection.
+        let screen = h.screen();
+        assert!(screen.contains("Generate a command or ask a question"));
+        assert!(screen.contains("Model: fast"), "status bar:\n{screen}");
+    }
+
+    #[test]
+    fn esc_closes_the_picker_without_exiting() {
+        let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
+        h.type_str("/model");
+        h.press(KeyCode::Enter);
+        h.stream(Event::ModelListLoaded(Ok(model_list())));
+        h.press(KeyCode::Down);
+
+        assert_eq!(h.press(KeyCode::Esc), None, "Esc closes, not exits");
+        assert!(h.app().fsm.ctx.model_picker.is_none());
+        assert_eq!(
+            h.app().model_select.cursor,
+            0,
+            "cursor resets when the picker closes"
+        );
+    }
+
+    #[test]
+    fn typing_does_not_reach_the_editor_while_picking() {
+        let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
+        h.type_str("/model");
+        h.press(KeyCode::Enter);
+        h.stream(Event::ModelListLoaded(Ok(model_list())));
+
+        h.type_str("stray keys");
+        assert!(
+            h.app().is_input_blank(),
+            "editor must not receive keys while the picker is open"
+        );
+    }
+
+    #[test]
+    fn status_bar_shows_usage_over_threshold() {
+        let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
+        let bucket_hot = crate::usage::UsageBucket {
+            used: 92,
+            limit: 100,
+        };
+        let bucket_cool = crate::usage::UsageBucket {
+            used: 1,
+            limit: 100,
+        };
+        h.process(Msg::Usage(crate::usage::UsageSnapshot {
+            period: "calendar_monthly".into(),
+            resets_at: "2099-01-01T00:00:00Z".into(),
+            requests: crate::usage::UsageBucket { used: 0, limit: -1 },
+            input: bucket_cool,
+            output: bucket_hot,
+        }));
+
+        let screen = h.screen();
+        assert!(screen.contains("92%"), "usage percent missing:\n{screen}");
+        assert!(
+            screen.contains("resets in"),
+            "reset delta missing:\n{screen}"
         );
     }
 
