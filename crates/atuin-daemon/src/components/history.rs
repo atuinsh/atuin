@@ -9,7 +9,6 @@ use atuin_client::{
     history::{History, HistoryId, store::HistoryStore},
     settings::Settings,
 };
-use atuin_common::string::NonNulStr;
 use dashmap::DashMap;
 use eyre::Result;
 use time::OffsetDateTime;
@@ -154,16 +153,9 @@ impl HistorySvc for HistoryGrpcService {
                 )
             })?;
 
-        let command = NonNulStr::new(req.command).map_err(|err| {
-            Status::invalid_argument(format!(
-                "command contains a NUL byte at index {}",
-                err.index
-            ))
-        })?;
-
         let h: History = History::daemon()
             .timestamp(timestamp)
-            .command(command.as_str())
+            .command(req.command)
             .cwd(req.cwd)
             .session(req.session)
             .hostname(req.hostname)
