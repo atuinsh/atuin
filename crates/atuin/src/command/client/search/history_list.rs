@@ -9,7 +9,9 @@ use atuin_client::{
 };
 use atuin_common::string::EllipsizeExt as _;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
-use atuin_common::string::ellipsis::{Budget, Indicator, Pos};
+use atuin_common::string::Measure;
+use atuin_common::string::align::Alignment;
+use atuin_common::string::ellipsis::{Indicator, Pos};
 use itertools::Itertools;
 use ratatui::{
     backend::FromCrossterm,
@@ -20,7 +22,6 @@ use ratatui::{
     widgets::{Block, StatefulWidget, Widget},
 };
 use time::OffsetDateTime;
-use unicode_width::UnicodeWidthStr;
 
 pub struct HistoryHighlighter<'a> {
     pub engine: &'a dyn SearchEngine,
@@ -262,8 +263,13 @@ impl DrawState<'_> {
         let duration = Duration::from_nanos(u64::try_from(h.duration).unwrap_or(0));
         let formatted = format_duration(duration);
         let w = width as usize;
-        // Right-align duration within its column width, plus trailing space
-        let display = format!("{formatted:>w$}");
+        // Right-align within the column, ellipsizing if it somehow overflows.
+        let display = formatted.pad_ellipsize(
+            Measure::Columns(w),
+            Pos::End,
+            Indicator::UNICODE,
+            Alignment::End,
+        );
         self.draw(&display, Style::from_crossterm(style));
     }
 
@@ -282,7 +288,12 @@ impl DrawState<'_> {
         let w = width as usize;
         let time_str = format!("{time} ago");
 
-        let display = format!("{time_str:>w$}");
+        let display = time_str.pad_ellipsize(
+            Measure::Columns(w),
+            Pos::End,
+            Indicator::UNICODE,
+            Alignment::End,
+        );
         self.draw(&display, Style::from_crossterm(style));
     }
 
@@ -314,7 +325,7 @@ impl DrawState<'_> {
         // Truncate long commands from the middle to show both start and end,
         // so users can identify commands even in narrow terminals (issue #3596).
         let ellipsized =
-            normalized.ellipsize(Budget::Columns(avail), Pos::Middle, Indicator::UNICODE);
+            normalized.ellipsize(Measure::Columns(avail), Pos::Middle, Indicator::UNICODE);
         let display = ellipsized.to_string();
         for (i, ch) in display.char_indices() {
             if self.x > self.list_area.width {
@@ -351,7 +362,12 @@ impl DrawState<'_> {
             )
             .unwrap_or_else(|_| "????-??-?? ??:??".to_string());
         let w = width as usize;
-        let display = format!("{formatted:w$}");
+        let display = formatted.pad_ellipsize(
+            Measure::Columns(w),
+            Pos::End,
+            Indicator::UNICODE,
+            Alignment::Start,
+        );
         self.draw(&display, Style::from_crossterm(style));
     }
 
@@ -360,14 +376,14 @@ impl DrawState<'_> {
         let style = self.theme.as_style(Meaning::Annotation);
         let w = width as usize;
         let cwd = &h.cwd;
-        // Elide from the left with "..." so the leaf directory stays visible;
+        // Elide from the left with "…" so the leaf directory stays visible;
         // pad to the column width when it already fits.
-        let display = if cwd.width() > w {
-            cwd.ellipsize(Budget::Columns(w), Pos::Start, Indicator::UNICODE)
-                .to_string()
-        } else {
-            format!("{cwd:w$}")
-        };
+        let display = cwd.pad_ellipsize(
+            Measure::Columns(w),
+            Pos::Start,
+            Indicator::UNICODE,
+            Alignment::Start,
+        );
         self.draw(&display, Style::from_crossterm(style));
     }
 
@@ -377,12 +393,12 @@ impl DrawState<'_> {
         let w = width as usize;
         // Database stores hostname as "hostname:username"
         let host = h.hostname.split(':').next().unwrap_or(&h.hostname);
-        let display = if host.width() > w {
-            host.ellipsize(Budget::Columns(w), Pos::End, Indicator::UNICODE)
-                .to_string()
-        } else {
-            format!("{host:w$}")
-        };
+        let display = host.pad_ellipsize(
+            Measure::Columns(w),
+            Pos::End,
+            Indicator::UNICODE,
+            Alignment::Start,
+        );
         self.draw(&display, Style::from_crossterm(style));
     }
 
@@ -392,12 +408,12 @@ impl DrawState<'_> {
         let w = width as usize;
         // Database stores hostname as "hostname:username"
         let user = h.hostname.split(':').nth(1).unwrap_or("");
-        let display = if user.width() > w {
-            user.ellipsize(Budget::Columns(w), Pos::End, Indicator::UNICODE)
-                .to_string()
-        } else {
-            format!("{user:w$}")
-        };
+        let display = user.pad_ellipsize(
+            Measure::Columns(w),
+            Pos::End,
+            Indicator::UNICODE,
+            Alignment::Start,
+        );
         self.draw(&display, Style::from_crossterm(style));
     }
 

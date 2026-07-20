@@ -8,7 +8,7 @@
 // clients must share the secret in order to be able to sync, as it is needed
 // to decrypt
 
-use std::{io::prelude::*, path::PathBuf};
+use std::io::prelude::*;
 
 use base64::prelude::{BASE64_STANDARD, Engine};
 pub use crypto_secretbox::Key;
@@ -27,8 +27,7 @@ pub fn generate_encoded_key() -> Result<(Key, String)> {
 }
 
 pub fn new_key(settings: &Settings) -> Result<Key> {
-    let path = settings.key_path.as_str();
-    let path = PathBuf::from(path);
+    let path = &settings.key_path;
 
     if path.exists() {
         bail!("key already exists! cannot overwrite");
@@ -44,9 +43,9 @@ pub fn new_key(settings: &Settings) -> Result<Key> {
 
 // Loads the secret key, will create + save if it doesn't exist
 pub fn load_key(settings: &Settings) -> Result<Key> {
-    let path = settings.key_path.as_str();
+    let path = &settings.key_path;
 
-    let key = if PathBuf::from(path).exists() {
+    let key = if path.exists() {
         let key = fs_err::read_to_string(path)?;
         decode_key(key)?
     } else {
@@ -101,7 +100,9 @@ pub fn decode_key(key: String) -> Result<Key> {
                     }
                     Ok(key)
                 }
-                _ => bail!("could not decode encryption key"),
+                _ => {
+                    bail!("could not decode encryption key");
+                }
             }
         }
     }

@@ -1,7 +1,6 @@
 use std::{
     fmt::{self, Display},
     io::{self, IsTerminal, Write},
-    path::PathBuf,
     time::Duration,
 };
 
@@ -129,7 +128,7 @@ pub enum Cmd {
         format: Option<String>,
     },
 
-    /// Get the last command ran
+    /// Get the last command that was run
     Last {
         #[arg(long)]
         human: bool,
@@ -578,7 +577,7 @@ pub(super) async fn start_history_entry(
         return handle_daemon_start(settings, command, author, intent).await;
     }
 
-    let db_path = PathBuf::from(settings.db_path.as_str());
+    let db_path = &settings.db_path;
     let db = Sqlite::new(db_path, settings.local_timeout).await?;
     handle_start(&db, settings, command, author, intent).await
 }
@@ -594,8 +593,8 @@ pub(super) async fn end_history_entry(
         return handle_daemon_end(settings, id, exit, duration).await;
     }
 
-    let db_path = PathBuf::from(settings.db_path.as_str());
-    let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+    let db_path = &settings.db_path;
+    let record_store_path = &settings.record_store_path;
 
     let db = Sqlite::new(db_path, settings.local_timeout).await?;
     let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
@@ -951,7 +950,7 @@ impl Cmd {
         };
 
         let history = db
-            .list(&filters, &context, None, false, include_deleted)
+            .list(&filters, &context, None, false, include_deleted, None)
             .await?;
 
         print_list(
@@ -979,7 +978,7 @@ impl Cmd {
         // Grab all executed commands and filter them using History::should_save.
         // We could iterate or paginate here if memory usage becomes an issue.
         let matches: Vec<History> = db
-            .list(&[Global], &context, None, false, false)
+            .list(&[Global], &context, None, false, false, None)
             .await?
             .into_iter()
             .filter(|h| !h.should_save(settings))
@@ -1013,7 +1012,7 @@ impl Cmd {
             for entry in matches {
                 eprintln!("deleting {}", entry.id);
                 let (id, _) = history_store.delete(entry.id.clone()).await?;
-                history_store.incremental_build(db, &[id]).await?;
+                history_store.build_all(db, &[id]).await?;
             }
 
             #[cfg(feature = "daemon")]
@@ -1070,7 +1069,7 @@ impl Cmd {
             for entry in matches {
                 eprintln!("deleting {}", entry.id);
                 let (id, _) = history_store.delete(entry.id).await?;
-                history_store.incremental_build(db, &[id]).await?;
+                history_store.build_all(db, &[id]).await?;
             }
 
             #[cfg(feature = "daemon")]
@@ -1120,8 +1119,8 @@ impl Cmd {
             cmd => {
                 let context = current_context().await?;
 
-                let db_path = PathBuf::from(settings.db_path.as_str());
-                let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+                let db_path = &settings.db_path;
+                let record_store_path = &settings.record_store_path;
 
                 let db = Sqlite::new(db_path, settings.local_timeout).await?;
                 let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;

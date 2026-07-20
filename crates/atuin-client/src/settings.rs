@@ -15,7 +15,7 @@ use serde_with::DeserializeFromStr;
 use std::{
     collections::HashMap,
     io::prelude::*,
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::{LazyLock, OnceLock},
 };
@@ -196,7 +196,7 @@ impl FromStr for Timezone {
         // that we currently use - `time`. If ever we migrate to using `chrono`, this would
         // be a good feature to add.
 
-        bail!(r#""{s}" is not a valid timezone spec"#)
+        bail!(r#""{s}" is not a valid timezone spec"#);
     }
 }
 
@@ -1009,9 +1009,9 @@ pub struct Settings {
     pub sync_protocol: SyncProtocol,
 
     pub sync_frequency: String,
-    pub db_path: String,
-    pub record_store_path: String,
-    pub key_path: String,
+    pub db_path: PathBuf,
+    pub record_store_path: PathBuf,
+    pub key_path: PathBuf,
     pub search_mode: SearchMode,
     pub filter_mode: Option<FilterMode>,
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
@@ -1726,13 +1726,13 @@ impl Settings {
     }
 
     pub fn paths_ok(&self) -> bool {
-        let paths = [
-            &self.db_path,
-            &self.record_store_path,
-            &self.key_path,
-            &self.meta.db_path,
+        let paths: [&Path; 4] = [
+            self.db_path.as_path(),
+            self.record_store_path.as_path(),
+            self.key_path.as_path(),
+            Path::new(&self.meta.db_path),
         ];
-        paths.iter().all(|p| !utils::broken_symlink(p))
+        paths.iter().all(|p| !utils::broken_symlink(*p))
     }
 }
 
@@ -1784,47 +1784,48 @@ mod tests {
     use url::Url;
 
     #[rstest]
-    #[case("+02", (2, 0, 0))]
-    #[case("-04", (-4, 0, 0))]
-    #[case("+05:30", (5, 30, 0))]
-    #[case("-09:30", (-9, -30, 0))]
+    #[case::plus_two_digit_hours("+02", (2, 0, 0))]
+    #[case::minus_two_digit_hours("-04", (-4, 0, 0))]
+    #[case::plus_hours_minutes("+05:30", (5, 30, 0))]
+    #[case::minus_hours_minutes("-09:30", (-9, -30, 0))]
     // single digit hours are allowed
-    #[case("+2", (2, 0, 0))]
-    #[case("-4", (-4, 0, 0))]
-    #[case("+5:30", (5, 30, 0))]
-    #[case("-9:30", (-9, -30, 0))]
+    #[case::plus_single_digit_hour("+2", (2, 0, 0))]
+    #[case::minus_single_digit_hour("-4", (-4, 0, 0))]
+    #[case::plus_single_digit_hour_minutes("+5:30", (5, 30, 0))]
+    #[case::minus_single_digit_hour_minutes("-9:30", (-9, -30, 0))]
     // fully qualified form
-    #[case("+09:30:00", (9, 30, 0))]
-    #[case("-09:30:00", (-9, -30, 0))]
+    #[case::plus_fully_qualified("+09:30:00", (9, 30, 0))]
+    #[case::minus_fully_qualified("-09:30:00", (-9, -30, 0))]
     // these offsets don't really exist but are supported anyway
-    #[case("+0:5", (0, 5, 0))]
-    #[case("-0:5", (0, -5, 0))]
-    #[case("+01:23:45", (1, 23, 45))]
-    #[case("-01:23:45", (-1, -23, -45))]
-    fn parses_offset_timezone_spec(
-        #[case] spec: &str,
+    #[case::plus_zero_hour_minutes("+0:5", (0, 5, 0))]
+    #[case::minus_zero_hour_minutes("-0:5", (0, -5, 0))]
+    #[case::plus_with_seconds("+01:23:45", (1, 23, 45))]
+    #[case::minus_with_seconds("-01:23:45", (-1, -23, -45))]
+    fn can_parse_offset_timezone_spec(
+        #[case] input: &str,
         #[case] expected: (i8, i8, i8),
     ) -> Result<()> {
-        assert_eq!(Timezone::from_str(spec)?.0.as_hms(), expected);
+        assert_eq!(Timezone::from_str(input)?.0.as_hms(), expected);
         Ok(())
     }
 
+    /// A leading sign is required, for clarity.
     #[rstest]
-    #[case("5")]
-    #[case("10:30")]
-    fn rejects_timezone_spec_without_a_leading_sign(#[case] spec: &str) {
-        assert!(Timezone::from_str(spec).is_err());
+    #[case::bare_hour("5")]
+    #[case::bare_hour_minutes("10:30")]
+    fn rejects_timezone_spec_without_leading_sign(#[case] input: &str) {
+        assert!(Timezone::from_str(input).is_err());
     }
 
     #[rstest]
     // Auto: official addresses are Hub, anything else is OSS
-    #[case(AiEndpointProtocol::Auto, "https://hub.atuin.sh", true)]
-    #[case(AiEndpointProtocol::Auto, "https://api.atuin.sh", true)]
-    #[case(AiEndpointProtocol::Auto, "https://ai.example.com", false)]
-    #[case(AiEndpointProtocol::Auto, "http://localhost:4000", false)]
+    #[case::auto_hub_address(AiEndpointProtocol::Auto, "https://hub.atuin.sh", true)]
+    #[case::auto_api_address(AiEndpointProtocol::Auto, "https://api.atuin.sh", true)]
+    #[case::auto_third_party_address(AiEndpointProtocol::Auto, "https://ai.example.com", false)]
+    #[case::auto_localhost(AiEndpointProtocol::Auto, "http://localhost:4000", false)]
     // An explicit protocol overrides the address check
-    #[case(AiEndpointProtocol::Hub, "http://localhost:4000", true)]
-    #[case(AiEndpointProtocol::Oss, "https://hub.atuin.sh", false)]
+    #[case::explicit_hub_overrides_address(AiEndpointProtocol::Hub, "http://localhost:4000", true)]
+    #[case::explicit_oss_overrides_address(AiEndpointProtocol::Oss, "https://hub.atuin.sh", false)]
     fn ai_endpoint_protocol_resolution(
         #[case] protocol: AiEndpointProtocol,
         #[case] endpoint: &str,

@@ -192,9 +192,15 @@ impl AuthClient for LegacyAuthClient {
 
         match resp.status().as_u16() {
             200 => Ok(MutateResponse::Success),
-            401 => bail!("current password is incorrect"),
-            403 => bail!("invalid login details"),
-            _ => bail!("unknown error"),
+            401 => {
+                bail!("current password is incorrect");
+            }
+            403 => {
+                bail!("invalid login details");
+            }
+            _ => {
+                bail!("unknown error");
+            }
         }
     }
 
@@ -214,9 +220,15 @@ impl AuthClient for LegacyAuthClient {
 
         match resp.status().as_u16() {
             200 => Ok(MutateResponse::Success),
-            401 => bail!("password is incorrect"),
-            403 => bail!("invalid login details"),
-            _ => bail!("unknown error"),
+            401 => {
+                bail!("password is incorrect");
+            }
+            403 => {
+                bail!("invalid login details");
+            }
+            _ => {
+                bail!("unknown error");
+            }
         }
     }
 }
@@ -388,15 +400,25 @@ impl AuthClient for HubAuthClient {
         if let Ok(err) = resp.json::<HubErrorResponse>().await {
             match err.code.as_deref() {
                 Some("2fa_required") => return Ok(MutateResponse::TwoFactorRequired),
-                Some("invalid_2fa_code") => bail!("invalid two-factor code"),
-                _ => bail!("{}", err.reason),
+                Some("invalid_2fa_code") => {
+                    bail!("invalid two-factor code");
+                }
+                _ => {
+                    bail!("{}", err.reason);
+                }
             }
         }
 
         match status {
-            StatusCode::UNAUTHORIZED => bail!("current password is incorrect"),
-            StatusCode::FORBIDDEN => bail!("invalid login details"),
-            _ => bail!("Hub password change failed with status {status}"),
+            StatusCode::UNAUTHORIZED => {
+                bail!("current password is incorrect");
+            }
+            StatusCode::FORBIDDEN => {
+                bail!("invalid login details");
+            }
+            _ => {
+                bail!("Hub password change failed with status {status}");
+            }
         }
     }
 
@@ -449,15 +471,25 @@ impl AuthClient for HubAuthClient {
         if let Ok(err) = resp.json::<HubErrorResponse>().await {
             match err.code.as_deref() {
                 Some("2fa_required") => return Ok(MutateResponse::TwoFactorRequired),
-                Some("invalid_2fa_code") => bail!("invalid two-factor code"),
-                _ => bail!("{}", err.reason),
+                Some("invalid_2fa_code") => {
+                    bail!("invalid two-factor code");
+                }
+                _ => {
+                    bail!("{}", err.reason);
+                }
             }
         }
 
         match status {
-            StatusCode::UNAUTHORIZED => bail!("password is incorrect"),
-            StatusCode::FORBIDDEN => bail!("invalid login details"),
-            _ => bail!("Hub account deletion failed with status {status}"),
+            StatusCode::UNAUTHORIZED => {
+                bail!("password is incorrect");
+            }
+            StatusCode::FORBIDDEN => {
+                bail!("invalid login details");
+            }
+            _ => {
+                bail!("Hub account deletion failed with status {status}");
+            }
         }
     }
 }

@@ -118,8 +118,12 @@ impl Cmd {
         match (self.action, self.agent) {
             (Some(Action::Install { agent }), None) => install(&agent),
             (None, Some(agent)) => handle(&agent, settings).await,
-            (None, None) => bail!("expected `atuin hook <agent>` or `atuin hook install <agent>`"),
-            (Some(_), Some(_)) => bail!("hook action cannot be combined with a positional agent"),
+            (None, None) => {
+                bail!("expected `atuin hook <agent>` or `atuin hook install <agent>`");
+            }
+            (Some(_), Some(_)) => {
+                bail!("hook action cannot be combined with a positional agent");
+            }
         }
     }
 }
@@ -250,7 +254,7 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
         matcher,
     } = agent.install_kind()
     else {
-        bail!("agent does not use JSON hooks")
+        bail!("agent does not use JSON hooks");
     };
 
     for event_type in HOOK_EVENT_TYPES {

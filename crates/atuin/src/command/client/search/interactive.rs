@@ -1858,7 +1858,7 @@ pub async fn history(
                                 let entry = results.remove(index);
 
                                 let ids = history_store.delete_entries([entry]).await?;
-                                history_store.incremental_build(&db, &ids).await?;
+                                history_store.build_all(&db, &ids).await?;
 
                                 app.tab_index  = 0;
                             },
@@ -1881,7 +1881,7 @@ pub async fn history(
                                 ).await?;
 
                                 let ids = history_store.delete_entries(all_matching).await?;
-                                history_store.incremental_build(&db, &ids).await?;
+                                history_store.build_all(&db, &ids).await?;
 
                                 app.results_len = results.len();
                                 app.results_state = ListState::default();
@@ -2041,7 +2041,9 @@ pub async fn history(
         InputAction::ReturnOriginal => Ok(String::new()),
         InputAction::Copy(index) => {
             let cmd = results.swap_remove(index).command;
-            set_clipboard(cmd);
+            if let Err(e) = set_clipboard(cmd) {
+                tracing::warn!(?e, "failed to copy to clipboard");
+            }
             Ok(String::new())
         }
         InputAction::ReturnQuery | InputAction::Accept(_) => {
@@ -2066,18 +2068,21 @@ pub async fn history(
     feature = "clipboard",
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 ))]
-fn set_clipboard(s: String) {
-    let mut ctx = arboard::Clipboard::new().unwrap();
-    ctx.set_text(s).unwrap();
+fn set_clipboard(s: String) -> Result<(), arboard::Error> {
+    let mut ctx = arboard::Clipboard::new()?;
+    ctx.set_text(s)?;
     // Use the clipboard context to make sure it is saved
-    ctx.get_text().unwrap();
+    ctx.get_text()?;
+    Ok(())
 }
 
 #[cfg(not(all(
     feature = "clipboard",
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 )))]
-fn set_clipboard(_s: String) {}
+fn set_clipboard(_s: String) -> Result<(), std::convert::Infallible> {
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {

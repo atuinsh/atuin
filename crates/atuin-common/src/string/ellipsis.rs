@@ -5,7 +5,9 @@ use std::borrow::Cow;
 use std::fmt;
 
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
+
+use super::Measure;
+use super::align::{AlignExt, Alignment};
 
 /// Which side of the string to elide when it does not fit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,40 +45,13 @@ impl Default for Indicator<'_> {
     }
 }
 
-/// How much room to truncate into, and the unit it is measured in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Budget {
-    /// A UTF-8 byte budget.
-    Bytes(usize),
-    /// A display-column budget via `unicode-width` - a double-width glyph such
-    /// as `世` or `🦀` counts as two. Use for presentation.
-    Columns(usize),
-}
-
-impl Budget {
-    /// The numeric limit, in this budget's own unit.
-    fn amount(self) -> usize {
-        match self {
-            Budget::Bytes(n) | Budget::Columns(n) => n,
-        }
-    }
-
-    /// Total cost of `s` in this budget's unit.
-    fn cost(self, s: &str) -> usize {
-        match self {
-            Budget::Bytes(_) => s.len(),
-            Budget::Columns(_) => s.width(),
-        }
-    }
-}
-
 pub trait EllipsizeExt: AsRef<str> {
     /// Truncate this string to fit within `budget`, splicing in `indicator` on
     /// `side` if any content had to be dropped. Returns a lazy [`Ellipsized`]
     /// view - no allocation until you ask for an owned string.
     fn ellipsize<'a>(
         &'a self,
-        budget: Budget,
+        budget: Measure,
         side: Pos,
         indicator: Indicator<'a>,
     ) -> Ellipsized<'a> {
@@ -112,6 +87,25 @@ pub trait EllipsizeExt: AsRef<str> {
                 let start = suffix_boundary(s, content / 2, cost).max(end);
                 Ellipsized::spliced(s, end, start, indicator)
             }
+        }
+    }
+
+    /// Fit `self` to `budget`: ellipsize it on `side` with `indicator` when it exceeds the budget,
+    /// otherwise pad it with spaces, aligned per `align`.
+    fn pad_ellipsize<'a>(
+        &'a self,
+        budget: Measure,
+        side: Pos,
+        indicator: Indicator<'a>,
+        align: Alignment,
+    ) -> Cow<'a, str>
+    where
+        Self: Sized,
+    {
+        if budget.cost(self.as_ref()) > budget.amount() {
+            self.ellipsize(budget, side, indicator).into()
+        } else {
+            self.pad_to(budget, align)
         }
     }
 }
@@ -273,104 +267,283 @@ fn suffix_boundary(s: &str, max: usize, cost: impl Fn(&str) -> usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{Budget, EllipsizeExt, Indicator, Pos};
+    use super::{EllipsizeExt, Indicator, Measure, Pos};
+    use crate::string::align::Alignment;
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
     use rstest::rstest;
     use unicode_width::UnicodeWidthStr;
 
-    fn amount(b: Budget) -> usize {
+    fn amount(b: Measure) -> usize {
         match b {
-            Budget::Bytes(n) => n,
-            Budget::Columns(n) => n,
+            Measure::Bytes(n) => n,
+            Measure::Columns(n) => n,
         }
     }
 
-    fn cost(b: Budget, s: &str) -> usize {
+    fn cost(b: Measure, s: &str) -> usize {
         match b {
-            Budget::Bytes(_) => s.len(),
-            Budget::Columns(_) => UnicodeWidthStr::width(s),
+            Measure::Bytes(_) => s.len(),
+            Measure::Columns(_) => UnicodeWidthStr::width(s),
         }
     }
 
     #[rstest]
-    #[case("hello", Budget::Columns(10), Pos::End, Indicator::ASCII, "hello")]
-    #[case("hello", Budget::Columns(5), Pos::End, Indicator::ASCII, "hello")]
-    #[case(
+    #[case::ascii_fits_under_column_budget(
+        "hello",
+        Measure::Columns(10),
+        Pos::End,
+        Indicator::ASCII,
+        "hello"
+    )]
+    #[case::ascii_exactly_fits_column_budget(
+        "hello",
+        Measure::Columns(5),
+        Pos::End,
+        Indicator::ASCII,
+        "hello"
+    )]
+    #[case::ascii_truncates_end_with_ascii_indicator(
         "hello world",
-        Budget::Columns(8),
+        Measure::Columns(8),
         Pos::End,
         Indicator::ASCII,
         "hello..."
     )]
-    #[case(
+    #[case::ascii_truncates_start_with_ascii_indicator(
         "hello world",
-        Budget::Columns(8),
+        Measure::Columns(8),
         Pos::Start,
         Indicator::ASCII,
         "...world"
     )]
-    #[case(
+    #[case::ascii_truncates_middle_with_ascii_indicator(
         "hello world",
-        Budget::Columns(7),
+        Measure::Columns(7),
         Pos::Middle,
         Indicator::ASCII,
         "he...ld"
     )]
-    #[case(
+    #[case::ascii_truncates_end_with_unicode_indicator(
         "hello world",
-        Budget::Columns(6),
+        Measure::Columns(6),
         Pos::End,
         Indicator::UNICODE,
         "hello…"
     )]
-    #[case(
+    #[case::ascii_truncates_start_with_unicode_indicator(
         "hello world",
-        Budget::Columns(6),
+        Measure::Columns(6),
         Pos::Start,
         Indicator::UNICODE,
         "…world"
     )]
-    #[case("你好世界", Budget::Columns(5), Pos::End, Indicator::ASCII, "你...")]
-    #[case("你好世界", Budget::Columns(4), Pos::End, Indicator::ASCII, "...")]
-    #[case("你好世界", Budget::Columns(8), Pos::End, Indicator::ASCII, "你好世界")]
-    #[case("🐢🦀🐢🦀", Budget::Columns(5), Pos::End, Indicator::UNICODE, "🐢🦀…")]
-    #[case(
+    #[case::cjk_truncates_under_column_budget(
+        "你好世界",
+        Measure::Columns(5),
+        Pos::End,
+        Indicator::ASCII,
+        "你..."
+    )]
+    #[case::cjk_truncates_to_indicator_only_under_tiny_column_budget(
+        "你好世界",
+        Measure::Columns(4),
+        Pos::End,
+        Indicator::ASCII,
+        "..."
+    )]
+    #[case::cjk_exactly_fits_column_budget(
+        "你好世界",
+        Measure::Columns(8),
+        Pos::End,
+        Indicator::ASCII,
+        "你好世界"
+    )]
+    #[case::emoji_truncates_end_under_column_budget_with_unicode_indicator(
         "🐢🦀🐢🦀",
-        Budget::Columns(8),
+        Measure::Columns(5),
+        Pos::End,
+        Indicator::UNICODE,
+        "🐢🦀…"
+    )]
+    #[case::emoji_exactly_fits_column_budget(
+        "🐢🦀🐢🦀",
+        Measure::Columns(8),
         Pos::End,
         Indicator::UNICODE,
         "🐢🦀🐢🦀"
     )]
-    #[case("hello", Budget::Columns(2), Pos::End, Indicator::ASCII, "he")]
-    #[case("hello", Budget::Columns(2), Pos::Start, Indicator::ASCII, "lo")]
-    #[case("hello", Budget::Columns(0), Pos::End, Indicator::ASCII, "")]
-    #[case("", Budget::Columns(5), Pos::End, Indicator::ASCII, "")]
-    #[case(
+    #[case::ascii_hard_truncates_end_when_budget_below_indicator_cost(
+        "hello",
+        Measure::Columns(2),
+        Pos::End,
+        Indicator::ASCII,
+        "he"
+    )]
+    #[case::ascii_hard_truncates_start_when_budget_below_indicator_cost(
+        "hello",
+        Measure::Columns(2),
+        Pos::Start,
+        Indicator::ASCII,
+        "lo"
+    )]
+    #[case::ascii_zero_budget_yields_empty_string(
+        "hello",
+        Measure::Columns(0),
+        Pos::End,
+        Indicator::ASCII,
+        ""
+    )]
+    #[case::empty_input_yields_empty_string(
+        "",
+        Measure::Columns(5),
+        Pos::End,
+        Indicator::ASCII,
+        ""
+    )]
+    #[case::ascii_truncates_end_under_byte_budget(
         "hello world",
-        Budget::Bytes(8),
+        Measure::Bytes(8),
         Pos::End,
         Indicator::ASCII,
         "hello..."
     )]
-    #[case(
+    #[case::ascii_truncates_end_under_byte_budget_with_unicode_indicator(
         "hello world",
-        Budget::Bytes(8),
+        Measure::Bytes(8),
         Pos::End,
         Indicator::UNICODE,
         "hello…"
     )]
-    #[case("café", Budget::Bytes(4), Pos::End, Indicator::ASCII, "c...")]
-    #[case("café", Budget::Bytes(5), Pos::End, Indicator::ASCII, "café")]
-    #[case("你好", Budget::Bytes(5), Pos::End, Indicator::ASCII, "...")]
+    #[case::accented_truncates_end_under_byte_budget(
+        "café",
+        Measure::Bytes(4),
+        Pos::End,
+        Indicator::ASCII,
+        "c..."
+    )]
+    #[case::accented_exactly_fits_byte_budget(
+        "café",
+        Measure::Bytes(5),
+        Pos::End,
+        Indicator::ASCII,
+        "café"
+    )]
+    #[case::cjk_truncates_to_indicator_only_under_byte_budget(
+        "你好",
+        Measure::Bytes(5),
+        Pos::End,
+        Indicator::ASCII,
+        "..."
+    )]
     fn truncates_per_table(
         #[case] input: &str,
-        #[case] budget: Budget,
+        #[case] budget: Measure,
         #[case] side: Pos,
         #[case] ellipsis: Indicator<'static>,
         #[case] expected: &str,
     ) {
         assert_eq!(input.ellipsize(budget, side, ellipsis), *expected);
+    }
+
+    #[rstest]
+    #[case::start_pads_when_shorter("hi", Measure::Columns(5), Pos::End, Alignment::Start, "hi   ")]
+    #[case::unchanged_when_exact_budget(
+        "hello",
+        Measure::Columns(5),
+        Pos::End,
+        Alignment::Start,
+        "hello"
+    )]
+    #[case::ellipsizes_end_when_too_wide(
+        "hello world",
+        Measure::Columns(6),
+        Pos::End,
+        Alignment::Start,
+        "hello…"
+    )]
+    #[case::ellipsizes_start_when_too_wide(
+        "hello world",
+        Measure::Columns(6),
+        Pos::Start,
+        Alignment::Start,
+        "…world"
+    )]
+    #[case::empty_pads_to_budget("", Measure::Columns(3), Pos::End, Alignment::Start, "   ")]
+    #[case::wide_glyph_exact_column_budget(
+        "世",
+        Measure::Columns(2),
+        Pos::End,
+        Alignment::Start,
+        "世"
+    )]
+    #[case::wide_glyph_pads_by_display_columns(
+        "世",
+        Measure::Columns(3),
+        Pos::End,
+        Alignment::Start,
+        "世 "
+    )]
+    #[case::pads_by_bytes_under_byte_budget(
+        "世",
+        Measure::Bytes(4),
+        Pos::End,
+        Alignment::Start,
+        "世 "
+    )]
+    #[case::end_align_left_pads("hi", Measure::Columns(5), Pos::End, Alignment::End, "   hi")]
+    #[case::center_even_split("hi", Measure::Columns(6), Pos::End, Alignment::Center, "  hi  ")]
+    #[case::center_odd_extra_on_right(
+        "hi",
+        Measure::Columns(5),
+        Pos::End,
+        Alignment::Center,
+        " hi  "
+    )]
+    #[case::align_ignored_when_elided(
+        "hello world",
+        Measure::Columns(6),
+        Pos::End,
+        Alignment::End,
+        "hello…"
+    )]
+    fn pad_ellipsize_table(
+        #[case] input: &str,
+        #[case] budget: Measure,
+        #[case] side: Pos,
+        #[case] align: Alignment,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            input
+                .pad_ellipsize(budget, side, Indicator::UNICODE, align)
+                .as_ref(),
+            expected
+        );
+    }
+
+    #[test]
+    fn pad_ellipsize_borrows_only_when_no_alloc_needed() {
+        // Exact fit: no padding, no elision -> borrowed.
+        assert!(matches!(
+            "hello".pad_ellipsize(
+                Measure::Columns(5),
+                Pos::End,
+                Indicator::UNICODE,
+                Alignment::Start
+            ),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        // Padding needed -> owned.
+        assert!(matches!(
+            "hi".pad_ellipsize(
+                Measure::Columns(5),
+                Pos::End,
+                Indicator::UNICODE,
+                Alignment::Start
+            ),
+            std::borrow::Cow::Owned(_)
+        ));
     }
 
     fn any_pos() -> impl Strategy<Value = Pos> {
@@ -381,10 +554,10 @@ mod tests {
         prop_oneof![Just(Indicator::ASCII), Just(Indicator::UNICODE)]
     }
 
-    fn any_budget() -> impl Strategy<Value = Budget> {
+    fn any_budget() -> impl Strategy<Value = Measure> {
         prop_oneof![
-            (0usize..40).prop_map(Budget::Bytes),
-            (0usize..40).prop_map(Budget::Columns),
+            (0usize..40).prop_map(Measure::Bytes),
+            (0usize..40).prop_map(Measure::Columns),
         ]
     }
 
@@ -437,7 +610,7 @@ mod tests {
             side in any_pos(),
             ellipsis in any_indicator(),
         ) {
-            let out = s.ellipsize(Budget::Bytes(n), side, ellipsis).to_string();
+            let out = s.ellipsize(Measure::Bytes(n), side, ellipsis).to_string();
             prop_assert!(out.len() <= n);
         }
 
@@ -475,7 +648,7 @@ mod tests {
 
     #[test]
     fn source_index_middle_maps_head_gap_tail() {
-        let e = "hello world".ellipsize(Budget::Columns(7), Pos::Middle, Indicator::ASCII);
+        let e = "hello world".ellipsize(Measure::Columns(7), Pos::Middle, Indicator::ASCII);
         assert_eq!(e.to_string(), "he...ld");
         assert_eq!(e.source_index(0), Some(0));
         assert_eq!(e.source_index(1), Some(1));
@@ -487,7 +660,7 @@ mod tests {
 
     #[test]
     fn source_index_fits_is_identity() {
-        let e = "hi".ellipsize(Budget::Columns(10), Pos::Middle, Indicator::ASCII);
+        let e = "hi".ellipsize(Measure::Columns(10), Pos::Middle, Indicator::ASCII);
         assert!(matches!(
             std::borrow::Cow::from(e),
             std::borrow::Cow::Borrowed(_)
@@ -498,14 +671,14 @@ mod tests {
 
     #[test]
     fn display_writes_without_allocating_via_cow() {
-        let e = "hello world".ellipsize(Budget::Columns(8), Pos::End, Indicator::ASCII);
+        let e = "hello world".ellipsize(Measure::Columns(8), Pos::End, Indicator::ASCII);
         assert_eq!(e.to_string(), "hello...");
         assert!(matches!(
             std::borrow::Cow::from(e),
             std::borrow::Cow::Owned(_)
         ));
 
-        let fits = "hi".ellipsize(Budget::Columns(8), Pos::End, Indicator::ASCII);
+        let fits = "hi".ellipsize(Measure::Columns(8), Pos::End, Indicator::ASCII);
         assert!(matches!(
             std::borrow::Cow::from(fits),
             std::borrow::Cow::Borrowed(_)

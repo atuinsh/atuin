@@ -123,7 +123,9 @@ impl HubAuthSession {
 
             match self.poll().await? {
                 HubAuthStatus::Complete(token) => return Ok(token),
-                HubAuthStatus::Failed(error) => bail!("Authentication failed: {}", error),
+                HubAuthStatus::Failed(error) => {
+                    bail!("Authentication failed: {}", error);
+                }
                 HubAuthStatus::Pending => {
                     tokio::time::sleep(poll_interval).await;
                 }

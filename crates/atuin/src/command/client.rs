@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
@@ -177,8 +175,8 @@ impl Cmd {
             _ => {}
         }
 
-        let db_path = PathBuf::from(settings.db_path.as_str());
-        let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+        let db_path = &settings.db_path;
+        let record_store_path = &settings.record_store_path;
 
         let db = Sqlite::new(db_path, settings.local_timeout).await?;
         let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;

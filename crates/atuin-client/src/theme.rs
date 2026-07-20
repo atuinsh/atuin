@@ -496,6 +496,7 @@ impl ThemeManager {
 mod theme_tests {
     use super::*;
     use atuin_common::test_utils::capture_logs;
+    use rstest::rstest;
 
     #[test]
     fn test_can_load_builtin_theme() {
@@ -775,59 +776,40 @@ mod theme_tests {
         })
     }
 
-    #[test]
-    fn test_can_parse_color_strings_correctly() {
+    #[rstest]
+    #[case::palette_name("brown", Color::Rgb { r: 165, g: 42, b: 42 })]
+    #[case::hex("#ff1122", Color::Rgb { r: 255, g: 17, b: 34 })]
+    #[case::at_named("@dark_grey", Color::DarkGrey)]
+    #[case::at_rgb("@rgb_(255,255,255)", Color::Rgb { r: 255, g: 255, b: 255 })]
+    #[case::at_ansi("@ansi_(255)", Color::AnsiValue(255))]
+    fn parses_color_string(#[case] input: &str, #[case] expected: Color) {
+        assert_eq!(from_string(input).unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::empty("", "Empty string")]
+    #[case::not_in_palette_word("manatee", "No such color in palette")]
+    #[case::not_in_palette_phrase("caput mortuum", "No such color in palette")]
+    #[case::not_in_palette_digits("123456", "No such color in palette")]
+    #[case::hex_too_short("#1122", "Could not parse 3 hex values from string")]
+    #[case::hex_too_long("#ffaa112", "Could not parse 3 hex values from string")]
+    #[case::hex_not_hex("#brown", "Could not parse 3 hex values from string")]
+    fn rejects_color_string(#[case] input: &str, #[case] expected_err: &str) {
+        assert_eq!(from_string(input), Err(expected_err.into()));
+    }
+
+    /// The `@`-prefixed forms echo the offending input back in the error message.
+    #[rstest]
+    #[case::bare_at("@")]
+    #[case::wrong_case("@DarkGray")]
+    #[case::malformed_name("@Dark 4ay")]
+    #[case::ansi_out_of_range("@ansi(256)")]
+    fn rejects_at_prefixed_color_string(#[case] input: &str) {
         assert_eq!(
-            from_string("brown").unwrap(),
-            Color::Rgb {
-                r: 165,
-                g: 42,
-                b: 42
-            }
+            from_string(input),
+            Err(format!(
+                "Could not convert color name {input} to Crossterm color"
+            ))
         );
-
-        assert_eq!(from_string(""), Err("Empty string".into()));
-
-        ["manatee", "caput mortuum", "123456"]
-            .iter()
-            .for_each(|inp| {
-                assert_eq!(from_string(inp), Err("No such color in palette".into()));
-            });
-
-        assert_eq!(
-            from_string("#ff1122").unwrap(),
-            Color::Rgb {
-                r: 255,
-                g: 17,
-                b: 34
-            }
-        );
-        ["#1122", "#ffaa112", "#brown"].iter().for_each(|inp| {
-            assert_eq!(
-                from_string(inp),
-                Err("Could not parse 3 hex values from string".into())
-            );
-        });
-
-        assert_eq!(from_string("@dark_grey").unwrap(), Color::DarkGrey);
-        assert_eq!(
-            from_string("@rgb_(255,255,255)").unwrap(),
-            Color::Rgb {
-                r: 255,
-                g: 255,
-                b: 255
-            }
-        );
-        assert_eq!(from_string("@ansi_(255)").unwrap(), Color::AnsiValue(255));
-        ["@", "@DarkGray", "@Dark 4ay", "@ansi(256)"]
-            .iter()
-            .for_each(|inp| {
-                assert_eq!(
-                    from_string(inp),
-                    Err(format!(
-                        "Could not convert color name {inp} to Crossterm color"
-                    ))
-                );
-            });
     }
 }

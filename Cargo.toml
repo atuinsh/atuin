@@ -90,8 +90,8 @@ features = ["json", "rustls-no-provider", "stream"]
 default-features = false
 
 [workspace.dependencies.sqlx]
-version = "0.8"
-features = ["runtime-tokio-rustls", "time", "postgres", "uuid"]
+version = "0.9"
+features = ["runtime-tokio", "time", "uuid"]
 
 # The profile that 'cargo dist' will build with
 [profile.dist]

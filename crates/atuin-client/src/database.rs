@@ -60,6 +60,7 @@ pub struct OptFilters {
     pub include_duplicates: bool,
     /// Author filter. Supports special values `$all-user` and `$all-agent`.
     pub authors: Vec<String>,
+    pub shells: Vec<String>,
 }
 
 /// Build a query [`Context`] without requiring a live shell session.
@@ -137,6 +138,31 @@ fn apply_author_filter(sql: &mut SqlBuilder, authors: &[String]) {
     }
 }
 
+fn apply_shell_filter<S>(sql: &mut SqlBuilder, shells: S)
+where
+    S: IntoIterator,
+    S::Item: AsRef<str>,
+{
+    let mut include_null = false;
+    let nonempty_shells = shells.into_iter().filter(|s| {
+        let is_empty = s.as_ref().is_empty();
+        if is_empty {
+            include_null = true;
+        }
+        !is_empty
+    });
+
+    let shell_list = nonempty_shells.map(|s| quote(s.as_ref())).join(", ");
+    let mut cond = (!shell_list.is_empty()).then(|| format!("shell in ({shell_list})"));
+
+    if include_null {
+        cond = Some(cond.map_or_else(String::new, |s| s + " OR ") + "shell IS NULL");
+    }
+    if let Some(cond) = cond {
+        sql.and_where(cond);
+    }
+}
+
 fn get_session_start_time(session_id: &str) -> Option<i64> {
     if let Ok(uuid) = Uuid::parse_str(session_id)
         && let Some(timestamp) = uuid.get_timestamp()
@@ -153,6 +179,14 @@ pub trait Database: Send + Sync + 'static {
     async fn save_bulk(&self, h: &[History]) -> Result<()>;
 
     async fn load(&self, id: &str) -> Result<Option<History>>;
+
+    /// Load the *active* (not soft-deleted) entries for the given IDs.
+    ///
+    /// Unlike [`load`](Self::load), this filters out soft-deleted rows -- an ID whose
+    /// row exists but is deleted is omitted, exactly like an ID that isn't present at
+    /// all. Ordering is unspecified. Prefer this over calling `load` in a loop: it
+    /// chunks into a handful of queries rather than one round trip per ID.
+    async fn load_active(&self, ids: &[HistoryId]) -> Result<Vec<History>>;
     async fn list(
         &self,
         filters: &[FilterMode],
@@ -160,6 +194,7 @@ pub trait Database: Send + Sync + 'static {
         max: Option<usize>,
         unique: bool,
         include_deleted: bool,
+        range: Option<(OffsetDateTime, OffsetDateTime)>,
     ) -> Result<Vec<History>>;
     async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>>;
 
@@ -361,6 +396,33 @@ impl Database for Sqlite {
         Ok(res)
     }
 
+    async fn load_active(&self, ids: &[HistoryId]) -> Result<Vec<History>> {
+        // sqlite caps bound parameters per statement (SQLITE_MAX_VARIABLE_NUMBER, as low as 999).
+        // Chunk well under that.
+        const CHUNK: usize = 500;
+
+        debug!("loading {} history items", ids.len());
+
+        let mut out = Vec::with_capacity(ids.len());
+
+        for chunk in ids.chunks(CHUNK) {
+            let placeholders = ["?"].repeat(chunk.len()).join(",");
+            let sql = format!(
+                "select * from history where id in ({placeholders}) and deleted_at is null"
+            );
+
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+            for id in chunk {
+                query = query.bind(id.0.as_str());
+            }
+
+            let rows = query.map(Self::query_history).fetch_all(&self.pool).await?;
+            out.extend(rows);
+        }
+
+        Ok(out)
+    }
+
     async fn update(&self, h: &History) -> Result<()> {
         debug!("updating sqlite history");
 
@@ -394,6 +456,7 @@ impl Database for Sqlite {
         max: Option<usize>,
         unique: bool,
         include_deleted: bool,
+        range: Option<(OffsetDateTime, OffsetDateTime)>,
     ) -> Result<Vec<History>> {
         debug!("listing history");
 
@@ -436,9 +499,16 @@ impl Database for Sqlite {
             query.limit(max);
         }
 
+        // Inclusive on both ends, matching `range()`. `stats` relies on this to count a
+        // command recorded exactly on a period boundary (e.g. at midnight).
+        if let Some((from, to)) = range {
+            query.and_where_ge("timestamp", from.unix_timestamp_nanos() as i64);
+            query.and_where_le("timestamp", to.unix_timestamp_nanos() as i64);
+        }
+
         let query = query.sql().expect("bug in list query. please report");
 
-        let res = sqlx::query(&query)
+        let res = sqlx::query(sqlx::AssertSqlSafe(query))
             .map(Self::query_history)
             .fetch_all(&self.pool)
             .await?;
@@ -612,29 +682,34 @@ impl Database for Sqlite {
             .exclude_cwd
             .map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
 
-        filter_options.before.map(|before| {
-            interim::parse_date_string(
+        if let Some(before) = filter_options.before {
+            let parsed = interim::parse_date_string(
                 before.as_str(),
                 OffsetDateTime::now_utc(),
                 interim::Dialect::Uk,
             )
-            .map(|before| {
-                sql.and_where_lt("timestamp", quote(before.unix_timestamp_nanos() as i64))
-            })
-        });
+            .map_err(|e| {
+                sqlx::Error::Decode(format!("invalid `before` filter {before:?}: {e}").into())
+            })?;
+            sql.and_where_lt("timestamp", quote(parsed.unix_timestamp_nanos() as i64));
+        }
 
-        filter_options.after.map(|after| {
-            interim::parse_date_string(
+        if let Some(after) = filter_options.after {
+            let parsed = interim::parse_date_string(
                 after.as_str(),
                 OffsetDateTime::now_utc(),
                 interim::Dialect::Uk,
             )
-            .map(|after| sql.and_where_gt("timestamp", quote(after.unix_timestamp_nanos() as i64)))
-        });
+            .map_err(|e| {
+                sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
+            })?;
+            sql.and_where_gt("timestamp", quote(parsed.unix_timestamp_nanos() as i64));
+        }
 
         if !filter_options.authors.is_empty() {
             apply_author_filter(&mut sql, &filter_options.authors);
         }
+        apply_shell_filter(&mut sql, &filter_options.shells);
 
         sql.and_where_is_null("deleted_at");
 
@@ -678,7 +753,7 @@ impl Database for Sqlite {
             )
         };
 
-        let res = sqlx::query(&query)
+        let res = sqlx::query(sqlx::AssertSqlSafe(query))
             .map(Self::query_history)
             .fetch_all(&self.pool)
             .await?;
@@ -687,7 +762,7 @@ impl Database for Sqlite {
     }
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>> {
-        let res = sqlx::query(query)
+        let res = sqlx::query(sqlx::AssertSqlSafe(query))
             .map(Self::query_history)
             .fetch_all(&self.pool)
             .await?;
@@ -722,7 +797,7 @@ impl Database for Sqlite {
 
         let query = query.sql().expect("bug in list query. please report");
 
-        let res = sqlx::query(&query)
+        let res = sqlx::query(sqlx::AssertSqlSafe(query))
             .map(|row: SqliteRow| {
                 let count: i32 = row.get("count");
                 (Self::query_history(row), count)
@@ -827,44 +902,45 @@ impl Database for Sqlite {
             .sql()
             .expect("issue in stats duration over time query");
 
-        let prev = sqlx::query(&prev)
+        let prev = sqlx::query(sqlx::AssertSqlSafe(prev))
             .bind(h.timestamp.unix_timestamp_nanos() as i64)
             .bind(&h.session)
             .map(Self::query_history)
             .fetch_optional(&self.pool)
             .await?;
 
-        let next = sqlx::query(&next)
+        let next = sqlx::query(sqlx::AssertSqlSafe(next))
             .bind(h.timestamp.unix_timestamp_nanos() as i64)
             .bind(&h.session)
             .map(Self::query_history)
             .fetch_optional(&self.pool)
             .await?;
 
-        let total: (i64,) = sqlx::query_as(&total)
+        let total: (i64,) = sqlx::query_as(sqlx::AssertSqlSafe(total))
             .bind(&h.command)
             .fetch_one(&self.pool)
             .await?;
 
-        let average: (f64,) = sqlx::query_as(&average)
+        let average: (f64,) = sqlx::query_as(sqlx::AssertSqlSafe(average))
             .bind(&h.command)
             .fetch_one(&self.pool)
             .await?;
 
-        let exits: Vec<(i64, i64)> = sqlx::query_as(&exits)
+        let exits: Vec<(i64, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(exits))
             .bind(&h.command)
             .fetch_all(&self.pool)
             .await?;
 
-        let day_of_week: Vec<(String, i64)> = sqlx::query_as(&day_of_week)
+        let day_of_week: Vec<(String, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(day_of_week))
             .bind(&h.command)
             .fetch_all(&self.pool)
             .await?;
 
-        let duration_over_time: Vec<(String, f64)> = sqlx::query_as(&duration_over_time)
-            .bind(&h.command)
-            .fetch_all(&self.pool)
-            .await?;
+        let duration_over_time: Vec<(String, f64)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(duration_over_time))
+                .bind(&h.command)
+                .fetch_all(&self.pool)
+                .await?;
 
         let duration_over_time = duration_over_time
             .iter()
@@ -1103,7 +1179,19 @@ mod test {
     use crate::settings::test_local_timeout;
 
     use super::*;
+    use rstest::rstest;
     use std::time::{Duration, Instant};
+    use time::format_description::well_known::Rfc3339;
+
+    fn new_context() -> Context {
+        Context {
+            hostname: "test:host".to_string(),
+            session: "beepboopiamasession".to_string(),
+            cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
+            git_root: None,
+        }
+    }
 
     async fn assert_search_eq(
         db: &impl Database,
@@ -1112,13 +1200,7 @@ mod test {
         query: &str,
         expected: usize,
     ) -> Result<Vec<History>> {
-        let context = Context {
-            hostname: "test:host".to_string(),
-            session: "beepboopiamasession".to_string(),
-            cwd: "/home/ellie".to_string(),
-            host_id: "test-host".to_string(),
-            git_root: None,
-        };
+        let context = new_context();
 
         let results = db
             .search(
@@ -1157,8 +1239,16 @@ mod test {
     }
 
     async fn new_history_item(db: &mut impl Database, cmd: &str) -> Result<()> {
+        new_history_item_at(db, cmd, None).await
+    }
+
+    async fn new_history_item_at(
+        db: &mut impl Database,
+        cmd: &str,
+        timestamp: Option<OffsetDateTime>,
+    ) -> Result<()> {
         let mut captured: History = History::capture()
-            .timestamp(OffsetDateTime::now_utc())
+            .timestamp(timestamp.unwrap_or_else(OffsetDateTime::now_utc))
             .command(cmd)
             .cwd("/home/ellie")
             .build()
@@ -1172,209 +1262,363 @@ mod test {
         db.save(&captured).await
     }
 
+    async fn save_history_item(db: &impl Database, cmd: &str) -> History {
+        let mut captured: History = History::capture()
+            .timestamp(OffsetDateTime::now_utc())
+            .command(cmd)
+            .cwd("/home/ellie")
+            .build()
+            .into();
+
+        captured.exit = 0;
+        captured.duration = 1;
+        captured.session = "beep boop".to_string();
+        captured.hostname = "booop".to_string();
+
+        db.save(&captured).await.unwrap();
+        captured
+    }
+
+    // `stats --filter-mode` scopes over a period by handing `list` an inclusive
+    // `(from, to)` range. The bounds must be inclusive on both ends so a command
+    // recorded exactly on a period boundary (e.g. at midnight) is still counted.
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_prefix() {
+    async fn test_list_range_is_inclusive() {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let context = Context {
+            hostname: "booop".to_string(),
+            session: "beep boop".to_string(),
+            cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
+            git_root: None,
+        };
+
+        // One item at a fixed instant, one at `now` (far outside the window below).
+        let at = OffsetDateTime::from_unix_timestamp(1_708_330_400).unwrap();
+        let mut past: History = History::capture()
+            .timestamp(at)
+            .command("ls /home/ellie")
+            .cwd("/home/ellie")
+            .build()
+            .into();
+        past.session = "beep boop".to_string();
+        past.hostname = "booop".to_string();
+        db.save(&past).await.unwrap();
+        save_history_item(&db, "ls /home/frank").await;
+
+        // No range -> everything.
+        let all = db
+            .list(&[], &context, None, false, false, None)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 2);
+
+        // A zero-width window on the item's exact timestamp matches it, because the
+        // bounds are inclusive (`timestamp >= from AND timestamp <= to`).
+        let hits = db
+            .list(&[], &context, None, false, false, Some((at, at)))
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].command, "ls /home/ellie");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_load_active_returns_only_requested_rows() {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let alpha = save_history_item(&db, "echo alpha").await;
+        let bravo = save_history_item(&db, "echo bravo").await;
+        let _charlie = save_history_item(&db, "echo charlie").await;
+
+        let loaded = db
+            .load_active(&[alpha.id.clone(), bravo.id.clone()])
+            .await
+            .unwrap();
+
+        let mut commands: Vec<String> = loaded.into_iter().map(|h| h.command).collect();
+        commands.sort();
+        assert_eq!(commands, vec!["echo alpha", "echo bravo"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_load_active_empty_never_reaches_sqlite() {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+        save_history_item(&db, "echo alpha").await;
+
+        // `select ... where id in ()` is a syntax error, so the empty case must
+        // short-circuit rather than build a query.
+        let loaded = db.load_active(&[]).await.unwrap();
+
+        assert!(loaded.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_load_active_skips_soft_deleted() {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let mut alpha = save_history_item(&db, "echo alpha").await;
+        let bravo = save_history_item(&db, "echo bravo").await;
+
+        alpha.deleted_at = Some(OffsetDateTime::now_utc());
+        alpha.command = String::new();
+        db.update(&alpha).await.unwrap();
+
+        let loaded = db
+            .load_active(&[alpha.id.clone(), bravo.id.clone()])
+            .await
+            .unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].command, "echo bravo");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_load_active_missing_ids_are_omitted() {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let alpha = save_history_item(&db, "echo alpha").await;
+
+        let loaded = db
+            .load_active(&[alpha.id.clone(), HistoryId("does-not-exist".to_string())])
+            .await
+            .unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].command, "echo alpha");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_load_active_chunks_past_sqlite_param_limit() {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        // Comfortably over SQLITE_MAX_VARIABLE_NUMBER's 999 floor: a single
+        // `in (...)` with one placeholder per id would fail here.
+        let mut ids = Vec::new();
+        for i in 0..1200 {
+            ids.push(save_history_item(&db, &format!("echo {i}")).await.id);
+        }
+
+        let loaded = db.load_active(&ids).await.unwrap();
+
+        assert_eq!(loaded.len(), 1200);
+    }
+
+    async fn db_with(commands: &[&str]) -> Sqlite {
         let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
             .await
             .unwrap();
-        new_history_item(&mut db, "ls /home/ellie").await.unwrap();
 
-        assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, "ls", 1)
+        for command in commands {
+            new_history_item(&mut db, command).await.unwrap();
+        }
+
+        db
+    }
+
+    #[rstest]
+    #[case::window_spans_the_item(Some((-1, 1)), 1, true)]
+    #[case::after_bound_is_exclusive(Some((0, 1)), 0, false)]
+    #[case::before_bound_is_exclusive(Some((-1, 0)), 0, false)]
+    #[case::window_entirely_after_the_item(Some((1, 2)), 0, false)]
+    #[case::window_entirely_before_the_item(Some((-2, -1)), 0, false)]
+    #[case::no_date_filter(None, 2, false)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_before_after(
+        #[case] offsets: Option<(i64, i64)>,
+        #[case] expected: usize,
+        #[case] expect_ellie_match: bool,
+    ) {
+        let t = OffsetDateTime::from_unix_timestamp(1708330400).unwrap();
+
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
             .await
             .unwrap();
-        assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, "/home", 0)
+        new_history_item_at(&mut db, "ls /home/ellie", Some(t))
             .await
             .unwrap();
-        assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, "ls  ", 0)
+        new_history_item_at(&mut db, "ls /home/frank", None)
+            .await
+            .unwrap();
+
+        let context = new_context();
+
+        let stamp = |seconds: i64| {
+            (t + time::Duration::seconds(seconds))
+                .format(&Rfc3339)
+                .unwrap()
+        };
+        let (after, before) = match offsets {
+            Some((after, before)) => (Some(stamp(after)), Some(stamp(before))),
+            None => (None, None),
+        };
+
+        let results = db
+            .search(
+                SearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "",
+                OptFilters {
+                    after,
+                    before,
+                    include_duplicates: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), expected);
+        if expect_ellie_match {
+            assert_eq!(results[0].command, "ls /home/ellie");
+        }
+    }
+
+    #[rstest]
+    #[case::with_duplicates_counts_every_execution(true, 2)]
+    #[case::without_duplicates_collapses_to_newest_row(false, 1)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_include_duplicates(
+        #[case] include_duplicates: bool,
+        #[case] expected: usize,
+    ) {
+        // The same command, run twice.
+        let db = db_with(&["ls", "ls"]).await;
+        let context = new_context();
+
+        let hits = db
+            .search(
+                SearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "",
+                OptFilters {
+                    include_duplicates,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(hits.len(), expected);
+    }
+
+    #[rstest]
+    #[case::before("before")]
+    #[case::after("after")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_rejects_unparsable_date_filter(#[case] which: &str) {
+        let db = db_with(&["ls"]).await;
+        let context = new_context();
+
+        let mut filters = OptFilters::default();
+        match which {
+            "before" => filters.before = Some("not a date".to_string()),
+            "after" => filters.after = Some("not a date".to_string()),
+            _ => unreachable!(),
+        }
+
+        let result = db
+            .search(
+                SearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "",
+                filters,
+            )
+            .await;
+
+        assert!(result.is_err(), "unparsable `{which}` filter must error");
+    }
+
+    #[rstest]
+    #[case::matches_prefix("ls", 1)]
+    #[case::not_a_prefix("/home", 0)]
+    #[case::trailing_whitespace("ls  ", 0)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_prefix(#[case] query: &str, #[case] expected: usize) {
+        let db = db_with(&["ls /home/ellie"]).await;
+
+        assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, query, expected)
             .await
             .unwrap();
     }
 
+    #[rstest]
+    #[case::matches_command("ls", 1)]
+    #[case::matches_arg("/home", 1)]
+    #[case::matches_multiple_words("ls ho", 1)]
+    #[case::no_match("hm", 0)]
+    // regex
+    #[case::regex_anchored_start("r/^ls ", 1)]
+    #[case::regex_anchored_end("r/ls / ie$", 1)]
+    #[case::regex_negated_no_match("r/ls / !ie", 0)]
+    #[case::regex_mixed_with_plain_term("meow r/ls/", 0)]
+    #[case::regex_single_slash("r//hom/", 1)]
+    #[case::regex_double_slash("r//home//", 1)]
+    #[case::regex_triple_slash("r//home///", 0)]
+    #[case::plain_query_looks_like_regex("/home.*e", 0)]
+    #[case::regex_wildcard("r/home.*e", 1)]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_fulltext() {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
-        new_history_item(&mut db, "ls /home/ellie").await.unwrap();
+    async fn test_search_fulltext(#[case] query: &str, #[case] expected: usize) {
+        let db = db_with(&["ls /home/ellie"]).await;
 
-        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "ls", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "/home", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "ls ho", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "hm", 0)
-            .await
-            .unwrap();
-
-        // regex
-        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "r/^ls ", 1)
-            .await
-            .unwrap();
         assert_search_eq(
             &db,
             SearchMode::FullText,
             FilterMode::Global,
-            "r/ls / ie$",
-            1,
-        )
-        .await
-        .unwrap();
-        assert_search_eq(
-            &db,
-            SearchMode::FullText,
-            FilterMode::Global,
-            "r/ls / !ie",
-            0,
-        )
-        .await
-        .unwrap();
-        assert_search_eq(
-            &db,
-            SearchMode::FullText,
-            FilterMode::Global,
-            "meow r/ls/",
-            0,
-        )
-        .await
-        .unwrap();
-        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "r//hom/", 1)
-            .await
-            .unwrap();
-        assert_search_eq(
-            &db,
-            SearchMode::FullText,
-            FilterMode::Global,
-            "r//home//",
-            1,
-        )
-        .await
-        .unwrap();
-        assert_search_eq(
-            &db,
-            SearchMode::FullText,
-            FilterMode::Global,
-            "r//home///",
-            0,
-        )
-        .await
-        .unwrap();
-        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "/home.*e", 0)
-            .await
-            .unwrap();
-        assert_search_eq(
-            &db,
-            SearchMode::FullText,
-            FilterMode::Global,
-            "r/home.*e",
-            1,
+            query,
+            expected,
         )
         .await
         .unwrap();
     }
 
+    #[rstest]
+    #[case::term_with_trailing_slash("ls /", 3)]
+    #[case::adjacent_terms_no_space("ls/", 2)]
+    #[case::short_terms("l/h/", 2)]
+    #[case::partial_match("/h/e", 3)]
+    #[case::typo_no_match("/hmoe/", 0)]
+    #[case::wrong_order_no_match("ellie/home", 0)]
+    #[case::concatenated_terms("lsellie", 1)]
+    #[case::bare_space_matches_all(" ", 4)]
+    #[case::starts_with("^ls", 2)]
+    #[case::exact_word("'ls", 2)]
+    #[case::ends_with("ellie$", 2)]
+    #[case::negated_starts_with("!^ls", 2)]
+    #[case::negated_term("!ellie", 1)]
+    #[case::negated_ends_with("!ellie$", 2)]
+    #[case::term_and_negated_term("ls !ellie", 1)]
+    #[case::starts_with_and_negated_ends_with("^ls !e$", 1)]
+    #[case::term_and_negated_starts_with("home !^ls", 2)]
+    #[case::or_exact_terms("'frank | 'rustup", 2)]
+    #[case::or_with_and_term("'frank | 'rustup 'ls", 1)]
+    #[case::case_insensitive_match("Ellie", 1)]
+    #[case::regex_anchored_start("r/^ls ", 2)]
+    #[case::regex_character_class("r/[Ee]llie", 3)]
+    #[case::regex_combined_with_fuzzy_term("/h/e r/^ls ", 1)]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_fuzzy() {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
-        new_history_item(&mut db, "ls /home/ellie").await.unwrap();
-        new_history_item(&mut db, "ls /home/frank").await.unwrap();
-        new_history_item(&mut db, "cd /home/Ellie").await.unwrap();
-        new_history_item(&mut db, "/home/ellie/.bin/rustup")
-            .await
-            .unwrap();
+    async fn test_search_fuzzy(#[case] query: &str, #[case] expected: usize) {
+        let db = db_with(&[
+            "ls /home/ellie",
+            "ls /home/frank",
+            "cd /home/Ellie",
+            "/home/ellie/.bin/rustup",
+        ])
+        .await;
 
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ls /", 3)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ls/", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "l/h/", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "/h/e", 3)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "/hmoe/", 0)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ellie/home", 0)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "lsellie", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, " ", 4)
-            .await
-            .unwrap();
-
-        // single term operators
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "^ls", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "'ls", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ellie$", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "!^ls", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "!ellie", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "!ellie$", 2)
-            .await
-            .unwrap();
-
-        // multiple terms
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ls !ellie", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "^ls !e$", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "home !^ls", 2)
-            .await
-            .unwrap();
-        assert_search_eq(
-            &db,
-            SearchMode::Fuzzy,
-            FilterMode::Global,
-            "'frank | 'rustup",
-            2,
-        )
-        .await
-        .unwrap();
-        assert_search_eq(
-            &db,
-            SearchMode::Fuzzy,
-            FilterMode::Global,
-            "'frank | 'rustup 'ls",
-            1,
-        )
-        .await
-        .unwrap();
-
-        // case matching
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "Ellie", 1)
-            .await
-            .unwrap();
-
-        // regex
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "r/^ls ", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "r/[Ee]llie", 3)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "/h/e r/^ls ", 1)
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, query, expected)
             .await
             .unwrap();
     }
@@ -1505,6 +1749,7 @@ mod test {
                 None,
                 false,
                 false,
+                None,
             )
             .await
             .unwrap();
