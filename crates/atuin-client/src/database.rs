@@ -194,6 +194,7 @@ pub trait Database: Send + Sync + 'static {
         max: Option<usize>,
         unique: bool,
         include_deleted: bool,
+        range: Option<(OffsetDateTime, OffsetDateTime)>,
     ) -> Result<Vec<History>>;
     async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>>;
 
@@ -455,6 +456,7 @@ impl Database for Sqlite {
         max: Option<usize>,
         unique: bool,
         include_deleted: bool,
+        range: Option<(OffsetDateTime, OffsetDateTime)>,
     ) -> Result<Vec<History>> {
         debug!("listing history");
 
@@ -495,6 +497,13 @@ impl Database for Sqlite {
 
         if let Some(max) = max {
             query.limit(max);
+        }
+
+        // Inclusive on both ends, matching `range()`. `stats` relies on this to count a
+        // command recorded exactly on a period boundary (e.g. at midnight).
+        if let Some((from, to)) = range {
+            query.and_where_ge("timestamp", from.unix_timestamp_nanos() as i64);
+            query.and_where_le("timestamp", to.unix_timestamp_nanos() as i64);
         }
 
         let query = query.sql().expect("bug in list query. please report");
@@ -1252,6 +1261,52 @@ mod test {
         captured
     }
 
+    // `stats --filter-mode` scopes over a period by handing `list` an inclusive
+    // `(from, to)` range. The bounds must be inclusive on both ends so a command
+    // recorded exactly on a period boundary (e.g. at midnight) is still counted.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_list_range_is_inclusive() {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let context = Context {
+            hostname: "booop".to_string(),
+            session: "beep boop".to_string(),
+            cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
+            git_root: None,
+        };
+
+        // One item at a fixed instant, one at `now` (far outside the window below).
+        let at = OffsetDateTime::from_unix_timestamp(1_708_330_400).unwrap();
+        let mut past: History = History::capture()
+            .timestamp(at)
+            .command("ls /home/ellie")
+            .cwd("/home/ellie")
+            .build()
+            .into();
+        past.session = "beep boop".to_string();
+        past.hostname = "booop".to_string();
+        db.save(&past).await.unwrap();
+        save_history_item(&db, "ls /home/frank").await;
+
+        // No range -> everything.
+        let all = db
+            .list(&[], &context, None, false, false, None)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 2);
+
+        // A zero-width window on the item's exact timestamp matches it, because the
+        // bounds are inclusive (`timestamp >= from AND timestamp <= to`).
+        let hits = db
+            .list(&[], &context, None, false, false, Some((at, at)))
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].command, "ls /home/ellie");
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_load_active_returns_only_requested_rows() {
         let db = Sqlite::new("sqlite::memory:", test_local_timeout())
@@ -1673,6 +1728,7 @@ mod test {
                 None,
                 false,
                 false,
+                None,
             )
             .await
             .unwrap();
