@@ -6,15 +6,20 @@ on:
 
 jobs:
   lockfile:
+    permissions:
+      contents: write
+      pull-requests: write
     runs-on: depot-ubuntu-24.04
     if: github.repository == 'atuinsh/atuin'
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@v22
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
       - name: Update flake.lock
-        uses: DeterminateSystems/update-flake-lock@v28
+        uses: DeterminateSystems/update-flake-lock@834c491b2ece4de0bbd00d85214bb5e83b4da5c6 # v28
         with:
           pr-title: "chore(deps): update flake.lock"
           pr-labels: |

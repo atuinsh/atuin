@@ -13,6 +13,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+
 jobs:
   build:
     strategy:
@@ -21,14 +24,16 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
           toolchain: 1.97.0
 
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -57,14 +62,16 @@ jobs:
         target: [x86_64-unknown-illumos]
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install cross
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2.84.0
         with:
           tool: cross
 
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -92,19 +99,21 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
           toolchain: 1.97.0
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2.84.0
         name: Install nextest
         with:
           tool: cargo-nextest
 
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -122,14 +131,16 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
           toolchain: 1.97.0
 
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -157,7 +168,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres
+        image: postgres:16
         env:
           POSTGRES_USER: atuin
           POSTGRES_PASSWORD: pass
@@ -166,19 +177,21 @@ jobs:
           - 5432:5432
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
           toolchain: 1.97.0
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2.84.0
         name: Install nextest
         with:
           tool: cargo-nextest
 
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -195,15 +208,17 @@ jobs:
     runs-on: depot-ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install latest rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
           toolchain: 1.97.0
           components: clippy
 
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -218,10 +233,12 @@ jobs:
     runs-on: depot-ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install latest rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
           toolchain: 1.97.0
           components: rustfmt
