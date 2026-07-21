@@ -1,0 +1,26 @@
+name: Ensure docs CNAME
+description: >-
+  Ensure the custom-domain CNAME file exists on gh-pages after a deploy, so
+  a mike push never knocks docs.atuin.sh off the custom domain.
+
+runs:
+  using: composite
+  steps:
+    - name: Ensure custom-domain CNAME on gh-pages
+      shell: bash
+      run: |
+        set -euo pipefail
+        # gh-pages may not exist on the very first deploy; nothing to guard.
+        if ! git ls-remote --exit-code origin gh-pages >/dev/null 2>&1; then
+          echo "gh-pages does not exist yet - skipping CNAME guard."
+          exit 0
+        fi
+        git fetch origin gh-pages
+        git worktree add gh-pages-wt gh-pages
+        if [ ! -f gh-pages-wt/CNAME ]; then
+          echo "docs.atuin.sh" > gh-pages-wt/CNAME
+          git -C gh-pages-wt add CNAME
+          git -C gh-pages-wt commit -m "chore(docs): ensure CNAME for custom domain"
+          git -C gh-pages-wt push origin gh-pages
+        fi
+        git worktree remove gh-pages-wt

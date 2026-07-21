@@ -1,7 +1,7 @@
 name: Deploy docs (manual)
 
 # Manual deploy, mainly for seeding gh-pages during cutover or re-deploying a
-# specific version. Leave the input blank to deploy the main (unreleased) docs.
+# specific version. Exactly one job runs, picked from the version input.
 on:
   workflow_dispatch:
     inputs:
@@ -20,7 +20,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    uses: ./.github/workflows/docs-deploy.yml
-    with:
-      version: ${{ inputs.version }}
+  main:
+    if: ${{ inputs.version == '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/docs-setup
+      - uses: ./.github/actions/docs-deploy-main
+      - uses: ./.github/actions/docs-cname
+
+  stable:
+    if: ${{ inputs.version != '' && !contains(inputs.version, '-') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/docs-setup
+      - uses: ./.github/actions/docs-deploy-stable
+        with:
+          version: ${{ inputs.version }}
+      - uses: ./.github/actions/docs-cname
+
+  prerelease:
+    if: ${{ contains(inputs.version, '-') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/docs-setup
+      - uses: ./.github/actions/docs-deploy-prerelease
+        with:
+          version: ${{ inputs.version }}
+      - uses: ./.github/actions/docs-cname

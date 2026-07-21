@@ -18,6 +18,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    # No `version` input -> the reusable deploys the main (unreleased) docs.
-    uses: ./.github/workflows/docs-deploy.yml
+  main:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/docs-setup
+      - uses: ./.github/actions/docs-deploy-main
+      - uses: ./.github/actions/docs-cname

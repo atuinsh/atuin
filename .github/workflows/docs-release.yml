@@ -1,8 +1,7 @@
 name: Deploy release docs
 
-# On any version tag: stable X.Y.Z deploys X.Y and moves `latest`;
-# a prerelease X.Y.Z-beta.N deploys a pre-release preview. The reusable
-# workflow decides which based on the version string.
+# On any version tag: a stable vX.Y.Z deploys X.Y and moves `latest`;
+# a prerelease vX.Y.Z-beta.N deploys a pre-release preview instead.
 on:
   push:
     tags:
@@ -18,8 +17,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    uses: ./.github/workflows/docs-deploy.yml
-    with:
-      # e.g. "v18.17.1"; the reusable strips the leading `v`.
-      version: ${{ github.ref_name }}
+  stable:
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/docs-setup
+      - uses: ./.github/actions/docs-deploy-stable
+        with:
+          version: ${{ github.ref_name }}
+      - uses: ./.github/actions/docs-cname
+
+  prerelease:
+    if: ${{ contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/docs-setup
+      - uses: ./.github/actions/docs-deploy-prerelease
+        with:
+          version: ${{ github.ref_name }}
+      - uses: ./.github/actions/docs-cname
