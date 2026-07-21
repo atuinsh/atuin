@@ -47,7 +47,7 @@ def prereleases_to_delete(versions, boundary: str, exclude: str | None = None):
 
     A prerelease is superseded when its base version is <= base(boundary). The
     `exclude` id (e.g. the prerelease just deployed) is never returned.
-    Non-prerelease ids (stable minors, `main`) and unparseable ids are ignored.
+    Non-prerelease ids (stable minors, `main`) and unparsable ids are ignored.
     """
     boundary_base = base_version(boundary)
     doomed = []
