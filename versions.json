@@ -15,11 +15,16 @@
     "aliases": []
   },
   {
-    "version": "18.10",
-    "title": "18.10",
+    "version": "18.11",
+    "title": "18.11",
     "aliases": [
       "latest"
     ]
+  },
+  {
+    "version": "18.10",
+    "title": "18.10",
+    "aliases": []
   },
   {
     "version": "18.9",
