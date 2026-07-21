@@ -156,6 +156,13 @@ plugins:
           - faq.md: Frequently asked questions - IDE terminals, history filtering, up-arrow, uninstalling.
           - uninstall.md: How to uninstall Atuin and remove all data.
 
+# reference/hex.md is a deliberate orphan: it documents the old name for
+# `atuin pty-proxy` and exists so old links and the llms.txt index still
+# resolve. It is intentionally absent from the nav, so declare that rather
+# than letting mkdocs log it as an oversight on every build.
+not_in_nav: |
+  reference/hex.md
+
 markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true

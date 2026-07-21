@@ -1198,4 +1198,4 @@ columns = ["duration", "time", { type = "directory", expand = true }, { type = "
 
 ## ai
 
-The settings for Atuin AI are listed in [a separate section](../../ai/settings/).
+The settings for Atuin AI are listed in [a separate section](../ai/settings.md).
