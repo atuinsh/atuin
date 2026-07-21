@@ -724,7 +724,7 @@ pub(crate) fn status_bar_view(
         Some((pct, snapshot.resets_in()))
     });
 
-    let left = text(format!(" Model: "))
+    let left = text(" Model: ")
         .style(Style::default().fg(Color::White))
         .span(
             model.unwrap_or("default"),
