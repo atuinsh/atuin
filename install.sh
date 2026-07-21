@@ -11,22 +11,12 @@ for arg in "$@"; do
 done
 
 if [ "$ATUIN_NON_INTERACTIVE" != "yes" ]; then
-  # Every prompt below reads from /dev/tty, never stdin (stdin is the script
-  # itself under `curl | sh`), so /dev/tty is the only thing worth testing.
-  # Opening it is not enough: it may exist as a device node that opens fine
-  # but isn't backed by a real terminal (containers, CI, headless), so verify
-  # with `test -t`. The subshell keeps the redirect -- and a failing `exec`,
-  # which is a special built-in -- from affecting the parent shell.
-  if ( exec </dev/tty && [ -t 0 ] ) 2>/dev/null; then
-    ATUIN_NON_INTERACTIVE="no"
-  else
-    ATUIN_NON_INTERACTIVE="yes"
   ATUIN_NON_INTERACTIVE=yes
   if { exec 3</dev/tty; } 2>/dev/null; then
-      if [ -t 3 ]; then
-          ATUIN_NON_INTERACTIVE=no
-      fi
-      exec 3<&-
+    if [ -t 3 ]; then
+        ATUIN_NON_INTERACTIVE=no
+    fi
+    exec 3<&-
   fi
 fi
 
