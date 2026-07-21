@@ -8,6 +8,10 @@ edit_uri: edit/main/docs/docs/
 theme:
   name: material
   custom_dir: overrides
+  # The turtle mark, not the horizontal wordmark: site_name is already
+  # "Atuin Docs", so the wordmark would render "Atuin" twice in the header.
+  logo: assets/atuin-turtle.png
+  favicon: assets/atuin-turtle.png
   palette:
     # slate first => dark is the default scheme
     - scheme: slate
