@@ -3,5 +3,12 @@
     "version": "main",
     "title": "main (unreleased)",
     "aliases": []
+  },
+  {
+    "version": "18.17",
+    "title": "18.17",
+    "aliases": [
+      "latest"
+    ]
   }
 ]
