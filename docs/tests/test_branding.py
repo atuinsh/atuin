@@ -35,21 +35,39 @@ def read_css(name: str) -> str:
 def parse_vars(css: str, scheme: str | None = None) -> dict[str, str]:
     """Extract custom-property declarations.
 
-    With `scheme`, read only the `[data-md-color-scheme="<scheme>"]` block;
-    otherwise read the `:root` block. Values are returned verbatim, so a
+    Comments are stripped first, then the stylesheet is split into
+    (selector-list, body) rule pairs and each selector list is split on
+    commas. A combined rule such as
+
+        [data-md-color-scheme="slate"],
+        [data-md-color-scheme="default"] {
+          ...
+        }
+
+    is therefore matched by BOTH "slate" and "default" -- unlike a naive
+    "selector immediately followed by `{`" match, which would only ever
+    see the last selector in the list.
+
+    With `scheme=None`, this reads the rule whose selector is exactly
+    `:root`. With a scheme, it reads EVERY rule whose selector list
+    contains `[data-md-color-scheme="<scheme>"]`, merging their bodies in
+    document order so a later declaration overrides an earlier one --
+    mirroring the CSS cascade. Values are returned verbatim, so a
     `var(--x)` reference comes back as the literal string -- callers that
     need a colour should use `resolve`.
     """
-    if scheme is None:
-        pattern = r":root\s*\{(.*?)\}"
-    else:
-        pattern = r'\[data-md-color-scheme="%s"\]\s*\{(.*?)\}' % re.escape(scheme)
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
 
-    body = "\n".join(re.findall(pattern, css, re.S))
-    return {
-        m.group(1).strip(): m.group(2).strip()
-        for m in re.finditer(r"(--[\w-]+)\s*:\s*([^;]+);", body)
-    }
+    target = ":root" if scheme is None else '[data-md-color-scheme="%s"]' % scheme
+
+    merged: dict[str, str] = {}
+    for selector_list, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css, re.S):
+        selectors = [s.strip() for s in selector_list.split(",")]
+        if target not in selectors:
+            continue
+        for m in re.finditer(r"(--[\w-]+)\s*:\s*([^;]+);", body):
+            merged[m.group(1).strip()] = m.group(2).strip()
+    return merged
 
 
 def resolve(value: str, root: dict[str, str]) -> str:
@@ -144,3 +162,29 @@ def test_light_scheme_does_not_use_the_bright_green_for_text(tokens):
     light = parse_vars(tokens, "default")
     for var in ("--md-typeset-a-color", "--md-default-fg-color"):
         assert resolve(light[var], root).lower() != "#38c85a"
+
+
+def test_combined_selector_rule_applies_to_both_schemes(tokens):
+    """The syntax-highlighting block is declared as a combined selector:
+
+        [data-md-color-scheme="slate"],
+        [data-md-color-scheme="default"] { ... }
+
+    Both schemes share it. A selector match that only looks at the text
+    immediately before `{` (i.e. the last selector in the list) would see
+    "default" but miss "slate", since "slate" is followed by a comma, not
+    a brace. That asymmetry is wrong -- the rule applies to both -- so
+    both schemes must expose the same `--md-code-hl-*` keys, and a
+    variable declared only in the combined rule must be visible from
+    either scheme lookup.
+    """
+    slate = parse_vars(tokens, "slate")
+    default = parse_vars(tokens, "default")
+
+    assert "--md-code-hl-keyword-color" in slate
+    assert "--md-code-hl-keyword-color" in default
+    assert slate["--md-code-hl-keyword-color"] == default["--md-code-hl-keyword-color"]
+
+    slate_hl_keys = {k for k in slate if k.startswith("--md-code-hl-")}
+    default_hl_keys = {k for k in default if k.startswith("--md-code-hl-")}
+    assert slate_hl_keys == default_hl_keys
