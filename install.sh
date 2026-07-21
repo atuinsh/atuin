@@ -11,13 +11,13 @@ for arg in "$@"; do
 done
 
 if [ "$ATUIN_NON_INTERACTIVE" != "yes" ]; then
-  # Check if we have a usable interactive terminal.
-  # Using `true </dev/tty` is not sufficient: /dev/tty may exist as a device
-  # node that can be opened, but not actually be backed by a real terminal
-  # (e.g. in containers, CI, or headless environments). This causes the later
-  # `read </dev/tty` calls to fail or hang.
-  # Instead, open /dev/tty and verify it is a terminal with `test -t`.
-  if [ -t 0 ] || ( exec </dev/tty && [ -t 0 ] ) 2>/dev/null; then
+  # Every prompt below reads from /dev/tty, never stdin (stdin is the script
+  # itself under `curl | sh`), so /dev/tty is the only thing worth testing.
+  # Opening it is not enough: it may exist as a device node that opens fine
+  # but isn't backed by a real terminal (containers, CI, headless), so verify
+  # with `test -t`. The subshell keeps the redirect -- and a failing `exec`,
+  # which is a special built-in -- from affecting the parent shell.
+  if ( exec </dev/tty && [ -t 0 ] ) 2>/dev/null; then
     ATUIN_NON_INTERACTIVE="no"
   else
     ATUIN_NON_INTERACTIVE="yes"
@@ -176,7 +176,10 @@ else
 fi
 
 if [ "$ATUIN_NON_INTERACTIVE" != "yes" ]; then
-  "$ATUIN_BIN" setup </dev/tty
+  if ! "$ATUIN_BIN" setup </dev/tty; then
+    echo ""
+    echo "Setup did not complete. You can run 'atuin setup' any time to finish."
+  fi
 fi
 
 cat << EOF
