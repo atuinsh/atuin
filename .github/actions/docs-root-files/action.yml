@@ -1,6 +1,6 @@
 name: Sync gh-pages root files
 description: >-
-  Copy the static root files in docs/gh-pages/ (CNAME for the custom domain,
+  Copy the static root files in docs/root-files/ (CNAME for the custom domain,
   the 404 page that redirects legacy pre-versioning URLs) onto the root of
   the gh-pages branch after a deploy, generate the /cli/* meta-refresh stubs
   for legacy URLs, and commit only when something changed. mike never touches
@@ -17,8 +17,8 @@ runs:
         # Old checkouts (e.g. release tags cut before these files existed)
         # have nothing to sync; gh-pages may not exist on the very first
         # deploy either.
-        if [ ! -d docs/gh-pages ]; then
-          echo "docs/gh-pages does not exist in this checkout - skipping."
+        if [ ! -d docs/root-files ]; then
+          echo "docs/root-files does not exist in this checkout - skipping."
           exit 0
         fi
         if ! git ls-remote --exit-code origin gh-pages >/dev/null 2>&1; then
@@ -27,7 +27,7 @@ runs:
         fi
         git fetch origin gh-pages
         git worktree add gh-pages-wt gh-pages
-        cp -R docs/gh-pages/. gh-pages-wt/
+        cp -R docs/root-files/. gh-pages-wt/
         # Absent in checkouts of release tags cut before the stub generator
         # existed; those runs just sync the plain root files.
         if [ -f docs/scripts/gen_legacy_stubs.py ]; then
