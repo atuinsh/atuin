@@ -188,3 +188,140 @@ def test_combined_selector_rule_applies_to_both_schemes(tokens):
     slate_hl_keys = {k for k in slate if k.startswith("--md-code-hl-")}
     default_hl_keys = {k for k in default if k.startswith("--md-code-hl-")}
     assert slate_hl_keys == default_hl_keys
+
+
+# --------------------------------------------------------------------------
+# Structural guards against a real build
+# --------------------------------------------------------------------------
+
+STYLESHEET_ORDER = [
+    "atuin-tokens.css",
+    "atuin-typography.css",
+    "atuin-components.css",
+    "atuin-decor.css",
+]
+
+
+def read_declarations(name: str) -> str:
+    """Return a stylesheet with CSS comments stripped.
+
+    Several guards below assert a string is ABSENT from a stylesheet -- no
+    `!important`, no `.md-sidebar`, no `.md-content__inner::before`. In every
+    one of those cases the file's own comment explains *why* the thing is
+    absent, and names it to do so. Matching raw text would fail on the very
+    documentation that records the rule.
+
+    These guards are about declarations, not prose. Read through this.
+    """
+    return re.sub(r"/\*.*?\*/", "", read_css(name), flags=re.S)
+
+
+@pytest.fixture(scope="session")
+def built_site(tmp_path_factory) -> Path:
+    """Build the site once per session into a temporary directory."""
+    out = tmp_path_factory.mktemp("site")
+    result = subprocess.run(
+        [sys.executable, "-m", "mkdocs", "build", "--site-dir", str(out)],
+        cwd=DOCS_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return out
+
+
+@pytest.fixture(scope="session")
+def index_html(built_site: Path) -> str:
+    return (built_site / "index.html").read_text(encoding="utf-8")
+
+
+def test_dark_is_the_default_scheme(index_html):
+    first = re.search(r'data-md-color-scheme="([a-z]+)"', index_html)
+    assert first and first.group(1) == "slate"
+
+
+def test_all_stylesheets_are_linked_in_order(index_html):
+    found = [name for name in STYLESHEET_ORDER if name in index_html]
+    assert found == STYLESHEET_ORDER, f"missing or misordered: {found}"
+
+    positions = [index_html.index(name) for name in STYLESHEET_ORDER]
+    assert positions == sorted(positions), (
+        "stylesheets are linked out of order; later files rely on loading last "
+        "to win specificity ties"
+    )
+
+
+def test_old_stylesheet_is_gone():
+    assert not (STYLESHEETS / "extra.css").exists()
+
+
+def test_logo_and_favicon_resolve(built_site: Path, index_html: str):
+    assert "assets/atuin-turtle.png" in index_html
+    assert (built_site / "assets" / "atuin-turtle.png").is_file()
+
+
+@pytest.mark.parametrize(
+    "banned",
+    ["#7c3aed", "#a855f7", "#ec4899", "#a78bfa", "#c084fc", "#f472b6"],
+)
+def test_no_purple_survives(banned):
+    """The old extra.css gradient. None of these belong to Atuin."""
+    for name in STYLESHEET_ORDER:
+        assert banned not in read_css(name).lower()
+
+
+def test_traffic_light_dots_are_gone():
+    """The old Mac window dots decorated every code block."""
+    for name in STYLESHEET_ORDER:
+        assert "radial-gradient" not in read_css(name)
+
+
+def test_section_label_selector_still_matches_material(index_html):
+    """Guards against a Material upgrade silently invalidating the selector
+    that carries the mono micro-labels in the sidebar."""
+    assert "md-nav__item--section" in index_html
+    assert "md-nav__item--section" in read_css("atuin-typography.css")
+
+
+def test_admonition_overrides_avoid_important():
+    """Material's per-type rules are 0,3,0; we tie with [class] and win on
+    load order. If !important appears, that contract has been broken.
+
+    See read_declarations for why comments are stripped.
+    """
+    assert "!important" not in read_declarations("atuin-components.css")
+    assert ".md-typeset .admonition[class]" in read_css("atuin-components.css")
+
+
+def test_404_keeps_the_legacy_redirect():
+    html = (DOCS_ROOT / "root-files" / "404.html").read_text(encoding="utf-8")
+    assert "LEGACY_PREFIXES" in html
+    assert 'window.location.replace' in html
+    # Absolute, because a 404 renders at arbitrary URL depths.
+    assert 'src="/atuin-logo-horizontal.png"' in html
+
+
+def test_hex_lattice_does_not_hijack_material_spacer():
+    """.md-content__inner::before is Material's .4rem spacer. Redefining it
+    for the lattice would collapse content spacing on every page.
+
+    See read_declarations for why comments are stripped -- atuin-decor.css
+    names this selector in a comment precisely to record that it is avoided.
+    """
+    declarations = read_declarations("atuin-decor.css")
+    assert ".md-main::before" in declarations
+    assert ".md-content__inner::before" not in declarations
+
+
+def test_decor_never_positions_the_sidebar():
+    """Material sets `.md-sidebar{position:sticky}` and
+    `.md-sidebar--primary{position:fixed}`, both at specificity 0,1,0. A
+    `.md-sidebar{position:relative}` rule in atuin-decor.css would tie and win
+    on load order, silently killing the sticky table of contents on every page
+    and the mobile navigation drawer.
+
+    Neither failure shows up in a build -- only in a browser. Hence this test.
+
+    See read_declarations for why comments are stripped.
+    """
+    assert "md-sidebar" not in read_declarations("atuin-decor.css")
