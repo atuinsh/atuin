@@ -12,6 +12,9 @@ theme:
   # "Atuin Docs", so the wordmark would render "Atuin" twice in the header.
   logo: assets/atuin-turtle.png
   favicon: assets/atuin-turtle.png
+  font:
+    text: DM Sans
+    code: Space Mono
   palette:
     # slate first => dark is the default scheme
     - scheme: slate
@@ -170,6 +173,7 @@ markdown_extensions:
 # win specificity ties by loading later. Do not reorder.
 extra_css:
   - stylesheets/atuin-tokens.css
+  - stylesheets/atuin-typography.css
 
 extra:
   version:

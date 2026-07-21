@@ -1,0 +1,81 @@
+/* ==========================================================================
+   Atuin typography
+   --------------------------------------------------------------------------
+   Two jobs: the heading scale, and the mono micro-label system.
+
+   On headings -- Material already sets h1/h2 to font-weight 300, so the
+   change here is tracking (-.01em -> -.03em), scale, and undimming h1, which
+   Material renders in --md-default-fg-color--light.
+
+   On micro-labels -- Space Mono, ~11px, uppercase, wide tracking is the most
+   recognisable texture in Atuin's identity. atuin.sh uses it for every
+   eyebrow, stat caption and section label. One shared rule applies it to
+   every equivalent surface here.
+   ========================================================================== */
+
+/* ---------- Headings ---------- */
+
+.md-typeset h1 {
+  color: var(--md-default-fg-color);
+  font-size: 2.2em;
+  font-weight: 300;
+  letter-spacing: -0.03em;
+  line-height: 1.12;
+}
+
+.md-typeset h2 {
+  font-size: 1.6em;
+  font-weight: 300;
+  letter-spacing: -0.03em;
+  line-height: 1.14;
+}
+
+.md-typeset h3 {
+  font-size: 1.15em;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+.md-typeset h4 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.md-typeset {
+  font-weight: 400;
+}
+
+.md-typeset p {
+  line-height: 1.68;
+}
+
+/* ---------- The mono micro-label system ----------
+   Colour is --md-default-fg-color--light, not --lighter: at ~11px this is
+   small text, so it needs 4.5:1. --lighter is only ~3.2:1 on the dark
+   background, which is fine for decoration but not for labels. */
+
+.md-nav__item--section > .md-nav__link,
+.md-nav--secondary .md-nav__title,
+.md-typeset .admonition-title,
+.md-typeset summary,
+.md-typeset table:not([class]) th {
+  color: var(--md-default-fg-color--light);
+  font-family: var(--md-code-font-family, "Space Mono"), monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* Admonition titles and summaries carry meaning, so they keep full-strength
+   foreground; only the nav labels stay muted. */
+.md-typeset .admonition-title,
+.md-typeset summary {
+  color: var(--md-default-fg-color);
+}
+
+/* Material sets section labels to weight 700 in the default typeface and
+   dims [for] variants; both are superseded above, but the sizing is not. */
+.md-nav__item--section > .md-nav__link {
+  font-size: 0.6rem;
+}
