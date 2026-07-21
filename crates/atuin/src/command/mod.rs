@@ -87,6 +87,9 @@ impl AtuinCmd {
 
 #[cfg(all(feature = "pty-proxy", unix))]
 fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
+    // `Mode::bits()` returns u16 on macOS/BSD but u32 on Linux, where this
+    // conversion is a no-op.
+    #[allow(clippy::useless_conversion)]
     let child_umask = Some(u32::from(prev_umask.bits()));
 
     #[cfg(feature = "daemon")]
