@@ -35,6 +35,12 @@ impl HistoryHighlighter<'_> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EmptyHistoryRow {
+    Hidden,
+    Prompt,
+}
+
 pub struct HistoryList<'a> {
     history: &'a [History],
     block: Option<Block<'a>>,
@@ -46,6 +52,7 @@ pub struct HistoryList<'a> {
     theme: &'a Theme,
     history_highlighter: HistoryHighlighter<'a>,
     show_numeric_shortcuts: bool,
+    empty_history_row: EmptyHistoryRow,
     /// Columns to display (in order, after the indicator)
     columns: &'a [UiColumn],
 }
@@ -85,9 +92,39 @@ impl StatefulWidget for HistoryList<'_> {
             inner_area
         });
 
-        if list_area.width < 1 || list_area.height < 1 || self.history.is_empty() {
+        if list_area.width < 1 || list_area.height < 1 {
             return;
         }
+
+        if self.history.is_empty() {
+            state.offset = 0;
+            state.max_entries = 0;
+
+            // Ultracompact mode renders the prompt as part of the selected
+            // history row. Preserve that prompt when the current filter has no
+            // matches so the UI does not appear blank.
+            if self.empty_history_row == EmptyHistoryRow::Prompt {
+                DrawState {
+                    buf,
+                    list_area,
+                    x: 0,
+                    y: 0,
+                    state,
+                    inverted: self.inverted,
+                    alternate_highlight: self.alternate_highlight,
+                    now: &self.now,
+                    indicator: self.indicator,
+                    theme: self.theme,
+                    history_highlighter: self.history_highlighter,
+                    show_numeric_shortcuts: self.show_numeric_shortcuts,
+                    columns: self.columns,
+                }
+                .render_empty_row();
+            }
+
+            return;
+        }
+
         let list_height = list_area.height as usize;
 
         let (start, end) = self.get_items_bounds(state.selected, state.offset, list_height);
@@ -143,12 +180,22 @@ impl<'a> HistoryList<'a> {
             theme,
             history_highlighter,
             show_numeric_shortcuts,
+            empty_history_row: EmptyHistoryRow::Hidden,
             columns,
         }
     }
 
     pub fn block(mut self, block: Block<'a>) -> Self {
         self.block = Some(block);
+        self
+    }
+
+    pub fn ultracompact(mut self, ultracompact: bool) -> Self {
+        self.empty_history_row = if ultracompact {
+            EmptyHistoryRow::Prompt
+        } else {
+            EmptyHistoryRow::Hidden
+        };
         self
     }
 
@@ -188,6 +235,14 @@ struct DrawState<'a> {
 static SLICES: &str = " > 1 2 3 4 5 6 7 8 9   ";
 
 impl DrawState<'_> {
+    fn render_empty_row(&mut self) {
+        self.index();
+        self.draw(
+            self.history_highlighter.search_input,
+            Style::from_crossterm(self.theme.as_style(Meaning::Base)),
+        );
+    }
+
     /// Render a complete row for a history item based on configured columns.
     fn render_row(&mut self, h: &History) {
         // Always render the indicator first (width 3)
