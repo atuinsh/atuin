@@ -1,0 +1,142 @@
+/* Light/dark mode image switching */
+body[data-md-color-scheme="default"] .img-dark {
+  display: none !important;
+}
+
+body[data-md-color-scheme="slate"] .img-light {
+  display: none !important;
+}
+
+/* ============================================
+   Landing Page Styles
+   ============================================ */
+
+/* Hero Section */
+.hero {
+  text-align: center;
+  padding: 3rem 1rem 2rem;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.hero h1 {
+  font-size: 2.5rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  line-height: 1.2;
+}
+
+.hero h1 strong {
+  background: linear-gradient(135deg, #7c3aed 0%, #a855f7 50%, #ec4899 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.hero p {
+  font-size: 1.15rem;
+  color: var(--md-default-fg-color--light);
+  margin-bottom: 2rem;
+  line-height: 1.6;
+}
+
+.hero-buttons {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.hero-buttons .md-button {
+  font-size: 0.95rem;
+  padding: 0.7rem 1.5rem;
+}
+
+/* Product Cards */
+.product-cards > ul > li {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.5rem;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.product-cards > ul > li:hover {
+  border-color: var(--md-accent-fg-color);
+  box-shadow: 0 4px 20px rgba(124, 58, 237, 0.1);
+}
+
+/* Check icons in cards */
+.product-cards li li .twemoji {
+  color: #10b981;
+}
+
+/* Bottom-aligned footer in product cards */
+.product-cards .card-footer {
+  margin-top: auto;
+}
+
+/* Tabbed code blocks styling */
+.quick-start .tabbed-set {
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+/* Links Section */
+.links-section > ul > li {
+  padding: 1.25rem !important;
+}
+
+.links-section .twemoji.lg {
+  font-size: 1.75rem;
+}
+
+/* Terminal-style code blocks */
+.highlight pre {
+  border-radius: 0.5rem;
+  position: relative;
+}
+
+/* Terminal header dots */
+.highlight pre::before {
+  content: "";
+  display: block;
+  height: 12px;
+  margin-bottom: 0.75rem;
+  background-image:
+    radial-gradient(circle, #ff5f56 5px, transparent 5px),
+    radial-gradient(circle, #ffbd2e 5px, transparent 5px),
+    radial-gradient(circle, #27c93f 5px, transparent 5px);
+  background-position: 0 0, 20px 0, 40px 0;
+  background-repeat: no-repeat;
+  background-size: 12px 12px;
+}
+
+/* Dark mode adjustments */
+[data-md-color-scheme="slate"] .hero h1 strong {
+  background: linear-gradient(135deg, #a78bfa 0%, #c084fc 50%, #f472b6 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Responsive adjustments */
+@media screen and (max-width: 600px) {
+  .hero h1 {
+    font-size: 1.8rem;
+  }
+
+  .hero p {
+    font-size: 1rem;
+  }
+
+  .hero-buttons {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .hero-buttons .md-button {
+    width: 100%;
+    max-width: 280px;
+  }
+}
