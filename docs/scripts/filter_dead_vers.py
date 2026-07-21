@@ -9,7 +9,7 @@ version ids whose docs should be pruned (one per line).
   base version <= it is pruned.
 
 Usage:
-    mike list --json | python filter_dead_vers.py <boundary> [--exclude <id>]
+    mike list --json | python filter_dead_vers.py <boundary>
 """
 
 import argparse
@@ -30,17 +30,15 @@ def _parse_or_none(entry: Mapping[str, object]) -> Version | None:
 def versions_to_prune(
     entries: Iterable[Mapping[str, object]],
     boundary: str,
-    exclude: str | None = None,
 ) -> list[str]:
-    boundary_base = Version.from_str(boundary).base
+    boundary_version = Version.from_str(boundary)
 
     def superseded(entry: Mapping[str, object]) -> bool:
         version = _parse_or_none(entry)
         return (
             version is not None
             and version.is_prerelease
-            and version.base <= boundary_base
-            and str(entry["version"]) != exclude
+            and version < boundary_version
         )
 
     return [str(entry["version"]) for entry in filter(superseded, entries)]
@@ -51,15 +49,14 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("boundary", help="version whose base sets the prune cutoff")
-    parser.add_argument("--exclude", default=None, help="version id to never prune")
+    parser.add_argument("boundary", help="version that sets the prune cutoff")
     args = parser.parse_args(argv)
 
     raw = sys.stdin.read().strip()
     entries = json.loads(raw) if raw else []
     sys.stdout.writelines(
         f"{version_id}\n"
-        for version_id in versions_to_prune(entries, args.boundary, args.exclude)
+        for version_id in versions_to_prune(entries, args.boundary)
     )
     return 0
 

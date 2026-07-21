@@ -24,7 +24,7 @@ runs:
         echo "Deploying prerelease docs: $VERSION"
         uv run mike deploy --push --title "$VERSION (pre-release)" "$VERSION"
 
-        STALE=$(uv run mike list --json | uv run python scripts/filter_dead_vers.py "$VERSION" --exclude "$VERSION")
+        STALE=$(uv run mike list --json | uv run python scripts/filter_dead_vers.py "$VERSION")
         if [ -n "$STALE" ]; then
           echo "Pruning superseded prerelease docs:" $STALE
           uv run mike delete --push $STALE
