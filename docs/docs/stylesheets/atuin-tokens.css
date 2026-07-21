@@ -36,8 +36,6 @@
   /* Structure */
   --atuin-rule: rgba(44, 82, 104, 0.36);
   --atuin-rule-strong: rgba(56, 200, 90, 0.22);
-  --atuin-nav-bg: rgba(16, 22, 32, 0.92);
-  --atuin-nav-edge: rgba(22, 37, 47, 0.82);
 }
 
 /* ==========================================================================
@@ -47,6 +45,12 @@
 [data-md-color-scheme="slate"] {
   /* Nudges the greys Material still derives itself into our hue family. */
   --md-hue: 217;
+
+  /* Chrome. atuin.sh's nav, verbatim. */
+  --atuin-nav-bg: rgba(16, 22, 32, 0.92);
+  --atuin-nav-edge: rgba(22, 37, 47, 0.82);
+  --atuin-search-bg: rgba(56, 200, 90, 0.06);
+  --atuin-search-edge: rgba(56, 200, 90, 0.18);
 
   --md-default-bg-color: var(--atuin-bg);
   --md-default-bg-color--light: rgba(16, 22, 32, 0.7);
@@ -99,6 +103,15 @@
    ========================================================================== */
 
 [data-md-color-scheme="default"] {
+  /* Chrome. Light, so the header and footer belong to the page rather than
+     bracketing it in slabs of dark. The turtle mark is a transparent SVG with
+     dark navy outlines, so it reads on a light bar without a second asset --
+     which is what originally forced a dark header here. */
+  --atuin-nav-bg: rgba(251, 252, 251, 0.92);
+  --atuin-nav-edge: rgba(18, 24, 26, 0.12);
+  --atuin-search-bg: rgba(21, 128, 61, 0.05);
+  --atuin-search-edge: rgba(21, 128, 61, 0.26);
+
   --md-default-bg-color: #fbfcfb;
   --md-default-bg-color--light: rgba(251, 252, 251, 0.7);
   --md-default-bg-color--lighter: rgba(251, 252, 251, 0.35);
@@ -113,8 +126,9 @@
   --md-primary-fg-color--light: var(--atuin-green);
   --md-primary-fg-color--dark: #0f5c2c;
   /* Light, because the header is dark in BOTH schemes (see components). */
-  --md-primary-bg-color: var(--atuin-text-1);
-  --md-primary-bg-color--light: var(--atuin-text-2);
+  /* Foreground ON the header bar -- dark now, since the bar is light. */
+  --md-primary-bg-color: #12181a;
+  --md-primary-bg-color--light: #4a5a60;
 
   --md-accent-fg-color: var(--atuin-green-deep);
   --md-accent-fg-color--transparent: rgba(21, 128, 61, 0.1);
@@ -130,11 +144,11 @@
   --md-code-bg-color: var(--atuin-screen);
   --md-code-fg-color: #cfe3d4;
 
-  --md-footer-bg-color: var(--atuin-bg-deep);
-  --md-footer-bg-color--dark: #0b111a;
-  --md-footer-fg-color: var(--atuin-text-1);
-  --md-footer-fg-color--light: var(--atuin-text-2);
-  --md-footer-fg-color--lighter: var(--atuin-text-3);
+  --md-footer-bg-color: #f1f4f2;
+  --md-footer-bg-color--dark: #e6eae7;
+  --md-footer-fg-color: #12181a;
+  --md-footer-fg-color--light: #4a5a60;
+  --md-footer-fg-color--lighter: #71838a;
 
   --md-shadow-z1: none;
   --md-shadow-z2: 0 4px 20px rgba(18, 24, 26, 0.12);

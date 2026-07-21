@@ -7,15 +7,15 @@
    ========================================================================== */
 
 /* ---------- Header ----------
-   Dark in BOTH schemes, matching atuin.sh's nav. This is also what keeps the
-   turtle mark legible in light mode without needing a second asset. */
+   Colours come from --atuin-nav-*, which each scheme defines: atuin.sh's dark
+   nav in slate, a light bar in default. Nothing here is scheme-specific. */
 
 .md-header {
   background-color: var(--atuin-nav-bg);
   backdrop-filter: blur(18px);
   border-bottom: 1px solid var(--atuin-nav-edge);
   box-shadow: none;
-  color: var(--atuin-text-1);
+  color: var(--md-primary-bg-color);
 }
 
 .md-header--shadow {
@@ -50,17 +50,18 @@
 /* ---------- Search ---------- */
 
 .md-search__form {
-  background-color: rgba(56, 200, 90, 0.06);
-  border: 1px solid rgba(56, 200, 90, 0.18);
+  background-color: var(--atuin-search-bg);
+  border: 1px solid var(--atuin-search-edge);
   border-radius: 6px;
 }
 
 .md-search__form:hover {
-  background-color: rgba(56, 200, 90, 0.1);
+  background-color: var(--atuin-search-bg);
+  border-color: var(--md-accent-fg-color);
 }
 
 .md-search__input::placeholder {
-  color: var(--atuin-text-3);
+  color: var(--md-default-fg-color--lighter);
 }
 
 /* ---------- Sidebar navigation ----------
