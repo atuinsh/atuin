@@ -716,8 +716,6 @@ pub(crate) fn status_bar_view(
     model: Option<&str>,
     usage: Option<&crate::usage::UsageSnapshot>,
 ) -> AnyElement<'static> {
-    let model_label = format!(" Model: {}", model.unwrap_or("default"));
-
     let usage = usage.and_then(|snapshot| {
         let pct = snapshot.as_percentage()?;
         if pct < USAGE_BAR_THRESHOLD_PCT {
@@ -726,7 +724,15 @@ pub(crate) fn status_bar_view(
         Some((pct, snapshot.resets_in()))
     });
 
-    let left = text(model_label).style(Style::default().fg(Color::DarkGray));
+    let left = text(format!(" Model: "))
+        .style(Style::default().fg(Color::White))
+        .span(
+            model.unwrap_or("default"),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )
+        .span(" (/model to change)", Style::default().fg(Color::Gray));
 
     let Some((pct, resets_in)) = usage else {
         return left.any();
