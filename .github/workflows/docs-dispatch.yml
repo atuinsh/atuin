@@ -1,0 +1,61 @@
+name: Deploy docs (manual)
+
+# Manual deploy, mainly for seeding gh-pages during cutover or re-deploying a
+# specific version. Exactly one job runs, picked from the version input.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to deploy (e.g. 18.17.1 -> latest; 18.18.0-beta.1 -> a pre-release preview). Leave blank to deploy the main (unreleased) docs."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+# Shared with every docs deploy trigger so writes to the gh-pages branch are
+# serialized across workflows (must match the group name in the other callers).
+concurrency:
+  group: docs-pages
+  cancel-in-progress: false
+
+jobs:
+  main:
+    if: ${{ inputs.version == '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/docs-setup
+      - uses: ./.github/actions/docs-deploy-main
+      - uses: ./.github/actions/docs-root-files
+
+  stable:
+    if: ${{ inputs.version != '' && !contains(inputs.version, '-') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/docs-setup
+      - uses: ./.github/actions/docs-deploy-stable
+        with:
+          version: ${{ inputs.version }}
+      - uses: ./.github/actions/docs-root-files
+
+  prerelease:
+    if: ${{ contains(inputs.version, '-') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/docs-setup
+      - uses: ./.github/actions/docs-deploy-prerelease
+        with:
+          version: ${{ inputs.version }}
+      - uses: ./.github/actions/docs-root-files

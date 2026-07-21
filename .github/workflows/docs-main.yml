@@ -1,0 +1,30 @@
+name: Deploy main docs
+
+# Redeploys the `main` (unreleased) docs version on every push to main
+# that touches docs/**.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+
+permissions:
+  contents: write
+
+# Shared with every docs deploy trigger so writes to the gh-pages branch are
+# serialized across workflows (must match the group name in the other callers).
+concurrency:
+  group: docs-pages
+  cancel-in-progress: false
+
+jobs:
+  main:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/docs-setup
+      - uses: ./.github/actions/docs-deploy-main
+      - uses: ./.github/actions/docs-root-files
