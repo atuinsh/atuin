@@ -13,8 +13,10 @@ CSS is not normally testable. Two things here are worth the harness:
 from __future__ import annotations
 
 import re
+import struct
 import subprocess
 import sys
+import zlib
 from pathlib import Path
 
 import pytest
@@ -256,8 +258,77 @@ def test_old_stylesheet_is_gone():
 
 
 def test_logo_and_favicon_resolve(built_site: Path, index_html: str):
+    """The logo is the SVG, the favicon the PNG. Both must ship."""
+    assert "assets/atuin-turtle.svg" in index_html
     assert "assets/atuin-turtle.png" in index_html
+    assert (built_site / "assets" / "atuin-turtle.svg").is_file()
     assert (built_site / "assets" / "atuin-turtle.png").is_file()
+
+
+def _decode_png_rgba(data: bytes) -> tuple[int, int, list[bytes]]:
+    """Minimal 8-bit RGBA PNG decoder, stdlib only.
+
+    Exists so the transparency guard needs no image dependency. Handles the
+    five PNG filter types; refuses anything that is not 8-bit truecolour with
+    alpha rather than guessing.
+    """
+    pos, idat, width, height = 8, b"", 0, 0
+    while pos < len(data):
+        length = struct.unpack(">I", data[pos:pos + 4])[0]
+        chunk, payload = data[pos + 4:pos + 8], data[pos + 8:pos + 8 + length]
+        if chunk == b"IHDR":
+            width, height, depth, colour = struct.unpack(">IIBB", payload[:10])
+            assert (depth, colour) == (8, 6), f"expected 8-bit RGBA, got {depth}/{colour}"
+        elif chunk == b"IDAT":
+            idat += payload
+        pos += 12 + length
+
+    raw, bpp = zlib.decompress(idat), 4
+    stride = width * bpp
+    prev, rows, i = bytearray(stride), [], 0
+    for _ in range(height):
+        ftype, i = raw[i], i + 1
+        line, i = bytearray(raw[i:i + stride]), i + stride
+        for x in range(stride):
+            left = line[x - bpp] if x >= bpp else 0
+            up = prev[x]
+            upleft = prev[x - bpp] if x >= bpp else 0
+            if ftype == 1:
+                line[x] = (line[x] + left) & 0xFF
+            elif ftype == 2:
+                line[x] = (line[x] + up) & 0xFF
+            elif ftype == 3:
+                line[x] = (line[x] + (left + up) // 2) & 0xFF
+            elif ftype == 4:
+                estimate = left + up - upleft
+                da, db, dc = (abs(estimate - v) for v in (left, up, upleft))
+                nearest = left if (da <= db and da <= dc) else (up if db <= dc else upleft)
+                line[x] = (line[x] + nearest) & 0xFF
+        rows.append(bytes(line))
+        prev = line
+    return width, height, rows
+
+
+def test_turtle_mark_has_a_transparent_background():
+    """The mark sits on the dark header in both schemes.
+
+    atuin.sh's icon.png -- the obvious source -- has an opaque WHITE
+    background baked in, which renders as a white card behind the turtle.
+    `file` reports it as RGBA either way, so the format alone proves nothing;
+    the alpha channel has to be read.
+
+    Both assets are checked: the SVG must declare no background rect, and the
+    PNG (generated from that SVG) must have fully transparent corners.
+    """
+    svg = (STYLESHEETS.parent / "assets" / "atuin-turtle.svg").read_text()
+    assert "<svg" in svg
+    assert 'fill="#fff' not in svg.lower().replace(" ", "")
+
+    png = (STYLESHEETS.parent / "assets" / "atuin-turtle.png").read_bytes()
+    width, height, pixels = _decode_png_rgba(png)
+    corners = [(0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)]
+    alphas = [pixels[y][x * 4 + 3] for x, y in corners]
+    assert alphas == [0, 0, 0, 0], f"corner alphas {alphas}, expected all 0"
 
 
 @pytest.mark.parametrize(

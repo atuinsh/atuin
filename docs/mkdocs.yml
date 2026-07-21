@@ -10,7 +10,10 @@ theme:
   custom_dir: overrides
   # The turtle mark, not the horizontal wordmark: site_name is already
   # "Atuin Docs", so the wordmark would render "Atuin" twice in the header.
-  logo: assets/atuin-turtle.png
+  # Logo is the SVG: vector, and transparent so it sits on the dark header
+  # in both schemes. Favicon stays a PNG for universal support, generated
+  # from the same SVG so the two never drift.
+  logo: assets/atuin-turtle.svg
   favicon: assets/atuin-turtle.png
   font:
     text: DM Sans
