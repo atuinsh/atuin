@@ -18,4 +18,4 @@ override-dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = []
