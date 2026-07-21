@@ -1,0 +1,75 @@
+# Atuin Docs
+
+Atuin replaces your shell's built-in history with a SQLite database, adding context
+(cwd, exit code, duration, hostname) and optionally syncing across machines with
+end-to-end encryption. These docs cover the CLI tool - installation, configuration,
+usage, self-hosting, and AI features.
+
+
+## Overview
+
+- [Home](https://docs.atuin.sh/index.md): Getting started with Atuin - quickstart, supported shells, and links.
+
+## Guide
+
+- [Getting Started](https://docs.atuin.sh/guide/getting-started/index.md): First steps - install, import history, and start using Atuin.
+- [Installation](https://docs.atuin.sh/guide/installation/index.md): Install via script, Homebrew, WinGet, Cargo, Nix, or from source.
+- [Setting up sync](https://docs.atuin.sh/guide/sync/index.md): Register an account and set up end-to-end encrypted history sync.
+- [Import existing history](https://docs.atuin.sh/guide/import/index.md): Import existing shell history from bash, zsh, fish, and others.
+- [Basic usage](https://docs.atuin.sh/guide/basic-usage/index.md): What Atuin records, how to use the TUI, and common config tweaks.
+- [Advanced usage](https://docs.atuin.sh/guide/advanced-usage/index.md): Filter modes (global, host, session, directory, workspace) and search modes (fuzzy, full-text, skim).
+- [Shell Integration](https://docs.atuin.sh/guide/shell-integration/index.md): How shell hooks work, environment variables, embedded terminals, and excluding commands.
+- [AI Agent Hooks](https://docs.atuin.sh/guide/agent-hooks/index.md): Capture commands from AI coding agents (Claude Code, Codex, pi) and filter by author.
+- [Deleting history](https://docs.atuin.sh/guide/delete-history/index.md): Delete single entries, bulk delete by query, remove duplicates, or wipe everything.
+- [Syncing dotfiles](https://docs.atuin.sh/guide/dotfiles/index.md): Sync shell aliases and environment variables across machines.
+- [Theming](https://docs.atuin.sh/guide/theming/index.md): Customize the TUI with color themes.
+
+## Configuration
+
+- [Config](https://docs.atuin.sh/configuration/config/index.md): Complete reference for ~/.config/atuin/config.toml - all settings with defaults and examples.
+- [Key Binding](https://docs.atuin.sh/configuration/key-binding/index.md): Custom up-arrow filter mode, disable up-arrow or ctrl-r, vim mode.
+- [Advanced Key Binding](https://docs.atuin.sh/configuration/advanced-key-binding/index.md): Full keymap customization with emacs, vim-normal, vim-insert, and inspector modes.
+
+## Reference
+
+- [config](https://docs.atuin.sh/reference/config/index.md): The `atuin config` command - get, set, list, and resolve configuration values.
+- [daemon](https://docs.atuin.sh/reference/daemon/index.md): Background daemon for faster writes, auto-sync, and in-memory fuzzy search.
+- [doctor](https://docs.atuin.sh/reference/doctor/index.md): Diagnose common problems and dump system info for bug reports.
+- [gen-completions](https://docs.atuin.sh/reference/gen-completions/index.md): Generate shell completions for bash, fish, zsh, nushell, powershell, elvish.
+- [Hex](https://docs.atuin.sh/reference/hex/index.md): The old name for `atuin pty-proxy`
+- [pty-proxy](https://docs.atuin.sh/reference/pty-proxy/index.md): Experimental PTY proxy with popup rendering over existing terminal output.
+- [import](https://docs.atuin.sh/reference/import/index.md): Import history from bash, fish, zsh, replxx, mcfly, resh, and xonsh.
+- [info](https://docs.atuin.sh/reference/info/index.md): Show config file paths, env vars, and version info.
+- [history list](https://docs.atuin.sh/reference/list/index.md): List history entries with formatting, filtering by cwd/session, and custom output templates.
+- [history prune](https://docs.atuin.sh/reference/prune/index.md): Delete entries matching history_filter config (useful after updating filters).
+- [search](https://docs.atuin.sh/reference/search/index.md): Search history with wildcards, filters (cwd, exit code, before/after), and delete mode.
+- [stats](https://docs.atuin.sh/reference/stats/index.md): Compute stats for a time period - most used command, command count, unique commands.
+- [sync](https://docs.atuin.sh/reference/sync/index.md): Sync commands - register, login, manual sync, and account management.
+
+## Self Hosting
+
+- [Server Setup](https://docs.atuin.sh/self-hosting/server-setup/index.md): Run your own Atuin sync server with PostgreSQL or SQLite.
+- [Usage](https://docs.atuin.sh/self-hosting/usage/index.md): Configure the client to use a self-hosted server.
+- [Docker](https://docs.atuin.sh/self-hosting/docker/index.md): Deploy with Docker or Docker Compose.
+- [Kubernetes](https://docs.atuin.sh/self-hosting/kubernetes/index.md): Full Kubernetes deployment with Postgres, secrets, and ingress.
+- [Systemd](https://docs.atuin.sh/self-hosting/systemd/index.md): Systemd service unit with hardening options.
+
+## AI
+
+- [Introduction](https://docs.atuin.sh/ai/introduction/index.md): Atuin AI - command generation and lookup via LLM from your terminal.
+- [Settings](https://docs.atuin.sh/ai/settings/index.md): AI configuration in config.toml - enabled, endpoint, session timeout.
+- [Slash Commands](https://docs.atuin.sh/ai/slash-commands/index.md): Slash commands available in Atuin AI.
+- [User-Defined Context](https://docs.atuin.sh/ai/user-context/index.md): Send additional context to the LLM via TERMINAL.md files and dynamic shell substitution.
+- [Skills](https://docs.atuin.sh/ai/skills/index.md): Reusable instruction sets (skills) for Atuin AI - playbooks, conventions, workflows.
+- [Tools & Permissions](https://docs.atuin.sh/ai/tools-permissions/index.md): Tools the AI can use (shell, filesystem) and permission files to control access.
+- [Reading Command Output](https://docs.atuin.sh/ai/command-output/index.md): Let Atuin AI read command outputs - capture via pty-proxy and the daemon.
+- [MCP Server](https://docs.atuin.sh/ai/mcp/index.md): Built-in MCP server exposing history search and command output to Claude Code, Cursor, and other AI tools.
+- [Self Hosting & Local Models](https://docs.atuin.sh/ai/self-hosting/index.md): Self-hosting the Atuin AI backend.
+
+## Misc
+
+- [Known Issues](https://docs.atuin.sh/known-issues/index.md): Known issues with ZFS and network filesystems.
+- [Integrations](https://docs.atuin.sh/integrations/index.md): Integrations with zsh-autosuggestions, zsh-vi-mode, ble.sh, and mcfly.
+- [FAQ](https://docs.atuin.sh/faq/index.md): Frequently asked questions - IDE terminals, history filtering, up-arrow, uninstalling.
+- [Uninstall](https://docs.atuin.sh/uninstall/index.md): How to uninstall Atuin and remove all data.
+
