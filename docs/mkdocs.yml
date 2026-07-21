@@ -9,18 +9,19 @@ theme:
   name: material
   custom_dir: overrides
   palette:
-    - scheme: default
-      primary: deep purple
-      accent: deep purple
-      toggle:
-        icon: material/brightness-7
-        name: Switch to dark mode
+    # slate first => dark is the default scheme
     - scheme: slate
-      primary: deep purple
-      accent: deep purple
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
+    - scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
   features:
     - navigation.sections
     - navigation.expand
@@ -161,8 +162,10 @@ markdown_extensions:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
+# Load order is load-bearing: later files read variables from earlier ones and
+# win specificity ties by loading later. Do not reorder.
 extra_css:
-  - stylesheets/extra.css
+  - stylesheets/atuin-tokens.css
 
 extra:
   version:

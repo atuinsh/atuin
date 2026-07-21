@@ -1,0 +1,169 @@
+/* ==========================================================================
+   Atuin brand tokens
+   --------------------------------------------------------------------------
+   Every value here is measured from atuin.sh's stylesheet or from
+   assets/turtle-interaction-default.svg. They are not design choices made
+   here; do not adjust them to taste. If something needs a colour that is not
+   on this list, update the spec first.
+
+   LOAD ORDER: this file must be first in `extra_css`. Every other
+   atuin-*.css file reads variables defined below.
+   ========================================================================== */
+
+:root {
+  /* Core brand -- atuin.sh :root */
+  --atuin-green: #38c85a;
+  --atuin-green-200: #a8ecba;
+  --atuin-green-100: #d4f5de;
+  /* Darkened green for light backgrounds. #38c85a on #fbfcfb is ~2.1:1 and
+     fails WCAG AA; this is ~4.9:1. See tests/test_branding.py. */
+  --atuin-green-deep: #15803d;
+
+  --atuin-bg: #101620;
+  --atuin-bg-deep: #0f1722;
+  --atuin-screen: #0d141e;          /* atuin.sh .terminal-screen */
+
+  --atuin-text-1: #e8f0e9;
+  --atuin-text-2: #8fa1a8;
+  --atuin-text-3: #5a6870;
+
+  /* Mascot palette -- the turtle's shell scutes */
+  --atuin-ink: #273338;
+  --atuin-blue: #0088d1;
+  --atuin-blue-mid: #4ec2f8;
+  --atuin-blue-pale: #b1e5fb;
+
+  /* Structure */
+  --atuin-rule: rgba(44, 82, 104, 0.36);
+  --atuin-rule-strong: rgba(56, 200, 90, 0.22);
+  --atuin-nav-bg: rgba(16, 22, 32, 0.92);
+  --atuin-nav-edge: rgba(22, 37, 47, 0.82);
+  --atuin-lattice: #38c85a;
+}
+
+/* ==========================================================================
+   Dark scheme (slate) -- the default
+   ========================================================================== */
+
+[data-md-color-scheme="slate"] {
+  /* Nudges the greys Material still derives itself into our hue family. */
+  --md-hue: 217;
+
+  --md-default-bg-color: var(--atuin-bg);
+  --md-default-bg-color--light: rgba(16, 22, 32, 0.7);
+  --md-default-bg-color--lighter: rgba(16, 22, 32, 0.35);
+  --md-default-bg-color--lightest: rgba(16, 22, 32, 0.12);
+
+  --md-default-fg-color: var(--atuin-text-1);
+  --md-default-fg-color--light: var(--atuin-text-2);
+  --md-default-fg-color--lighter: var(--atuin-text-3);
+  --md-default-fg-color--lightest: rgba(90, 104, 112, 0.35);
+
+  /* Material reuses --md-primary-fg-color as a FOREGROUND colour (.md-button
+     text, active nav). It must be the green, not the dark nav colour --
+     .md-header gets its dark background from atuin-components.css instead. */
+  --md-primary-fg-color: var(--atuin-green);
+  --md-primary-fg-color--light: var(--atuin-green-200);
+  --md-primary-fg-color--dark: var(--atuin-green-deep);
+  --md-primary-bg-color: var(--atuin-text-1);
+  --md-primary-bg-color--light: var(--atuin-text-2);
+
+  --md-accent-fg-color: var(--atuin-green);
+  --md-accent-fg-color--transparent: rgba(56, 200, 90, 0.1);
+  --md-accent-bg-color: #06100a;
+  --md-accent-bg-color--light: rgba(6, 16, 10, 0.7);
+
+  --md-typeset-color: var(--atuin-text-1);
+  --md-typeset-a-color: var(--atuin-green);
+  --md-typeset-mark-color: rgba(56, 200, 90, 0.25);
+  --md-typeset-table-color: var(--atuin-rule);
+
+  --md-code-bg-color: var(--atuin-screen);
+  --md-code-fg-color: #cfe3d4;
+
+  --md-footer-bg-color: var(--atuin-bg-deep);
+  --md-footer-bg-color--dark: #0b111a;
+  --md-footer-fg-color: var(--atuin-text-1);
+  --md-footer-fg-color--light: var(--atuin-text-2);
+  --md-footer-fg-color--lighter: var(--atuin-text-3);
+
+  /* Material's elevation shadows are one of its loudest tells. */
+  --md-shadow-z1: none;
+  --md-shadow-z2: 0 4px 20px rgba(0, 0, 0, 0.4);
+  --md-shadow-z3: 0 28px 80px rgba(0, 0, 0, 0.42);
+
+  color-scheme: dark;
+}
+
+/* ==========================================================================
+   Light scheme (default)
+   ========================================================================== */
+
+[data-md-color-scheme="default"] {
+  --md-default-bg-color: #fbfcfb;
+  --md-default-bg-color--light: rgba(251, 252, 251, 0.7);
+  --md-default-bg-color--lighter: rgba(251, 252, 251, 0.35);
+  --md-default-bg-color--lightest: rgba(251, 252, 251, 0.12);
+
+  --md-default-fg-color: #12181a;
+  --md-default-fg-color--light: #4a5a60;
+  --md-default-fg-color--lighter: #71838a;
+  --md-default-fg-color--lightest: rgba(113, 131, 138, 0.3);
+
+  --md-primary-fg-color: var(--atuin-green-deep);
+  --md-primary-fg-color--light: var(--atuin-green);
+  --md-primary-fg-color--dark: #0f5c2c;
+  /* Light, because the header is dark in BOTH schemes (see components). */
+  --md-primary-bg-color: var(--atuin-text-1);
+  --md-primary-bg-color--light: var(--atuin-text-2);
+
+  --md-accent-fg-color: var(--atuin-green-deep);
+  --md-accent-fg-color--transparent: rgba(21, 128, 61, 0.1);
+  --md-accent-bg-color: #ffffff;
+  --md-accent-bg-color--light: rgba(255, 255, 255, 0.7);
+
+  --md-typeset-color: #12181a;
+  --md-typeset-a-color: var(--atuin-green-deep);
+  --md-typeset-mark-color: rgba(56, 200, 90, 0.25);
+  --md-typeset-table-color: rgba(18, 24, 26, 0.16);
+
+  /* Atuin's terminal is always a dark screen, in either scheme. */
+  --md-code-bg-color: var(--atuin-screen);
+  --md-code-fg-color: #cfe3d4;
+
+  --md-footer-bg-color: var(--atuin-bg-deep);
+  --md-footer-bg-color--dark: #0b111a;
+  --md-footer-fg-color: var(--atuin-text-1);
+  --md-footer-fg-color--light: var(--atuin-text-2);
+  --md-footer-fg-color--lighter: var(--atuin-text-3);
+
+  --md-shadow-z1: none;
+  --md-shadow-z2: 0 4px 20px rgba(18, 24, 26, 0.12);
+  --md-shadow-z3: 0 28px 80px rgba(18, 24, 26, 0.16);
+
+  color-scheme: light;
+}
+
+/* ==========================================================================
+   Syntax highlighting -- identical in both schemes, because code blocks are
+   dark in both. Colours are drawn from the mascot's palette so the terminal
+   reads as part of the brand rather than as Pygments' defaults.
+   ========================================================================== */
+
+[data-md-color-scheme="slate"],
+[data-md-color-scheme="default"] {
+  --md-code-hl-keyword-color: var(--atuin-blue-mid);
+  --md-code-hl-function-color: var(--atuin-green);
+  --md-code-hl-string-color: var(--atuin-green-200);
+  --md-code-hl-number-color: var(--atuin-blue-pale);
+  --md-code-hl-constant-color: var(--atuin-blue-pale);
+  --md-code-hl-special-color: var(--atuin-green);
+  --md-code-hl-comment-color: var(--atuin-text-3);
+  --md-code-hl-operator-color: var(--atuin-text-2);
+  --md-code-hl-punctuation-color: var(--atuin-text-2);
+  --md-code-hl-name-color: #cfe3d4;
+  --md-code-hl-variable-color: var(--atuin-text-1);
+  --md-code-hl-generic-color: var(--atuin-text-2);
+  --md-code-hl-color: rgba(56, 200, 90, 0.18);
+  --md-code-hl-color--light: rgba(56, 200, 90, 0.1);
+}
