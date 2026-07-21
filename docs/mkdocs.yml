@@ -15,6 +15,24 @@ theme:
   # from the same SVG so the two never drift.
   logo: assets/atuin-turtle.svg
   favicon: assets/atuin-turtle.png
+  # Octicons rather than Material's own set: sharper corners, thinner
+  # strokes, and developer-native. Material Design icons read as Google on a
+  # terminal brand. Decorative icons (admonition glyphs, the <details>
+  # chevron) are removed entirely in atuin-components.css -- atuin.sh carries
+  # those affordances typographically, not pictographically.
+  icon:
+    repo: octicons/mark-github-16
+    edit: octicons/pencil-16
+    view: octicons/eye-16
+    previous: octicons/arrow-left-16
+    next: octicons/arrow-right-16
+    top: octicons/arrow-up-16
+    menu: octicons/three-bars-16
+    close: octicons/x-16
+    search: octicons/search-16
+    share: octicons/link-16
+    alternate: octicons/moon-16
+    annotation: octicons/plus-circle-16
   font:
     text: DM Sans
     code: Space Mono
@@ -24,13 +42,13 @@ theme:
       primary: custom
       accent: custom
       toggle:
-        icon: material/brightness-4
+        icon: octicons/sun-16
         name: Switch to light mode
     - scheme: default
       primary: custom
       accent: custom
       toggle:
-        icon: material/brightness-7
+        icon: octicons/moon-16
         name: Switch to dark mode
   features:
     # Navigation

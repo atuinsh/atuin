@@ -127,18 +127,54 @@
   border: 0;
 }
 
-/* Material draws the icon as a mask fed by --md-admonition-icon--*; recolour
-   the mask rather than replacing it, so every type keeps its own glyph. */
+/* No admonition glyph. Material masks an icon in via
+   --md-admonition-icon--*, but a pictogram is redundant next to a coloured
+   rule and a mono uppercase label, and Material's icon set reads as Google
+   on a terminal brand. atuin.sh carries these affordances typographically.
+
+   Material reserves 2rem of left padding for that icon, so the padding has
+   to come back with it. */
 .md-typeset .admonition-title[class]::before,
 .md-typeset details > summary::before,
 .md-typeset details[class] > summary::before {
-  background-color: var(--atuin-adm);
+  display: none;
 }
 
-/* The disclosure marker on the right-hand side. */
+[dir="ltr"] .md-typeset .admonition-title,
+[dir="ltr"] .md-typeset summary {
+  padding-left: 0.8rem;
+}
+
+[dir="rtl"] .md-typeset .admonition-title,
+[dir="rtl"] .md-typeset summary {
+  padding-right: 0.8rem;
+}
+
+/* The disclosure marker: mono +/- in the accent colour, like atuin.sh's FAQ.
+   Material draws a chevron by masking --md-details-icon and rotating it 90deg
+   when open, so the mask, the sizing and the rotation all have to be undone
+   before `content` will show. */
 .md-typeset details > summary::after,
 .md-typeset details[class] > summary::after {
+  content: "+";
+  background-color: transparent;
+  -webkit-mask-image: none;
+  mask-image: none;
   color: var(--atuin-adm);
+  font-family: var(--md-code-font-family, "Space Mono"), monospace;
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1;
+  height: auto;
+  width: auto;
+  transform: none;
+  top: 0.55em;
+}
+
+.md-typeset details[open] > summary::after,
+.md-typeset details[open][class] > summary::after {
+  content: "-";
+  transform: none;
 }
 
 /* Per-type accents. Note these target the type class directly (0,3,0 with
