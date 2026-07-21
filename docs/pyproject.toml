@@ -9,6 +9,7 @@ dependencies = [
   "mkdocs-glightbox>=0.4",
   "mkdocs-redirects>=1.2.2",
   "mkdocs-llmstxt>=0.5",
+  "mkdocs-minify-plugin>=0.8",
   "mike>=2.1",
 ]
 
