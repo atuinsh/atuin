@@ -53,7 +53,7 @@ impl Importer for Bash {
                 _ => None,
             })
             // if no known timestamps, use now as base
-            .unwrap_or((lines.len(), OffsetDateTime::now_utc()));
+            .unwrap_or_else(|| (lines.len(), OffsetDateTime::now_utc()));
 
         // if no timestamp is recorded, then use this increment to set an arbitrary timestamp
         // to preserve ordering
@@ -64,8 +64,9 @@ impl Importer for Bash {
 
         // make sure there is a minimum amount of time before the first known timestamp
         // to fit all commands, given the default increment
-        let mut next_timestamp =
-            first_timestamp - timestamp_increment * commands_before_first_timestamp as i32;
+        let mut next_timestamp = first_timestamp
+            - timestamp_increment
+                * u32::try_from(commands_before_first_timestamp).unwrap_or(u32::MAX);
 
         for line in lines.into_iter() {
             match line {
@@ -80,7 +81,10 @@ impl Importer for Bash {
                     next_timestamp = t;
                 }
                 LineType::Command(c) => {
-                    let imported = History::import().timestamp(next_timestamp).command(c);
+                    let imported = History::import()
+                        .shell("bash")
+                        .timestamp(next_timestamp)
+                        .command(c);
 
                     h.push(imported.build().into()).await?;
                     next_timestamp += timestamp_increment;
@@ -111,11 +115,11 @@ impl<'a> From<&'a [u8]> for LineType<'a> {
         if line.is_empty() {
             return LineType::Empty;
         }
-        let parsed = match try_parse_line_as_timestamp(line) {
+
+        match try_parse_line_as_timestamp(line) {
             Some(time) => LineType::Timestamp(time),
             None => LineType::Command(line),
-        };
-        parsed
+        }
     }
 }
 

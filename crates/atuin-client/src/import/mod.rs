@@ -12,6 +12,7 @@ pub mod bash;
 pub mod fish;
 pub mod nu;
 pub mod nu_histdb;
+pub mod powershell;
 pub mod replxx;
 pub mod resh;
 pub mod xonsh;
@@ -29,7 +30,7 @@ pub trait Importer: Sized {
 
 #[async_trait]
 pub trait Loader: Sync + Send {
-    async fn push(&mut self, hist: History) -> eyre::Result<()>;
+    async fn push(&mut self, hist: History) -> Result<()>;
 }
 
 fn unix_byte_lines(input: &[u8]) -> impl Iterator<Item = &[u8]> {
@@ -103,7 +104,10 @@ fn is_file(p: PathBuf) -> Result<PathBuf> {
     if p.is_file() {
         Ok(p)
     } else {
-        bail!("Could not find history file {:?}. Try setting $HISTFILE", p)
+        bail!(
+            "Could not find history file {:?}. Try setting and exporting $HISTFILE",
+            p
+        );
     }
 }
 fn is_dir(p: PathBuf) -> Result<PathBuf> {
@@ -111,9 +115,9 @@ fn is_dir(p: PathBuf) -> Result<PathBuf> {
         Ok(p)
     } else {
         bail!(
-            "Could not find history directory {:?}. Try setting $HISTFILE",
+            "Could not find history directory {:?}. Try setting and exporting $HISTFILE",
             p
-        )
+        );
     }
 }
 

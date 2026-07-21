@@ -1,12 +1,46 @@
 # Source this in your ~/.config/nushell/config.nu
-$env.ATUIN_SESSION = (atuin uuid)
+# minimum supported version = 0.93.0
+module compat {
+  export def --wrapped "random uuid -v 7" [...rest] { atuin uuid }
+}
+use (if not (
+    (version).major > 0 or
+    (version).minor >= 103
+) { "compat" }) *
+
+if 'ATUIN_SESSION' not-in $env or ('ATUIN_SHLVL' not-in $env) or ($env.ATUIN_SHLVL != ($env.SHLVL? | default "")) {
+    $env.ATUIN_SESSION = (random uuid -v 7 | str replace -a "-" "")
+    $env.ATUIN_SHLVL = ($env.SHLVL? | default "")
+}
 hide-env -i ATUIN_HISTORY_ID
+
+def _atuin_osc133_command_executed [] {
+    if 'ATUIN_PTY_PROXY_ACTIVE' not-in $env {
+        return
+    }
+    if 'ATUIN_HISTORY_ID' not-in $env or ($env.ATUIN_HISTORY_ID | is-empty) {
+        return
+    }
+
+    print -n $"(char -u '1b')]133;C(char bel)"
+}
+
+def _atuin_osc133_command_finished [exit_code: int] {
+    if 'ATUIN_PTY_PROXY_ACTIVE' not-in $env {
+        return
+    }
+    if 'ATUIN_HISTORY_ID' not-in $env or ($env.ATUIN_HISTORY_ID | is-empty) {
+        return
+    }
+
+    print -n $"(char -u '1b')]133;D;($exit_code);history_id=($env.ATUIN_HISTORY_ID);session_id=($env.ATUIN_SESSION)(char bel)"
+}
 
 # Magic token to make sure we don't record commands run by keybindings
 let ATUIN_KEYBINDING_TOKEN = $"# (random uuid)"
 
 let _atuin_pre_execution = {||
-    if ($nu | get -i history-enabled) == false {
+    if ($nu | get history-enabled?) == false {
         return
     }
     let cmd = (commandline)
@@ -14,7 +48,10 @@ let _atuin_pre_execution = {||
         return
     }
     if not ($cmd | str starts-with $ATUIN_KEYBINDING_TOKEN) {
-        $env.ATUIN_HISTORY_ID = (atuin history start -- $cmd)
+        $env.ATUIN_HISTORY_ID = (with-env { ATUIN_SHELL: nu } {
+            atuin history start --hook -- $cmd | complete | get stdout | str trim
+        })
+        _atuin_osc133_command_executed
     }
 }
 
@@ -23,36 +60,49 @@ let _atuin_pre_prompt = {||
     if 'ATUIN_HISTORY_ID' not-in $env {
         return
     }
-    with-env { ATUIN_LOG: error } {
-        do { atuin history end $'--exit=($last_exit)' -- $env.ATUIN_HISTORY_ID } | complete
-
+    _atuin_osc133_command_finished $last_exit
+    if (version).minor >= 104 or (version).major > 0 {
+        job spawn {
+            ^atuin history end --hook $'--exit=($env.LAST_EXIT_CODE)' -- $env.ATUIN_HISTORY_ID | complete
+        } | ignore
+    } else {
+        do { atuin history end --hook $'--exit=($last_exit)' -- $env.ATUIN_HISTORY_ID } | complete
     }
-    hide-env ATUIN_HISTORY_ID
+    hide-env -i ATUIN_HISTORY_ID
 }
 
 def _atuin_search_cmd [...flags: string] {
-    let nu_version = do {
-        let version = version
-        let major = $version.major?
-        if $major != null {
-            # These members are only available in versions > 0.92.2
-            [$major $version.minor $version.patch]
-        } else {
-            # So fall back to the slower parsing when they're missing
-            $version.version | split row '.' | into int
-        }
-    }
-    [
-        $ATUIN_KEYBINDING_TOKEN,
-        ([
-            `with-env { ATUIN_LOG: error, ATUIN_QUERY: (commandline) } {`,
-                (if $nu_version.0 <= 0 and $nu_version.1 <= 90 { 'commandline' } else { 'commandline edit' }),
-                (if $nu_version.1 >= 92 { '(run-external atuin search' } else { '(run-external --redirect-stderr atuin search' }),
-                    ($flags | append [--interactive] | each {|e| $'"($e)"'}),
-                (if $nu_version.1 >= 92 { ' e>| str trim)' } else {' | complete | $in.stderr | str substring ..-1)'}),
-            `}`,
-        ] | flatten | str join ' '),
-    ] | str join "\n"
+    if (version).minor >= 106 or (version).major > 0 {
+        [
+            $ATUIN_KEYBINDING_TOKEN,
+            ([
+                `with-env { ATUIN_QUERY: (commandline), ATUIN_SHELL: nu } {`,
+                    ([
+                        'let output = (run-external atuin search',
+                        ($flags | append [--interactive] | each {|e| $'"($e)"'}),
+                        'e>| str trim)',
+                    ] | flatten | str join ' '),
+                    'if ($output | str starts-with "__atuin_accept__:") {',
+                    'commandline edit --accept ($output | str replace "__atuin_accept__:" "")',
+                    '} else {',
+                    'commandline edit $output',
+                    '}',
+                `}`,
+            ] | flatten | str join "\n"),
+        ]
+    } else {
+        [
+            $ATUIN_KEYBINDING_TOKEN,
+            ([
+                `with-env { ATUIN_QUERY: (commandline) } {`,
+                    'commandline edit',
+                    '(run-external atuin search',
+                        ($flags | append [--interactive] | each {|e| $'"($e)"'}),
+                    ' e>| str trim)',
+                `}`,
+            ] | flatten | str join ' '),
+        ]
+    } | str join "\n"
 }
 
 $env.config = ($env | default {} config).config
@@ -61,9 +111,9 @@ $env.config = (
     $env.config | upsert hooks (
         $env.config.hooks
         | upsert pre_execution (
-            $env.config.hooks | get -i pre_execution | default [] | append $_atuin_pre_execution)
+            $env.config.hooks | get pre_execution? | default [] | append $_atuin_pre_execution)
         | upsert pre_prompt (
-            $env.config.hooks | get -i pre_prompt | default [] | append $_atuin_pre_prompt)
+            $env.config.hooks | get pre_prompt? | default [] | append $_atuin_pre_prompt)
     )
 )
 

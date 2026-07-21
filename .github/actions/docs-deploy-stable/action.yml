@@ -1,0 +1,35 @@
+name: Deploy stable release docs
+description: >-
+  Publish X.Y docs for a stable X.Y.Z release, move the `latest` alias and
+  site default to it, and prune every prerelease preview the release
+  supersedes.
+
+inputs:
+  version:
+    description: Stable version to deploy (X.Y.Z; a leading `v` is stripped).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Deploy release docs
+      shell: bash
+      working-directory: docs
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        VERSION=$(uv run python scripts/parse_version.py --require stable "$VERSION")
+
+        MINOR="${VERSION%.*}"
+        echo "Deploying release docs: version=$MINOR alias=latest (from $VERSION)"
+        uv run mike deploy --push --update-aliases "$MINOR" latest
+        uv run mike set-default --push latest
+
+        # Prune every prerelease preview whose base version is <= this
+        # release (the corresponding release, or a later one, has landed).
+        STALE=$(uv run mike list --json | uv run python scripts/filter_dead_vers.py "$VERSION")
+        if [ -n "$STALE" ]; then
+          echo "Pruning superseded prerelease docs:" $STALE
+          uv run mike delete --push $STALE
+        fi

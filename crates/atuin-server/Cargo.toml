@@ -10,28 +10,34 @@ license = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 
+[lib]
+name = "atuin_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "atuin-server"
+path = "src/bin/main.rs"
+
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.5.0-beta.2" }
-atuin-server-database = { path = "../atuin-server-database", version = "18.5.0-beta.2" }
+atuin-common = { workspace = true }
+atuin-server-database = { workspace = true }
+atuin-server-postgres = { workspace = true }
+atuin-server-sqlite = { workspace = true }
 
 tracing = { workspace = true }
-time = { workspace = true }
 eyre = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true }
-async-trait = { workspace = true }
-axum = "0.7"
-axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+axum = "0.8"
 fs-err = { workspace = true }
 tower = { workspace = true }
 tower-http = { version = "0.6", features = ["trace"] }
 reqwest = { workspace = true }
-rustls = { version = "0.23", features = ["ring"], default-features = false }
+url = { workspace = true }
 argon2 = "0.5"
-semver = { workspace = true }
-metrics-exporter-prometheus = "0.12.1"
-metrics = "0.21.1"
-postmark = {version= "0.10.2", features=["reqwest", "reqwest-rustls-tls"]}
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
+metrics = "0.24"
+clap = { workspace = true }
+tracing-subscriber = { workspace = true }

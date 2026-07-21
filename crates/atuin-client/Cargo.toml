@@ -2,6 +2,7 @@
 name = "atuin-client"
 edition = "2024"
 description = "client library for atuin"
+autobenches = false
 
 rust-version = { workspace = true }
 version = { workspace = true }
@@ -13,15 +14,15 @@ repository = { workspace = true }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["sync", "daemon"]
-sync = ["urlencoding", "reqwest", "sha2", "hex"]
+default = ["sync", "hub", "daemon"]
+sync = ["reqwest"]
+hub = ["reqwest"]
 daemon = []
 check-update = []
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.5.0-beta.2" }
-
-log = { workspace = true }
+derive_more = { workspace = true }
+tracing = { workspace = true }
 base64 = { workspace = true }
 time = { workspace = true, features = ["macros", "formatting", "parsing"] }
 clap = { workspace = true }
@@ -33,17 +34,18 @@ interim = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+url = { workspace = true }
 humantime = "2.1.0"
 async-trait = { workspace = true }
 itertools = { workspace = true }
 rand = { workspace = true }
-shellexpand = "3"
+shellexpand = { workspace = true }
 sqlx = { workspace = true, features = ["sqlite", "regexp"] }
-minspan = "0.1.1"
-regex = "1.10.5"
+minspan = "0.1.5"
+regex = { workspace = true }
 serde_regex = "1.1.0"
 fs-err = { workspace = true }
-sql-builder = "3"
+sql-builder = { workspace = true }
 memchr = "2.7"
 rmp = { version = "0.8.14" }
 typed-builder = { workspace = true }
@@ -51,30 +53,46 @@ tokio = { workspace = true }
 semver = { workspace = true }
 thiserror = { workspace = true }
 futures = "0.3"
+notify = "7"
 crypto_secretbox = "0.1.1"
-generic-array = { version = "0.14", features = ["serde"] }
 serde_with = "3.8.1"
 
 # encryption
-rusty_paseto = { version = "0.7.0", default-features = false }
-rusty_paserk = { version = "0.4.0", default-features = false, features = ["v4", "serde"] }
+rusty_paseto = { version = "0.8.0", default-features = false }
+rusty_paserk = { version = "0.5.0", default-features = false, features = [
+  "v4",
+  "serde",
+] }
 
 # sync
-urlencoding = { version = "2.1.0", optional = true }
 reqwest = { workspace = true, optional = true }
-hex = { version = "0.4", optional = true }
-sha2 = { version = "0.10", optional = true }
-indicatif = "0.17.7"
-tiny-bip39 = "=1.0.0"
+indicatif = "0.18.0"
+tiny-bip39 = "2.0.0"
 
 # theme
-crossterm = { version = "0.28.1", features = ["serde"] }
+crossterm = { workspace = true, features = ["serde"] }
 palette = { version = "0.7.5", features = ["serializing"] }
-lazy_static = "1.4.0"
-strum_macros = "0.26.3"
-strum = { version = "0.26.2", features = ["strum_macros"] }
+strum_macros = "0.27"
+strum = { version = "0.27", features = ["strum_macros"] }
+
+[dependencies.atuin-common]
+path = "../atuin-common"
+version = "18.18.0-beta.1"
+features = ["tracing"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 pretty_assertions = { workspace = true }
-testing_logger = "0.1.1"
+rstest = { workspace = true }
+divan = "0.1.14"
+tempfile = "3"
+
+# This crate's tests require the `test-utils` feature in atuin-common.
+[dev-dependencies.atuin-common]
+path = "../atuin-common"
+version = "18.18.0-beta.1"
+features = ["test-utils"]
+
+[[bench]]
+name = "benchmarks"
+harness = false

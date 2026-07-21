@@ -8,6 +8,9 @@ message StartHistoryRequest {
   string cwd = 3;
   string session = 4;
   string hostname = 5;
+  string author = 6;
+  string intent = 7;
+  string shell = 8;
 }
 
 message EndHistoryRequest {
@@ -16,16 +19,76 @@ message EndHistoryRequest {
   uint64 duration = 3;
 }
 
+// Cancel an in-progress history entry without adding it to the database.
+message CancelHistoryRequest {
+  string id = 1;
+}
+
 message StartHistoryReply {
   string id = 1;
+  string version = 2;
+  uint32 protocol = 3;
 }
 
 message EndHistoryReply {
   string id = 1;
   uint64 idx = 2;
+  string version = 3;
+  uint32 protocol = 4;
+}
+
+message CancelHistoryReply {
+  string version = 1;
+  uint32 protocol = 2;
+}
+
+message StatusRequest {}
+
+message StatusReply {
+  bool healthy = 1;
+  string version = 2;
+  uint32 pid = 3;
+  uint32 protocol = 4;
+}
+
+message ShutdownRequest {}
+
+message ShutdownReply {
+  bool accepted = 1;
+}
+
+message TailHistoryRequest {}
+
+enum HistoryEventKind {
+  HISTORY_EVENT_KIND_UNSPECIFIED = 0;
+  HISTORY_EVENT_KIND_STARTED = 1;
+  HISTORY_EVENT_KIND_ENDED = 2;
+}
+
+message HistoryEntry {
+  uint64 timestamp = 1; // nanosecond unix epoch
+  string id = 2;
+  string command = 3;
+  string cwd = 4;
+  string session = 5;
+  string hostname = 6;
+  string author = 7;
+  string intent = 8;
+  int64 exit = 9;
+  int64 duration = 10;
+  string shell = 11;
+}
+
+message TailHistoryReply {
+  HistoryEventKind kind = 1;
+  HistoryEntry history = 2;
 }
 
 service History {
   rpc StartHistory(StartHistoryRequest) returns (StartHistoryReply);
   rpc EndHistory(EndHistoryRequest) returns (EndHistoryReply);
+  rpc CancelHistory(CancelHistoryRequest) returns (CancelHistoryReply);
+  rpc TailHistory(TailHistoryRequest) returns (stream TailHistoryReply);
+  rpc Status(StatusRequest) returns (StatusReply);
+  rpc Shutdown(ShutdownRequest) returns (ShutdownReply);
 }

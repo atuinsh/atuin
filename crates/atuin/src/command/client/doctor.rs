@@ -1,5 +1,6 @@
+use std::path::PathBuf;
 use std::process::Command;
-use std::{env, path::PathBuf, str::FromStr};
+use std::{env, str::FromStr};
 
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
@@ -167,18 +168,31 @@ impl ShellInfo {
             .collect()
     }
 
+    fn unknown() -> Self {
+        let name = Shell::Unknown.to_string();
+        let default = Shell::default_shell().unwrap_or(Shell::Unknown).to_string();
+        let preexec = Self::detect_preexec_framework(name.as_str());
+
+        Self {
+            name,
+            default,
+            plugins: Vec::new(),
+            preexec,
+        }
+    }
+
     pub fn new() -> Self {
         // TODO: rework to use atuin_common::Shell
 
         let sys = System::new_all();
 
-        let process = sys
-            .process(get_current_pid().expect("Failed to get current PID"))
-            .expect("Process with current pid does not exist");
+        let Some(process) = get_current_pid().ok().and_then(|pid| sys.process(pid)) else {
+            return Self::unknown();
+        };
 
-        let parent = sys
-            .process(process.parent().expect("Atuin running with no parent!"))
-            .expect("Process with parent pid does not exist");
+        let Some(parent) = process.parent().and_then(|pid| sys.process(pid)) else {
+            return Self::unknown();
+        };
 
         let name = shell_name(Some(parent));
 
@@ -236,32 +250,57 @@ impl SystemInfo {
 
 #[derive(Debug, Serialize)]
 struct SyncInfo {
-    /// Whether the main Atuin sync server is in use
-    /// I'm just calling it Atuin Cloud for lack of a better name atm
-    pub cloud: bool,
-    pub records: bool,
+    pub auth_state: String,
     pub auto_sync: bool,
 
     pub last_sync: String,
 }
 
 impl SyncInfo {
-    pub fn new(settings: &Settings) -> Self {
+    pub async fn new(settings: &Settings) -> Self {
+        // Build auth state description from raw token state without calling
+        // resolve_sync_auth(), which has side effects (token migration cleanup)
+        // that a diagnostic command should not trigger.
+        let meta = Settings::meta_store().await.ok();
+        let has_hub_token = match &meta {
+            Some(m) => m
+                .hub_session_token()
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|t| t.starts_with("atapi_")),
+            None => false,
+        };
+        let has_cli_token = match &meta {
+            Some(m) => m.session_token().await.ok().flatten().is_some(),
+            None => false,
+        };
+
+        let auth_state = if has_hub_token {
+            "Hub (authenticated)".into()
+        } else if settings.is_hub_sync() && has_cli_token {
+            "Hub (legacy token \u{2014} run 'atuin login' to upgrade)".into()
+        } else if !settings.is_hub_sync() && has_cli_token {
+            "Self-hosted (authenticated)".into()
+        } else {
+            "Not authenticated".into()
+        };
+
         Self {
-            cloud: settings.sync_address == "https://api.atuin.sh",
+            auth_state,
             auto_sync: settings.auto_sync,
-            records: settings.sync.records,
-            last_sync: Settings::last_sync().map_or("no last sync".to_string(), |v| v.to_string()),
+            last_sync: Settings::last_sync()
+                .await
+                .map_or_else(|_| "no last sync".to_string(), |v| v.to_string()),
         }
     }
 }
 
 #[derive(Debug)]
 struct SettingPaths {
-    db: String,
-    record_store: String,
-    key: String,
-    session: String,
+    db: PathBuf,
+    record_store: PathBuf,
+    key: PathBuf,
 }
 
 impl SettingPaths {
@@ -270,7 +309,6 @@ impl SettingPaths {
             db: settings.db_path.clone(),
             record_store: settings.record_store_path.clone(),
             key: settings.key_path.clone(),
-            session: settings.session_path.clone(),
         }
     }
 
@@ -279,13 +317,13 @@ impl SettingPaths {
             ("ATUIN_DB_PATH", &self.db),
             ("ATUIN_RECORD_STORE", &self.record_store),
             ("ATUIN_KEY", &self.key),
-            ("ATUIN_SESSION", &self.session),
         ];
 
         for (path_env_var, path) in paths {
-            if utils::broken_symlink(path) {
+            if utils::broken_symlink(path.as_path()) {
                 eprintln!(
-                    "{path} (${path_env_var}) is a broken symlink. This may cause issues with Atuin."
+                    "{} (${path_env_var}) is a broken symlink. This may cause issues with Atuin.",
+                    path.display()
                 );
             }
         }
@@ -295,6 +333,7 @@ impl SettingPaths {
 #[derive(Debug, Serialize)]
 struct AtuinInfo {
     pub version: String,
+    pub commit: String,
 
     /// Whether the main Atuin sync server is in use
     /// I'm just calling it Atuin Cloud for lack of a better name atm
@@ -304,15 +343,16 @@ struct AtuinInfo {
 
     #[serde(skip)] // probably unnecessary to expose this
     pub setting_paths: SettingPaths,
+
+    pub daemon_enabled: bool,
 }
 
 impl AtuinInfo {
     pub async fn new(settings: &Settings) -> Self {
-        let session_path = settings.session_path.as_str();
-        let logged_in = PathBuf::from(session_path).exists();
+        let logged_in = settings.logged_in().await.unwrap_or(false);
 
         let sync = if logged_in {
-            Some(SyncInfo::new(settings))
+            Some(SyncInfo::new(settings).await)
         } else {
             None
         };
@@ -327,9 +367,11 @@ impl AtuinInfo {
 
         Self {
             version: crate::VERSION.to_string(),
+            commit: crate::SHA.to_string(),
             sync,
             sqlite_version,
             setting_paths: SettingPaths::new(settings),
+            daemon_enabled: cfg!(feature = "daemon") && settings.daemon.enabled,
         }
     }
 }
@@ -355,8 +397,13 @@ fn checks(info: &DoctorDump) {
     println!(); // spacing
     //
     let zfs_error = "[Filesystem] ZFS is known to have some issues with SQLite. Atuin uses SQLite heavily. If you are having poor performance, there are some workarounds here: https://github.com/atuinsh/atuin/issues/952".bold().red();
-    let bash_plugin_error = "[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh be installed. An older ble.sh may not be detected. so ignore this if you have it set up! Read more here: https://docs.atuin.sh/guide/installation/#bash".bold().red();
+    let bash_plugin_error = "[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh (>= 0.4) be installed. An older ble.sh may not be detected. so ignore this if you have ble.sh >= 0.4 set up! Read more here: https://docs.atuin.sh/guide/installation/#bash".bold().red();
     let blesh_integration_error = "[Shell] Atuin and ble.sh seem to be loaded in the session, but the integration does not seem to be working. Please check the setup in .bashrc.".bold().red();
+    let openbsd_warning = "[System] OpenBSD is not officially supported.".bold().red();
+
+    if cfg!(target_os = "openbsd") {
+        println!("{openbsd_warning}");
+    }
 
     // ZFS: https://github.com/atuinsh/atuin/issues/952
     if info.system.disks.iter().any(|d| d.filesystem == "zfs") {

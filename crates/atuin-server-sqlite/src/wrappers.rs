@@ -1,0 +1,54 @@
+use ::sqlx::{FromRow, Result};
+use atuin_common::record::{EncryptedData, Host, Record};
+use atuin_server_database::models::{Session, User};
+use sqlx::{Row, sqlite::SqliteRow};
+
+#[derive(derive_more::Into)]
+pub struct DbUser(pub User);
+#[derive(derive_more::Into)]
+pub struct DbSession(pub Session);
+#[derive(derive_more::Into)]
+pub struct DbRecord(pub Record<EncryptedData>);
+
+impl<'a> FromRow<'a, SqliteRow> for DbUser {
+    fn from_row(row: &'a SqliteRow) -> Result<Self> {
+        Ok(Self(User {
+            id: row.try_get("id")?,
+            username: row.try_get("username")?,
+            email: row.try_get("email")?,
+            password: row.try_get("password")?,
+        }))
+    }
+}
+
+impl<'a> ::sqlx::FromRow<'a, SqliteRow> for DbSession {
+    fn from_row(row: &'a SqliteRow) -> ::sqlx::Result<Self> {
+        Ok(Self(Session {
+            id: row.try_get("id")?,
+            user_id: row.try_get("user_id")?,
+            token: row.try_get("token")?,
+        }))
+    }
+}
+
+impl<'a> ::sqlx::FromRow<'a, SqliteRow> for DbRecord {
+    fn from_row(row: &'a SqliteRow) -> ::sqlx::Result<Self> {
+        let idx: i64 = row.try_get("idx")?;
+        let timestamp: i64 = row.try_get("timestamp")?;
+
+        let data = EncryptedData {
+            data: row.try_get("data")?,
+            content_encryption_key: row.try_get("cek")?,
+        };
+
+        Ok(Self(Record {
+            id: row.try_get("client_id")?,
+            host: Host::new(row.try_get("host")?),
+            idx: idx as u64,
+            timestamp: timestamp as u64,
+            version: row.try_get("version")?,
+            tag: row.try_get("tag")?,
+            data,
+        }))
+    }
+}

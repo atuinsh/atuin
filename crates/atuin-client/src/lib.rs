@@ -1,23 +1,30 @@
 #![deny(unsafe_code)]
 
 #[macro_use]
-extern crate log;
+extern crate tracing;
 
 #[cfg(feature = "sync")]
 pub mod api_client;
 #[cfg(feature = "sync")]
-pub mod sync;
+pub mod auth;
+#[cfg(feature = "hub")]
+pub mod hub;
+#[cfg(feature = "sync")]
+pub mod login;
+#[cfg(feature = "sync")]
+pub mod register;
 
 pub mod database;
+pub mod distro;
 pub mod encryption;
 pub mod history;
 pub mod import;
-pub mod kv;
-pub mod login;
 pub mod logout;
+pub mod logs;
+pub mod meta;
 pub mod ordering;
+pub mod plugin;
 pub mod record;
-pub mod register;
 pub mod secrets;
 pub mod settings;
 pub mod theme;

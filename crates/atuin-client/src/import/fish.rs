@@ -17,7 +17,7 @@ pub struct Fish {
     bytes: Vec<u8>,
 }
 
-/// see https://fishshell.com/docs/current/interactive.html#searchable-command-history
+/// see <https://fishshell.com/docs/current/interactive.html#searchable-command-history>
 fn default_histpath() -> Result<PathBuf> {
     let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
     let data = std::env::var("XDG_DATA_HOME").map_or_else(
@@ -62,6 +62,17 @@ impl Importer for Fish {
         let mut time: Option<OffsetDateTime> = None;
         let mut cmd: Option<String> = None;
 
+        let mut process_cmd = async |cmd: &mut Option<String>, time: Option<OffsetDateTime>| {
+            let Some(cmd) = cmd.take() else {
+                return Ok(());
+            };
+
+            let time = time.unwrap_or(now);
+            let entry = History::import().shell("fish").timestamp(time).command(cmd);
+
+            loader.push(entry.build().into()).await
+        };
+
         for b in unix_byte_lines(&self.bytes) {
             let s = match std::str::from_utf8(b) {
                 Ok(s) => s,
@@ -70,12 +81,7 @@ impl Importer for Fish {
 
             if let Some(c) = s.strip_prefix("- cmd: ") {
                 // first, we must deal with the prev cmd
-                if let Some(cmd) = cmd.take() {
-                    let time = time.unwrap_or(now);
-                    let entry = History::import().timestamp(time).command(cmd);
-
-                    loader.push(entry.build().into()).await?;
-                }
+                process_cmd(&mut cmd, time).await?;
 
                 // using raw strings to avoid needing escaping.
                 // replaces double backslashes with single backslashes
@@ -96,13 +102,7 @@ impl Importer for Fish {
         }
 
         // we might have a trailing cmd
-        if let Some(cmd) = cmd.take() {
-            let time = time.unwrap_or(now);
-            let entry = History::import().timestamp(time).command(cmd);
-
-            loader.push(entry.build().into()).await?;
-        }
-
+        process_cmd(&mut cmd, time).await?;
         Ok(())
     }
 }

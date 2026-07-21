@@ -82,7 +82,7 @@ impl AliasRecord {
                             decode::read_str_from_slice(bytes).map_err(error_report)?;
 
                         if !bytes.is_empty() {
-                            bail!("trailing bytes in encoded shell alias record. malformed")
+                            bail!("trailing bytes in encoded shell alias record. malformed");
                         }
 
                         Ok(AliasRecord::Create(Alias {
@@ -105,19 +105,19 @@ impl AliasRecord {
                             decode::read_str_from_slice(bytes).map_err(error_report)?;
 
                         if !bytes.is_empty() {
-                            bail!("trailing bytes in encoded shell alias record. malformed")
+                            bail!("trailing bytes in encoded shell alias record. malformed");
                         }
 
                         Ok(AliasRecord::Delete(key.to_owned()))
                     }
 
                     n => {
-                        bail!("unknown AliasRecord type {n}")
+                        bail!("unknown AliasRecord type {n}");
                     }
                 }
             }
             _ => {
-                bail!("unknown version {version:?}")
+                bail!("unknown version {version:?}");
             }
         }
     }
@@ -142,7 +142,20 @@ impl AliasStore {
 
     pub async fn posix(&self) -> Result<String> {
         let aliases = self.aliases().await?;
+        Ok(Self::format_posix(&aliases))
+    }
 
+    pub async fn xonsh(&self) -> Result<String> {
+        let aliases = self.aliases().await?;
+        Ok(Self::format_xonsh(&aliases))
+    }
+
+    pub async fn powershell(&self) -> Result<String> {
+        let aliases = self.aliases().await?;
+        Ok(Self::format_powershell(&aliases))
+    }
+
+    fn format_posix(aliases: &[Alias]) -> String {
         let mut config = String::new();
 
         for alias in aliases {
@@ -153,28 +166,39 @@ impl AliasStore {
             config.push_str(&format!("alias {}='{}'\n", alias.name, value));
         }
 
-        Ok(config)
+        config
     }
 
-    pub async fn xonsh(&self) -> Result<String> {
-        let aliases = self.aliases().await?;
-
+    fn format_xonsh(aliases: &[Alias]) -> String {
         let mut config = String::new();
 
         for alias in aliases {
             config.push_str(&format!("aliases['{}'] ='{}'\n", alias.name, alias.value));
         }
 
-        Ok(config)
+        config
+    }
+
+    fn format_powershell(aliases: &[Alias]) -> String {
+        let mut config = String::new();
+
+        for alias in aliases {
+            config.push_str(&crate::shell::powershell::format_alias(alias));
+        }
+
+        config
     }
 
     pub async fn build(&self) -> Result<()> {
         let dir = atuin_common::utils::dotfiles_cache_dir();
         tokio::fs::create_dir_all(dir.clone()).await?;
 
+        let aliases = self.aliases().await?;
+
         // Build for all supported shells
-        let posix = self.posix().await?;
-        let xonsh = self.xonsh().await?;
+        let posix = Self::format_posix(&aliases);
+        let xonsh = Self::format_xonsh(&aliases);
+        let powershell = Self::format_powershell(&aliases);
 
         // All the same contents, maybe optimize in the future or perhaps there will be quirks
         // per-shell
@@ -183,11 +207,13 @@ impl AliasStore {
         let bash = dir.join("aliases.bash");
         let fish = dir.join("aliases.fish");
         let xsh = dir.join("aliases.xsh");
+        let ps1 = dir.join("aliases.ps1");
 
         tokio::fs::write(zsh, &posix).await?;
         tokio::fs::write(bash, &posix).await?;
         tokio::fs::write(fish, &posix).await?;
         tokio::fs::write(xsh, &xonsh).await?;
+        tokio::fs::write(ps1, &powershell).await?;
 
         Ok(())
     }
@@ -272,16 +298,29 @@ impl AliasStore {
 
         // this is sorted, oldest to newest
         let tagged = self.store.all_tagged(CONFIG_SHELL_ALIAS_TAG).await?;
+        let mut skipped = 0;
 
         for record in tagged {
             let version = record.version.clone();
 
-            let decrypted = match version.as_str() {
-                CONFIG_SHELL_ALIAS_VERSION => record.decrypt::<PASETO_V4>(&self.encryption_key)?,
-                version => bail!("unknown version {version:?}"),
+            // Skip records we can't decrypt or decode, rather than failing the entire build.
+            let ar = match version.as_str() {
+                CONFIG_SHELL_ALIAS_VERSION => record
+                    .decrypt::<PASETO_V4>(&self.encryption_key)
+                    .and_then(|decrypted| {
+                        AliasRecord::deserialize(&decrypted.data, version.as_str())
+                    }),
+                version => Err(eyre!("unknown version {version:?}")),
             };
 
-            let ar = AliasRecord::deserialize(&decrypted.data, version.as_str())?;
+            let ar = match ar {
+                Ok(ar) => ar,
+                Err(e) => {
+                    tracing::warn!("failed to decode alias record, skipping: {e}");
+                    skipped += 1;
+                    continue;
+                }
+            };
 
             match ar {
                 AliasRecord::Create(a) => {
@@ -291,6 +330,13 @@ impl AliasStore {
                     build.remove(&d);
                 }
             }
+        }
+
+        if skipped > 0 {
+            // aliases() runs during shell init, so this must not write to stderr
+            tracing::warn!(
+                "skipped {skipped} alias records that could not be decrypted or decoded"
+            );
         }
 
         Ok(build.into_values().collect())
@@ -391,5 +437,50 @@ alias k='kubectl'
 alias kgap='kubectl get pods --all-namespaces'
 "
         )
+    }
+
+    #[tokio::test]
+    async fn build_aliases_skips_corrupt_records() {
+        use atuin_client::record::{encryption::PASETO_V4, store::Store};
+        use atuin_common::record::{DecryptedData, Host};
+
+        use super::CONFIG_SHELL_ALIAS_TAG;
+
+        let store = SqliteStore::new(":memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
+        let host_id = atuin_common::record::HostId(atuin_common::utils::uuid_v7());
+
+        let alias = AliasStore::new(store.clone(), host_id, key);
+
+        alias.set("k", "kubectl").await.unwrap();
+
+        // a record in the alias tag encrypted with a different key - the store is corrupt,
+        // or "mixed". it should be skipped, rather than breaking the build entirely.
+        let corrupt_key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
+        let corrupt = atuin_common::record::Record::builder()
+            .host(Host::new(host_id))
+            .version(CONFIG_SHELL_ALIAS_VERSION.to_string())
+            .tag(CONFIG_SHELL_ALIAS_TAG.to_string())
+            .idx(1)
+            .data(DecryptedData(vec![1, 2, 3]))
+            .build();
+
+        store
+            .push(&corrupt.encrypt::<PASETO_V4>(&corrupt_key))
+            .await
+            .unwrap();
+
+        let aliases = alias.aliases().await.unwrap();
+
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(
+            aliases[0],
+            Alias {
+                name: String::from("k"),
+                value: String::from("kubectl")
+            }
+        );
     }
 }

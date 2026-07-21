@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use atuin_common::api::LoginRequest;
 use eyre::{Context, Result, bail};
 use tokio::fs::File;
@@ -23,31 +21,22 @@ pub async fn login(
     let key = match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
         Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
         Err(err) => {
-            match err.downcast_ref::<bip39::ErrorKind>() {
-                Some(err) => {
-                    match err {
-                        // assume they copied in the base64 key
-                        bip39::ErrorKind::InvalidWord => key,
-                        bip39::ErrorKind::InvalidChecksum => {
-                            bail!("key mnemonic was not valid")
-                        }
-                        bip39::ErrorKind::InvalidKeysize(_)
-                        | bip39::ErrorKind::InvalidWordLength(_)
-                        | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
-                            bail!("key was not the correct length")
-                        }
-                    }
+            match err {
+                // assume they copied in the base64 key
+                bip39::ErrorKind::InvalidWord(_) => key,
+                bip39::ErrorKind::InvalidChecksum => {
+                    bail!("key mnemonic was not valid");
                 }
-                _ => {
-                    // unknown error. assume they copied the base64 key
-                    key
+                bip39::ErrorKind::InvalidKeysize(_)
+                | bip39::ErrorKind::InvalidWordLength(_)
+                | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
+                    bail!("key was not the correct length");
                 }
             }
         }
     };
 
-    let key_path = settings.key_path.as_str();
-    let key_path = PathBuf::from(key_path);
+    let key_path = &settings.key_path;
 
     if !key_path.exists() {
         if decode_key(key.clone()).is_err() {
@@ -80,15 +69,13 @@ pub async fn login(
         }
     }
 
-    let session = api_client::login(
-        settings.sync_address.as_str(),
-        LoginRequest { username, password },
-    )
-    .await?;
+    let session =
+        api_client::login(&settings.sync_address, LoginRequest { username, password }).await?;
 
-    let session_path = settings.session_path.as_str();
-    let mut file = File::create(session_path).await?;
-    file.write_all(session.session.as_bytes()).await?;
+    Settings::meta_store()
+        .await?
+        .save_session(&session.session)
+        .await?;
 
     Ok(session.session)
 }

@@ -31,6 +31,7 @@ impl From<HistDbEntry> for History {
         let ts_secs = histdb_item.start_timestamp / 1000;
         let ts_ns = (histdb_item.start_timestamp % 1000) * 1_000_000;
         let imported = History::import()
+            .shell("nu")
             .timestamp(
                 OffsetDateTime::from_unix_timestamp(ts_secs).unwrap()
                     + Duration::nanoseconds(ts_ns),

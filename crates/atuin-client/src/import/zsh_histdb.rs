@@ -157,6 +157,7 @@ impl Importer for ZshHistDb {
             let session = session_map.entry(entry.session).or_insert_with(uuid_v7);
 
             let imported = History::import()
+                .shell("zsh")
                 .timestamp(entry.start_time.assume_utc())
                 .command(command)
                 .cwd(cwd)

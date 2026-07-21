@@ -23,8 +23,9 @@ pub fn setup_metrics_recorder() -> PrometheusHandle {
 }
 
 /// Middleware to record some common HTTP metrics
-/// Generic over B to allow for arbitrary body types (eg Vec<u8>, Streams, a deserialized thing, etc)
-/// Someday tower-http might provide a metrics middleware: https://github.com/tower-rs/tower-http/issues/57
+///
+/// Generic over B to allow for arbitrary body types (eg `Vec<u8>`, `Stream`s, a deserialized thing, etc).
+/// Someday tower-http might provide a metrics middleware: <https://github.com/tower-rs/tower-http/issues/57>
 pub async fn track_metrics(req: Request, next: Next) -> impl IntoResponse {
     let start = Instant::now();
 
@@ -48,8 +49,8 @@ pub async fn track_metrics(req: Request, next: Next) -> impl IntoResponse {
         ("status", status),
     ];
 
-    metrics::increment_counter!("http_requests_total", &labels);
-    metrics::histogram!("http_requests_duration_seconds", latency, &labels);
+    metrics::counter!("http_requests_total", &labels).increment(1);
+    metrics::histogram!("http_requests_duration_seconds", &labels).record(latency);
 
     response
 }

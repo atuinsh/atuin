@@ -19,20 +19,14 @@
   <a href="https://discord.gg/Fq8bJSKPHh"><img src="https://img.shields.io/discord/954121165239115808" /></a>
   <a rel="me" href="https://hachyderm.io/@atuin"><img src="https://img.shields.io/mastodon/follow/109944632283122560?domain=https%3A%2F%2Fhachyderm.io&style=social"/></a>
   <a href="https://twitter.com/atuinsh"><img src="https://img.shields.io/twitter/follow/atuinsh?style=social" /></a>
-  <a href="https://actuated.dev/"><img alt="Arm CI sponsored by Actuated" src="https://docs.actuated.dev/images/actuated-badge.png" width="120px"></img></a>
 </p>
 
-
 [English] | [简体中文]
-
 
 Atuin replaces your existing shell history with a SQLite database, and records
 additional context for your commands. Additionally, it provides optional and
 _fully encrypted_ synchronisation of your history between machines, via an Atuin
 server.
-
-
-
 
 <p align="center">
   <img src="demo.gif" alt="animated" width="80%" />
@@ -41,10 +35,6 @@ server.
 <p align="center">
 <em>exit code, duration, time and command shown</em>
 </p>
-
-
-
-
 
 As well as the search UI, it can do things like this:
 
@@ -77,6 +67,7 @@ I wanted to. And I **really** don't want to.
 - [Setting up sync](https://docs.atuin.sh/guide/sync/)
 - [Import history](https://docs.atuin.sh/guide/import/)
 - [Basic usage](https://docs.atuin.sh/guide/basic-usage/)
+
 ## Supported Shells
 
 - zsh
@@ -84,12 +75,17 @@ I wanted to. And I **really** don't want to.
 - fish
 - nushell
 - xonsh
+- powershell (tier 2 support)
 
 ## Community
 
 ### Forum
 
-Atuin has a community forum, please ask here for help and support: https://forum.atuin.sh/
+Atuin has a community forum, please ask here for help and support: <https://forum.atuin.sh/>
+
+### IRC
+
+We're also available via #atuin on libera.chat
 
 ### Discord
 
@@ -99,7 +95,7 @@ Atuin also has a community Discord, available [here](https://discord.gg/jR3tfchV
 
 This will sign you up for the Atuin Cloud sync server. Everything is end-to-end encrypted, so your secrets are safe!
 
-Read more in the [docs](https://docs.atuin.sh) for an offline setup, self hosted server, and more.
+Read the [docs](https://docs.atuin.sh) for an offline setup, self-hosted server, and more.
 
 ```
 curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
@@ -114,13 +110,20 @@ Then restart your shell!
 > [!NOTE]
 >
 > **For Bash users**: The above sets up `bash-preexec` for necessary hooks, but
-> `bash-preexec` has limitations.  For details, please see the
+> `bash-preexec` has limitations. For details, please see the
 > [Bash](https://docs.atuin.sh/guide/installation/#installing-the-shell-plugin)
 > section of the shell plugin documentation.
 
 # Security
 
-If you find any security issues, we'd appreciate it if you could alert ellie@atuin.sh
+If you find any security issues, we'd appreciate it if you could alert <ellie@atuin.sh>
+
+# Related projects
+- [Catpuccin for Atuin](https://github.com/catppuccin/atuin)
+- [eshell-atuin](https://github.com/SqrtMinusOne/eshell-atuin)
+- [mob (tiny creatures in your terminal)](https://github.com/bboynton97/mob)
+
+Please open a PR for any others!
 
 # Contributors
 
@@ -131,4 +134,4 @@ If you find any security issues, we'd appreciate it if you could alert ellie@atu
 Made with [contrib.rocks](https://contrib.rocks).
 
 [English]: ./README.md
-[简体中文]: ./docs/zh-CN/README.md
+[简体中文]: ./docs-i18n/zh-CN/README.md

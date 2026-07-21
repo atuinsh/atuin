@@ -10,16 +10,16 @@ homepage = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.5.0-beta.2" }
-atuin-server-database = { path = "../atuin-server-database", version = "18.5.0-beta.2" }
+atuin-common = { path = "../atuin-common", version = "18.18.0-beta.1" }
+atuin-server-database = { path = "../atuin-server-database", version = "18.18.0-beta.1" }
+derive_more = { workspace = true }
 
 eyre = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
 serde = { workspace = true }
-sqlx = { workspace = true }
+sqlx = { workspace = true, features = ["postgres", "tls-rustls"] }
 async-trait = { workspace = true }
 uuid = { workspace = true }
-metrics = "0.21.1"
-futures-util = "0.3"
-url = "2.5.2"
+metrics = "0.24"
+rand.workspace = true

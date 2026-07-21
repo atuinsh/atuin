@@ -14,8 +14,12 @@ macro_rules! new_uuid {
             Ord,
             serde::Serialize,
             serde::Deserialize,
+            derive_more::Display,
+            derive_more::From,
+            derive_more::Deref,
         )]
         #[serde(transparent)]
+        #[display("{_0}")]
         pub struct $name(pub Uuid);
 
         impl<DB: sqlx::Database> sqlx::Type<DB> for $name
@@ -44,8 +48,8 @@ macro_rules! new_uuid {
         {
             fn encode_by_ref(
                 &self,
-                buf: &mut DB::ArgumentBuffer<'q>,
-            ) -> Result<sqlx::encode::IsNull, Box<(dyn std::error::Error + Send + Sync + 'static)>>
+                buf: &mut DB::ArgumentBuffer,
+            ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync + 'static>>
             {
                 self.0.encode_by_ref(buf)
             }
@@ -53,7 +57,16 @@ macro_rules! new_uuid {
     };
 }
 
+#[cfg(feature = "ansi")]
+pub mod ansi;
 pub mod api;
+pub mod logs;
+pub mod path;
 pub mod record;
 pub mod shell;
+pub mod string;
+#[cfg(feature = "test-utils")]
+pub mod test_utils;
+pub mod tls;
+pub mod url;
 pub mod utils;

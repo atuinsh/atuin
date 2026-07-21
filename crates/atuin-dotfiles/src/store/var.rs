@@ -80,19 +80,19 @@ impl VarRecord {
                             decode::read_str_from_slice(bytes).map_err(error_report)?;
 
                         if !bytes.is_empty() {
-                            bail!("trailing bytes in encoded dotfiles var record. malformed")
+                            bail!("trailing bytes in encoded dotfiles var record. malformed");
                         }
 
                         Ok(VarRecord::Delete(key.to_owned()))
                     }
 
                     n => {
-                        bail!("unknown Dotfiles var record type {n}")
+                        bail!("unknown Dotfiles var record type {n}");
                     }
                 }
             }
             _ => {
-                bail!("unknown version {version:?}")
+                bail!("unknown version {version:?}");
             }
         }
     }
@@ -115,54 +115,136 @@ impl VarStore {
         }
     }
 
+    /// Escape a value for use in POSIX shells (bash, zsh)
+    /// This adds double quotes around the value and escapes any embedded double quotes
+    fn escape_posix_value(value: &str) -> String {
+        // If the value contains no special characters, we can use it unquoted
+        if value
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '/' || c == '.')
+        {
+            value.to_string()
+        } else {
+            // Otherwise, wrap in double quotes and escape any special characters
+            format!(
+                "\"{}\"",
+                value
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('$', "\\$")
+                    .replace('`', "\\`")
+            )
+        }
+    }
+
+    /// Escape a value for use in fish shell
+    /// Fish uses single quotes for literal strings, but we need to handle embedded single quotes
+    fn escape_fish_value(value: &str) -> String {
+        // If the value contains no special characters, we can use it unquoted
+        if value
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '/' || c == '.')
+        {
+            value.to_string()
+        } else {
+            // Use single quotes and escape any embedded single quotes
+            format!("'{}'", value.replace('\'', "\\'"))
+        }
+    }
+
+    /// Escape a value for use in xonsh
+    /// Xonsh uses Python-style string literals
+    fn escape_xonsh_value(value: &str) -> String {
+        // If the value contains no special characters, we can use it unquoted
+        if value
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '/' || c == '.')
+        {
+            value.to_string()
+        } else {
+            // Use double quotes and escape appropriately for Python strings
+            format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+        }
+    }
+
     pub async fn xonsh(&self) -> Result<String> {
         let env = self.vars().await?;
-
-        let mut config = String::new();
-
-        for env in env {
-            config.push_str(&format!("${}={}\n", env.name, env.value));
-        }
-
-        Ok(config)
+        Ok(Self::format_xonsh(&env))
     }
 
     pub async fn fish(&self) -> Result<String> {
         let env = self.vars().await?;
-
-        let mut config = String::new();
-
-        for env in env {
-            config.push_str(&format!("set -gx {} {}\n", env.name, env.value));
-        }
-
-        Ok(config)
+        Ok(Self::format_fish(&env))
     }
 
     pub async fn posix(&self) -> Result<String> {
         let env = self.vars().await?;
+        Ok(Self::format_posix(&env))
+    }
 
+    pub async fn powershell(&self) -> Result<String> {
+        let env = self.vars().await?;
+        Ok(Self::format_powershell(&env))
+    }
+
+    fn format_xonsh(env: &[Var]) -> String {
         let mut config = String::new();
 
         for env in env {
+            let escaped_value = Self::escape_xonsh_value(&env.value);
+            config.push_str(&format!("${}={}\n", env.name, escaped_value));
+        }
+
+        config
+    }
+
+    fn format_fish(env: &[Var]) -> String {
+        let mut config = String::new();
+
+        for env in env {
+            let escaped_value = Self::escape_fish_value(&env.value);
+            config.push_str(&format!("set -gx {} {}\n", env.name, escaped_value));
+        }
+
+        config
+    }
+
+    fn format_posix(env: &[Var]) -> String {
+        let mut config = String::new();
+
+        for env in env {
+            let escaped_value = Self::escape_posix_value(&env.value);
             if env.export {
-                config.push_str(&format!("export {}={}\n", env.name, env.value));
+                config.push_str(&format!("export {}={}\n", env.name, escaped_value));
             } else {
-                config.push_str(&format!("{}={}\n", env.name, env.value));
+                config.push_str(&format!("{}={}\n", env.name, escaped_value));
             }
         }
 
-        Ok(config)
+        config
+    }
+
+    fn format_powershell(env: &[Var]) -> String {
+        let mut config = String::new();
+
+        for var in env {
+            config.push_str(&crate::shell::powershell::format_var(var));
+        }
+
+        config
     }
 
     pub async fn build(&self) -> Result<()> {
         let dir = atuin_common::utils::dotfiles_cache_dir();
         tokio::fs::create_dir_all(dir.clone()).await?;
 
+        let env = self.vars().await?;
+
         // Build for all supported shells
-        let posix = self.posix().await?;
-        let xonsh = self.xonsh().await?;
-        let fsh = self.fish().await?;
+        let posix = Self::format_posix(&env);
+        let xonsh = Self::format_xonsh(&env);
+        let fsh = Self::format_fish(&env);
+        let powershell = Self::format_powershell(&env);
 
         // All the same contents, maybe optimize in the future or perhaps there will be quirks
         // per-shell
@@ -171,11 +253,13 @@ impl VarStore {
         let bash = dir.join("vars.bash");
         let fish = dir.join("vars.fish");
         let xsh = dir.join("vars.xsh");
+        let ps1 = dir.join("vars.ps1");
 
         tokio::fs::write(zsh, &posix).await?;
         tokio::fs::write(bash, &posix).await?;
         tokio::fs::write(fish, &fsh).await?;
         tokio::fs::write(xsh, &xonsh).await?;
+        tokio::fs::write(ps1, &powershell).await?;
 
         Ok(())
     }
@@ -261,16 +345,30 @@ impl VarStore {
 
         // this is sorted, oldest to newest
         let tagged = self.store.all_tagged(DOTFILES_VAR_TAG).await?;
+        let mut skipped = 0;
 
         for record in tagged {
             let version = record.version.clone();
 
-            let decrypted = match version.as_str() {
-                DOTFILES_VAR_VERSION => record.decrypt::<PASETO_V4>(&self.encryption_key)?,
-                version => bail!("unknown version {version:?}"),
-            };
+            // Skip records we can't decrypt or decode, rather than failing the entire build.
+            let ar =
+                match version.as_str() {
+                    DOTFILES_VAR_VERSION => record
+                        .decrypt::<PASETO_V4>(&self.encryption_key)
+                        .and_then(|decrypted| {
+                            VarRecord::deserialize(&decrypted.data, version.as_str())
+                        }),
+                    version => Err(eyre!("unknown version {version:?}")),
+                };
 
-            let ar = VarRecord::deserialize(&decrypted.data, version.as_str())?;
+            let ar = match ar {
+                Ok(ar) => ar,
+                Err(e) => {
+                    tracing::warn!("failed to decode var record, skipping: {e}");
+                    skipped += 1;
+                    continue;
+                }
+            };
 
             match ar {
                 VarRecord::Create(a) => {
@@ -280,6 +378,11 @@ impl VarStore {
                     build.remove(&d);
                 }
             }
+        }
+
+        if skipped > 0 {
+            // vars() runs during shell init, so this must not write to stderr
+            tracing::warn!("skipped {skipped} var records that could not be decrypted or decoded");
         }
 
         Ok(build.into_values().collect())
@@ -296,6 +399,7 @@ mod tests {
 
     use super::{DOTFILES_VAR_VERSION, VarRecord, VarStore};
     use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
+    use rstest::rstest;
 
     #[test]
     fn encode_decode() {
@@ -315,6 +419,50 @@ mod tests {
 
         assert_eq!(encoded.0, &snapshot);
         assert_eq!(decoded, record);
+    }
+
+    #[rstest]
+    // Simple values should not be quoted
+    #[case::simple("simple", "simple")]
+    #[case::path("path/to/file", "path/to/file")]
+    #[case::underscores("value_with_underscores", "value_with_underscores")]
+    // Values with spaces should be quoted
+    #[case::spaces("hello world", "\"hello world\"")]
+    #[case::spaces_short("bar baz", "\"bar baz\"")]
+    // Values with special characters should be quoted and escaped
+    #[case::double_quotes("say \"hello\"", "\"say \\\"hello\\\"\"")]
+    #[case::backslashes("path\\with\\backslashes", "\"path\\\\with\\\\backslashes\"")]
+    #[case::dollar("say $hello", "\"say \\$hello\"")]
+    #[case::backticks("see `example.md`", "\"see \\`example.md\\`\"")]
+    fn escapes_posix_value(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(VarStore::escape_posix_value(input), expected);
+    }
+
+    #[rstest]
+    // Simple values should not be quoted
+    #[case::simple("simple", "simple")]
+    #[case::path("path/to/file", "path/to/file")]
+    // Values with spaces should be single-quoted
+    #[case::spaces("hello world", "'hello world'")]
+    #[case::spaces_short("bar baz", "'bar baz'")]
+    // Values with single quotes should be escaped
+    #[case::single_quote("don't", "'don\\'t'")]
+    fn escapes_fish_value(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(VarStore::escape_fish_value(input), expected);
+    }
+
+    #[rstest]
+    // Simple values should not be quoted
+    #[case::simple("simple", "simple")]
+    #[case::path("path/to/file", "path/to/file")]
+    // Values with spaces should be quoted
+    #[case::spaces("hello world", "\"hello world\"")]
+    #[case::spaces_short("bar baz", "\"bar baz\"")]
+    // Values with special characters should be quoted and escaped
+    #[case::double_quotes("say \"hello\"", "\"say \\\"hello\\\"\"")]
+    #[case::backslashes("path\\with\\backslashes", "\"path\\\\with\\\\backslashes\"")]
+    fn escapes_xonsh_value(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(VarStore::escape_xonsh_value(input), expected);
     }
 
     #[tokio::test]
@@ -353,5 +501,32 @@ mod tests {
                 export: true,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn test_var_generation_with_spaces() {
+        let store = SqliteStore::new(":memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
+        let host_id = atuin_common::record::HostId(atuin_common::utils::uuid_v7());
+
+        let env = VarStore::new(store, host_id, key);
+
+        // Test the exact scenario from the bug report
+        env.set("FOO", "bar baz", true).await.unwrap();
+
+        let posix_output = env.posix().await.unwrap();
+        let fish_output = env.fish().await.unwrap();
+        let xonsh_output = env.xonsh().await.unwrap();
+
+        // POSIX should quote the value
+        assert_eq!(posix_output, "export FOO=\"bar baz\"\n");
+
+        // Fish should quote the value
+        assert_eq!(fish_output, "set -gx FOO 'bar baz'\n");
+
+        // Xonsh should quote the value
+        assert_eq!(xonsh_output, "$FOO=\"bar baz\"\n");
     }
 }

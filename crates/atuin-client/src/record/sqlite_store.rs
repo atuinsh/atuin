@@ -11,7 +11,10 @@ use fs_err as fs;
 
 use sqlx::{
     Row,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow},
+    sqlite::{
+        SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
+        SqliteSynchronous,
+    },
 };
 
 use atuin_common::record::{
@@ -32,7 +35,7 @@ impl SqliteStore {
     pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
         let path = path.as_ref();
 
-        debug!("opening sqlite database at {:?}", path);
+        debug!("opening sqlite database at {path:?}");
 
         if utils::broken_symlink(path) {
             eprintln!(
@@ -41,14 +44,16 @@ impl SqliteStore {
             std::process::exit(1);
         }
 
-        if !path.exists() {
-            if let Some(dir) = path.parent() {
-                fs::create_dir_all(dir)?;
-            }
+        if !path.exists()
+            && let Some(dir) = path.parent()
+        {
+            fs::create_dir_all(dir)?;
         }
 
         let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
             .journal_mode(SqliteJournalMode::Wal)
+            .optimize_on_close(true, None)
+            .synchronous(SqliteSynchronous::Normal)
             .foreign_keys(true)
             .create_if_missing(true);
 

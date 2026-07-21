@@ -1,0 +1,33 @@
+[package]
+name = "tests-database"
+edition = "2024"
+description = "Integration tests for atuin-server-database and it's flavours"
+
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+[dependencies]
+atuin-common = { workspace = true }
+atuin-server-database = { workspace = true }
+atuin-server-postgres = { workspace = true }
+atuin-server-sqlite = { workspace = true }
+
+eyre = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+time = { workspace = true }
+serde = { workspace = true }
+sqlx = { workspace = true, features = ["sqlite", "regexp", "postgres", "tls-rustls"] }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+metrics = "0.24"
+futures-util = "0.3"
+
+fake = { version = "5", features = ["time"] }
+snowflake_uid = { version = "0.1.1" }
+
+regex.workspace = true
+url = "2.5.8"

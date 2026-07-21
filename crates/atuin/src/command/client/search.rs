@@ -1,6 +1,7 @@
-use std::io::{IsTerminal as _, stderr};
+use std::fs::File;
+use std::io::{IsTerminal as _, Write, stderr, stdout};
 
-use atuin_common::utils::{self, Escapable as _};
+use atuin_common::{string::EscapeNonPrintablePosixExt as _, utils};
 use clap::Parser;
 use eyre::Result;
 
@@ -22,6 +23,7 @@ mod engines;
 mod history_list;
 mod inspector;
 mod interactive;
+pub mod keybindings;
 
 pub use duration::format_duration_into;
 
@@ -33,7 +35,7 @@ pub struct Cmd {
     cwd: Option<String>,
 
     /// Exclude directory from results
-    #[arg(long = "exclude-cwd")]
+    #[arg(long)]
     exclude_cwd: Option<String>,
 
     /// Filter search result by exit code
@@ -41,7 +43,7 @@ pub struct Cmd {
     exit: Option<i64>,
 
     /// Exclude results with this exit code
-    #[arg(long = "exclude-exit")]
+    #[arg(long)]
     exclude_exit: Option<i64>,
 
     /// Only include results added before this date
@@ -65,26 +67,27 @@ pub struct Cmd {
     interactive: bool,
 
     /// Allow overriding filter mode over config
-    #[arg(long = "filter-mode")]
+    #[arg(long)]
     filter_mode: Option<FilterMode>,
 
     /// Allow overriding search mode over config
-    #[arg(long = "search-mode")]
+    #[arg(long)]
     search_mode: Option<SearchMode>,
 
     /// Marker argument used to inform atuin that it was invoked from a shell up-key binding (hidden from help to avoid confusion)
-    #[arg(long = "shell-up-key-binding", hide = true)]
+    #[arg(long, hide = true)]
     shell_up_key_binding: bool,
 
     /// Notify the keymap at the shell's side
-    #[arg(long = "keymap-mode", default_value = "auto")]
+    #[arg(long, default_value = "auto")]
     keymap_mode: KeymapMode,
 
     /// Use human-readable formatting for time
     #[arg(long)]
     human: bool,
 
-    query: Option<Vec<String>>,
+    #[arg(allow_hyphen_values = true)]
+    query: Vec<String>,
 
     /// Show only the text of the command
     #[arg(long)]
@@ -109,31 +112,57 @@ pub struct Cmd {
     /// Display the command time in another timezone other than the configured default.
     ///
     /// This option takes one of the following kinds of values:
+    ///
     /// - the special value "local" (or "l") which refers to the system time zone
     /// - an offset from UTC (e.g. "+9", "-2:30")
-    #[arg(long, visible_alias = "tz")]
-    #[arg(allow_hyphen_values = true)]
-    // Clippy warns about `Option<Option<T>>`, but we suppress it because we need
-    // this distinction for proper argument handling.
-    #[allow(clippy::option_option)]
-    timezone: Option<Option<Timezone>>,
+    #[arg(long, visible_alias = "tz", verbatim_doc_comment)]
+    // `num_args = 0..=1` allows a user to run `atuin search --tz` with no argument to `--tz`. This
+    // does the same thing as not providing the flag, but we previously allowed it (via an
+    // `Option<Option<T>>` field type), so let's keep supporting it to avoid breaking existing
+    // scripts.
+    #[arg(allow_hyphen_values = true, num_args = 0..=1)]
+    timezone: Option<Timezone>,
 
     /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and
     /// {relativetime}.
+    ///
     /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
     #[arg(long, short)]
     format: Option<String>,
 
     /// Set the maximum number of lines Atuin's interface should take up.
-    #[arg(long = "inline-height")]
+    #[arg(long)]
     inline_height: Option<u16>,
+
+    /// Filter by author. Supports $all-user (non-agents), $all-agent, or literal names.
+    ///
+    /// Can be specified multiple times.
+    #[arg(long)]
+    author: Vec<String>,
 
     /// Include duplicate commands in the output (non-interactive only)
     #[arg(long)]
     include_duplicates: bool,
+
+    /// File name to write the result to (hidden from help as this is meant to be used from a script)
+    #[arg(long, hide = true)]
+    result_file: Option<String>,
+
+    /// Filter by the shell that was used to run the command
+    ///
+    /// If passed multiple times, commands from any of the shells will be shown.
+    ///
+    /// `--shell ""` will include commands for which the shell is unknown.
+    #[arg(long)]
+    shell: Vec<String>,
 }
 
 impl Cmd {
+    /// Returns true if this search command will run in interactive (TUI) mode
+    pub fn is_interactive(&self) -> bool {
+        self.interactive
+    }
+
     // clippy: please write this instead
     // clippy: now it has too many lines
     // me: I'll do it later OKAY
@@ -145,20 +174,19 @@ impl Cmd {
         store: SqliteStore,
         theme: &Theme,
     ) -> Result<()> {
-        let query = self.query.map_or_else(
-            || {
-                std::env::var("ATUIN_QUERY").map_or_else(
-                    |_| vec![],
-                    |query| {
-                        query
-                            .split(' ')
-                            .map(std::string::ToString::to_string)
-                            .collect()
-                    },
-                )
-            },
-            |query| query,
-        );
+        let query = if self.query.is_empty() {
+            std::env::var("ATUIN_QUERY").map_or_else(
+                |_| vec![],
+                |query| {
+                    query
+                        .split(' ')
+                        .map(std::string::ToString::to_string)
+                        .collect()
+                },
+            )
+        } else {
+            self.query
+        };
 
         if (self.delete_it_all || self.delete) && self.limit.is_some() {
             // Because of how deletion is implemented, it will always delete all matches
@@ -208,13 +236,22 @@ impl Cmd {
 
         let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
 
-        let host_id = Settings::host_id().expect("failed to get host_id");
+        let host_id = Settings::host_id().await?;
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         if self.interactive {
             let item = interactive::history(&query, settings, db, &history_store, theme).await?;
-            if stderr().is_terminal() {
-                eprintln!("{}", item.escape_control());
+
+            if let Some(result_file) = self.result_file {
+                let mut file = File::create(result_file)?;
+                write!(file, "{item}")?;
+            } else if !stdout().is_terminal() {
+                // stdout is not a terminal - likely command substitution like VAR=$(atuin search -i)
+                // Write to stdout so it gets captured. This requires some care on Windows, as the current
+                // console code page or `[Console]::OutputEncoding` on PowerShell may be different from UTF-8.
+                println!("{item}");
+            } else if stderr().is_terminal() {
+                eprintln!("{}", item.escape_non_printable());
             } else {
                 eprintln!("{item}");
             }
@@ -222,6 +259,7 @@ impl Cmd {
             let opt_filter = OptFilters {
                 exit: self.exit,
                 exclude_exit: self.exclude_exit,
+                only_failed: false,
                 cwd: self.cwd,
                 exclude_cwd: self.exclude_cwd,
                 before: self.before,
@@ -230,6 +268,8 @@ impl Cmd {
                 offset: self.offset,
                 reverse: self.reverse,
                 include_duplicates: self.include_duplicates,
+                authors: self.author,
+                shells: self.shell,
             };
 
             let mut entries =
@@ -247,45 +287,37 @@ impl Cmd {
                 while !entries.is_empty() {
                     for entry in &entries {
                         eprintln!("deleting {}", entry.id);
-
-                        if settings.sync.records {
-                            let (id, _) = history_store.delete(entry.id.clone()).await?;
-                            history_store.incremental_build(&db, &[id]).await?;
-                        } else {
-                            db.delete(entry.clone()).await?;
-                        }
                     }
+
+                    let ids = history_store.delete_entries(entries).await?;
+                    history_store.build_all(&db, &ids).await?;
 
                     entries =
                         run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
                 }
             } else {
-                let format = match self.format {
-                    None => Some(settings.history_format.as_str()),
-                    _ => self.format.as_deref(),
-                };
-                let tz = match self.timezone {
-                    Some(Some(tz)) => tz,                   // User provided a value
-                    Some(None) | None => settings.timezone, // No value was provided
-                };
+                let format = self
+                    .format
+                    .as_deref()
+                    .unwrap_or(settings.history_format.as_str());
+                let tz = self.timezone.unwrap_or(settings.timezone);
 
                 super::history::print_list(
                     &entries,
                     ListMode::from_flags(self.human, self.cmd_only),
-                    format,
+                    Some(format),
                     self.print0,
                     true,
                     tz,
                 );
             }
-        };
+        }
         Ok(())
     }
 }
 
 // This is supposed to more-or-less mirror the command line version, so ofc
 // it is going to have a lot of args
-#[allow(clippy::too_many_arguments, clippy::cast_possible_truncation)]
 async fn run_non_interactive(
     settings: &Settings,
     filter_options: OptFilters,
@@ -298,14 +330,14 @@ async fn run_non_interactive(
         filter_options.cwd
     };
 
-    let context = current_context();
+    let context = current_context().await?;
 
     let opt_filter = OptFilters {
         cwd: dir.clone(),
         ..filter_options
     };
 
-    let filter_mode = settings.default_filter_mode();
+    let filter_mode = settings.default_filter_mode(context.git_root.is_some());
 
     let results = db
         .search(
@@ -318,4 +350,35 @@ async fn run_non_interactive(
         .await?;
 
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cmd;
+    use clap::Parser;
+
+    #[test]
+    fn search_for_triple_dash() {
+        // Issue #3028: searching for `---` should not be treated as a CLI flag
+        let cmd = Cmd::try_parse_from(["search", "---"]);
+        assert!(cmd.is_ok(), "Failed to parse '---' as a query: {cmd:?}");
+        let cmd = cmd.unwrap();
+        assert_eq!(cmd.query, vec!["---".to_string()]);
+    }
+
+    #[test]
+    fn search_for_double_dash_value() {
+        // Searching for strings starting with -- should also work
+        let cmd = Cmd::try_parse_from(["search", "--", "--foo"]);
+        assert!(cmd.is_ok());
+        let cmd = cmd.unwrap();
+        assert_eq!(cmd.query, vec!["--foo".to_string()]);
+    }
+
+    #[test]
+    fn search_author_cli_flag() {
+        let cmd =
+            Cmd::try_parse_from(["search", "--author", "codex", "--author", "ellie"]).unwrap();
+        assert_eq!(cmd.author, vec!["codex".to_string(), "ellie".to_string()]);
+    }
 }

@@ -1,0 +1,31 @@
+name: Deploy prerelease docs
+description: >-
+  Publish a prerelease preview under its full version id. Never touches
+  `latest` or the default. Prunes older previews it supersedes (older
+  betas of this or an earlier line).
+
+inputs:
+  version:
+    description: Prerelease version to deploy (X.Y.Z-<pre>; a leading `v` is stripped).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Deploy prerelease docs
+      shell: bash
+      working-directory: docs
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        VERSION=$(uv run python scripts/parse_version.py --require prerelease "$VERSION")
+
+        echo "Deploying prerelease docs: $VERSION"
+        uv run mike deploy --push --title "$VERSION (pre-release)" "$VERSION"
+
+        STALE=$(uv run mike list --json | uv run python scripts/filter_dead_vers.py "$VERSION")
+        if [ -n "$STALE" ]; then
+          echo "Pruning superseded prerelease docs:" $STALE
+          uv run mike delete --push $STALE
+        fi

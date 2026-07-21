@@ -1,6 +1,10 @@
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
+use atuin_scripts::store::ScriptStore;
 use clap::Args;
 use eyre::{Result, bail};
+
+#[cfg(feature = "daemon")]
+use crate::command::client::daemon as daemon_cmd;
 
 use atuin_client::{
     database::Database, encryption, history::store::HistoryStore,
@@ -33,7 +37,13 @@ impl Rebuild {
                 self.rebuild_dotfiles(settings, store.clone()).await?;
             }
 
-            tag => bail!("unknown tag: {tag}"),
+            "scripts" => {
+                self.rebuild_scripts(settings, store.clone()).await?;
+            }
+
+            tag => {
+                bail!("unknown tag: {tag}");
+            }
         }
 
         Ok(())
@@ -47,10 +57,13 @@ impl Rebuild {
     ) -> Result<()> {
         let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
 
-        let host_id = Settings::host_id().expect("failed to get host_id");
+        let host_id = Settings::host_id().await?;
         let history_store = HistoryStore::new(store, host_id, encryption_key);
 
         history_store.build(database).await?;
+
+        #[cfg(feature = "daemon")]
+        daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryRebuilt).await;
 
         Ok(())
     }
@@ -58,13 +71,25 @@ impl Rebuild {
     async fn rebuild_dotfiles(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
         let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
 
-        let host_id = Settings::host_id().expect("failed to get host_id");
+        let host_id = Settings::host_id().await?;
 
         let alias_store = AliasStore::new(store.clone(), host_id, encryption_key);
         let var_store = VarStore::new(store.clone(), host_id, encryption_key);
 
         alias_store.build().await?;
         var_store.build().await?;
+
+        Ok(())
+    }
+
+    async fn rebuild_scripts(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
+        let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
+        let host_id = Settings::host_id().await?;
+        let script_store = ScriptStore::new(store, host_id, encryption_key);
+        let database =
+            atuin_scripts::database::Database::new(settings.scripts.db_path.clone(), 1.0).await?;
+
+        script_store.build(database).await?;
 
         Ok(())
     }

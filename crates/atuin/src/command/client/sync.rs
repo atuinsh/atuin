@@ -53,9 +53,9 @@ impl Cmd {
         match self {
             Self::Sync { force } => run(&settings, force, db, store).await,
             Self::Login(l) => l.run(&settings, &store).await,
-            Self::Logout => account::logout::run(&settings),
-            Self::Register(r) => r.run(&settings).await,
-            Self::Status => status::run(&settings, db).await,
+            Self::Logout => account::logout::run().await,
+            Self::Register(r) => r.run(&settings, &store).await,
+            Self::Status => status::run(&settings).await,
             Self::Key { base64 } => {
                 use atuin_client::encryption::{encode_key, load_key};
                 let key = load_key(&settings).wrap_err("could not load encryption key")?;
@@ -80,45 +80,43 @@ async fn run(
     db: &impl Database,
     store: SqliteStore,
 ) -> Result<()> {
-    if settings.sync.records {
-        let encryption_key: [u8; 32] = encryption::load_key(settings)
-            .context("could not load encryption key")?
-            .into();
+    let encryption_key: [u8; 32] = encryption::load_key(settings)
+        .context("could not load encryption key")?
+        .into();
 
-        let host_id = Settings::host_id().expect("failed to get host_id");
-        let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
+    let host_id = Settings::host_id().await?;
+    let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
-        let (uploaded, downloaded) = sync::sync(settings, &store).await?;
+    let (uploaded, downloaded) = sync::sync(settings, &store, &encryption_key)
+        .await
+        .map_err(crate::print_error::format_sync_error)?;
+
+    crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
+
+    println!("{uploaded}/{} up/down to record store", downloaded.len());
+
+    let history_length = db.history_count(true).await?;
+    let store_history_length = store.len_tag("history").await?;
+
+    #[allow(clippy::cast_sign_loss)]
+    if history_length as u64 > store_history_length {
+        println!("{history_length} in history index, but {store_history_length} in history store");
+        println!("Running automatic history store init...");
+
+        // Internally we use the global filter mode, so this context is ignored.
+        // don't recurse or loop here.
+        history_store.init_store(db).await?;
+
+        println!("Re-running sync due to new records locally");
+
+        // we'll want to run sync once more, as there will now be stuff to upload
+        let (uploaded, downloaded) = sync::sync(settings, &store, &encryption_key)
+            .await
+            .map_err(crate::print_error::format_sync_error)?;
 
         crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
 
         println!("{uploaded}/{} up/down to record store", downloaded.len());
-
-        let history_length = db.history_count(true).await?;
-        let store_history_length = store.len_tag("history").await?;
-
-        #[allow(clippy::cast_sign_loss)]
-        if history_length as u64 > store_history_length {
-            println!(
-                "{history_length} in history index, but {store_history_length} in history store"
-            );
-            println!("Running automatic history store init...");
-
-            // Internally we use the global filter mode, so this context is ignored.
-            // don't recurse or loop here.
-            history_store.init_store(db).await?;
-
-            println!("Re-running sync due to new records locally");
-
-            // we'll want to run sync once more, as there will now be stuff to upload
-            let (uploaded, downloaded) = sync::sync(settings, &store).await?;
-
-            crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
-
-            println!("{uploaded}/{} up/down to record store", downloaded.len());
-        }
-    } else {
-        atuin_client::sync::sync(settings, force, db).await?;
     }
 
     println!(

@@ -47,7 +47,7 @@ pub async fn alias_config(store: &AliasStore) -> String {
     }
 
     if let Err(e) = store.build().await {
-        return format!("echo 'Atuin: failed to generate aliases: {}'", e);
+        return format!("echo 'Atuin: failed to generate aliases: {e}'");
     }
 
     cached_aliases(aliases, store).await
@@ -62,7 +62,7 @@ pub async fn var_config(store: &VarStore) -> String {
     }
 
     if let Err(e) = store.build().await {
-        return format!("echo 'Atuin: failed to generate vars: {}'", e);
+        return format!("echo 'Atuin: failed to generate vars: {e}'");
     }
 
     cached_vars(vars, store).await

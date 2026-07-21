@@ -12,14 +12,25 @@ pub struct HistoryImported {
     command: String,
     #[builder(default = "unknown".into(), setter(into))]
     cwd: String,
-    #[builder(default = -1)]
+    #[builder(default = Self::DEFAULT_EXIT)]
     exit: i64,
-    #[builder(default = -1)]
+    #[builder(default = Self::DEFAULT_DURATION)]
     duration: i64,
     #[builder(default, setter(strip_option, into))]
     session: Option<String>,
     #[builder(default, setter(strip_option, into))]
     hostname: Option<String>,
+    #[builder(default, setter(strip_option, into))]
+    author: Option<String>,
+    #[builder(default, setter(strip_option, into))]
+    intent: Option<String>,
+    #[builder(default, setter(strip_option, into))]
+    shell: Option<String>,
+}
+
+impl HistoryImported {
+    pub const DEFAULT_EXIT: i64 = -1;
+    pub const DEFAULT_DURATION: i64 = -1;
 }
 
 impl From<HistoryImported> for History {
@@ -32,7 +43,10 @@ impl From<HistoryImported> for History {
             imported.duration,
             imported.session,
             imported.hostname,
+            imported.author,
+            imported.intent,
             None,
+            imported.shell,
         )
     }
 }
@@ -43,12 +57,19 @@ impl From<HistoryImported> for History {
 /// so it doesn't have any fields which are known only after
 /// the command is finished, such as `exit` or `duration`.
 #[derive(Debug, Clone, TypedBuilder)]
+#[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct HistoryCaptured {
     timestamp: time::OffsetDateTime,
     #[builder(setter(into))]
     command: String,
     #[builder(setter(into))]
     cwd: String,
+    #[builder(default, setter(into))]
+    author: Option<String>,
+    #[builder(default, setter(into))]
+    intent: Option<String>,
+    #[builder(default, setter(into))]
+    shell: Option<String>,
 }
 
 impl From<HistoryCaptured> for History {
@@ -61,7 +82,10 @@ impl From<HistoryCaptured> for History {
             -1,
             None,
             None,
+            captured.author,
+            captured.intent,
             None,
+            captured.shell,
         )
     }
 }
@@ -79,7 +103,10 @@ pub struct HistoryFromDb {
     duration: i64,
     session: String,
     hostname: String,
+    author: String,
+    intent: Option<String>,
     deleted_at: Option<time::OffsetDateTime>,
+    shell: Option<String>,
 }
 
 impl From<HistoryFromDb> for History {
@@ -93,7 +120,10 @@ impl From<HistoryFromDb> for History {
             duration: from_db.duration,
             session: from_db.session,
             hostname: from_db.hostname,
+            author: from_db.author,
+            intent: from_db.intent,
             deleted_at: from_db.deleted_at,
+            shell: from_db.shell,
         }
     }
 }
@@ -114,6 +144,12 @@ pub struct HistoryDaemonCapture {
     session: String,
     #[builder(setter(into))]
     hostname: String,
+    #[builder(default, setter(strip_option, into))]
+    author: Option<String>,
+    #[builder(default, setter(strip_option, into))]
+    intent: Option<String>,
+    #[builder(default, setter(strip_option, into))]
+    shell: Option<String>,
 }
 
 impl From<HistoryDaemonCapture> for History {
@@ -126,7 +162,10 @@ impl From<HistoryDaemonCapture> for History {
             -1,
             Some(captured.session),
             Some(captured.hostname),
+            captured.author,
+            captured.intent,
             None,
+            captured.shell,
         )
     }
 }

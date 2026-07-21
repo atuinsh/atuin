@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use atuin_common::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ErrorResponse};
 use axum::{
     Router,
@@ -22,7 +21,6 @@ use atuin_server_database::{Database, DbError, models::User};
 
 pub struct UserAuth(pub User);
 
-#[async_trait]
 impl<DB: Send + Sync> FromRequestParts<AppState<DB>> for UserAuth
 where
     DB: Database,
@@ -105,33 +103,21 @@ async fn semver(request: Request, next: Next) -> Response {
 #[derive(Clone)]
 pub struct AppState<DB: Database> {
     pub database: DB,
-    pub settings: Settings<DB::Settings>,
+    pub settings: Settings,
 }
 
-pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> Router {
+pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
     let routes = Router::new()
         .route("/", get(handlers::index))
-        .route("/healthz", get(handlers::health::health_check))
-        .route("/sync/count", get(handlers::history::count))
-        .route("/sync/history", get(handlers::history::list))
-        .route("/sync/calendar/:focus", get(handlers::history::calendar))
-        .route("/sync/status", get(handlers::status::status))
-        .route("/history", post(handlers::history::add))
-        .route("/history", delete(handlers::history::delete))
-        .route("/user/:username", get(handlers::user::get))
+        .route("/healthz", get(handlers::health::health_check));
+
+    let routes = routes
+        .route("/user/{username}", get(handlers::user::get))
         .route("/account", delete(handlers::user::delete))
         .route("/account/password", patch(handlers::user::change_password))
         .route("/register", post(handlers::user::register))
         .route("/login", post(handlers::user::login))
-        .route("/record", post(handlers::record::post::<DB>))
-        .route("/record", get(handlers::record::index::<DB>))
-        .route("/record/next", get(handlers::record::next))
         .route("/api/v0/me", get(handlers::v0::me::get))
-        .route("/api/v0/account/verify", post(handlers::user::verify_user))
-        .route(
-            "/api/v0/account/send-verification",
-            post(handlers::user::send_verification),
-        )
         .route("/api/v0/record", post(handlers::v0::record::post))
         .route("/api/v0/record", get(handlers::v0::record::index))
         .route("/api/v0/record/next", get(handlers::v0::record::next))

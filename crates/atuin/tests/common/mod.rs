@@ -3,13 +3,14 @@ use std::{env, time::Duration};
 use atuin_client::api_client;
 use atuin_common::utils::uuid_v7;
 use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
-use atuin_server_postgres::{Postgres, PostgresSettings};
+use atuin_server_database::DbSettings;
+use atuin_server_postgres::Postgres;
 use futures_util::TryFutureExt;
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 use tracing::{Dispatch, dispatcher};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt};
 
-pub async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandle<()>) {
+pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHandle<()>) {
     let formatting_layer = tracing_tree::HierarchicalLayer::default()
         .with_writer(tracing_subscriber::fmt::TestWriter::new())
         .with_indent_lines(true)
@@ -30,15 +31,14 @@ pub async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandl
         port: 0,
         path: path.to_owned(),
         open_registration: true,
-        max_history_length: 8192,
         max_record_size: 1024 * 1024 * 1024,
-        page_size: 1100,
         register_webhook_url: None,
         register_webhook_username: String::new(),
-        db_settings: PostgresSettings { db_uri },
+        db_settings: DbSettings {
+            db_uri,
+            read_db_uri: None,
+        },
         metrics: atuin_server::settings::Metrics::default(),
-        tls: atuin_server::settings::Tls::default(),
-        mail: atuin_server::settings::Mail::default(),
         fake_version: None,
     };
 
@@ -63,11 +63,14 @@ pub async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandl
     // let the server come online
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    (format!("http://{addr}{path}"), shutdown_tx, server)
+    let url = url::Url::parse(&format!("http://{addr}{path}"))
+        .expect("test server address is a valid URL");
+
+    (url, shutdown_tx, server)
 }
 
 pub async fn register_inner<'a>(
-    address: &'a str,
+    address: &'a url::Url,
     username: &str,
     password: &str,
 ) -> api_client::Client<'a> {
@@ -78,24 +81,40 @@ pub async fn register_inner<'a>(
         .await
         .unwrap();
 
-    api_client::Client::new(address, &registration_response.session, 5, 30).unwrap()
+    api_client::Client::new(
+        address,
+        api_client::AuthToken::Token(registration_response.session),
+        5,
+        30,
+    )
+    .unwrap()
 }
 
 #[allow(dead_code)]
-pub async fn login(address: &str, username: String, password: String) -> api_client::Client<'_> {
+pub async fn login(
+    address: &url::Url,
+    username: String,
+    password: String,
+) -> api_client::Client<'_> {
     // registration works
-    let login_respose = api_client::login(
+    let login_response = api_client::login(
         address,
         atuin_common::api::LoginRequest { username, password },
     )
     .await
     .unwrap();
 
-    api_client::Client::new(address, &login_respose.session, 5, 30).unwrap()
+    api_client::Client::new(
+        address,
+        api_client::AuthToken::Token(login_response.session),
+        5,
+        30,
+    )
+    .unwrap()
 }
 
 #[allow(dead_code)]
-pub async fn register(address: &str) -> api_client::Client<'_> {
+pub async fn register(address: &url::Url) -> api_client::Client<'_> {
     let username = uuid_v7().as_simple().to_string();
     let password = uuid_v7().as_simple().to_string();
     register_inner(address, &username, &password).await

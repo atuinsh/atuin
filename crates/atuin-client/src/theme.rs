@@ -1,6 +1,4 @@
 use config::{Config, File as ConfigFile, FileFormat};
-use lazy_static::lazy_static;
-use log;
 use palette::named;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -8,6 +6,7 @@ use std::collections::HashMap;
 use std::error;
 use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use strum_macros;
 
 static DEFAULT_MAX_DEPTH: u8 = 10;
@@ -51,7 +50,7 @@ pub struct ThemeDefinitionConfigBlock {
     pub parent: Option<String>,
 }
 
-use crossterm::style::{Color, ContentStyle};
+use crossterm::style::{Attribute, Attributes, Color, ContentStyle};
 
 // For now, a theme is loaded as a mapping of meanings to colors, but it may be desirable to
 // expand that in the future to general styles, so we populate a Meaning->ContentStyle hashmap.
@@ -71,20 +70,20 @@ impl Theme {
     }
 
     pub fn get_info(&self) -> ContentStyle {
-        self.get_alert(log::Level::Info)
+        self.get_alert(tracing::Level::INFO)
     }
 
     pub fn get_warning(&self) -> ContentStyle {
-        self.get_alert(log::Level::Warn)
+        self.get_alert(tracing::Level::WARN)
     }
 
     pub fn get_error(&self) -> ContentStyle {
-        self.get_alert(log::Level::Error)
+        self.get_alert(tracing::Level::ERROR)
     }
 
     // The alert meanings may be chosen by the Level enum, rather than the methods above
     // or the full Meaning enum, to simplify programmatic selection of a log-level.
-    pub fn get_alert(&self, severity: log::Level) -> ContentStyle {
+    pub fn get_alert(&self, severity: tracing::Level) -> ContentStyle {
         self.styles[ALERT_TYPES.get(&severity).unwrap()]
     }
 
@@ -133,12 +132,7 @@ impl Theme {
                     *name,
                     StyleFactory::from_fg_string(color).unwrap_or_else(|err| {
                         if debug {
-                            log::warn!(
-                                "Tried to load string as a color unsuccessfully: ({}={}) {}",
-                                name,
-                                color,
-                                err
-                            );
+                            tracing::warn!("Tried to load string as a color unsuccessfully: ({name}={color}) {err}");
                         }
                         ContentStyle::default()
                     }),
@@ -198,7 +192,7 @@ fn from_string(name: &str) -> Result<Color, String> {
             // For full flexibility, we need to use serde_json, given
             // crossterm's approach.
             serde_json::from_str::<Color>(format!("\"{}\"", &name[1..]).as_str())
-                .map_err(|_| format!("Could not convert color name {} to Crossterm color", name))
+                .map_err(|_| format!("Could not convert color name {name} to Crossterm color"))
         }
         _ => {
             let srgb = named::from_str(name).ok_or("No such color in palette")?;
@@ -233,111 +227,136 @@ impl StyleFactory {
             ..ContentStyle::default()
         }
     }
+
+    fn from_fg_color_and_attributes(color: Color, attributes: Attributes) -> ContentStyle {
+        ContentStyle {
+            foreground_color: Some(color),
+            attributes,
+            ..ContentStyle::default()
+        }
+    }
 }
 
 // Built-in themes. Rather than having extra files added before any theming
 // is available, this gives a couple of basic options, demonstrating the use
 // of themes: autumn and marine
-lazy_static! {
-    static ref ALERT_TYPES: HashMap<log::Level, Meaning> = {
+static ALERT_TYPES: LazyLock<HashMap<tracing::Level, Meaning>> = LazyLock::new(|| {
+    HashMap::from([
+        (tracing::Level::INFO, Meaning::AlertInfo),
+        (tracing::Level::WARN, Meaning::AlertWarn),
+        (tracing::Level::ERROR, Meaning::AlertError),
+    ])
+});
+
+static MEANING_FALLBACKS: LazyLock<HashMap<Meaning, Meaning>> = LazyLock::new(|| {
+    HashMap::from([
+        (Meaning::Guidance, Meaning::AlertInfo),
+        (Meaning::Annotation, Meaning::AlertInfo),
+        (Meaning::Title, Meaning::Important),
+    ])
+});
+
+static DEFAULT_THEME: LazyLock<Theme> = LazyLock::new(|| {
+    Theme::new(
+        "default".to_string(),
+        None,
         HashMap::from([
-            (log::Level::Info, Meaning::AlertInfo),
-            (log::Level::Warn, Meaning::AlertWarn),
-            (log::Level::Error, Meaning::AlertError),
-        ])
-    };
-    static ref MEANING_FALLBACKS: HashMap<Meaning, Meaning> = {
-        HashMap::from([
-            (Meaning::Guidance, Meaning::AlertInfo),
-            (Meaning::Annotation, Meaning::AlertInfo),
-            (Meaning::Title, Meaning::Important),
-        ])
-    };
-    static ref DEFAULT_THEME: Theme = {
-        Theme::new(
-            "default".to_string(),
-            None,
+            (
+                Meaning::AlertError,
+                StyleFactory::from_fg_color(Color::DarkRed),
+            ),
+            (
+                Meaning::AlertWarn,
+                StyleFactory::from_fg_color(Color::DarkYellow),
+            ),
+            (
+                Meaning::AlertInfo,
+                StyleFactory::from_fg_color(Color::DarkGreen),
+            ),
+            (
+                Meaning::Annotation,
+                StyleFactory::from_fg_color(Color::DarkGrey),
+            ),
+            (
+                Meaning::Guidance,
+                StyleFactory::from_fg_color(Color::DarkBlue),
+            ),
+            (
+                Meaning::Important,
+                StyleFactory::from_fg_color_and_attributes(
+                    Color::White,
+                    Attributes::from(Attribute::Bold),
+                ),
+            ),
+            (Meaning::Muted, StyleFactory::from_fg_color(Color::Grey)),
+            (Meaning::Base, ContentStyle::default()),
+        ]),
+    )
+});
+
+static BUILTIN_THEMES: LazyLock<HashMap<&'static str, Theme>> = LazyLock::new(|| {
+    HashMap::from([
+        ("default", HashMap::new()),
+        (
+            "(none)",
+            HashMap::from([
+                (Meaning::AlertError, ContentStyle::default()),
+                (Meaning::AlertWarn, ContentStyle::default()),
+                (Meaning::AlertInfo, ContentStyle::default()),
+                (Meaning::Annotation, ContentStyle::default()),
+                (Meaning::Guidance, ContentStyle::default()),
+                (Meaning::Important, ContentStyle::default()),
+                (Meaning::Muted, ContentStyle::default()),
+                (Meaning::Base, ContentStyle::default()),
+            ]),
+        ),
+        (
+            "autumn",
             HashMap::from([
                 (
                     Meaning::AlertError,
-                    StyleFactory::from_fg_color(Color::DarkRed),
+                    StyleFactory::known_fg_string("saddlebrown"),
                 ),
                 (
                     Meaning::AlertWarn,
-                    StyleFactory::from_fg_color(Color::DarkYellow),
+                    StyleFactory::known_fg_string("darkorange"),
                 ),
-                (
-                    Meaning::AlertInfo,
-                    StyleFactory::from_fg_color(Color::DarkGreen),
-                ),
+                (Meaning::AlertInfo, StyleFactory::known_fg_string("gold")),
                 (
                     Meaning::Annotation,
                     StyleFactory::from_fg_color(Color::DarkGrey),
                 ),
-                (
-                    Meaning::Guidance,
-                    StyleFactory::from_fg_color(Color::DarkBlue),
-                ),
-                (
-                    Meaning::Important,
-                    StyleFactory::from_fg_color(Color::White),
-                ),
-                (Meaning::Muted, StyleFactory::from_fg_color(Color::Grey)),
-                (Meaning::Base, ContentStyle::default()),
+                (Meaning::Guidance, StyleFactory::known_fg_string("brown")),
             ]),
-        )
-    };
-    static ref BUILTIN_THEMES: HashMap<&'static str, Theme> = {
-        HashMap::from([
-            ("default", HashMap::new()),
-            (
-                "autumn",
-                HashMap::from([
-                    (
-                        Meaning::AlertError,
-                        StyleFactory::known_fg_string("saddlebrown"),
-                    ),
-                    (
-                        Meaning::AlertWarn,
-                        StyleFactory::known_fg_string("darkorange"),
-                    ),
-                    (Meaning::AlertInfo, StyleFactory::known_fg_string("gold")),
-                    (
-                        Meaning::Annotation,
-                        StyleFactory::from_fg_color(Color::DarkGrey),
-                    ),
-                    (Meaning::Guidance, StyleFactory::known_fg_string("brown")),
-                ]),
-            ),
-            (
-                "marine",
-                HashMap::from([
-                    (
-                        Meaning::AlertError,
-                        StyleFactory::known_fg_string("yellowgreen"),
-                    ),
-                    (Meaning::AlertWarn, StyleFactory::known_fg_string("cyan")),
-                    (
-                        Meaning::AlertInfo,
-                        StyleFactory::known_fg_string("turquoise"),
-                    ),
-                    (
-                        Meaning::Annotation,
-                        StyleFactory::known_fg_string("steelblue"),
-                    ),
-                    (
-                        Meaning::Base,
-                        StyleFactory::known_fg_string("lightsteelblue"),
-                    ),
-                    (Meaning::Guidance, StyleFactory::known_fg_string("teal")),
-                ]),
-            ),
-        ])
-        .iter()
-        .map(|(name, theme)| (*name, Theme::from_map(name.to_string(), None, theme)))
-        .collect()
-    };
-}
+        ),
+        (
+            "marine",
+            HashMap::from([
+                (
+                    Meaning::AlertError,
+                    StyleFactory::known_fg_string("yellowgreen"),
+                ),
+                (Meaning::AlertWarn, StyleFactory::known_fg_string("cyan")),
+                (
+                    Meaning::AlertInfo,
+                    StyleFactory::known_fg_string("turquoise"),
+                ),
+                (
+                    Meaning::Annotation,
+                    StyleFactory::known_fg_string("steelblue"),
+                ),
+                (
+                    Meaning::Base,
+                    StyleFactory::known_fg_string("lightsteelblue"),
+                ),
+                (Meaning::Guidance, StyleFactory::known_fg_string("teal")),
+            ]),
+        ),
+    ])
+    .iter()
+    .map(|(name, theme)| (*name, Theme::from_map(name.to_string(), None, theme)))
+    .collect()
+});
 
 // To avoid themes being repeatedly loaded, we store them in a theme manager
 pub struct ThemeManager {
@@ -376,13 +395,18 @@ impl ThemeManager {
             PathBuf::from(p)
         } else {
             let config_dir = atuin_common::utils::config_dir();
-            let mut theme_file = PathBuf::new();
-            theme_file.push(config_dir);
+            let mut theme_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
+                PathBuf::from(p)
+            } else {
+                let mut theme_file = PathBuf::new();
+                theme_file.push(config_dir);
+                theme_file
+            };
             theme_file.push("themes");
             theme_file
         };
 
-        let theme_toml = format!["{}.toml", name];
+        let theme_toml = format!["{name}.toml"];
         theme_file.push(theme_toml);
 
         let mut config_builder = Config::builder();
@@ -430,11 +454,11 @@ impl ThemeManager {
                 }
                 Some(self.load_theme(parent_name.as_str(), Some(max_depth - 1)))
             }
-            None => None,
+            None => Some(self.load_theme("default", Some(max_depth - 1))),
         };
 
         if debug && name != theme_config.theme.name {
-            log::warn!(
+            tracing::warn!(
                 "Your theme config name is not the name of your loaded theme {} != {}",
                 name,
                 theme_config.theme.name
@@ -460,8 +484,8 @@ impl ThemeManager {
             None => match self.load_theme_from_file(name, max_depth.unwrap_or(DEFAULT_MAX_DEPTH)) {
                 Ok(theme) => theme,
                 Err(err) => {
-                    log::warn!("Could not load theme {}: {}", name, err);
-                    built_ins.get("default").unwrap()
+                    tracing::warn!("Could not load theme {name}: {err}");
+                    built_ins.get("(none)").unwrap()
                 }
             },
         }
@@ -471,6 +495,8 @@ impl ThemeManager {
 #[cfg(test)]
 mod theme_tests {
     use super::*;
+    use atuin_common::test_utils::capture_logs;
+    use rstest::rstest;
 
     #[test]
     fn test_can_load_builtin_theme() {
@@ -595,14 +621,17 @@ mod theme_tests {
         assert_eq!(theme.get_info().foreground_color.unwrap(), Color::DarkGreen);
         assert_eq!(theme.get_base().foreground_color, None);
         assert_eq!(
-            theme.get_alert(log::Level::Error).foreground_color.unwrap(),
+            theme
+                .get_alert(tracing::Level::ERROR)
+                .foreground_color
+                .unwrap(),
             Color::DarkRed
         )
     }
 
     #[test]
     fn test_can_use_parent_theme_for_fallbacks() {
-        testing_logger::setup();
+        let logs = capture_logs();
 
         let mut manager = ThemeManager::new(Some(false), Some("".to_string()));
 
@@ -667,9 +696,10 @@ mod theme_tests {
             from_string("white").ok()
         );
 
-        testing_logger::validate(|captured_logs| assert_eq!(captured_logs.len(), 0));
+        assert_eq!(logs.get().len(), 0);
 
-        // If the parent is not found, we end up with the base theme colors
+        // If the parent is not found, we end up with the no theme colors or styling
+        // as this is considered a (soft) error state.
         let nunsolarized = Config::builder()
             .add_source(ConfigFile::from_str(
                 "
@@ -692,23 +722,23 @@ mod theme_tests {
             nunsolarized_theme
                 .as_style(Meaning::Guidance)
                 .foreground_color,
-            Some(Color::DarkBlue)
+            None
         );
 
-        testing_logger::validate(|captured_logs| {
-            assert_eq!(captured_logs.len(), 1);
-            assert_eq!(
-                captured_logs[0].body,
-                "Could not load theme nonsolarized: Empty theme directory override and could not find theme elsewhere"
-            );
-            assert_eq!(captured_logs[0].level, log::Level::Warn)
-        });
+        let captured_logs = logs.get();
+        assert_eq!(captured_logs.len(), 1);
+        assert_eq!(
+            captured_logs[0].message,
+            "Could not load theme nonsolarized: Empty theme directory override and could not find theme elsewhere"
+        );
+        assert_eq!(captured_logs[0].level, tracing::Level::WARN)
     }
 
     #[test]
     fn test_can_debug_theme() {
-        testing_logger::setup();
         [true, false].iter().for_each(|debug| {
+            let logs = capture_logs();
+
             let mut manager = ThemeManager::new(Some(*debug), Some("".to_string()));
             let config = Config::builder()
                 .add_source(ConfigFile::from_str(
@@ -727,80 +757,59 @@ mod theme_tests {
             manager
                 .load_theme_from_config("config_theme", config, 1)
                 .unwrap();
-            testing_logger::validate(|captured_logs| {
-                if *debug {
-                    assert_eq!(captured_logs.len(), 2);
-                    assert_eq!(
-                        captured_logs[0].body,
-                        "Your theme config name is not the name of your loaded theme config_theme != mytheme"
-                    );
-                    assert_eq!(captured_logs[0].level, log::Level::Warn);
-                    assert_eq!(
-                        captured_logs[1].body,
-                        "Tried to load string as a color unsuccessfully: (AlertInfo=xinetic) No such color in palette"
-                    );
-                    assert_eq!(captured_logs[1].level, log::Level::Warn)
-                } else {
-                    assert_eq!(captured_logs.len(), 0)
-                }
-            })
+            let captured_logs = logs.get();
+            if *debug {
+                assert_eq!(captured_logs.len(), 2);
+                assert_eq!(
+                    captured_logs[0].message,
+                    "Your theme config name is not the name of your loaded theme config_theme != mytheme"
+                );
+                assert_eq!(captured_logs[0].level, tracing::Level::WARN);
+                assert_eq!(
+                    captured_logs[1].message,
+                    "Tried to load string as a color unsuccessfully: (AlertInfo=xinetic) No such color in palette"
+                );
+                assert_eq!(captured_logs[1].level, tracing::Level::WARN)
+            } else {
+                assert_eq!(captured_logs.len(), 0)
+            }
         })
     }
 
-    #[test]
-    fn test_can_parse_color_strings_correctly() {
+    #[rstest]
+    #[case::palette_name("brown", Color::Rgb { r: 165, g: 42, b: 42 })]
+    #[case::hex("#ff1122", Color::Rgb { r: 255, g: 17, b: 34 })]
+    #[case::at_named("@dark_grey", Color::DarkGrey)]
+    #[case::at_rgb("@rgb_(255,255,255)", Color::Rgb { r: 255, g: 255, b: 255 })]
+    #[case::at_ansi("@ansi_(255)", Color::AnsiValue(255))]
+    fn parses_color_string(#[case] input: &str, #[case] expected: Color) {
+        assert_eq!(from_string(input).unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::empty("", "Empty string")]
+    #[case::not_in_palette_word("manatee", "No such color in palette")]
+    #[case::not_in_palette_phrase("caput mortuum", "No such color in palette")]
+    #[case::not_in_palette_digits("123456", "No such color in palette")]
+    #[case::hex_too_short("#1122", "Could not parse 3 hex values from string")]
+    #[case::hex_too_long("#ffaa112", "Could not parse 3 hex values from string")]
+    #[case::hex_not_hex("#brown", "Could not parse 3 hex values from string")]
+    fn rejects_color_string(#[case] input: &str, #[case] expected_err: &str) {
+        assert_eq!(from_string(input), Err(expected_err.into()));
+    }
+
+    /// The `@`-prefixed forms echo the offending input back in the error message.
+    #[rstest]
+    #[case::bare_at("@")]
+    #[case::wrong_case("@DarkGray")]
+    #[case::malformed_name("@Dark 4ay")]
+    #[case::ansi_out_of_range("@ansi(256)")]
+    fn rejects_at_prefixed_color_string(#[case] input: &str) {
         assert_eq!(
-            from_string("brown").unwrap(),
-            Color::Rgb {
-                r: 165,
-                g: 42,
-                b: 42
-            }
+            from_string(input),
+            Err(format!(
+                "Could not convert color name {input} to Crossterm color"
+            ))
         );
-
-        assert_eq!(from_string(""), Err("Empty string".into()));
-
-        ["manatee", "caput mortuum", "123456"]
-            .iter()
-            .for_each(|inp| {
-                assert_eq!(from_string(inp), Err("No such color in palette".into()));
-            });
-
-        assert_eq!(
-            from_string("#ff1122").unwrap(),
-            Color::Rgb {
-                r: 255,
-                g: 17,
-                b: 34
-            }
-        );
-        ["#1122", "#ffaa112", "#brown"].iter().for_each(|inp| {
-            assert_eq!(
-                from_string(inp),
-                Err("Could not parse 3 hex values from string".into())
-            );
-        });
-
-        assert_eq!(from_string("@dark_grey").unwrap(), Color::DarkGrey);
-        assert_eq!(
-            from_string("@rgb_(255,255,255)").unwrap(),
-            Color::Rgb {
-                r: 255,
-                g: 255,
-                b: 255
-            }
-        );
-        assert_eq!(from_string("@ansi_(255)").unwrap(), Color::AnsiValue(255));
-        ["@", "@DarkGray", "@Dark 4ay", "@ansi(256)"]
-            .iter()
-            .for_each(|inp| {
-                assert_eq!(
-                    from_string(inp),
-                    Err(format!(
-                        "Could not convert color name {} to Crossterm color",
-                        inp
-                    ))
-                );
-            });
     }
 }

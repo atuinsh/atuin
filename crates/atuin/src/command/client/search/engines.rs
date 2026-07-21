@@ -1,19 +1,29 @@
 use async_trait::async_trait;
 use atuin_client::{
-    database::{Context, Database},
-    history::History,
+    database::{Context, Database, OptFilters},
+    history::{AUTHOR_FILTER_ALL_USER, History, HistoryId},
     settings::{FilterMode, SearchMode, Settings},
 };
 use eyre::Result;
 
 use super::cursor::Cursor;
 
+#[cfg(feature = "daemon")]
+pub mod daemon;
 pub mod db;
 pub mod skim;
 
-pub fn engine(search_mode: SearchMode) -> Box<dyn SearchEngine> {
+#[allow(unused)] // settings is only used if daemon feature is enabled
+pub fn engine(search_mode: SearchMode, settings: &Settings) -> Box<dyn SearchEngine> {
     match search_mode {
         SearchMode::Skim => Box::new(skim::Search::new()) as Box<_>,
+        #[cfg(feature = "daemon")]
+        SearchMode::DaemonFuzzy => Box::new(daemon::Search::new(settings)) as Box<_>,
+        #[cfg(not(feature = "daemon"))]
+        SearchMode::DaemonFuzzy => {
+            // Fall back to fuzzy mode if daemon feature is not enabled
+            Box::new(db::Search(SearchMode::Fuzzy)) as Box<_>
+        }
         mode => Box::new(db::Search(mode)) as Box<_>,
     }
 }
@@ -22,6 +32,7 @@ pub struct SearchState {
     pub input: Cursor,
     pub filter_mode: FilterMode,
     pub context: Context,
+    pub custom_context: Option<HistoryId>,
 }
 
 impl SearchState {
@@ -44,6 +55,7 @@ impl SearchState {
 
     fn filter_mode_available(&self, mode: FilterMode, settings: &Settings) -> bool {
         match mode {
+            FilterMode::Global | FilterMode::SessionPreload => self.custom_context.is_none(),
             FilterMode::Workspace => settings.workspaces && self.context.git_root.is_some(),
             _ => true,
         }
@@ -61,7 +73,17 @@ pub trait SearchEngine: Send + Sync + 'static {
     async fn query(&mut self, state: &SearchState, db: &mut dyn Database) -> Result<Vec<History>> {
         if state.input.as_str().is_empty() {
             Ok(db
-                .list(&[state.filter_mode], &state.context, Some(200), true, false)
+                .search(
+                    SearchMode::FullText,
+                    state.filter_mode,
+                    &state.context,
+                    "",
+                    OptFilters {
+                        limit: Some(200),
+                        authors: vec![AUTHOR_FILTER_ALL_USER.to_string()],
+                        ..Default::default()
+                    },
+                )
                 .await?
                 .into_iter()
                 .collect::<Vec<_>>())
@@ -69,4 +91,5 @@ pub trait SearchEngine: Send + Sync + 'static {
             self.full_query(state, db).await
         }
     }
+    fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize>;
 }

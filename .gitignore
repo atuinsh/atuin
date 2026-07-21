@@ -7,6 +7,16 @@
 result
 publish.sh
 .envrc
+.planning/
+.antigravitycli/
 
 ui/backend/target
 ui/backend/gen
+
+sqlite-server.db*
+
+.atuin/permissions.*.toml
+
+__pycache__/
+*.py[codz]
+*$py.class
