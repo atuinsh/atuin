@@ -1,7 +1,5 @@
 name: Deploy release docs
 
-# On any version tag: a stable vX.Y.Z deploys X.Y and moves `latest`;
-# a prerelease vX.Y.Z-beta.N deploys a pre-release preview instead.
 on:
   push:
     tags:
@@ -10,8 +8,6 @@ on:
 permissions:
   contents: write
 
-# Shared with every docs deploy trigger so writes to the gh-pages branch are
-# serialized across workflows (must match the group name in the other callers).
 concurrency:
   group: docs-pages
   cancel-in-progress: false
