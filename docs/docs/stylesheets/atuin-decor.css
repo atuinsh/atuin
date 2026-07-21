@@ -1,0 +1,93 @@
+/* ==========================================================================
+   Atuin decor
+   --------------------------------------------------------------------------
+   Two motifs, both cosmetic. Deleting this file degrades the look and breaks
+   nothing.
+   ========================================================================== */
+
+/* ---------- Hex lattice ----------
+   The turtle's shell is a hexagonal tessellation, which is where atuin.sh's
+   hex motif comes from. The tile path below is atuin.sh's verbatim: one
+   hexagon plus the stem that joins it to the next row.
+
+   Applied to .md-main::before, NOT .md-content__inner::before -- Material
+   already uses that pseudo-element as a .4rem spacer. */
+
+.md-main {
+  position: relative;
+}
+
+.md-main::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 320px;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.045;
+  background-image: url("data:image/svg+xml,%3Csvg width='108' height='186' viewBox='0 0 108 186' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M54 0 108 31V93L54 124 0 93V31L54 0Z M54 124V186' fill='none' stroke='%2338c85a' stroke-width='1.35' stroke-linecap='square' stroke-linejoin='miter'/%3E%3C/svg%3E");
+  background-position: center -2px;
+  background-size: 108px 186px;
+  mask-image: linear-gradient(to bottom, #000 0, rgba(0, 0, 0, 0.4) 55%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, rgba(0, 0, 0, 0.4) 55%, transparent 100%);
+}
+
+/* Keep real content above the lattice.
+
+   ONLY .md-content. Do NOT add .md-sidebar here: Material sets
+   `.md-sidebar{position:sticky}` and `.md-sidebar--primary{position:fixed}`,
+   both at specificity 0,1,0. A `.md-sidebar{position:relative}` rule here is
+   also 0,1,0 and loads later, so it would win and silently kill the sticky
+   table of contents on every page and the mobile navigation drawer.
+
+   The sidebar does not need lifting anyway -- `position: sticky` already
+   makes it a positioned element, so it paints above the lattice, which is
+   .md-main's ::before and therefore first in tree order. .md-content, by
+   contrast, has no positioning of its own in Material and would otherwise
+   paint below. */
+.md-content {
+  position: relative;
+  z-index: 1;
+}
+
+/* The lattice is tuned for the dark background; on white it muddies the
+   text band, so it is dialled back rather than removed. */
+[data-md-color-scheme="default"] .md-main::before {
+  opacity: 0.03;
+}
+
+/* ---------- Bracketed chrome links ----------
+   From atuin.sh's nav, where every link sits inside [brackets] that turn
+   green on hover. Applied only to chrome -- the repo link and the footer
+   social icons. Deliberately NOT the 40-item left sidebar, where it would
+   read as clutter.
+
+   .md-source__repository is a <div>; the anchor wrapping it is .md-source,
+   which is why the hover selectors reach down from there. */
+
+.md-source__repository::before,
+.md-source__repository::after,
+.md-social__link::before,
+.md-social__link::after {
+  color: var(--md-default-fg-color--lighter);
+  transition: color 160ms ease;
+}
+
+.md-source__repository::before,
+.md-social__link::before {
+  content: "[";
+  margin-right: 2px;
+}
+
+.md-source__repository::after,
+.md-social__link::after {
+  content: "]";
+  margin-left: 2px;
+}
+
+.md-source:hover .md-source__repository::before,
+.md-source:hover .md-source__repository::after,
+.md-social__link:hover::before,
+.md-social__link:hover::after {
+  color: var(--atuin-green);
+}

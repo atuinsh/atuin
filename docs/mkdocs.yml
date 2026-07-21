@@ -175,6 +175,7 @@ extra_css:
   - stylesheets/atuin-tokens.css
   - stylesheets/atuin-typography.css
   - stylesheets/atuin-components.css
+  - stylesheets/atuin-decor.css
 
 extra:
   version:
