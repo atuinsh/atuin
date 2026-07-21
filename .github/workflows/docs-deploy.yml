@@ -1,30 +1,22 @@
-name: Deploy docs to GitHub Pages
+name: Deploy docs (reusable)
+
+# Shared implementation called by the trigger-specific workflows
+# (docs-main.yml, docs-release.yml, docs-dispatch.yml). Not triggered directly.
 
 on:
-  push:
-    # NOTE: `paths` filters apply ONLY to the `branches` pushes, not to tag
-    # pushes. A release tag deploys even though the version-bump commit may
-    # not touch docs/**. Do not "simplify" by merging these filters.
-    branches: [main]
-    paths:
-      - "docs/**"
-    tags:
-      - "v*"
-  workflow_dispatch:
+  workflow_call:
     inputs:
-      release_version:
-        description: "Version to deploy (e.g. 18.17.1 -> latest; 18.18.0-beta.1 -> a pre-release preview). Leave blank to deploy the main version."
+      version:
+        description: >-
+          Version to deploy. Empty = the main (unreleased) docs;
+          X.Y.Z = a stable release (moves the `latest` alias + default);
+          X.Y.Z-beta.N = a pre-release preview. A leading `v` is stripped.
+        type: string
         required: false
         default: ""
 
 permissions:
   contents: write
-
-# Serialize all writes to the gh-pages branch so a main push and a tag
-# release never race each other pushing to the same branch.
-concurrency:
-  group: docs-pages
-  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -56,23 +48,10 @@ jobs:
 
       - name: Deploy versioned docs
         env:
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
-          EVENT_NAME: ${{ github.event_name }}
-          DISPATCH_VERSION: ${{ github.event.inputs.release_version }}
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-
-          # Decide what to deploy.
-          # - tag push -> release path (version from tag)
-          # - workflow_dispatch with release_version -> release path
-          # - anything else (main push, blank dispatch) -> main version
-          VERSION=""
-          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$DISPATCH_VERSION" ]; then
-            VERSION="$DISPATCH_VERSION"
-          elif [ "$EVENT_NAME" = "push" ] && [ "$REF_TYPE" = "tag" ]; then
-            VERSION="${REF_NAME#v}"
-          fi
+          VERSION="${VERSION#v}"
 
           if [ -n "$VERSION" ]; then
             if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
@@ -112,9 +91,7 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
-          # gh-pages may not exist yet (e.g. the very first trigger is a
-          # prerelease tag, whose deploy step skips without creating it).
-          # No branch -> nothing to guard; exit cleanly.
+          # gh-pages may not exist on the very first deploy; nothing to guard.
           if ! git ls-remote --exit-code origin gh-pages >/dev/null 2>&1; then
             echo "gh-pages does not exist yet - skipping CNAME guard."
             exit 0

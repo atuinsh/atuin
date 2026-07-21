@@ -1,0 +1,25 @@
+name: Deploy release docs
+
+# On any version tag: stable X.Y.Z deploys X.Y and moves `latest`;
+# a prerelease X.Y.Z-beta.N deploys a pre-release preview. The reusable
+# workflow decides which based on the version string.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+# Shared with every docs deploy trigger so writes to the gh-pages branch are
+# serialized across workflows (must match the group name in the other callers).
+concurrency:
+  group: docs-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/docs-deploy.yml
+    with:
+      # e.g. "v18.17.1"; the reusable strips the leading `v`.
+      version: ${{ github.ref_name }}

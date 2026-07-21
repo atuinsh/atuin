@@ -1,0 +1,26 @@
+name: Deploy docs (manual)
+
+# Manual deploy, mainly for seeding gh-pages during cutover or re-deploying a
+# specific version. Leave the input blank to deploy the main (unreleased) docs.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to deploy (e.g. 18.17.1 -> latest; 18.18.0-beta.1 -> a pre-release preview). Leave blank to deploy the main (unreleased) docs."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+# Shared with every docs deploy trigger so writes to the gh-pages branch are
+# serialized across workflows (must match the group name in the other callers).
+concurrency:
+  group: docs-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/docs-deploy.yml
+    with:
+      version: ${{ inputs.version }}

@@ -1,0 +1,23 @@
+name: Deploy main docs
+
+# Redeploys the `main` (unreleased) docs version on every push to main
+# that touches docs/**.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+
+permissions:
+  contents: write
+
+# Shared with every docs deploy trigger so writes to the gh-pages branch are
+# serialized across workflows (must match the group name in the other callers).
+concurrency:
+  group: docs-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # No `version` input -> the reusable deploys the main (unreleased) docs.
+    uses: ./.github/workflows/docs-deploy.yml
