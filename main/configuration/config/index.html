@@ -1,0 +1,4944 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://docs.atuin.sh/main/configuration/config/">
+      
+      
+        <link rel="prev" href="../../guide/theming/">
+      
+      
+        <link rel="next" href="../key-binding/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.0">
+    
+    
+      
+        <title>Config - Atuin Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.618322db.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+<script>
+    !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey getNextSurveyStep identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+    posthog.init('phc_rXjtykrfkeyppPRiqpcwsp62mszskk2sQs5UKND2yhBp',{api_host:'https://ev.atuin.sh', ui_host: "https://us.posthog.com", defaults:'2026-01-30', })
+</script>
+
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-purple" data-md-color-accent="deep-purple">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#config" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+          <aside class="md-banner md-banner--warning">
+            <div class="md-banner__inner md-grid md-typeset">
+              
+  You're viewing docs for a version that is <strong>not the current release</strong>.
+  This may be an older release or the in-development <code>main</code> branch, which is
+  not what <code>install.sh</code> gives you.
+  <a href="../../..">
+    <strong>Switch to the latest release &rarr;</strong>
+  </a>
+
+            </div>
+            <script>var el=document.querySelector("[data-md-component=outdated]"),base=new URL("../.."),outdated=__md_get("__outdated",sessionStorage,base);!0===outdated&&el&&(el.hidden=!1)</script>
+          </aside>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Atuin Docs" class="md-header__button md-logo" aria-label="Atuin Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Atuin Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Config
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-purple" data-md-color-accent="deep-purple"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-purple" data-md-color-accent="deep-purple"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/atuinsh/atuin" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    atuinsh/atuin
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Atuin Docs" class="md-nav__button md-logo" aria-label="Atuin Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Atuin Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/atuinsh/atuin" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    atuinsh/atuin
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/sync/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setting up sync
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Import existing history
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/basic-usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Basic usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/advanced-usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Advanced usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/shell-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shell Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/agent-hooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI Agent Hooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/delete-history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deleting history
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/dotfiles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Syncing dotfiles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/theming/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Theming
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Configuration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Config
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#db_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        db_path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        key_path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#session_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        session_path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dialect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dialect
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#auto_sync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        auto_sync
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#update_check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        update_check
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sync_address" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        sync_address
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sync_frequency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        sync_frequency
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#search_mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        search_mode
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="search_mode">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fuzzy-search-syntax" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        fuzzy search syntax
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#filter_mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        filter_mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#search_mode_shell_up_key_binding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        search_mode_shell_up_key_binding
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#filter_mode_shell_up_key_binding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        filter_mode_shell_up_key_binding
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inline_height_shell_up_key_binding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        inline_height_shell_up_key_binding
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workspaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        workspaces
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#style" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        style
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#invert" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        invert
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inline_height" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        inline_height
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#show_preview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        show_preview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#max_preview_height" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        max_preview_height
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#show_help" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        show_help
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#show_tabs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        show_tabs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#auto_hide_height" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        auto_hide_height
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exit_mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        exit_mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#history_format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        history_format
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#history_filter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        history_filter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cwd_filter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cwd_filter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#store_failed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        store_failed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#secrets_filter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        secrets_filter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#macos-ctrl-n-key-shortcuts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        macOS Ctrl-n key shortcuts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#show_numeric_shortcuts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        show_numeric_shortcuts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#network_timeout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network_timeout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#network_connect_timeout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network_connect_timeout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#local_timeout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        local_timeout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#command_chaining" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        command_chaining
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#enter_accept" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        enter_accept
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keymap_mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        keymap_mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keymap_cursor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        keymap_cursor
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prefers_reduced_motion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        prefers_reduced_motion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        search
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="search">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#filters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        filters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#score-multipliers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Score multipliers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Score multipliers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#frequency_score_multiplier" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        frequency_score_multiplier
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recency_score_multiplier" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        recency_score_multiplier
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#frecency_score_multiplier" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        frecency_score_multiplier
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#authors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        authors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stats" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stats
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Stats">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#common_subcommands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        common_subcommands
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#common_prefix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        common_prefix
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dotfiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dotfiles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#scroll_exits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        scroll_exits
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prefix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        prefix
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exit_past_line_start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        exit_past_line_start
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accept_past_line_end" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accept_past_line_end
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accept_past_line_start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accept_past_line_start
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accept_with_backspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accept_with_backspace
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#preview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        preview
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="preview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        strategy
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#daemon" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Daemon
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Daemon">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#enabled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        enabled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#autostart" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        autostart
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync_frequency_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        sync_frequency
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#socket_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        socket_path
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pidfile_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pidfile_path
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#systemd_socket" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        systemd_socket
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tcp_port" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        tcp_port
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        logs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="logs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#enabled_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        enabled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dir
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#level" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        level
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        retention
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ai" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ai
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#daemon_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        daemon
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#search_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        search
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#theme" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        theme
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="theme">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#name" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        name
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#debug" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        debug
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#max_depth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        max_depth
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ui
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ui">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#columns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        columns
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="columns">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#available-column-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Available column types
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#column-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Column options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ai_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ai
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../key-binding/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key Binding
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../advanced-key-binding/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Advanced Key Binding
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/daemon/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    daemon
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/doctor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    doctor
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/gen-completions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    gen-completions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/pty-proxy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    pty-proxy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    import
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/info/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    info
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/list/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    history list
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/prune/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    history prune
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/search/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/stats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stats
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/sync/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    sync
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Self Hosting
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Self Hosting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../self-hosting/server-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Server Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../self-hosting/usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../self-hosting/docker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../self-hosting/kubernetes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../self-hosting/systemd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Systemd
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/introduction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Introduction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/slash-commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Slash Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/user-context/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User-Defined Context
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/tools-permissions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tools & Permissions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/command-output/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reading Command Output
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/self-hosting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Self Hosting & Local Models
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../known-issues/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Known Issues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integrations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integrations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../faq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FAQ
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../uninstall/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Uninstall
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#db_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        db_path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        key_path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#session_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        session_path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dialect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dialect
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#auto_sync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        auto_sync
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#update_check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        update_check
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sync_address" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        sync_address
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sync_frequency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        sync_frequency
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#search_mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        search_mode
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="search_mode">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fuzzy-search-syntax" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        fuzzy search syntax
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#filter_mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        filter_mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#search_mode_shell_up_key_binding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        search_mode_shell_up_key_binding
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#filter_mode_shell_up_key_binding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        filter_mode_shell_up_key_binding
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inline_height_shell_up_key_binding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        inline_height_shell_up_key_binding
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workspaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        workspaces
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#style" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        style
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#invert" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        invert
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inline_height" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        inline_height
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#show_preview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        show_preview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#max_preview_height" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        max_preview_height
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#show_help" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        show_help
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#show_tabs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        show_tabs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#auto_hide_height" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        auto_hide_height
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exit_mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        exit_mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#history_format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        history_format
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#history_filter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        history_filter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cwd_filter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cwd_filter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#store_failed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        store_failed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#secrets_filter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        secrets_filter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#macos-ctrl-n-key-shortcuts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        macOS Ctrl-n key shortcuts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#show_numeric_shortcuts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        show_numeric_shortcuts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#network_timeout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network_timeout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#network_connect_timeout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network_connect_timeout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#local_timeout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        local_timeout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#command_chaining" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        command_chaining
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#enter_accept" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        enter_accept
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keymap_mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        keymap_mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keymap_cursor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        keymap_cursor
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prefers_reduced_motion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        prefers_reduced_motion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        search
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="search">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#filters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        filters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#score-multipliers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Score multipliers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Score multipliers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#frequency_score_multiplier" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        frequency_score_multiplier
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recency_score_multiplier" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        recency_score_multiplier
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#frecency_score_multiplier" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        frecency_score_multiplier
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#authors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        authors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stats" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stats
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Stats">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#common_subcommands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        common_subcommands
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#common_prefix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        common_prefix
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dotfiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dotfiles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#scroll_exits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        scroll_exits
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prefix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        prefix
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exit_past_line_start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        exit_past_line_start
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accept_past_line_end" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accept_past_line_end
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accept_past_line_start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accept_past_line_start
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accept_with_backspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accept_with_backspace
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#preview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        preview
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="preview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        strategy
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#daemon" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Daemon
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Daemon">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#enabled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        enabled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#autostart" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        autostart
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync_frequency_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        sync_frequency
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#socket_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        socket_path
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pidfile_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pidfile_path
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#systemd_socket" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        systemd_socket
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tcp_port" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        tcp_port
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        logs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="logs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#enabled_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        enabled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dir
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#level" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        level
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        retention
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ai" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ai
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#daemon_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        daemon
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#search_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        search
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#theme" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        theme
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="theme">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#name" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        name
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#debug" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        debug
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#max_depth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        max_depth
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ui
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ui">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#columns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        columns
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="columns">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#available-column-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Available column types
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#column-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Column options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ai_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ai
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/atuinsh/atuin/edit/main/docs/docs/configuration/config.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/atuinsh/atuin/raw/main/docs/docs/configuration/config.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
+    </a>
+  
+
+
+<h1 id="config">Config</h1>
+<p>Atuin maintains two configuration files, stored in <code>~/.config/atuin/</code>. We store
+data in <code>~/.local/share/atuin</code> (unless overridden by XDG_*).</p>
+<p>The full path to the config file would be <code>~/.config/atuin/config.toml</code></p>
+<p>The config location can be overridden with ATUIN_CONFIG_DIR</p>
+<h3 id="db_path"><code>db_path</code></h3>
+<p>Default: <code>~/.local/share/atuin/history.db</code></p>
+<p>The path to the Atuin SQLite database.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">db_path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;~/.history.db&quot;</span>
+</code></pre></div>
+<h3 id="key_path"><code>key_path</code></h3>
+<p>Default: <code>~/.local/share/atuin/key</code></p>
+<p>The path to the Atuin encryption key.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">key_path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;~/.atuin-key&quot;</span>
+</code></pre></div>
+<h3 id="session_path"><code>session_path</code></h3>
+<p>Default: <code>~/.local/share/atuin/session</code></p>
+<p>The path to the Atuin server session file.
+This is essentially just an API token</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">session_path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;~/.atuin-session&quot;</span>
+</code></pre></div>
+<h3 id="dialect"><code>dialect</code></h3>
+<p>Default: <code>us</code></p>
+<p>This configures how the <a href="../../reference/stats/">stats</a> command parses dates. It has two
+possible values</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">dialect</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;uk&quot;</span>
+</code></pre></div>
+<p>or</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">dialect</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;us&quot;</span>
+</code></pre></div>
+<h3 id="auto_sync"><code>auto_sync</code></h3>
+<p>Default: <code>true</code></p>
+<p>Configures whether or not to automatically sync, when logged in.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">auto_sync</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="err">/</span><span class="n">false</span>
+</code></pre></div>
+<h3 id="update_check"><code>update_check</code></h3>
+<p>Default: <code>true</code></p>
+<p>Configures whether or not to automatically check for updates.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">update_check</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="err">/</span><span class="n">false</span>
+</code></pre></div>
+<h3 id="sync_address"><code>sync_address</code></h3>
+<p>Default: <code>https://api.atuin.sh</code></p>
+<p>The address of the server to sync with!</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">sync_address</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;https://api.atuin.sh&quot;</span>
+</code></pre></div>
+<h3 id="sync_frequency"><code>sync_frequency</code></h3>
+<p>Default: <code>1h</code></p>
+<p>How often to automatically sync with the server. This can be given in a
+"human-readable" format. For example, <code>10s</code>, <code>20m</code>, <code>1h</code>, etc.</p>
+<p>If set to <code>0</code>, Atuin will sync after every command. Some servers may potentially
+rate limit, which won't cause any issues.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">sync_frequency</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;1h&quot;</span>
+</code></pre></div>
+<h3 id="search_mode"><code>search_mode</code></h3>
+<p>Default: <code>fuzzy</code></p>
+<p>Which search mode to use. Atuin supports "prefix", "fulltext", "fuzzy", "daemon-fuzzy", and
+"skim" search modes.</p>
+<p>Prefix mode searches for "query*"; fulltext mode searches for "*query*";
+"fuzzy" applies the <a href="#fuzzy-search-syntax">fuzzy search syntax</a>;
+"skim" applies the <a href="https://github.com/lotabout/skim#search-syntax">skim search syntax</a>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">search_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;fuzzy&quot;</span>
+</code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">daemon-fuzzy search mode</p>
+<p>The "daemon-fuzzy" mode is new as of Atuin 18.13. This search mode uses an in-memory index, stored in the daemon, to perform fast and customizable searches.</p>
+<p>To use the new <code>"daemon-fuzzy"</code> mode, enable the daemon, set autostart to true (unless you manage its lifecycle yourself), and set the search mode:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">search_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;daemon-fuzzy&quot;</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="k">[daemon]</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="n">autostart</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</code></pre></div>
+<p>You can customize the priority given to frequency, recency, and frecency scores in this mode. See <a href="#score-multipliers">the score multipliers section</a> for more information.</p>
+</div>
+<h4 id="fuzzy-search-syntax"><code>fuzzy</code> search syntax</h4>
+<p>The "fuzzy" and "daemon-fuzzy" search syntax is based on the
+<a href="https://github.com/junegunn/fzf#search-syntax">fzf search syntax</a>.</p>
+<table>
+<thead>
+<tr>
+<th>Token</th>
+<th>Match type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sbtrkt</code></td>
+<td>fuzzy-match</td>
+<td>Items that match <code>sbtrkt</code></td>
+</tr>
+<tr>
+<td><code>'wild</code></td>
+<td>exact-match (quoted)</td>
+<td>Items that include <code>wild</code></td>
+</tr>
+<tr>
+<td><code>^music</code></td>
+<td>prefix-exact-match</td>
+<td>Items that start with <code>music</code></td>
+</tr>
+<tr>
+<td><code>.mp3$</code></td>
+<td>suffix-exact-match</td>
+<td>Items that end with <code>.mp3</code></td>
+</tr>
+<tr>
+<td><code>!fire</code></td>
+<td>inverse-exact-match</td>
+<td>Items that do not include <code>fire</code></td>
+</tr>
+<tr>
+<td><code>!^music</code></td>
+<td>inverse-prefix-exact-match</td>
+<td>Items that do not start with <code>music</code></td>
+</tr>
+<tr>
+<td><code>!.mp3$</code></td>
+<td>inverse-suffix-exact-match</td>
+<td>Items that do not end with <code>.mp3</code></td>
+</tr>
+</tbody>
+</table>
+<p>A single bar character term acts as an OR operator. For example, the following
+query matches entries that start with <code>core</code> and end with either <code>go</code>, <code>rb</code>,
+or <code>py</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>^core go$ | rb$ | py$
+</code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">Bar not supported in daemon-fuzzy</p>
+<p>The "daemon-fuzzy" search mode does not currently support the bar character operator.</p>
+</div>
+<h3 id="filter_mode"><code>filter_mode</code></h3>
+<p>Default: <code>global</code></p>
+<p>The default filter to use when searching</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>global (default)</td>
+<td>Search from the full history</td>
+</tr>
+<tr>
+<td>host</td>
+<td>Search history from this host</td>
+</tr>
+<tr>
+<td>session</td>
+<td>Search history from the current session</td>
+</tr>
+<tr>
+<td>directory</td>
+<td>Search history from the current directory</td>
+</tr>
+<tr>
+<td>workspace</td>
+<td>Search history from the current git repository</td>
+</tr>
+<tr>
+<td>session-preload</td>
+<td>Search from the current session and the global history from before the session start</td>
+</tr>
+</tbody>
+</table>
+<p>Filter modes can still be toggled via ctrl-r</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">filter_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;host&quot;</span>
+</code></pre></div>
+<h3 id="search_mode_shell_up_key_binding"><code>search_mode_shell_up_key_binding</code></h3>
+<p>Atuin version: &gt;= 17.0</p>
+<p>Default: <code>fuzzy</code></p>
+<p>The default searchmode to use when searching and being invoked from a shell up-key binding.</p>
+<p>Accepts exactly the same options as <code>search_mode</code> above</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="n">search_mode_shell_up_key_binding</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;fuzzy&quot;</span>
+</code></pre></div>
+<p>Defaults to the value specified for <code>search_mode</code>.</p>
+<h3 id="filter_mode_shell_up_key_binding"><code>filter_mode_shell_up_key_binding</code></h3>
+<p>Default: <code>global</code></p>
+<p>The default filter to use when searching and being invoked from a shell up-key binding.</p>
+<p>Accepts exactly the same options as <code>filter_mode</code> above</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">filter_mode_shell_up_key_binding</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;session&quot;</span>
+</code></pre></div>
+<p>Defaults to the value specified for <code>filter_mode</code>.</p>
+<h3 id="inline_height_shell_up_key_binding"><code>inline_height_shell_up_key_binding</code></h3>
+<p>The maximum number of lines the interface should take up when atuin is invoked from a shell up-key binding.</p>
+<p>The accepted values are identical to those of <code>inline_height</code>.</p>
+<p>When unset, the value from <code>inline_height</code> is used.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="n">inline_height_shell_up_key_binding</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span>
+</code></pre></div>
+<h3 id="workspaces"><code>workspaces</code></h3>
+<p>Atuin version: &gt;= 17.0</p>
+<p>Default: <code>false</code></p>
+<p>This flag enables a pseudo filter-mode named "workspace": the filter is automatically
+activated when you are in a git repository.</p>
+<p>With workspace filtering enabled, Atuin will filter for commands executed in any directory
+within a git repository tree.</p>
+<p>Filter modes can still be toggled via ctrl-r.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">workspaces</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+</code></pre></div>
+<h3 id="style"><code>style</code></h3>
+<p>Default: <code>compact</code></p>
+<p>Which style to use. Possible values: <code>auto</code>, <code>full</code> and <code>compact</code>.</p>
+<ul>
+<li><code>compact</code>:</li>
+</ul>
+<p><img alt="compact" src="https://user-images.githubusercontent.com/1710904/161623659-4fec047f-ea4b-471c-9581-861d2eb701a9.png" /></p>
+<ul>
+<li><code>full</code>:</li>
+</ul>
+<p><img alt="full" src="https://user-images.githubusercontent.com/1710904/161623547-42afbfa7-a3ef-4820-bacd-fcaf1e324969.png" /></p>
+<p>This means that Atuin will automatically switch to <code>compact</code> mode when the terminal window is too short for <code>full</code> to display properly.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="n">style</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;compact&quot;</span>
+</code></pre></div>
+<h3 id="invert"><code>invert</code></h3>
+<p>Atuin version: &gt;= 17.0</p>
+<p>Default: <code>false</code></p>
+<p>Invert the UI - put the search bar at the top.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="n">invert</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="err">/</span><span class="n">false</span>
+</code></pre></div>
+<h3 id="inline_height"><code>inline_height</code></h3>
+<p>Default: <code>40</code></p>
+<p>Set the maximum number of lines Atuin's interface should take up.</p>
+<p>If set to <code>0</code>, Atuin will always take up as many lines as available (full screen).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="n">inline_height</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">40</span>
+</code></pre></div>
+<h3 id="show_preview"><code>show_preview</code></h3>
+<p>Default: <code>true</code></p>
+<p>Configure whether or not to show a preview of the selected command.</p>
+<p>Useful when the command is longer than the terminal width and is cut off.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="n">show_preview</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</code></pre></div>
+<h3 id="max_preview_height"><code>max_preview_height</code></h3>
+<p>Atuin version: &gt;= 17.0</p>
+<p>Default: <code>4</code></p>
+<p>Configure the maximum height of the preview to show.</p>
+<p>Useful when you have long scripts in your history that you want to distinguish by more than the first few lines.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="n">max_preview_height</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
+</code></pre></div>
+<h3 id="show_help"><code>show_help</code></h3>
+<p>Atuin version: &gt;= 17.0</p>
+<p>Default: <code>true</code></p>
+<p>Configure whether or not to show the help row, which includes the current Atuin version (and whether an update is available), a keymap hint, and the total amount of commands in your history.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="n">show_help</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</code></pre></div>
+<h3 id="show_tabs"><code>show_tabs</code></h3>
+<p>Atuin version: &gt;= 18.0</p>
+<p>Default: <code>true</code></p>
+<p>Configure whether or not to show tabs for search and inspect.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="n">show_tabs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</code></pre></div>
+<h3 id="auto_hide_height"><code>auto_hide_height</code></h3>
+<p>Atuin version: &gt;= 18.4</p>
+<p>Default: <code>8</code></p>
+<p>Set Atuin to hide lines when a minimum number of rows is subceeded. This has no effect except
+when <code>compact</code> style is being used (see <code>style</code> above), and currently applies to only the
+interactive search and inspector. It can be turned off entirely by setting to <code>0</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="n">auto_hide_height</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span>
+</code></pre></div>
+<h3 id="exit_mode"><code>exit_mode</code></h3>
+<p>Default: <code>return-original</code></p>
+<p>What to do when the escape key is pressed when searching</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>return-original (default)</td>
+<td>Set the command-line to the value it had before starting search</td>
+</tr>
+<tr>
+<td>return-query</td>
+<td>Set the command-line to the search query you have entered so far</td>
+</tr>
+</tbody>
+</table>
+<p>Pressing ctrl+c or ctrl+d will always return the original command-line value.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="n">exit_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;return-query&quot;</span>
+</code></pre></div>
+<h3 id="history_format"><code>history_format</code></h3>
+<p>Default to <code>history list</code></p>
+<p>The history format allows you to configure the default <code>history list</code> format - which can also be specified with the --format arg.</p>
+<p>The specified --format arg will prioritize the config when both are present</p>
+<p>More on <a href="../../reference/list/">history list</a></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="n">history_format</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;{time}</span><span class="se">\t</span><span class="s2">{command}</span><span class="se">\t</span><span class="s2">{duration}&quot;</span>
+</code></pre></div>
+<h3 id="history_filter"><code>history_filter</code></h3>
+<p>The history filter allows you to exclude commands from history tracking - maybe you want to keep ALL of your <code>curl</code> commands totally out of your shell history, or maybe just some matching a pattern.</p>
+<p>This supports regular expressions, so you can hide pretty much whatever you want!</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="c1">## Note that these regular expressions are unanchored, i.e. if they don&#39;t start</span>
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a><span class="c1">## with ^ or end with $, they&#39;ll match anywhere in the command.</span>
+<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="n">history_filter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a><span class="w">   </span><span class="s2">&quot;^secret-cmd&quot;</span><span class="p">,</span>
+<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="w">   </span><span class="s2">&quot;^innocuous-cmd .*--secret=.+&quot;</span>
+<a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a><span class="p">]</span>
+</code></pre></div>
+<h3 id="cwd_filter"><code>cwd_filter</code></h3>
+<p>The cwd filter allows you to exclude directories from history tracking.</p>
+<p>This supports regular expressions, so you can hide pretty much whatever you want!</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="c1">## Note that these regular expressions are unanchored, i.e. if they don&#39;t start</span>
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="c1">## with ^ or end with $, they&#39;ll match anywhere in the path.</span>
+<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a><span class="c1"># cwd_filter = [</span>
+<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="c1">#   &quot;^/very/secret/directory&quot;,</span>
+<a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a><span class="c1"># ]</span>
+</code></pre></div>
+<p>After updating that parameter, you can run <a href="../../reference/prune/">the prune command</a> to remove old history entries that match the new filters.</p>
+<h3 id="store_failed"><code>store_failed</code></h3>
+<p>Atuin version: &gt;= 18.3.0</p>
+<p>Default: <code>true</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="n">store_failed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</code></pre></div>
+<p>Configures whether to store commands that failed (those with non-zero exit status) or not.</p>
+<h3 id="secrets_filter"><code>secrets_filter</code></h3>
+<p>Atuin version: &gt;= 17.0</p>
+<p>Default: <code>true</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="n">secrets_filter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</code></pre></div>
+<p>This matches history against a set of default regex, and will not save it if we get a match. Defaults include</p>
+<ol>
+<li>AWS key id</li>
+<li>Github pat (old and new)</li>
+<li>Slack oauth tokens (bot, user)</li>
+<li>Slack webhooks</li>
+<li>Stripe live/test keys</li>
+<li>Atuin login command</li>
+<li>Cloud environment variable patterns (<code>AWS_ACCESS_KEY_ID</code>, <code>AWS_SECRET_ACCESS_KEY</code>, <code>AZURE_STORAGE_CLASS_KEY</code>, <code>GOOGLE_SERVICE_ACCOUNT_KEY</code>)</li>
+<li>Netlify authentication tokens</li>
+<li>Npm pat</li>
+<li>Pulumi pat</li>
+</ol>
+<h3 id="macos-ctrl-n-key-shortcuts">macOS Ctrl-n key shortcuts</h3>
+<p>Default: <code>true</code></p>
+<p>macOS does not have an <span class="keys"><kbd class="key-alt">Alt</kbd></span> key, although terminal emulators can often be configured to map the <span class="keys"><kbd class="key-option">Option</kbd></span> key to be used as <span class="keys"><kbd class="key-alt">Alt</kbd></span>. <em>However</em>, remapping <span class="keys"><kbd class="key-option">Option</kbd></span> this way may prevent typing some characters, such as using <span class="keys"><kbd class="key-option">Option</kbd><span>+</span><kbd class="key-3">3</kbd></span> to type <code>#</code> on the British English layout. For such a scenario, set the <code>ctrl_n_shortcuts</code> option to <code>true</code> in your config file to replace <span class="keys"><kbd class="key-alt">Alt</kbd><span>+</span><kbd class="key-0">0</kbd></span> to <span class="keys"><kbd class="key-alt">Alt</kbd><span>+</span><kbd class="key-9">9</kbd></span> shortcuts with <span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-0">0</kbd></span> to <span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-9">9</kbd></span> instead:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="c1"># Use Ctrl-0 .. Ctrl-9 instead of Alt-0 .. Alt-9 UI shortcuts</span>
+<a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a><span class="n">ctrl_n_shortcuts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</code></pre></div>
+<h3 id="show_numeric_shortcuts">show_numeric_shortcuts</h3>
+<p>Atuin version: &gt;= 18.9</p>
+<p>Default: <code>true</code></p>
+<p>Whether to show numeric shortcuts (1..9) beside list items in the TUI. Set this to <code>false</code> to hide the moving numbers if you find them distracting.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="n">show_numeric_shortcuts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</code></pre></div>
+<h3 id="network_timeout"><code>network_timeout</code></h3>
+<p>Atuin version: &gt;= 18.0</p>
+<p>Default: <code>30</code></p>
+<p>The max amount of time (in seconds) to wait for a network request. If any
+operations with a sync server take longer than this, the code will fail -
+rather than wait indefinitely.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a><span class="n">network_timeout</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">30</span>
+</code></pre></div>
+<h3 id="network_connect_timeout"><code>network_connect_timeout</code></h3>
+<p>Atuin version: &gt;= 18.0</p>
+<p>Default: <code>5</code></p>
+<p>The max time (in seconds) we wait for a connection to become established with a
+remote sync server. Any longer than this and the request will fail.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a><span class="n">network_connect_timeout</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span>
+</code></pre></div>
+<h3 id="local_timeout"><code>local_timeout</code></h3>
+<p>Atuin version: &gt;= 18.0</p>
+<p>Default: <code>5</code></p>
+<p>Timeout (in seconds) for acquiring a local database connection (sqlite).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a><span class="n">local_timeout</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span>
+</code></pre></div>
+<h3 id="command_chaining"><code>command_chaining</code></h3>
+<p>Atuin version: &gt;= 18.8</p>
+<p>Default: <code>false</code></p>
+<p>Allows building a command chain with the <code>&amp;&amp;</code> or <code>||</code> operator. When enabled, opening atuin will search for the next command in the chain, and append to the current buffer.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a><span class="n">command_chaining</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+</code></pre></div>
+<h3 id="enter_accept"><code>enter_accept</code></h3>
+<p>Atuin version: &gt;= 17.0</p>
+<p>Default: <code>false</code></p>
+<p>When set to true, Atuin will default to immediately executing a command rather
+than the user having to press enter twice. Pressing tab will return to the
+shell and give the user a chance to edit.</p>
+<p>This technically defaults to true for new users, but false for existing. We
+have set <code>enter_accept = true</code> in the default config file. This is likely to
+change to be the default for everyone in a later release.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a><span class="n">enter_accept</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+</code></pre></div>
+<h3 id="keymap_mode"><code>keymap_mode</code></h3>
+<p>Atuin version: &gt;= 18.0</p>
+<p>Default: <code>emacs</code></p>
+<p>The initial keymap mode of the interactive Atuin search (e.g. started by the
+keybindings in the shells). There are four supported values: <code>"emacs"</code>,
+<code>"vim-normal"</code>, <code>"vim-insert"</code>, and <code>"auto"</code>. The keymap mode <code>"emacs"</code> is the
+most basic one. In the keymap mode <code>"vim-normal"</code>, you may use <span class="keys"><kbd class="key-k">K</kbd></span>
+and <span class="keys"><kbd class="key-j">J</kbd></span> to navigate the history list as in Vim, whilst pressing</p>
+<p><span class="keys"><kbd class="key-i">I</kbd></span> changes the keymap mode to <code>"vim-insert"</code>. In the keymap mode <code>"vim-insert"</code>,
+you can search for a string as in the keymap mode <code>"emacs"</code>, while pressing <span class="keys"><kbd class="key-escape">Esc</kbd></span>
+switches the keymap mode to <code>"vim-normal"</code>. When set to <code>"auto"</code>, the initial
+keymap mode is automatically determined based on the shell's keymap that triggered
+the Atuin search. <code>"auto"</code> is not supported by NuShell at present, where it will
+always trigger the Atuin search with the keymap mode <code>"emacs"</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a><span class="n">keymap_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;emacs&quot;</span>
+</code></pre></div>
+<h3 id="keymap_cursor"><code>keymap_cursor</code></h3>
+<p>Atuin version: &gt;= 18.0</p>
+<p>Default: <code>(empty dictionary)</code></p>
+<p>The terminal's cursor style associated with each keymap mode in the Atuin
+search. This is specified by a dictionary whose keys and values being the
+keymap names and the cursor styles, respectively. A key specifies one of the
+keymaps from <code>emacs</code>, <code>vim_insert</code>, and <code>vim_normal</code>. A value is one of the
+cursor styles, <code>default</code> or <code>{blink,steady}-{block,underline,bar}</code>. The
+following is an example.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a><span class="n">keymap_cursor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">emacs</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;blink-block&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">vim_insert</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;blink-block&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">vim_normal</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;steady-block&quot;</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>If the cursor style is specified, the terminal's cursor style is changed to the
+specified one when the Atuin search starts with or switches to the
+corresponding keymap mode. Also, the terminal's cursor style is reset to the
+one associated with the keymap mode corresponding to the shell's keymap on the
+termination of the Atuin search.</p>
+<h3 id="prefers_reduced_motion"><code>prefers_reduced_motion</code></h3>
+<p>Atuin version: &gt;= 18.0</p>
+<p>Default: <code>false</code></p>
+<p>Enable this, and Atuin will reduce motion in the TUI as much as possible. Users
+with motion sensitivity can find the live-updating timestamps distracting.</p>
+<p>Alternatively, set env var NO_MOTION</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a><span class="n">prefers_reduced_motion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+</code></pre></div>
+<h2 id="search">search</h2>
+<h3 id="filters"><code>filters</code></h3>
+<p>Atuin version: &gt;= 18.4</p>
+<p>The list of filter modes available in interactive search, in the order they cycle through when you press ctrl-r. By default, all modes are enabled. Removing a mode from this list disables it entirely. The <code>workspace</code> mode is skipped when not in a git repository or when <code>workspaces = false</code>. See <a href="#filter_mode"><code>filter_mode</code></a> for a description of each mode.</p>
+<p>The <code>filter_mode</code> setting selects the initial mode from this list. If <code>filter_mode</code> is set to a mode not in the list, the first available mode is used instead.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a><span class="k">[search]</span>
+<a id="__codelineno-41-2" name="__codelineno-41-2" href="#__codelineno-41-2"></a><span class="n">filters</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;global&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;host&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;session&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;directory&quot;</span><span class="p">]</span>
+</code></pre></div>
+<h3 id="score-multipliers">Score multipliers</h3>
+<p>For the <a href="#search_mode"><code>"daemon-fuzzy"</code> search mode</a>, you can control the scoring of matched items. The system scores matches based on three numbers: frequency, recency, and frecency:</p>
+<ul>
+<li>Frequency — how often this exact match has been run, with diminishing returns</li>
+<li>Recency — how recently this exact match was last run</li>
+<li>Frecency — a combination of frequency and recency</li>
+</ul>
+<p>The frecency calculation is <code>Recency Score * Recency Multiplier + Frequency Score * Frequency Multiplier</code>. By changing the options below, you can customize the relative importance of each part of the score calculation.</p>
+<p>For each setting, a value of <code>1.0</code> (the default) means the score is used as-is. Values less than <code>1.0</code> decrease that score's influence, and values greater than <code>1.0</code> increase that score's influence.</p>
+<p>So, for example, if you cared a lot about how frequently you run a command but not as much how recently, you could set <code>frequency_score_multiplier</code> to <code>10.0</code> and <code>recency_score_multiplier</code> to <code>0.1</code>.</p>
+<div class="admonition warning">
+<p class="admonition-title">daemon-fuzzy mode only</p>
+<p>The score multiplier settings shown here only work with the <code>"daemon-fuzzy"</code> search mode.</p>
+</div>
+<h4 id="frequency_score_multiplier"><code>frequency_score_multiplier</code></h4>
+<p>Default: <code>1.0</code></p>
+<p>The multiplier to apply to the frequency score in the frecency calculation. Setting this to <code>0</code> disables the frequency portion of the frecency scoring altogether.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-42-1" name="__codelineno-42-1" href="#__codelineno-42-1"></a><span class="n">frequency_score_multiplier</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">1.0</span>
+</code></pre></div>
+<h4 id="recency_score_multiplier"><code>recency_score_multiplier</code></h4>
+<p>Default: <code>1.0</code></p>
+<p>The multiplier to apply to the recency score in the frecency calculation. Setting this to <code>0</code> disables the recency portion of the frecency scoring altogether.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-43-1" name="__codelineno-43-1" href="#__codelineno-43-1"></a><span class="n">recency_score_multiplier</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">1.0</span>
+</code></pre></div>
+<h4 id="frecency_score_multiplier"><code>frecency_score_multiplier</code></h4>
+<p>Default: <code>1.0</code></p>
+<p>The multiplier used for the final frecency score. Setting this to <code>0</code> disables frecency scoring altogether, relying solely on the fuzzy matcher's score.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-44-1" name="__codelineno-44-1" href="#__codelineno-44-1"></a><span class="n">frecency_score_multiplier</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">1.0</span>
+</code></pre></div>
+<p>Example:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-45-1" name="__codelineno-45-1" href="#__codelineno-45-1"></a><span class="n">search_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;daemon-fuzzy&quot;</span>
+<a id="__codelineno-45-2" name="__codelineno-45-2" href="#__codelineno-45-2"></a>
+<a id="__codelineno-45-3" name="__codelineno-45-3" href="#__codelineno-45-3"></a><span class="k">[daemon]</span>
+<a id="__codelineno-45-4" name="__codelineno-45-4" href="#__codelineno-45-4"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-45-5" name="__codelineno-45-5" href="#__codelineno-45-5"></a><span class="n">autostart</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-45-6" name="__codelineno-45-6" href="#__codelineno-45-6"></a>
+<a id="__codelineno-45-7" name="__codelineno-45-7" href="#__codelineno-45-7"></a><span class="k">[search]</span>
+<a id="__codelineno-45-8" name="__codelineno-45-8" href="#__codelineno-45-8"></a><span class="n">recency_score_multiplier</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">10.0</span>
+<a id="__codelineno-45-9" name="__codelineno-45-9" href="#__codelineno-45-9"></a><span class="n">frequency_score_multiplier</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.8</span>
+<a id="__codelineno-45-10" name="__codelineno-45-10" href="#__codelineno-45-10"></a><span class="n">frecency_score_multiplier</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">2.0</span>
+</code></pre></div>
+<h4 id="authors"><code>authors</code></h4>
+<p>Default: <code>["$all-user"]</code></p>
+<p>Filter search results by command author. This controls which commands appear in interactive search based on who (or what) ran them. Useful when AI coding agents are recording commands via <a href="../../guide/agent-hooks/">agent hooks</a>.</p>
+<p>Special values:</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>$all-user</code></td>
+<td>Commands from any author that is <strong>not</strong> a known AI agent</td>
+</tr>
+<tr>
+<td><code>$all-agent</code></td>
+<td>Commands from any known AI agent</td>
+</tr>
+</tbody>
+</table>
+<p>You can also use literal author names like <code>"claude-code"</code>, <code>"codex"</code>, <code>"opencode"</code>, or <code>"pi"</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-46-1" name="__codelineno-46-1" href="#__codelineno-46-1"></a><span class="k">[search]</span>
+<a id="__codelineno-46-2" name="__codelineno-46-2" href="#__codelineno-46-2"></a><span class="c1"># Default: only show human-authored commands</span>
+<a id="__codelineno-46-3" name="__codelineno-46-3" href="#__codelineno-46-3"></a><span class="n">authors</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;$all-user&quot;</span><span class="p">]</span>
+<a id="__codelineno-46-4" name="__codelineno-46-4" href="#__codelineno-46-4"></a>
+<a id="__codelineno-46-5" name="__codelineno-46-5" href="#__codelineno-46-5"></a><span class="c1"># Show everything (no author filtering)</span>
+<a id="__codelineno-46-6" name="__codelineno-46-6" href="#__codelineno-46-6"></a><span class="c1"># authors = []</span>
+<a id="__codelineno-46-7" name="__codelineno-46-7" href="#__codelineno-46-7"></a>
+<a id="__codelineno-46-8" name="__codelineno-46-8" href="#__codelineno-46-8"></a><span class="c1"># Show commands from you and Claude Code</span>
+<a id="__codelineno-46-9" name="__codelineno-46-9" href="#__codelineno-46-9"></a><span class="c1"># authors = [&quot;$all-user&quot;, &quot;claude-code&quot;]</span>
+</code></pre></div>
+<h2 id="stats">Stats</h2>
+<p>This section of client config is specifically for configuring Atuin stats calculations</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-47-1" name="__codelineno-47-1" href="#__codelineno-47-1"></a><span class="k">[stats]</span>
+<a id="__codelineno-47-2" name="__codelineno-47-2" href="#__codelineno-47-2"></a><span class="n">common_subcommands</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="err">...]</span>
+<a id="__codelineno-47-3" name="__codelineno-47-3" href="#__codelineno-47-3"></a><span class="n">common_prefix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="err">...]</span>
+</code></pre></div>
+<h3 id="common_subcommands"><code>common_subcommands</code></h3>
+<p>Default:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-48-1" name="__codelineno-48-1" href="#__codelineno-48-1"></a><span class="n">common_subcommands</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-48-2" name="__codelineno-48-2" href="#__codelineno-48-2"></a><span class="w">  </span><span class="s2">&quot;apt&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-3" name="__codelineno-48-3" href="#__codelineno-48-3"></a><span class="w">  </span><span class="s2">&quot;cargo&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-4" name="__codelineno-48-4" href="#__codelineno-48-4"></a><span class="w">  </span><span class="s2">&quot;composer&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-5" name="__codelineno-48-5" href="#__codelineno-48-5"></a><span class="w">  </span><span class="s2">&quot;dnf&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-6" name="__codelineno-48-6" href="#__codelineno-48-6"></a><span class="w">  </span><span class="s2">&quot;docker&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-7" name="__codelineno-48-7" href="#__codelineno-48-7"></a><span class="w">  </span><span class="s2">&quot;git&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-8" name="__codelineno-48-8" href="#__codelineno-48-8"></a><span class="w">  </span><span class="s2">&quot;go&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-9" name="__codelineno-48-9" href="#__codelineno-48-9"></a><span class="w">  </span><span class="s2">&quot;ip&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-10" name="__codelineno-48-10" href="#__codelineno-48-10"></a><span class="w">  </span><span class="s2">&quot;jj&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-11" name="__codelineno-48-11" href="#__codelineno-48-11"></a><span class="w">  </span><span class="s2">&quot;kubectl&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-12" name="__codelineno-48-12" href="#__codelineno-48-12"></a><span class="w">  </span><span class="s2">&quot;nix&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-13" name="__codelineno-48-13" href="#__codelineno-48-13"></a><span class="w">  </span><span class="s2">&quot;nmcli&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-14" name="__codelineno-48-14" href="#__codelineno-48-14"></a><span class="w">  </span><span class="s2">&quot;npm&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-15" name="__codelineno-48-15" href="#__codelineno-48-15"></a><span class="w">  </span><span class="s2">&quot;pecl&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-16" name="__codelineno-48-16" href="#__codelineno-48-16"></a><span class="w">  </span><span class="s2">&quot;pnpm&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-17" name="__codelineno-48-17" href="#__codelineno-48-17"></a><span class="w">  </span><span class="s2">&quot;podman&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-18" name="__codelineno-48-18" href="#__codelineno-48-18"></a><span class="w">  </span><span class="s2">&quot;port&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-19" name="__codelineno-48-19" href="#__codelineno-48-19"></a><span class="w">  </span><span class="s2">&quot;systemctl&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-20" name="__codelineno-48-20" href="#__codelineno-48-20"></a><span class="w">  </span><span class="s2">&quot;tmux&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-21" name="__codelineno-48-21" href="#__codelineno-48-21"></a><span class="w">  </span><span class="s2">&quot;yarn&quot;</span><span class="p">,</span>
+<a id="__codelineno-48-22" name="__codelineno-48-22" href="#__codelineno-48-22"></a><span class="p">]</span>
+</code></pre></div>
+<p>Configures commands where we should consider the subcommand as part of the statistics. For example, consider <code>kubectl get</code> rather than just <code>kubectl</code>.</p>
+<h3 id="common_prefix"><code>common_prefix</code></h3>
+<p>Atuin version: &gt;= 17.1</p>
+<p>Default:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-49-1" name="__codelineno-49-1" href="#__codelineno-49-1"></a><span class="n">common_prefix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-49-2" name="__codelineno-49-2" href="#__codelineno-49-2"></a><span class="w">  </span><span class="s2">&quot;sudo&quot;</span><span class="p">,</span>
+<a id="__codelineno-49-3" name="__codelineno-49-3" href="#__codelineno-49-3"></a><span class="p">]</span>
+</code></pre></div>
+<p>Configures commands that should be totally stripped from stats calculations. For example, 'sudo' should be ignored.</p>
+<h2 id="dotfiles"><code>dotfiles</code></h2>
+<p>Atuin version: &gt;= 18.1</p>
+<p>Default: <code>false</code></p>
+<p>To enable sync of shell aliases between hosts.</p>
+<p>Add the new section to the bottom of your config file, for every machine you use Atuin with</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-50-1" name="__codelineno-50-1" href="#__codelineno-50-1"></a><span class="k">[dotfiles]</span>
+<a id="__codelineno-50-2" name="__codelineno-50-2" href="#__codelineno-50-2"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</code></pre></div>
+<p>Manage aliases using the command line options</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-51-1" name="__codelineno-51-1" href="#__codelineno-51-1"></a># Alias &#39;k&#39; to &#39;kubectl&#39;
+<a id="__codelineno-51-2" name="__codelineno-51-2" href="#__codelineno-51-2"></a>atuin dotfiles alias set k kubectl
+<a id="__codelineno-51-3" name="__codelineno-51-3" href="#__codelineno-51-3"></a>
+<a id="__codelineno-51-4" name="__codelineno-51-4" href="#__codelineno-51-4"></a># List all aliases
+<a id="__codelineno-51-5" name="__codelineno-51-5" href="#__codelineno-51-5"></a>atuin dotfiles alias list
+<a id="__codelineno-51-6" name="__codelineno-51-6" href="#__codelineno-51-6"></a>
+<a id="__codelineno-51-7" name="__codelineno-51-7" href="#__codelineno-51-7"></a># Delete an alias
+<a id="__codelineno-51-8" name="__codelineno-51-8" href="#__codelineno-51-8"></a>atuin dotfiles alias delete k
+</code></pre></div>
+<p>After setting an alias, you will either need to restart your shell or source the init file for the change to take affect</p>
+<h2 id="keys">keys</h2>
+<p>This section of the client config is specifically for configuring key-related settings.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-52-1" name="__codelineno-52-1" href="#__codelineno-52-1"></a><span class="k">[keys]</span>
+<a id="__codelineno-52-2" name="__codelineno-52-2" href="#__codelineno-52-2"></a><span class="n">scroll_exits</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="err">...]</span>
+<a id="__codelineno-52-3" name="__codelineno-52-3" href="#__codelineno-52-3"></a><span class="n">prefix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;a&#39;</span>
+</code></pre></div>
+<h3 id="scroll_exits"><code>scroll_exits</code></h3>
+<p>Atuin version: &gt;= 18.1</p>
+<p>Default: <code>true</code></p>
+<p>Configures whether the TUI exits, when scrolled past the last or first entry.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-53-1" name="__codelineno-53-1" href="#__codelineno-53-1"></a><span class="n">scroll_exits</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</code></pre></div>
+<h3 id="prefix"><code>prefix</code></h3>
+<p>Atuin version: &gt; 18.3</p>
+<p>Default: <code>a</code></p>
+<p>Which key to use as the prefix. Prefix mode is a two-step shortcut system: you press <span class="keys"><kbd class="key-control">Ctrl</kbd></span> and the prefix key to enter prefix mode, then press a second key to trigger an action. For example, with the default prefix <code>a</code>, pressing <span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-a">A</kbd></span> then <span class="keys"><kbd class="key-d">D</kbd></span> deletes the selected entry.</p>
+<p>See the <a href="../key-binding/#prefix-mode">key binding page</a> for the full list of default prefix shortcuts, or the <a href="../advanced-key-binding/#custom-prefix-bindings">advanced key binding page</a> to customize them.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-54-1" name="__codelineno-54-1" href="#__codelineno-54-1"></a><span class="n">prefix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;a&quot;</span>
+</code></pre></div>
+<h3 id="exit_past_line_start"><code>exit_past_line_start</code></h3>
+<p>Atuin version: &gt;= 18.5</p>
+<p>Default: <code>true</code></p>
+<p>Exits the TUI when scrolling left while the cursor is at the start of the line.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a><span class="n">exit_past_line_start</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</code></pre></div>
+<h3 id="accept_past_line_end"><code>accept_past_line_end</code></h3>
+<p>Atuin version: &gt;= 18.5</p>
+<p>Default: <code>true</code></p>
+<p>The right arrow key performs the same functionality as Tab and copies the selected line to the command line to be
+modified.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-56-1" name="__codelineno-56-1" href="#__codelineno-56-1"></a><span class="n">accept_past_line_end</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</code></pre></div>
+<h3 id="accept_past_line_start"><code>accept_past_line_start</code></h3>
+<p>Atuin version: &gt;= 18.9</p>
+<p>Default: <code>false</code></p>
+<p>The left arrow key performs the same functionality as Tab and copies the selected line to the command line to be
+modified.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-57-1" name="__codelineno-57-1" href="#__codelineno-57-1"></a><span class="n">accept_past_line_start</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+</code></pre></div>
+<h3 id="accept_with_backspace"><code>accept_with_backspace</code></h3>
+<p>Atuin version: &gt;= 18.9</p>
+<p>Default: <code>false</code></p>
+<p>The backspace key performs the same functionality as Tab and copies the selected line to the command line to be
+modified.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-58-1" name="__codelineno-58-1" href="#__codelineno-58-1"></a><span class="n">accept_with_backspace</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+</code></pre></div>
+<h2 id="preview">preview</h2>
+<p>This section of the client config is specifically for configuring preview-related settings.
+(In the future the other 2 preview settings will be moved here.)</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-59-1" name="__codelineno-59-1" href="#__codelineno-59-1"></a><span class="k">[preview]</span>
+<a id="__codelineno-59-2" name="__codelineno-59-2" href="#__codelineno-59-2"></a><span class="n">strategy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="err">...]</span>
+</code></pre></div>
+<h3 id="strategy"><code>strategy</code></h3>
+<p>Atuin version: &gt;= 18.3</p>
+<p>Default: <code>auto</code></p>
+<p>Which preview strategy is used to calculate the preview height. It respects <code>max_preview_height</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Preview height is calculated from the length of the</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>auto (default)</td>
+<td>selected command</td>
+</tr>
+<tr>
+<td>static</td>
+<td>longest command in the current result set</td>
+</tr>
+<tr>
+<td>fixed</td>
+<td>use <code>max_preview_height</code> as fixed value</td>
+</tr>
+</tbody>
+</table>
+<p>By using <code>auto</code> a preview is shown, if the command is longer than the width of the terminal.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-60-1" name="__codelineno-60-1" href="#__codelineno-60-1"></a><span class="n">strategy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;auto&quot;</span>
+</code></pre></div>
+<h2 id="daemon">Daemon</h2>
+<p>Atuin version: &gt;= 18.3</p>
+<h3 id="enabled">enabled</h3>
+<p>Default: <code>false</code></p>
+<p>Enable the background daemon</p>
+<p>Add the new section to the bottom of your config file</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-61-1" name="__codelineno-61-1" href="#__codelineno-61-1"></a><span class="k">[daemon]</span>
+<a id="__codelineno-61-2" name="__codelineno-61-2" href="#__codelineno-61-2"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</code></pre></div>
+<h3 id="autostart">autostart</h3>
+<p>Default: <code>false</code></p>
+<p>Automatically start and manage the daemon when needed.
+This is not compatible with <code>systemd_socket = true</code>.
+If a legacy experimental daemon is already running, restart it manually once before using autostart.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-62-1" name="__codelineno-62-1" href="#__codelineno-62-1"></a><span class="n">autostart</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+</code></pre></div>
+<h3 id="sync_frequency_1">sync_frequency</h3>
+<p>Default: <code>300</code></p>
+<p>How often the daemon should sync, in seconds</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-63-1" name="__codelineno-63-1" href="#__codelineno-63-1"></a><span class="n">sync_frequency</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">300</span>
+</code></pre></div>
+<h3 id="socket_path">socket_path</h3>
+<p>Default:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-64-1" name="__codelineno-64-1" href="#__codelineno-64-1"></a><span class="n">socket_path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;~/.local/share/atuin/atuin.sock&quot;</span>
+</code></pre></div>
+<p>Where to bind a unix socket for client -&gt; daemon communication</p>
+<p>If XDG_RUNTIME_DIR is available, then we use this directory instead.</p>
+<h3 id="pidfile_path">pidfile_path</h3>
+<p>Default:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-65-1" name="__codelineno-65-1" href="#__codelineno-65-1"></a><span class="n">pidfile_path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;~/.local/share/atuin/atuin-daemon.pid&quot;</span>
+</code></pre></div>
+<p>Path to the daemon pidfile used for process coordination.</p>
+<h3 id="systemd_socket">systemd_socket</h3>
+<p>Default <code>false</code></p>
+<p>Use a socket passed via systemd socket activation protocol instead of the path</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-66-1" name="__codelineno-66-1" href="#__codelineno-66-1"></a><span class="n">systemd_socket</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+</code></pre></div>
+<h3 id="tcp_port">tcp_port</h3>
+<p>Default: <code>8889</code></p>
+<p>The port to use for client -&gt; daemon communication. Only used on non-unix systems.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-67-1" name="__codelineno-67-1" href="#__codelineno-67-1"></a><span class="n">tcp_port</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8889</span>
+</code></pre></div>
+<h2 id="logs">logs</h2>
+<p>Atuin version: &gt;= 18.13</p>
+<p>Behavior of log files.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-68-1" name="__codelineno-68-1" href="#__codelineno-68-1"></a><span class="k">[logs]</span>
+<a id="__codelineno-68-2" name="__codelineno-68-2" href="#__codelineno-68-2"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-68-3" name="__codelineno-68-3" href="#__codelineno-68-3"></a><span class="n">dir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;~/.atuin/logs&quot;</span>
+<a id="__codelineno-68-4" name="__codelineno-68-4" href="#__codelineno-68-4"></a><span class="n">level</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;info&quot;</span>
+<a id="__codelineno-68-5" name="__codelineno-68-5" href="#__codelineno-68-5"></a><span class="n">retention</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
+</code></pre></div>
+<h3 id="enabled_1">enabled</h3>
+<p>Default: <code>true</code></p>
+<p>Whether or not to enable file-based logging.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-69-1" name="__codelineno-69-1" href="#__codelineno-69-1"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</code></pre></div>
+<h3 id="dir">dir</h3>
+<p>Default: <code>"~/.atuin/logs"</code></p>
+<p>The directory in which to store log files.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-70-1" name="__codelineno-70-1" href="#__codelineno-70-1"></a><span class="n">dir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;~/.atuin/logs&quot;</span>
+</code></pre></div>
+<h3 id="level">level</h3>
+<p>Default: <code>"info"</code></p>
+<p>The logging level to use. Valid values are <code>"trace"</code>, <code>"debug"</code>, <code>"info"</code>, <code>"warn"</code>, and <code>"error"</code>, in order of highest-to-lowest verbosity.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-71-1" name="__codelineno-71-1" href="#__codelineno-71-1"></a><span class="n">level</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;info&quot;</span>
+</code></pre></div>
+<h3 id="retention">retention</h3>
+<p>Default: <code>4</code></p>
+<p>How many days of log files to keep (per file type). Files older than this will be removed.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-72-1" name="__codelineno-72-1" href="#__codelineno-72-1"></a><span class="n">retention</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
+</code></pre></div>
+<h3 id="ai">ai</h3>
+<p>A sub-object with specific options for AI logging:</p>
+<ul>
+<li><code>enabled</code> - whether to output AI logs; defaults to <code>logs.enabled</code></li>
+<li><code>file</code> - the filename to use for the AI logs; defaults to <code>"ai.log"</code>. Always relative to <code>logs.dir</code>.</li>
+<li><code>level</code> - override the log level for the AI logs; defaults to <code>logs.level</code></li>
+<li><code>retention</code> - how many days to store AI logs; defaults to <code>logs.retention</code></li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-73-1" name="__codelineno-73-1" href="#__codelineno-73-1"></a><span class="k">[logs.ai]</span>
+<a id="__codelineno-73-2" name="__codelineno-73-2" href="#__codelineno-73-2"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-73-3" name="__codelineno-73-3" href="#__codelineno-73-3"></a><span class="n">file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;ai.log&quot;</span>
+<a id="__codelineno-73-4" name="__codelineno-73-4" href="#__codelineno-73-4"></a><span class="n">level</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;info&quot;</span>
+<a id="__codelineno-73-5" name="__codelineno-73-5" href="#__codelineno-73-5"></a><span class="n">retention</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
+</code></pre></div>
+<h3 id="daemon_1">daemon</h3>
+<p>A sub-object with specific options for daemon logging:</p>
+<ul>
+<li><code>enabled</code> - whether to output daemon logs; defaults to <code>logs.enabled</code></li>
+<li><code>file</code> - the filename to use for the daemon logs; defaults to <code>"daemon.log"</code>. Always relative to <code>logs.dir</code>.</li>
+<li><code>level</code> - override the log level for the daemon logs; defaults to <code>logs.level</code></li>
+<li><code>retention</code> - how many days to store daemon logs; defaults to <code>logs.retention</code></li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-74-1" name="__codelineno-74-1" href="#__codelineno-74-1"></a><span class="k">[logs.daemon]</span>
+<a id="__codelineno-74-2" name="__codelineno-74-2" href="#__codelineno-74-2"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-74-3" name="__codelineno-74-3" href="#__codelineno-74-3"></a><span class="n">file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;daemon.log&quot;</span>
+<a id="__codelineno-74-4" name="__codelineno-74-4" href="#__codelineno-74-4"></a><span class="n">level</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;info&quot;</span>
+<a id="__codelineno-74-5" name="__codelineno-74-5" href="#__codelineno-74-5"></a><span class="n">retention</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
+</code></pre></div>
+<h3 id="search_1">search</h3>
+<p>A sub-object with specific options for search logging:</p>
+<ul>
+<li><code>enabled</code> - whether to output search logs; defaults to <code>logs.enabled</code></li>
+<li><code>file</code> - the filename to use for the search logs; defaults to <code>"search.log"</code>. Always relative to <code>logs.dir</code>.</li>
+<li><code>level</code> - override the log level for the search logs; defaults to <code>logs.level</code></li>
+<li><code>retention</code> - how many days to store search logs; defaults to <code>logs.retention</code></li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-75-1" name="__codelineno-75-1" href="#__codelineno-75-1"></a><span class="k">[logs.search]</span>
+<a id="__codelineno-75-2" name="__codelineno-75-2" href="#__codelineno-75-2"></a><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-75-3" name="__codelineno-75-3" href="#__codelineno-75-3"></a><span class="n">file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;search.log&quot;</span>
+<a id="__codelineno-75-4" name="__codelineno-75-4" href="#__codelineno-75-4"></a><span class="n">level</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;info&quot;</span>
+<a id="__codelineno-75-5" name="__codelineno-75-5" href="#__codelineno-75-5"></a><span class="n">retention</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span>
+</code></pre></div>
+<h2 id="theme">theme</h2>
+<p>Atuin version: &gt;= 18.4</p>
+<p>The theme to use for showing the terminal interface.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-76-1" name="__codelineno-76-1" href="#__codelineno-76-1"></a><span class="k">[theme]</span>
+<a id="__codelineno-76-2" name="__codelineno-76-2" href="#__codelineno-76-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;default&quot;</span>
+<a id="__codelineno-76-3" name="__codelineno-76-3" href="#__codelineno-76-3"></a><span class="n">debug</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+<a id="__codelineno-76-4" name="__codelineno-76-4" href="#__codelineno-76-4"></a><span class="n">max_depth</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span>
+</code></pre></div>
+<h3 id="name"><code>name</code></h3>
+<p>Default: <code>"default"</code></p>
+<p>A theme name that must be present as a built-in (unset or <code>default</code> for the default,
+else <code>autumn</code> or <code>marine</code>), or found in the themes directory, with the suffix <code>.toml</code>.
+By default this is <code>~/.config/atuin/themes/</code> but can be overridden with the
+<code>ATUIN_THEME_DIR</code> environment variable.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-77-1" name="__codelineno-77-1" href="#__codelineno-77-1"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;my-theme&quot;</span>
+</code></pre></div>
+<h3 id="debug"><code>debug</code></h3>
+<p>Default: <code>false</code></p>
+<p>Output information about why a theme will not load. Independent from other log
+levels as it can cause data from the theme file to be printed unfiltered to the
+terminal.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-78-1" name="__codelineno-78-1" href="#__codelineno-78-1"></a><span class="n">debug</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+</code></pre></div>
+<h3 id="max_depth"><code>max_depth</code></h3>
+<p>Default: 10</p>
+<p>Number of levels of "parenthood" that will be traversed for a theme. This should not
+need to be added in or changed in normal usage.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-79-1" name="__codelineno-79-1" href="#__codelineno-79-1"></a><span class="n">max_depth</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span>
+</code></pre></div>
+<h2 id="ui">ui</h2>
+<p>Atuin version: &gt;= 18.5</p>
+<p>Configure the interactive search UI appearance.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-80-1" name="__codelineno-80-1" href="#__codelineno-80-1"></a><span class="k">[ui]</span>
+<a id="__codelineno-80-2" name="__codelineno-80-2" href="#__codelineno-80-2"></a><span class="n">columns</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;duration&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;time&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;command&quot;</span><span class="p">]</span>
+</code></pre></div>
+<h3 id="columns"><code>columns</code></h3>
+<p>Default: <code>["duration", "time", "command"]</code></p>
+<p>Columns to display in the interactive search, from left to right. The selection
+indicator (<code>" &gt; "</code>) is always shown first implicitly.</p>
+<p>Each column can be specified as:
+- A simple string (uses default width): <code>"duration"</code>
+- An object with type and optional width/expand: <code>{ type = "directory", width = 30 }</code></p>
+<h4 id="available-column-types">Available column types</h4>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Default Width</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>duration</td>
+<td>5</td>
+<td>Command execution duration (e.g., "123ms")</td>
+</tr>
+<tr>
+<td>time</td>
+<td>8</td>
+<td>Relative time since execution (e.g., "59m ago")</td>
+</tr>
+<tr>
+<td>datetime</td>
+<td>16</td>
+<td>Absolute timestamp (e.g., "2025-01-22 14:35")</td>
+</tr>
+<tr>
+<td>directory</td>
+<td>20</td>
+<td>Working directory (truncated if too long)</td>
+</tr>
+<tr>
+<td>host</td>
+<td>15</td>
+<td>Hostname where command was run</td>
+</tr>
+<tr>
+<td>user</td>
+<td>10</td>
+<td>Username</td>
+</tr>
+<tr>
+<td>exit</td>
+<td>3</td>
+<td>Exit code (colored by success/failure)</td>
+</tr>
+<tr>
+<td>command</td>
+<td>*</td>
+<td>The command itself (expands by default)</td>
+</tr>
+</tbody>
+</table>
+<h4 id="column-options">Column options</h4>
+<ul>
+<li><strong>type</strong>: The column type (required when using object format)</li>
+<li><strong>width</strong>: Custom width in characters (optional, uses default if not specified)</li>
+<li><strong>expand</strong>: If <code>true</code>, the column fills remaining space. Default is <code>true</code> for <code>command</code>, <code>false</code> for others. Only one column should have <code>expand = true</code>.</li>
+</ul>
+<h4 id="examples">Examples</h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-81-1" name="__codelineno-81-1" href="#__codelineno-81-1"></a><span class="c1"># Minimal - more space for commands</span>
+<a id="__codelineno-81-2" name="__codelineno-81-2" href="#__codelineno-81-2"></a><span class="n">columns</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;duration&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;command&quot;</span><span class="p">]</span>
+<a id="__codelineno-81-3" name="__codelineno-81-3" href="#__codelineno-81-3"></a>
+<a id="__codelineno-81-4" name="__codelineno-81-4" href="#__codelineno-81-4"></a><span class="c1"># With custom directory width</span>
+<a id="__codelineno-81-5" name="__codelineno-81-5" href="#__codelineno-81-5"></a><span class="n">columns</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;duration&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">type</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;directory&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">width</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="mi">30</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="s2">&quot;command&quot;</span><span class="p">]</span>
+<a id="__codelineno-81-6" name="__codelineno-81-6" href="#__codelineno-81-6"></a>
+<a id="__codelineno-81-7" name="__codelineno-81-7" href="#__codelineno-81-7"></a><span class="c1"># Show host for multi-machine sync users</span>
+<a id="__codelineno-81-8" name="__codelineno-81-8" href="#__codelineno-81-8"></a><span class="n">columns</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;duration&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;time&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;host&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;command&quot;</span><span class="p">]</span>
+<a id="__codelineno-81-9" name="__codelineno-81-9" href="#__codelineno-81-9"></a>
+<a id="__codelineno-81-10" name="__codelineno-81-10" href="#__codelineno-81-10"></a><span class="c1"># Show exit codes prominently</span>
+<a id="__codelineno-81-11" name="__codelineno-81-11" href="#__codelineno-81-11"></a><span class="n">columns</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;exit&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;duration&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;command&quot;</span><span class="p">]</span>
+<a id="__codelineno-81-12" name="__codelineno-81-12" href="#__codelineno-81-12"></a>
+<a id="__codelineno-81-13" name="__codelineno-81-13" href="#__codelineno-81-13"></a><span class="c1"># Make directory expand instead of command</span>
+<a id="__codelineno-81-14" name="__codelineno-81-14" href="#__codelineno-81-14"></a><span class="n">columns</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;duration&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;time&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">type</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;directory&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">expand</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">type</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;command&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">expand</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="p">}]</span>
+</code></pre></div>
+<h2 id="ai_1">ai</h2>
+<p>The settings for Atuin AI are listed in <a href="../../ai/settings/">a separate section</a>.</p>
+
+
+
+
+
+
+
+  
+    
+  
+  
+    
+  
+
+
+  <aside class="md-source-file">
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Last update">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="July 20, 2026 20:37:13 UTC">July 20, 2026</span>
+  </span>
+
+    
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Created">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="December 12, 2025 22:47:24 UTC">December 12, 2025</span>
+  </span>
+
+    
+    
+    
+  </aside>
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/atuinsh/atuin" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://discord.gg/jR3tfchVvW" target="_blank" rel="noopener" title="discord.gg" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M492.5 69.8c-.2-.3-.4-.6-.8-.7-38.1-17.5-78.4-30-119.7-37.1-.4-.1-.8 0-1.1.1s-.6.4-.8.8c-5.5 9.9-10.5 20.2-14.9 30.6-44.6-6.8-89.9-6.8-134.4 0-4.5-10.5-9.5-20.7-15.1-30.6-.2-.3-.5-.6-.8-.8s-.7-.2-1.1-.2C162.5 39 122.2 51.5 84.1 69c-.3.1-.6.4-.8.7C7.1 183.5-13.8 294.6-3.6 404.2c0 .3.1.5.2.8s.3.4.5.6c44.4 32.9 94 58 146.8 74.2.4.1.8.1 1.1 0s.7-.4.9-.7c11.3-15.4 21.4-31.8 30-48.8.1-.2.2-.5.2-.8s0-.5-.1-.8-.2-.5-.4-.6-.4-.3-.7-.4c-15.8-6.1-31.2-13.4-45.9-21.9-.3-.2-.5-.4-.7-.6s-.3-.6-.3-.9 0-.6.2-.9.3-.5.6-.7c3.1-2.3 6.2-4.7 9.1-7.1.3-.2.6-.4.9-.4s.7 0 1 .1c96.2 43.9 200.4 43.9 295.5 0 .3-.1.7-.2 1-.2s.7.2.9.4c2.9 2.4 6 4.9 9.1 7.2.2.2.4.4.6.7s.2.6.2.9-.1.6-.3.9-.4.5-.6.6c-14.7 8.6-30 15.9-45.9 21.8-.2.1-.5.2-.7.4s-.3.4-.4.7-.1.5-.1.8.1.5.2.8c8.8 17 18.8 33.3 30 48.8.2.3.6.6.9.7s.8.1 1.1 0c52.9-16.2 102.6-41.3 147.1-74.2.2-.2.4-.4.5-.6s.2-.5.2-.8c12.3-126.8-20.5-236.9-86.9-334.5zm-302 267.7c-29 0-52.8-26.6-52.8-59.2s23.4-59.2 52.8-59.2c29.7 0 53.3 26.8 52.8 59.2 0 32.7-23.4 59.2-52.8 59.2m195.4 0c-29 0-52.8-26.6-52.8-59.2s23.4-59.2 52.8-59.2c29.7 0 53.3 26.8 52.8 59.2 0 32.7-23.2 59.2-52.8 59.2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "search.suggest", "search.highlight", "content.code.copy", "content.action.edit", "content.action.view"], "search": "../../assets/javascripts/workers/search.7a47a382.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"alias": true, "default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.e71a0d61.min.js"></script>
+      
+    
+  </body>
+</html>
