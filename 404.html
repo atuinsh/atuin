@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Page not found - Atuin Docs</title>
+  <script>
+    // Top-level sections of the pre-versioned docs site. Every known legacy
+    // page has a static meta-refresh stub (see scripts/gen_legacy_stubs.py);
+    // this JS hop is the net for anything unmapped. It lands on the
+    // mkdocs-redirects stubs inside /latest/, which chain mapped stragglers
+    // on to their new home.
+    var LEGACY_PREFIXES = ["cli"];
+    var first = window.location.pathname.split("/")[1];
+    if (LEGACY_PREFIXES.indexOf(first) !== -1) {
+      window.location.replace(
+        "/latest" + window.location.pathname + window.location.search + window.location.hash
+      );
+    }
+  </script>
+</head>
+<body>
+  <h1>Page not found</h1>
+  <p>Looking for the CLI docs? They live at <a href="/latest/cli/">/latest/cli/</a>.</p>
+  <p><a href="/">Go to the latest documentation.</a></p>
+</body>
+</html>
