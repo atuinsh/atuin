@@ -231,6 +231,18 @@
   border-radius: 10px;
 }
 
+/* The copy-button chip sits inside the terminal block, so its corners have to
+   be concentric with it, not arbitrary. For nested rounding the inner radius
+   is the outer radius minus the gap: the terminal is 10px and the chip is
+   inset .25em (~3.4px at the code font size), which lands on 6px -- a step
+   that already exists on the design system's radius scale.
+
+   Material ships .1rem (2px), which reads as a hard little square floating in
+   a rounded box. */
+.md-code__nav {
+  border-radius: 6px;
+}
+
 /* Inline code is not a terminal screen; keep it a quiet tint. */
 .md-typeset code:not(pre code) {
   background-color: rgba(56, 200, 90, 0.08);

@@ -188,4 +188,11 @@
   --md-code-hl-generic-color: var(--atuin-text-2);
   --md-code-hl-color: rgba(56, 200, 90, 0.18);
   --md-code-hl-color--light: rgba(56, 200, 90, 0.1);
+
+  /* The chip behind the copy button. Material hardcodes #f5f5f54d and
+     #f5f5f5b3 -- light greys, baked for its light scheme, which read as a
+     pale smudge on a dark terminal. Retinted to the same green the terminal
+     ring uses. */
+  --md-code-bg-color--lighter: rgba(56, 200, 90, 0.06);
+  --md-code-bg-color--light: rgba(56, 200, 90, 0.14);
 }
