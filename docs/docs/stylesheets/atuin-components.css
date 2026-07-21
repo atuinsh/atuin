@@ -1,0 +1,283 @@
+/* ==========================================================================
+   Atuin components
+   --------------------------------------------------------------------------
+   Restyles the surfaces that carry Material's visual signature. Font
+   properties for admonition titles, summaries and table headers live in
+   atuin-typography.css -- do not restate them here.
+   ========================================================================== */
+
+/* ---------- Header ----------
+   Dark in BOTH schemes, matching atuin.sh's nav. This is also what keeps the
+   turtle mark legible in light mode without needing a second asset. */
+
+.md-header {
+  background-color: var(--atuin-nav-bg);
+  backdrop-filter: blur(18px);
+  border-bottom: 1px solid var(--atuin-nav-edge);
+  box-shadow: none;
+  color: var(--atuin-text-1);
+}
+
+.md-header--shadow {
+  box-shadow: none;
+}
+
+.md-tabs {
+  background-color: transparent;
+}
+
+/* Material force-squares the logo to 1.2rem. Restated so the asset can be
+   swapped for a non-square one without silent distortion. */
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  width: auto;
+  height: 1.3rem;
+}
+
+.md-header__title {
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+/* ---------- Search ---------- */
+
+.md-search__form {
+  background-color: rgba(56, 200, 90, 0.06);
+  border: 1px solid rgba(56, 200, 90, 0.18);
+  border-radius: 6px;
+}
+
+.md-search__form:hover {
+  background-color: rgba(56, 200, 90, 0.1);
+}
+
+.md-search__input::placeholder {
+  color: var(--atuin-text-3);
+}
+
+/* ---------- Sidebar navigation ---------- */
+
+.md-nav__link--active,
+.md-nav__link--active code {
+  color: var(--md-typeset-a-color);
+}
+
+.md-nav__item--section > .md-nav__link {
+  margin-bottom: 0.3rem;
+}
+
+/* ---------- Admonitions and details ----------
+   Material sets per-type borders at `.md-typeset .admonition.warning`, which
+   is specificity 0,3,0. The `[class]` here lifts ours to 0,3,0 as well; since
+   this file loads after Material's, an equal-specificity tie goes to us. That
+   is why there is no !important anywhere below. */
+
+.md-typeset .admonition,
+.md-typeset details {
+  --atuin-adm: var(--atuin-green);
+  --atuin-adm-bg: rgba(56, 200, 90, 0.04);
+}
+
+.md-typeset .admonition[class],
+.md-typeset details[class] {
+  background-color: var(--atuin-adm-bg);
+  border: 1px solid var(--atuin-rule);
+  border-left: 2px solid var(--atuin-adm);
+  border-radius: 4px;
+  box-shadow: none;
+  font-size: 0.7rem;
+}
+
+.md-typeset .admonition[class]:focus-within,
+.md-typeset details[class]:focus-within {
+  box-shadow: 0 0 0 2px var(--atuin-adm-bg);
+}
+
+/* Every rule below carries [class] for the same reason as above. Material's
+   per-type rules are specific: `.md-typeset .warning>.admonition-title` is
+   0,3,0 and `.md-typeset .warning>summary:after` is 0,2,2. Without [class]
+   these would silently lose and the restyle would appear to do nothing. */
+.md-typeset .admonition-title[class],
+.md-typeset summary[class] {
+  background-color: transparent;
+  border: 0;
+}
+
+/* Material draws the icon as a mask fed by --md-admonition-icon--*; recolour
+   the mask rather than replacing it, so every type keeps its own glyph. */
+.md-typeset .admonition-title[class]::before,
+.md-typeset summary[class]::before {
+  background-color: var(--atuin-adm);
+}
+
+/* The details disclosure marker: green, mono, like atuin.sh's FAQ. */
+.md-typeset summary[class]::after {
+  color: var(--atuin-adm);
+}
+
+/* Per-type accents. Note these target the type class directly (0,3,0 with
+   .md-typeset), setting only the custom property that the rules above read. */
+.md-typeset .note,
+.md-typeset .tip,
+.md-typeset .success,
+.md-typeset .hint {
+  --atuin-adm: var(--atuin-green);
+  --atuin-adm-bg: rgba(56, 200, 90, 0.04);
+}
+
+.md-typeset .info,
+.md-typeset .abstract,
+.md-typeset .question,
+.md-typeset .example {
+  --atuin-adm: var(--atuin-blue-mid);
+  --atuin-adm-bg: rgba(78, 194, 248, 0.04);
+}
+
+.md-typeset .warning {
+  --atuin-adm: #e0a33a;
+  --atuin-adm-bg: rgba(224, 163, 58, 0.05);
+}
+
+.md-typeset .danger,
+.md-typeset .failure,
+.md-typeset .bug {
+  --atuin-adm: #e05a5a;
+  --atuin-adm-bg: rgba(224, 90, 90, 0.05);
+}
+
+.md-typeset .quote {
+  --atuin-adm: var(--atuin-text-2);
+  --atuin-adm-bg: rgba(143, 161, 168, 0.04);
+}
+
+/* ---------- Code ----------
+   The old stylesheet drew Mac traffic-light dots before every block. Those
+   are gone with extra.css. What replaces them is atuin.sh's actual
+   .terminal-screen treatment: a dark screen with a faint green inset ring.
+
+   There is deliberately no `$` prompt gutter -- CSS has no per-line hook, and
+   Atuin's shell blocks interleave commands with output, so a `$` on every
+   line would be wrong. */
+
+.md-typeset pre > code {
+  background-color: var(--atuin-screen);
+  border-radius: 6px;
+  box-shadow:
+    inset 0 0 0 1px rgba(56, 200, 90, 0.1),
+    0 0 0 1px rgba(8, 13, 17, 0.24);
+}
+
+.md-typeset .highlight > pre {
+  border-radius: 6px;
+}
+
+/* Inline code is not a terminal screen; keep it a quiet tint. */
+.md-typeset code:not(pre code) {
+  background-color: rgba(56, 200, 90, 0.08);
+  border-radius: 3px;
+  color: var(--md-default-fg-color);
+  font-size: 0.85em;
+  padding: 0.08em 0.34em;
+}
+
+.md-typeset a > code:not(pre code) {
+  color: var(--md-typeset-a-color);
+}
+
+/* Tabbed code blocks (pymdownx.tabbed) */
+.md-typeset .tabbed-labels > label {
+  font-family: var(--md-code-font-family, "Space Mono"), monospace;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* ---------- Buttons ----------
+   Hexagonal, from atuin.sh. clip-path removes any real border, so the border
+   is carried by an inner ::before at inset 1px inheriting the same clip. */
+
+.md-typeset .md-button {
+  --atuin-btn-bg: rgba(56, 200, 90, 0.06);
+  --atuin-btn-border: rgba(56, 200, 90, 0.34);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.1rem;
+  padding: 0 1.1rem;
+  background-color: var(--atuin-btn-bg);
+  border: 0;
+  border-radius: 0;
+  clip-path: polygon(
+    12px 0,
+    calc(100% - 12px) 0,
+    100% 50%,
+    calc(100% - 12px) 100%,
+    12px 100%,
+    0 50%
+  );
+  color: var(--md-default-fg-color);
+  font-family: var(--md-code-font-family, "Space Mono"), monospace;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: filter 160ms ease, background-color 160ms ease;
+}
+
+.md-typeset .md-button::before {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  z-index: -1;
+  border: 1px solid var(--atuin-btn-border);
+  clip-path: inherit;
+}
+
+.md-typeset .md-button:hover,
+.md-typeset .md-button:focus {
+  background-color: rgba(56, 200, 90, 0.12);
+  color: var(--md-default-fg-color);
+  filter: brightness(1.08);
+}
+
+.md-typeset .md-button--primary {
+  --atuin-btn-bg: var(--atuin-green);
+  --atuin-btn-border: var(--atuin-green);
+  color: #06100a;
+}
+
+.md-typeset .md-button--primary:hover,
+.md-typeset .md-button--primary:focus {
+  background-color: var(--atuin-green);
+  color: #06100a;
+}
+
+/* ---------- Tables ---------- */
+
+.md-typeset table:not([class]) {
+  border: 1px solid var(--md-typeset-table-color);
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.md-typeset table:not([class]) th {
+  background-color: transparent;
+  border-bottom: 1px solid var(--md-typeset-table-color);
+}
+
+.md-typeset table:not([class]) td {
+  border-top: 1px solid var(--md-typeset-table-color);
+}
+
+/* ---------- Footer ---------- */
+
+.md-footer-meta {
+  border-top: 1px solid var(--atuin-rule);
+}
+
+.md-footer__link:hover {
+  color: var(--atuin-green);
+  opacity: 1;
+}
