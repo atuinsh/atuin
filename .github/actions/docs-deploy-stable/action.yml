@@ -19,11 +19,7 @@ runs:
         VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
-        VERSION="${VERSION#v}"
-        if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-          echo "Version '$VERSION' is not a stable X.Y.Z - refusing to deploy." >&2
-          exit 1
-        fi
+        VERSION=$(uv run python scripts/parse_version.py --require stable "$VERSION")
 
         MINOR="${VERSION%.*}"
         echo "Deploying release docs: version=$MINOR alias=latest (from $VERSION)"

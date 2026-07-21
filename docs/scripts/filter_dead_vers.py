@@ -20,31 +20,30 @@ from collections.abc import Iterable, Mapping
 from common import Version
 
 
+def _parse_or_none(entry: Mapping[str, object]) -> Version | None:
+    try:
+        return Version.from_mike(entry)
+    except ValueError:
+        return None  # not a version we manage (e.g. "main") -> never prune
+
+
 def versions_to_prune(
     entries: Iterable[Mapping[str, object]],
     boundary: str,
     exclude: str | None = None,
 ) -> list[str]:
-    """Return the prerelease ids (from `mike list --json` entries) superseded by `boundary`.
-
-    A prerelease is superseded when its base version is <= the base of
-    `boundary`. `exclude` (e.g. the id just deployed) is never returned. Entries
-    that are stable releases, `main`, or otherwise unparsable are left alone.
-    """
     boundary_base = Version.from_str(boundary).base
 
-    doomed: list[str] = []
-    for entry in entries:
-        version_id = str(entry["version"])
-        if version_id == exclude:
-            continue
-        try:
-            version = Version.from_mike(entry)
-        except ValueError:
-            continue  # not a version we manage (e.g. "main") -> never prune
-        if version.is_prerelease and version.base <= boundary_base:
-            doomed.append(version_id)
-    return doomed
+    def superseded(entry: Mapping[str, object]) -> bool:
+        version = _parse_or_none(entry)
+        return (
+            version is not None
+            and version.is_prerelease
+            and version.base <= boundary_base
+            and str(entry["version"]) != exclude
+        )
+
+    return [str(entry["version"]) for entry in filter(superseded, entries)]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -58,8 +57,10 @@ def main(argv: list[str] | None = None) -> int:
 
     raw = sys.stdin.read().strip()
     entries = json.loads(raw) if raw else []
-    for version_id in versions_to_prune(entries, args.boundary, args.exclude):
-        print(version_id)
+    sys.stdout.writelines(
+        f"{version_id}\n"
+        for version_id in versions_to_prune(entries, args.boundary, args.exclude)
+    )
     return 0
 
 

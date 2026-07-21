@@ -54,6 +54,10 @@ class Version:
     def is_prerelease(self) -> bool:
         return self.pre_release is not None
 
+    def __str__(self) -> str:
+        base = ".".join(map(str, self.base))
+        return base if self.pre_release is None else f"{base}-beta.{self.pre_release}"
+
     def _key(self) -> tuple[int, int, int, float]:
         # A stable release (None) sorts after every prerelease of the same base,
         # matching semver (`18.18.0` > `18.18.0-beta.9`).
