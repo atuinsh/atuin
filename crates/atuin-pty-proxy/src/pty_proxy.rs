@@ -157,8 +157,22 @@ fn render_init(shell: Shell) -> &'static str {
             r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
   _atuin_pty_proxy_tmux_current="${TMUX:-}"
   _atuin_pty_proxy_tmux_previous="${ATUIN_PTY_PROXY_TMUX:-}"
+  _atuin_pty_proxy_tty_current="$(command tty 2>/dev/null || true)"
+  _atuin_pty_proxy_tty_previous="${ATUIN_PTY_PROXY_TTY:-}"
 
-  if [[ -z "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || [[ "$_atuin_pty_proxy_tmux_current" != "$_atuin_pty_proxy_tmux_previous" ]]; then
+  _atuin_pty_proxy_start=""
+  if [[ -z "${ATUIN_PTY_PROXY_ACTIVE:-}" ]]; then
+    _atuin_pty_proxy_start=1
+  elif [[ "$_atuin_pty_proxy_tmux_current" != "$_atuin_pty_proxy_tmux_previous" ]]; then
+    _atuin_pty_proxy_start=1
+  elif [[ -n "$_atuin_pty_proxy_tty_previous" ]] && [[ -n "$_atuin_pty_proxy_tty_current" ]] && [[ "$_atuin_pty_proxy_tty_current" != "$_atuin_pty_proxy_tty_previous" ]]; then
+    # The shell runs on a different terminal surface (e.g. a multiplexer
+    # pane) than the proxy that exported these variables, so its screen
+    # state does not describe this surface. Start a proxy of our own.
+    _atuin_pty_proxy_start=1
+  fi
+
+  if [[ -n "$_atuin_pty_proxy_start" ]]; then
     export ATUIN_PTY_PROXY_ACTIVE=1
     export ATUIN_PTY_PROXY_TMUX="$_atuin_pty_proxy_tmux_current"
     if [[ -n "${BASH_VERSION:-}" ]]; then
@@ -175,7 +189,7 @@ fn render_init(shell: Shell) -> &'static str {
     fi
   fi
 
-  unset _atuin_pty_proxy_tmux_current _atuin_pty_proxy_tmux_previous
+  unset _atuin_pty_proxy_tmux_current _atuin_pty_proxy_tmux_previous _atuin_pty_proxy_tty_current _atuin_pty_proxy_tty_previous _atuin_pty_proxy_start
 fi
 "#
         }
@@ -191,11 +205,25 @@ fi
         set _atuin_pty_proxy_tmux_previous "$ATUIN_PTY_PROXY_TMUX"
     end
 
+    set -l _atuin_pty_proxy_tty_current (command tty 2>/dev/null)
+    set -l _atuin_pty_proxy_tty_previous ""
+    if set -q ATUIN_PTY_PROXY_TTY
+        set _atuin_pty_proxy_tty_previous "$ATUIN_PTY_PROXY_TTY"
+    end
+
+    set -l _atuin_pty_proxy_start 0
     if not set -q ATUIN_PTY_PROXY_ACTIVE
-        set -gx ATUIN_PTY_PROXY_ACTIVE 1
-        set -gx ATUIN_PTY_PROXY_TMUX "$_atuin_pty_proxy_tmux_current"
-        exec atuin pty-proxy --shell (status fish-path)
+        set _atuin_pty_proxy_start 1
     else if test "$_atuin_pty_proxy_tmux_current" != "$_atuin_pty_proxy_tmux_previous"
+        set _atuin_pty_proxy_start 1
+    else if test -n "$_atuin_pty_proxy_tty_previous"; and test -n "$_atuin_pty_proxy_tty_current"; and test "$_atuin_pty_proxy_tty_current" != "$_atuin_pty_proxy_tty_previous"
+        # The shell runs on a different terminal surface (e.g. a multiplexer
+        # pane) than the proxy that exported these variables, so its screen
+        # state does not describe this surface. Start a proxy of our own.
+        set _atuin_pty_proxy_start 1
+    end
+
+    if test $_atuin_pty_proxy_start -eq 1
         set -gx ATUIN_PTY_PROXY_ACTIVE 1
         set -gx ATUIN_PTY_PROXY_TMUX "$_atuin_pty_proxy_tmux_current"
         exec atuin pty-proxy --shell (status fish-path)
@@ -210,8 +238,16 @@ end
             r#"if (is-terminal --stdin) and (is-terminal --stdout) {
     let tmux_current = ($env.TMUX? | default "")
     let tmux_previous = ($env.ATUIN_PTY_PROXY_TMUX? | default "")
+    let tty_current = (try { ^tty | str trim } catch { "" })
+    let tty_previous = ($env.ATUIN_PTY_PROXY_TTY? | default "")
 
-    if (($env.ATUIN_PTY_PROXY_ACTIVE? | default "") | is-empty) or ($tmux_current != $tmux_previous) {
+    # A non-empty tty_previous that differs from tty_current means the shell
+    # runs on a different terminal surface (e.g. a multiplexer pane) than the
+    # proxy that exported these variables, so its screen state does not
+    # describe this surface. Start a proxy of our own.
+    let tty_changed = (not ($tty_previous | is-empty)) and (not ($tty_current | is-empty)) and ($tty_current != $tty_previous)
+
+    if (($env.ATUIN_PTY_PROXY_ACTIVE? | default "") | is-empty) or ($tmux_current != $tmux_previous) or $tty_changed {
         $env.ATUIN_PTY_PROXY_ACTIVE = "1"
         $env.ATUIN_PTY_PROXY_TMUX = $tmux_current
         exec atuin pty-proxy --shell $nu.current-exe
@@ -225,6 +261,134 @@ end
 #[cfg(test)]
 mod tests {
     use super::{Shell, render_init, shell_from_name};
+
+    /// How `ATUIN_PTY_PROXY_TTY` should look to the shell under test.
+    enum ProxyTty {
+        /// The PTY the shell actually runs on — a proxy owning this surface.
+        OwnDevice,
+        /// A different device — env inherited across a multiplexer boundary.
+        Foreign,
+        /// Not set — environment from a proxy that predates the variable.
+        Unset,
+    }
+
+    /// Run the rendered bash init guard inside a real PTY, with `exec atuin
+    /// pty-proxy` replaced by an echo marker, and return everything the
+    /// shell printed.
+    fn run_bash_guard(active: bool, proxy_tty: &ProxyTty) -> String {
+        use std::io::Read;
+
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+
+        let script = render_init(Shell::Bash).replace(
+            "exec atuin pty-proxy",
+            "echo WOULD_EXEC_PTY_PROXY # atuin pty-proxy",
+        );
+        let script_path = std::env::temp_dir().join(format!(
+            "atuin-pty-proxy-guard-test-{}-{active}-{}.sh",
+            std::process::id(),
+            match proxy_tty {
+                ProxyTty::OwnDevice => "own",
+                ProxyTty::Foreign => "foreign",
+                ProxyTty::Unset => "unset",
+            },
+        ));
+        std::fs::write(&script_path, script).expect("write init script");
+
+        let pty = native_pty_system();
+        let pair = pty
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let slave_device = pair.master.tty_name().expect("pty slave device name");
+
+        let mut cmd = CommandBuilder::new("bash");
+        let source_line = format!("source '{}'; echo GUARD_RAN", script_path.display());
+        cmd.args(["--noprofile", "--norc", "-i", "-c", &source_line]);
+        // Pin every variable the guard reads: the test process may itself be
+        // running under tmux or an atuin pty-proxy, and the base environment
+        // is inherited.
+        cmd.env("TMUX", "");
+        cmd.env("ATUIN_PTY_PROXY_TMUX", "");
+        if active {
+            cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
+        } else {
+            cmd.env_remove("ATUIN_PTY_PROXY_ACTIVE");
+        }
+        match proxy_tty {
+            ProxyTty::OwnDevice => cmd.env("ATUIN_PTY_PROXY_TTY", &slave_device),
+            ProxyTty::Foreign => cmd.env("ATUIN_PTY_PROXY_TTY", "/dev/atuin-test-elsewhere"),
+            ProxyTty::Unset => cmd.env_remove("ATUIN_PTY_PROXY_TTY"),
+        }
+
+        let mut child = pair.slave.spawn_command(cmd).expect("spawn bash");
+        drop(pair.slave);
+
+        let mut reader = pair.master.try_clone_reader().expect("clone reader");
+        let output_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = reader.read_to_end(&mut buf);
+            String::from_utf8_lossy(&buf).into_owned()
+        });
+
+        child.wait().expect("wait for bash");
+        let output = output_thread.join().expect("join reader thread");
+        let _ = std::fs::remove_file(&script_path);
+        output
+    }
+
+    #[test]
+    fn bash_guard_starts_proxy_when_inactive() {
+        let output = run_bash_guard(false, &ProxyTty::Unset);
+        assert!(output.contains("WOULD_EXEC_PTY_PROXY"), "output: {output}");
+    }
+
+    #[test]
+    fn bash_guard_skips_proxy_on_own_device() {
+        let output = run_bash_guard(true, &ProxyTty::OwnDevice);
+        assert!(!output.contains("WOULD_EXEC_PTY_PROXY"), "output: {output}");
+        assert!(output.contains("GUARD_RAN"), "output: {output}");
+    }
+
+    #[test]
+    fn bash_guard_starts_proxy_on_foreign_device() {
+        // A multiplexer pane (e.g. herdr) inherits ATUIN_PTY_PROXY_ACTIVE and
+        // ATUIN_PTY_PROXY_TTY from a proxy wrapping an outer shell, but runs
+        // on its own PTY — the guard must start a proxy for this surface.
+        let output = run_bash_guard(true, &ProxyTty::Foreign);
+        assert!(output.contains("WOULD_EXEC_PTY_PROXY"), "output: {output}");
+    }
+
+    #[test]
+    fn bash_guard_skips_proxy_when_tty_unknown() {
+        // Environment from a proxy that could not name its slave device (or
+        // an older atuin): fall back to the previous behavior of trusting
+        // ATUIN_PTY_PROXY_ACTIVE rather than exec-looping.
+        let output = run_bash_guard(true, &ProxyTty::Unset);
+        assert!(!output.contains("WOULD_EXEC_PTY_PROXY"), "output: {output}");
+        assert!(output.contains("GUARD_RAN"), "output: {output}");
+    }
+
+    #[test]
+    fn init_scripts_guard_on_tty_change() {
+        let posix = render_init(Shell::Bash);
+        assert!(
+            posix.contains(r#"_atuin_pty_proxy_tty_current="$(command tty 2>/dev/null || true)""#)
+        );
+        assert!(posix.contains(r#"_atuin_pty_proxy_tty_previous="${ATUIN_PTY_PROXY_TTY:-}""#));
+
+        let fish = render_init(Shell::Fish);
+        assert!(fish.contains("ATUIN_PTY_PROXY_TTY"));
+        assert!(fish.contains("command tty"));
+
+        let nu = render_init(Shell::Nu);
+        assert!(nu.contains("ATUIN_PTY_PROXY_TTY"));
+        assert!(nu.contains("^tty"));
+    }
 
     #[test]
     fn shell_from_name_handles_paths() {
