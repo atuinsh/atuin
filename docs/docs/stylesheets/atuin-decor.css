@@ -1,8 +1,7 @@
 /* ==========================================================================
    Atuin decor
    --------------------------------------------------------------------------
-   Two motifs, both cosmetic. Deleting this file degrades the look and breaks
-   nothing.
+   Purely cosmetic. Deleting this file degrades the look and breaks nothing.
    ========================================================================== */
 
 /* ---------- Hex lattice ----------
@@ -56,55 +55,16 @@
   opacity: 0.03;
 }
 
-/* ---------- Bracketed chrome links ----------
-   From atuin.sh's nav, where every link sits inside [brackets] that turn
-   green on hover. Applied only to chrome -- the repo link and the footer
-   social icons. Deliberately NOT the 40-item left sidebar, where it would
-   read as clutter.
+/* NOTE: atuin.sh's nav wraps each link in [brackets] that turn green on
+   hover, and that motif was tried here and removed.
 
-   .md-source__repository is a <div>; the anchor wrapping it is .md-source,
-   which is why the hover selectors reach down from there. */
+   It does not survive contact with Material's chrome. The header repo link
+   is a <div> that Material's JavaScript injects a <ul> of GitHub facts into
+   at runtime; since ::after is always the last DOM child, the closing
+   bracket lands below that list and the header breaks across three lines.
+   It could be forced back onto one line by making the row a flex container
+   and reordering the facts, but a decoration that needs layout surgery to
+   avoid breaking someone else's component is not worth its upkeep -- and it
+   would break again the next time Material changes that markup.
 
-.md-source__repository::before,
-.md-source__repository::after,
-.md-social__link::before,
-.md-social__link::after {
-  color: var(--md-default-fg-color--lighter);
-  transition: color 160ms ease;
-}
-
-.md-source__repository::before,
-.md-social__link::before {
-  content: "[";
-  margin-right: 2px;
-}
-
-.md-source__repository::after,
-.md-social__link::after {
-  content: "]";
-  margin-left: 2px;
-}
-
-.md-source:hover .md-source__repository::before,
-.md-source:hover .md-source__repository::after,
-.md-social__link:hover::before,
-.md-social__link:hover::after {
-  color: var(--atuin-green);
-}
-
-/* Material's JS injects <ul class="md-source__facts"> (version, stars,
-   forks) into .md-source__repository at runtime. ::after is always the
-   last DOM child, so without this the closing bracket lands *below* the
-   injected list and the header renders across three lines. Making the
-   row a wrapping flex container and pushing the facts to order:1 puts
-   the brackets either side of the name, with the facts on their own line.
-   Not visible in the static HTML, so no build check catches it. */
-.md-source__repository {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-}
-
-.md-source__facts {
-  order: 1;
-}
+   Do not reintroduce it without solving that properly. */
