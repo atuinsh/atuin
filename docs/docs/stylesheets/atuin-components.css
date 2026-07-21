@@ -63,12 +63,11 @@
   color: var(--atuin-text-3);
 }
 
-/* ---------- Sidebar navigation ---------- */
-
-.md-nav__link--active,
-.md-nav__link--active code {
-  color: var(--md-typeset-a-color);
-}
+/* ---------- Sidebar navigation ----------
+   No active-link colour rule here on purpose: Material already ships
+   `.md-nav__item .md-nav__link--active{color:var(--md-typeset-a-color)}` at
+   0,2,0, which resolves to our green via the token layer. A rule here would
+   sit at 0,1,0, lose, and mislead whoever next tries to change that colour. */
 
 .md-nav__item--section > .md-nav__link {
   margin-bottom: 0.3rem;
@@ -87,6 +86,7 @@
 }
 
 .md-typeset .admonition[class],
+.md-typeset details,
 .md-typeset details[class] {
   background-color: var(--atuin-adm-bg);
   border: 1px solid var(--atuin-rule);
@@ -97,16 +97,31 @@
 }
 
 .md-typeset .admonition[class]:focus-within,
+.md-typeset details:focus-within,
 .md-typeset details[class]:focus-within {
   box-shadow: 0 0 0 2px var(--atuin-adm-bg);
 }
 
-/* Every rule below carries [class] for the same reason as above. Material's
-   per-type rules are specific: `.md-typeset .warning>.admonition-title` is
-   0,3,0 and `.md-typeset .warning>summary:after` is 0,2,2. Without [class]
-   these would silently lose and the restyle would appear to do nothing. */
+/* Material's per-type rules are specific, so these overrides have to reach
+   the same weight or higher:
+     .md-typeset .warning>.admonition-title   0,3,0
+     .md-typeset .warning>summary             0,2,1
+     .md-typeset .warning>summary:before      0,2,2
+
+   NOTE ON <summary>: the type class goes on <details>, NOT on <summary> --
+   pymdownx.details emits `<details class="tip"><summary>Title</summary>`.
+   An earlier version of this file used `summary[class]`, which matches
+   nothing at all, so every <details> silently kept Material's stock teal
+   while admonitions restyled correctly. Reaching the summary through its
+   parent (`details[class] > summary`, 0,2,2) beats the per-type rule
+   outright rather than tying.
+
+   Each selector is paired with a class-less variant so an untyped
+   `??? "Title"` block is covered too -- `details[class]` does not match a
+   <details> with no class attribute. */
 .md-typeset .admonition-title[class],
-.md-typeset summary[class] {
+.md-typeset details > summary,
+.md-typeset details[class] > summary {
   background-color: transparent;
   border: 0;
 }
@@ -114,12 +129,14 @@
 /* Material draws the icon as a mask fed by --md-admonition-icon--*; recolour
    the mask rather than replacing it, so every type keeps its own glyph. */
 .md-typeset .admonition-title[class]::before,
-.md-typeset summary[class]::before {
+.md-typeset details > summary::before,
+.md-typeset details[class] > summary::before {
   background-color: var(--atuin-adm);
 }
 
-/* The details disclosure marker: green, mono, like atuin.sh's FAQ. */
-.md-typeset summary[class]::after {
+/* The disclosure marker on the right-hand side. */
+.md-typeset details > summary::after,
+.md-typeset details[class] > summary::after {
   color: var(--atuin-adm);
 }
 

@@ -384,6 +384,35 @@ def test_hex_lattice_does_not_hijack_material_spacer():
     assert ".md-content__inner::before" not in declarations
 
 
+def test_summary_is_styled_through_its_parent_details(built_site: Path):
+    """`<summary>` carries no class -- the type class goes on `<details>`.
+
+    pymdownx.details emits `<details class="tip"><summary>Title</summary>`.
+    An earlier version of atuin-components.css tried to reach the summary
+    with `summary[class]`, which matches nothing, so every <details> block
+    silently kept Material's stock teal while admonitions restyled fine.
+    Specificity arithmetic cannot catch this -- the selector was perfectly
+    weighted, it just described markup that does not exist.
+
+    Guards the DOM fact directly, so it stays true regardless of how the
+    stylesheet is later rewritten.
+    """
+    summaries = [
+        m.group(0)
+        for path in built_site.rglob("index.html")
+        for m in re.finditer(r"<summary[^>]*>", path.read_text(encoding="utf-8"))
+    ]
+    assert summaries, "no <summary> in the built site; this guard needs one to be meaningful"
+    with_class = [s for s in summaries if "class=" in s]
+    assert not with_class, f"<summary> unexpectedly has a class: {with_class[:3]}"
+
+    css = read_declarations("atuin-components.css")
+    assert "summary[class]" not in css, (
+        "summary[class] matches nothing -- reach the summary through its "
+        "parent instead, e.g. `details[class] > summary`"
+    )
+
+
 def test_decor_never_positions_the_sidebar():
     """Material sets `.md-sidebar{position:sticky}` and
     `.md-sidebar--primary{position:fixed}`, both at specificity 0,1,0. A
