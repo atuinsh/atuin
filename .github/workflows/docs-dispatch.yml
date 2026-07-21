@@ -30,7 +30,7 @@ jobs:
           fetch-depth: 0
       - uses: ./.github/actions/docs-setup
       - uses: ./.github/actions/docs-deploy-main
-      - uses: ./.github/actions/docs-cname
+      - uses: ./.github/actions/docs-root-files
 
   stable:
     if: ${{ inputs.version != '' && !contains(inputs.version, '-') }}
@@ -44,7 +44,7 @@ jobs:
       - uses: ./.github/actions/docs-deploy-stable
         with:
           version: ${{ inputs.version }}
-      - uses: ./.github/actions/docs-cname
+      - uses: ./.github/actions/docs-root-files
 
   prerelease:
     if: ${{ contains(inputs.version, '-') }}
@@ -58,4 +58,4 @@ jobs:
       - uses: ./.github/actions/docs-deploy-prerelease
         with:
           version: ${{ inputs.version }}
-      - uses: ./.github/actions/docs-cname
+      - uses: ./.github/actions/docs-root-files

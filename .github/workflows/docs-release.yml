@@ -25,7 +25,7 @@ jobs:
       - uses: ./.github/actions/docs-deploy-stable
         with:
           version: ${{ github.ref_name }}
-      - uses: ./.github/actions/docs-cname
+      - uses: ./.github/actions/docs-root-files
 
   prerelease:
     if: ${{ contains(github.ref_name, '-') }}
@@ -39,4 +39,4 @@ jobs:
       - uses: ./.github/actions/docs-deploy-prerelease
         with:
           version: ${{ github.ref_name }}
-      - uses: ./.github/actions/docs-cname
+      - uses: ./.github/actions/docs-root-files

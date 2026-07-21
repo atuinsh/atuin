@@ -1,0 +1,42 @@
+name: Sync gh-pages root files
+description: >-
+  Copy the static root files in docs/gh-pages/ (CNAME for the custom domain,
+  the 404 page that redirects legacy pre-versioning URLs) onto the root of
+  the gh-pages branch after a deploy, generate the /cli/* meta-refresh stubs
+  for legacy URLs, and commit only when something changed. mike never touches
+  files it does not manage, so these survive every deploy; this step exists
+  to seed a fresh gh-pages branch and to roll out edits.
+
+runs:
+  using: composite
+  steps:
+    - name: Sync root files to gh-pages
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Old checkouts (e.g. release tags cut before these files existed)
+        # have nothing to sync; gh-pages may not exist on the very first
+        # deploy either.
+        if [ ! -d docs/gh-pages ]; then
+          echo "docs/gh-pages does not exist in this checkout - skipping."
+          exit 0
+        fi
+        if ! git ls-remote --exit-code origin gh-pages >/dev/null 2>&1; then
+          echo "gh-pages does not exist yet - skipping."
+          exit 0
+        fi
+        git fetch origin gh-pages
+        git worktree add gh-pages-wt gh-pages
+        cp -R docs/gh-pages/. gh-pages-wt/
+        # Absent in checkouts of release tags cut before the stub generator
+        # existed; those runs just sync the plain root files.
+        if [ -f docs/scripts/gen_legacy_stubs.py ]; then
+          uv run --project docs python docs/scripts/gen_legacy_stubs.py \
+            docs/mkdocs.yml gh-pages-wt
+        fi
+        git -C gh-pages-wt add --all
+        if ! git -C gh-pages-wt diff --cached --quiet; then
+          git -C gh-pages-wt commit -m "chore(docs): sync gh-pages root files"
+          git -C gh-pages-wt push origin gh-pages
+        fi
+        git worktree remove gh-pages-wt

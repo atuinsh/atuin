@@ -27,4 +27,4 @@ jobs:
           fetch-depth: 0
       - uses: ./.github/actions/docs-setup
       - uses: ./.github/actions/docs-deploy-main
-      - uses: ./.github/actions/docs-cname
+      - uses: ./.github/actions/docs-root-files
