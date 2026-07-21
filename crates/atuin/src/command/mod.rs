@@ -41,13 +41,12 @@ pub enum AtuinCmd {
 
 impl AtuinCmd {
     pub fn run(self) -> Result<()> {
+        // set umask before we potentially open/create files
+        // or in other words, 077. Do not allow any access to any other user.
+        // Keep the previous umask so pty-proxy can restore it in the shell it
+        // spawns — the shell must not inherit ours (#3695).
         #[cfg(not(windows))]
-        {
-            // set umask before we potentially open/create files
-            // or in other words, 077. Do not allow any access to any other user
-            let mode = Mode::RWXG | Mode::RWXO;
-            umask(mode);
-        }
+        let prev_umask = umask(Mode::RWXG | Mode::RWXO);
 
         match self {
             // Client commands initialize their own logging
@@ -62,6 +61,9 @@ impl AtuinCmd {
 
             #[cfg(feature = "pty-proxy")]
             Self::PtyProxy(proxy) => {
+                #[cfg(unix)]
+                run_pty_proxy(proxy, prev_umask);
+                #[cfg(not(unix))]
                 run_pty_proxy(proxy);
                 Ok(())
             }
@@ -81,12 +83,14 @@ impl AtuinCmd {
 }
 
 #[cfg(all(feature = "pty-proxy", unix))]
-fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy) {
+fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
+    let child_umask = Some(u32::from(prev_umask.bits()));
+
     #[cfg(feature = "daemon")]
-    proxy.run(semantic_command_capture_sink());
+    proxy.run(semantic_command_capture_sink(), child_umask);
 
     #[cfg(not(feature = "daemon"))]
-    proxy.run(None);
+    proxy.run(None, child_umask);
 }
 
 #[cfg(all(feature = "pty-proxy", not(unix)))]

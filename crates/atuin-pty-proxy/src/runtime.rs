@@ -49,6 +49,13 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     }
     cmd.env("ATUIN_PTY_PROXY_SOCKET", sock_path.as_os_str());
     cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
+    // Atuin sets a restrictive process-wide umask on startup to protect the
+    // files it creates. The shell must not inherit it (#3695) — restore the
+    // umask the user launched us with. Applied in the child between fork and
+    // exec, so the proxy's own umask stays restrictive.
+    if let Some(mask) = options.child_umask {
+        cmd.umask(Some(mask as _));
+    }
 
     let mut child = pair
         .slave
