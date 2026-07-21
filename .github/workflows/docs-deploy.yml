@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       release_version:
-        description: "Full release version to deploy as latest (e.g. 18.17.1). Leave blank to deploy the main version."
+        description: "Version to deploy (e.g. 18.17.1 -> latest; 18.18.0-beta.1 -> a pre-release preview). Leave blank to deploy the main version."
         required: false
         default: ""
 
@@ -81,15 +81,26 @@ jobs:
             fi
 
             if [[ "$VERSION" == *-* ]]; then
-              echo "Prerelease ($VERSION) - skipping docs deploy."
-              exit 0
+              # Prerelease: publish under its full version id, titled clearly.
+              # Never latest, never default. Then prune older previews it
+              # supersedes (older betas of this or an earlier line).
+              echo "Deploying prerelease docs: $VERSION"
+              uv run mike deploy --push --title "$VERSION (pre-release)" "$VERSION"
+              STALE=$(uv run mike list --json | uv run python scripts/prerelease_docs.py "$VERSION" --exclude "$VERSION")
+            else
+              MINOR="${VERSION%.*}"
+              echo "Deploying release docs: version=$MINOR alias=latest (from $VERSION)"
+              uv run mike deploy --push --update-aliases "$MINOR" latest
+              uv run mike set-default --push latest
+              # Prune every prerelease preview whose base version is <= this
+              # release (the corresponding release, or a later one, has landed).
+              STALE=$(uv run mike list --json | uv run python scripts/prerelease_docs.py "$VERSION")
             fi
 
-            MINOR="${VERSION%.*}"
-
-            echo "Deploying release docs: version=$MINOR alias=latest (from $VERSION)"
-            uv run mike deploy --push --update-aliases "$MINOR" latest
-            uv run mike set-default --push latest
+            if [ -n "$STALE" ]; then
+              echo "Pruning superseded prerelease docs:" $STALE
+              uv run mike delete --push $STALE
+            fi
           else
             echo "Deploying main (unreleased) docs"
             uv run mike deploy --push --title "main (unreleased)" main
