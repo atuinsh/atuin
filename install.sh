@@ -21,6 +21,12 @@ if [ "$ATUIN_NON_INTERACTIVE" != "yes" ]; then
     ATUIN_NON_INTERACTIVE="no"
   else
     ATUIN_NON_INTERACTIVE="yes"
+  ATUIN_NON_INTERACTIVE=yes
+  if { exec 3</dev/tty; } 2>/dev/null; then
+      if [ -t 3 ]; then
+          ATUIN_NON_INTERACTIVE=no
+      fi
+      exec 3<&-
   fi
 fi
 
