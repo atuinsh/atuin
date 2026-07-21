@@ -101,7 +101,7 @@ echo ""
 if [ "$ATUIN_NON_INTERACTIVE" != "yes" ]; then
 
   printf "Would you like to import your existing shell history into Atuin? [Y/n] "
-  read -r import_answer </dev/tty 2>/dev/null || import_answer="n"
+  read -r import_answer </dev/tty || import_answer="n"
   import_answer="${import_answer:-y}"
 
   case "$import_answer" in
@@ -129,7 +129,7 @@ Sync your history across all your machines with Atuin Cloud:
 EOF
 
   printf "Sign up for a sync account? [Y/n] "
-  read -r sync_answer </dev/tty 2>/dev/null || sync_answer="n"
+  read -r sync_answer </dev/tty || sync_answer="n"
   sync_answer="${sync_answer:-y}"
 
   case "$sync_answer" in
