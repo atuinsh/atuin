@@ -31,7 +31,15 @@
 .md-header__button.md-logo img,
 .md-header__button.md-logo svg {
   width: auto;
-  height: 1.3rem;
+  height: 1.7rem;
+}
+
+/* The button's own padding is what caps the mark's apparent size once the
+   image is this large; trimming it lets the turtle read at a glance in a
+   2.4rem header without crowding the wordmark. */
+.md-header__button.md-logo {
+  padding: 0.2rem;
+  margin-right: 0.1rem;
 }
 
 .md-header__title {
