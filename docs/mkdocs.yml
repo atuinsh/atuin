@@ -33,16 +33,33 @@ theme:
         icon: material/brightness-7
         name: Switch to dark mode
   features:
+    # Navigation
+    - navigation.instant           # SPA-style page loads
+    - navigation.instant.prefetch  # start fetching on link hover
+    - navigation.instant.progress  # progress bar if a load is slow
+    - navigation.tracking          # URL follows the anchor you are reading
+    - navigation.path              # breadcrumbs above the page title
     - navigation.sections
     - navigation.expand
+    - navigation.top               # back-to-top button
+    - navigation.footer            # prev/next links at the page foot
+    - toc.follow                   # right-hand ToC scrolls to keep up
+    # Search
     - search.suggest
     - search.highlight
+    - search.share
+    # Content
+    - content.tabs.link            # selecting a tab selects it everywhere
     - content.code.copy
     - content.action.edit
     - content.action.view
 
 plugins:
   - search
+  # Downloads external assets (the Google Fonts CSS and its woff2 files) at
+  # build time and serves them from the site itself, so a reader never hits a
+  # third-party origin. Bundled with mkdocs-material -- no extra dependency.
+  - privacy
   - git-revision-date-localized:
       enable_creation_date: true
   - redirects:
