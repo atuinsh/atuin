@@ -41,12 +41,21 @@
   letter-spacing: -0.01em;
 }
 
+/* design_system.md "Body": DM Sans, 15px / 1.65, weight 300. Light and
+   spacious is the stated intent ("keep it light and spacious"). */
 .md-typeset {
-  font-weight: 400;
+  font-weight: 300;
 }
 
-.md-typeset p {
-  line-height: 1.68;
+.md-typeset p,
+.md-typeset li {
+  line-height: 1.65;
+}
+
+/* Bold inside 300-weight prose needs a real step up to read as emphasis. */
+.md-typeset strong,
+.md-typeset b {
+  font-weight: 600;
 }
 
 /* ---------- The mono micro-label system ----------
@@ -61,8 +70,8 @@
 .md-typeset table:not([class]) th {
   color: var(--md-default-fg-color--light);
   font-family: var(--md-code-font-family, "Space Mono"), monospace;
-  font-size: 0.62rem;
-  font-weight: 700;
+  font-size: 0.55rem;
+  font-weight: 400;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
@@ -74,8 +83,8 @@
   color: var(--md-default-fg-color);
 }
 
-/* Material sets section labels to weight 700 in the default typeface and
-   dims [for] variants; both are superseded above, but the sizing is not. */
+/* Nav section labels sit at the design system's "Nano" step (10px, +8%). */
 .md-nav__item--section > .md-nav__link {
-  font-size: 0.6rem;
+  font-size: 0.5rem;
+  letter-spacing: 0.08em;
 }

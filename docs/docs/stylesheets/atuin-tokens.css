@@ -1,41 +1,50 @@
 /* ==========================================================================
    Atuin brand tokens
    --------------------------------------------------------------------------
-   Every value here is measured from atuin.sh's stylesheet or from
-   assets/turtle-interaction-default.svg. They are not design choices made
-   here; do not adjust them to taste. If something needs a colour that is not
-   on this list, update the spec first.
+   Source of truth: design_system.md (the Figma rebrand spec). Where that
+   document and atuin.sh's live CSS disagree, the document wins -- it is the
+   go-forward direction and the live site predates parts of it.
 
    LOAD ORDER: this file must be first in `extra_css`. Every other
    atuin-*.css file reads variables defined below.
    ========================================================================== */
 
 :root {
-  /* Core brand -- atuin.sh :root */
-  --atuin-green: #38c85a;
-  --atuin-green-200: #a8ecba;
+  /* Brand green ramp -- design_system.md "Brand green ramp" */
   --atuin-green-100: #d4f5de;
-  /* Darkened green for light backgrounds. #38c85a on #fbfcfb is ~2.1:1 and
-     fails WCAG AA; this is ~4.9:1. See tests/test_branding.py. */
-  --atuin-green-deep: #15803d;
+  --atuin-green-200: #a8ecba;
+  --atuin-green-300: #70de90;
+  --atuin-green-400: #38c85a;
+  --atuin-green-500: #2aa348;
+  --atuin-green-600: #1a7a34;
+  --atuin-green-700: #0d4d1f;
 
-  --atuin-bg: #101620;
-  --atuin-bg-deep: #0f1722;
-  --atuin-screen: #0d141e;          /* atuin.sh .terminal-screen */
+  /* Step 400 is the brand accent. Named separately because most rules want
+     "the brand green" rather than a position on the ramp. */
+  --atuin-green: var(--atuin-green-400);
 
+  /* Surfaces -- design_system.md "Primary palette" */
+  --atuin-bg: #0a0d0b;         /* page background, outermost surface */
+  --atuin-surface-1: #0f1214;  /* cards, panels, nav */
+  --atuin-surface-2: #141a15;  /* terminal blocks, inputs, elevated panels */
+  --atuin-surface-3: #2f383d;  /* window bars, menus, active surfaces */
+
+  /* Text */
   --atuin-text-1: #e8f0e9;
   --atuin-text-2: #8fa1a8;
   --atuin-text-3: #5a6870;
 
-  /* Mascot palette -- the turtle's shell scutes */
+  /* Borders -- green-tinted, per design_system.md "Border tokens" */
+  --atuin-border: rgba(56, 200, 90, 0.12);
+  --atuin-border-strong: rgba(56, 200, 90, 0.22);
+
+  /* Mascot palette. design_system.md: blue is a supporting colour, used
+     "mostly through mascot assets, terminal accents, or very restrained
+     surface highlights" -- here, only syntax highlighting. */
   --atuin-ink: #273338;
   --atuin-blue: #0088d1;
   --atuin-blue-mid: #4ec2f8;
   --atuin-blue-pale: #b1e5fb;
-
-  /* Structure */
-  --atuin-rule: rgba(44, 82, 104, 0.36);
-  --atuin-rule-strong: rgba(56, 200, 90, 0.22);
 }
 
 /* ==========================================================================
@@ -67,7 +76,7 @@
      .md-header gets its dark background from atuin-components.css instead. */
   --md-primary-fg-color: var(--atuin-green);
   --md-primary-fg-color--light: var(--atuin-green-200);
-  --md-primary-fg-color--dark: var(--atuin-green-deep);
+  --md-primary-fg-color--dark: var(--atuin-green-600);
   --md-primary-bg-color: var(--atuin-text-1);
   --md-primary-bg-color--light: var(--atuin-text-2);
 
@@ -79,12 +88,12 @@
   --md-typeset-color: var(--atuin-text-1);
   --md-typeset-a-color: var(--atuin-green);
   --md-typeset-mark-color: rgba(56, 200, 90, 0.25);
-  --md-typeset-table-color: var(--atuin-rule);
+  --md-typeset-table-color: var(--atuin-border);
 
-  --md-code-bg-color: var(--atuin-screen);
-  --md-code-fg-color: #cfe3d4;
+  --md-code-bg-color: var(--atuin-surface-2);
+  --md-code-fg-color: var(--atuin-text-1);
 
-  --md-footer-bg-color: var(--atuin-bg-deep);
+  --md-footer-bg-color: var(--atuin-surface-1);
   --md-footer-bg-color--dark: #0b111a;
   --md-footer-fg-color: var(--atuin-text-1);
   --md-footer-fg-color--light: var(--atuin-text-2);
@@ -109,8 +118,8 @@
      which is what originally forced a dark header here. */
   --atuin-nav-bg: rgba(251, 252, 251, 0.92);
   --atuin-nav-edge: rgba(18, 24, 26, 0.12);
-  --atuin-search-bg: rgba(21, 128, 61, 0.05);
-  --atuin-search-edge: rgba(21, 128, 61, 0.26);
+  --atuin-search-bg: rgba(26, 122, 52, 0.05);
+  --atuin-search-edge: rgba(26, 122, 52, 0.28);
 
   --md-default-bg-color: #fbfcfb;
   --md-default-bg-color--light: rgba(251, 252, 251, 0.7);
@@ -122,27 +131,27 @@
   --md-default-fg-color--lighter: #71838a;
   --md-default-fg-color--lightest: rgba(113, 131, 138, 0.3);
 
-  --md-primary-fg-color: var(--atuin-green-deep);
+  --md-primary-fg-color: var(--atuin-green-600);
   --md-primary-fg-color--light: var(--atuin-green);
-  --md-primary-fg-color--dark: #0f5c2c;
+  --md-primary-fg-color--dark: var(--atuin-green-700);
   /* Light, because the header is dark in BOTH schemes (see components). */
   /* Foreground ON the header bar -- dark now, since the bar is light. */
   --md-primary-bg-color: #12181a;
   --md-primary-bg-color--light: #4a5a60;
 
-  --md-accent-fg-color: var(--atuin-green-deep);
-  --md-accent-fg-color--transparent: rgba(21, 128, 61, 0.1);
+  --md-accent-fg-color: var(--atuin-green-600);
+  --md-accent-fg-color--transparent: rgba(26, 122, 52, 0.1);
   --md-accent-bg-color: #ffffff;
   --md-accent-bg-color--light: rgba(255, 255, 255, 0.7);
 
   --md-typeset-color: #12181a;
-  --md-typeset-a-color: var(--atuin-green-deep);
+  --md-typeset-a-color: var(--atuin-green-600);
   --md-typeset-mark-color: rgba(56, 200, 90, 0.25);
-  --md-typeset-table-color: rgba(18, 24, 26, 0.16);
+  --md-typeset-table-color: rgba(26, 122, 52, 0.22);
 
   /* Atuin's terminal is always a dark screen, in either scheme. */
-  --md-code-bg-color: var(--atuin-screen);
-  --md-code-fg-color: #cfe3d4;
+  --md-code-bg-color: var(--atuin-surface-2);
+  --md-code-fg-color: var(--atuin-text-1);
 
   --md-footer-bg-color: #f1f4f2;
   --md-footer-bg-color--dark: #e6eae7;
@@ -174,7 +183,7 @@
   --md-code-hl-comment-color: var(--atuin-text-3);
   --md-code-hl-operator-color: var(--atuin-text-2);
   --md-code-hl-punctuation-color: var(--atuin-text-2);
-  --md-code-hl-name-color: #cfe3d4;
+  --md-code-hl-name-color: var(--atuin-text-1);
   --md-code-hl-variable-color: var(--atuin-text-1);
   --md-code-hl-generic-color: var(--atuin-text-2);
   --md-code-hl-color: rgba(56, 200, 90, 0.18);

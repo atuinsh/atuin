@@ -90,9 +90,9 @@
 .md-typeset details,
 .md-typeset details[class] {
   background-color: var(--atuin-adm-bg);
-  border: 1px solid var(--atuin-rule);
+  border: 1px solid var(--atuin-border);
   border-left: 2px solid var(--atuin-adm);
-  border-radius: 4px;
+  border-radius: 12px;
   box-shadow: none;
   font-size: 0.7rem;
 }
@@ -186,21 +186,19 @@
    line would be wrong. */
 
 .md-typeset pre > code {
-  background-color: var(--atuin-screen);
-  border-radius: 6px;
-  box-shadow:
-    inset 0 0 0 1px rgba(56, 200, 90, 0.1),
-    0 0 0 1px rgba(8, 13, 17, 0.24);
+  background-color: var(--atuin-surface-2);
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px var(--atuin-border-strong);
 }
 
 .md-typeset .highlight > pre {
-  border-radius: 6px;
+  border-radius: 10px;
 }
 
 /* Inline code is not a terminal screen; keep it a quiet tint. */
 .md-typeset code:not(pre code) {
   background-color: rgba(56, 200, 90, 0.08);
-  border-radius: 3px;
+  border-radius: 4px;
   color: var(--md-default-fg-color);
   font-size: 0.85em;
   padding: 0.08em 0.34em;
@@ -213,9 +211,9 @@
 /* Tabbed code blocks (pymdownx.tabbed) */
 .md-typeset .tabbed-labels > label {
   font-family: var(--md-code-font-family, "Space Mono"), monospace;
-  font-size: 0.6rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
+  font-size: 0.55rem;
+  font-weight: 400;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
@@ -271,20 +269,20 @@
 .md-typeset .md-button--primary {
   --atuin-btn-bg: var(--atuin-green);
   --atuin-btn-border: var(--atuin-green);
-  color: #06100a;
+  color: var(--atuin-bg);
 }
 
 .md-typeset .md-button--primary:hover,
 .md-typeset .md-button--primary:focus {
   background-color: var(--atuin-green);
-  color: #06100a;
+  color: var(--atuin-bg);
 }
 
 /* ---------- Tables ---------- */
 
 .md-typeset table:not([class]) {
   border: 1px solid var(--md-typeset-table-color);
-  border-radius: 4px;
+  border-radius: 12px;
   box-shadow: none;
 }
 
@@ -300,7 +298,7 @@
 /* ---------- Footer ---------- */
 
 .md-footer-meta {
-  border-top: 1px solid var(--atuin-rule);
+  border-top: 1px solid var(--atuin-border);
 }
 
 .md-footer__link:hover {
