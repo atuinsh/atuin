@@ -59,7 +59,7 @@ pub(crate) fn parse_shell_command(code: &str, shell: ShellKind) -> ParsedShellCo
 #[cfg(feature = "tree-sitter")]
 mod ts {
     use super::{ParsedShellCommand, ShellCommand, parse_fallback};
-    use tree_sitter_lib::{Parser, Tree};
+    use tree_sitter::{Parser, Tree};
 
     fn bash_parser() -> Parser {
         let mut parser = Parser::new();
@@ -104,11 +104,7 @@ mod ts {
         walk_bash_node(tree.root_node(), source, commands);
     }
 
-    fn walk_bash_node(
-        node: tree_sitter_lib::Node,
-        source: &[u8],
-        commands: &mut Vec<ShellCommand>,
-    ) {
+    fn walk_bash_node(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<ShellCommand>) {
         match node.kind() {
             "command" => {
                 if let Some(cmd) = extract_bash_command(node, source) {
@@ -134,7 +130,7 @@ mod ts {
     }
 
     /// Extract the full command string and name from a bash `command` node.
-    fn extract_bash_command(node: tree_sitter_lib::Node, source: &[u8]) -> Option<ShellCommand> {
+    fn extract_bash_command(node: tree_sitter::Node, source: &[u8]) -> Option<ShellCommand> {
         // A `command` node has children like:
         //   variable_assignment* command_name argument* redirect*
         // We want the command_name and all arguments (skipping assignments and redirects).
@@ -219,11 +215,7 @@ mod ts {
         walk_fish_node(tree.root_node(), source, commands);
     }
 
-    fn walk_fish_node(
-        node: tree_sitter_lib::Node,
-        source: &[u8],
-        commands: &mut Vec<ShellCommand>,
-    ) {
+    fn walk_fish_node(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<ShellCommand>) {
         match node.kind() {
             "command" => {
                 if let Some(cmd) = extract_fish_command(node, source) {
@@ -247,7 +239,7 @@ mod ts {
         }
     }
 
-    fn extract_fish_command(node: tree_sitter_lib::Node, source: &[u8]) -> Option<ShellCommand> {
+    fn extract_fish_command(node: tree_sitter::Node, source: &[u8]) -> Option<ShellCommand> {
         // In fish, a `command` node has:
         //   name (command_name or word) followed by arguments (word, string, etc.)
         let mut name = None;
