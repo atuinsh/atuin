@@ -77,7 +77,7 @@ strum = { version = "0.27", features = ["strum_macros"] }
 
 [dependencies.atuin-common]
 path = "../atuin-common"
-version = "18.17.1"
+version = "18.18.0-beta.1"
 features = ["tracing"]
 
 [dev-dependencies]
@@ -90,7 +90,7 @@ tempfile = "3"
 # This crate's tests require the `test-utils` feature in atuin-common.
 [dev-dependencies.atuin-common]
 path = "../atuin-common"
-version = "18.17.1"
+version = "18.18.0-beta.1"
 features = ["test-utils"]
 
 [[bench]]

@@ -21,14 +21,14 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.97.0
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -57,14 +57,14 @@ jobs:
         target: [x86_64-unknown-illumos]
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install cross
         uses: taiki-e/install-action@v2
         with:
           tool: cross
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -92,7 +92,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
@@ -104,7 +104,7 @@ jobs:
         with:
           tool: cargo-nextest
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -122,14 +122,14 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.97.0
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -166,7 +166,7 @@ jobs:
           - 5432:5432
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
@@ -178,7 +178,7 @@ jobs:
         with:
           tool: cargo-nextest
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -195,7 +195,7 @@ jobs:
     runs-on: depot-ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install latest rust
         uses: dtolnay/rust-toolchain@master
@@ -203,7 +203,7 @@ jobs:
           toolchain: 1.97.0
           components: clippy
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -218,7 +218,7 @@ jobs:
     runs-on: depot-ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install latest rust
         uses: dtolnay/rust-toolchain@master
