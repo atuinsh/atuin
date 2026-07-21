@@ -22,8 +22,8 @@ LABEL org.opencontainers.image.source="https://github.com/atuinsh/atuin" \
   org.opencontainers.image.licenses="MIT"
 
 RUN useradd -c 'atuin user' atuin && mkdir /config && chown atuin:atuin /config
-# Install ca-certificates for webhooks to work
-RUN apt update && apt install ca-certificates netcat-traditional -y && rm -rf /var/lib/apt/lists/*
+# ca-certificates for webhooks to work, curl for the healthcheck
+RUN apt update && apt install --no-install-recommends ca-certificates curl -y && rm -rf /var/lib/apt/lists/*
 WORKDIR app
 
 USER atuin
@@ -33,6 +33,8 @@ ENV RUST_LOG=atuin_server=info
 ENV ATUIN_CONFIG_DIR=/config
 
 COPY --from=builder /app/target/release/atuin-server /usr/local/bin
-COPY healthcheck.sh /
-HEALTHCHECK CMD /healthcheck.sh
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -fsS -o /dev/null "http://localhost:${ATUIN_PORT:-8888}/healthz"
+
 ENTRYPOINT ["/usr/local/bin/atuin-server"]
