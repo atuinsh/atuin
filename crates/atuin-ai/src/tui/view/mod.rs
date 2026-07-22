@@ -7,7 +7,8 @@
 
 use atuin_common::path::DisplayRichExt;
 use eye_declare::{
-    AnyElement, Element, ElementExt, Fluent, col, empty, markdown, row, spinner, text, viewport,
+    AnyElement, Element, ElementExt, Fluent, Markdown, MarkdownStyles, Spinner, col, empty,
+    markdown, row, spinner, text, viewport,
 };
 use ratatui_core::style::{Color, Modifier, Style};
 
@@ -32,6 +33,38 @@ const MAX_SHELL_PREVIEW_LINES: u16 = 5;
 /// only the most recent entries are displayed; the header count tells the
 /// full story.
 const MAX_GROUP_ENTRIES: usize = 5;
+
+/// Tool spinner in the app's standard state colors: yellow glyph and label
+/// while in flight, green checkmark once done.
+pub(crate) fn tool_spinner(label: impl Into<String>, done: bool) -> Spinner {
+    let s = spinner(label).done(done);
+    if done {
+        s.spinner_style(Style::default().fg(Color::Green))
+    } else {
+        s.spinner_style(Style::default().fg(Color::Yellow))
+            .label_style(Style::default().fg(Color::Yellow))
+    }
+}
+
+/// Markdown in the app's styles, streaming like every renderer here. The
+/// styles pin eye-declare's defaults so the app's palette doesn't shift if
+/// those defaults change.
+fn md(source: impl Into<String>) -> Markdown {
+    markdown(source)
+        .styles(MarkdownStyles {
+            base: Style::default(),
+            code_inline: Style::default().fg(Color::Yellow),
+            code_block: Style::default().fg(Color::Green),
+            bold: Style::default().add_modifier(Modifier::BOLD),
+            italic: Style::default().add_modifier(Modifier::ITALIC),
+            heading: Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+            table_border: Style::default().fg(Color::DarkGray),
+            table_header: Style::default().add_modifier(Modifier::BOLD),
+        })
+        .streaming(true)
+}
 
 /// Render one turn. `first` suppresses the leading blank row; `busy` shows
 /// the working spinner on the last agent turn; `showing_ui` suppresses it
@@ -117,14 +150,14 @@ fn out_of_band_output_view(details: &OutOfBandOutputDetails) -> AnyElement<'stat
         .when_some(details.command.clone(), |c, command| {
             c.child(text(command).style(Style::default().fg(Color::Blue)))
         })
-        .child(markdown(details.content.clone()).streaming(true))
+        .child(md(details.content.clone()))
         .pad_left(2)
         .any()
 }
 
 fn event_view(event: &UiEvent) -> AnyElement<'static> {
     match event {
-        UiEvent::Text { content } => markdown(content.clone()).streaming(true).pad_left(2).any(),
+        UiEvent::Text { content } => md(content.clone()).pad_left(2).any(),
         UiEvent::ToolSummary(summary) => tool_summary_view(summary),
         UiEvent::SuggestedCommand(details) => suggested_command_view(details),
         UiEvent::ToolCall(details) => tool_call_view(details).pad_left(2).any(),
@@ -134,16 +167,7 @@ fn event_view(event: &UiEvent) -> AnyElement<'static> {
 }
 
 fn tool_summary_view(summary: &ToolSummary) -> AnyElement<'static> {
-    let check_style = if summary.any_pending() {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default().fg(Color::Green)
-    };
-
-    spinner(summary.summary())
-        .spinner_style(check_style)
-        .done(!summary.any_pending())
-        .any()
+    tool_spinner(summary.summary(), !summary.any_pending()).any()
 }
 
 fn tool_call_view(details: &ToolCallDetails) -> AnyElement<'static> {
@@ -165,11 +189,8 @@ fn tool_call_view(details: &ToolCallDetails) -> AnyElement<'static> {
 /// Status indicator for a non-preview tool call (e.g. a server-side tool).
 fn tool_status_view(name: &str, status: &ToolResultStatus) -> AnyElement<'static> {
     match status {
-        ToolResultStatus::Pending => spinner(format!("Running: {name}"))
-            .label_style(Style::default().fg(Color::Yellow))
-            .done(false)
-            .any(),
-        ToolResultStatus::Success => spinner(format!("Ran: {name}")).done(true).any(),
+        ToolResultStatus::Pending => tool_spinner(format!("Running: {name}"), false).any(),
+        ToolResultStatus::Success => tool_spinner(format!("Ran: {name}"), true).any(),
         ToolResultStatus::Error => text("✗ ")
             .style(Style::default().fg(Color::Red))
             .span(format!("{name}: denied"), Style::default().fg(Color::Red))
@@ -188,28 +209,29 @@ fn shell_tool_view(command: &str, preview: Option<&ToolPreview>) -> AnyElement<'
     match preview {
         Some(preview) => col()
             .child(
-                spinner(if done {
-                    format!("Ran: {command}")
-                } else {
-                    format!("Running: {command}")
-                })
-                .done(done)
+                tool_spinner(
+                    if done {
+                        format!("Ran: {command}")
+                    } else {
+                        format!("Running: {command}")
+                    },
+                    done,
+                )
                 .hide_checkmark(),
             )
             .child(
-                row().fixed(2, text("└ ")).fill(
-                    viewport(preview.lines.iter().cloned())
-                        .height((preview.lines.len() as u16).clamp(1, MAX_SHELL_PREVIEW_LINES))
-                        .style(Style::default().fg(Color::Gray))
-                        .wrap(false),
-                ),
+                row()
+                    .fixed(2, text("└ ").style(Style::default().fg(Color::DarkGray)))
+                    .fill(
+                        viewport(preview.lines.iter().cloned())
+                            .height((preview.lines.len() as u16).clamp(1, MAX_SHELL_PREVIEW_LINES))
+                            .style(Style::default().fg(Color::Gray))
+                            .wrap(false),
+                    ),
             )
             .child(shell_tool_footer(preview, done))
             .any(),
-        None => spinner(format!("Running: {command}"))
-            .label_style(Style::default().fg(Color::Yellow))
-            .done(false)
-            .any(),
+        None => tool_spinner(format!("Running: {command}"), false).any(),
     }
 }
 
@@ -370,13 +392,10 @@ fn tool_status_line(
     suffix: &str,
 ) -> AnyElement<'static> {
     match status {
-        ToolResultStatus::Pending => spinner(format!("{doing}: {display_path}"))
-            .label_style(Style::default().fg(Color::Yellow))
-            .done(false)
-            .any(),
-        ToolResultStatus::Success => spinner(format!("{did}: {display_path}{suffix}"))
-            .done(true)
-            .any(),
+        ToolResultStatus::Pending => tool_spinner(format!("{doing}: {display_path}"), false).any(),
+        ToolResultStatus::Success => {
+            tool_spinner(format!("{did}: {display_path}{suffix}"), true).any()
+        }
         ToolResultStatus::Error => text("✗ ")
             .style(Style::default().fg(Color::Red))
             .span(
@@ -425,7 +444,10 @@ fn group_row_view(
     content: AnyElement<'static>,
 ) -> AnyElement<'static> {
     row()
-        .fixed(2, text(tree_marker(is_first)))
+        .fixed(
+            2,
+            text(tree_marker(is_first)).style(Style::default().fg(Color::DarkGray)),
+        )
         .fixed(2, status_marker_view(status))
         .fill(content)
         .any()
@@ -440,7 +462,7 @@ fn file_read_group_view(group: &ToolGroup) -> AnyElement<'static> {
     };
 
     col()
-        .child(spinner(label).done(!group.any_pending()).hide_checkmark())
+        .child(tool_spinner(label, !group.any_pending()).hide_checkmark())
         .children(
             visible_group_calls(group)
                 .iter()
@@ -461,11 +483,7 @@ fn file_read_row(is_first: bool, details: &ToolCallDetails) -> AnyElement<'stati
 
 fn history_search_group_view(group: &ToolGroup) -> AnyElement<'static> {
     col()
-        .child(
-            spinner("Searched Atuin history:")
-                .done(!group.any_pending())
-                .hide_checkmark(),
-        )
+        .child(tool_spinner("Searched Atuin history:", !group.any_pending()).hide_checkmark())
         .children(
             visible_group_calls(group)
                 .iter()
@@ -592,8 +610,8 @@ fn suggested_command_view(details: &SuggestedCommandDetails) -> AnyElement<'stat
             |c, notes| {
                 c.child(
                     row()
-                        .fixed(2, text("└"))
-                        .fill(markdown(notes).streaming(true))
+                        .fixed(2, text("└").style(Style::default().fg(Color::DarkGray)))
+                        .fill(md(notes))
                         .pad_left(2),
                 )
             },
@@ -616,8 +634,8 @@ fn suggested_command_view(details: &SuggestedCommandDetails) -> AnyElement<'stat
             |c, notes| {
                 c.child(
                     row()
-                        .fixed(2, text("└"))
-                        .fill(markdown(notes).streaming(true))
+                        .fixed(2, text("└").style(Style::default().fg(Color::DarkGray)))
+                        .fill(md(notes))
                         .pad_left(2),
                 )
             },
