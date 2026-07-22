@@ -66,7 +66,7 @@
      green-cast #0a0d0b page they read as a blue bar top and bottom. Surface 1
      is what the spec assigns to "nav background", and the edge goes neutral
      to match the terminal's rim. */
-  --atuin-nav-bg: rgba(15, 18, 20, 0.92);
+  --atuin-nav-bg: var(--atuin-surface-1);
   --atuin-nav-edge: var(--atuin-surface-edge);
   --atuin-search-bg: rgba(56, 200, 90, 0.06);
   --atuin-search-edge: rgba(56, 200, 90, 0.18);
@@ -105,7 +105,7 @@
   --md-code-fg-color: var(--atuin-text-1);
 
   --md-footer-bg-color: var(--atuin-surface-1);
-  --md-footer-bg-color--dark: var(--atuin-bg);
+  --md-footer-bg-color--dark: var(--atuin-surface-1);
   --md-footer-fg-color: var(--atuin-text-1);
   --md-footer-fg-color--light: var(--atuin-text-2);
   --md-footer-fg-color--lighter: var(--atuin-text-3);
@@ -127,7 +127,7 @@
      bracketing it in slabs of dark. The turtle mark is a transparent SVG with
      dark navy outlines, so it reads on a light bar without a second asset --
      which is what originally forced a dark header here. */
-  --atuin-nav-bg: rgba(251, 252, 251, 0.92);
+  --atuin-nav-bg: #f1f4f2;
   --atuin-nav-edge: rgba(18, 24, 26, 0.12);
   --atuin-search-bg: rgba(26, 122, 52, 0.05);
   --atuin-search-edge: rgba(26, 122, 52, 0.28);
@@ -166,7 +166,7 @@
   --md-code-fg-color: var(--atuin-text-1);
 
   --md-footer-bg-color: #f1f4f2;
-  --md-footer-bg-color--dark: #e6eae7;
+  --md-footer-bg-color--dark: #f1f4f2;
   --md-footer-fg-color: #12181a;
   --md-footer-fg-color--light: #4a5a60;
   --md-footer-fg-color--lighter: #71838a;

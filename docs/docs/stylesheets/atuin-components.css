@@ -10,9 +10,13 @@
    Colours come from --atuin-nav-*, which each scheme defines: atuin.sh's dark
    nav in slate, a light bar in default. Nothing here is scheme-specific. */
 
+/* Opaque, not translucent. A 0.92 alpha over the page composited to #0F1213
+   while the footer sat at #0F1214, and the blur made the header drift as
+   content scrolled beneath it -- three nearly-but-not-quite equal chrome
+   tones. One flat surface for header and footer alike; the hairline does the
+   separating. */
 .md-header {
   background-color: var(--atuin-nav-bg);
-  backdrop-filter: blur(18px);
   border-bottom: 1px solid var(--atuin-nav-edge);
   box-shadow: none;
   color: var(--md-primary-bg-color);
