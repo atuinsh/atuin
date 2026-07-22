@@ -20,6 +20,9 @@ concurrency:
 jobs:
   main:
     runs-on: ubuntu-latest
+    env:
+      MKDOCS_GIT_COMMITTERS_ENABLED: true
+      MKDOCS_GIT_COMMITTERS_APIKEY: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7

@@ -1218,4 +1218,4 @@ syntax_highlight = false
 
 ## ai
 
-The settings for Atuin AI are listed in [a separate section](../../ai/settings/).
+The settings for Atuin AI are listed in [a separate section](../ai/settings.md).
