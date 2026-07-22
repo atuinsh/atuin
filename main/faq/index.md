@@ -35,7 +35,7 @@ EG:
 eval "$(atuin init zsh --disable-up-arrow)"
 ```
 
-See [key binding](https://docs.atuin.sh/configuration/key-binding.md) for more
+See [key binding](https://docs.atuin.sh/configuration/key-binding/index.md) for more
 
 ## How do I remove the default question mark binding for Atuin AI?
 
