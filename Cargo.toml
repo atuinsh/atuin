@@ -56,6 +56,7 @@ tokio = { version = "1", features = ["full"] }
 uuid = { version = "1.9", features = ["v4", "v7", "serde"] }
 whoami = "2.1.0"
 typed-builder = "0.23.2"
+parking_lot = "0.12.1"
 pretty_assertions = "1.3.0"
 proptest = "1.11.0"
 rstest = "0.26.1"

@@ -13,5 +13,5 @@ exclude = ["/typos.toml", "/tarpaulin.toml"]
 
 [dependencies]
 atuin-nucleo-matcher = { version = "0.3.1", path = "matcher" }
-parking_lot = { version = "0.12.1", features = ["send_guard", "arc_lock"] }
+parking_lot = { workspace = true, features = ["send_guard", "arc_lock"] }
 rayon = "1.7.0"
