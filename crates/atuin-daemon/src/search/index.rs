@@ -19,7 +19,7 @@ use atuin_nucleo::{Injector, Nucleo, pattern};
 use dashmap::DashMap;
 use lasso::{Spur, ThreadedRodeo};
 use time::OffsetDateTime;
-use tokio::sync::RwLock;
+use parking_lot::RwLock;
 use tracing::{Level, instrument};
 use uuid::Uuid;
 
@@ -329,8 +329,8 @@ impl SearchIndex {
     }
 
     /// Get the number of items in Nucleo (should match command_count).
-    pub async fn nucleo_item_count(&self) -> u32 {
-        self.nucleo.read().await.snapshot().item_count()
+    pub fn nucleo_item_count(&self) -> u32 {
+        self.nucleo.read().snapshot().item_count()
     }
 
     /// Search for commands matching a query.
@@ -338,17 +338,17 @@ impl SearchIndex {
     /// Returns a list of history IDs (most recent invocation per command).
     /// Uses precomputed global frecency for scoring if available.
     #[instrument(skip_all, level = tracing::Level::TRACE, name = "index_search", fields(query = %query))]
-    pub async fn search(
+    pub fn search(
         &self,
         query: &str,
         filter_mode: IndexFilterMode,
         _context: &QueryContext,
         limit: u32,
     ) -> Vec<String> {
-        let mut nucleo = self.nucleo.write().await;
+        let mut nucleo = self.nucleo.write();
 
         // Get precomputed frecency map (may be None if not yet computed)
-        let frecency_map = self.frecency_map.read().await.clone();
+        let frecency_map = self.frecency_map.read().clone();
 
         // Build filter based on mode
         let filter = self.build_filter(&filter_mode);
@@ -400,7 +400,7 @@ impl SearchIndex {
     /// - `frequency_score_multiplier`: Weight for frequency component
     /// - `frecency_score_multiplier`: Overall multiplier for final score
     #[instrument(skip_all, level = tracing::Level::DEBUG, name = "rebuild_frecency")]
-    pub async fn rebuild_frecency(&self, search_settings: &Search) {
+    pub fn rebuild_frecency(&self, search_settings: &Search) {
         let now = OffsetDateTime::now_utc().unix_timestamp();
         let mut frecency_map: HashMap<Arc<str>, u32> = HashMap::new();
 
@@ -420,7 +420,7 @@ impl SearchIndex {
             frecency_map.insert(Arc::clone(entry.key()), frecency);
         }
 
-        *self.frecency_map.write().await = Some(Arc::new(frecency_map));
+        *self.frecency_map.write() = Some(Arc::new(frecency_map));
     }
 
     /// Build filter predicate for the given mode.
@@ -664,8 +664,8 @@ mod tests {
         assert!(!data.has_invocation_in_workspace(&check3, &interner));
     }
 
-    #[tokio::test]
-    async fn search_index_add_and_search() {
+    #[test]
+    fn search_index_add_and_search() {
         let index = SearchIndex::new();
 
         let h1 = make_history(
@@ -691,25 +691,22 @@ mod tests {
         assert_eq!(index.command_count(), 3);
 
         // Search for "git" - should match 2 commands
-        let results = index
-            .search("git", IndexFilterMode::Global, &QueryContext::default(), 10)
-            .await;
+        let results =
+            index.search("git", IndexFilterMode::Global, &QueryContext::default(), 10);
         assert_eq!(results.len(), 2);
 
         // Search with directory filter
-        let results = index
-            .search(
-                "",
-                IndexFilterMode::Directory(
-                    "/home/user/project"
-                        .display_rich()
-                        .trailing_slash(true)
-                        .to_string(),
-                ),
-                &QueryContext::default(),
-                10,
-            )
-            .await;
+        let results = index.search(
+            "",
+            IndexFilterMode::Directory(
+                "/home/user/project"
+                    .display_rich()
+                    .trailing_slash(true)
+                    .to_string(),
+            ),
+            &QueryContext::default(),
+            10,
+        );
         assert_eq!(results.len(), 2); // git status and git commit
     }
 }

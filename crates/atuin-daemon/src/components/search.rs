@@ -145,7 +145,7 @@ impl Component for SearchComponent {
                         );
                         // Build initial frecency map with current settings
                         let settings = handle_for_loader.settings();
-                        index.read().await.rebuild_frecency(&settings.search).await;
+                        index.read().await.rebuild_frecency(&settings.search);
                         info!("Initial frecency map built");
                         break;
                     }
@@ -171,8 +171,7 @@ impl Component for SearchComponent {
                 index_for_frecency
                     .read()
                     .await
-                    .rebuild_frecency(&settings.search)
-                    .await;
+                    .rebuild_frecency(&settings.search);
             }
         }));
 
@@ -228,8 +227,7 @@ impl Component for SearchComponent {
                     self.index
                         .read()
                         .await
-                        .rebuild_frecency(&settings.search)
-                        .await;
+                        .rebuild_frecency(&settings.search);
                 }
             }
             // Events we don't care about
@@ -314,9 +312,7 @@ impl SearchSvc for SearchGrpcService {
                             span!(Level::TRACE, "daemon_search_query", %query, query_id)
                                 .in_scope(|| async {
                                     let index = index.read().await;
-                                    index
-                                        .search(&query, index_filter, &query_context, RESULTS_LIMIT)
-                                        .await
+                                    index.search(&query, index_filter, &query_context, RESULTS_LIMIT)
                                 })
                                 .await;
 
