@@ -376,3 +376,7 @@
 ##
 ## Make directory expand instead of command:
 # columns = ["duration", "time", { type = "directory", expand = true }, { type = "command", expand = false }]
+
+## Syntax highlight commands in the search results, using the theme's colors.
+## Not available on all platforms (e.g. Windows).
+# syntax_highlight = true

@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use super::duration::format_duration;
 use super::engines::SearchEngine;
+use super::syntax;
 use atuin_client::{
     history::History,
     settings::{UiColumn, UiColumnType},
@@ -35,6 +36,7 @@ impl HistoryHighlighter<'_> {
     }
 }
 
+#[allow(clippy::struct_excessive_bools)]
 pub struct HistoryList<'a> {
     history: &'a [History],
     block: Option<Block<'a>>,
@@ -46,6 +48,7 @@ pub struct HistoryList<'a> {
     theme: &'a Theme,
     history_highlighter: HistoryHighlighter<'a>,
     show_numeric_shortcuts: bool,
+    syntax_highlight: bool,
     /// Columns to display (in order, after the indicator)
     columns: &'a [UiColumn],
 }
@@ -107,6 +110,7 @@ impl StatefulWidget for HistoryList<'_> {
             theme: self.theme,
             history_highlighter: self.history_highlighter,
             show_numeric_shortcuts: self.show_numeric_shortcuts,
+            syntax_highlight: self.syntax_highlight,
             columns: self.columns,
         };
 
@@ -121,7 +125,7 @@ impl StatefulWidget for HistoryList<'_> {
 }
 
 impl<'a> HistoryList<'a> {
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
     pub fn new(
         history: &'a [History],
         inverted: bool,
@@ -131,6 +135,7 @@ impl<'a> HistoryList<'a> {
         theme: &'a Theme,
         history_highlighter: HistoryHighlighter<'a>,
         show_numeric_shortcuts: bool,
+        syntax_highlight: bool,
         columns: &'a [UiColumn],
     ) -> Self {
         Self {
@@ -143,6 +148,7 @@ impl<'a> HistoryList<'a> {
             theme,
             history_highlighter,
             show_numeric_shortcuts,
+            syntax_highlight,
             columns,
         }
     }
@@ -167,6 +173,7 @@ impl<'a> HistoryList<'a> {
     }
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct DrawState<'a> {
     buf: &'a mut Buffer,
     list_area: Rect,
@@ -180,6 +187,7 @@ struct DrawState<'a> {
     theme: &'a Theme,
     history_highlighter: HistoryHighlighter<'a>,
     show_numeric_shortcuts: bool,
+    syntax_highlight: bool,
     columns: &'a [UiColumn],
 }
 
@@ -317,6 +325,13 @@ impl DrawState<'_> {
 
         let highlight_indices = self.history_highlighter.get_highlight_indices(&normalized);
 
+        // The selected row keeps its single highlight color.
+        let syntax = if self.syntax_highlight && !row_highlighted {
+            syntax::classify(&normalized, h.shell.as_deref())
+        } else {
+            Vec::new()
+        };
+
         // Calculate the available width for the command text.
         // `self.x` is already past the indicator and any preceding columns,
         // so the remaining width is how far we can draw.
@@ -334,10 +349,11 @@ impl DrawState<'_> {
             // Map each output cell back to its source byte and test the existing
             // highlight set; a cell on the spliced ellipsis maps to None and is
             // never highlighted (this is why the "…" is never bolded).
-            let highlighted = ellipsized
-                .source_index(i)
-                .is_some_and(|b| highlight_indices.contains(&b));
-            let mut char_style = style;
+            let source_byte = ellipsized.source_index(i);
+            let highlighted = source_byte.is_some_and(|b| highlight_indices.contains(&b));
+            let mut char_style = source_byte
+                .and_then(|b| syntax.get(b))
+                .map_or(style, |&meaning| self.theme.as_style(meaning));
             if highlighted {
                 if row_highlighted {
                     char_style = self.theme.as_style(Meaning::AlertWarn);

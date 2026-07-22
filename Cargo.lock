@@ -214,7 +214,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "atuin"
-version = "18.17.1"
+version = "18.18.0-beta.1"
 dependencies = [
  "arboard",
  "async-trait",
@@ -270,6 +270,9 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "tracing-tree",
+ "tree-sitter",
+ "tree-sitter-bash",
+ "tree-sitter-fish",
  "unicode-width 0.2.2",
  "url",
  "uuid",
@@ -278,7 +281,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-ai"
-version = "18.17.1"
+version = "18.18.0-beta.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -335,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-client"
-version = "18.17.1"
+version = "18.18.0-beta.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -391,7 +394,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "18.17.1"
+version = "18.18.0-beta.1"
 dependencies = [
  "base64",
  "derive_more",
@@ -421,7 +424,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-daemon"
-version = "18.17.1"
+version = "18.18.0-beta.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -457,7 +460,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-dotfiles"
-version = "18.17.1"
+version = "18.18.0-beta.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -474,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-history"
-version = "18.17.1"
+version = "18.18.0-beta.1"
 dependencies = [
  "atuin-client",
  "crossterm",
@@ -488,7 +491,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-kv"
-version = "18.17.1"
+version = "18.18.0-beta.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -532,7 +535,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-pty-proxy"
-version = "18.17.1"
+version = "18.18.0-beta.1"
 dependencies = [
  "atuin-common",
  "clap",
@@ -546,7 +549,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-scripts"
-version = "18.17.1"
+version = "18.18.0-beta.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -569,7 +572,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server"
-version = "18.17.1"
+version = "18.18.0-beta.1"
 dependencies = [
  "argon2",
  "atuin-common",
@@ -596,7 +599,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-database"
-version = "18.17.1"
+version = "18.18.0-beta.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -611,7 +614,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-postgres"
-version = "18.17.1"
+version = "18.18.0-beta.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -629,7 +632,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-sqlite"
-version = "18.17.1"
+version = "18.18.0-beta.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -5262,7 +5265,7 @@ dependencies = [
 
 [[package]]
 name = "tests-database"
-version = "18.17.1"
+version = "18.18.0-beta.1"
 dependencies = [
  "async-trait",
  "atuin-common",

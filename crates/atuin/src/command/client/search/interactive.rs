@@ -977,6 +977,7 @@ impl State {
                     theme,
                     history_highlighter,
                     settings.show_numeric_shortcuts,
+                    settings.ui.syntax_highlight,
                     &settings.ui.columns,
                 );
                 f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
@@ -1164,6 +1165,7 @@ impl State {
         theme: &'a Theme,
         history_highlighter: HistoryHighlighter<'a>,
         show_numeric_shortcuts: bool,
+        syntax_highlight: bool,
         columns: &'a [UiColumn],
     ) -> HistoryList<'a> {
         let results_list = HistoryList::new(
@@ -1175,6 +1177,7 @@ impl State {
             theme,
             history_highlighter,
             show_numeric_shortcuts,
+            syntax_highlight,
             columns,
         );
 

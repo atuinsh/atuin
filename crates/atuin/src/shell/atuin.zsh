@@ -93,6 +93,27 @@ _atuin_precmd() {
     export ATUIN_HISTORY_ID=""
 }
 
+# Allow comment lines at the interactive prompt, matching the default
+# behavior of bash and fish (oh-my-zsh also enables this).
+setopt interactive_comments
+
+# With interactive_comments, a line starting with '#' is added to history
+# without executing anything, so preexec never fires for it. Record such
+# lines from the history hook instead.
+_atuin_zshaddhistory() {
+    # Guard in case the user unset the option after atuin init: the line then
+    # executes as a normal command and is recorded by preexec/precmd.
+    [[ -o interactive_comments ]] || return 0
+    local line=${1%$'\n'}
+    # Skip multi-line buffers: anything after the comment executes, so the
+    # whole buffer is recorded by preexec/precmd.
+    [[ $line == \#* && $line != *$'\n'* ]] || return 0
+    local id
+    id=$(ATUIN_SHELL=zsh atuin history start --hook -- "$line" 2>/dev/null)
+    [[ -n $id ]] && (atuin history end --hook --exit 0 --duration=0 -- "$id" >/dev/null 2>&1 &)
+    return 0
+}
+
 # Check if tmux popup is available (tmux >= 3.2)
 __atuin_tmux_popup_check() {
     [[ -n "${TMUX-}" ]] || return 1
@@ -210,6 +231,7 @@ _atuin_up_search_viins() {
 
 add-zsh-hook preexec _atuin_preexec
 add-zsh-hook precmd _atuin_precmd
+add-zsh-hook zshaddhistory _atuin_zshaddhistory
 
 zle -N atuin-search _atuin_search
 zle -N atuin-search-vicmd _atuin_search_vicmd
