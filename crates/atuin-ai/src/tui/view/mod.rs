@@ -134,7 +134,14 @@ fn event_view(event: &UiEvent) -> AnyElement<'static> {
 }
 
 fn tool_summary_view(summary: &ToolSummary) -> AnyElement<'static> {
+    let check_style = if summary.any_pending() {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::Green)
+    };
+
     spinner(summary.summary())
+        .spinner_style(check_style)
         .done(!summary.any_pending())
         .any()
 }
