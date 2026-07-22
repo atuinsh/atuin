@@ -42,21 +42,34 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download metadata
-        uses: actions/download-artifact@v8
-        with:
-          name: docs-preview-meta
-          path: meta
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Read pull request number
+      # The pull request number is derived from the head SHA on the trusted
+      # `workflow_run` event, NOT from the build artifact.
+      #
+      # This matters. The build job runs the pull request's own code, so it
+      # controls everything it uploads. An earlier version of this workflow
+      # read the number out of the artifact, which let a fork claim to be any
+      # pull request it liked -- and since this job holds `pull-requests:
+      # write`, that meant a github-actions[bot] comment linking to
+      # attacker-controlled content could be planted on ANY issue in the repo.
+      #
+      # `github.event.workflow_run.pull_requests` is empty for forks, which is
+      # what tempted the artifact in the first place; asking the API which pull
+      # request owns the head SHA works for forks and cannot be influenced by
+      # the build.
+      - name: Resolve the pull request
         id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          number="$(tr -dc '0-9' < meta/pr-number)"
+          number="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SHA}/pulls" \
+            --jq 'map(select(.state == "open")) | .[0].number // empty')"
+          # Belt and braces: the API returns an integer, but this value reaches
+          # a shell command line and a GITHUB_OUTPUT write.
+          number="$(printf '%s' "$number" | tr -dc '0-9')"
           if [ -z "$number" ]; then
-            echo "::error::no pull request number in the build artifact"
+            echo "::error::no open pull request found for ${SHA}"
             exit 1
           fi
           echo "number=${number}" >> "$GITHUB_OUTPUT"
@@ -67,7 +80,12 @@ jobs:
       # deployment, so this never touches production.
       - name: Deploy to Cloudflare Pages
         id: deploy
-        uses: cloudflare/wrangler-action@v3
+        # Pinned to a commit rather than a tag: this is the only third-party
+        # action in the repo that receives credentials (the Cloudflare token
+        # and GITHUB_TOKEN), and a tag can be repointed. v3 was stale -- v4.0.0
+        # shipped 2026-05-12; its only breaking change is the default Wrangler
+        # version, so inputs and outputs are unchanged.
+        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

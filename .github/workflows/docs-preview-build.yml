@@ -39,6 +39,10 @@ jobs:
           # git-revision-date-localized reads the commit history to date each
           # page; a shallow clone makes every page show the same date.
           fetch-depth: 0
+          # This job runs untrusted code. The token is read-only, so leaking it
+          # gains an attacker nothing on a public repo, but there is no reason
+          # to leave it in .git/config where build tooling could reach it.
+          persist-credentials: false
 
       - uses: ./.github/actions/docs-setup
 
@@ -51,23 +55,9 @@ jobs:
         working-directory: docs
         run: uv run mkdocs build --strict --site-dir "${GITHUB_WORKSPACE}/site"
 
-      # The deploy half cannot reliably read the PR number off a workflow_run
-      # event for fork pull requests, so pass it explicitly.
-      - name: Record pull request number
-        run: |
-          mkdir -p meta
-          echo "${{ github.event.pull_request.number }}" > meta/pr-number
-
       - name: Upload site
         uses: actions/upload-artifact@v7
         with:
           name: docs-preview-site
           path: site/
-          retention-days: 3
-
-      - name: Upload metadata
-        uses: actions/upload-artifact@v7
-        with:
-          name: docs-preview-meta
-          path: meta/
           retention-days: 3
