@@ -2,186 +2,186 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://docs.atuin.sh/main/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/faq/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/integrations/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/known-issues/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/uninstall/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/ai/command-output/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/ai/introduction/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/ai/mcp/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/ai/self-hosting/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/ai/settings/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/ai/skills/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/ai/slash-commands/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/ai/tools-permissions/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/ai/user-context/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/configuration/advanced-key-binding/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/configuration/config/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/configuration/key-binding/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/guide/advanced-usage/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/guide/agent-hooks/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/guide/basic-usage/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/guide/delete-history/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/guide/dotfiles/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/guide/getting-started/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/guide/import/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/guide/installation/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/guide/shell-integration/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/guide/sync/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/guide/theming/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/reference/config/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/reference/daemon/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/reference/doctor/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/reference/gen-completions/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/reference/hex/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/reference/import/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/reference/info/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/reference/list/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/reference/prune/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/reference/pty-proxy/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/reference/search/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/reference/stats/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/reference/sync/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/self-hosting/docker/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/self-hosting/kubernetes/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/self-hosting/server-setup/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/self-hosting/systemd/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/self-hosting/usage/</loc>
-         <lastmod>2026-07-21</lastmod>
+         <lastmod>2026-07-22</lastmod>
     </url>
 </urlset>

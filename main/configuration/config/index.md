@@ -1141,6 +1141,20 @@ columns = ["exit", "duration", "command"]
 columns = ["duration", "time", { type = "directory", expand = true }, { type = "command", expand = false }]
 ```
 
+### `syntax_highlight`
+
+Default: `true`
+
+Syntax highlight commands in the search results, parsed with the grammar for the shell that ran them: bash/zsh/sh use the bash grammar, fish uses the fish grammar, and shells without a grammar (nu, xonsh, powershell) are shown unhighlighted. The selected row keeps its usual single highlight color.
+
+The default colors are ANSI palette colors, so they automatically match your terminal's color scheme. They can also be customized via the `Syntax*` keys in a [theme](https://docs.atuin.sh/guide/theming/index.md).
+
+Not available on platforms where tree-sitter doesn't build (e.g. Windows); commands are shown unhighlighted there.
+
+```
+syntax_highlight = false
+```
+
 ## ai
 
 The settings for Atuin AI are listed in [a separate section](https://docs.atuin.sh/ai/settings/index.md).

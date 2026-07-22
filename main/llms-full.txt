@@ -1304,6 +1304,12 @@ Themes are maps from *Meanings*, describing the developer's intentions, to (at p
 - `Important`: drawing the user's attention to information
 - `Title`: titling a section or view
 - `Muted`: anodyne, usually grey, foreground for contrast with other colors. Normally equivalent to the base color, but allows themes to change the base color, with less risk of breaking intentional color contrasts (e.g. stacked bar charts)
+- `SyntaxCommand`: the command word when syntax highlighting shell commands (`git` in `git status`)
+- `SyntaxFlag`: a `-f`/`--flag` argument
+- `SyntaxString`: a quoted string
+- `SyntaxVariable`: `$VAR`, `${VAR}` or a `FOO=bar` assignment
+- `SyntaxOperator`: operators such as `|`, `&&`, `;`, `>`
+- `SyntaxComment`: a `# comment`
 
 These may expand over time as they are added to Atuin's codebase, but Atuin should have fallbacks added for any new *Meanings* so that, whether themes limit to the present list or take advantage of new *Meanings* in future, they should keep working sensibly.
 
@@ -2499,6 +2505,20 @@ columns = ["exit", "duration", "command"]
 
 # Make directory expand instead of command
 columns = ["duration", "time", { type = "directory", expand = true }, { type = "command", expand = false }]
+```
+
+### `syntax_highlight`
+
+Default: `true`
+
+Syntax highlight commands in the search results, parsed with the grammar for the shell that ran them: bash/zsh/sh use the bash grammar, fish uses the fish grammar, and shells without a grammar (nu, xonsh, powershell) are shown unhighlighted. The selected row keeps its usual single highlight color.
+
+The default colors are ANSI palette colors, so they automatically match your terminal's color scheme. They can also be customized via the `Syntax*` keys in a [theme](https://docs.atuin.sh/guide/theming/index.md).
+
+Not available on platforms where tree-sitter doesn't build (e.g. Windows); commands are shown unhighlighted there.
+
+```
+syntax_highlight = false
 ```
 
 ## ai
