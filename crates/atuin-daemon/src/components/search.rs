@@ -8,7 +8,7 @@ use std::{pin::Pin, sync::Arc};
 use atuin_client::database::Database;
 use atuin_common::path::DisplayRichExt;
 use eyre::Result;
-use tokio::sync::RwLock;
+use parking_lot::RwLock;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{Level, debug, info, instrument, span, trace};
@@ -37,7 +37,7 @@ const FRECENCY_REFRESH_INTERVAL_SECS: u64 = 60;
 /// - Provides the Search gRPC service
 pub struct SearchComponent {
     index: Arc<RwLock<SearchIndex>>,
-    handle: tokio::sync::RwLock<Option<DaemonHandle>>,
+    handle: RwLock<Option<DaemonHandle>>,
     loader_handle: Option<tokio::task::JoinHandle<()>>,
     frecency_handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -47,7 +47,7 @@ impl SearchComponent {
     pub fn new() -> Self {
         Self {
             index: Arc::new(RwLock::new(SearchIndex::new())),
-            handle: tokio::sync::RwLock::new(None),
+            handle: RwLock::new(None),
             loader_handle: None,
             frecency_handle: None,
         }
@@ -62,9 +62,10 @@ impl SearchComponent {
 
     /// Rebuild the entire search index from the database.
     async fn rebuild_index(&self) -> Result<()> {
-        let handle_guard = self.handle.read().await;
-        let handle = handle_guard
-            .as_ref()
+        let handle = self
+            .handle
+            .read()
+            .clone()
             .ok_or_else(|| eyre::eyre!("component not initialized"))?;
 
         info!("Rebuilding search index from database");
@@ -98,7 +99,7 @@ impl SearchComponent {
         );
 
         // Replace the old index with the new one
-        *self.index.write().await = new_index;
+        *self.index.write() = new_index;
         Ok(())
     }
 }
@@ -116,7 +117,7 @@ impl Component for SearchComponent {
     }
 
     async fn start(&mut self, handle: DaemonHandle) -> Result<()> {
-        *self.handle.write().await = Some(handle.clone());
+        *self.handle.write() = Some(handle.clone());
 
         // Spawn background task to load history into index
         let index = self.index.clone();
@@ -136,16 +137,16 @@ impl Component for SearchComponent {
                             "Loading {} history entries into search index",
                             histories.len()
                         );
-                        index.read().await.add_histories(&histories);
+                        index.read().add_histories(&histories);
                     }
                     Ok(None) => {
                         info!(
                             "Initial history load complete; {} unique commands indexed",
-                            index.read().await.command_count()
+                            index.read().command_count()
                         );
                         // Build initial frecency map with current settings
                         let settings = handle_for_loader.settings();
-                        index.read().await.rebuild_frecency(&settings.search);
+                        index.read().rebuild_frecency(&settings.search);
                         info!("Initial frecency map built");
                         break;
                     }
@@ -168,10 +169,7 @@ impl Component for SearchComponent {
                 interval.tick().await;
                 trace!("Refreshing frecency map");
                 let settings = handle_for_frecency.settings();
-                index_for_frecency
-                    .read()
-                    .await
-                    .rebuild_frecency(&settings.search);
+                index_for_frecency.read().rebuild_frecency(&settings.search);
             }
         }));
 
@@ -184,23 +182,20 @@ impl Component for SearchComponent {
             DaemonEvent::HistorySynced(ids) => {
                 debug!(count = ids.len(), "Indexing synced history entries");
 
-                let handle_guard = self.handle.read().await;
-                let Some(handle) = handle_guard.as_ref() else {
+                let Some(handle) = self.handle.read().clone() else {
                     return Ok(());
                 };
 
                 let histories = handle.history_db().load_active(ids).await?;
-                self.index.read().await.add_histories(&histories);
+                self.index.read().add_histories(&histories);
             }
             DaemonEvent::HistoryStarted(history) => {
                 debug!(id = %history.id, command = %history.command, "History started (no index action)");
             }
             DaemonEvent::HistoryEnded(history) => {
-                span!(Level::TRACE, "inject_history_ended")
-                    .in_scope(async || {
-                        self.index.read().await.add_history(history);
-                    })
-                    .await;
+                span!(Level::TRACE, "inject_history_ended").in_scope(|| {
+                    self.index.read().add_history(history);
+                });
             }
             DaemonEvent::HistoryPruned | DaemonEvent::HistoryRebuilt => {
                 info!("History store pruned or rebuilt, rebuilding search index");
@@ -221,13 +216,9 @@ impl Component for SearchComponent {
             }
             DaemonEvent::SettingsReloaded => {
                 info!("Settings reloaded, rebuilding frecency map with new multipliers");
-                let handle_guard = self.handle.read().await;
-                if let Some(handle) = handle_guard.as_ref() {
+                if let Some(handle) = self.handle.read().as_ref() {
                     let settings = handle.settings();
-                    self.index
-                        .read()
-                        .await
-                        .rebuild_frecency(&settings.search);
+                    self.index.read().rebuild_frecency(&settings.search);
                 }
             }
             // Events we don't care about
@@ -309,12 +300,16 @@ impl SearchSvc for SearchGrpcService {
 
                         // Perform the search
                         let history_ids =
-                            span!(Level::TRACE, "daemon_search_query", %query, query_id)
-                                .in_scope(|| async {
-                                    let index = index.read().await;
-                                    index.search(&query, index_filter, &query_context, RESULTS_LIMIT)
-                                })
-                                .await;
+                            span!(Level::TRACE, "daemon_search_query", %query, query_id).in_scope(
+                                || {
+                                    index.read().search(
+                                        &query,
+                                        index_filter,
+                                        &query_context,
+                                        RESULTS_LIMIT,
+                                    )
+                                },
+                            );
 
                         // Convert history IDs to bytes
                         let ids: Vec<Vec<u8>> = history_ids
