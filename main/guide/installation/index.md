@@ -155,24 +155,30 @@ With ble.sh (>= 0.4) installed and loaded in `~/.bashrc`, just add atuin to your
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
 ```
 
-[Bash-preexec](https://github.com/rcaloras/bash-preexec) can also be used, but you may experience some minor problems with the recorded duration and exit status of some commands.
+[bash-preexec](https://github.com/rcaloras/bash-preexec) can also be used, but you may experience some minor problems with the recorded duration and exit status of some commands.
 
 Please note
 
-bash-preexec currently has an issue where it will stop honoring `ignorespace`. While Atuin will ignore commands prefixed with whitespace, they may still end up in your bash history. Please check your configuration! All other shells do not have this issue.
+bash-preexec currently has [an issue](https://github.com/rcaloras/bash-preexec/issues/115) where it will stop honoring `ignorespace`. While Atuin will ignore commands prefixed with whitespace, they may still end up in your bash history. Please check your configuration! All other shells do not have this issue.
 
 To use `atuin < 18.10.0` in `bash < 4` with bash-preexec, the option `enter_accept` needs to be turned on (which is so by default). There is no restriction in the latest version of Atuin (>= 18.10.0).
 
 bash-preexec cannot properly invoke the `preexec` hook for subshell commands `(...)`, function definitions `func() { ...; }`, empty for-in-statements `for i in; do ...; done`, etc., so those commands and duration may not be recorded in the Atuin's history correctly.
 
-To use bash-preexec, download and initialize it
+As of Atuin 18.18.0, `atuin init bash` will automatically load bash-preexec if no other preexec backend has been loaded (ble.sh or an external copy of bash-preexec). To disable this behavior, pass `ATUIN_NO_BUILTIN_PREEXEC=1` to `atuin init`, e.g.:
+
+```
+eval "$(ATUIN_NO_BUILTIN_PREEXEC=1 atuin init bash)"
+```
+
+If you prefer, you can also download and install bash-preexec separately:
 
 ```
 curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
 echo '[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh' >> ~/.bashrc
 ```
 
-Then set up Atuin
+Then set up Atuin:
 
 ```
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc

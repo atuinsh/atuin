@@ -2288,13 +2288,14 @@ After installing, remember to restart your shell.</p>
 </code></pre></div>
 </div>
 <div class="tabbed-block">
-<p><a href="https://github.com/rcaloras/bash-preexec">Bash-preexec</a> can also be used, but you may experience
+<p><a href="https://github.com/rcaloras/bash-preexec">bash-preexec</a> can also be used, but you may experience
  some minor problems with the recorded duration and exit status of some commands.</p>
 <div class="admonition warning">
 <p class="admonition-title">Please note</p>
-<p>bash-preexec currently has an issue where it will stop honoring <code>ignorespace</code>.
-While Atuin will ignore commands prefixed with whitespace, they may still end up in your bash history.
-Please check your configuration! All other shells do not have this issue.</p>
+<p>bash-preexec currently has <a href="https://github.com/rcaloras/bash-preexec/issues/115">an issue</a> where it will stop
+honoring <code>ignorespace</code>. While Atuin will ignore commands prefixed with
+whitespace, they may still end up in your bash history. Please check your
+configuration! All other shells do not have this issue.</p>
 <p>To use <code>atuin &lt; 18.10.0</code> in <code>bash &lt; 4</code> with bash-preexec, the option
 <code>enter_accept</code> needs to be turned on (which is so by default).  There is no
 restriction in the latest version of Atuin (&gt;= 18.10.0).</p>
@@ -2303,12 +2304,17 @@ restriction in the latest version of Atuin (&gt;= 18.10.0).</p>
 i in; do ...; done</code>, etc., so those commands and duration may not be recorded
 in the Atuin's history correctly.</p>
 </div>
-<p>To use bash-preexec, download and initialize it</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>curl<span class="w"> </span>https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh<span class="w"> </span>-o<span class="w"> </span>~/.bash-preexec.sh
-<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">&#39;[[ -f ~/.bash-preexec.sh ]] &amp;&amp; source ~/.bash-preexec.sh&#39;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>~/.bashrc
+<p>As of Atuin 18.18.0, <code>atuin init bash</code> will automatically load bash-preexec if no other
+preexec backend has been loaded (ble.sh or an external copy of bash-preexec). To disable
+this behavior, pass <code>ATUIN_NO_BUILTIN_PREEXEC=1</code> to <code>atuin init</code>, e.g.:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="nb">eval</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span><span class="nv">ATUIN_NO_BUILTIN_PREEXEC</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>atuin<span class="w"> </span>init<span class="w"> </span>bash<span class="k">)</span><span class="s2">&quot;</span>
 </code></pre></div>
-<p>Then set up Atuin</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">&#39;eval &quot;$(atuin init bash)&quot;&#39;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>~/.bashrc
+<p>If you prefer, you can also download and install bash-preexec separately:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>curl<span class="w"> </span>https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh<span class="w"> </span>-o<span class="w"> </span>~/.bash-preexec.sh
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">&#39;[[ -f ~/.bash-preexec.sh ]] &amp;&amp; source ~/.bash-preexec.sh&#39;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>~/.bashrc
+</code></pre></div>
+<p>Then set up Atuin:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">&#39;eval &quot;$(atuin init bash)&quot;&#39;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>~/.bashrc
 </code></pre></div>
 </div>
 </div>
@@ -2316,30 +2322,30 @@ in the Atuin's history correctly.</p>
 </div>
 <div class="tabbed-block">
 <p>Add</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>atuin<span class="w"> </span>init<span class="w"> </span>fish<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="nb">source</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>atuin<span class="w"> </span>init<span class="w"> </span>fish<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="nb">source</span>
 </code></pre></div>
 <p>to your <code>is-interactive</code> block in your <code>~/.config/fish/config.fish</code> file</p>
 </div>
 <div class="tabbed-block">
 <p>Run in <em>Nushell</em>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>mkdir<span class="w"> </span>~/.local/share/atuin/
-<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>atuin<span class="w"> </span>init<span class="w"> </span>nu<span class="w"> </span><span class="p">|</span><span class="w"> </span>save<span class="w"> </span>~/.local/share/atuin/init.nu
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>mkdir<span class="w"> </span>~/.local/share/atuin/
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>atuin<span class="w"> </span>init<span class="w"> </span>nu<span class="w"> </span><span class="p">|</span><span class="w"> </span>save<span class="w"> </span>~/.local/share/atuin/init.nu
 </code></pre></div>
 <p>Add to <code>config.nu</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="nb">source</span><span class="w"> </span>~/.local/share/atuin/init.nu
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="nb">source</span><span class="w"> </span>~/.local/share/atuin/init.nu
 </code></pre></div>
 <details class="tip">
 <summary>Optional: Atuin pty-proxy</summary>
 <p>pty-proxy is a lightweight pty proxy that renders the Atuin popup over
 your previous output, restoring it when closed — no clearing, no
 fullscreen. To use pty-proxy with Nushell, generate the init script:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>mkdir<span class="w"> </span>~/.local/share/atuin/
-<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>atuin<span class="w"> </span>pty-proxy<span class="w"> </span>init<span class="w"> </span>nu<span class="w"> </span><span class="p">|</span><span class="w"> </span>save<span class="w"> </span>-f<span class="w"> </span>~/.local/share/atuin/pty-proxy-init.nu
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>mkdir<span class="w"> </span>~/.local/share/atuin/
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>atuin<span class="w"> </span>pty-proxy<span class="w"> </span>init<span class="w"> </span>nu<span class="w"> </span><span class="p">|</span><span class="w"> </span>save<span class="w"> </span>-f<span class="w"> </span>~/.local/share/atuin/pty-proxy-init.nu
 </code></pre></div>
 <p>Then source it as early as possible in your <code>config.nu</code>, <em>before</em>
 the regular atuin init:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="nb">source</span><span class="w"> </span>~/.local/share/atuin/pty-proxy-init.nu
-<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="nb">source</span><span class="w"> </span>~/.local/share/atuin/init.nu
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="nb">source</span><span class="w"> </span>~/.local/share/atuin/pty-proxy-init.nu
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a><span class="nb">source</span><span class="w"> </span>~/.local/share/atuin/init.nu
 </code></pre></div>
 <p>Nushell's <code>source</code> command requires a static file path, so you must
 pre-generate both files.</p>
@@ -2347,13 +2353,13 @@ pre-generate both files.</p>
 </div>
 <div class="tabbed-block">
 <p>Add
-<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>execx<span class="o">(</span><span class="k">$(</span>atuin<span class="w"> </span>init<span class="w"> </span>xonsh<span class="k">)</span><span class="o">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>execx<span class="o">(</span><span class="k">$(</span>atuin<span class="w"> </span>init<span class="w"> </span>xonsh<span class="k">)</span><span class="o">)</span>
 </code></pre></div>
 to the end of your <code>~/.xonshrc</code></p>
 </div>
 <div class="tabbed-block">
 <p>Add the following to the end of your <code>$PROFILE</code> file:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>atuin<span class="w"> </span>init<span class="w"> </span>powershell<span class="w"> </span><span class="p">|</span><span class="w"> </span>Out-String<span class="w"> </span><span class="p">|</span><span class="w"> </span>Invoke-Expression
+<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>atuin<span class="w"> </span>init<span class="w"> </span>powershell<span class="w"> </span><span class="p">|</span><span class="w"> </span>Out-String<span class="w"> </span><span class="p">|</span><span class="w"> </span>Invoke-Expression
 </code></pre></div>
 </div>
 </div>
@@ -2385,7 +2391,7 @@ to the end of your <code>~/.xonshrc</code></p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="July 15, 2026 00:54:53 UTC">July 15, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="July 22, 2026 18:32:43 UTC">July 22, 2026</span>
   </span>
 
     
