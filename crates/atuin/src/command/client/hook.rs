@@ -338,6 +338,11 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent, hook_command: &str) -> Res
 
         // Rewrite every Atuin-managed entry to the absolute command and drop any
         // duplicates so reinstalling never leaves stale bare `atuin hook ...` lines.
+        //
+        // `seen_managed` is intentionally shared across all wrapper entries for this
+        // event type: we want exactly one Atuin hook to fire per event, so if two
+        // different-matcher wrappers both contain a managed hook, only the first is
+        // kept (and an emptied wrapper is pruned below).
         let mut seen_managed = false;
         for entry in arr.iter_mut() {
             let Some(hooks_arr) = entry.get_mut("hooks").and_then(Value::as_array_mut) else {
