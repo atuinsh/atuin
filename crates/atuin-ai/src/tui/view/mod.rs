@@ -746,12 +746,10 @@ pub(crate) fn status_bar_view(
     });
 
     let left = text(" Model: ")
-        .style(Style::default().fg(Color::White))
+        .style(Style::default())
         .span(
             model.unwrap_or("default"),
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
+            Style::default().add_modifier(Modifier::BOLD),
         )
         .span(" (/model to change)", Style::default().fg(Color::Gray));
 
