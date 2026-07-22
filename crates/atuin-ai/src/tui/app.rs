@@ -79,7 +79,7 @@ pub(crate) enum Msg {
     /// Retry after an error (Enter / r).
     Retry,
     /// Leave the TUI without a command.
-    Quit,
+    Quit(ExitOutcome),
     /// Move the model-picker cursor (Up/Down while picking).
     ModelSelect(SelectMsg),
     /// Choose the highlighted model (Enter while picking).
@@ -133,6 +133,7 @@ pub(crate) struct AiApp {
     /// Turns already committed — 0 means the next turn is the first (no
     /// leading blank row).
     pushed_turns: usize,
+    exiting: bool,
 }
 
 impl AiApp {
@@ -188,6 +189,7 @@ impl AiApp {
             slash_results: Vec::new(),
             pushed_events: 0,
             pushed_turns: 0,
+            exiting: false,
         }
     }
 
@@ -313,11 +315,15 @@ impl AiApp {
         }
         for effect in effects {
             match effect {
-                Effect::ExitApp(action) => ctx.exit(match action {
-                    ExitAction::Execute(cmd) => ExitOutcome::Execute(cmd),
-                    ExitAction::Insert(cmd) => ExitOutcome::Insert(cmd),
-                    ExitAction::Cancel => ExitOutcome::Cancel,
-                }),
+                Effect::ExitApp(action) => {
+                    let exit = match action {
+                        ExitAction::Execute(cmd) => ExitOutcome::Execute(cmd),
+                        ExitAction::Insert(cmd) => ExitOutcome::Insert(cmd),
+                        ExitAction::Cancel => ExitOutcome::Cancel,
+                    };
+                    self.exiting = true;
+                    ctx.perform(async move { Msg::Quit(exit) }).detach();
+                }
                 Effect::StartStream {
                     messages,
                     session_id,
@@ -954,7 +960,7 @@ impl App for AiApp {
             Msg::Cancel => self.handle_fsm(Event::Cancel, ctx),
             Msg::Interrupt => self.handle_fsm(Event::InterruptTools, ctx),
             Msg::Retry => self.handle_fsm(Event::Retry, ctx),
-            Msg::Quit => ctx.exit(ExitOutcome::Cancel),
+            Msg::Quit(outcome) => ctx.exit(outcome),
             Msg::ModelSelect(sel) => {
                 let len = match &self.fsm.ctx.model_picker {
                     Some(crate::fsm::ModelPicker::Ready(list)) => list.models.len(),
@@ -999,7 +1005,7 @@ impl App for AiApp {
             self.fsm.ctx.model_picker,
             Some(crate::fsm::ModelPicker::Loading)
         );
-        let show_input = asking.is_none() && ready_picker.is_none();
+        let show_input = asking.is_none() && ready_picker.is_none() && !self.exiting;
         let needs_pending_banner = busy
             && !matches!(
                 turns.last().map(|t| &t.kind),
@@ -1092,7 +1098,7 @@ impl App for AiApp {
             if self.shell_executing() {
                 Msg::Interrupt
             } else {
-                Msg::Quit
+                Msg::Quit(ExitOutcome::Cancel)
             },
         );
 

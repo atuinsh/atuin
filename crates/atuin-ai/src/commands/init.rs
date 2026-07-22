@@ -27,9 +27,19 @@ fn generate_auto_integration() -> eyre::Result<&'static str> {
 /// Generate the zsh integration function - pure function for easy testing
 pub fn generate_zsh_integration() -> &'static str {
     r#"
-# TUI uses an alternate screen, so no explicit cleanup is needed.
 _atuin_ai_cleanup() {
     true
+}
+
+# zle reset-prompt anchors the repaint at the cursor row: a multi-line
+# prompt grows *upward*, overwriting whatever the inline TUI left on the
+# rows above. Pad with prompt-height - 1 newlines first so the repaint
+# lands on blank rows below the conversation instead.
+_atuin_ai_reset_prompt() {
+    local -a _prompt_lines=("${(@f)${(%%)PROMPT}}")
+    local -i _pad=$(( ${#_prompt_lines} - 1 ))
+    (( _pad > 0 )) && printf '\n%.0s' {1..$_pad} >/dev/tty
+    zle reset-prompt
 }
 
 # Question mark at start of line - natural language mode.
@@ -46,25 +56,25 @@ self-atuin-ai-question-mark() {
         _atuin_ai_cleanup
 
         if [[ $output == __atuin_ai_print__:* ]]; then
-            zle -I
             echo "${output#__atuin_ai_print__:}"
+            _atuin_ai_reset_prompt
         elif [[ $output == __atuin_ai_cancel__ ]]; then
-            zle reset-prompt
+            _atuin_ai_reset_prompt
         elif [[ $output == __atuin_ai_execute__:* ]]; then
             RBUFFER=""
             LBUFFER=${output#__atuin_ai_execute__:}
-            zle reset-prompt
+            _atuin_ai_reset_prompt
             zle accept-line
         elif [[ $output == __atuin_ai_insert__:* ]]; then
             RBUFFER=""
             LBUFFER=${output#__atuin_ai_insert__:}
-            zle reset-prompt
+            _atuin_ai_reset_prompt
         elif [[ -n $output ]]; then
             RBUFFER=""
             LBUFFER=$output
-            zle reset-prompt
+            _atuin_ai_reset_prompt
         else
-            zle reset-prompt
+            _atuin_ai_reset_prompt
         fi
     else
         zle self-insert

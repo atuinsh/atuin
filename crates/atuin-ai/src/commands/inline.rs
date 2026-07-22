@@ -346,9 +346,6 @@ async fn run_inline_tui(
     // session snapshot is on disk before the process can exit.
     let _ = persist_worker.await;
 
-    // v1 emitted one extra newline at exit; keep the shell handoff spacing.
-    println!();
-
     Ok(outcome)
 }
 
