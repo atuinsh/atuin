@@ -124,7 +124,7 @@ fn out_of_band_output_view(details: &OutOfBandOutputDetails) -> AnyElement<'stat
 
 fn event_view(event: &UiEvent) -> AnyElement<'static> {
     match event {
-        UiEvent::Text { content } => markdown(content.clone()).pad_left(2).any(),
+        UiEvent::Text { content } => markdown(content.clone()).streaming(true).pad_left(2).any(),
         UiEvent::ToolSummary(summary) => tool_summary_view(summary),
         UiEvent::SuggestedCommand(details) => suggested_command_view(details),
         UiEvent::ToolCall(details) => tool_call_view(details).pad_left(2).any(),
@@ -582,7 +582,14 @@ fn suggested_command_view(details: &SuggestedCommandDetails) -> AnyElement<'stat
         })
         .when_some(
             is_dangerous.then_some(danger_notes).flatten(),
-            |c, notes| c.child(row().fixed(2, text("└")).fill(markdown(notes)).pad_left(2)),
+            |c, notes| {
+                c.child(
+                    row()
+                        .fixed(2, text("└"))
+                        .fill(markdown(notes).streaming(true))
+                        .pad_left(2),
+                )
+            },
         )
         .when(low_confidence, |c| {
             c.child(
@@ -599,7 +606,14 @@ fn suggested_command_view(details: &SuggestedCommandDetails) -> AnyElement<'stat
         })
         .when_some(
             low_confidence.then_some(confidence_notes).flatten(),
-            |c, notes| c.child(row().fixed(2, text("└")).fill(markdown(notes)).pad_left(2)),
+            |c, notes| {
+                c.child(
+                    row()
+                        .fixed(2, text("└"))
+                        .fill(markdown(notes).streaming(true))
+                        .pad_left(2),
+                )
+            },
         )
         .any()
 }
