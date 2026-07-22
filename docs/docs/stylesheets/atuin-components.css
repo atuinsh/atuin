@@ -103,6 +103,7 @@
 .md-typeset details {
   --atuin-adm: var(--atuin-green-300);
   --atuin-adm-bg: rgba(56, 200, 90, 0.10);
+  --atuin-adm-rgb: 56, 200, 90;
 }
 
 /* Uniform hairline, no accent bar on the edge. A coloured slab down the left
@@ -113,7 +114,11 @@
 .md-typeset details,
 .md-typeset details[class] {
   background-color: var(--atuin-adm-bg);
-  border: 1px solid var(--atuin-border);
+  /* Derived from the panel's own hue, not a global green. A single green
+     border over an amber panel composited to #26331a -- a green edge on an
+     amber box, fighting both the fill and the title. Same hue at a higher
+     alpha reads as a deeper, more saturated edge of the same colour. */
+  border: 1px solid rgba(var(--atuin-adm-rgb), var(--atuin-adm-border-a));
   border-radius: 12px;
   box-shadow: none;
   font-size: 0.7rem;
@@ -243,6 +248,7 @@
 .md-typeset .hint {
   --atuin-adm: var(--atuin-green-300);
   --atuin-adm-bg: rgba(56, 200, 90, 0.10);
+  --atuin-adm-rgb: 56, 200, 90;
 }
 
 .md-typeset .info,
@@ -251,11 +257,13 @@
 .md-typeset .example {
   --atuin-adm: #8fd8fb;
   --atuin-adm-bg: rgba(78, 194, 248, 0.10);
+  --atuin-adm-rgb: 78, 194, 248;
 }
 
 .md-typeset .warning {
   --atuin-adm: #eec177;
   --atuin-adm-bg: rgba(224, 163, 58, 0.12);
+  --atuin-adm-rgb: 224, 163, 58;
 }
 
 .md-typeset .danger,
@@ -263,11 +271,13 @@
 .md-typeset .bug {
   --atuin-adm: #ef8f8f;
   --atuin-adm-bg: rgba(224, 90, 90, 0.12);
+  --atuin-adm-rgb: 224, 90, 90;
 }
 
 .md-typeset .quote {
   --atuin-adm: #b3c1c6;
   --atuin-adm-bg: rgba(143, 161, 168, 0.09);
+  --atuin-adm-rgb: 143, 161, 168;
 }
 
 /* Light scheme: the accent has to go DARKER, not brighter.
@@ -326,7 +336,7 @@
 .md-typeset pre > code {
   background-color: var(--atuin-surface-2);
   border-radius: 10px;
-  box-shadow: inset 0 0 0 1px var(--atuin-border-strong);
+  box-shadow: inset 0 0 0 1px var(--atuin-surface-edge);
 }
 
 .md-typeset .highlight > pre {

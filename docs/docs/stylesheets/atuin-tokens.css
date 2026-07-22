@@ -38,6 +38,12 @@
   --atuin-border: rgba(56, 200, 90, 0.12);
   --atuin-border-strong: rgba(56, 200, 90, 0.22);
 
+  /* Neutral hairline for raised surfaces. The terminal block used
+     --atuin-border-strong, but a green ring on a green-cast dark screen
+     composites to #1c4024 -- a muddy olive. Hue-free reads as an edge
+     instead of a colour. */
+  --atuin-surface-edge: rgba(232, 240, 233, 0.08);
+
   /* Mascot palette. design_system.md: blue is a supporting colour, used
      "mostly through mascot assets, terminal accents, or very restrained
      surface highlights" -- here, only syntax highlighting. */
@@ -60,6 +66,7 @@
   --atuin-nav-edge: rgba(22, 37, 47, 0.82);
   --atuin-search-bg: rgba(56, 200, 90, 0.06);
   --atuin-search-edge: rgba(56, 200, 90, 0.18);
+  --atuin-adm-border-a: 0.28;
 
   --md-default-bg-color: var(--atuin-bg);
   --md-default-bg-color--light: rgba(16, 22, 32, 0.7);
@@ -120,6 +127,7 @@
   --atuin-nav-edge: rgba(18, 24, 26, 0.12);
   --atuin-search-bg: rgba(26, 122, 52, 0.05);
   --atuin-search-edge: rgba(26, 122, 52, 0.28);
+  --atuin-adm-border-a: 0.45;
 
   --md-default-bg-color: #fbfcfb;
   --md-default-bg-color--light: rgba(251, 252, 251, 0.7);
