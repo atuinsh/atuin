@@ -61,9 +61,13 @@
   /* Nudges the greys Material still derives itself into our hue family. */
   --md-hue: 217;
 
-  /* Chrome. atuin.sh's nav, verbatim. */
-  --atuin-nav-bg: rgba(16, 22, 32, 0.92);
-  --atuin-nav-edge: rgba(22, 37, 47, 0.82);
+  /* Chrome. These were atuin.sh's live nav values (#101620 / #16252f), which
+     are navy -- they predate the rebrand. Against the design system's
+     green-cast #0a0d0b page they read as a blue bar top and bottom. Surface 1
+     is what the spec assigns to "nav background", and the edge goes neutral
+     to match the terminal's rim. */
+  --atuin-nav-bg: rgba(15, 18, 20, 0.92);
+  --atuin-nav-edge: var(--atuin-surface-edge);
   --atuin-search-bg: rgba(56, 200, 90, 0.06);
   --atuin-search-edge: rgba(56, 200, 90, 0.18);
   --atuin-adm-border-a: 0.28;
@@ -101,7 +105,7 @@
   --md-code-fg-color: var(--atuin-text-1);
 
   --md-footer-bg-color: var(--atuin-surface-1);
-  --md-footer-bg-color--dark: #0b111a;
+  --md-footer-bg-color--dark: var(--atuin-bg);
   --md-footer-fg-color: var(--atuin-text-1);
   --md-footer-fg-color--light: var(--atuin-text-2);
   --md-footer-fg-color--lighter: var(--atuin-text-3);
