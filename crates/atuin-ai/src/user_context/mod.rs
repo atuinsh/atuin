@@ -11,7 +11,9 @@ pub(crate) mod interpolate;
 mod walker;
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 pub(crate) use walker::global_context_path;
 
@@ -53,7 +55,7 @@ impl UserContextCache {
         // The lock is not held across the gather; streams run one at a time
         // so duplicate gathers aren't a concern.
         let epoch = {
-            let slot = self.lock();
+            let slot = self.inner.lock();
             if let Some(contexts) = slot.contexts.clone() {
                 return contexts;
             }
@@ -66,7 +68,7 @@ impl UserContextCache {
         // it for the in-flight request but leave the cache empty so the
         // next request re-gathers. Likewise, never overwrite a result a
         // concurrent gather stored first — ours may be the older read.
-        let mut slot = self.lock();
+        let mut slot = self.inner.lock();
         if slot.epoch == epoch && slot.contexts.is_none() {
             slot.contexts = Some(contexts.clone());
         }
@@ -75,18 +77,9 @@ impl UserContextCache {
 
     /// Drop the cached contexts so the next request re-gathers them.
     pub fn invalidate(&self) {
-        let mut slot = self.lock();
+        let mut slot = self.inner.lock();
         slot.epoch += 1;
         slot.contexts = None;
-    }
-
-    /// A poisoned lock means another thread panicked while holding it, but
-    /// the cached value is only ever replaced wholesale — it can't be torn.
-    /// Recover with the inner value rather than propagating the panic.
-    fn lock(&self) -> std::sync::MutexGuard<'_, CacheSlot> {
-        self.inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 

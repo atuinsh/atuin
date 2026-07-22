@@ -302,6 +302,7 @@ dependencies = [
  "futures",
  "glob-match",
  "imara-diff",
+ "parking_lot",
  "pretty_assertions",
  "pulldown-cmark",
  "ratatui",
