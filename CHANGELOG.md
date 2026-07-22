@@ -10,13 +10,14 @@ All notable changes to this project will be documented in this file.
 - *(deps)* Update unsound/vulnerable dependencies in Cargo.lock ([#3632](https://github.com/atuinsh/atuin/issues/3632))
 - *(hook)* Drop agent commands containing NUL bytes via NonNulStr ([#3589](https://github.com/atuinsh/atuin/issues/3589)) ([#3660](https://github.com/atuinsh/atuin/issues/3660))
 - *(init)* Fix include guard in Bash init script; chore(init): improve inclusion of shell init scripts in Rust ([#3645](https://github.com/atuinsh/atuin/issues/3645))
+- *(install)* Make /dev/tty authoritative for interactivity detection ([#3691](https://github.com/atuinsh/atuin/issues/3691))
 - Search functionality to respect character offsets and non-ASCII ([#3659](https://github.com/atuinsh/atuin/issues/3659))
 - Quote argument-hint YAML values so Copilot CLI ≥1.0.65 loads all skills ([#3613](https://github.com/atuinsh/atuin/issues/3613)) ([#3614](https://github.com/atuinsh/atuin/issues/3614))
 - Correct grammar in 'history last' help text ([#3430](https://github.com/atuinsh/atuin/issues/3430))
 - Work around rust nightly warning on eyre bail ([#3680](https://github.com/atuinsh/atuin/issues/3680))
 - Improve non-interactive TTY detection in install.sh ([#3315](https://github.com/atuinsh/atuin/issues/3315))
 - Add /model hint to status bar ([#3687](https://github.com/atuinsh/atuin/issues/3687))
-
+- Set correct umask for pty-proxy ([#3700](https://github.com/atuinsh/atuin/issues/3700))
 
 ### Documentation
 
@@ -27,23 +28,25 @@ All notable changes to this project will be documented in this file.
 - Serve docs.atuin.sh from this repo; remove Desktop docs ([#3684](https://github.com/atuinsh/atuin/issues/3684))
 - Version docs.atuin.sh with mike (per-release + main) ([#3688](https://github.com/atuinsh/atuin/issues/3688))
 - Hotfix bad path ([#3690](https://github.com/atuinsh/atuin/issues/3690))
-
+- Document built-in bash-preexec ([#3651](https://github.com/atuinsh/atuin/issues/3651))
 
 ### Features
 
 - *(bash)* Bundle bash-preexec with Atuin; automatically load if no other preexec backend is loaded ([#3650](https://github.com/atuinsh/atuin/issues/3650))
 - *(search)* Add `--shell` option to `atuin search` to filter results by shell ([#3658](https://github.com/atuinsh/atuin/issues/3658))
+- *(search)* Syntax highlight commands in interactive search ([#3704](https://github.com/atuinsh/atuin/issues/3704))
 - *(string)* EllipsizeExt -- General-purpose utility for adding ellipses to strings ([#3639](https://github.com/atuinsh/atuin/issues/3639))
 - Add 'yolo' setting to Atuin AI options ([#3637](https://github.com/atuinsh/atuin/issues/3637))
 - Add `shell` field to history entries ([#3636](https://github.com/atuinsh/atuin/issues/3636))
 - Add hickory-dns resolver for musl target to improve DNS resolution ([#3647](https://github.com/atuinsh/atuin/issues/3647))
 - Add atuin stats --filter-mode ([#1737](https://github.com/atuinsh/atuin/issues/1737))
 - More aggressive optimizations for dist release ([#3683](https://github.com/atuinsh/atuin/issues/3683))
-
+- Capture zsh comments as history ([#3699](https://github.com/atuinsh/atuin/issues/3699))
 
 ### Miscellaneous Tasks
 
 - *(atuin-common)* Add ellipsize_or_pad for unicode pad ([#3663](https://github.com/atuinsh/atuin/issues/3663))
+- *(ci)* Bump GitHub Actions to latest versions ([#3689](https://github.com/atuinsh/atuin/issues/3689))
 - *(clap)* Simplify clap field types and fix help message formatting ([#3640](https://github.com/atuinsh/atuin/issues/3640))
 - *(logging)* Refactor logging ([#3622](https://github.com/atuinsh/atuin/issues/3622))
 - *(release-skill)* Time label-gated PR merges around the release ([#3654](https://github.com/atuinsh/atuin/issues/3654))
@@ -57,7 +60,8 @@ All notable changes to this project will be documented in this file.
 - Update sqlx to v9 ([#3668](https://github.com/atuinsh/atuin/issues/3668))
 - Follow-up on #1737 ([#3649](https://github.com/atuinsh/atuin/issues/3649))
 - Update Atuin AI to eye-declare v0.6.1 ([#3686](https://github.com/atuinsh/atuin/issues/3686))
-
+- Remove docs-dispatch ([#3694](https://github.com/atuinsh/atuin/issues/3694))
+- Docker healtcheck ([#2451](https://github.com/atuinsh/atuin/issues/2451))
 
 ### Refactor
 
@@ -66,7 +70,6 @@ All notable changes to this project will be documented in this file.
 - *(sync)* Remove deprecated V1 sync protocol ([#3634](https://github.com/atuinsh/atuin/issues/3634))
 - Use typed Url instead of hand-built string URLs ([#3644](https://github.com/atuinsh/atuin/issues/3644))
 - Extract shared vt100 logic into atuin-common ([#3664](https://github.com/atuinsh/atuin/issues/3664))
-
 
 ### Testing
 
