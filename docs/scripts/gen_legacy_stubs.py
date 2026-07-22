@@ -46,6 +46,9 @@ class _MkdocsLoader(yaml.SafeLoader):
 _MkdocsLoader.add_multi_constructor(
     "tag:yaml.org,2002:python/name:", lambda loader, suffix, node: None
 )
+# `!ENV [VAR, default]` (mkdocs env-var interpolation, used by git-committers);
+# also irrelevant to stub generation.
+_MkdocsLoader.add_constructor("!ENV", lambda loader, node: None)
 
 
 def _md_to_url(md_path: str) -> str:
