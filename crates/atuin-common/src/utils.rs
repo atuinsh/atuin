@@ -249,9 +249,36 @@ where
 #[allow(unsafe_code)]
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_ne;
-
     use super::*;
+    use pretty_assertions::assert_ne;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case(&[], &[], true)]
+    #[case(&[], &[1], false)]
+    #[case(&[1], &[], false)]
+    #[case(&[1], &[1], true)]
+    #[case(&[1], &[2], false)]
+    #[case(&[1, 1], &[1], true)]
+    #[case(&[1, 2], &[1], false)]
+    #[case(&[1], &[1, 2], false)]
+    #[case(&[2, 1], &[1, 2], true)]
+    #[case(&[2, 1, 1, 2, 2], &[1, 2], true)]
+    #[case(&[2, 3, 1, 2], &[1, 2, 3], true)]
+    #[case(&[2, 3, 1, 2], &[1, 2], false)]
+    #[case(&[2, 3, 1, 2], &[1, 2, 3, 4], false)]
+    fn test_iter_equals_sorted_deduped_slice(
+        #[case] iter: &[u32],
+        #[case] sorted: &[u32],
+        #[case] expected: bool,
+        #[values(0, 1, 2, 3, 4, 5)] buffer_size: usize,
+    ) {
+        let mut buffer = [false; 8];
+        assert_eq!(
+            iter_equals_sorted_deduped_slice(iter, sorted, &mut buffer[..buffer_size]),
+            expected,
+        );
+    }
 
     #[cfg(not(windows))]
     #[test]
