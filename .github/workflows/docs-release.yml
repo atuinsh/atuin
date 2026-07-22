@@ -16,6 +16,9 @@ jobs:
   stable:
     if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
+    env:
+      MKDOCS_GIT_COMMITTERS_ENABLED: true
+      MKDOCS_GIT_COMMITTERS_APIKEY: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -30,6 +33,9 @@ jobs:
   prerelease:
     if: ${{ contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
+    env:
+      MKDOCS_GIT_COMMITTERS_ENABLED: true
+      MKDOCS_GIT_COMMITTERS_APIKEY: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7

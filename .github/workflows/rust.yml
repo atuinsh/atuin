@@ -17,7 +17,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [depot-ubuntu-24.04, macos-14, windows-latest]
+        os: [depot-ubuntu-24.04, macos-14, depot-windows-2025-16]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -88,7 +88,7 @@ jobs:
   unit-test:
     strategy:
       matrix:
-        os: [depot-ubuntu-24.04, macos-14, windows-latest]
+        os: [depot-ubuntu-24.04, macos-14, depot-windows-2025-16]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -118,7 +118,7 @@ jobs:
   check:
     strategy:
       matrix:
-        os: [depot-ubuntu-24.04, macos-14, windows-latest]
+        os: [depot-ubuntu-24.04, macos-14, depot-windows-2025-16]
     runs-on: ${{ matrix.os }}
 
     steps:

@@ -60,7 +60,7 @@ deny = [
 
 The `AtuinHistory` tool allows Atuin AI to search your Atuin history for relevant commands. This tool is read-only. Atuin AI might ask to use this tool when you ask it to recall a command or information about a command you ran in the past, or when you ask for help with a failing command (e.g. "why did my last command fail?").
 
-![Example of Atuin History tool](../images/tool_atuin_history.png)
+![Example of Atuin History tool](images/tool_atuin_history.png)
 
 **Permission rule and scope:** `AtuinHistory`
 
@@ -94,7 +94,7 @@ allow = ["AtuinOutput"]
 
 The `Read` tool allows Atuin AI to read files on your system. Atuin AI might ask to use this tool when you ask it to analyze the contents of a file, when you ask for edits to the contents of a file, or when you ask a question that is most easily answered by consulting the contents of a file.
 
-![Example of Atuin FS Tools](../images/tool_fs.png)
+![Example of Atuin FS Tools](images/tool_fs.png)
 
 **Permission rule and scope:** `Read(<glob_pattern>)` (e.g. `Read(**/\*.md)`to allow reading all markdown files in the current directory and subdirectories). A missing glob pattern (e.g.`Read`) matches all files.
 
@@ -116,7 +116,7 @@ deny = ["Read(.secret/**)"]
 
 The `Write` tool allows Atuin AI to create and edit files on your system. Atuin AI might ask to use this tool when you ask it to update configuration for a tool or help debug a problem.
 
-![Example of Atuin FS Tools](../images/tool_fs.png)
+![Example of Atuin FS Tools](images/tool_fs.png)
 
 **Permission rule and scope:** `Write(<glob_pattern>)` (e.g. `Write(**/\*.md)`to allow reading all markdown files in the current directory and subdirectories). A missing glob pattern (e.g.`Write`) matches all files.
 
@@ -138,7 +138,7 @@ deny = ["Write(.secret/**)"]
 
 The `Shell` tool allows Atuin AI to execute shell commands on your system. Atuin AI might ask to use this tool when you ask it to perform an action that is most easily accomplished by running a shell command itself, or when you ask for help debugging a failing command, or during a multi-step workflow.
 
-![Example of Atuin Shell Tool](../images/tool_shell.png)
+![Example of Atuin Shell Tool](images/tool_shell.png)
 
 **Permission rule and scope:** `Shell(<command pattern>)` (e.g. `Shell(git *)` to allow any command that starts with `git`). A missing command pattern (e.g. `Shell`) matches all commands.
 

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use crossterm::event::KeyCode;
 use eye_declare::{
     App, Ctx, Element, ElementExt, Fluent, Focus, FocusHandle, InputEvent, Keymap, Task, col, key,
-    keymap, spinner, text,
+    keymap, text,
 };
 use ratatui_core::style::{Color, Modifier, Style};
 use tokio::sync::mpsc::UnboundedSender;
@@ -1063,7 +1063,7 @@ impl App for AiApp {
             })
             .when(picker_loading, |c| {
                 c.child(
-                    spinner("Loading models…")
+                    view::tool_spinner("Loading models…", false)
                         .label_style(Style::default().fg(Color::Gray))
                         .pad_top(1),
                 )

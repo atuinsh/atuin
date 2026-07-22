@@ -8,32 +8,73 @@ edit_uri: edit/main/docs/docs/
 theme:
   name: material
   custom_dir: overrides
+  logo: assets/atuin-turtle.svg
+  favicon: assets/atuin-turtle.png
+  icon:
+    repo: octicons/mark-github-16
+    edit: octicons/pencil-16
+    view: octicons/eye-16
+    previous: octicons/arrow-left-16
+    next: octicons/arrow-right-16
+    top: octicons/arrow-up-16
+    menu: octicons/three-bars-16
+    close: octicons/x-16
+    search: octicons/search-16
+    share: octicons/link-16
+    alternate: octicons/moon-16
+    annotation: octicons/plus-circle-16
+  font:
+    text: DM Sans
+    code: Space Mono
   palette:
-    - scheme: default
-      primary: deep purple
-      accent: deep purple
-      toggle:
-        icon: material/brightness-7
-        name: Switch to dark mode
     - scheme: slate
-      primary: deep purple
-      accent: deep purple
+      primary: custom
+      accent: custom
       toggle:
-        icon: material/brightness-4
+        icon: octicons/sun-16
         name: Switch to light mode
+    - scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: octicons/moon-16
+        name: Switch to dark mode
   features:
+    - navigation.instant           # SPA-style page loads
+    - navigation.instant.prefetch  # start fetching on link hover
+    - navigation.instant.progress  # progress bar if a load is slow
+    - navigation.tracking          # URL follows the anchor you are reading
+    - navigation.path              # breadcrumbs above the page title
     - navigation.sections
     - navigation.expand
+    - navigation.top               # back-to-top button
+    - toc.follow                   # right-hand ToC scrolls to keep up
     - search.suggest
     - search.highlight
-    - content.code.copy
-    - content.action.edit
-    - content.action.view
+    - search.share                 # share buttons
+    - content.tabs.link            # selecting a tab selects it everywhere
+    - content.code.copy            # copy affordance on terminal
+    - content.action.edit          # edit the page easily
+    - content.action.view          # view the raw md
 
 plugins:
   - search
+  - privacy # Download external assets at compile time for user privacy
   - git-revision-date-localized:
       enable_creation_date: true
+  - git-committers:
+      repository: atuinsh/atuin
+      branch: main
+      docs_path: docs/docs/
+      enabled: !ENV [MKDOCS_GIT_COMMITTERS_ENABLED, false]
+      token: !ENV [MKDOCS_GIT_COMMITTERS_APIKEY, ""]
+      cache_dir: .cache/plugin/git-committers/
+      exclude_committers:
+        - web-flow # gh web-editor
+        - claude
+        - greptile-apps[bot]
+        - dependabot[bot]
+        - github-actions[bot]
   - redirects:
       redirect_maps:
         "cli/ai/command-output.md": "ai/command-output.md"
@@ -144,6 +185,21 @@ plugins:
           - integrations.md: Integrations with zsh-autosuggestions, zsh-vi-mode, ble.sh, and mcfly.
           - faq.md: Frequently asked questions - IDE terminals, history filtering, up-arrow, uninstalling.
           - uninstall.md: How to uninstall Atuin and remove all data.
+  - minify:
+      minify_html: true
+      minify_js: true
+      minify_css: true
+      htmlmin_opts:
+        remove_comments: true
+
+not_in_nav: |
+  reference/hex.md
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
 
 markdown_extensions:
   - pymdownx.highlight:
@@ -162,7 +218,7 @@ markdown_extensions:
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 extra_css:
-  - stylesheets/extra.css
+  - stylesheets/atuin.css
 
 extra:
   version:
@@ -172,8 +228,19 @@ extra:
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/atuinsh/atuin
+      name: Atuin on GitHub
     - icon: fontawesome/brands/discord
       link: https://discord.gg/jR3tfchVvW
+      name: Atuin on Discord
+    - icon: fontawesome/brands/x-twitter
+      link: https://x.com/atuinsh
+      name: Atuin on X
+    - icon: fontawesome/brands/mastodon
+      link: https://mastodon.online/@atuin@hachyderm.io
+      name: Atuin on Mastodon
+    - icon: fontawesome/brands/bluesky
+      link: https://bsky.app/profile/atuin.sh
+      name: Atuin on Bluesky
 
 nav:
   - Home: index.md
