@@ -1787,7 +1787,7 @@ pub async fn history(
             filter_mode: default_filter_mode,
             context: initial_context.clone(),
             custom_context: None,
-            shell_filter: settings.search.shells.to_list(),
+            shells: settings.search.shells.clone(),
         },
         engine: engines::engine(search_mode, settings),
         results_len: 0,

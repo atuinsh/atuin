@@ -643,7 +643,7 @@ pub(crate) fn permission_options(
     }
 }
 
-/// "Atuin AI would like to <verb>: <target>" plus the options list.
+/// `Atuin AI would like to <verb>: <target>` plus the options list.
 pub(crate) fn permission_prompt_view(
     tool_call: &TrackedTool,
     in_git_project: bool,

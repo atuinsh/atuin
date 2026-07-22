@@ -32,7 +32,7 @@ impl SearchEngine for Search {
                 OptFilters {
                     limit: Some(200),
                     authors: &[AUTHOR_FILTER_ALL_USER.to_owned()],
-                    shells: &state.shell_filter,
+                    shells: state.shells.to_list().as_slice(),
                     ..Default::default()
                 },
             )

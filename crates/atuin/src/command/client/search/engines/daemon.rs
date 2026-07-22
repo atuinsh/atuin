@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use atuin_client::{
     database::{Database, OptFilters},
     history::{AUTHOR_FILTER_ALL_USER, History},
-    settings::{SearchMode, Settings},
+    settings::{SearchMode, Settings, Shells},
 };
 use atuin_daemon::client::{DaemonClientErrorKind, SearchClient, SearchParams, classify_error};
 use atuin_nucleo_matcher::{
@@ -93,7 +93,7 @@ impl Search {
                 OptFilters {
                     limit: Some(200),
                     authors: &[AUTHOR_FILTER_ALL_USER.to_owned()],
-                    shells: &state.shell_filter,
+                    shells: state.shells.to_list().as_slice(),
                     ..Default::default()
                 },
             )
@@ -138,8 +138,12 @@ impl SearchEngine for Search {
             query: query.clone(),
             query_id,
             filter_mode: state.filter_mode,
-            shell_filter: state.shell_filter.clone(),
             context: Some(state.context.clone()),
+            current_shell: match state.shells {
+                // If the shell filter is "auto", we need to send the current shell to the daemon.
+                Shells::Auto => std::env::var("CURRENT_SHELL").ok(),
+                _ => None,
+            },
         };
 
         // Try to connect and search; if it fails with a retriable error,

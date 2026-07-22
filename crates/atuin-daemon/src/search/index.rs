@@ -13,7 +13,7 @@ use std::{
 };
 
 use atuin_client::history::{History, is_known_agent};
-use atuin_client::settings::Search;
+use atuin_client::settings::{self, Search};
 use atuin_common::path::DisplayRichExt;
 use atuin_nucleo::{Injector, Nucleo, pattern};
 use dashmap::DashMap;
@@ -113,8 +113,6 @@ pub struct CommandData {
     hosts: HashSet<Spur>,
     /// All sessions where this command has been run (as 16-byte UUIDs).
     sessions: HashSet<[u8; 16]>,
-    /// All shells that have run this command (interned keys).
-    shells: HashSet<Spur>,
 }
 
 impl CommandData {
@@ -139,7 +137,6 @@ impl CommandData {
             directories: HashSet::from([dir_key]),
             hosts: HashSet::from([host_key]),
             sessions: HashSet::from([session]),
-            shells: HashSet::from([Self::intern_shell(history, interner)]),
         })
     }
 
@@ -164,7 +161,6 @@ impl CommandData {
         self.directories.insert(dir_key);
         self.hosts.insert(interner.get_or_intern(&history.hostname));
         self.sessions.insert(session);
-        self.shells.insert(Self::intern_shell(history, interner));
 
         // Update most recent if this invocation is newer
         if timestamp > self.most_recent_timestamp {
@@ -209,38 +205,6 @@ impl CommandData {
     pub fn has_invocation_in_session(&self, session: &str) -> bool {
         parse_uuid_bytes(session).is_some_and(|bytes| self.sessions.contains(&bytes))
     }
-
-    fn intern_shell(history: &History, interner: &ThreadedRodeo) -> Spur {
-        interner.get_or_intern(history.shell.as_deref().unwrap_or_default())
-    }
-
-    /// Check if any invocation matches the list of allowed shells.
-    ///
-    /// An empty `shell_filter` allows all shells.
-    ///
-    /// # Time complexity
-    ///
-    /// O(`shell_filter.len()`)
-    pub fn matches_shell_filter<S>(&self, shell_filter: S, interner: &ThreadedRodeo) -> bool
-    where
-        S: IntoIterator<Item: AsRef<str>>,
-    {
-        use std::ops::ControlFlow::{Break, Continue};
-
-        match shell_filter.into_iter().try_fold(true, |_, shell| {
-            if interner
-                .get(shell.as_ref())
-                .is_some_and(|spur| self.shells.contains(&spur))
-            {
-                Break(())
-            } else {
-                Continue(false)
-            }
-        }) {
-            Continue(filter_was_empty) => filter_was_empty,
-            Break(()) => true,
-        }
-    }
 }
 
 /// Filter mode for search queries.
@@ -256,6 +220,62 @@ pub enum IndexFilterMode {
     Host(String),
     /// Filter to commands run in a specific session.
     Session(String),
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum ShellFilter {
+    #[default]
+    All,
+    Current(String),
+    Set(HashSet<String>),
+}
+
+impl ShellFilter {
+    pub fn new<S>(shells: &settings::Shells, current_shell: Option<S>) -> Self
+    where
+        S: Into<String>,
+    {
+        Self::try_from_settings(shells).unwrap_or_else(|| match current_shell {
+            Some(shell) => Self::Current(shell.into()),
+            None => Self::All,
+        })
+    }
+
+    pub fn try_from_settings(shells: &settings::Shells) -> Option<Self> {
+        use settings::Shells;
+        match shells {
+            Shells::All => Some(Self::All),
+            // We can't construct the filter without knowing the current shell.
+            Shells::Auto => None,
+            Shells::List(list) => Some(Self::Set(list.iter().cloned().collect())),
+        }
+    }
+
+    pub fn matches_current_shell(&self, current_shell: Option<&str>) -> bool {
+        let shell = match self {
+            Self::Current(shell) => Some(shell.as_str()),
+            _ => None,
+        };
+        shell == current_shell
+    }
+
+    pub fn matches_settings(&self, shells: &settings::Shells) -> bool {
+        use settings::Shells;
+        match (self, shells) {
+            (Self::All, Shells::All) => true,
+            (Self::Current(_), Shells::Auto) => true,
+            (Self::Set(set), Shells::List(list)) => list.iter().all(|s| set.contains(s)),
+            _ => false,
+        }
+    }
+
+    fn contains(&self, shell: Option<&str>) -> bool {
+        match self {
+            Self::All => true,
+            Self::Current(current) => shell.is_none_or(|s| s == current),
+            Self::Set(set) => set.contains(shell.unwrap_or_default()),
+        }
+    }
 }
 
 /// Shareable frecency map: command -> frecency score.
@@ -284,11 +304,13 @@ pub struct SearchIndex {
     frecency_map: RwLock<Option<FrecencyMap>>,
     /// String interner for deduplicating cwd, hostname, and directory paths.
     interner: Arc<ThreadedRodeo>,
+    /// Controls which shells' commands are included.
+    pub shells: ShellFilter,
 }
 
 impl SearchIndex {
     /// Create a new empty search index.
-    pub fn new() -> Self {
+    pub fn new(shells: ShellFilter) -> Self {
         let nucleo_config = atuin_nucleo::Config::DEFAULT;
         // Single column for command text
         let nucleo = Nucleo::<String>::new(nucleo_config, Arc::new(|| {}), None, 1);
@@ -300,6 +322,7 @@ impl SearchIndex {
             injector,
             frecency_map: RwLock::new(None),
             interner: Arc::new(ThreadedRodeo::new()),
+            shells,
         }
     }
 
@@ -308,7 +331,7 @@ impl SearchIndex {
     /// If the command already exists, updates its invocation data.
     /// If it's a new command, adds it to both the map and Nucleo.
     pub fn add_history(&self, history: &History) {
-        if is_known_agent(&history.author) {
+        if is_known_agent(&history.author) || !self.shells.contains(history.shell.as_deref()) {
             return;
         }
 
@@ -356,23 +379,19 @@ impl SearchIndex {
     /// Returns a list of history IDs (most recent invocation per command).
     /// Uses precomputed global frecency for scoring if available.
     #[instrument(skip_all, level = tracing::Level::TRACE, name = "index_search", fields(query = %query))]
-    pub async fn search<S>(
+    pub async fn search(
         &self,
         query: &str,
         filter_mode: IndexFilterMode,
-        shell_filter: S,
         limit: u32,
-    ) -> Vec<String>
-    where
-        S: IntoIterator<Item: AsRef<str>> + Clone,
-    {
+    ) -> Vec<String> {
         let mut nucleo = self.nucleo.write().await;
 
         // Get precomputed frecency map (may be None if not yet computed)
         let frecency_map = self.frecency_map.read().await.clone();
 
         // Build filter based on mode and shells
-        let filter = self.build_filter(&filter_mode, shell_filter);
+        let filter = self.build_filter(&filter_mode);
         nucleo.set_filter(filter);
 
         // Build scorer from precomputed frecency (or None if not available)
@@ -445,18 +464,9 @@ impl SearchIndex {
     }
 
     /// Build filter predicate for the given mode and shell filter.
-    fn build_filter<S>(
-        &self,
-        mode: &IndexFilterMode,
-        shell_filter: S,
-    ) -> Option<atuin_nucleo::Filter<String>>
-    where
-        S: IntoIterator<Item: AsRef<str>> + Clone,
-    {
+    fn build_filter(&self, mode: &IndexFilterMode) -> Option<atuin_nucleo::Filter<String>> {
         // Nothing to filter on
-        if matches!(mode, IndexFilterMode::Global)
-            && shell_filter.clone().into_iter().next().is_none()
-        {
+        if matches!(mode, IndexFilterMode::Global) {
             return None;
         }
 
@@ -479,9 +489,6 @@ impl SearchIndex {
                     IndexFilterMode::Session(session) => entry.has_invocation_in_session(session),
                 };
                 if !mode_passes {
-                    continue;
-                }
-                if !entry.matches_shell_filter(shell_filter.clone(), &self.interner) {
                     continue;
                 }
                 // Convert Arc<str> to String for filter lookup
@@ -508,7 +515,7 @@ impl SearchIndex {
 
 impl Default for SearchIndex {
     fn default() -> Self {
-        Self::new()
+        Self::new(ShellFilter::All)
     }
 }
 

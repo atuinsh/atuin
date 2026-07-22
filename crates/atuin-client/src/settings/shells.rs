@@ -21,22 +21,54 @@ pub enum Shells {
 impl Shells {
     /// Turn this setting into a concrete list of shells.
     ///
-    /// The returned vector is suitable for passing to [`Database::search`] via
-    /// [`OptFilters::shell`].
+    /// The returned list is suitable for passing to [`Database::search`] via
+    /// [`OptFilters::shells`].
     ///
     /// [`Database::search`]: crate::database::Database::search
-    /// [`OptFilters::shell`]: crate::database::OptFilters::shell
-    pub fn to_list(&self) -> Vec<String> {
-        match self {
-            Self::All => vec![],
-            Self::Auto => match std::env::var("ATUIN_SHELL") {
+    /// [`OptFilters::shells`]: crate::database::OptFilters::shells
+    pub fn to_list(&self) -> ShellList<'_> {
+        self.to_list_with(std::env::var("ATUIN_SHELL").ok())
+    }
+
+    /// Like [`Self::to_list`], but takes the current shell as a parameter.
+    pub fn to_list_with(&self, current_shell: Option<String>) -> ShellList<'_> {
+        let inner = match self {
+            Self::All => ShellListInner::Reference(&[]),
+            Self::Auto => match current_shell {
                 // Show results from the current shell, plus entries that have no shell recorded.
-                Ok(shell) => vec![shell, "".into()],
+                Some(shell) => ShellListInner::Inline([shell, "".into()]),
                 // Show all results if no shell is detected.
-                Err(_) => vec![],
+                None => ShellListInner::Reference(&[]),
             },
-            Self::List(shells) => shells.clone(),
+            Self::List(shells) => ShellListInner::Reference(shells),
+        };
+        ShellList(inner)
+    }
+}
+
+enum ShellListInner<'a> {
+    Inline([String; 2]),
+    Reference(&'a [String]),
+}
+
+pub struct ShellList<'a>(ShellListInner<'a>);
+
+impl ShellList<'_> {
+    pub fn as_slice(&self) -> &[String] {
+        match &self.0 {
+            ShellListInner::Inline(array) => array.as_slice(),
+            ShellListInner::Reference(slice) => slice,
         }
+    }
+
+    pub fn to_vec(&self) -> Vec<String> {
+        self.as_slice().into()
+    }
+}
+
+impl AsRef<[String]> for ShellList<'_> {
+    fn as_ref(&self) -> &[String] {
+        self.as_slice()
     }
 }
 

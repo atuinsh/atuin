@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use atuin_client::{
     database::{Context, Database, OptFilters},
     history::{AUTHOR_FILTER_ALL_USER, History, HistoryId},
-    settings::{FilterMode, SearchMode, Settings},
+    settings::{FilterMode, SearchMode, Settings, Shells},
 };
 use eyre::Result;
 
@@ -33,9 +33,7 @@ pub struct SearchState {
     pub filter_mode: FilterMode,
     pub context: Context,
     pub custom_context: Option<HistoryId>,
-    /// If nonempty, include commands only from these shells. Like [`OptFilters::shell`], an empty
-    /// string includes commands for which the shell is unknown.
-    pub shell_filter: Vec<String>,
+    pub shells: Shells,
 }
 
 impl SearchState {
@@ -84,7 +82,7 @@ pub trait SearchEngine: Send + Sync + 'static {
                     OptFilters {
                         limit: Some(200),
                         authors: &[AUTHOR_FILTER_ALL_USER.to_owned()],
-                        shells: &state.shell_filter,
+                        shells: state.shells.to_list().as_slice(),
                         ..Default::default()
                     },
                 )
@@ -95,5 +93,6 @@ pub trait SearchEngine: Send + Sync + 'static {
             self.full_query(state, db).await
         }
     }
+
     fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize>;
 }
