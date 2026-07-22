@@ -18,8 +18,8 @@ use atuin_common::path::DisplayRichExt;
 use atuin_nucleo::{Injector, Nucleo, pattern};
 use dashmap::DashMap;
 use lasso::{Spur, ThreadedRodeo};
-use time::OffsetDateTime;
 use parking_lot::RwLock;
+use time::OffsetDateTime;
 use tracing::{Level, instrument};
 use uuid::Uuid;
 
@@ -691,8 +691,7 @@ mod tests {
         assert_eq!(index.command_count(), 3);
 
         // Search for "git" - should match 2 commands
-        let results =
-            index.search("git", IndexFilterMode::Global, &QueryContext::default(), 10);
+        let results = index.search("git", IndexFilterMode::Global, &QueryContext::default(), 10);
         assert_eq!(results.len(), 2);
 
         // Search with directory filter
