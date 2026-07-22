@@ -76,6 +76,15 @@
   text-transform: uppercase;
 }
 
+/* The admonition/details label sits between the design system's Eyebrow
+   (11px) and Label (14px) steps. It heads a block rather than captioning a
+   nav group, so it carries slightly more presence than the other surfaces
+   sharing the rule above -- which stay at 11px. */
+.md-typeset .admonition-title,
+.md-typeset summary {
+  font-size: 0.62rem;
+}
+
 /* Admonition titles and summaries carry meaning, so they keep full-strength
    foreground; only the nav labels stay muted. */
 .md-typeset .admonition-title,

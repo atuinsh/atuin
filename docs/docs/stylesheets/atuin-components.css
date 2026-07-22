@@ -175,6 +175,21 @@
   padding-left: 0.8rem;
 }
 
+/* Tighten the gap between the label and the body. Material leaves 8px of
+   title padding plus a 14px paragraph margin -- 22px of whitespace, which
+   read as a disconnect once the title became a compact mono label instead of
+   a full-width filled bar. 6px + 10px reads as one block. */
+.md-typeset .admonition-title[class],
+.md-typeset details > summary,
+.md-typeset details[class] > summary {
+  padding-bottom: 0.3rem;
+}
+
+.md-typeset .admonition-title + *,
+.md-typeset summary + * {
+  margin-top: 0.5rem;
+}
+
 [dir="rtl"] .md-typeset .admonition-title,
 [dir="rtl"] .md-typeset summary {
   padding-right: 0.8rem;
