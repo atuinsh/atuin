@@ -45,10 +45,10 @@ struct HistoryComponentInner {
     running: DashMap<HistoryId, History>,
 
     /// Handle to the daemon (set during start).
-    handle: tokio::sync::RwLock<Option<DaemonHandle>>,
+    handle: parking_lot::RwLock<Option<DaemonHandle>>,
 
     /// History store for pushing records (set during start).
-    history_store: tokio::sync::RwLock<Option<HistoryStore>>,
+    history_store: parking_lot::RwLock<Option<HistoryStore>>,
 }
 
 impl HistoryComponent {
@@ -57,8 +57,8 @@ impl HistoryComponent {
         Self {
             inner: Arc::new(HistoryComponentInner {
                 running: DashMap::new(),
-                handle: tokio::sync::RwLock::new(None),
-                history_store: tokio::sync::RwLock::new(None),
+                handle: parking_lot::RwLock::new(None),
+                history_store: parking_lot::RwLock::new(None),
             }),
         }
     }
@@ -91,8 +91,8 @@ impl Component for HistoryComponent {
         let history_store =
             HistoryStore::new(handle.store().clone(), host_id, *handle.encryption_key());
 
-        *self.inner.history_store.write().await = Some(history_store);
-        *self.inner.handle.write().await = Some(handle);
+        *self.inner.history_store.write() = Some(history_store);
+        *self.inner.handle.write() = Some(handle);
 
         tracing::info!("history component started");
         Ok(())
@@ -166,7 +166,7 @@ impl HistorySvc for HistoryGrpcService {
             .into();
 
         // Emit the event
-        if let Some(handle) = self.inner.handle.read().await.as_ref() {
+        if let Some(handle) = self.inner.handle.read().as_ref() {
             handle.emit(DaemonEvent::HistoryStarted(h.clone()));
         }
 
@@ -201,15 +201,20 @@ impl HistorySvc for HistoryGrpcService {
                 value => i64::try_from(value).expect("failed to get i64 duration"),
             };
 
-            // Get the handle and store to save the history
-            let handle_guard = self.inner.handle.read().await;
-            let handle = handle_guard
-                .as_ref()
+            // Clone the handle and store out so no lock guard is held across
+            // the DB writes below (both are cheap, Arc-backed clones).
+            let handle = self
+                .inner
+                .handle
+                .read()
+                .clone()
                 .ok_or_else(|| Status::internal("component not initialized"))?;
 
-            let store_guard = self.inner.history_store.read().await;
-            let history_store = store_guard
-                .as_ref()
+            let history_store = self
+                .inner
+                .history_store
+                .read()
+                .clone()
                 .ok_or_else(|| Status::internal("component not initialized"))?;
 
             // Save to database
@@ -273,10 +278,11 @@ impl HistorySvc for HistoryGrpcService {
         &self,
         _request: Request<TailHistoryRequest>,
     ) -> Result<Response<Self::TailHistoryStream>, Status> {
-        let handle_guard = self.inner.handle.read().await;
-        let handle = handle_guard
-            .as_ref()
-            .cloned()
+        let handle = self
+            .inner
+            .handle
+            .read()
+            .clone()
             .ok_or_else(|| Status::internal("component not initialized"))?;
 
         let mut rx = handle.subscribe();
@@ -340,7 +346,7 @@ impl HistorySvc for HistoryGrpcService {
         _request: Request<ShutdownRequest>,
     ) -> Result<Response<ShutdownReply>, Status> {
         // Use the daemon handle to request shutdown
-        if let Some(handle) = self.inner.handle.read().await.as_ref() {
+        if let Some(handle) = self.inner.handle.read().as_ref() {
             handle.shutdown();
         }
         Ok(Response::new(ShutdownReply { accepted: true }))
