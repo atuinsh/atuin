@@ -62,6 +62,37 @@ plugins:
   - privacy # Download external assets at compile time for user privacy
   - git-revision-date-localized:
       enable_creation_date: true
+  # Contributor avatars per page. Material renders these natively, so no
+  # template override is needed.
+  #
+  # Off unless explicitly switched on: it queries the GitHub API once per page,
+  # so a local `mkdocs serve` would be slow and would need a token nobody has
+  # to hand. Contributors therefore only appear on deployed builds.
+  #
+  # A dedicated variable rather than piggybacking on CI. `!ENV [CI, false]`
+  # looks tidier but is fragile -- CI is spelled differently by different
+  # providers, and setting it to an empty string yields "" rather than the
+  # default, which enables the plugin with no token and fails the build.
+  #
+  # docs_path is repo-relative, and this project nests the docs dir one level
+  # deeper than usual (mkdocs.yml lives in docs/, docs_dir is docs/docs/), so
+  # the default of `docs/` would look up paths that do not exist and silently
+  # return no contributors for every page.
+  - git-committers:
+      repository: atuinsh/atuin
+      branch: main
+      docs_path: docs/docs/
+      enabled: !ENV [MKDOCS_GIT_COMMITTERS_ENABLED, false]
+      token: !ENV [MKDOCS_GIT_COMMITTERS_APIKEY, ""]
+      cache_dir: .cache/plugin/git-committers/
+      # web-flow is GitHub's web-editor account: it is credited on every commit
+      # made through the web UI, so it appeared on all 46 pages and outranked
+      # every actual human. The rest are bots that will touch docs eventually.
+      exclude_committers:
+        - web-flow
+        - greptile-apps[bot]
+        - dependabot[bot]
+        - github-actions[bot]
   - redirects:
       redirect_maps:
         "cli/ai/command-output.md": "ai/command-output.md"

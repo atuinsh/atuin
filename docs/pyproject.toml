@@ -10,6 +10,7 @@ dependencies = [
   "mkdocs-redirects>=1.2.2",
   "mkdocs-llmstxt>=0.5",
   "mkdocs-minify-plugin>=0.8",
+  "mkdocs-git-committers-plugin-2>=2.5",
   "mike>=2.1",
 ]
 
