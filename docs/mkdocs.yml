@@ -250,11 +250,24 @@ extra:
     provider: mike
     default: latest
     alias: true
+  # `name` sets the link's title/aria-label. Without it Material falls back to
+  # the bare hostname, so an icon-only link announces as "github.com".
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/atuinsh/atuin
+      name: Atuin on GitHub
     - icon: fontawesome/brands/discord
       link: https://discord.gg/jR3tfchVvW
+      name: Atuin on Discord
+    - icon: fontawesome/brands/x-twitter
+      link: https://x.com/atuinsh
+      name: Atuin on X
+    - icon: fontawesome/brands/mastodon
+      link: https://mastodon.online/@atuin@hachyderm.io
+      name: Atuin on Mastodon
+    - icon: fontawesome/brands/bluesky
+      link: https://bsky.app/profile/atuin.sh
+      name: Atuin on Bluesky
 
 nav:
   - Home: index.md
