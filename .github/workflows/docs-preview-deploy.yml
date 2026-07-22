@@ -42,6 +42,42 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Cloudflare Pages does not merely serve what it is handed. A
+      # `_worker.js` file or a `functions/` directory at the root of the upload
+      # becomes a Pages Function -- server-side code running on Cloudflare's
+      # edge, in this account. The dashboard's Direct Upload does not support
+      # Functions, but `wrangler pages deploy` does, and that is the path used
+      # here.
+      #
+      # That turns "a fork can publish static HTML" into "a fork can run code
+      # in our Cloudflare account". `_headers` and `_redirects` are not code,
+      # but they let an upload set arbitrary response headers or proxy another
+      # origin, which is enough for convincing phishing.
+      #
+      # mkdocs emits none of these, and it copies unrecognised files from
+      # docs/docs/ straight to the site root -- so `docs/docs/_worker.js` in a
+      # pull request would land as `site/_worker.js` here.
+      #
+      # Fail rather than strip: presence is either an attack or a deliberate
+      # change, and both deserve a human. This check lives in the deploy job on
+      # purpose; in the build job a malicious pull request could simply delete
+      # it.
+      - name: Reject server-side code in the artifact
+        run: |
+          set -euo pipefail
+          found=0
+          for path in _worker.js _worker.js.map functions _routes.json _headers _redirects; do
+            if [ -e "site/${path}" ]; then
+              echo "::error::artifact contains '${path}', which Cloudflare Pages treats as behaviour rather than a static asset"
+              found=1
+            fi
+          done
+          if [ "$found" -ne 0 ]; then
+            echo "::error::refusing to deploy -- see .github/workflows/docs-preview-deploy.yml"
+            exit 1
+          fi
+          echo "artifact contains no Pages Functions or routing overrides"
+
       # The pull request number is derived from the head SHA on the trusted
       # `workflow_run` event, NOT from the build artifact.
       #
