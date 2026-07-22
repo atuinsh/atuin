@@ -7,8 +7,32 @@ use atuin_client::theme::Meaning;
 /// Style every byte of `cmd` with a `Syntax*` meaning, parsing with the
 /// grammar for the entry's shell. Anything unrecognized (plain arguments,
 /// parse errors, shells without a grammar) stays `Base`.
+///
+/// Rows are re-classified on every redraw while typing or scrolling, so
+/// results are memoized; repeat frames cost a hash lookup, not a parse.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn classify(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    thread_local! {
+        static CACHE: RefCell<HashMap<String, Vec<Meaning>>> = RefCell::new(HashMap::new());
+    }
+
+    let key = format!("{}\x1f{}", shell.unwrap_or(""), cmd);
+    CACHE.with_borrow_mut(|cache| {
+        if cache.len() > 4096 {
+            cache.clear();
+        }
+        cache
+            .entry(key)
+            .or_insert_with(|| parse(cmd, shell))
+            .clone()
+    })
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn parse(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
     let mut meanings = vec![Meaning::Base; cmd.len()];
 
     let language: tree_sitter::Language = match shell {
