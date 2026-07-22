@@ -90,6 +90,7 @@ plugins:
       # every actual human. The rest are bots that will touch docs eventually.
       exclude_committers:
         - web-flow
+        - claude
         - greptile-apps[bot]
         - dependabot[bot]
         - github-actions[bot]
@@ -236,9 +237,7 @@ markdown_extensions:
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 extra_css:
-  - stylesheets/atuin-tokens.css
-  - stylesheets/atuin-components.css
-  - stylesheets/atuin-decor.css
+  - stylesheets/atuin.css
 
 extra:
   version:
