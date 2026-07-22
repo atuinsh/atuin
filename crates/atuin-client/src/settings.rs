@@ -957,6 +957,10 @@ pub struct Ui {
     /// Can be simple strings or objects with type and width.
     #[serde(default = "Ui::default_columns")]
     pub columns: Vec<UiColumn>,
+
+    /// Syntax highlight commands in the interactive search results.
+    #[serde(default = "Ui::default_syntax_highlight")]
+    pub syntax_highlight: bool,
 }
 
 impl Ui {
@@ -966,6 +970,10 @@ impl Ui {
             UiColumn::new(UiColumnType::Time),
             UiColumn::new(UiColumnType::Command),
         ]
+    }
+
+    fn default_syntax_highlight() -> bool {
+        true
     }
 
     /// Validate the UI configuration.
@@ -986,6 +994,7 @@ impl Default for Ui {
     fn default() -> Self {
         Self {
             columns: Self::default_columns(),
+            syntax_highlight: Self::default_syntax_highlight(),
         }
     }
 }
@@ -1489,6 +1498,7 @@ impl Settings {
             .set_default("ai.send_cwd", false)?
             .set_default("ai.opening.send_cwd", false)?
             .set_default("ai.opening.send_last_command", false)?
+            .set_default("ui.syntax_highlight", true)?
             .set_default(
                 "search.filters",
                 vec![

@@ -63,6 +63,9 @@ thiserror = "2"
 rustix = { version = "1.1.4", features = ["process", "fs"] }
 tower = "0.5"
 tracing = "0.1"
+tree-sitter = "0.26.8"
+tree-sitter-bash = "0.25.1"
+tree-sitter-fish = "3.6.0"
 ratatui = "0.30.0"
 sql-builder = "3"
 tempfile = { version = "3.19" }

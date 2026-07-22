@@ -30,6 +30,12 @@ pub enum Meaning {
     Important,
     Title,
     Muted,
+    SyntaxCommand,
+    SyntaxFlag,
+    SyntaxString,
+    SyntaxVariable,
+    SyntaxOperator,
+    SyntaxComment,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -253,6 +259,7 @@ static MEANING_FALLBACKS: LazyLock<HashMap<Meaning, Meaning>> = LazyLock::new(||
         (Meaning::Guidance, Meaning::AlertInfo),
         (Meaning::Annotation, Meaning::AlertInfo),
         (Meaning::Title, Meaning::Important),
+        (Meaning::SyntaxComment, Meaning::Annotation),
     ])
 });
 
@@ -290,6 +297,30 @@ static DEFAULT_THEME: LazyLock<Theme> = LazyLock::new(|| {
             ),
             (Meaning::Muted, StyleFactory::from_fg_color(Color::Grey)),
             (Meaning::Base, ContentStyle::default()),
+            // Syntax highlighting uses ANSI palette colors, so they follow
+            // the user's terminal color scheme out of the box.
+            (
+                Meaning::SyntaxCommand,
+                StyleFactory::from_fg_color(Color::Green),
+            ),
+            (
+                Meaning::SyntaxFlag,
+                StyleFactory::from_fg_color(Color::DarkCyan),
+            ),
+            (
+                Meaning::SyntaxString,
+                StyleFactory::from_fg_color(Color::DarkYellow),
+            ),
+            (
+                Meaning::SyntaxVariable,
+                StyleFactory::from_fg_color(Color::Magenta),
+            ),
+            // Operators keep the terminal's default foreground
+            (Meaning::SyntaxOperator, ContentStyle::default()),
+            (
+                Meaning::SyntaxComment,
+                StyleFactory::from_fg_color(Color::DarkGrey),
+            ),
         ]),
     )
 });
@@ -299,16 +330,11 @@ static BUILTIN_THEMES: LazyLock<HashMap<&'static str, Theme>> = LazyLock::new(||
         ("default", HashMap::new()),
         (
             "(none)",
-            HashMap::from([
-                (Meaning::AlertError, ContentStyle::default()),
-                (Meaning::AlertWarn, ContentStyle::default()),
-                (Meaning::AlertInfo, ContentStyle::default()),
-                (Meaning::Annotation, ContentStyle::default()),
-                (Meaning::Guidance, ContentStyle::default()),
-                (Meaning::Important, ContentStyle::default()),
-                (Meaning::Muted, ContentStyle::default()),
-                (Meaning::Base, ContentStyle::default()),
-            ]),
+            DEFAULT_THEME
+                .styles
+                .keys()
+                .map(|&meaning| (meaning, ContentStyle::default()))
+                .collect(),
         ),
         (
             "autumn",

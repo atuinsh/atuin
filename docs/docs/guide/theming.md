@@ -61,6 +61,12 @@ to (at present) colors. In future, this may be expanded to allow richer style su
 * `Important`: drawing the user's attention to information
 * `Title`: titling a section or view
 * `Muted`: anodyne, usually grey, foreground for contrast with other colors. Normally equivalent to the base color, but allows themes to change the base color, with less risk of breaking intentional color contrasts (e.g. stacked bar charts)
+* `SyntaxCommand`: the command word when syntax highlighting shell commands (`git` in `git status`)
+* `SyntaxFlag`: a `-f`/`--flag` argument
+* `SyntaxString`: a quoted string
+* `SyntaxVariable`: `$VAR`, `${VAR}` or a `FOO=bar` assignment
+* `SyntaxOperator`: operators such as `|`, `&&`, `;`, `>`
+* `SyntaxComment`: a `# comment`
 
 These may expand over time as they are added to Atuin's codebase, but Atuin
 should have fallbacks added for any new *Meanings* so that, whether themes limit to

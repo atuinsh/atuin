@@ -24,6 +24,7 @@ mod history_list;
 mod inspector;
 mod interactive;
 pub mod keybindings;
+mod syntax;
 
 pub use duration::format_duration_into;
 
