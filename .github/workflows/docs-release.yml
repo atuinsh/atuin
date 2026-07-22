@@ -17,10 +17,6 @@ jobs:
     if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     env:
-      # Switches on the git-committers plugin, which is off by default so a
-      # local `mkdocs serve` does not need a token or hit the GitHub API once
-      # per page. GITHUB_TOKEN is enough -- the plugin only reads commit
-      # authors on a public repo -- so this needs no new secret.
       MKDOCS_GIT_COMMITTERS_ENABLED: true
       MKDOCS_GIT_COMMITTERS_APIKEY: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -38,10 +34,6 @@ jobs:
     if: ${{ contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     env:
-      # Switches on the git-committers plugin, which is off by default so a
-      # local `mkdocs serve` does not need a token or hit the GitHub API once
-      # per page. GITHUB_TOKEN is enough -- the plugin only reads commit
-      # authors on a public repo -- so this needs no new secret.
       MKDOCS_GIT_COMMITTERS_ENABLED: true
       MKDOCS_GIT_COMMITTERS_APIKEY: ${{ secrets.GITHUB_TOKEN }}
     steps:
