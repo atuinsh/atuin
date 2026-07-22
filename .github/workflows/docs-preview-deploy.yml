@@ -62,13 +62,30 @@ jobs:
       # change, and both deserve a human. This check lives in the deploy job on
       # purpose; in the build job a malicious pull request could simply delete
       # it.
+      #
+      # The match is deliberately paranoid, because a miss here is code
+      # execution in the Cloudflare account:
+      #   - case-insensitive: the runner is case-sensitive Linux, but Pages'
+      #     own matching is not documented as case-sensitive, so `_Worker.js`
+      #     must not slip through;
+      #   - symlink-aware (-L): a dangling symlink named `_worker.js` is false
+      #     under `-e`;
+      #   - directory form: `_worker.js/` is caught as well as the file;
+      #   - root only: these files are inert in a subdirectory on Pages, and a
+      #     legitimate page could be named e.g. guide/_redirects.
+      # wrangler config files are added as defence in depth in case a config in
+      # the asset directory could influence the deploy.
       - name: Reject server-side code in the artifact
         run: |
           set -euo pipefail
+          blocked='^(_worker\.js|_worker\.js\.map|functions|_routes\.json|_headers|_redirects|wrangler\.(toml|json|jsonc)|\.dev\.vars)$'
           found=0
-          for path in _worker.js _worker.js.map functions _routes.json _headers _redirects; do
-            if [ -e "site/${path}" ]; then
-              echo "::error::artifact contains '${path}', which Cloudflare Pages treats as behaviour rather than a static asset"
+          for entry in site/* site/.*; do
+            [ -e "$entry" ] || [ -L "$entry" ] || continue
+            base="$(basename "$entry")"
+            low="$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')"
+            if printf '%s\n' "$low" | grep -Eq "$blocked"; then
+              echo "::error::artifact root contains '${base}', which Cloudflare Pages treats as behaviour rather than a static asset"
               found=1
             fi
           done
@@ -76,7 +93,7 @@ jobs:
             echo "::error::refusing to deploy -- see .github/workflows/docs-preview-deploy.yml"
             exit 1
           fi
-          echo "artifact contains no Pages Functions or routing overrides"
+          echo "artifact root contains no Pages Functions or routing overrides"
 
       # The pull request number is derived from the head SHA on the trusted
       # `workflow_run` event, NOT from the build artifact.
