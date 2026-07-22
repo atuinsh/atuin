@@ -216,10 +216,11 @@ impl Component for SearchComponent {
             }
             DaemonEvent::SettingsReloaded => {
                 info!("Settings reloaded, rebuilding frecency map with new multipliers");
-                if let Some(handle) = self.handle.read().as_ref() {
-                    let settings = handle.settings();
-                    self.index.read().rebuild_frecency(&settings.search);
-                }
+                let Some(handle) = self.handle.read().clone() else {
+                    return Ok(());
+                };
+                let settings = handle.settings();
+                self.index.read().rebuild_frecency(&settings.search);
             }
             // Events we don't care about
             DaemonEvent::SyncCompleted { .. }
