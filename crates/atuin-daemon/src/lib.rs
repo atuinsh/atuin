@@ -74,7 +74,7 @@ pub async fn boot(
                 // Use the already-loaded settings from the watcher
                 // (avoids parsing the config file twice)
                 let new_settings = (*settings_rx.borrow()).clone();
-                watcher_handle.apply_settings((*new_settings).clone()).await;
+                watcher_handle.apply_settings(new_settings);
             }
             tracing::debug!("config file watcher stopped");
         });

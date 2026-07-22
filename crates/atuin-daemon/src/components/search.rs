@@ -144,7 +144,7 @@ impl Component for SearchComponent {
                             index.read().await.command_count()
                         );
                         // Build initial frecency map with current settings
-                        let settings = handle_for_loader.settings().await;
+                        let settings = handle_for_loader.settings();
                         index.read().await.rebuild_frecency(&settings.search).await;
                         info!("Initial frecency map built");
                         break;
@@ -167,7 +167,7 @@ impl Component for SearchComponent {
             loop {
                 interval.tick().await;
                 trace!("Refreshing frecency map");
-                let settings = handle_for_frecency.settings().await;
+                let settings = handle_for_frecency.settings();
                 index_for_frecency
                     .read()
                     .await
@@ -224,7 +224,7 @@ impl Component for SearchComponent {
                 info!("Settings reloaded, rebuilding frecency map with new multipliers");
                 let handle_guard = self.handle.read().await;
                 if let Some(handle) = handle_guard.as_ref() {
-                    let settings = handle.settings().await;
+                    let settings = handle.settings();
                     self.index
                         .read()
                         .await

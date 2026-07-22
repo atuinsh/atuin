@@ -115,8 +115,8 @@ impl Component for SyncComponent {
 async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>) {
     tracing::info!("sync loop starting");
 
-    // Clone settings since we need them across await points
-    let settings = handle.settings().await.clone();
+    // Arc snapshot of the settings; safe to hold across await points
+    let settings = handle.settings();
     let host_id = match Settings::host_id().await {
         Ok(id) => id,
         Err(e) => {
@@ -145,7 +145,7 @@ async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                let settings = handle.settings().await;
+                let settings = handle.settings();
 
                 // Skip periodic ticks if auto_sync is disabled AND we're not retrying
                 // a previous failure. Retries must continue regardless of auto_sync.
@@ -168,7 +168,7 @@ async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>
                 match cmd {
                     Some(SyncCommand::ForceSync) => {
                         tracing::info!("executing force sync");
-                        let settings = handle.settings().await;
+                        let settings = handle.settings();
                         sync_state = do_sync_tick(
                             &handle,
                             &history_store,

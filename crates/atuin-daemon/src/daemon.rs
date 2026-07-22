@@ -15,7 +15,8 @@ use atuin_client::{
     settings::Settings,
 };
 use eyre::{Context, Result};
-use tokio::sync::{RwLock, broadcast};
+use parking_lot::RwLock;
+use tokio::sync::broadcast;
 
 use crate::events::DaemonEvent;
 
@@ -31,8 +32,8 @@ pub struct DaemonState {
     // Event bus
     event_tx: broadcast::Sender<DaemonEvent>,
 
-    // Configuration (mutable - can be reloaded)
-    settings: RwLock<Settings>,
+    // Configuration (mutable - can be reloaded; readers take an Arc snapshot)
+    settings: RwLock<Arc<Settings>>,
 
     // Encryption key (immutable - derived at startup)
     encryption_key: [u8; 32],
@@ -65,7 +66,7 @@ pub struct DaemonState {
 /// handle.emit(DaemonEvent::HistoryPruned);
 ///
 /// // Access settings
-/// let settings = handle.settings().await;
+/// let settings = handle.settings();
 /// let sync_freq = settings.daemon.sync_frequency;
 ///
 /// // Access database
@@ -105,21 +106,21 @@ impl DaemonHandle {
 
     // ---- Configuration ----
 
-    /// Get the current settings.
+    /// Get a snapshot of the current settings.
     ///
-    /// This acquires a read lock on the settings. For most use cases, clone
-    /// the settings if you need to hold onto them.
-    pub async fn settings(&self) -> tokio::sync::RwLockReadGuard<'_, Settings> {
-        self.state.settings.read().await
+    /// Returns a cheap `Arc` clone. The snapshot is immutable; a settings
+    /// reload swaps in a new `Arc`, so hold the snapshot as long as needed.
+    pub fn settings(&self) -> Arc<Settings> {
+        self.state.settings.read().clone()
     }
 
     /// Reload settings from disk and emit a SettingsReloaded event.
     ///
     /// Components listening for `SettingsReloaded` can then re-read settings
     /// via `handle.settings()` to pick up the changes.
-    pub async fn reload_settings(&self) -> Result<()> {
+    pub fn reload_settings(&self) -> Result<()> {
         let new_settings = Settings::new()?;
-        self.apply_settings(new_settings).await;
+        self.apply_settings(Arc::new(new_settings));
         Ok(())
     }
 
@@ -127,8 +128,8 @@ impl DaemonHandle {
     ///
     /// Use this when settings have already been loaded (e.g., from a file watcher)
     /// to avoid parsing the config file twice.
-    pub async fn apply_settings(&self, settings: Settings) {
-        *self.state.settings.write().await = settings;
+    pub fn apply_settings(&self, settings: Arc<Settings>) {
+        *self.state.settings.write() = settings;
         self.emit(DaemonEvent::SettingsReloaded);
         tracing::info!("settings applied");
     }
@@ -441,7 +442,7 @@ impl DaemonBuilder {
         // Create the shared state
         let state = Arc::new(DaemonState {
             event_tx,
-            settings: RwLock::new(self.settings),
+            settings: RwLock::new(Arc::new(self.settings)),
             encryption_key,
             history_db,
             store,
