@@ -145,4 +145,31 @@ mod tests {
         let result = Shells::deserialize(deserializer);
         assert_eq!(result.as_ref().ok(), expected.as_ref(), "{result:?}");
     }
+
+    #[rstest]
+    #[case::all_bash(Shells::All, Some("bash"), &[])]
+    #[case::all_none(Shells::All, None, &[])]
+    #[case::auto_bash(Shells::Auto, Some("bash"), &["bash", ""])]
+    #[case::auto_none(Shells::Auto, None, &[])]
+    #[case::list_bash_zsh(Shells::List(vec!["bash".into()]), Some("zsh"), &["bash"])]
+    #[case::list_bash_unknown_zsh(
+        Shells::List(["bash", ""].map(str::to_owned).into()),
+        Some("zsh"),
+        &["bash", ""],
+    )]
+    #[case::list_bash_zsh_none(
+        Shells::List(["bash", "zsh"].map(str::to_owned).into()),
+        None,
+        &["bash", "zsh"],
+    )]
+    #[case::list_empty_bash(Shells::List(vec![]), Some("bash"), &[])]
+    fn to_list(
+        #[case] settings: Shells,
+        #[case] current_shell: Option<&str>,
+        #[case] expected: &[&str],
+    ) {
+        let list = settings.to_list_with(current_shell.map(Into::into));
+        let slice = list.as_slice();
+        assert!(slice.iter().eq(expected), "{slice:?} != {expected:?}");
+    }
 }

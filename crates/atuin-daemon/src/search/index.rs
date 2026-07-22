@@ -223,6 +223,7 @@ pub enum IndexFilterMode {
 }
 
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(test, derive(Eq, PartialEq))]
 pub enum ShellFilter {
     #[default]
     All,
@@ -247,6 +248,8 @@ impl ShellFilter {
             Shells::All => Some(Self::All),
             // We can't construct the filter without knowing the current shell.
             Shells::Auto => None,
+            // Empty list in settings is treated the same as "all".
+            Shells::List(list) if list.is_empty() => Some(Self::All),
             Shells::List(list) => Some(Self::Set(list.iter().cloned().collect())),
         }
     }
@@ -523,6 +526,7 @@ impl Default for SearchIndex {
 mod tests {
     use super::*;
     use rstest::rstest;
+    use settings::Shells;
     use time::macros::datetime;
 
     fn make_history(command: &str, cwd: &str, timestamp: OffsetDateTime) -> History {
@@ -708,7 +712,7 @@ mod tests {
 
     #[tokio::test]
     async fn search_index_add_and_search() {
-        let index = SearchIndex::new();
+        let index = SearchIndex::default();
 
         let h1 = make_history(
             "git status",
@@ -733,14 +737,7 @@ mod tests {
         assert_eq!(index.command_count(), 3);
 
         // Search for "git" - should match 2 commands
-        let results = index
-            .search(
-                "git",
-                IndexFilterMode::Global,
-                std::iter::empty::<&str>(),
-                10,
-            )
-            .await;
+        let results = index.search("git", IndexFilterMode::Global, 10).await;
         assert_eq!(results.len(), 2);
 
         // Search with directory filter
@@ -753,24 +750,53 @@ mod tests {
                         .trailing_slash(true)
                         .to_string(),
                 ),
-                std::iter::empty::<&str>(),
                 10,
             )
             .await;
         assert_eq!(results.len(), 2); // git status and git commit
     }
 
+    #[rstest]
+    #[case::all_bash(Shells::All, Some("bash"), ShellFilter::All)]
+    #[case::all_none(Shells::All, None, ShellFilter::All)]
+    #[case::auto_bash(Shells::Auto, Some("bash"), ShellFilter::Current("bash".into()))]
+    #[case::auto_none(Shells::Auto, None, ShellFilter::All)]
+    #[case::list_empty_bash(Shells::List(vec![]), Some("bash"), ShellFilter::All)]
+    #[case::list_empty_none(Shells::List(vec![]), None, ShellFilter::All)]
+    #[case::list_bash_zsh_none(
+        Shells::List(["bash", "zsh"].map(str::to_owned).into()),
+        None,
+        ShellFilter::Set(["zsh", "bash"].map(str::to_owned).into()),
+    )]
+    #[case::list_zsh_fish(
+        Shells::List(["zsh".to_owned()].into()),
+        Some("fish"),
+        ShellFilter::Set(["zsh".to_owned()].into()),
+    )]
+    fn settings_to_shell_filter(
+        #[case] settings: Shells,
+        #[case] current_shell: Option<&str>,
+        #[case] expected: ShellFilter,
+    ) {
+        assert_eq!(ShellFilter::new(&settings, current_shell), expected);
+    }
+
     #[tokio::test]
     #[rstest]
-    #[case::empty_filter(&[], 7)]
-    #[case::bash(&["bash"], 1)]
-    #[case::bash_unknown(&["bash", ""], 5)]
-    #[case::bash_zsh(&["bash", "zsh"], 3)]
-    #[case::unknown(&[""], 4)]
-    #[case::fish(&["fish"], 0)]
-    #[case::fish_unknown(&["fish", ""], 4)]
-    async fn test_shell_filter(#[case] shell_filter: &[&str], #[case] expected_count: usize) {
-        let index = SearchIndex::new();
+    #[case::all(ShellFilter::All, 7)]
+    #[case::bash(ShellFilter::Set(["bash".to_owned()].into()), 1)]
+    #[case::bash_unknown(ShellFilter::Set(["bash", ""].map(str::to_owned).into()), 5)]
+    #[case::bash_current(ShellFilter::Current("bash".into()), 5)]
+    #[case::bash_zsh(ShellFilter::Set(["bash", "zsh"].map(str::to_owned).into()), 3)]
+    #[case::unknown(ShellFilter::Set(["".to_owned()].into()), 4)]
+    #[case::fish(ShellFilter::Set(["fish".to_owned()].into()), 0)]
+    #[case::fish_unknown(ShellFilter::Set(["fish", ""].map(str::to_owned).into()), 4)]
+    #[case::fish_current(ShellFilter::Current("fish".into()), 4)]
+    async fn search_with_shell_filter(
+        #[case] shell_filter: ShellFilter,
+        #[case] expected_count: usize,
+    ) {
+        let index = SearchIndex::new(shell_filter);
 
         for (command, shell) in [
             ("echo unknown1", None),
@@ -786,9 +812,7 @@ mod tests {
             index.add_history(&history);
         }
 
-        let results = index
-            .search("echo", IndexFilterMode::Global, shell_filter, 100)
-            .await;
+        let results = index.search("echo", IndexFilterMode::Global, 100).await;
         assert_eq!(results.len(), expected_count, "{results:?}");
     }
 }
