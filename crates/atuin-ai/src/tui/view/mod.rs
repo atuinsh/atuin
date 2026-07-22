@@ -117,7 +117,7 @@ fn out_of_band_output_view(details: &OutOfBandOutputDetails) -> AnyElement<'stat
         .when_some(details.command.clone(), |c, command| {
             c.child(text(command).style(Style::default().fg(Color::Blue)))
         })
-        .child(markdown(details.content.clone()))
+        .child(markdown(details.content.clone()).streaming(true))
         .pad_left(2)
         .any()
 }
