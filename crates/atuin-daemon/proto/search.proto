@@ -23,7 +23,7 @@ message SearchRequest {
   uint64 query_id = 2; // Incrementing ID to match responses to queries
   FilterMode filter_mode = 3;
   SearchContext context = 4;
-  string shell = 5; // The current shell in use
+  repeated string shells = 5; // Which shells' commands to include
 }
 
 message SearchResponse {

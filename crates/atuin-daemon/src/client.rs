@@ -172,7 +172,7 @@ pub struct SearchParams {
     pub query_id: u64,
     pub filter_mode: FilterMode,
     pub context: Option<Context>,
-    pub current_shell: Option<String>,
+    pub shells: Vec<String>,
 }
 
 impl From<SearchParams> for SearchRequest {
@@ -182,7 +182,7 @@ impl From<SearchParams> for SearchRequest {
             query_id: params.query_id,
             filter_mode: RpcFilterMode::from(params.filter_mode).into(),
             context: params.context.map(RpcSearchContext::from),
-            shell: params.current_shell.unwrap_or_default(),
+            shells: params.shells,
         }
     }
 }

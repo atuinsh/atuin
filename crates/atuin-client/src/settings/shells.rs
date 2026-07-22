@@ -27,14 +27,17 @@ impl Shells {
     /// [`Database::search`]: crate::database::Database::search
     /// [`OptFilters::shells`]: crate::database::OptFilters::shells
     pub fn to_list(&self) -> ShellList<'_> {
-        self.to_list_with(std::env::var("ATUIN_SHELL").ok())
+        self.to_list_with(|| std::env::var("ATUIN_SHELL").ok())
     }
 
     /// Like [`Self::to_list`], but takes the current shell as a parameter.
-    pub fn to_list_with(&self, current_shell: Option<String>) -> ShellList<'_> {
+    pub fn to_list_with<F>(&self, current_shell: F) -> ShellList<'_>
+    where
+        F: FnOnce() -> Option<String>,
+    {
         let inner = match self {
             Self::All => ShellListInner::Reference(&[]),
-            Self::Auto => match current_shell {
+            Self::Auto => match current_shell() {
                 // Show results from the current shell, plus entries that have no shell recorded.
                 Some(shell) => ShellListInner::Inline([shell, "".into()]),
                 // Show all results if no shell is detected.
@@ -168,7 +171,7 @@ mod tests {
         #[case] current_shell: Option<&str>,
         #[case] expected: &[&str],
     ) {
-        let list = settings.to_list_with(current_shell.map(Into::into));
+        let list = settings.to_list_with(|| current_shell.map(Into::into));
         let slice = list.as_slice();
         assert!(slice.iter().eq(expected), "{slice:?} != {expected:?}");
     }

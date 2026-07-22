@@ -195,6 +195,57 @@ where
     }
 }
 
+/// Checks whether an iterator contains all elements of a sorted slice and no other elements.
+///
+/// The sorted slice must not contain any duplicates.
+///
+/// All elements of `buffer` must be `false`. If `sorted.len() <= buffer.len()`, this function will
+/// not allocate any memory.
+pub fn iter_equals_sorted_deduped_slice<'a, I, T, S>(
+    iter: I,
+    sorted: &'a [S],
+    buffer: &mut [bool],
+) -> bool
+where
+    I: IntoIterator<Item = &'a T>,
+    T: Ord + ?Sized + 'a,
+    S: std::borrow::Borrow<T>,
+{
+    debug_assert!(
+        buffer.iter().all(|b| !*b),
+        "all elements of `buffer` must be `false`",
+    );
+    debug_assert!(
+        sorted.is_sorted_by_key(|s| s.borrow()),
+        "`sorted` must be sorted",
+    );
+    debug_assert_eq!(
+        {
+            let mut vec = sorted.iter().collect::<Vec<_>>();
+            vec.dedup_by_key(|s| s.borrow());
+            vec.len()
+        },
+        sorted.len(),
+        "`sorted` must not contain duplicates",
+    );
+
+    let mut seen_heap;
+    let seen;
+    if sorted.len() <= buffer.len() {
+        seen = &mut buffer[..sorted.len()];
+    } else {
+        seen_heap = vec![false; sorted.len()];
+        seen = seen_heap.as_mut_slice();
+    }
+    for item in iter {
+        match sorted.binary_search_by_key(&item, |s| s.borrow()) {
+            Ok(pos) => seen[pos] = true,
+            Err(_) => return false,
+        }
+    }
+    seen.iter().all(|b| *b)
+}
+
 #[allow(unsafe_code)]
 #[cfg(test)]
 mod tests {

@@ -15,6 +15,7 @@ use std::{
 use atuin_client::history::{History, is_known_agent};
 use atuin_client::settings::{self, Search};
 use atuin_common::path::DisplayRichExt;
+use atuin_common::utils::iter_equals_sorted_deduped_slice;
 use atuin_nucleo::{Injector, Nucleo, pattern};
 use dashmap::DashMap;
 use lasso::{Spur, ThreadedRodeo};
@@ -222,62 +223,103 @@ pub enum IndexFilterMode {
     Session(String),
 }
 
-#[derive(Clone, Debug, Default)]
-#[cfg_attr(test, derive(Eq, PartialEq))]
-pub enum ShellFilter {
-    #[default]
-    All,
-    Current(String),
-    Set(HashSet<String>),
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ShellFilter {
+    sorted: Vec<String>,
 }
 
 impl ShellFilter {
-    pub fn new<S>(shells: &settings::Shells, current_shell: Option<S>) -> Self
-    where
-        S: Into<String>,
-    {
-        Self::try_from_settings(shells).unwrap_or_else(|| match current_shell {
-            Some(shell) => Self::Current(shell.into()),
-            None => Self::All,
-        })
+    pub const ALL: Self = Self { sorted: Vec::new() };
+
+    fn from_vec_unchecked(shells: Vec<String>) -> Self {
+        debug_assert_eq!(
+            {
+                let mut copy = shells.clone();
+                copy.sort_unstable();
+                copy.dedup();
+                copy
+            },
+            shells,
+            "`shells` is not sorted and deduped",
+        );
+        Self { sorted: shells }
     }
 
-    pub fn try_from_settings(shells: &settings::Shells) -> Option<Self> {
+    fn auto(current_shell: Option<String>) -> Self {
+        let Some(shell) = current_shell else {
+            return Self::ALL;
+        };
+        Self::from_vec_unchecked(vec!["".into(), shell])
+    }
+
+    pub fn from_initial_settings(shells: &settings::Shells) -> Self {
+        // The current shell might be in `ATUIN_SHELL` if the daemon was autostarted by the shell
+        // hooks. If it isn't or we're wrong, the index will be rebuilt if necessary when a search
+        // request is received. This is only necessary if `search.shells` is "auto" in config.toml.
+        Self::from_initial_settings_with(shells, || std::env::var("ATUIN_SHELL").ok())
+    }
+
+    fn from_initial_settings_with<F>(shells: &settings::Shells, current_shell: F) -> Self
+    where
+        F: FnOnce() -> Option<String>,
+    {
         use settings::Shells;
         match shells {
-            Shells::All => Some(Self::All),
-            // We can't construct the filter without knowing the current shell.
-            Shells::Auto => None,
-            // Empty list in settings is treated the same as "all".
-            Shells::List(list) if list.is_empty() => Some(Self::All),
-            Shells::List(list) => Some(Self::Set(list.iter().cloned().collect())),
+            Shells::All => Self::ALL,
+            // The current shell might be in `ATUIN_SHELL` if the daemon was autostarted by the
+            // shell hooks. If it isn't or we're wrong, the index will be rebuilt if necessary when
+            // a search request is received. This is only necessary if `search.shells` is "auto" in
+            // config.toml.
+            Shells::Auto => Self::auto(current_shell()),
+            Shells::List(list) => Self::from_iter(list),
         }
     }
 
-    pub fn matches_current_shell(&self, current_shell: Option<&str>) -> bool {
-        let shell = match self {
-            Self::Current(shell) => Some(shell.as_str()),
-            _ => None,
-        };
-        shell == current_shell
+    pub fn matches<'a, I>(&'a self, shells: I) -> bool
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        iter_equals_sorted_deduped_slice(shells, &self.sorted, &mut [false; 16])
     }
 
-    pub fn matches_settings(&self, shells: &settings::Shells) -> bool {
-        use settings::Shells;
-        match (self, shells) {
-            (Self::All, Shells::All) => true,
-            (Self::Current(_), Shells::Auto) => true,
-            (Self::Set(set), Shells::List(list)) => list.iter().all(|s| set.contains(s)),
-            _ => false,
+    pub fn update(&self, shells: Vec<String>) -> Option<Self> {
+        if self.matches(shells.iter().map(|s| s.as_str())) {
+            None
+        } else {
+            Some(shells.into())
         }
     }
 
     fn contains(&self, shell: Option<&str>) -> bool {
-        match self {
-            Self::All => true,
-            Self::Current(current) => shell.is_none_or(|s| s == current),
-            Self::Set(set) => set.contains(shell.unwrap_or_default()),
+        if self.sorted.is_empty() {
+            return true;
         }
+        self.sorted
+            .binary_search_by_key(&shell.unwrap_or_default(), |s| s.as_str())
+            .is_ok()
+    }
+}
+
+impl From<Vec<String>> for ShellFilter {
+    fn from(mut shells: Vec<String>) -> Self {
+        shells.sort_unstable();
+        shells.dedup();
+        Self { sorted: shells }
+    }
+}
+
+impl<T> FromIterator<T> for ShellFilter
+where
+    T: Into<String>,
+{
+    fn from_iter<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+    {
+        iter.into_iter()
+            .map(Into::into)
+            .collect::<Vec<String>>()
+            .into()
     }
 }
 
@@ -518,7 +560,7 @@ impl SearchIndex {
 
 impl Default for SearchIndex {
     fn default() -> Self {
-        Self::new(ShellFilter::All)
+        Self::new(ShellFilter::ALL)
     }
 }
 
@@ -757,46 +799,40 @@ mod tests {
     }
 
     #[rstest]
-    #[case::all_bash(Shells::All, Some("bash"), ShellFilter::All)]
-    #[case::all_none(Shells::All, None, ShellFilter::All)]
-    #[case::auto_bash(Shells::Auto, Some("bash"), ShellFilter::Current("bash".into()))]
-    #[case::auto_none(Shells::Auto, None, ShellFilter::All)]
-    #[case::list_empty_bash(Shells::List(vec![]), Some("bash"), ShellFilter::All)]
-    #[case::list_empty_none(Shells::List(vec![]), None, ShellFilter::All)]
-    #[case::list_bash_zsh_none(
-        Shells::List(["bash", "zsh"].map(str::to_owned).into()),
+    #[case::all_bash(Shells::All, Some("bash"), &[])]
+    #[case::all_none(Shells::All, None, &[])]
+    #[case::auto_bash(Shells::Auto, Some("bash"), &["", "bash"])]
+    #[case::auto_none(Shells::Auto, None, &[])]
+    #[case::list_empty_bash(Shells::List(vec![]), Some("bash"), &[])]
+    #[case::list_empty_none(Shells::List(vec![]), None, &[])]
+    #[case::list_zsh_bash_none(
+        Shells::List(["zsh", "bash"].map(str::to_owned).into()),
         None,
-        ShellFilter::Set(["zsh", "bash"].map(str::to_owned).into()),
+        &["bash", "zsh"],
     )]
-    #[case::list_zsh_fish(
-        Shells::List(["zsh".to_owned()].into()),
-        Some("fish"),
-        ShellFilter::Set(["zsh".to_owned()].into()),
-    )]
+    #[case::list_zsh_fish(Shells::List(vec!["zsh".into()]), Some("fish"), &["zsh"])]
     fn settings_to_shell_filter(
         #[case] settings: Shells,
         #[case] current_shell: Option<&str>,
-        #[case] expected: ShellFilter,
+        #[case] expected: &[&str],
     ) {
-        assert_eq!(ShellFilter::new(&settings, current_shell), expected);
+        assert_eq!(
+            ShellFilter::from_initial_settings_with(&settings, || current_shell.map(Into::into)),
+            expected.iter().copied().collect::<ShellFilter>()
+        );
     }
 
     #[tokio::test]
     #[rstest]
-    #[case::all(ShellFilter::All, 7)]
-    #[case::bash(ShellFilter::Set(["bash".to_owned()].into()), 1)]
-    #[case::bash_unknown(ShellFilter::Set(["bash", ""].map(str::to_owned).into()), 5)]
-    #[case::bash_current(ShellFilter::Current("bash".into()), 5)]
-    #[case::bash_zsh(ShellFilter::Set(["bash", "zsh"].map(str::to_owned).into()), 3)]
-    #[case::unknown(ShellFilter::Set(["".to_owned()].into()), 4)]
-    #[case::fish(ShellFilter::Set(["fish".to_owned()].into()), 0)]
-    #[case::fish_unknown(ShellFilter::Set(["fish", ""].map(str::to_owned).into()), 4)]
-    #[case::fish_current(ShellFilter::Current("fish".into()), 4)]
-    async fn search_with_shell_filter(
-        #[case] shell_filter: ShellFilter,
-        #[case] expected_count: usize,
-    ) {
-        let index = SearchIndex::new(shell_filter);
+    #[case::all(&[], 7)]
+    #[case::bash(&["bash"], 1)]
+    #[case::bash_unknown(&["bash", ""], 5)]
+    #[case::bash_zsh(&["bash", "zsh"], 3)]
+    #[case::unknown(&[""], 4)]
+    #[case::fish(&["fish"], 0)]
+    #[case::fish_unknown(&["fish", ""], 4)]
+    async fn search_with_shell_filter(#[case] shells: &[&str], #[case] expected_count: usize) {
+        let index = SearchIndex::new(shells.iter().copied().collect());
 
         for (command, shell) in [
             ("echo unknown1", None),

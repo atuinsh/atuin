@@ -136,34 +136,6 @@ impl SearchComponent {
         *self.index.write().await = new_index;
         Ok(())
     }
-
-    async fn handle_settings_update(&self) {
-        let Some(handle) = self.handle.as_ref() else {
-            return;
-        };
-
-        let settings = handle.settings().await;
-        let shells = &settings.search.shells;
-
-        if self.index.read().await.shells.matches_settings(shells) {
-            drop(settings);
-            info!("Rebuilding frecency map after settings update");
-            build_frecency(|| self.index.read(), handle).await;
-            return;
-        }
-
-        let Some(filter) = ShellFilter::try_from_settings(shells) else {
-            // We can't rebuild the index without knowing the current shell; wait to rebuild it
-            // until we receive a request.
-            return;
-        };
-
-        drop(settings);
-        info!("Rebuilding search index after settings update");
-        let new_index = SearchIndex::new(filter);
-        build_index(async || &new_index, handle).await;
-        *self.index.write().await = new_index;
-    }
 }
 
 impl Default for SearchComponent {
@@ -186,14 +158,8 @@ impl Component for SearchComponent {
         let handle_for_loader = handle.clone();
 
         self.loader_handle = Some(tokio::spawn(async move {
-            // The current shell might be in `ATUIN_SHELL` if the daemon was autostarted by the
-            // shell hooks. If it isn't or we're wrong, the index will be rebuilt if necessary when
-            // a search request is received. This is only necessary if `search.shells` is "auto" in
-            // config.toml.
-            let current_shell = std::env::var("ATUIN_SHELL").ok();
-            index.write().await.shells = ShellFilter::new(
+            index.write().await.shells = ShellFilter::from_initial_settings(
                 &handle_for_loader.settings().await.search.shells,
-                current_shell,
             );
             build_index(|| index.read(), &handle_for_loader).await;
         }));
@@ -255,7 +221,10 @@ impl Component for SearchComponent {
                 }
             }
             DaemonEvent::SettingsReloaded => {
-                self.handle_settings_update().await;
+                if let Some(handle) = self.handle.as_ref() {
+                    info!("Rebuilding frecency map after settings update");
+                    build_frecency(|| self.index.read(), handle).await;
+                }
             }
             // Events we don't care about
             DaemonEvent::SyncCompleted { .. }
@@ -299,22 +268,15 @@ pub struct SearchGrpcService {
 }
 
 impl SearchGrpcService {
-    async fn maybe_rebuild_index(&self, current_shell: Option<String>) {
-        if self
-            .index
-            .read()
-            .await
-            .shells
-            .matches_current_shell(current_shell.as_deref())
-        {
+    async fn maybe_rebuild_index(&self, shells: Vec<String>) {
+        let Some(new_filter) = self.index.read().await.shells.update(shells) else {
             return;
-        }
+        };
 
-        info!("Rebuilding search index from database after current shell change");
+        info!("Rebuilding search index from database after shell filter change");
 
         // Create a new index
-        let shells = ShellFilter::new(&self.handle.settings().await.search.shells, current_shell);
-        let new_index = SearchIndex::new(shells);
+        let new_index = SearchIndex::new(new_filter);
         build_index(async || &new_index, &self.handle).await;
 
         info!(
@@ -352,12 +314,8 @@ impl SearchSvc for SearchGrpcService {
                             .try_into()
                             .unwrap_or(FilterMode::Global);
                         let proto_context = search_req.context;
-                        let current_shell = match search_req.shell {
-                            s if s.is_empty() => None,
-                            s => Some(s),
-                        };
 
-                        this.maybe_rebuild_index(current_shell).await;
+                        this.maybe_rebuild_index(search_req.shells).await;
 
                         debug!(
                             "search request: query = {}, query_id = {}, filter_mode = {}, context = {:?}",
