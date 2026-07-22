@@ -77,9 +77,45 @@ jobs:
             --project-name=atuin-docs-preview
             --branch=pr-${{ steps.pr.outputs.number }}
 
-      # Upsert a single comment rather than adding one per push. Uses `gh api`
-      # instead of a third-party action to keep the credentialed workflow's
-      # dependency surface small.
+      # A GitHub Deployment renders natively in the pull request timeline as a
+      # "View deployment" button -- the same mechanism Netlify and Vercel use.
+      # Done with `gh api` rather than a third-party action because this
+      # workflow holds the Cloudflare token, and the purpose-built action for
+      # this (AdrianGonz97/refined-cf-pages-action) had no release in the 14
+      # months to July 2026 and 44 stars. Twenty lines of API calls is a better
+      # trade than an unmaintained dependency next to a deploy credential.
+      - name: Record the deployment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.pr.outputs.number }}
+          URL: ${{ steps.deploy.outputs.pages-deployment-alias-url || steps.deploy.outputs.deployment-url }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          # transient_environment marks it as ephemeral, so GitHub greys out
+          # superseded previews instead of leaving a wall of live-looking ones.
+          deployment_id="$(gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/deployments" \
+            -f ref="${SHA}" \
+            -f environment="docs-preview/pr-${PR}" \
+            -f description="Docs preview for #${PR}" \
+            -F auto_merge=false \
+            -F transient_environment=true \
+            -f 'required_contexts[]' \
+            --jq '.id')"
+
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/deployments/${deployment_id}/statuses" \
+            -f state="success" \
+            -f environment_url="${URL}" \
+            -f log_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            -f description="Docs preview ready" >/dev/null
+
+          echo "deployment ${deployment_id} -> ${URL}"
+
+      # The deployment above is the primary signal; this is the visible nudge,
+      # upserted so pushing again edits one comment instead of stacking them.
       - name: Comment the preview link
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -89,13 +125,8 @@ jobs:
         run: |
           set -euo pipefail
           marker="<!-- atuin-docs-preview -->"
-          body="${marker}
-          **Docs preview** — [\`${SHA:0:7}\`](${URL})
-
-          ${URL}
-
-          Built with \`mkdocs build --strict\`, so a broken link or a dead
-          \`#anchor\` fails this check rather than shipping."
+          printf -v body '%s\n### Docs preview\n\n| | |\n|---|---|\n| Preview | %s |\n| Commit | `%s` |\n\nBuilt with `mkdocs build --strict`, so a broken link or a dead `#anchor` fails this check rather than shipping.\n' \
+            "$marker" "$URL" "${SHA:0:7}"
 
           existing="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
             --paginate --jq "map(select(.body | startswith(\"${marker}\"))) | .[0].id // empty")"
@@ -103,9 +134,7 @@ jobs:
           if [ -n "$existing" ]; then
             gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" \
               -f body="$body" >/dev/null
-            echo "updated comment ${existing}"
           else
             gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
               -f body="$body" >/dev/null
-            echo "created comment"
           fi
