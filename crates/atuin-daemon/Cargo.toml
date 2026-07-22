@@ -27,6 +27,7 @@ tower = { workspace = true }
 eyre = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+parking_lot = { workspace = true }
 
 dashmap = "6.1.0"
 lasso = { version = "0.7", features = ["multi-threaded"] }

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use atuin_client::history::{History, HistoryId};
 use eyre::Result;
-use tokio::sync::Mutex;
+use parking_lot::Mutex;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{Level, instrument};
 
@@ -118,14 +118,14 @@ impl Component for SemanticComponent {
 
     async fn handle_event(&mut self, event: &DaemonEvent) -> Result<()> {
         if let DaemonEvent::HistoryEnded(history) = event {
-            self.inner.record_history(history.clone()).await;
+            self.inner.record_history(history.clone());
         }
 
         Ok(())
     }
 
     async fn stop(&mut self) -> Result<()> {
-        let state = self.inner.state.lock().await;
+        let state = self.inner.state.lock();
         tracing::info!(
             sessions = state.sessions.len(),
             records = state.record_count(),
@@ -138,19 +138,16 @@ impl Component for SemanticComponent {
 }
 
 impl SemanticComponentInner {
-    async fn record_capture(&self, capture: CommandCapture) -> bool {
-        let mut state = self.state.lock().await;
-        state.record_capture(capture)
+    fn record_capture(&self, capture: CommandCapture) -> bool {
+        self.state.lock().record_capture(capture)
     }
 
-    async fn record_history(&self, history: History) {
-        let mut state = self.state.lock().await;
-        state.record_history(history);
+    fn record_history(&self, history: History) {
+        self.state.lock().record_history(history);
     }
 
-    async fn command_output(&self, request: &CommandOutputRequest) -> CommandOutputReply {
-        let mut state = self.state.lock().await;
-        state.command_output(request)
+    fn command_output(&self, request: &CommandOutputRequest) -> CommandOutputReply {
+        self.state.lock().command_output(request)
     }
 }
 
@@ -456,7 +453,7 @@ impl SemanticSvc for SemanticGrpcService {
         let mut accepted = 0_u64;
 
         while let Some(capture) = stream.message().await? {
-            if self.inner.record_capture(capture).await {
+            if self.inner.record_capture(capture) {
                 accepted += 1;
             }
         }
@@ -474,7 +471,7 @@ impl SemanticSvc for SemanticGrpcService {
             return Err(Status::invalid_argument("history_id is required"));
         }
 
-        Ok(Response::new(self.inner.command_output(&request).await))
+        Ok(Response::new(self.inner.command_output(&request)))
     }
 }
 
