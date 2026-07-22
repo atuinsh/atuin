@@ -31,6 +31,8 @@ When `atuin hook install` runs, it writes the agent's config file or extension t
 | Codex | `~/.codex/hooks.json` |
 | pi | `~/.pi/agent/extensions/atuin.ts` |
 
+For Claude Code and Codex, the installer writes an **absolute path** to the `atuin` binary (via `current_exe`) so the hook does not depend on `PATH` inside the agent's process. That matters when your default shell never runs `atuin init`, or when the agent spawns hooks with a minimal environment.
+
 The hook lifecycle:
 
 1. **PreToolUse** -- the agent is about to run a Bash command. Atuin records the command, working directory, and timestamp (same as `history start`).
@@ -80,7 +82,7 @@ Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `openco
 atuin hook install claude-code
 ```
 
-This adds hook entries to `~/.claude/settings.json`. Claude Code calls `atuin hook claude-code` on each `Bash` tool use, passing the event as JSON on `stdin`.
+This adds hook entries to `~/.claude/settings.json`. Claude Code calls the installed hook command (absolute path to `atuin hook claude-code`) on each `Bash` tool use, passing the event as JSON on `stdin`.
 
 ### Codex
 
@@ -88,7 +90,7 @@ This adds hook entries to `~/.claude/settings.json`. Claude Code calls `atuin ho
 atuin hook install codex
 ```
 
-This adds hook entries to `~/.codex/hooks.json`. Codex calls `atuin hook codex` on each Bash tool use matching `^Bash$`.
+This adds hook entries to `~/.codex/hooks.json`. Codex calls the installed hook command (absolute path to `atuin hook codex`) on each Bash tool use matching `^Bash$`.
 
 ### pi
 
@@ -127,12 +129,14 @@ ls ~/.pi/agent/extensions/atuin.ts
 
 ## Re-installing
 
-Running `atuin hook install` again is safe. If hooks are already installed, the command will skip them and print a message:
+Running `atuin hook install` again is safe. If hooks are already installed with the same absolute path, the command will skip them and print a message:
 
 ```
 hooks.PreToolUse: already installed, skipping
 hooks.PostToolUse: already installed, skipping
 hooks.PostToolUseFailure: already installed, skipping
 ```
+
+If an older install used a bare `atuin hook ...` command (or a different absolute path), reinstalling upgrades the entry to the current binary path.
 
 For pi, reinstalling will also skip if the managed extension already matches the bundled version.
