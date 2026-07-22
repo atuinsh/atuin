@@ -321,8 +321,12 @@ impl AiApp {
                         ExitAction::Insert(cmd) => ExitOutcome::Insert(cmd),
                         ExitAction::Cancel => ExitOutcome::Cancel,
                     };
+                    // The runtime presents once more after an exit-requesting
+                    // update, and finalize reclaims the rows the tail vacated —
+                    // so hiding the input and exiting in the same update leaves
+                    // the screen without it. No deferred render needed.
                     self.exiting = true;
-                    ctx.perform(async move { Msg::Quit(exit) }).detach();
+                    ctx.exit(exit);
                 }
                 Effect::StartStream {
                     messages,
@@ -960,7 +964,10 @@ impl App for AiApp {
             Msg::Cancel => self.handle_fsm(Event::Cancel, ctx),
             Msg::Interrupt => self.handle_fsm(Event::InterruptTools, ctx),
             Msg::Retry => self.handle_fsm(Event::Retry, ctx),
-            Msg::Quit(outcome) => ctx.exit(outcome),
+            Msg::Quit(outcome) => {
+                self.exiting = true;
+                ctx.exit(outcome);
+            }
             Msg::ModelSelect(sel) => {
                 let len = match &self.fsm.ctx.model_picker {
                     Some(crate::fsm::ModelPicker::Ready(list)) => list.models.len(),
@@ -1277,6 +1284,24 @@ mod tests {
     fn esc_exits_with_cancel() {
         let mut h = Harness::new(fixture_app());
         assert_eq!(h.press(KeyCode::Esc), Some(ExitOutcome::Cancel));
+    }
+
+    #[test]
+    fn exit_erases_the_input_box() {
+        let mut h = Harness::new(fixture_app());
+        assert!(
+            h.screen().contains("Generate a command or ask a question"),
+            "input box missing before exit:\n{}",
+            h.screen()
+        );
+
+        h.press(KeyCode::Esc);
+        assert!(
+            !h.all_lines()
+                .contains("Generate a command or ask a question"),
+            "input box still on screen after exit:\n{}",
+            h.all_lines()
+        );
     }
 
     #[test]
