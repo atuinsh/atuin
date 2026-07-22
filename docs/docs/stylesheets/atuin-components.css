@@ -86,15 +86,26 @@
   --atuin-adm-bg: rgba(56, 200, 90, 0.04);
 }
 
+/* Uniform hairline, no accent bar on the edge. A coloured slab down the left
+   is a Material device; atuin.sh's own FAQ blocks use an even border and let
+   the green +/- marker carry the accent. The type is still legible here from
+   the title colour and the background tint, both set per type below. */
 .md-typeset .admonition[class],
 .md-typeset details,
 .md-typeset details[class] {
   background-color: var(--atuin-adm-bg);
   border: 1px solid var(--atuin-border);
-  border-left: 2px solid var(--atuin-adm);
   border-radius: 12px;
   box-shadow: none;
   font-size: 0.7rem;
+}
+
+/* The type colour moves to the label. [class] to clear typography.css's
+   0,2,0 rule, which sets these to full-strength foreground. */
+.md-typeset .admonition-title[class],
+.md-typeset details[class] > summary,
+.md-typeset details > summary {
+  color: var(--atuin-adm);
 }
 
 .md-typeset .admonition[class]:focus-within,
