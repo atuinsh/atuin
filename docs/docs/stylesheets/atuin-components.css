@@ -1,10 +1,93 @@
 /* ==========================================================================
-   Atuin components
+   Atuin styles
    --------------------------------------------------------------------------
-   Restyles the surfaces that carry Material's visual signature. Font
-   properties for admonition titles, summaries and table headers live in
-   atuin-typography.css -- do not restate them here.
+   Everything that targets a Material selector: the type scale, the mono
+   micro-label system, and the components that carry Material's visual
+   signature.
+
+   This was two files (typography + components) while the branch was being
+   built, so each was one reviewable unit. That reason expired on merge, and
+   the boundary had started to leak -- an admonition title's font lived in one
+   file and its colour and padding in the other, and one rule had gone dead
+   because the other file overrode it at higher specificity. One file, so
+   "where do I change this?" has one answer.
+
+   Order still matters: the shared rules come first, and several component
+   rules below rely on winning specificity ties by loading after Material's
+   bundle. Do not reorder relative to atuin-tokens.css.
    ========================================================================== */
+
+/* ---------- Headings ---------- */
+
+.md-typeset h1 {
+  color: var(--md-default-fg-color);
+  font-size: 2.2em;
+  font-weight: 300;
+  letter-spacing: -0.03em;
+  line-height: 1.12;
+}
+
+.md-typeset h2 {
+  font-size: 1.6em;
+  font-weight: 300;
+  letter-spacing: -0.03em;
+  line-height: 1.14;
+}
+
+.md-typeset h3 {
+  font-size: 1.15em;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+.md-typeset h4 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* design_system.md "Body": DM Sans, 15px / 1.65, weight 300. Light and
+   spacious is the stated intent ("keep it light and spacious"). */
+.md-typeset {
+  font-weight: 300;
+}
+
+.md-typeset p,
+.md-typeset li {
+  line-height: 1.65;
+}
+
+/* Bold inside 300-weight prose needs a real step up to read as emphasis. */
+.md-typeset strong,
+.md-typeset b {
+  font-weight: 600;
+}
+
+/* ---------- The mono micro-label system ----------
+   Colour is --md-default-fg-color--light, not --lighter: at ~11px this is
+   small text, so it needs 4.5:1. --lighter is only ~3.2:1 on the dark
+   background, which is fine for decoration but not for labels. */
+
+.md-nav__item--section > .md-nav__link,
+.md-nav--secondary .md-nav__title,
+.md-typeset .admonition-title,
+.md-typeset summary,
+.md-typeset table:not([class]) th {
+  color: var(--md-default-fg-color--light);
+  font-family: var(--md-code-font-family, "Space Mono"), monospace;
+  font-size: 0.55rem;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* The admonition/details label sits between the design system's Eyebrow
+   (11px) and Label (14px) steps. It heads a block rather than captioning a
+   nav group, so it carries slightly more presence than the other surfaces
+   sharing the rule above -- which stay at 11px. */
+.md-typeset .admonition-title,
+.md-typeset summary {
+  font-size: 0.62rem;
+}
 
 /* ---------- Header ----------
    Colours come from --atuin-nav-*, which each scheme defines: atuin.sh's dark
