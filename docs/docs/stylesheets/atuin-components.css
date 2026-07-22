@@ -101,7 +101,7 @@
 
 .md-typeset .admonition,
 .md-typeset details {
-  --atuin-adm: var(--atuin-green);
+  --atuin-adm: var(--atuin-green-300);
   --atuin-adm-bg: rgba(56, 200, 90, 0.10);
 }
 
@@ -210,6 +210,15 @@
 /* Per-type accents. These target the type class directly (0,3,0 with
    .md-typeset), setting only the custom properties the rules above read.
 
+   --atuin-adm is a TEXT colour only: since the coloured left bar was dropped
+   the border is uniform, so this drives just the title and the +/- marker.
+   Each value is one step brighter than the base accent so the label reads
+   against its own tinted panel -- measured against the composited background,
+   not the page: note 7.75 -> 10.14, info 8.36 -> 10.76, warning 7.40 -> 9.80,
+   danger 4.82 -> 7.50, quote 6.55 -> 9.50. Green uses ramp step 300, an
+   actual design-system token; the others have no published ramp and are
+   lightened by hand.
+
    Background alphas are deliberately not uniform: amber and red read dimmer
    than green at equal alpha over a near-black ground, so they sit slightly
    higher. Levelling them makes warning and danger recede. */
@@ -217,7 +226,7 @@
 .md-typeset .tip,
 .md-typeset .success,
 .md-typeset .hint {
-  --atuin-adm: var(--atuin-green);
+  --atuin-adm: var(--atuin-green-300);
   --atuin-adm-bg: rgba(56, 200, 90, 0.10);
 }
 
@@ -225,25 +234,69 @@
 .md-typeset .abstract,
 .md-typeset .question,
 .md-typeset .example {
-  --atuin-adm: var(--atuin-blue-mid);
+  --atuin-adm: #8fd8fb;
   --atuin-adm-bg: rgba(78, 194, 248, 0.10);
 }
 
 .md-typeset .warning {
-  --atuin-adm: #e0a33a;
+  --atuin-adm: #eec177;
   --atuin-adm-bg: rgba(224, 163, 58, 0.12);
 }
 
 .md-typeset .danger,
 .md-typeset .failure,
 .md-typeset .bug {
-  --atuin-adm: #e05a5a;
+  --atuin-adm: #ef8f8f;
   --atuin-adm-bg: rgba(224, 90, 90, 0.12);
 }
 
 .md-typeset .quote {
-  --atuin-adm: var(--atuin-text-2);
+  --atuin-adm: #b3c1c6;
   --atuin-adm-bg: rgba(143, 161, 168, 0.09);
+}
+
+/* Light scheme: the accent has to go DARKER, not brighter.
+
+   --atuin-adm is a text colour, and the same tint that makes a near-black
+   panel is a near-white one over #fbfcfb. The dark-scheme values above sit at
+   1.4-2.0:1 there -- effectively invisible. Measured against the composited
+   light panel, these all clear 4.5:1: note 4.88, info 5.44, warning 5.28,
+   danger 5.93, quote 6.50.
+
+   Scheme-scoped selectors are 0,3,0 against the 0,2,0 rules above, so they
+   win outright rather than on load order.
+
+   The background tints are deliberately NOT overridden: the same rgba over a
+   light ground already produces a correct pale panel. */
+
+[data-md-color-scheme="default"] .md-typeset .admonition,
+[data-md-color-scheme="default"] .md-typeset details,
+[data-md-color-scheme="default"] .md-typeset .note,
+[data-md-color-scheme="default"] .md-typeset .tip,
+[data-md-color-scheme="default"] .md-typeset .success,
+[data-md-color-scheme="default"] .md-typeset .hint {
+  --atuin-adm: var(--atuin-green-600);
+}
+
+[data-md-color-scheme="default"] .md-typeset .info,
+[data-md-color-scheme="default"] .md-typeset .abstract,
+[data-md-color-scheme="default"] .md-typeset .question,
+[data-md-color-scheme="default"] .md-typeset .example {
+  --atuin-adm: #0b6a94;
+}
+
+[data-md-color-scheme="default"] .md-typeset .warning {
+  --atuin-adm: #8a5a00;
+}
+
+[data-md-color-scheme="default"] .md-typeset .danger,
+[data-md-color-scheme="default"] .md-typeset .failure,
+[data-md-color-scheme="default"] .md-typeset .bug {
+  --atuin-adm: #a32f2f;
+}
+
+[data-md-color-scheme="default"] .md-typeset .quote {
+  --atuin-adm: #4a5a60;
 }
 
 /* ---------- Code ----------
