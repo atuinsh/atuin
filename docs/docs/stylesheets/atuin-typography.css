@@ -92,8 +92,9 @@
   color: var(--md-default-fg-color);
 }
 
-/* Nav section labels sit at the design system's "Nano" step (10px, +8%). */
-.md-nav__item--section > .md-nav__link {
-  font-size: 0.5rem;
-  letter-spacing: 0.08em;
-}
+/* Sidebar section headings take the shared rule above unchanged, which is
+   the design system's "Eyebrow" step (11px, +12%). They previously carried a
+   "Nano" override (10px, +8%) -- but the spec assigns Nano to "Tags, meta"
+   and Eyebrow to "Section labels", which is exactly what these are. Dropping
+   the override both sizes them up slightly and puts them on the right step,
+   matching the table-of-contents heading. */
