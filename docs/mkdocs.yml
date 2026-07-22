@@ -8,18 +8,8 @@ edit_uri: edit/main/docs/docs/
 theme:
   name: material
   custom_dir: overrides
-  # The turtle mark, not the horizontal wordmark: site_name is already
-  # "Atuin Docs", so the wordmark would render "Atuin" twice in the header.
-  # Logo is the SVG: vector, and transparent so it sits on the dark header
-  # in both schemes. Favicon stays a PNG for universal support, generated
-  # from the same SVG so the two never drift.
   logo: assets/atuin-turtle.svg
   favicon: assets/atuin-turtle.png
-  # Octicons rather than Material's own set: sharper corners, thinner
-  # strokes, and developer-native. Material Design icons read as Google on a
-  # terminal brand. Decorative icons (admonition glyphs, the <details>
-  # chevron) are removed entirely in atuin-components.css -- atuin.sh carries
-  # those affordances typographically, not pictographically.
   icon:
     repo: octicons/mark-github-16
     edit: octicons/pencil-16
@@ -37,7 +27,6 @@ theme:
     text: DM Sans
     code: Space Mono
   palette:
-    # slate first => dark is the default scheme
     - scheme: slate
       primary: custom
       accent: custom
@@ -51,7 +40,6 @@ theme:
         icon: octicons/moon-16
         name: Switch to dark mode
   features:
-    # Navigation
     - navigation.instant           # SPA-style page loads
     - navigation.instant.prefetch  # start fetching on link hover
     - navigation.instant.progress  # progress bar if a load is slow
@@ -60,24 +48,18 @@ theme:
     - navigation.sections
     - navigation.expand
     - navigation.top               # back-to-top button
-    - navigation.footer            # prev/next links at the page foot
     - toc.follow                   # right-hand ToC scrolls to keep up
-    # Search
     - search.suggest
     - search.highlight
-    - search.share
-    # Content
+    - search.share                 # share buttons
     - content.tabs.link            # selecting a tab selects it everywhere
-    - content.code.copy
-    - content.action.edit
-    - content.action.view
+    - content.code.copy            # copy affordance on terminal
+    - content.action.edit          # edit the page easily
+    - content.action.view          # view the raw md
 
 plugins:
   - search
-  # Downloads external assets (the Google Fonts CSS and its woff2 files) at
-  # build time and serves them from the site itself, so a reader never hits a
-  # third-party origin. Bundled with mkdocs-material -- no extra dependency.
-  - privacy
+  - privacy # Download external assets at compile time for user privacy
   - git-revision-date-localized:
       enable_creation_date: true
   - redirects:
@@ -190,11 +172,6 @@ plugins:
           - integrations.md: Integrations with zsh-autosuggestions, zsh-vi-mode, ble.sh, and mcfly.
           - faq.md: Frequently asked questions - IDE terminals, history filtering, up-arrow, uninstalling.
           - uninstall.md: How to uninstall Atuin and remove all data.
-  # Last in the list on purpose: this post-processes rendered output, so
-  # every other plugin -- privacy especially, which rewrites asset URLs --
-  # must have run before it. Measured on this site: 19% smaller gzipped
-  # (491KB -> 397KB across all pages). Code blocks are left alone; verified
-  # byte-identical across 116 blocks including whitespace-sensitive YAML.
   - minify:
       minify_html: true
       minify_js: true
@@ -202,19 +179,9 @@ plugins:
       htmlmin_opts:
         remove_comments: true
 
-# reference/hex.md is a deliberate orphan: it documents the old name for
-# `atuin pty-proxy` and exists so old links and the llms.txt index still
-# resolve. It is intentionally absent from the nav, so declare that rather
-# than letting mkdocs log it as an oversight on every build.
 not_in_nav: |
   reference/hex.md
 
-# mkdocs' own link checking. `anchors` is the one worth having: it catches
-# deep-links to a #section that has been renamed or removed, which is how a
-# config reference this size rots. Kept at `warn` rather than `error` because
-# nothing gates pull requests yet -- `error` would mean one bad link merged to
-# main blocks every subsequent docs deploy. Promote to `error` once a PR check
-# exists.
 validation:
   omitted_files: warn
   absolute_links: warn
@@ -237,8 +204,6 @@ markdown_extensions:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
-# Load order is load-bearing: later files read variables from earlier ones and
-# win specificity ties by loading later. Do not reorder.
 extra_css:
   - stylesheets/atuin-tokens.css
   - stylesheets/atuin-typography.css
@@ -250,8 +215,6 @@ extra:
     provider: mike
     default: latest
     alias: true
-  # `name` sets the link's title/aria-label. Without it Material falls back to
-  # the bare hostname, so an icon-only link announces as "github.com".
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/atuinsh/atuin
