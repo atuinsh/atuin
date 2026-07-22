@@ -1,0 +1,73 @@
+name: Docs preview (build)
+
+# Half one of a two-workflow preview deployment.
+#
+# This half builds the docs from the pull request and uploads the result as an
+# artifact. It runs UNTRUSTED code -- the PR owns docs/mkdocs.yml, and mkdocs
+# plugins execute arbitrary Python at build time -- so it deliberately holds no
+# secrets and no write permissions. The deploy half
+# (docs-preview-deploy.yml) picks the artifact up.
+#
+# Do NOT be tempted to merge these into one workflow using
+# `pull_request_target` to get at the deploy credentials. That trigger runs
+# with secrets against the pull request's own code, so any fork could ship a
+# mkdocs plugin that exfiltrates the Cloudflare token.
+
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs-preview-build.yml"
+      - ".github/workflows/docs-preview-deploy.yml"
+      - ".github/actions/docs-setup/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-preview-build-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pull request
+        uses: actions/checkout@v7
+        with:
+          # git-revision-date-localized reads the commit history to date each
+          # page; a shallow clone makes every page show the same date.
+          fetch-depth: 0
+
+      - uses: ./.github/actions/docs-setup
+
+      # --strict turns warnings into failures, which is what makes this a gate
+      # rather than decoration. It catches broken internal links and, thanks to
+      # `validation.anchors` in mkdocs.yml, deep-links to a #section that no
+      # longer exists. mkdocs.yml keeps those at `warn` so `mkdocs serve` stays
+      # usable locally; CI is where they should stop a merge.
+      - name: Build
+        working-directory: docs
+        run: uv run mkdocs build --strict --site-dir "${GITHUB_WORKSPACE}/site"
+
+      # The deploy half cannot reliably read the PR number off a workflow_run
+      # event for fork pull requests, so pass it explicitly.
+      - name: Record pull request number
+        run: |
+          mkdir -p meta
+          echo "${{ github.event.pull_request.number }}" > meta/pr-number
+
+      - name: Upload site
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs-preview-site
+          path: site/
+          retention-days: 3
+
+      - name: Upload metadata
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs-preview-meta
+          path: meta/
+          retention-days: 3

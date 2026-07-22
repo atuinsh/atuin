@@ -1,0 +1,111 @@
+name: Docs preview (deploy)
+
+# Half two of a two-workflow preview deployment.
+#
+# `workflow_run` runs the copy of this file on the DEFAULT BRANCH, not the copy
+# in the pull request, so holding secrets here is safe even when the build half
+# was triggered by a fork. This workflow never checks out pull request code --
+# it only downloads the already-built static site and hands it to Cloudflare.
+#
+# The artifact itself is still untrusted content: it is attacker-influenced
+# HTML and JavaScript. That is inherent to preview deployments. It is contained
+# by deploying to a dedicated Pages project on a *.pages.dev domain, never to
+# docs.atuin.sh.
+
+on:
+  workflow_run:
+    workflows: ["Docs preview (build)"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read # download artifacts from the triggering run
+  deployments: write # record the Cloudflare deployment
+  pull-requests: write # post the preview link
+
+concurrency:
+  group: docs-preview-deploy-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy preview
+    # A failed build has nothing worth publishing.
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download site
+        uses: actions/download-artifact@v8
+        with:
+          name: docs-preview-site
+          path: site
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download metadata
+        uses: actions/download-artifact@v8
+        with:
+          name: docs-preview-meta
+          path: meta
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read pull request number
+        id: pr
+        run: |
+          set -euo pipefail
+          number="$(tr -dc '0-9' < meta/pr-number)"
+          if [ -z "$number" ]; then
+            echo "::error::no pull request number in the build artifact"
+            exit 1
+          fi
+          echo "number=${number}" >> "$GITHUB_OUTPUT"
+
+      # --branch gives each pull request a stable preview alias, so pushing
+      # again reuses the same URL instead of minting a new one every time.
+      # Anything other than the project's production branch is a preview
+      # deployment, so this never touches production.
+      - name: Deploy to Cloudflare Pages
+        id: deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          command: >-
+            pages deploy site
+            --project-name=atuin-docs-preview
+            --branch=pr-${{ steps.pr.outputs.number }}
+
+      # Upsert a single comment rather than adding one per push. Uses `gh api`
+      # instead of a third-party action to keep the credentialed workflow's
+      # dependency surface small.
+      - name: Comment the preview link
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.pr.outputs.number }}
+          URL: ${{ steps.deploy.outputs.pages-deployment-alias-url || steps.deploy.outputs.deployment-url }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          marker="<!-- atuin-docs-preview -->"
+          body="${marker}
+          **Docs preview** — [\`${SHA:0:7}\`](${URL})
+
+          ${URL}
+
+          Built with \`mkdocs build --strict\`, so a broken link or a dead
+          \`#anchor\` fails this check rather than shipping."
+
+          existing="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
+            --paginate --jq "map(select(.body | startswith(\"${marker}\"))) | .[0].id // empty")"
+
+          if [ -n "$existing" ]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" \
+              -f body="$body" >/dev/null
+            echo "updated comment ${existing}"
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
+              -f body="$body" >/dev/null
+            echo "created comment"
+          fi
