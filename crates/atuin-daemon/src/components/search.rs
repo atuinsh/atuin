@@ -126,7 +126,9 @@ impl SearchComponent {
 
         // Create a new index
         let new_index = SearchIndex::new(self.index.read().await.shells.clone());
-        let _ = build_index_only(async || &new_index, handle).await;
+        if build_index_only(async || &new_index, handle).await.is_err() {
+            eyre::bail!("failed to build index");
+        }
 
         info!(
             "Search index rebuild complete; {} unique commands",
