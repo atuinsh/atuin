@@ -712,6 +712,17 @@ impl AgentFsm {
                 vec![]
             }
 
+            // Display metadata on a tracked tool; state-independent since
+            // the lookup may land after the turn has moved on.
+            (_, Event::OutputCommandResolved { tool_id, command }) => {
+                if let Some(tracked) = self.ctx.tools.get_mut(&tool_id)
+                    && let crate::tools::ClientToolCall::AtuinOutput(call) = &mut tracked.tool
+                {
+                    call.command = command;
+                }
+                vec![]
+            }
+
             // RequestSkillLoad during non-idle: still emit the effect
             (_, Event::RequestSkillLoad { name, arguments }) => {
                 vec![Effect::LoadSkill { name, arguments }]
@@ -830,6 +841,10 @@ impl AgentFsm {
 
         // Track the tool and push ToolCall event
         let tool_for_effect = tool.clone();
+        let output_history_id = match &tool {
+            crate::tools::ClientToolCall::AtuinOutput(call) => Some(call.history_id),
+            _ => None,
+        };
         self.ctx.tools.insert(id.clone(), tool);
         self.ctx.current_turn_tool_ids.push(id.clone());
         self.ctx.events.push(ConversationEvent::ToolCall {
@@ -848,10 +863,20 @@ impl AgentFsm {
             };
         }
 
-        vec![Effect::CheckPermission {
+        let mut effects = Vec::new();
+        // The permission prompt wants the command behind the UUID; kick the
+        // lookup off alongside the permission check.
+        if let Some(history_id) = output_history_id {
+            effects.push(Effect::ResolveOutputCommand {
+                tool_id: id.clone(),
+                history_id,
+            });
+        }
+        effects.push(Effect::CheckPermission {
             tool_id: id,
             tool: tool_for_effect,
-        }]
+        });
+        effects
     }
 
     /// Handle permission resolver result.
