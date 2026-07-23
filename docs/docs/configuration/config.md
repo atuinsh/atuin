@@ -492,6 +492,23 @@ remote sync server. Any longer than this and the request will fail.
 network_connect_timeout = 5
 ```
 
+### `extra_headers`
+
+Atuin version: >= 18.19
+
+Default: `{}`
+
+Extra HTTP headers to send on every request to the sync server. This is useful
+when a self-hosted server sits behind a proxy or access gateway that requires
+its own authentication header — for example Cloudflare Access.
+
+Headers that Atuin sets itself (such as `Authorization`) cannot be overridden;
+Atuin's values always win.
+
+```toml
+extra_headers = { "CF-Access-Client-Id" = "...", "CF-Access-Client-Secret" = "..." }
+```
+
 ### `local_timeout`
 
 Atuin version: >= 18.0

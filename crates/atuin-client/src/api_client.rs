@@ -5,7 +5,7 @@ use std::time::Duration;
 use eyre::{Result, bail};
 use reqwest::{
     Response, StatusCode, Url,
-    header::{AUTHORIZATION, HeaderMap, USER_AGENT},
+    header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT},
 };
 
 use atuin_common::{
@@ -57,11 +57,27 @@ pub struct Client<'a> {
     client: reqwest::Client,
 }
 
+/// Build a [`HeaderMap`] from user-configured extra headers (the
+/// `extra_headers` setting). Headers Atuin sets itself should be inserted
+/// after these so that Atuin's values win.
+pub(crate) fn extra_headers_map(extra_headers: &HashMap<String, String>) -> Result<HeaderMap> {
+    let mut headers = HeaderMap::new();
+    for (name, value) in extra_headers {
+        let name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|e| eyre::eyre!("invalid extra_headers name {name:?}: {e}"))?;
+        let value = HeaderValue::from_str(value)
+            .map_err(|e| eyre::eyre!("invalid extra_headers value for {name:?}: {e}"))?;
+        headers.insert(name, value);
+    }
+    Ok(headers)
+}
+
 pub async fn register(
     address: &Url,
     username: &str,
     email: &str,
     password: &str,
+    extra_headers: &HashMap<String, String>,
 ) -> Result<RegisterResponse> {
     ensure_crypto_provider();
     let mut map = HashMap::new();
@@ -69,22 +85,21 @@ pub async fn register(
     map.insert("email", email);
     map.insert("password", password);
 
+    let mut headers = extra_headers_map(extra_headers)?;
+    headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
+    headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
+
+    let client = reqwest::Client::new();
+
     let url = address.append(["user", username])?;
-    let resp = reqwest::get(url).await?;
+    let resp = client.get(url).headers(headers.clone()).send().await?;
 
     if resp.status().is_success() {
         bail!("username already in use");
     }
 
     let url = address.append(["register"])?;
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(url)
-        .header(USER_AGENT, APP_USER_AGENT)
-        .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
-        .json(&map)
-        .send()
-        .await?;
+    let resp = client.post(url).headers(headers).json(&map).send().await?;
     let resp = handle_resp_error(resp).await?;
 
     if !ensure_version(&resp)? {
@@ -95,17 +110,19 @@ pub async fn register(
     Ok(session)
 }
 
-pub async fn login(address: &Url, req: LoginRequest) -> Result<LoginResponse> {
+pub async fn login(
+    address: &Url,
+    req: LoginRequest,
+    extra_headers: &HashMap<String, String>,
+) -> Result<LoginResponse> {
     ensure_crypto_provider();
     let url = address.append(["login"])?;
     let client = reqwest::Client::new();
 
-    let resp = client
-        .post(url)
-        .header(USER_AGENT, APP_USER_AGENT)
-        .json(&req)
-        .send()
-        .await?;
+    let mut headers = extra_headers_map(extra_headers)?;
+    headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
+
+    let resp = client.post(url).headers(headers).json(&req).send().await?;
     let resp = handle_resp_error(resp).await?;
 
     if !ensure_version(&resp)? {
@@ -206,10 +223,12 @@ impl<'a> Client<'a> {
         auth: AuthToken,
         connect_timeout: u64,
         timeout: u64,
+        extra_headers: &HashMap<String, String>,
     ) -> Result<Self> {
         ensure_crypto_provider();
-        let mut headers = HeaderMap::new();
+        let mut headers = extra_headers_map(extra_headers)?;
         headers.insert(AUTHORIZATION, auth.to_header_value().parse()?);
+        headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
 
         // used for semver server check
         headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
@@ -217,7 +236,6 @@ impl<'a> Client<'a> {
         Ok(Client {
             sync_addr,
             client: reqwest::Client::builder()
-                .user_agent(APP_USER_AGENT)
                 .default_headers(headers)
                 .connect_timeout(Duration::new(connect_timeout, 0))
                 .timeout(Duration::new(timeout, 0))
@@ -338,5 +356,37 @@ impl<'a> Client<'a> {
         } else {
             bail!("Unknown error");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extra_headers_map_parses_headers() {
+        let mut extra = HashMap::new();
+        extra.insert("X-Auth-Token".to_string(), "secret".to_string());
+        let headers = extra_headers_map(&extra).unwrap();
+        assert_eq!(headers.get("x-auth-token").unwrap(), "secret");
+    }
+
+    #[test]
+    fn atuin_headers_override_extra_headers() {
+        let mut extra = HashMap::new();
+        extra.insert("Authorization".to_string(), "Token user-value".to_string());
+
+        let mut headers = extra_headers_map(&extra).unwrap();
+        headers.insert(AUTHORIZATION, "Token atuin-value".parse().unwrap());
+
+        assert_eq!(headers.get(AUTHORIZATION).unwrap(), "Token atuin-value");
+        assert_eq!(headers.get_all(AUTHORIZATION).iter().count(), 1);
+    }
+
+    #[test]
+    fn extra_headers_map_rejects_invalid_names() {
+        let mut extra = HashMap::new();
+        extra.insert("bad header".to_string(), "value".to_string());
+        assert!(extra_headers_map(&extra).is_err());
     }
 }

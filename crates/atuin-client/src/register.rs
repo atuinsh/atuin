@@ -8,8 +8,14 @@ pub async fn register_classic(
     email: String,
     password: String,
 ) -> Result<String> {
-    let session =
-        api_client::register(&settings.sync_address, &username, &email, &password).await?;
+    let session = api_client::register(
+        &settings.sync_address,
+        &username,
+        &email,
+        &password,
+        &settings.extra_headers,
+    )
+    .await?;
 
     let meta = Settings::meta_store().await?;
     meta.save_session(&session.session).await?;

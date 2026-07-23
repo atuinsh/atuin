@@ -189,6 +189,12 @@
 # network_connect_timeout = 5
 # network_timeout = 30
 
+## Extra HTTP headers to send on every request to the sync server. Useful when
+## a self-hosted server sits behind a proxy that requires its own auth header,
+## e.g. Cloudflare Access. Headers that Atuin sets itself (e.g. Authorization)
+## cannot be overridden.
+# extra_headers = { "CF-Access-Client-Id" = "...", "CF-Access-Client-Secret" = "..." }
+
 ## Timeout (in seconds) for acquiring a local database connection (sqlite)
 # local_timeout = 5
 
