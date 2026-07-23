@@ -12,7 +12,7 @@ use eyre::Result;
 use tokio::sync::RwLock;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{Level, debug, info, instrument, span, trace};
+use tracing::{Level, debug, error, info, instrument, span, trace};
 use uuid::Uuid;
 
 use crate::{
@@ -57,7 +57,7 @@ where
                 return Ok(());
             }
             Err(e) => {
-                tracing::error!("Failed to load history: {}", e);
+                error!("Failed to load history: {}", e);
                 return Err(());
             }
         }
@@ -118,16 +118,17 @@ impl SearchComponent {
     }
 
     /// Rebuild the entire search index from the database without updating the frecency map.
-    async fn rebuild_index_only(&self) -> Result<()> {
+    async fn rebuild_index_only(&self) {
         let Some(handle) = self.handle.as_ref() else {
-            eyre::bail!("component not initialized");
+            error!("Component not initialized");
+            return;
         };
         info!("Rebuilding search index from database");
 
         // Create a new index
         let new_index = SearchIndex::new(self.index.read().await.shells.clone());
         if build_index_only(async || &new_index, handle).await.is_err() {
-            eyre::bail!("failed to build index");
+            return;
         }
 
         info!(
@@ -135,7 +136,6 @@ impl SearchComponent {
             new_index.command_count()
         );
         *self.index.write().await = new_index;
-        Ok(())
     }
 }
 
@@ -206,9 +206,7 @@ impl Component for SearchComponent {
             }
             DaemonEvent::HistoryPruned | DaemonEvent::HistoryRebuilt => {
                 info!("History store pruned or rebuilt, rebuilding search index");
-                if let Err(e) = self.rebuild_index_only().await {
-                    tracing::error!("Failed to rebuild search index: {}", e);
-                }
+                self.rebuild_index_only().await;
             }
             DaemonEvent::HistoryDeleted { ids } => {
                 info!(
@@ -217,9 +215,7 @@ impl Component for SearchComponent {
                 );
                 // For now, just rebuild the entire index. A more efficient implementation
                 // would remove specific items from the index.
-                if let Err(e) = self.rebuild_index_only().await {
-                    tracing::error!("Failed to rebuild search index: {}", e);
-                }
+                self.rebuild_index_only().await;
             }
             DaemonEvent::SettingsReloaded => {
                 if let Some(handle) = self.handle.as_ref() {
