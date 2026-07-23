@@ -17,7 +17,7 @@ impl RecallState {
     /// Step to an older message. `current` is the editor's text, stashed
     /// as the draft when recall begins. Returns the text to load, or
     /// `None` when there is nothing older.
-    pub fn back(&mut self, messages: &[&str], current: &str) -> Option<String> {
+    pub fn back<S: AsRef<str>>(&mut self, messages: &[S], current: &str) -> Option<String> {
         // A stale index (the event list shrank) clamps to the newest.
         let next = match self.index {
             None => messages.len().checked_sub(1)?,
@@ -27,20 +27,20 @@ impl RecallState {
             self.draft = current.to_string();
         }
         self.index = Some(next);
-        Some(messages[next].to_string())
+        Some(messages[next].as_ref().to_string())
     }
 
     /// Step toward newer messages; past the newest, leave recall and
     /// restore the draft. Returns the text to load, or `None` when not
     /// recalling.
-    pub fn forward(&mut self, messages: &[&str]) -> Option<String> {
+    pub fn forward<S: AsRef<str>>(&mut self, messages: &[S]) -> Option<String> {
         let next = self.index? + 1;
         if next >= messages.len() {
             self.index = None;
             return Some(std::mem::take(&mut self.draft));
         }
         self.index = Some(next);
-        Some(messages[next].to_string())
+        Some(messages[next].as_ref().to_string())
     }
 
     pub fn reset(&mut self) {
@@ -77,8 +77,9 @@ mod tests {
     #[test]
     fn back_with_no_messages_is_a_noop() {
         let mut r = RecallState::default();
-        assert_eq!(r.back(&[], "draft"), None);
-        assert_eq!(r.forward(&[]), None);
+        let empty: &[&str] = &[];
+        assert_eq!(r.back(empty, "draft"), None);
+        assert_eq!(r.forward(empty), None);
     }
 
     #[test]

@@ -863,16 +863,27 @@ impl AiApp {
         }
     }
 
-    /// Load an older (`back`) or newer message from this session into the
-    /// editor, shell-history style.
+    /// Load an older (`back`) or newer submission from this session into
+    /// the editor, shell-history style. Slash commands are recorded
+    /// out-of-band with the typed invocation in `command`; skills carry
+    /// their name and arguments, from which the invocation is rebuilt.
     fn recall_message(&mut self, back: bool) {
-        let messages: Vec<&str> = self
+        let messages: Vec<String> = self
             .fsm
             .ctx
             .events
             .iter()
             .filter_map(|e| match e {
-                ConversationEvent::UserMessage { content } => Some(content.as_str()),
+                ConversationEvent::UserMessage { content } => Some(content.clone()),
+                ConversationEvent::OutOfBandOutput {
+                    command: Some(cmd), ..
+                } if cmd.starts_with('/') => Some(cmd.clone()),
+                ConversationEvent::SkillInvocation {
+                    name, arguments, ..
+                } => Some(match arguments {
+                    Some(args) => format!("/{name} {args}"),
+                    None => format!("/{name}"),
+                }),
                 _ => None,
             })
             .collect();
@@ -1503,6 +1514,30 @@ mod tests {
         // The multi-line draft survives the round trip.
         h.press(KeyCode::Down);
         assert_eq!(h.app().input.borrow().lines(), ["a", "b"]);
+    }
+
+    #[test]
+    fn recall_includes_slash_commands_and_skills() {
+        let mut h = Harness::new(app_with(two_message_fsm()));
+        h.type_str("/help");
+        h.press(KeyCode::Enter);
+        // Loading a skill starts a turn; finish it to return to Idle.
+        h.process(Msg::Fsm(Event::SkillLoaded {
+            name: "review".into(),
+            arguments: Some("main".into()),
+            content: "skill content".into(),
+        }));
+        h.stream(Event::StreamStarted);
+        h.stream(Event::StreamDone {
+            session_id: "s1".into(),
+        });
+
+        h.press(KeyCode::Up);
+        assert_eq!(h.app().input.borrow().lines(), ["/review main"]);
+        h.press(KeyCode::Up);
+        assert_eq!(h.app().input.borrow().lines(), ["/help"]);
+        h.press(KeyCode::Up);
+        assert_eq!(h.app().input.borrow().lines(), ["second question"]);
     }
 
     #[test]
