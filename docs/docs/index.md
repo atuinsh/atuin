@@ -33,41 +33,10 @@ atuin register -u <USERNAME> -e <EMAIL>
 atuin sync
 ```
 
-<div class="grid cards" markdown>
-
--   **Get set up**
-
-    ---
-
-    [Installation](guide/installation.md) ·
-    [Import history](guide/import.md) ·
-    [Set up sync](guide/sync.md)
-
--   **Use it well**
-
-    ---
-
-    [Basic usage](guide/basic-usage.md) ·
-    [Filter and search modes](guide/advanced-usage.md) ·
-    [Key bindings](configuration/key-binding.md)
-
--   **Tune it**
-
-    ---
-
-    [All config options](configuration/config.md) ·
-    [Theming](guide/theming.md) ·
-    [Excluding commands](guide/excluding-commands.md)
-
--   **Go further**
-
-    ---
-
-    [Atuin AI](ai/introduction.md) ·
-    [AI agent hooks](guide/agent-hooks.md) ·
-    [Self-hosting](self-hosting/server-setup.md)
-
-</div>
+If you'd rather take it one step at a time, [Getting Started](guide/getting-started.md)
+walks through the same thing with more explanation. From there,
+[Basic usage](guide/basic-usage.md) covers driving the TUI, and
+[Config](configuration/config.md) documents every setting.
 
 ## Supported shells
 
