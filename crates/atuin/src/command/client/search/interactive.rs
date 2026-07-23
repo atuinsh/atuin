@@ -116,7 +116,8 @@ pub fn to_compactness(f: &Frame, settings: &Settings) -> Compactness {
 #[allow(clippy::struct_field_names)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct State {
-    history_count: i64,
+    /// Total history count; None until the background count query finishes.
+    history_count: Option<i64>,
     update_needed: Option<Version>,
     results_state: ListState,
     switched_search_mode: bool,
@@ -1147,10 +1148,10 @@ impl State {
     }
 
     fn build_stats(&self, theme: &Theme) -> Paragraph<'_> {
-        Paragraph::new(Text::from(Span::raw(format!(
-            "history count: {}",
-            self.history_count,
-        ))))
+        Paragraph::new(Text::from(Span::raw(
+            self.history_count
+                .map_or_else(String::new, |count| format!("history count: {count}")),
+        )))
         .style(Style::from_crossterm(theme.as_style(Meaning::Annotation)))
         .alignment(Alignment::Right)
     }
@@ -1758,9 +1759,14 @@ pub async fn history(
     let update_needed = tokio::spawn(async move { settings2.needs_update().await }).fuse();
     tokio::pin!(update_needed);
 
+    // Counting history is a full table scan, which can take a while on a large,
+    // cold database - don't hold up the first frame for it.
+    let count_db = db.clone_boxed();
+    let history_count = tokio::spawn(async move { count_db.history_count(false).await }).fuse();
+    tokio::pin!(history_count);
+
     let initial_context = current_context().await?;
 
-    let history_count = db.history_count(false).await?;
     let search_mode = if settings.shell_up_key_binding {
         settings
             .search_mode_shell_up_key_binding
@@ -1773,7 +1779,7 @@ pub async fn history(
         .filter(|_| settings.shell_up_key_binding)
         .unwrap_or_else(|| settings.default_filter_mode(initial_context.git_root.is_some()));
     let mut app = State {
-        history_count,
+        history_count: None,
         results_state: ListState::default(),
         update_needed: None,
         switched_search_mode: false,
@@ -1812,11 +1818,18 @@ pub async fn history(
 
     app.initialize_keymap_cursor(settings);
 
-    let mut results = app.query_results(&mut db, settings.smart_sort).await?;
-
     if inline_height > 0 && !popup_mode {
         terminal.clear()?;
     }
+
+    // Paint the UI before running the first search: on a cold start the query can
+    // block for a while (cold database pages, sleeping daemon), and the user should
+    // see the search UI immediately rather than a frozen terminal.
+    terminal.draw(|f| {
+        app.draw(f, &[], None, None, settings, theme, popup_mode);
+    })?;
+
+    let mut results = app.query_results(&mut db, settings.smart_sort).await?;
 
     let mut stats: Option<HistoryStats> = None;
     let mut inspecting: Option<History> = None;
@@ -1927,6 +1940,9 @@ pub async fn history(
                 // Don't fail interactive search if update check fails
                 // The update check is a nice-to-have feature, not critical
                 app.update_needed = update_needed.ok().flatten();
+            }
+            history_count = &mut history_count => {
+                app.history_count = history_count.ok().and_then(Result::ok);
             }
         }
 
@@ -2260,7 +2276,7 @@ mod tests {
     fn state_scroll_up_underflow() {
         let settings = Settings::utc();
         let mut state = State {
-            history_count: 0,
+            history_count: Some(0),
             update_needed: None,
             results_state: ListState::default(),
             switched_search_mode: false,
@@ -2316,7 +2332,7 @@ mod tests {
         };
 
         let mut state = State {
-            history_count: 1,
+            history_count: Some(1),
             update_needed: None,
             results_state: ListState::default(),
             switched_search_mode: false,
@@ -2435,7 +2451,7 @@ mod tests {
         let settings = Settings::utc();
 
         let mut state = State {
-            history_count: 100,
+            history_count: Some(100),
             update_needed: None,
             results_state: ListState::default(),
             switched_search_mode: false,
@@ -2494,7 +2510,7 @@ mod tests {
         let settings = Settings::utc();
 
         let mut state = State {
-            history_count: 100,
+            history_count: Some(100),
             update_needed: None,
             results_state: ListState::default(),
             switched_search_mode: false,
@@ -2549,7 +2565,7 @@ mod tests {
         let settings = Settings::utc();
 
         let mut state = State {
-            history_count: 100,
+            history_count: Some(100),
             update_needed: None,
             results_state: ListState::default(),
             switched_search_mode: false,
@@ -2600,7 +2616,7 @@ mod tests {
         let settings = Settings::utc();
 
         let mut state = State {
-            history_count: 100,
+            history_count: Some(100),
             update_needed: None,
             results_state: ListState::default(),
             switched_search_mode: false,
@@ -2664,7 +2680,7 @@ mod tests {
         let settings = Settings::utc();
 
         let mut state = State {
-            history_count: 100,
+            history_count: Some(100),
             update_needed: None,
             results_state: ListState::default(),
             switched_search_mode: false,
@@ -2729,7 +2745,7 @@ mod tests {
     fn make_executor_state(results_len: usize, selected: usize) -> State {
         let settings = Settings::utc();
         let mut state = State {
-            history_count: i64::try_from(results_len).unwrap(),
+            history_count: Some(i64::try_from(results_len).unwrap()),
             update_needed: None,
             results_state: ListState::default(),
             switched_search_mode: false,
@@ -3167,7 +3183,7 @@ mod tests {
         )]);
 
         let mut state = State {
-            history_count: 100,
+            history_count: Some(100),
             update_needed: None,
             results_state: ListState::default(),
             switched_search_mode: false,
