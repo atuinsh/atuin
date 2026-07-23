@@ -494,8 +494,6 @@ network_connect_timeout = 5
 
 ### `extra_headers`
 
-Atuin version: >= 18.19
-
 Default: `{}`
 
 Extra HTTP headers to send on every request to the sync server. This is useful
