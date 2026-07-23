@@ -88,7 +88,7 @@ Default: `1h`
 
 How often to automatically sync with the server. This can be given in a "human-readable" format. For example, `10s`, `20m`, `1h`, etc.
 
-If set to `0`, Atuin will sync after every command. Some servers may potentially rate limit, which won't cause any issues.
+If set to `0`, Atuin will sync after every command. Some servers may rate limit very frequent syncs, but this won't cause any issues.
 
 ```
 sync_frequency = "1h"
@@ -150,18 +150,9 @@ The "daemon-fuzzy" search mode does not currently support the bar character oper
 
 Default: `global`
 
-The default filter to use when searching
+The filter mode that interactive search starts in. Accepted values are `global`, `host`, `session`, `directory`, `workspace`, and `session-preload` — see [Filter mode](https://docs.atuin.sh/guide/advanced-usage/#filter-mode) for what each one searches.
 
-| Mode             | Description                                                                          |
-| ---------------- | ------------------------------------------------------------------------------------ |
-| global (default) | Search from the full history                                                         |
-| host             | Search history from this host                                                        |
-| session          | Search history from the current session                                              |
-| directory        | Search history from the current directory                                            |
-| workspace        | Search history from the current git repository                                       |
-| session-preload  | Search from the current session and the global history from before the session start |
-
-Filter modes can still be toggled via ctrl-r
+Whichever mode you start in, you can still cycle through the rest with ctrl-r.
 
 ```
 filter_mode = "host"
@@ -235,7 +226,7 @@ Which style to use. Possible values: `auto`, `full` and `compact`.
 
 - `full`:
 
-This means that Atuin will automatically switch to `compact` mode when the terminal window is too short for `full` to display properly.
+With `auto`, Atuin uses `full` mode, but automatically switches to `compact` mode when the terminal window is too short for `full` to display properly.
 
 ```
 style = "compact"
@@ -321,7 +312,7 @@ Atuin version: >= 18.4
 
 Default: `8`
 
-Set Atuin to hide lines when a minimum number of rows is subceeded. This has no effect except when `compact` style is being used (see `style` above), and currently applies to only the interactive search and inspector. It can be turned off entirely by setting to `0`.
+Hide extra UI lines when the available height falls below this number of rows. This has no effect except when `compact` style is being used (see `style` above), and currently applies to only the interactive search and inspector. It can be turned off entirely by setting to `0`.
 
 ```
 auto_hide_height = 8
@@ -346,11 +337,7 @@ exit_mode = "return-query"
 
 ### `history_format`
 
-Default to `history list`
-
-The history format allows you to configure the default `history list` format - which can also be specified with the --format arg.
-
-The specified --format arg will prioritize the config when both are present
+The default format used by `history list`. It can also be specified per invocation with the `--format` arg, which takes precedence over this config value.
 
 More on [history list](https://docs.atuin.sh/reference/list/index.md)
 
@@ -411,18 +398,27 @@ Default: `true`
 secrets_filter = true
 ```
 
-This matches history against a set of default regex, and will not save it if we get a match. Defaults include
+Matches each command against a set of built-in regular expressions, and refuses to save it if any of them match. The patterns currently cover:
 
-1. AWS key id
-1. Github pat (old and new)
-1. Slack oauth tokens (bot, user)
-1. Slack webhooks
-1. Stripe live/test keys
-1. Atuin login command
-1. Cloud environment variable patterns (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AZURE_STORAGE_CLASS_KEY`, `GOOGLE_SERVICE_ACCOUNT_KEY`)
-1. Netlify authentication tokens
-1. Npm pat
-1. Pulumi pat
+| Service      | Matches                                                                                                               |
+| ------------ | --------------------------------------------------------------------------------------------------------------------- |
+| AWS          | Access key IDs, and commands setting `AWS_SECRET_ACCESS_KEY` or `AWS_SESSION_TOKEN`                                   |
+| Azure        | Commands setting `AZURE_*_KEY`                                                                                        |
+| Google Cloud | Commands setting `GOOGLE_SERVICE_ACCOUNT_KEY`                                                                         |
+| GitHub       | Personal access tokens (old and new), OAuth access tokens (app and user), app installation tokens, and refresh tokens |
+| GitLab       | Personal access tokens                                                                                                |
+| Slack        | OAuth v2 bot and user tokens, and webhook URLs                                                                        |
+| Stripe       | Live and test keys                                                                                                    |
+| Netlify      | Authentication tokens                                                                                                 |
+| npm          | Tokens                                                                                                                |
+| Pulumi       | Personal access tokens                                                                                                |
+| Atuin        | `atuin login`, which takes your password and encryption key as arguments                                              |
+
+For the exact expressions, see [`secrets.rs`](https://github.com/atuinsh/atuin/blob/main/crates/atuin-client/src/secrets.rs).
+
+Note
+
+This is a safety net, not a guarantee. It only catches credentials in recognized formats — use [`history_filter`](#history_filter) for anything else you need kept out, and see [Excluding Commands from History](https://docs.atuin.sh/guide/excluding-commands/index.md).
 
 ### macOS Ctrl-n key shortcuts
 
@@ -571,7 +567,7 @@ prefers_reduced_motion = false
 
 Atuin version: >= 18.4
 
-The list of filter modes available in interactive search, in the order they cycle through when you press ctrl-r. By default, all modes are enabled. Removing a mode from this list disables it entirely. The `workspace` mode is skipped when not in a git repository or when `workspaces = false`. See [`filter_mode`](#filter_mode) for a description of each mode.
+The list of filter modes available in interactive search, in the order they cycle through when you press ctrl-r. By default, all modes are enabled. Removing a mode from this list disables it entirely. The `workspace` mode is skipped when not in a git repository or when `workspaces = false`. See [Filter mode](https://docs.atuin.sh/guide/advanced-usage/#filter-mode) for a description of each mode.
 
 The `filter_mode` setting selects the initial mode from this list. If `filter_mode` is set to a mode not in the list, the first available mode is used instead.
 
@@ -643,32 +639,11 @@ frequency_score_multiplier = 0.8
 frecency_score_multiplier = 2.0
 ```
 
-#### `authors`
+### Filtering by author
 
-Default: `["$all-user"]`
+Interactive search shows only commands you ran yourself, hiding those recorded by AI coding agents through [agent hooks](https://docs.atuin.sh/guide/agent-hooks/index.md). This is not currently configurable in `config.toml`.
 
-Filter search results by command author. This controls which commands appear in interactive search based on who (or what) ran them. Useful when AI coding agents are recording commands via [agent hooks](https://docs.atuin.sh/guide/agent-hooks/index.md).
-
-Special values:
-
-| Value        | Meaning                                                   |
-| ------------ | --------------------------------------------------------- |
-| `$all-user`  | Commands from any author that is **not** a known AI agent |
-| `$all-agent` | Commands from any known AI agent                          |
-
-You can also use literal author names like `"claude-code"`, `"codex"`, `"opencode"`, or `"pi"`.
-
-```
-[search]
-# Default: only show human-authored commands
-authors = ["$all-user"]
-
-# Show everything (no author filtering)
-# authors = []
-
-# Show commands from you and Claude Code
-# authors = ["$all-user", "claude-code"]
-```
+To filter by author on the command line, use `atuin search --author`. See [Filtering by Author](https://docs.atuin.sh/guide/agent-hooks/#filtering-by-author) for the available values.
 
 ## Stats
 
@@ -753,7 +728,7 @@ atuin dotfiles alias list
 atuin dotfiles alias delete k
 ```
 
-After setting an alias, you will either need to restart your shell or source the init file for the change to take affect
+After setting an alias, you will either need to restart your shell or source the init file for the change to take effect
 
 ## keys
 
@@ -866,6 +841,56 @@ By using `auto` a preview is shown, if the command is longer than the width of t
 
 ```
 strategy = "auto"
+```
+
+## tmux
+
+When you are inside tmux, open the search UI in a [popup](https://github.com/tmux/tmux/wiki/Getting-Started#popups) floating above your current pane, instead of drawing over the pane itself. The popup opens in your current working directory, and closes when you accept a command or exit.
+
+```
+[tmux]
+enabled = true
+width = "80%"
+height = "60%"
+```
+
+Atuin falls back to its normal rendering, with no error, whenever the popup can't be used — outside tmux, on tmux older than 3.2, or in a shell that doesn't support it.
+
+Requirements
+
+- tmux >= 3.2, which is where `display-popup` gained the behavior Atuin needs
+- zsh, bash, or fish — nushell, xonsh, and PowerShell don't support the popup yet
+
+These settings are read by `atuin init` and passed to the shell plugin through environment variables, so **restart your shell after changing them**. To disable the popup for a single session without touching your config, set `ATUIN_TMUX_POPUP=false` before Atuin's key bindings run.
+
+### `enabled`
+
+Default: `false`
+
+Whether to show the search UI in a tmux popup.
+
+```
+enabled = true
+```
+
+### `width`
+
+Default: `"80%"`
+
+Width of the popup, passed to `tmux display-popup -w`. Accepts a percentage of the terminal width, or an absolute number of columns.
+
+```
+width = "80%"
+```
+
+### `height`
+
+Default: `"60%"`
+
+Height of the popup, passed to `tmux display-popup -h`. Accepts a percentage of the terminal height, or an absolute number of rows.
+
+```
+height = "60%"
 ```
 
 ## Daemon

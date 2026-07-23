@@ -4,7 +4,7 @@ Atuin can also calculate stats based on your history - this is currently a littl
 
 ## 1-day stats
 
-You provide the starting point, and Atuin computes the stats for 24h from that point. Date parsing is provided by `interim`, which supports different formats for full or relative dates. Certain formats rely on the dialect option in your [configuration](https://docs.atuin.sh/configuration/config/#dialect) to differentiate day from month. Refer to [the module's documentation](https://docs.rs/interim/0.1.0/interim/#supported-formats) for more details on the supported date formats.
+You provide the starting point, and Atuin computes the stats for 24h from that point. Date parsing is provided by `interim`, which supports different formats for full or relative dates. Certain formats rely on the dialect option in your [configuration](https://docs.atuin.sh/configuration/config/#dialect) to differentiate day from month. Refer to [the module's documentation](https://docs.rs/interim/latest/interim/#supported-formats) for more details on the supported date formats.
 
 ```
 $ atuin stats last friday

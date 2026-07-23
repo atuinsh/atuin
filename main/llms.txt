@@ -18,8 +18,9 @@ usage, self-hosting, and AI features.
 - [Import existing history](https://docs.atuin.sh/guide/import/index.md): Import existing shell history from bash, zsh, fish, and others.
 - [Basic usage](https://docs.atuin.sh/guide/basic-usage/index.md): What Atuin records, how to use the TUI, and common config tweaks.
 - [Advanced usage](https://docs.atuin.sh/guide/advanced-usage/index.md): Filter modes (global, host, session, directory, workspace) and search modes (fuzzy, full-text, skim).
-- [Shell Integration](https://docs.atuin.sh/guide/shell-integration/index.md): How shell hooks work, environment variables, embedded terminals, and excluding commands.
+- [Shell Integration](https://docs.atuin.sh/guide/shell-integration/index.md): How shell hooks work, environment variables, and embedded terminals.
 - [AI Agent Hooks](https://docs.atuin.sh/guide/agent-hooks/index.md): Capture commands from AI coding agents (Claude Code, Codex, pi) and filter by author.
+- [Excluding commands](https://docs.atuin.sh/guide/excluding-commands/index.md): Keep commands out of history with ignorespace, history_filter, and cwd_filter.
 - [Deleting history](https://docs.atuin.sh/guide/delete-history/index.md): Delete single entries, bulk delete by query, remove duplicates, or wipe everything.
 - [Syncing dotfiles](https://docs.atuin.sh/guide/dotfiles/index.md): Sync shell aliases and environment variables across machines.
 - [Theming](https://docs.atuin.sh/guide/theming/index.md): Customize the TUI with color themes.
@@ -32,10 +33,12 @@ usage, self-hosting, and AI features.
 
 ## Reference
 
+- [account](https://docs.atuin.sh/reference/account/index.md): The `atuin account` command - register, login, change password, delete, and link to Hub.
 - [config](https://docs.atuin.sh/reference/config/index.md): The `atuin config` command - get, set, list, and resolve configuration values.
 - [daemon](https://docs.atuin.sh/reference/daemon/index.md): Background daemon for faster writes, auto-sync, and in-memory fuzzy search.
 - [doctor](https://docs.atuin.sh/reference/doctor/index.md): Diagnose common problems and dump system info for bug reports.
 - [gen-completions](https://docs.atuin.sh/reference/gen-completions/index.md): Generate shell completions for bash, fish, zsh, nushell, powershell, elvish.
+- [init](https://docs.atuin.sh/reference/init/index.md): The `atuin init` command - shell plugin setup, key binding flags, and env vars.
 - [Hex](https://docs.atuin.sh/reference/hex/index.md): The old name for `atuin pty-proxy`
 - [pty-proxy](https://docs.atuin.sh/reference/pty-proxy/index.md): Experimental PTY proxy with popup rendering over existing terminal output.
 - [import](https://docs.atuin.sh/reference/import/index.md): Import history from bash, fish, zsh, replxx, mcfly, resh, and xonsh.
@@ -44,6 +47,7 @@ usage, self-hosting, and AI features.
 - [history prune](https://docs.atuin.sh/reference/prune/index.md): Delete entries matching history_filter config (useful after updating filters).
 - [search](https://docs.atuin.sh/reference/search/index.md): Search history with wildcards, filters (cwd, exit code, before/after), and delete mode.
 - [stats](https://docs.atuin.sh/reference/stats/index.md): Compute stats for a time period - most used command, command count, unique commands.
+- [store](https://docs.atuin.sh/reference/store/index.md): The `atuin store` command - inspect, verify, rekey, rebuild, and repair the record store.
 - [sync](https://docs.atuin.sh/reference/sync/index.md): Sync commands - register, login, manual sync, and account management.
 
 ## Self Hosting

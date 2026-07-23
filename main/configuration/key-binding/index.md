@@ -113,7 +113,7 @@ atuin-bind [-m KEYMAP] KEYSEQ COMMAND
 | `atuin-up-search`       | Search command for `up` or similar keys                                    |
 | `atuin-up-search-emacs` | Search command for `up` or similar keys, with the `emacs` keymap mode      |
 | `atuin-up-search-viins` | Search command for `up` or similar keys, with the `vim-insert` keymap mode |
-| `atuin-up-search-vicmd` | Search command for `up` or similar keys, with the `vim-nomarl` keymap mode |
+| `atuin-up-search-vicmd` | Search command for `up` or similar keys, with the `vim-normal` keymap mode |
 
 The keymap mode controls the initial keymap in the Atuin search and is determined in combination with the config ["keymap_mode"](https://docs.atuin.sh/configuration/config/#keymap_mode) (`atuin >= 18.0`).
 
@@ -148,9 +148,9 @@ bind -M insert \cr _atuin_search
 
 For the `Up` keybinding, `_atuin_bind_up` can be used instead of `_atuin_search`.
 
-Adding the useful alternative key binding of `Ctrl`+`Up` is tricky and determined by the terminals adherence to terminfo(5).
+Adding the useful alternative key binding of `Ctrl`+`Up` is tricky and determined by the terminal's adherence to terminfo(5).
 
-Conveniently FISH uses a command to capture keystrokes and advises you of the exact command to add for your specific terminal. In your terminal, run `fish_key_reader` then punch the desired keystroke/s.
+Conveniently, fish provides a command to capture keystrokes and advise you of the exact command to add for your specific terminal. In your terminal, run `fish_key_reader` then press the desired keystrokes.
 
 For example, in Gnome Terminal the output to `Ctrl`+`Up` is `bind \e\[1\;5A 'do something'`
 
@@ -160,7 +160,7 @@ So, adding this to the above sample, `bind \e\[1\;5A _atuin_search` will provide
 
 ```
 $env.ATUIN_NOBIND = true
-atuin init nu | save -f ~/.local/share/atuin/init.nu #make sure you created the directory beforehand with `mkdir ~/.local/share/atuin/init.nu`
+atuin init nu | save -f ~/.local/share/atuin/init.nu #make sure you created the directory beforehand with `mkdir ~/.local/share/atuin`
 source ~/.local/share/atuin/init.nu
 
 #bind to ctrl-r in emacs, vi_normal and vi_insert modes, add any other bindings you want here too
@@ -199,13 +199,12 @@ $env.config = (
 | ctrl + delete / ctrl + alt + delete       | Remove the next word or the word just after the cursor                                                         |
 | ctrl + w                                  | Remove the word before the cursor even if it spans across the word boundaries                                  |
 | ctrl + u                                  | Clear the current line                                                                                         |
-| ctrl + n / ctrl + j / ↑                   | Select the next item on the list                                                                               |
-| ctrl + p / ctrl + k / ↓                   | Select the previous item on the list                                                                           |
+| ctrl + n / ctrl + j / ↓                   | Select the next item on the list                                                                               |
+| ctrl + p / ctrl + k / ↑                   | Select the previous item on the list                                                                           |
 | ctrl + o                                  | Open the [inspector](#inspector)                                                                               |
 | page down                                 | Scroll search results one page down                                                                            |
 | page up                                   | Scroll search results one page up                                                                              |
-| ↓ (with no entry selected)                | Return original or return query depending on [settings](https://docs.atuin.sh/configuration/config/#exit_mode) |
-| ↓                                         | Select the next item on the list                                                                               |
+| ↓ (on the first entry)                    | Return original or return query depending on [settings](https://docs.atuin.sh/configuration/config/#exit_mode) |
 | ctrl + a, d                               | Delete the selected history entry                                                                              |
 | ctrl + a, D                               | Delete **all** history entries matching the selected command                                                   |
 | ctrl + a, a                               | Move cursor to the start of the line                                                                           |
@@ -223,8 +222,8 @@ If [vim is enabled in the config](https://docs.atuin.sh/configuration/config/#ke
 
 | Shortcut | Mode   | Action                                        |
 | -------- | ------ | --------------------------------------------- |
-| k        | Normal | Selects the next item on the list             |
-| j        | Normal | Selects the previous item on the list         |
+| k        | Normal | Selects the previous item on the list         |
+| j        | Normal | Selects the next item on the list             |
 | h        | Normal | Move cursor left                              |
 | l        | Normal | Move cursor right                             |
 | 0        | Normal | Move cursor to start of line                  |

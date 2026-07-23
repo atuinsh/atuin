@@ -6,7 +6,7 @@ All the settings that control the behavior of [Atuin AI](https://docs.atuin.sh/a
 
 Default: `false`
 
-Whether or not the AI feature are enabled. When set to `false`, the question mark keybinding will output a message with instructions to run `atuin setup` to enable the feature.
+Whether or not the AI features are enabled. When set to `false`, the question mark keybinding will output a message with instructions to run `atuin setup` to enable the feature.
 
 ### model
 

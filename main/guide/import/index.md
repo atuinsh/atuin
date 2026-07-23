@@ -1,6 +1,6 @@
 # Import existing history
 
-Atuin uses a shell plugin to ensure that we capture new shell history. But for older history, you will need to import it
+Atuin uses a shell plugin to ensure that we capture new shell history. But for older history, you will need to import it.
 
 This will import the history for your current shell:
 

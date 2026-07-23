@@ -2,9 +2,9 @@
 
 While we offer a public sync server, and cannot view your data (as it is encrypted), you may still wish to self host your own Atuin sync server.
 
-The requirements to do so are pretty minimal! You need to be able to run a binary or docker container, and have a PostgreSQL database setup. Atuin requires PostgreSQL 14 or above.
+The requirements to do so are pretty minimal! You need to be able to run a binary or docker container, and have a PostgreSQL database set up. Atuin requires PostgreSQL 14 or above.
 
-Atuin also supports sqlite 3 and above.
+Alternatively, the server can use SQLite (version 3 or above) instead of PostgreSQL.
 
 The server is distributed as a separate binary, `atuin-server`. Prebuilt binaries and an installer are published with every release on the [GitHub releases page](https://github.com/atuinsh/atuin/releases). For example, to install the latest release:
 
@@ -44,13 +44,13 @@ ATUIN_OPEN_REGISTRATION=true
 ATUIN_DB_URI="postgres://user:password@hostname/database"
 ```
 
-| Parameter           | Description                                                    |
-| ------------------- | -------------------------------------------------------------- |
-| `host`              | The host to listen on (default: 127.0.0.1)                     |
-| `port`              | The TCP port to listen on (default: 8888)                      |
-| `open_registration` | If `true`, accept new user registrations (default: false)      |
-| `db_uri`            | A valid PostgreSQL URI, for saving history (default: false)    |
-| `path`              | A path to prepend to all routes of the server (default: false) |
+| Parameter           | Description                                                                 |
+| ------------------- | --------------------------------------------------------------------------- |
+| `host`              | The host to listen on (default: 127.0.0.1)                                  |
+| `port`              | The TCP port to listen on (default: 8888)                                   |
+| `open_registration` | If `true`, accept new user registrations (default: false)                   |
+| `db_uri`            | A valid PostgreSQL or SQLite URI, for saving history (required, no default) |
+| `path`              | A path to prepend to all routes of the server (default: empty)              |
 
 For sqlite, use the following in your server.toml:
 

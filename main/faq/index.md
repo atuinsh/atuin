@@ -21,15 +21,13 @@ history_filter = [
 
 You can also exclude commands by directory with `cwd_filter`, or prefix individual commands with a space.
 
-See [Shell Integration and Interoperability](https://docs.atuin.sh/guide/shell-integration/#excluding-commands-from-history) for more options.
+See [Excluding Commands from History](https://docs.atuin.sh/guide/excluding-commands/index.md) for more options.
 
 ## How do I remove the default up arrow binding?
 
 Open your shell config file, find the line containing `atuin init`.
 
-Add `--disable-up-arrow`
-
-EG:
+Add `--disable-up-arrow`, e.g.:
 
 ```
 eval "$(atuin init zsh --disable-up-arrow)"
@@ -41,9 +39,7 @@ See [key binding](https://docs.atuin.sh/configuration/key-binding/index.md) for 
 
 Open your shell config file, find the line containing `atuin init`.
 
-Add `--disable-ai`
-
-EG:
+Add `--disable-ai`, e.g.:
 
 ```
 eval "$(atuin init zsh --disable-ai)"
@@ -53,7 +49,7 @@ eval "$(atuin init zsh --disable-ai)"
 
 Press tab! By default, enter will execute a command, and tab will insert it ready for editing.
 
-You can make `enter` edit a command by putting `enter_accept = false` into your config file (~/.config/atuin/config.toml)
+You can make `enter` edit a command by putting `enter_accept = false` into your config file (`~/.config/atuin/config.toml`)
 
 ## How do I delete my account?
 

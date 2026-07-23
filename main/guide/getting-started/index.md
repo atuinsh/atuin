@@ -1,46 +1,58 @@
 # Getting Started
 
-Atuin replaces your existing shell history with a SQLite database, and records additional context for your commands. With this context, Atuin gives you faster and better search of your shell history.
+This guide walks through setting Atuin up properly, one step at a time. If you just want the commands, the [quickstart on the home page](https://docs.atuin.sh/#quickstart) has them.
 
-Additionally, Atuin (optionally) syncs your shell history between all of your machines. Fully end-to-end encrypted, of course.
+There are four steps, and only the first is required:
 
-You may use either the server I host, or host your own! Or just don't use sync at all. As all history sync is encrypted, I couldn't access your data even if I wanted to. And I **really** don't want to.
+1. [Install Atuin](https://docs.atuin.sh/guide/installation/index.md) and its shell plugin
+1. [Import your existing history](https://docs.atuin.sh/guide/import/index.md)
+1. [Set up sync](https://docs.atuin.sh/guide/sync/index.md), if you want your history on more than one machine
+1. [Learn the TUI](https://docs.atuin.sh/guide/basic-usage/index.md)
 
-If you have any problems, please open an [issue](https://github.com/ellie/atuin/issues) or get in touch on our [Discord](https://discord.gg/Fq8bJSKPHh)!
+## 1. Install
 
-## Supported Shells
-
-- zsh
-- bash
-- fish
-- nushell
-- xonsh
-- powershell (tier 2 support)
-
-## Quickstart
-
-Please do try and read this guide, but if you're in a hurry and want to get started quickly:
+The install script handles the binary and the shell plugin, and walks you through the rest:
 
 ```
 bash <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
+```
 
-atuin register -u <USERNAME> -e <EMAIL>
+Then restart your shell. Prefer a package manager, or want to install the pieces yourself? See [Installation](https://docs.atuin.sh/guide/installation/index.md).
+
+At this point Atuin is recording new commands. Press `Ctrl`+`R` or the `Up` arrow to search them.
+
+## 2. Import your existing history
+
+Atuin only records commands run after it's installed, so bring the old ones in:
+
+```
 atuin import auto
+```
+
+This detects your shell and imports from its history file, which stays untouched and keeps being written to. See [Import existing history](https://docs.atuin.sh/guide/import/index.md) for importing from a specific shell or a non-default file.
+
+## 3. Set up sync (optional)
+
+Sync backs your history up and shares it between machines, end-to-end encrypted. You can use our server or [host your own](https://docs.atuin.sh/self-hosting/server-setup/index.md).
+
+```
+atuin register -u <USERNAME> -e <EMAIL>
 atuin sync
 ```
 
-Now restart your shell!
+Registration generates an encryption key. **Save it somewhere safe** — you'll need it to log in on any other machine, and it cannot be recovered. See [Setting up sync](https://docs.atuin.sh/guide/sync/index.md) for the details, including logging in elsewhere.
 
-Anytime you press ctrl-r or up, you will see the Atuin search UI. Type your query, enter to execute. If you'd like to select a command without executing it, press tab.
+Skipping this step is fine. Your history stays on this machine, not backed up and not synchronized.
 
-You might like to configure an [inline window](https://docs.atuin.sh/configuration/config/#inline_height), or [disable up arrow bindings](https://docs.atuin.sh/configuration/key-binding/#disable-up-arrow)
+## 4. Make it yours
 
-Note: The above sync and registration is fully optional. If you'd like to use Atuin offline, you can run
+Once you're up and running:
 
-```
-bash <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
+- [Basic usage](https://docs.atuin.sh/guide/basic-usage/index.md) — what Atuin records, and how to drive the TUI
+- [Filter and search modes](https://docs.atuin.sh/guide/advanced-usage/index.md) — narrow searches to this directory, this machine, or this session
+- [Key bindings](https://docs.atuin.sh/configuration/key-binding/index.md) — including how to [disable the up arrow binding](https://docs.atuin.sh/configuration/key-binding/#disable-up-arrow) if it isn't for you
+- [Config](https://docs.atuin.sh/configuration/config/index.md) — every setting, including an [inline window](https://docs.atuin.sh/configuration/config/#inline_height) instead of full screen
 
-atuin import auto
-```
+## Getting help
 
-Your shell history will be local only, not backed up, and not synchronized across devices.
+Open a topic on the [forum](https://forum.atuin.sh), join our [Discord](https://discord.gg/Fq8bJSKPHh), or file an [issue](https://github.com/atuinsh/atuin/issues). Running [`atuin doctor`](https://docs.atuin.sh/reference/doctor/index.md) collects the information we'll ask for.

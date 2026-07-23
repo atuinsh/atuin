@@ -19,7 +19,7 @@ docker run -d -v "$CONFIG:/config" ghcr.io/atuinsh/atuin:<LATEST TAGGED RELEASE>
 
 ## Docker Compose
 
-Using the already build docker image hosting your own Atuin can be done using the supplied docker-compose file.
+You can also host your own Atuin server with the prebuilt docker image using the supplied docker-compose file.
 
 Create a `docker-compose.yml`:
 
@@ -70,7 +70,7 @@ docker compose up -d
 
 ## Using systemd to manage your atuin server
 
-The following `systemd` unit file to manage your `docker-compose` managed service:
+The following `systemd` unit file can be used to manage your `docker-compose` managed service:
 
 ```
 [Unit]
@@ -97,7 +97,7 @@ Start and enable the service with:
 systemctl enable --now atuin
 ```
 
-Check if its running with:
+Check if it's running with:
 
 ```
 systemctl status atuin
@@ -114,7 +114,7 @@ You can add another service to your `docker-compose.yml` file to have it run dai
     env_file:
       - .env
     environment:
-      POSTGRES_HOST: postgresql
+      POSTGRES_HOST: db
       POSTGRES_DB: ${ATUIN_DB_NAME}
       POSTGRES_USER: ${ATUIN_DB_USERNAME}
       POSTGRES_PASSWORD: ${ATUIN_DB_PASSWORD}
@@ -123,7 +123,7 @@ You can add another service to your `docker-compose.yml` file to have it run dai
     volumes:
       - ./db_dumps:/db_dumps
     depends_on:
-      - postgresql
+      - db
 ```
 
 This will create daily backups of your database for that additional layer of comfort.

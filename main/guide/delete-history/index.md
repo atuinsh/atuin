@@ -120,7 +120,7 @@ atuin store verify
 atuin store purge
 ```
 
-This is useful when one machine ends up with local records that were encrypted with a different key than the one Atuin is currently using.
+This is useful when one machine ends up with local records that were encrypted with a different key than the one Atuin is currently using. See the [store reference](https://docs.atuin.sh/reference/store/index.md) for the other record store commands.
 
 Warning
 

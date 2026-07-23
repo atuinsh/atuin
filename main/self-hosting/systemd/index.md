@@ -54,7 +54,7 @@ Afterwards, run
 systemctl restart systemd-sysusers
 ```
 
-to make sure the file is read. A new `atuin-server` user should then be available.
+to make sure the file is read. A new `atuin` user should then be available.
 
 Now, you can attempt to run the Atuin server:
 

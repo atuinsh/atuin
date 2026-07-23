@@ -8,94 +8,124 @@ usage, self-hosting, and AI features.
 
 # Overview
 
-# Getting started
+# Atuin
 
-Atuin replaces your existing shell history with a SQLite database, and records additional context for your commands. With this context, Atuin gives you faster and better search of your shell history.
+Atuin replaces your shell history with a SQLite database, and records extra context for every command: the directory it ran in, how long it took, whether it succeeded, and which machine and session it came from. That context is what makes search actually useful.
 
-Additionally, Atuin (optionally) syncs your shell history between all of your machines. Fully end-to-end encrypted, of course.
-
-You may use either the server I host, or host your own! Or just don't use sync at all. As all history sync is encrypted, I couldn't access your data even if I wanted to. And I **really** don't want to.
-
-If you have any problems, please open a topic on the [forum](https://forum.atuin.sh)
-
-Alternatively, get in touch on our [Discord](https://discord.gg/Fq8bJSKPHh) or open an [issue](https://github.com/atuinsh/atuin/issues)
-
-#### Supported Shells
-
-- zsh
-- bash
-- fish
-- nushell
-- xonsh
-- powershell (tier 2 support)
+It can also sync your history across all of your machines, end-to-end encrypted. Use our server, [host your own](https://docs.atuin.sh/self-hosting/server-setup/index.md), or skip sync entirely and stay local.
 
 ## Quickstart
 
-Please do try and read this guide, but if you're in a hurry and want to get started quickly:
-
 ```
 bash <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
+```
 
-atuin register -u <USERNAME> -e <EMAIL>
+Restart your shell, then press `Ctrl`+`R` or the `Up` arrow to search. Type a query, press enter to run the selected command, or tab to put it on your command line for editing.
+
+To bring your existing history with you:
+
+```
 atuin import auto
+```
+
+To sync it across machines — optional, and covered in [Setting up sync](https://docs.atuin.sh/guide/sync/index.md):
+
+```
+atuin register -u <USERNAME> -e <EMAIL>
 atuin sync
 ```
 
-Now restart your shell!
+- **Get set up**
 
-Anytime you press ctrl-r or up, you will see the Atuin search UI. Type your query, enter to execute. If you'd like to select a command without executing it, press tab.
+  ______________________________________________________________________
 
-You might like to configure an [inline window](https://docs.atuin.sh/configuration/config/#inline_height), or [disable up arrow bindings](https://docs.atuin.sh/configuration/key-binding/#disable-up-arrow)
+  [Installation](https://docs.atuin.sh/guide/installation/index.md) · [Import history](https://docs.atuin.sh/guide/import/index.md) · [Set up sync](https://docs.atuin.sh/guide/sync/index.md)
 
-[**Installation** - Install and setup Atuin](https://docs.atuin.sh/guide/installation/index.md)
+- **Use it well**
+
+  ______________________________________________________________________
+
+  [Basic usage](https://docs.atuin.sh/guide/basic-usage/index.md) · [Filter and search modes](https://docs.atuin.sh/guide/advanced-usage/index.md) · [Key bindings](https://docs.atuin.sh/configuration/key-binding/index.md)
+
+- **Tune it**
+
+  ______________________________________________________________________
+
+  [All config options](https://docs.atuin.sh/configuration/config/index.md) · [Theming](https://docs.atuin.sh/guide/theming/index.md) · [Excluding commands](https://docs.atuin.sh/guide/excluding-commands/index.md)
+
+- **Go further**
+
+  ______________________________________________________________________
+
+  [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md) · [AI agent hooks](https://docs.atuin.sh/guide/agent-hooks/index.md) · [Self-hosting](https://docs.atuin.sh/self-hosting/server-setup/index.md)
+
+## Supported shells
+
+zsh, bash, fish, nushell, xonsh, and PowerShell (tier 2 support).
+
+## Getting help
+
+Open a topic on the [forum](https://forum.atuin.sh), join our [Discord](https://discord.gg/Fq8bJSKPHh), or file an [issue](https://github.com/atuinsh/atuin/issues). If something isn't working, [`atuin doctor`](https://docs.atuin.sh/reference/doctor/index.md) collects the details we'll ask for.
 # Guide
 
 # Getting Started
 
-Atuin replaces your existing shell history with a SQLite database, and records additional context for your commands. With this context, Atuin gives you faster and better search of your shell history.
+This guide walks through setting Atuin up properly, one step at a time. If you just want the commands, the [quickstart on the home page](https://docs.atuin.sh/#quickstart) has them.
 
-Additionally, Atuin (optionally) syncs your shell history between all of your machines. Fully end-to-end encrypted, of course.
+There are four steps, and only the first is required:
 
-You may use either the server I host, or host your own! Or just don't use sync at all. As all history sync is encrypted, I couldn't access your data even if I wanted to. And I **really** don't want to.
+1. [Install Atuin](https://docs.atuin.sh/guide/installation/index.md) and its shell plugin
+1. [Import your existing history](https://docs.atuin.sh/guide/import/index.md)
+1. [Set up sync](https://docs.atuin.sh/guide/sync/index.md), if you want your history on more than one machine
+1. [Learn the TUI](https://docs.atuin.sh/guide/basic-usage/index.md)
 
-If you have any problems, please open an [issue](https://github.com/ellie/atuin/issues) or get in touch on our [Discord](https://discord.gg/Fq8bJSKPHh)!
+## 1. Install
 
-## Supported Shells
-
-- zsh
-- bash
-- fish
-- nushell
-- xonsh
-- powershell (tier 2 support)
-
-## Quickstart
-
-Please do try and read this guide, but if you're in a hurry and want to get started quickly:
+The install script handles the binary and the shell plugin, and walks you through the rest:
 
 ```
 bash <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
+```
 
-atuin register -u <USERNAME> -e <EMAIL>
+Then restart your shell. Prefer a package manager, or want to install the pieces yourself? See [Installation](https://docs.atuin.sh/guide/installation/index.md).
+
+At this point Atuin is recording new commands. Press `Ctrl`+`R` or the `Up` arrow to search them.
+
+## 2. Import your existing history
+
+Atuin only records commands run after it's installed, so bring the old ones in:
+
+```
 atuin import auto
+```
+
+This detects your shell and imports from its history file, which stays untouched and keeps being written to. See [Import existing history](https://docs.atuin.sh/guide/import/index.md) for importing from a specific shell or a non-default file.
+
+## 3. Set up sync (optional)
+
+Sync backs your history up and shares it between machines, end-to-end encrypted. You can use our server or [host your own](https://docs.atuin.sh/self-hosting/server-setup/index.md).
+
+```
+atuin register -u <USERNAME> -e <EMAIL>
 atuin sync
 ```
 
-Now restart your shell!
+Registration generates an encryption key. **Save it somewhere safe** — you'll need it to log in on any other machine, and it cannot be recovered. See [Setting up sync](https://docs.atuin.sh/guide/sync/index.md) for the details, including logging in elsewhere.
 
-Anytime you press ctrl-r or up, you will see the Atuin search UI. Type your query, enter to execute. If you'd like to select a command without executing it, press tab.
+Skipping this step is fine. Your history stays on this machine, not backed up and not synchronized.
 
-You might like to configure an [inline window](https://docs.atuin.sh/configuration/config/#inline_height), or [disable up arrow bindings](https://docs.atuin.sh/configuration/key-binding/#disable-up-arrow)
+## 4. Make it yours
 
-Note: The above sync and registration is fully optional. If you'd like to use Atuin offline, you can run
+Once you're up and running:
 
-```
-bash <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
+- [Basic usage](https://docs.atuin.sh/guide/basic-usage/index.md) — what Atuin records, and how to drive the TUI
+- [Filter and search modes](https://docs.atuin.sh/guide/advanced-usage/index.md) — narrow searches to this directory, this machine, or this session
+- [Key bindings](https://docs.atuin.sh/configuration/key-binding/index.md) — including how to [disable the up arrow binding](https://docs.atuin.sh/configuration/key-binding/#disable-up-arrow) if it isn't for you
+- [Config](https://docs.atuin.sh/configuration/config/index.md) — every setting, including an [inline window](https://docs.atuin.sh/configuration/config/#inline_height) instead of full screen
 
-atuin import auto
-```
+## Getting help
 
-Your shell history will be local only, not backed up, and not synchronized across devices.
+Open a topic on the [forum](https://forum.atuin.sh), join our [Discord](https://discord.gg/Fq8bJSKPHh), or file an [issue](https://github.com/atuinsh/atuin/issues). Running [`atuin doctor`](https://docs.atuin.sh/reference/doctor/index.md) collects the information we'll ask for.
 
 # Installation
 
@@ -416,7 +446,7 @@ atuin sync -f
 
 # Import existing history
 
-Atuin uses a shell plugin to ensure that we capture new shell history. But for older history, you will need to import it
+Atuin uses a shell plugin to ensure that we capture new shell history. But for older history, you will need to import it.
 
 This will import the history for your current shell:
 
@@ -454,12 +484,7 @@ At any time, you can open the TUI with the default keybindings of the up arrow, 
 
 Once in the TUI, press enter to immediately execute a command, or press tab to insert it into your shell for editing.
 
-While searching in the TUI, you can adjust the "filter mode" by repeatedly pressing `ctrl-r`. Atuin can filter by:
-
-1. All hosts
-1. Just your local machine
-1. The current directory only
-1. The current shell session only
+While searching in the TUI, you can narrow the search scope by pressing `ctrl-r` to cycle through [filter modes](https://docs.atuin.sh/guide/advanced-usage/#filter-mode) — the full history, this machine, the current directory, the current git repository, or the current shell session.
 
 See the [advanced usage](https://docs.atuin.sh/guide/advanced-usage/index.md) page for more options.
 
@@ -498,45 +523,51 @@ You may also prefer the compact UI mode:
 style = "compact"
 ```
 
+### tmux popup
+
+If you use tmux, Atuin can open the search UI in a popup floating above your current pane rather than drawing over it:
+
+```
+[tmux]
+enabled = true
+```
+
+See the [`tmux` config reference](https://docs.atuin.sh/configuration/config/#tmux) for sizing and requirements.
+
 # Advanced Usage
 
-Atuin offers you several options to help navigate through the results.
+Two settings shape every search you run: the **filter mode** decides *which* commands are searched, and the **search mode** decides *how* your query is matched against them. Both can be changed on the fly from inside the TUI.
 
 ## Filter mode
 
-The command history can be filtered in different ways, letting you narrow the search scope.
+The filter mode narrows the set of history Atuin searches. Cycle through the modes by pressing **ctrl-r** inside the TUI.
 
-You can cycle through the different modes by pressing **ctrl-r**.
+| Mode             | Searches                                                                     |
+| ---------------- | ---------------------------------------------------------------------------- |
+| global (default) | Your full history, from every machine                                        |
+| host             | Only history from this machine                                               |
+| session          | Only history from the current shell session                                  |
+| directory        | Only history from the current directory                                      |
+| workspace        | Only history from anywhere in the current git repository                     |
+| session-preload  | The current session, plus all global history from before the session started |
 
-The available modes are:
+`workspace` mode requires [`workspaces = true`](https://docs.atuin.sh/configuration/config/#workspaces), and is skipped when you are not inside a git repository.
 
-| Mode             | Description                                                                          |
-| ---------------- | ------------------------------------------------------------------------------------ |
-| global (default) | Search from the full history                                                         |
-| host             | Search history from this host                                                        |
-| session          | Search history from the current session                                              |
-| directory        | Search history from the current directory                                            |
-| workspace        | Search history from the current git repository                                       |
-| session-preload  | Search from the current session and the global history from before the session start |
-
-See the [`filter_mode` config reference](https://docs.atuin.sh/configuration/config/#filter_mode) for more details.
+To change which mode searches start in, set [`filter_mode`](https://docs.atuin.sh/configuration/config/#filter_mode). To remove modes from the ctrl-r rotation entirely, set [`search.filters`](https://docs.atuin.sh/configuration/config/#filters). The up arrow can start in a different mode than ctrl-r — see [`filter_mode_shell_up_key_binding`](https://docs.atuin.sh/configuration/config/#filter_mode_shell_up_key_binding).
 
 ## Search mode
 
-Atuin offers different modes to interpret your search query.
+The search mode decides how your query text is interpreted. Cycle through the modes by pressing **ctrl-s** inside the TUI.
 
-You can cycle through the different modes by pressing **ctrl-s**.
+| Mode            | Matches                                                                                                                                                                     |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| fuzzy (default) | Fuzzily, using the [fzf syntax](https://github.com/junegunn/fzf#search-syntax) — see [fuzzy search syntax](https://docs.atuin.sh/configuration/config/#fuzzy-search-syntax) |
+| prefix          | Commands that start with your query                                                                                                                                         |
+| fulltext        | Commands that contain your query anywhere                                                                                                                                   |
+| skim            | Using the [skim syntax](https://github.com/lotabout/skim#search-syntax)                                                                                                     |
+| daemon-fuzzy    | Like `fuzzy`, but served from the [daemon's](https://docs.atuin.sh/reference/daemon/index.md) in-memory index, with tunable scoring                                         |
 
-The available modes are:
-
-| Mode            | Description                                                                                                    |
-| --------------- | -------------------------------------------------------------------------------------------------------------- |
-| fuzzy (default) | Search for commands in a fuzzy way, similar to the [fzf syntax](https://github.com/junegunn/fzf#search-syntax) |
-| prefix          | Commands that start with your query                                                                            |
-| fulltext        | Commands that contain your query as a substring                                                                |
-| skim            | Search for commands using the [skim syntax](https://github.com/lotabout/skim#search-syntax)                    |
-
-See the [`search_mode` config reference](https://docs.atuin.sh/configuration/config/#search_mode) for more details.
+To change the default, set [`search_mode`](https://docs.atuin.sh/configuration/config/#search_mode).
 
 ## Context switch
 
@@ -550,7 +581,9 @@ Pressing this key combination again will return to the initial context. You can 
 
 # Shell Integration and Interoperability
 
-Atuin uses shell hooks to capture your command history. This page explains how the integration works, why Atuin might not record commands in certain environments, and how to control what gets recorded.
+Atuin uses shell hooks to capture your command history. This page explains how the integration works, and why Atuin might not record commands in certain environments.
+
+To keep specific commands *out* of your history on purpose, see [Excluding Commands from History](https://docs.atuin.sh/guide/excluding-commands/index.md).
 
 ## How Atuin's Shell Integration Works
 
@@ -605,7 +638,7 @@ You can verify whether Atuin is active by running:
 atuin doctor
 ```
 
-Look for the `shell.preexec` field in the output. If it shows `none`, Atuin's hooks aren't installed in that shell session.
+Look for the `shell.preexec` field in the output. If it shows `none`, Atuin's hooks aren't installed in that shell session. To confirm the shell is interactive at all, check that `echo $-` includes an `i`.
 
 ### Enabling Atuin in Embedded Terminals
 
@@ -665,101 +698,6 @@ atuin doctor | grep preexec
 
 You should see `built-in`, `bash-preexec`, `blesh`, or similar—not `none`.
 
-## Excluding Commands from History
-
-Sometimes you *don't* want certain commands in your history. This is common when:
-
-- AI coding tools run many automated commands (git status, file listings, etc.)
-- You're running sensitive commands you don't want synced
-- Build tools or scripts generate repetitive command noise
-
-### Using history_filter
-
-The `history_filter` option in `~/.config/atuin/config.toml` lets you exclude commands matching specific patterns:
-
-```
-history_filter = [
-    "^ls$",           # Exclude bare 'ls' commands
-    "^cd ",           # Exclude cd commands
-    "^cat ",          # Exclude cat commands
-]
-```
-
-Patterns are regular expressions. They're unanchored by default, so `secret` matches anywhere in a command. Use `^` and `$` for exact matching.
-
-### Using cwd_filter
-
-To exclude all commands run from specific directories:
-
-```
-cwd_filter = [
-    "^/tmp",                    # Exclude commands run from /tmp
-    "/node_modules/",           # Exclude commands from any node_modules
-    "^/home/user/scratch",      # Exclude a scratch directory
-]
-```
-
-### Prefix with Space (ignorespace)
-
-Most shells support "ignorespace"—commands prefixed with a space aren't saved to history. Atuin honors this convention:
-
-```
- echo "this won't be saved"  # Note the leading space
-```
-
-Bash with bash-preexec
-
-When using bash-preexec (not ble.sh), there's a known issue where ignorespace isn't fully honored. The command won't appear in Atuin, but may still appear in your bash history. See [installation](https://docs.atuin.sh/guide/installation/index.md) for details.
-
-### Disabling Atuin for Specific Tools
-
-If a tool spawns interactive shells but you don't want its commands recorded, you have several options:
-
-#### Option 1: Environment Variable Check
-
-Modify your shell configuration to skip Atuin initialization based on an environment variable:
-
-```
-# In .bashrc or .zshrc
-if [[ -z "${MY_TOOL_SESSION}" ]]; then
-    eval "$(atuin init bash)"
-fi
-```
-
-Then configure your tool to set `MY_TOOL_SESSION=1` when spawning shells.
-
-#### Option 2: Use history_filter for Tool-Specific Patterns
-
-If the tool runs predictable commands, filter them:
-
-```
-history_filter = [
-    "^git status$",
-    "^git diff",
-    "^ls -la$",
-]
-```
-
-#### Option 3: Filter by Directory
-
-If the tool operates in specific directories:
-
-```
-cwd_filter = [
-    "^/path/to/tool/workspace",
-]
-```
-
-### Cleaning Up Existing History
-
-After adding filters, you can remove matching entries from your existing history:
-
-```
-atuin history prune
-```
-
-This removes entries that match your current `history_filter` or `cwd_filter` patterns.
-
 ## Shell-Specific Notes
 
 ### Bash
@@ -786,31 +724,9 @@ Zsh has native hook support via `add-zsh-hook`. The integration is straightforwa
 
 Fish uses its event system (`fish_preexec` and `fish_postexec` events). It also respects Fish's private mode—commands run with `fish --private` aren't recorded.
 
-## Troubleshooting
+### Nushell, xonsh, and PowerShell
 
-### Commands aren't being recorded
-
-1. Run `atuin doctor` and check the output
-1. Verify `shell.preexec` is not `none`
-1. Ensure your shell is interactive (`echo $-` should contain `i`)
-1. Check that `atuin init` is in your shell config and being sourced
-
-### Commands from a specific tool aren't recorded
-
-1. Check if the tool starts an interactive shell
-1. Try configuring the tool to use `bash -i` or `zsh -i`
-1. Use a wrapper script if the tool doesn't support shell arguments
-
-### Too many commands are being recorded
-
-1. Add patterns to `history_filter` in your config
-1. Use `cwd_filter` for directory-based exclusion
-1. Prefix sensitive commands with a space
-1. Run `atuin history prune` to clean existing entries
-
-### Atuin works in terminal but not in IDE
-
-This is the most common issue. The IDE's embedded terminal likely isn't starting an interactive shell. See [Enabling Atuin in Embedded Terminals](#enabling-atuin-in-embedded-terminals) above.
+These shells are supported too; see [installation](https://docs.atuin.sh/guide/installation/#installing-the-shell-plugin) for how to load the plugin in each.
 
 # AI Agent Hooks
 
@@ -951,6 +867,85 @@ hooks.PostToolUseFailure: already installed, skipping
 
 For pi, reinstalling will also skip if the managed extension already matches the bundled version.
 
+# Excluding Commands from History
+
+Sometimes you don't want a command in your history and Atuin gives you four ways ways to exclude the commands.
+
+## Prefix with a space
+
+Most shells support "ignorespace": a command typed with a leading space isn't saved to history. Atuin honors this convention, and it's the quickest way to keep a single command out.
+
+```
+ echo "this won't be saved"  # note the leading space
+```
+
+Bash with bash-preexec
+
+When using bash-preexec (not ble.sh), there's a known issue where ignorespace isn't fully honored. The command won't appear in Atuin, but may still appear in your bash history. See [installation](https://docs.atuin.sh/guide/installation/index.md) for details.
+
+## Filter by command: `history_filter`
+
+[`history_filter`](https://docs.atuin.sh/configuration/config/#history_filter) excludes any command matching a regular expression:
+
+```
+history_filter = [
+    "^ls$",           # exclude bare 'ls', but not 'ls -la'
+    "^cd ",           # exclude cd commands
+    "--password",     # exclude anything with a password flag
+]
+```
+
+Patterns are unanchored, so `secret` matches anywhere in the command. Use `^` and `$` when you want to match the whole command exactly.
+
+## Filter by directory: `cwd_filter`
+
+[`cwd_filter`](https://docs.atuin.sh/configuration/config/#cwd_filter) excludes every command run from a matching directory:
+
+```
+cwd_filter = [
+    "^/tmp",                    # nothing run from /tmp
+    "/node_modules/",           # nothing run inside any node_modules
+    "^/home/user/scratch",      # a scratch directory
+]
+```
+
+These patterns are unanchored regular expressions too, matched against the working directory path.
+
+## Skip Atuin entirely for a tool
+
+If a tool spawns interactive shells and you'd rather it recorded nothing at all, guard the `atuin init` call in your shell config:
+
+```
+# In .bashrc or .zshrc
+if [[ -z "${MY_TOOL_SESSION}" ]]; then
+    eval "$(atuin init bash)"
+fi
+```
+
+Then configure the tool to set `MY_TOOL_SESSION=1` when it spawns a shell. See the [`atuin init` reference](https://docs.atuin.sh/reference/init/index.md) for the other ways to change what the plugin sets up.
+
+Commands from AI agents
+
+You don't need to exclude AI agent commands to keep them out of your way. Atuin tags them with the agent that ran them and hides them from interactive search by default — see [AI Agent Hooks](https://docs.atuin.sh/guide/agent-hooks/index.md).
+
+## Cleaning up commands you already recorded
+
+Filters only apply going forward. To remove entries recorded *before* you added a filter, run [`atuin history prune`](https://docs.atuin.sh/reference/prune/index.md):
+
+```
+# See what would be removed
+atuin history prune --dry-run
+
+# Remove it
+atuin history prune
+```
+
+This deletes existing entries matching your current `history_filter` and `cwd_filter`. For deleting entries that don't match a filter, see [Deleting History](https://docs.atuin.sh/guide/delete-history/index.md).
+
+## Secrets are filtered automatically
+
+Independently of your own filters, Atuin refuses to record commands that look like they contain credentials — AWS keys, GitHub and npm tokens, Slack webhooks, Stripe keys, and more. This is on by default; see [`secrets_filter`](https://docs.atuin.sh/configuration/config/#secrets_filter) for the full list.
+
 # Deleting History
 
 Atuin provides several ways to delete history, whether you want to remove a single entry, bulk delete by query, clean up duplicates, or wipe everything.
@@ -1073,7 +1068,7 @@ atuin store verify
 atuin store purge
 ```
 
-This is useful when one machine ends up with local records that were encrypted with a different key than the one Atuin is currently using.
+This is useful when one machine ends up with local records that were encrypted with a different key than the one Atuin is currently using. See the [store reference](https://docs.atuin.sh/reference/store/index.md) for the other record store commands.
 
 Warning
 
@@ -1288,7 +1283,7 @@ to the same config block. This will print out any color names that cannot be par
 A final optional setting is available:
 
 ```
-max_depth: 10
+max_depth = 10
 ```
 
 which sets the maximum levels of theme parents to traverse. This should not need to be explicitly added in normal use.
@@ -1358,7 +1353,7 @@ Guidance = "#888844"
 
 where not all of the *Meanings* need to be explicitly defined. If they are absent, then the color will be chosen from the parent theme, if one is defined, or if that key is missing in the `theme` block, from the `default` theme.
 
-If the entire named theme is missing, which is inherently an error, then the theme will drop to `(none)` and leave Atuin unstyled, rather than trying to fallback to the any default, or other, theme.
+If the entire named theme is missing, which is inherently an error, then the theme will drop to `(none)` and leave Atuin unstyled, rather than trying to fall back to the default or any other theme.
 
 This theme file should be moved to `~/.config/atuin/themes/my-theme.toml` and the following added to `~/.config/atuin/config.toml`:
 
@@ -1460,7 +1455,7 @@ Default: `1h`
 
 How often to automatically sync with the server. This can be given in a "human-readable" format. For example, `10s`, `20m`, `1h`, etc.
 
-If set to `0`, Atuin will sync after every command. Some servers may potentially rate limit, which won't cause any issues.
+If set to `0`, Atuin will sync after every command. Some servers may rate limit very frequent syncs, but this won't cause any issues.
 
 ```
 sync_frequency = "1h"
@@ -1522,18 +1517,9 @@ The "daemon-fuzzy" search mode does not currently support the bar character oper
 
 Default: `global`
 
-The default filter to use when searching
+The filter mode that interactive search starts in. Accepted values are `global`, `host`, `session`, `directory`, `workspace`, and `session-preload` — see [Filter mode](https://docs.atuin.sh/guide/advanced-usage/#filter-mode) for what each one searches.
 
-| Mode             | Description                                                                          |
-| ---------------- | ------------------------------------------------------------------------------------ |
-| global (default) | Search from the full history                                                         |
-| host             | Search history from this host                                                        |
-| session          | Search history from the current session                                              |
-| directory        | Search history from the current directory                                            |
-| workspace        | Search history from the current git repository                                       |
-| session-preload  | Search from the current session and the global history from before the session start |
-
-Filter modes can still be toggled via ctrl-r
+Whichever mode you start in, you can still cycle through the rest with ctrl-r.
 
 ```
 filter_mode = "host"
@@ -1607,7 +1593,7 @@ Which style to use. Possible values: `auto`, `full` and `compact`.
 
 - `full`:
 
-This means that Atuin will automatically switch to `compact` mode when the terminal window is too short for `full` to display properly.
+With `auto`, Atuin uses `full` mode, but automatically switches to `compact` mode when the terminal window is too short for `full` to display properly.
 
 ```
 style = "compact"
@@ -1693,7 +1679,7 @@ Atuin version: >= 18.4
 
 Default: `8`
 
-Set Atuin to hide lines when a minimum number of rows is subceeded. This has no effect except when `compact` style is being used (see `style` above), and currently applies to only the interactive search and inspector. It can be turned off entirely by setting to `0`.
+Hide extra UI lines when the available height falls below this number of rows. This has no effect except when `compact` style is being used (see `style` above), and currently applies to only the interactive search and inspector. It can be turned off entirely by setting to `0`.
 
 ```
 auto_hide_height = 8
@@ -1718,11 +1704,7 @@ exit_mode = "return-query"
 
 ### `history_format`
 
-Default to `history list`
-
-The history format allows you to configure the default `history list` format - which can also be specified with the --format arg.
-
-The specified --format arg will prioritize the config when both are present
+The default format used by `history list`. It can also be specified per invocation with the `--format` arg, which takes precedence over this config value.
 
 More on [history list](https://docs.atuin.sh/reference/list/index.md)
 
@@ -1783,18 +1765,27 @@ Default: `true`
 secrets_filter = true
 ```
 
-This matches history against a set of default regex, and will not save it if we get a match. Defaults include
+Matches each command against a set of built-in regular expressions, and refuses to save it if any of them match. The patterns currently cover:
 
-1. AWS key id
-1. Github pat (old and new)
-1. Slack oauth tokens (bot, user)
-1. Slack webhooks
-1. Stripe live/test keys
-1. Atuin login command
-1. Cloud environment variable patterns (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AZURE_STORAGE_CLASS_KEY`, `GOOGLE_SERVICE_ACCOUNT_KEY`)
-1. Netlify authentication tokens
-1. Npm pat
-1. Pulumi pat
+| Service      | Matches                                                                                                               |
+| ------------ | --------------------------------------------------------------------------------------------------------------------- |
+| AWS          | Access key IDs, and commands setting `AWS_SECRET_ACCESS_KEY` or `AWS_SESSION_TOKEN`                                   |
+| Azure        | Commands setting `AZURE_*_KEY`                                                                                        |
+| Google Cloud | Commands setting `GOOGLE_SERVICE_ACCOUNT_KEY`                                                                         |
+| GitHub       | Personal access tokens (old and new), OAuth access tokens (app and user), app installation tokens, and refresh tokens |
+| GitLab       | Personal access tokens                                                                                                |
+| Slack        | OAuth v2 bot and user tokens, and webhook URLs                                                                        |
+| Stripe       | Live and test keys                                                                                                    |
+| Netlify      | Authentication tokens                                                                                                 |
+| npm          | Tokens                                                                                                                |
+| Pulumi       | Personal access tokens                                                                                                |
+| Atuin        | `atuin login`, which takes your password and encryption key as arguments                                              |
+
+For the exact expressions, see [`secrets.rs`](https://github.com/atuinsh/atuin/blob/main/crates/atuin-client/src/secrets.rs).
+
+Note
+
+This is a safety net, not a guarantee. It only catches credentials in recognized formats — use [`history_filter`](#history_filter) for anything else you need kept out, and see [Excluding Commands from History](https://docs.atuin.sh/guide/excluding-commands/index.md).
 
 ### macOS Ctrl-n key shortcuts
 
@@ -1943,7 +1934,7 @@ prefers_reduced_motion = false
 
 Atuin version: >= 18.4
 
-The list of filter modes available in interactive search, in the order they cycle through when you press ctrl-r. By default, all modes are enabled. Removing a mode from this list disables it entirely. The `workspace` mode is skipped when not in a git repository or when `workspaces = false`. See [`filter_mode`](#filter_mode) for a description of each mode.
+The list of filter modes available in interactive search, in the order they cycle through when you press ctrl-r. By default, all modes are enabled. Removing a mode from this list disables it entirely. The `workspace` mode is skipped when not in a git repository or when `workspaces = false`. See [Filter mode](https://docs.atuin.sh/guide/advanced-usage/#filter-mode) for a description of each mode.
 
 The `filter_mode` setting selects the initial mode from this list. If `filter_mode` is set to a mode not in the list, the first available mode is used instead.
 
@@ -2015,32 +2006,11 @@ frequency_score_multiplier = 0.8
 frecency_score_multiplier = 2.0
 ```
 
-#### `authors`
+### Filtering by author
 
-Default: `["$all-user"]`
+Interactive search shows only commands you ran yourself, hiding those recorded by AI coding agents through [agent hooks](https://docs.atuin.sh/guide/agent-hooks/index.md). This is not currently configurable in `config.toml`.
 
-Filter search results by command author. This controls which commands appear in interactive search based on who (or what) ran them. Useful when AI coding agents are recording commands via [agent hooks](https://docs.atuin.sh/guide/agent-hooks/index.md).
-
-Special values:
-
-| Value        | Meaning                                                   |
-| ------------ | --------------------------------------------------------- |
-| `$all-user`  | Commands from any author that is **not** a known AI agent |
-| `$all-agent` | Commands from any known AI agent                          |
-
-You can also use literal author names like `"claude-code"`, `"codex"`, `"opencode"`, or `"pi"`.
-
-```
-[search]
-# Default: only show human-authored commands
-authors = ["$all-user"]
-
-# Show everything (no author filtering)
-# authors = []
-
-# Show commands from you and Claude Code
-# authors = ["$all-user", "claude-code"]
-```
+To filter by author on the command line, use `atuin search --author`. See [Filtering by Author](https://docs.atuin.sh/guide/agent-hooks/#filtering-by-author) for the available values.
 
 ## Stats
 
@@ -2125,7 +2095,7 @@ atuin dotfiles alias list
 atuin dotfiles alias delete k
 ```
 
-After setting an alias, you will either need to restart your shell or source the init file for the change to take affect
+After setting an alias, you will either need to restart your shell or source the init file for the change to take effect
 
 ## keys
 
@@ -2238,6 +2208,56 @@ By using `auto` a preview is shown, if the command is longer than the width of t
 
 ```
 strategy = "auto"
+```
+
+## tmux
+
+When you are inside tmux, open the search UI in a [popup](https://github.com/tmux/tmux/wiki/Getting-Started#popups) floating above your current pane, instead of drawing over the pane itself. The popup opens in your current working directory, and closes when you accept a command or exit.
+
+```
+[tmux]
+enabled = true
+width = "80%"
+height = "60%"
+```
+
+Atuin falls back to its normal rendering, with no error, whenever the popup can't be used — outside tmux, on tmux older than 3.2, or in a shell that doesn't support it.
+
+Requirements
+
+- tmux >= 3.2, which is where `display-popup` gained the behavior Atuin needs
+- zsh, bash, or fish — nushell, xonsh, and PowerShell don't support the popup yet
+
+These settings are read by `atuin init` and passed to the shell plugin through environment variables, so **restart your shell after changing them**. To disable the popup for a single session without touching your config, set `ATUIN_TMUX_POPUP=false` before Atuin's key bindings run.
+
+### `enabled`
+
+Default: `false`
+
+Whether to show the search UI in a tmux popup.
+
+```
+enabled = true
+```
+
+### `width`
+
+Default: `"80%"`
+
+Width of the popup, passed to `tmux display-popup -w`. Accepts a percentage of the terminal width, or an absolute number of columns.
+
+```
+width = "80%"
+```
+
+### `height`
+
+Default: `"60%"`
+
+Height of the popup, passed to `tmux display-popup -h`. Accepts a percentage of the terminal height, or an absolute number of rows.
+
+```
+height = "60%"
 ```
 
 ## Daemon
@@ -2660,7 +2680,7 @@ atuin-bind [-m KEYMAP] KEYSEQ COMMAND
 | `atuin-up-search`       | Search command for `up` or similar keys                                    |
 | `atuin-up-search-emacs` | Search command for `up` or similar keys, with the `emacs` keymap mode      |
 | `atuin-up-search-viins` | Search command for `up` or similar keys, with the `vim-insert` keymap mode |
-| `atuin-up-search-vicmd` | Search command for `up` or similar keys, with the `vim-nomarl` keymap mode |
+| `atuin-up-search-vicmd` | Search command for `up` or similar keys, with the `vim-normal` keymap mode |
 
 The keymap mode controls the initial keymap in the Atuin search and is determined in combination with the config ["keymap_mode"](https://docs.atuin.sh/configuration/config/#keymap_mode) (`atuin >= 18.0`).
 
@@ -2695,9 +2715,9 @@ bind -M insert \cr _atuin_search
 
 For the `Up` keybinding, `_atuin_bind_up` can be used instead of `_atuin_search`.
 
-Adding the useful alternative key binding of `Ctrl`+`Up` is tricky and determined by the terminals adherence to terminfo(5).
+Adding the useful alternative key binding of `Ctrl`+`Up` is tricky and determined by the terminal's adherence to terminfo(5).
 
-Conveniently FISH uses a command to capture keystrokes and advises you of the exact command to add for your specific terminal. In your terminal, run `fish_key_reader` then punch the desired keystroke/s.
+Conveniently, fish provides a command to capture keystrokes and advise you of the exact command to add for your specific terminal. In your terminal, run `fish_key_reader` then press the desired keystrokes.
 
 For example, in Gnome Terminal the output to `Ctrl`+`Up` is `bind \e\[1\;5A 'do something'`
 
@@ -2707,7 +2727,7 @@ So, adding this to the above sample, `bind \e\[1\;5A _atuin_search` will provide
 
 ```
 $env.ATUIN_NOBIND = true
-atuin init nu | save -f ~/.local/share/atuin/init.nu #make sure you created the directory beforehand with `mkdir ~/.local/share/atuin/init.nu`
+atuin init nu | save -f ~/.local/share/atuin/init.nu #make sure you created the directory beforehand with `mkdir ~/.local/share/atuin`
 source ~/.local/share/atuin/init.nu
 
 #bind to ctrl-r in emacs, vi_normal and vi_insert modes, add any other bindings you want here too
@@ -2746,13 +2766,12 @@ $env.config = (
 | ctrl + delete / ctrl + alt + delete       | Remove the next word or the word just after the cursor                                                         |
 | ctrl + w                                  | Remove the word before the cursor even if it spans across the word boundaries                                  |
 | ctrl + u                                  | Clear the current line                                                                                         |
-| ctrl + n / ctrl + j / ↑                   | Select the next item on the list                                                                               |
-| ctrl + p / ctrl + k / ↓                   | Select the previous item on the list                                                                           |
+| ctrl + n / ctrl + j / ↓                   | Select the next item on the list                                                                               |
+| ctrl + p / ctrl + k / ↑                   | Select the previous item on the list                                                                           |
 | ctrl + o                                  | Open the [inspector](#inspector)                                                                               |
 | page down                                 | Scroll search results one page down                                                                            |
 | page up                                   | Scroll search results one page up                                                                              |
-| ↓ (with no entry selected)                | Return original or return query depending on [settings](https://docs.atuin.sh/configuration/config/#exit_mode) |
-| ↓                                         | Select the next item on the list                                                                               |
+| ↓ (on the first entry)                    | Return original or return query depending on [settings](https://docs.atuin.sh/configuration/config/#exit_mode) |
 | ctrl + a, d                               | Delete the selected history entry                                                                              |
 | ctrl + a, D                               | Delete **all** history entries matching the selected command                                                   |
 | ctrl + a, a                               | Move cursor to the start of the line                                                                           |
@@ -2770,8 +2789,8 @@ If [vim is enabled in the config](https://docs.atuin.sh/configuration/config/#ke
 
 | Shortcut | Mode   | Action                                        |
 | -------- | ------ | --------------------------------------------- |
-| k        | Normal | Selects the next item on the list             |
-| j        | Normal | Selects the previous item on the list         |
+| k        | Normal | Selects the previous item on the list         |
+| j        | Normal | Selects the next item on the list             |
 | h        | Normal | Move cursor left                              |
 | l        | Normal | Move cursor right                             |
 | 0        | Normal | Move cursor to start of line                  |
@@ -2832,13 +2851,13 @@ Modifier keys, F1-F24 keys, and some special characters work best - or *only* wo
 
 The Atuin TUI has multiple modes, each with its own keymap. You configure each one under a separate TOML table:
 
-| Config section        | When it is active                                   |
-| --------------------- | --------------------------------------------------- |
-| `[keymap.emacs]`      | Search tab, `keymap_mode = "emacs"`                 |
-| `[keymap.vim-normal]` | Search tab, `keymap_mode = "vim"`, normal mode      |
-| `[keymap.vim-insert]` | Search tab, `keymap_mode = "vim"`, insert mode      |
-| `[keymap.inspector]`  | Inspector tab (opened with `ctrl-o`)                |
-| `[keymap.prefix]`     | After pressing the prefix key (`ctrl-a` by default) |
+| Config section        | When it is active                                                                                          |
+| --------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `[keymap.emacs]`      | Search tab, `keymap_mode = "emacs"`                                                                        |
+| `[keymap.vim-normal]` | Search tab, vim normal mode (see [`keymap_mode`](https://docs.atuin.sh/configuration/config/#keymap_mode)) |
+| `[keymap.vim-insert]` | Search tab, vim insert mode (see [`keymap_mode`](https://docs.atuin.sh/configuration/config/#keymap_mode)) |
+| `[keymap.inspector]`  | Inspector tab (opened with `ctrl-o`)                                                                       |
+| `[keymap.prefix]`     | After pressing the prefix key (`ctrl-a` by default)                                                        |
 
 Vim-insert mode inherits all emacs bindings by default, then overrides `esc` and `ctrl-[` to enter normal mode instead of exiting.
 
@@ -2846,7 +2865,7 @@ You only need to specify the keys you want to change. Unmentioned keys keep thei
 
 Warning
 
-If you specify a key in your keymap that would normally be changed by an option, like the `enter` key with the `enter_accept` setting, the setting will not take any affect. Those options modify the default keymap based on their setting, but if you override the key in the keymap, you're responsible for managing correct behavior.
+If you specify a key in your keymap that would normally be changed by an option, like the `enter` key with the `enter_accept` setting, the setting will not take effect. Those options modify the default keymap based on their setting, but if you override the key in the keymap, you're responsible for managing correct behavior.
 
 ## Key format
 
@@ -3030,8 +3049,8 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `delete-all`         | Delete **all** history entries matching the selected command text                                                     |
 | `exit`               | Exit the TUI (behavior depends on the `exit_mode` setting)                                                            |
 | `redraw`             | Redraw the screen                                                                                                     |
-| `cycle-filter-mode`  | Cycle through filter modes (global, host, session, directory)                                                         |
-| `cycle-search-mode`  | Cycle through search modes (fuzzy, prefix, fulltext, skim)                                                            |
+| `cycle-filter-mode`  | Cycle through the enabled [filter modes](https://docs.atuin.sh/configuration/config/#filter_mode)                     |
+| `cycle-search-mode`  | Cycle through [search modes](https://docs.atuin.sh/configuration/config/#search_mode) (fuzzy, prefix, fulltext, skim) |
 | `toggle-tab`         | Toggle between the search tab and inspector tab                                                                       |
 | `switch-context`     | Switch to the [context](https://docs.atuin.sh/guide/advanced-usage/#context-switch) of the currently selected command |
 | `clear-context`      | Return to the initial [context](https://docs.atuin.sh/guide/advanced-usage/#context-switch)                           |
@@ -3271,6 +3290,98 @@ If you are migrating from `[keys]` to `[keymap]`, here is how the old flags map:
 | `prefix = "x"`                  | Prefix key becomes `ctrl-x` (set in the emacs/vim keymaps)                                           |
 # Reference
 
+# account
+
+## `atuin account`
+
+Manage your sync account. Registering and logging in are covered as a walkthrough in [Setting up Sync](https://docs.atuin.sh/guide/sync/index.md); this page is the command reference.
+
+`atuin register`, `atuin login`, and `atuin logout` are shorthand for the corresponding `atuin account` subcommands.
+
+## Subcommands
+
+### `atuin account register`
+
+Create an account on the configured sync server.
+
+```
+atuin account register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
+```
+
+| Flag              | Description                                                            |
+| ----------------- | ---------------------------------------------------------------------- |
+| `--username`/`-u` | Your desired username. Must be unique, alphanumerics and hyphens only  |
+| `--email`/`-e`    | Used only for important notifications, such as security issues         |
+| `--password`/`-p` | Omit this to be prompted instead, keeping it out of your shell history |
+
+Registering logs you in and generates your encryption key. Save the key — see [`atuin key`](https://docs.atuin.sh/reference/sync/#key).
+
+### `atuin account login`
+
+Log in on another machine.
+
+```
+atuin account login -u <USERNAME>
+```
+
+| Flag               | Description                                                  |
+| ------------------ | ------------------------------------------------------------ |
+| `--username`/`-u`  | Your username                                                |
+| `--password`/`-p`  | Omit to be prompted                                          |
+| `--key`/`-k`       | Your encryption key. Omit to be prompted                     |
+| `--totp-code`/`-t` | Your two-factor authentication code, if your account has 2FA |
+
+Omitting `--password` and `--key` is recommended: you'll be prompted for both, so neither ends up in your shell history.
+
+### `atuin account logout`
+
+```
+atuin account logout
+```
+
+Ends the local session. Your history and encryption key stay on the machine.
+
+### `atuin account change-password`
+
+```
+atuin account change-password
+```
+
+| Flag                      | Description                                                  |
+| ------------------------- | ------------------------------------------------------------ |
+| `--current-password`/`-c` | Omit to be prompted                                          |
+| `--new-password`/`-n`     | Omit to be prompted                                          |
+| `--totp-code`/`-t`        | Your two-factor authentication code, if your account has 2FA |
+
+This changes your account password only. Your encryption key is unaffected, and other machines stay logged in.
+
+### `atuin account delete`
+
+```
+atuin account delete
+```
+
+Deletes your account and all synchronized history from the server.
+
+| Flag               | Description                                                  |
+| ------------------ | ------------------------------------------------------------ |
+| `--password`/`-p`  | Your password. Omit to be prompted                           |
+| `--totp-code`/`-t` | Your two-factor authentication code, if your account has 2FA |
+
+Warning
+
+This does not prompt for confirmation, and it cannot be undone. Your local history is not affected — only the server copy.
+
+### `atuin account link`
+
+Link your CLI sync account to your [Atuin Hub](https://hub.atuin.sh/) account.
+
+```
+atuin account link
+```
+
+Opens a browser to authenticate with Hub, then associates the two accounts. If you are already signed in to Hub, the accounts are linked immediately.
+
 # config
 
 ## `atuin config`
@@ -3398,7 +3509,7 @@ The Atuin daemon is a background daemon designed to
 
 1. Speed up database writes
 1. Allow machines to sync when not in use, so they're ready to go right away
-1. Provides a hot in-memory fuzzy searcher
+1. Provide a hot in-memory fuzzy searcher
 1. Perform background maintenance
 
 It may also work around issues with ZFS/SQLite performance.
@@ -3481,6 +3592,58 @@ Possible values for the `--shell` argument are the following:
 
 Also, see the [supported shells](https://github.com/atuinsh/atuin#supported-shells).
 
+# init
+
+## `atuin init <shell>`
+
+Prints the shell plugin for the given shell. Evaluating its output is what installs Atuin's hooks and key bindings into your session, so this command belongs in your shell's startup file rather than being run by hand.
+
+```
+atuin init zsh
+```
+
+See [installation](https://docs.atuin.sh/guide/installation/#installing-the-shell-plugin) for the exact line to add for your shell — the syntax differs between shells.
+
+Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`.
+
+## What it sets up
+
+- **Hooks** that record each command, its exit code, and its duration. See [Shell Integration](https://docs.atuin.sh/guide/shell-integration/index.md).
+- **Key bindings** for `Ctrl`+`R` and the `Up` arrow, and `?` for [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md).
+- **Dotfiles**, if [enabled](https://docs.atuin.sh/configuration/config/#dotfiles) — your synced aliases and environment variables are defined here.
+
+## Flags
+
+| Flag                 | Description                                                                  |
+| -------------------- | ---------------------------------------------------------------------------- |
+| `--disable-up-arrow` | Don't bind the `Up` arrow key                                                |
+| `--disable-ctrl-r`   | Don't bind `Ctrl`+`R`                                                        |
+| `--disable-ai`       | Don't bind `?` to [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md) |
+
+For example, to keep `Ctrl`+`R` but leave the up arrow alone:
+
+```
+eval "$(atuin init zsh --disable-up-arrow)"
+```
+
+## Environment variables
+
+| Variable                   | Effect                                                                                            |
+| -------------------------- | ------------------------------------------------------------------------------------------------- |
+| `ATUIN_NOBIND`             | If set to any value, binds no keys at all. Equivalent to passing every `--disable-*` flag.        |
+| `ATUIN_NO_BUILTIN_PREEXEC` | Bash only. Stops `atuin init bash` from auto-loading its bundled bash-preexec (Atuin >= 18.18.0). |
+
+Binding no keys is useful when you want to choose the bindings yourself:
+
+```
+export ATUIN_NOBIND="true"
+eval "$(atuin init zsh)"
+
+bindkey '^r' atuin-search
+```
+
+See [Key Binding](https://docs.atuin.sh/configuration/key-binding/index.md) for the widget and function names each shell exposes, and [Advanced Key Binding](https://docs.atuin.sh/configuration/advanced-key-binding/index.md) for customizing the keys *inside* the TUI.
+
 `atuin hex` has been renamed `atuin pty-proxy` as of Atuin v18.17.0.
 
 # pty-proxy
@@ -3496,6 +3659,21 @@ Previously `atuin hex`
 The search TUI exposes a tradeoff: the UI is either in fullscreen alt-screen mode that takes over your terminal, or inline mode that clears your previous output. Neither is great.
 
 With pty-proxy, the Atuin popup renders over the top of your previous output, but when it's closed we can restore the output successfully.
+
+Already using tmux?
+
+tmux can solve the same problem without pty-proxy: set [`[tmux] enabled = true`](https://docs.atuin.sh/configuration/config/#tmux) and the search UI opens in a popup above your pane, leaving the pane untouched.
+
+## Capturing command output
+
+Because pty-proxy sits between your terminal and your shell, it can also record what each command printed. It reads the [OSC 133](https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/prompts-data-model.md) prompt markers your shell emits to tell where one command's output ends and the next begins, then hands each captured block to the [daemon](https://docs.atuin.sh/reference/daemon/index.md), which holds it in memory against the command's Atuin history ID.
+
+That capture is what lets AI tools see what actually happened, rather than guessing from the command alone:
+
+- [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md) can answer "why did that fail?" by reading the real error, via its `AtuinOutput` tool
+- External agents such as Claude Code and Cursor can do the same through Atuin's [MCP server](https://docs.atuin.sh/ai/mcp/index.md)
+
+Output capture needs **both** pty-proxy and the daemon running. Nothing is captured by default. See [Reading Command Output](https://docs.atuin.sh/ai/command-output/index.md) for setup, retention limits, and privacy.
 
 ## Initialization
 
@@ -3698,8 +3876,8 @@ Atuin search supports wildcards, with either the `*` or `%` character. By defaul
 | `--exclude-cwd`      | Do not include commands that ran in this directory (default: none)                                                                                                               |
 | `--exit`/`-e`        | Filter by exit code (default: none)                                                                                                                                              |
 | `--exclude-exit`     | Do not include commands that exited with this value (default: none)                                                                                                              |
-| `--before`           | Only include commands ran before this time(default: none)                                                                                                                        |
-| `--after`            | Only include commands ran after this time(default: none)                                                                                                                         |
+| `--before`           | Only include commands run before this time (default: none)                                                                                                                       |
+| `--after`            | Only include commands run after this time (default: none)                                                                                                                        |
 | `--interactive`/`-i` | Open the interactive search UI (default: false)                                                                                                                                  |
 | `--human`            | Use human-readable formatting for the timestamp and duration (default: false)                                                                                                    |
 | `--limit`            | Limit the number of results (default: none)                                                                                                                                      |
@@ -3756,7 +3934,7 @@ Atuin can also calculate stats based on your history - this is currently a littl
 
 ## 1-day stats
 
-You provide the starting point, and Atuin computes the stats for 24h from that point. Date parsing is provided by `interim`, which supports different formats for full or relative dates. Certain formats rely on the dialect option in your [configuration](https://docs.atuin.sh/configuration/config/#dialect) to differentiate day from month. Refer to [the module's documentation](https://docs.rs/interim/0.1.0/interim/#supported-formats) for more details on the supported date formats.
+You provide the starting point, and Atuin computes the stats for 24h from that point. Date parsing is provided by `interim`, which supports different formats for full or relative dates. Certain formats rely on the dialect option in your [configuration](https://docs.atuin.sh/configuration/config/#dialect) to differentiate day from month. Refer to [the module's documentation](https://docs.rs/interim/latest/interim/#supported-formats) for more details on the supported date formats.
 
 ```
 $ atuin stats last friday
@@ -3796,11 +3974,104 @@ $ atuin stats all
 +---------------------+-------+
 ```
 
+# store
+
+## `atuin store`
+
+Atuin keeps your history in an encrypted, append-only **record store**. Sync works by exchanging these records, rather than by copying rows between databases. `atuin store` inspects and repairs that store.
+
+Most people never need these commands. Reach for them when sync is misbehaving, or when a machine ends up holding records encrypted with a key it no longer has.
+
+Danger
+
+`rekey`, `purge`, and the `--force` forms of `push`/`pull` can destroy data that cannot be recovered. Read the description of a command before running it, and make sure you know which key Atuin is currently using.
+
+## Subcommands
+
+### `atuin store status`
+
+Print the current state of the record store — how many records exist locally, per tag and per host.
+
+```
+atuin store status
+```
+
+Start here when diagnosing a sync problem.
+
+### `atuin store verify`
+
+Check that every local record can be decrypted with your current key.
+
+```
+atuin store verify
+```
+
+Failures mean some records were written with a different key — usually because a machine was logged in with an old key, or a key was regenerated.
+
+### `atuin store purge`
+
+Delete the local records that fail decryption.
+
+```
+atuin store purge
+```
+
+Warning
+
+This only touches the local record store on the current machine. It does not wipe your history, delete your sync account, or affect other machines.
+
+Run `atuin store verify` first, so you know you are clearing up a genuine key mismatch rather than deleting data blindly. See [Deleting History](https://docs.atuin.sh/guide/delete-history/#purging-undecryptable-local-store-records) for the full procedure.
+
+### `atuin store rekey [KEY]`
+
+Re-encrypt the entire local store with a new key. Omit the key to have one generated for you.
+
+```
+atuin store rekey
+```
+
+Danger
+
+Every other machine will need the new key before it can read anything you sync after this point. Save the new key somewhere safe first.
+
+### `atuin store rebuild <TAG>`
+
+Rebuild derived state from the record store — for example, regenerate the history database from `history` records.
+
+```
+atuin store rebuild history
+```
+
+Useful when the record store is intact but the local view of it isn't.
+
+### `atuin store push`
+
+Upload local records to the sync server, one way.
+
+| Flag         | Description                                                                  |
+| ------------ | ---------------------------------------------------------------------------- |
+| `--tag`/`-t` | Only push this tag (e.g. `history`). Defaults to all tags                    |
+| `--host`     | Only push this host, given as a host UUID. Defaults to the current host      |
+| `--force`    | Clear the remote store, then upload everything local, for all hosts and tags |
+| `--page`     | How many records to upload at a time (default: 100)                          |
+
+### `atuin store pull`
+
+Download records from the sync server, one way.
+
+| Flag         | Description                                                          |
+| ------------ | -------------------------------------------------------------------- |
+| `--tag`/`-t` | Only pull this tag. Defaults to all tags                             |
+| `--force`    | Wipe the local store first, then download everything from the remote |
+| `--page`     | How many records to download at a time (default: 100)                |
+
+For ordinary two-way syncing, use [`atuin sync`](https://docs.atuin.sh/reference/sync/index.md) instead.
+
 # sync
 
 Atuin can back up your history to a server, and use this to ensure multiple machines have the same shell history. This is all encrypted end-to-end, so the server operator can *never* see your data!
 
-Anyone can host a server (see the [self-hosting docs](https://docs.atuin.sh/self-hosting/server-setup/index.md)), but I host one at https://api.atuin.sh. This is the default server address, which can be changed in the [config](https://docs.atuin.sh/configuration/config/#sync_address). Again, I *cannot* see your data, and do not want to.
+Anyone can host a server (see the [self-hosting docs](https://docs.atuin.sh/self-hosting/server-setup/index.md)), and we host one at <https://api.atuin.sh>. This is the default server address, which can be changed in the [config](https://docs.atuin.sh/configuration/config/#sync_address). Again, we *cannot* see your data, and do not want to.
 
 ## Sync frequency
 
@@ -3867,9 +4138,9 @@ atuin logout
 
 While we offer a public sync server, and cannot view your data (as it is encrypted), you may still wish to self host your own Atuin sync server.
 
-The requirements to do so are pretty minimal! You need to be able to run a binary or docker container, and have a PostgreSQL database setup. Atuin requires PostgreSQL 14 or above.
+The requirements to do so are pretty minimal! You need to be able to run a binary or docker container, and have a PostgreSQL database set up. Atuin requires PostgreSQL 14 or above.
 
-Atuin also supports sqlite 3 and above.
+Alternatively, the server can use SQLite (version 3 or above) instead of PostgreSQL.
 
 The server is distributed as a separate binary, `atuin-server`. Prebuilt binaries and an installer are published with every release on the [GitHub releases page](https://github.com/atuinsh/atuin/releases). For example, to install the latest release:
 
@@ -3909,13 +4180,13 @@ ATUIN_OPEN_REGISTRATION=true
 ATUIN_DB_URI="postgres://user:password@hostname/database"
 ```
 
-| Parameter           | Description                                                    |
-| ------------------- | -------------------------------------------------------------- |
-| `host`              | The host to listen on (default: 127.0.0.1)                     |
-| `port`              | The TCP port to listen on (default: 8888)                      |
-| `open_registration` | If `true`, accept new user registrations (default: false)      |
-| `db_uri`            | A valid PostgreSQL URI, for saving history (default: false)    |
-| `path`              | A path to prepend to all routes of the server (default: false) |
+| Parameter           | Description                                                                 |
+| ------------------- | --------------------------------------------------------------------------- |
+| `host`              | The host to listen on (default: 127.0.0.1)                                  |
+| `port`              | The TCP port to listen on (default: 8888)                                   |
+| `open_registration` | If `true`, accept new user registrations (default: false)                   |
+| `db_uri`            | A valid PostgreSQL or SQLite URI, for saving history (required, no default) |
+| `path`              | A path to prepend to all routes of the server (default: empty)              |
 
 For sqlite, use the following in your server.toml:
 
@@ -3974,7 +4245,7 @@ docker run -d -v "$CONFIG:/config" ghcr.io/atuinsh/atuin:<LATEST TAGGED RELEASE>
 
 ## Docker Compose
 
-Using the already build docker image hosting your own Atuin can be done using the supplied docker-compose file.
+You can also host your own Atuin server with the prebuilt docker image using the supplied docker-compose file.
 
 Create a `docker-compose.yml`:
 
@@ -4025,7 +4296,7 @@ docker compose up -d
 
 ## Using systemd to manage your atuin server
 
-The following `systemd` unit file to manage your `docker-compose` managed service:
+The following `systemd` unit file can be used to manage your `docker-compose` managed service:
 
 ```
 [Unit]
@@ -4052,7 +4323,7 @@ Start and enable the service with:
 systemctl enable --now atuin
 ```
 
-Check if its running with:
+Check if it's running with:
 
 ```
 systemctl status atuin
@@ -4069,7 +4340,7 @@ You can add another service to your `docker-compose.yml` file to have it run dai
     env_file:
       - .env
     environment:
-      POSTGRES_HOST: postgresql
+      POSTGRES_HOST: db
       POSTGRES_DB: ${ATUIN_DB_NAME}
       POSTGRES_USER: ${ATUIN_DB_USERNAME}
       POSTGRES_PASSWORD: ${ATUIN_DB_PASSWORD}
@@ -4078,7 +4349,7 @@ You can add another service to your `docker-compose.yml` file to have it run dai
     volumes:
       - ./db_dumps:/db_dumps
     depends_on:
-      - postgresql
+      - db
 ```
 
 This will create daily backups of your database for that additional layer of comfort.
@@ -4315,7 +4586,7 @@ Note that this configuration will store the database folder *outside* the kubern
 
 You should also change the password string in `ATUIN_DB_PASSWORD` and `ATUIN_DB_URI` in the`secrets.yaml` file to a more secure one.
 
-The atuin service on the port `30530` of the host system. That is configured by the `nodePort` property. Kubernetes has a strict rule that you are not allowed to expose a port numbered lower than 30000. To make the clients work, you can simply set the port in your `config.toml` file, e.g. `sync_address = "http://192.168.1.10:30530"`.
+The atuin service is exposed on port `30530` of the host system. That is configured by the `nodePort` property. Kubernetes has a strict rule that you are not allowed to expose a port numbered lower than 30000. To make the clients work, you can simply set the port in your `config.toml` file, e.g. `sync_address = "http://192.168.1.10:30530"`.
 
 Deploy the Atuin server using `kubectl`:
 
@@ -4433,7 +4704,7 @@ Afterwards, run
 systemctl restart systemd-sysusers
 ```
 
-to make sure the file is read. A new `atuin-server` user should then be available.
+to make sure the file is read. A new `atuin` user should then be available.
 
 Now, you can attempt to run the Atuin server:
 
@@ -4500,7 +4771,7 @@ All the settings that control the behavior of [Atuin AI](https://docs.atuin.sh/a
 
 Default: `false`
 
-Whether or not the AI feature are enabled. When set to `false`, the question mark keybinding will output a message with instructions to run `atuin setup` to enable the feature.
+Whether or not the AI features are enabled. When set to `false`, the question mark keybinding will output a message with instructions to run `atuin setup` to enable the feature.
 
 ### model
 
@@ -4638,7 +4909,7 @@ Atuin AI allows you to send additional context to the LLM beyond just your promp
 
 ## Additional Context Search Paths
 
-Atuin AI looks for additional context in `TERMINAL.md` and `.atuin/TERMINAL.md` files in the current directory and its parent directories. It also checks `TERMINAL.md` in your Atuin config directory (`~/.config/atuin/TERMINAL.md` by default). If it finds any of these files, it sends their contents as additional context to the LLM.
+Atuin AI looks for additional context in the current directory and its parent directories, in two locations per directory:
 
 - `.atuin/TERMINAL.md` — scoped inside the `.atuin` dotdir
 - `TERMINAL.md` — at the directory root (e.g. project root)
@@ -4875,9 +5146,9 @@ allow = ["AtuinOutput"]
 
 The `Read` tool allows Atuin AI to read files on your system. Atuin AI might ask to use this tool when you ask it to analyze the contents of a file, when you ask for edits to the contents of a file, or when you ask a question that is most easily answered by consulting the contents of a file.
 
-**Permission rule and scope:** `Read(<glob_pattern>)` (e.g. `Read(**/\*.md)`to allow reading all markdown files in the current directory and subdirectories). A missing glob pattern (e.g.`Read`) matches all files.
+**Permission rule and scope:** `Read(<glob_pattern>)` (e.g. `Read(**/*.md)` to allow reading all markdown files in the current directory and subdirectories). A missing glob pattern (e.g. `Read`) matches all files.
 
-**Config value:** `ai.capabilities.enable_fs_tools` (see [settings documentation](https://docs.atuin.sh/ai/settings/#capabilities)) — this setting enables both the `Read` and `Write` tools.
+**Config value:** `ai.capabilities.enable_file_tools` (see [settings documentation](https://docs.atuin.sh/ai/settings/#capabilities)) — this setting enables both the `Read` and `Write` tools.
 
 **Example permissions file:**
 
@@ -4895,9 +5166,9 @@ To prevent accidental data loss, Atuin AI is required to read the contents of a 
 
 The `Write` tool allows Atuin AI to create and edit files on your system. Atuin AI might ask to use this tool when you ask it to update configuration for a tool or help debug a problem.
 
-**Permission rule and scope:** `Write(<glob_pattern>)` (e.g. `Write(**/\*.md)`to allow reading all markdown files in the current directory and subdirectories). A missing glob pattern (e.g.`Write`) matches all files.
+**Permission rule and scope:** `Write(<glob_pattern>)` (e.g. `Write(**/*.md)` to allow writing all markdown files in the current directory and subdirectories). A missing glob pattern (e.g. `Write`) matches all files.
 
-**Config value:** `ai.capabilities.enable_fs_tools` (see [settings documentation](https://docs.atuin.sh/ai/settings/#capabilities)) — this setting enables both the `Read` and `Write` tools.
+**Config value:** `ai.capabilities.enable_file_tools` (see [settings documentation](https://docs.atuin.sh/ai/settings/#capabilities)) — this setting enables both the `Read` and `Write` tools.
 
 **Example permissions file:**
 
@@ -5245,15 +5516,13 @@ history_filter = [
 
 You can also exclude commands by directory with `cwd_filter`, or prefix individual commands with a space.
 
-See [Shell Integration and Interoperability](https://docs.atuin.sh/guide/shell-integration/#excluding-commands-from-history) for more options.
+See [Excluding Commands from History](https://docs.atuin.sh/guide/excluding-commands/index.md) for more options.
 
 ## How do I remove the default up arrow binding?
 
 Open your shell config file, find the line containing `atuin init`.
 
-Add `--disable-up-arrow`
-
-EG:
+Add `--disable-up-arrow`, e.g.:
 
 ```
 eval "$(atuin init zsh --disable-up-arrow)"
@@ -5265,9 +5534,7 @@ See [key binding](https://docs.atuin.sh/configuration/key-binding/index.md) for 
 
 Open your shell config file, find the line containing `atuin init`.
 
-Add `--disable-ai`
-
-EG:
+Add `--disable-ai`, e.g.:
 
 ```
 eval "$(atuin init zsh --disable-ai)"
@@ -5277,7 +5544,7 @@ eval "$(atuin init zsh --disable-ai)"
 
 Press tab! By default, enter will execute a command, and tab will insert it ready for editing.
 
-You can make `enter` edit a command by putting `enter_accept = false` into your config file (~/.config/atuin/config.toml)
+You can make `enter` edit a command by putting `enter_accept = false` into your config file (`~/.config/atuin/config.toml`)
 
 ## How do I delete my account?
 
@@ -5327,7 +5594,7 @@ If you used the Atuin installer, you can totally delete it by removing the follo
 
 Otherwise, uninstalling Atuin depends on your system, and how you installed it.
 
-EG, on macOS, you'd want to run
+For example, on macOS, you'd want to run
 
 ```
 brew uninstall atuin

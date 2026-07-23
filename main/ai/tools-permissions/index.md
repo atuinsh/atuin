@@ -92,9 +92,9 @@ allow = ["AtuinOutput"]
 
 The `Read` tool allows Atuin AI to read files on your system. Atuin AI might ask to use this tool when you ask it to analyze the contents of a file, when you ask for edits to the contents of a file, or when you ask a question that is most easily answered by consulting the contents of a file.
 
-**Permission rule and scope:** `Read(<glob_pattern>)` (e.g. `Read(**/\*.md)`to allow reading all markdown files in the current directory and subdirectories). A missing glob pattern (e.g.`Read`) matches all files.
+**Permission rule and scope:** `Read(<glob_pattern>)` (e.g. `Read(**/*.md)` to allow reading all markdown files in the current directory and subdirectories). A missing glob pattern (e.g. `Read`) matches all files.
 
-**Config value:** `ai.capabilities.enable_fs_tools` (see [settings documentation](https://docs.atuin.sh/ai/settings/#capabilities)) — this setting enables both the `Read` and `Write` tools.
+**Config value:** `ai.capabilities.enable_file_tools` (see [settings documentation](https://docs.atuin.sh/ai/settings/#capabilities)) — this setting enables both the `Read` and `Write` tools.
 
 **Example permissions file:**
 
@@ -112,9 +112,9 @@ To prevent accidental data loss, Atuin AI is required to read the contents of a 
 
 The `Write` tool allows Atuin AI to create and edit files on your system. Atuin AI might ask to use this tool when you ask it to update configuration for a tool or help debug a problem.
 
-**Permission rule and scope:** `Write(<glob_pattern>)` (e.g. `Write(**/\*.md)`to allow reading all markdown files in the current directory and subdirectories). A missing glob pattern (e.g.`Write`) matches all files.
+**Permission rule and scope:** `Write(<glob_pattern>)` (e.g. `Write(**/*.md)` to allow writing all markdown files in the current directory and subdirectories). A missing glob pattern (e.g. `Write`) matches all files.
 
-**Config value:** `ai.capabilities.enable_fs_tools` (see [settings documentation](https://docs.atuin.sh/ai/settings/#capabilities)) — this setting enables both the `Read` and `Write` tools.
+**Config value:** `ai.capabilities.enable_file_tools` (see [settings documentation](https://docs.atuin.sh/ai/settings/#capabilities)) — this setting enables both the `Read` and `Write` tools.
 
 **Example permissions file:**
 

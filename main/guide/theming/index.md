@@ -35,7 +35,7 @@ to the same config block. This will print out any color names that cannot be par
 A final optional setting is available:
 
 ```
-max_depth: 10
+max_depth = 10
 ```
 
 which sets the maximum levels of theme parents to traverse. This should not need to be explicitly added in normal use.
@@ -105,7 +105,7 @@ Guidance = "#888844"
 
 where not all of the *Meanings* need to be explicitly defined. If they are absent, then the color will be chosen from the parent theme, if one is defined, or if that key is missing in the `theme` block, from the `default` theme.
 
-If the entire named theme is missing, which is inherently an error, then the theme will drop to `(none)` and leave Atuin unstyled, rather than trying to fallback to the any default, or other, theme.
+If the entire named theme is missing, which is inherently an error, then the theme will drop to `(none)` and leave Atuin unstyled, rather than trying to fall back to the default or any other theme.
 
 This theme file should be moved to `~/.config/atuin/themes/my-theme.toml` and the following added to `~/.config/atuin/config.toml`:
 

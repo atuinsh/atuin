@@ -89,6 +89,10 @@
          <lastmod>2026-07-23</lastmod>
     </url>
     <url>
+         <loc>https://docs.atuin.sh/main/guide/excluding-commands/</loc>
+         <lastmod>2026-07-23</lastmod>
+    </url>
+    <url>
          <loc>https://docs.atuin.sh/main/guide/getting-started/</loc>
          <lastmod>2026-07-23</lastmod>
     </url>
@@ -110,6 +114,10 @@
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/guide/theming/</loc>
+         <lastmod>2026-07-23</lastmod>
+    </url>
+    <url>
+         <loc>https://docs.atuin.sh/main/reference/account/</loc>
          <lastmod>2026-07-23</lastmod>
     </url>
     <url>
@@ -141,6 +149,10 @@
          <lastmod>2026-07-23</lastmod>
     </url>
     <url>
+         <loc>https://docs.atuin.sh/main/reference/init/</loc>
+         <lastmod>2026-07-23</lastmod>
+    </url>
+    <url>
          <loc>https://docs.atuin.sh/main/reference/list/</loc>
          <lastmod>2026-07-23</lastmod>
     </url>
@@ -158,6 +170,10 @@
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/reference/stats/</loc>
+         <lastmod>2026-07-23</lastmod>
+    </url>
+    <url>
+         <loc>https://docs.atuin.sh/main/reference/store/</loc>
          <lastmod>2026-07-23</lastmod>
     </url>
     <url>
