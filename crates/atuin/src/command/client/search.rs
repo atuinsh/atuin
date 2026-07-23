@@ -18,7 +18,6 @@ use atuin_client::{
 use super::history::ListMode;
 
 mod cursor;
-mod duration;
 mod engines;
 mod history_list;
 mod inspector;
@@ -26,7 +25,7 @@ mod interactive;
 pub mod keybindings;
 mod syntax;
 
-pub use duration::format_duration_into;
+pub use atuin_common::time::format_duration_into;
 
 #[allow(clippy::struct_excessive_bools, clippy::struct_field_names)]
 #[derive(Parser, Debug)]

@@ -2,7 +2,7 @@ use atuin_client::history::{History, is_known_agent};
 use time::UtcOffset;
 
 pub(crate) fn current_local_offset() -> UtcOffset {
-    UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC)
+    atuin_common::time::local_offset_or_utc()
 }
 
 pub(crate) fn format_last_command(history: &History, local_offset: UtcOffset) -> String {

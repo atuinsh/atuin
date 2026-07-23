@@ -8,7 +8,7 @@ use atuin_client::{
     settings::Settings,
 };
 use itertools::Itertools;
-use time::{OffsetDateTime, UtcOffset};
+use time::OffsetDateTime;
 
 #[cfg(feature = "sync")]
 mod push;
@@ -72,7 +72,7 @@ impl Cmd {
 
     pub async fn status(&self, store: SqliteStore) -> Result<()> {
         let host_id = Settings::host_id().await?;
-        let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
+        let offset = atuin_common::time::local_offset_or_utc();
 
         let status = store.status().await?;
 

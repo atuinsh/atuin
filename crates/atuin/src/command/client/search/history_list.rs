@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use super::duration::format_duration;
 use super::engines::SearchEngine;
 use super::syntax;
 use atuin_client::{
@@ -13,6 +12,7 @@ use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use atuin_common::string::Measure;
 use atuin_common::string::align::Alignment;
 use atuin_common::string::ellipsis::{Indicator, Pos};
+use atuin_common::time::{DATETIME_MINUTE_FMT, DurationExt, OffsetDateTimeExt, format_duration};
 use itertools::Itertools;
 use ratatui::{
     backend::FromCrossterm,
@@ -268,7 +268,7 @@ impl DrawState<'_> {
         } else {
             Meaning::AlertError
         });
-        let duration = Duration::from_nanos(u64::try_from(h.duration).unwrap_or(0));
+        let duration = Duration::saturating_from_nanos_i64(h.duration);
         let formatted = format_duration(duration);
         let w = width as usize;
         // Right-align within the column, ellipsizing if it somehow overflows.
@@ -284,13 +284,7 @@ impl DrawState<'_> {
     fn time(&mut self, h: &History, width: u16) {
         let style = self.theme.as_style(Meaning::Guidance);
 
-        // Account for the chance that h.timestamp is "in the future"
-        // This would mean that "since" is negative, and the unwrap here
-        // would fail.
-        // If the timestamp would otherwise be in the future, display
-        // the time since as 0.
-        let since = (self.now)() - h.timestamp;
-        let time = format_duration(since.try_into().unwrap_or_default());
+        let time = format_duration((self.now)().saturating_duration_since(h.timestamp));
 
         // Format as "Xs ago" right-aligned within column width
         let w = width as usize;
@@ -367,15 +361,12 @@ impl DrawState<'_> {
     /// Render the absolute datetime column (e.g., "2025-01-22 14:35")
     fn datetime(&mut self, h: &History, width: u16) {
         let style = self.theme.as_style(Meaning::Annotation);
-        // Format: YYYY-MM-DD HH:MM
+        // FIXME: this renders UTC, not the configured timezone -- unlike every other
+        // display site, which calls `.to_offset(...)` first. Fixing it means threading a
+        // `Timezone` into `HistoryList`.
         let formatted = h
             .timestamp
-            .format(
-                &time::format_description::parse_borrowed::<1>(
-                    "[year]-[month]-[day] [hour]:[minute]",
-                )
-                .expect("valid format"),
-            )
+            .format(DATETIME_MINUTE_FMT)
             .unwrap_or_else(|_| "????-??-?? ??:??".to_string());
         let w = width as usize;
         let display = formatted.pad_ellipsize(

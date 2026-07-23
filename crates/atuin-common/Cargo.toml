@@ -25,8 +25,12 @@ ansi = ["dep:vt100"]
 
 [dependencies]
 derive_more = { workspace = true }
-time = { workspace = true }
+# `formatting`/`parsing` are needed by the `time` module (format descriptors, offset
+# parsing). They are declared explicitly rather than leeched from sibling crates via
+# cargo feature unification, which would break if those siblings stopped asking.
+time = { workspace = true, features = ["formatting", "parsing"] }
 serde = { workspace = true }
+serde_with = "3.8.1"
 uuid = { workspace = true }
 typed-builder = { workspace = true }
 eyre = { workspace = true }

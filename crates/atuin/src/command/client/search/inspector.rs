@@ -16,7 +16,7 @@ use ratatui::{
     widgets::{Bar, BarChart, BarGroup, Block, Borders, Padding, Paragraph, Row, Table},
 };
 
-use super::duration::format_duration;
+use atuin_common::time::{DurationExt, format_duration};
 
 use super::super::theme::{Meaning, Theme};
 use super::interactive::{Compactness, to_compactness};
@@ -118,7 +118,7 @@ pub fn draw_stats_table(
     stats: &HistoryStats,
     theme: &Theme,
 ) {
-    let duration = Duration::from_nanos(u64_or_zero(history.duration));
+    let duration = Duration::saturating_from_nanos_i64(history.duration);
     let avg_duration = Duration::from_nanos(stats.average_duration);
     let (host, user) = history.hostname.split_once(':').unwrap_or(("", ""));
 
@@ -246,7 +246,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, them
     let duration_over_time: Vec<Bar> = duration_over_time
         .iter()
         .map(|(date, duration)| {
-            let d = Duration::from_nanos(u64_or_zero(*duration));
+            let d = Duration::saturating_from_nanos_i64(*duration);
             Bar::default()
                 .label(date.clone())
                 .value(u64_or_zero(*duration))

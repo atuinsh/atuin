@@ -5,7 +5,7 @@ use std::{
 };
 
 use atuin_common::logs::LogConfig;
-use atuin_common::time::OffsetDateTimeExt;
+use atuin_common::time::{DATETIME_FMT, DurationExt, OffsetDateTimeExt, format_duration};
 use atuin_common::{
     string::{EscapeNonPrintablePosixExt as _, NonNulStr},
     utils,
@@ -40,7 +40,7 @@ use atuin_client::{
 #[cfg(feature = "sync")]
 use atuin_client::record;
 
-use time::{OffsetDateTime, macros::format_description};
+use time::OffsetDateTime;
 use tracing::{debug, warn};
 
 #[cfg(feature = "daemon")]
@@ -320,9 +320,6 @@ impl CmdFormat {
     }
 }
 
-static TIME_FMT: &[time::format_description::FormatItem<'static>] =
-    format_description!("[year]-[month]-[day] [hour repr:24]:[minute]:[second]");
-
 /// defines how to format the history
 impl FormatKey for FmtHistory<'_> {
     #[allow(clippy::cast_sign_loss)]
@@ -337,20 +334,19 @@ impl FormatKey for FmtHistory<'_> {
             "directory" => f.write_str(self.history.cwd.trim())?,
             "exit" => f.write_str(&self.history.exit.to_string())?,
             "duration" => {
-                let dur = Duration::from_nanos(std::cmp::max(self.history.duration, 0) as u64);
+                let dur = Duration::saturating_from_nanos_i64(self.history.duration);
                 format_duration_into(dur, f)?;
             }
             "time" => {
                 self.history
                     .timestamp
                     .to_offset(self.tz.0)
-                    .format(TIME_FMT)
+                    .format(DATETIME_FMT)
                     .map_err(|_| fmt::Error)?
                     .fmt(f)?;
             }
             "relativetime" => {
-                let since = OffsetDateTime::now_utc() - self.history.timestamp;
-                let d = Duration::try_from(since).unwrap_or_default();
+                let d = OffsetDateTime::now_utc().saturating_duration_since(self.history.timestamp);
                 format_duration_into(d, f)?;
             }
             "host" => f.write_str(
@@ -733,7 +729,9 @@ impl TailEvent {
                 intent: self.history.intent.as_deref(),
                 exit: self.exit_value(),
                 duration_ns: self.duration_value(),
-                duration: self.duration_value().map(format_duration_ns),
+                duration: self
+                    .duration_value()
+                    .map(|d| format_duration(Duration::saturating_from_nanos_i64(d))),
                 success: self.success_value(),
                 finished_at: self
                     .finished_at()
@@ -850,7 +848,9 @@ impl TailEvent {
 
     fn duration_display(&self) -> String {
         match self.duration_value() {
-            Some(duration) if duration >= 0 => format_duration_ns(duration),
+            Some(duration) if duration >= 0 => {
+                format_duration(Duration::saturating_from_nanos_i64(duration))
+            }
             Some(_) => "unknown".bright_yellow().to_string(),
             None => "running".bright_yellow().to_string(),
         }
@@ -877,19 +877,7 @@ impl TailKind {
 
 #[cfg(feature = "daemon")]
 fn format_history_time(timestamp: OffsetDateTime, tz: Timezone) -> Result<String> {
-    Ok(timestamp.to_offset(tz.0).format(TIME_FMT)?)
-}
-
-#[cfg(feature = "daemon")]
-fn format_duration_ns(duration_ns: i64) -> String {
-    struct F(Duration);
-    impl Display for F {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            format_duration_into(self.0, f)
-        }
-    }
-
-    F(Duration::from_nanos(duration_ns.max(0).cast_unsigned())).to_string()
+    Ok(timestamp.to_offset(tz.0).format(DATETIME_FMT)?)
 }
 
 #[cfg(feature = "daemon")]
