@@ -33,7 +33,7 @@ See
  - <https://docs.aws.amazon.com/wellarchitected/latest/financial-services-industry-lens/use-envelope-encryption-with-customer-master-keys.html>
  - <https://cloud.google.com/kms/docs/envelope-encryption>
  - <https://learn.microsoft.com/en-us/azure/storage/blobs/client-side-encryption?tabs=dotnet#encryption-and-decryption-via-the-envelope-technique>
- - <https://www.yubico.com/gb/product/yubihsm-2-fips/>
+ - <https://www.yubico.com/products/hardware-security-module/>
  - <https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html#encrypting-stored-keys>
 
 Why would we care? In the past we have received some requests for company solutions. If in future we can configure a
