@@ -94,10 +94,13 @@ pub struct CliVerifyResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CapabilitiesResponse {
-    /// The version of the capabilities response.
+    /// An opaque capability token issued by the server.
     ///
-    /// If the client and server disagree on this, none of the capabilities are to be assumed.
-    pub version: usize,
+    /// The server is free to choose its own scheme (a hash, a monotonic counter, a UUID, ...); the
+    /// client stores and echoes this value back verbatim in `X-Atuin-Capabilities-Known` and never
+    /// interprets it. If the client and server disagree on this token, none of the capabilities are
+    /// to be assumed.
+    pub version: String,
 
     /// The list of capabilities this server supports. These will be provided as a JSON:
     ///
@@ -111,11 +114,10 @@ pub struct CapabilitiesResponse {
     ///     "version": 1,
     ///     "max_batch_size": 128,
     ///     "min_batch_size": 12,
-    ///     "max_bytes": 13,
+    ///     "max_bytes": 13
     ///   },
     ///   "sh.atuin.server/records.stdout": {
-    ///     "version": 1,
-    ///     ""
+    ///     "version": 1
     ///   }
     /// }
     /// ```

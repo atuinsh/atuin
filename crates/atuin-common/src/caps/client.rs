@@ -32,7 +32,7 @@ struct CapClientInner {
 #[derive(Debug)]
 struct ServerCaps {
     /// The server's capability version.
-    version: usize,
+    version: String,
     caps: HashMap<CapKey, serde_json::Value>,
 }
 
@@ -134,10 +134,10 @@ impl CapClient {
 
     /// The capability token this client currently knows, or `None` if it has never fetched.
     ///
-    /// The token is opaque: it is the server's [`ServerCaps::version`] stringified, echoed back to
-    /// the server verbatim. The client never interprets it.
+    /// The token is opaque: it is the server's [`ServerCaps::version`], echoed back to the server
+    /// verbatim. The client never interprets it.
     pub(crate) fn known_token(&self) -> Option<String> {
-        self.inner.server.get().map(|caps| caps.version.to_string())
+        self.inner.server.get().map(|caps| caps.version.clone())
     }
 }
 
@@ -155,7 +155,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/api/v0/capabilities"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "version": 7,
+                "version": "7",
                 "capabilities": {}
             })))
             .mount(&server)
@@ -171,7 +171,7 @@ mod tests {
 
         client.refresh(&reqwest::Client::new()).await.unwrap();
 
-        // The token is the server's version, stringified and opaque.
+        // The token is the server's version, opaque and echoed verbatim.
         assert_eq!(client.known_token(), Some("7".to_string()));
     }
 }

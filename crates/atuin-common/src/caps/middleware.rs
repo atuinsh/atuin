@@ -128,7 +128,6 @@ impl CapabilitiesExt for Client {
 mod tests {
     use super::*;
     use crate::caps::CapClient;
-    use reqwest_middleware::ClientBuilder;
     use rstest::rstest;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -140,7 +139,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/api/v0/capabilities"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "version": 5,
+                "version": "5",
                 "capabilities": {}
             })))
             .mount(&server)
