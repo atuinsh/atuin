@@ -50,7 +50,7 @@ How the client talks to the configured `endpoint`. One of:
 
 With the default of `"auto"`, pointing `endpoint` at your own server just works: set `api_token` if your server requires one.
 
-### yolo
+### `yolo`
 
 Default: `false`
 

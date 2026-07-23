@@ -64,6 +64,6 @@ unhighlighted
 unstyled
 walkthrough
 [Xx]onsh
-(?:yolo|YOLO)
+YOLO
 zinit
 [Zz]sh

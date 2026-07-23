@@ -176,7 +176,7 @@ Atuin version: >= 17.0
 
 Default: `fuzzy`
 
-The default `searchmode` to use when searching and being invoked from a shell up-key binding.
+The default search mode to use when searching and being invoked from a shell up-key binding.
 
 Accepts exactly the same options as `search_mode` above
 
@@ -357,7 +357,7 @@ exit_mode = "return-query"
 
 ### `history_format`
 
-The default format used by `history list`. It can also be specified per invocation with the `--format` `arg`, which takes precedence over this config value.
+The default format used by `history list`. It can also be specified per invocation with the `--format` argument, which takes precedence over this config value.
 
 More on [history list](../reference/list.md)
 
@@ -1013,7 +1013,7 @@ Default:
 socket_path = "~/.local/share/atuin/atuin.sock"
 ```
 
-Where to bind a `unix` socket for client -> daemon communication
+Where to bind a Unix socket for client -> daemon communication
 
 If XDG_RUNTIME_DIR is available, then we use this directory instead.
 
@@ -1041,7 +1041,7 @@ systemd_socket = false
 
 Default: `8889`
 
-The port to use for client -> daemon communication. Only used on non-`unix` systems.
+The port to use for client -> daemon communication. Only used on non-Unix systems.
 
 ```toml
 tcp_port = 8889
@@ -1225,16 +1225,16 @@ Each column can be specified as:
 
 #### Available column types
 
-| Column    | Default Width | Description                                     |
-| --------- | ------------- | ----------------------------------------------- |
-| duration  | 5             | Command execution duration (e.g., "123ms")      |
-| time      | 8             | Relative time since execution (e.g., "59m ago") |
-| `datetime` | 16            | Absolute timestamp (e.g., "2025-01-22 14:35")   |
-| directory | 20            | Working directory (truncated if too long)       |
-| host      | 15            | Hostname where command was run                  |
-| user      | 10            | Username                                        |
-| exit      | 3             | Exit code (colored by success/failure)          |
-| command   | *             | The command itself (expands by default)         |
+| Column      | Default Width | Description                                     |
+| ----------- | -------------- | ----------------------------------------------- |
+| `duration`  | 5              | Command execution duration (e.g., "123ms")      |
+| `time`      | 8              | Relative time since execution (e.g., "59m ago") |
+| `datetime`  | 16             | Absolute timestamp (e.g., "2025-01-22 14:35")   |
+| `directory` | 20             | Working directory (truncated if too long)       |
+| `host`      | 15             | Hostname where command was run                  |
+| `user`      | 10             | Username                                        |
+| `exit`      | 3              | Exit code (colored by success/failure)          |
+| `command`   | *              | The command itself (expands by default)         |
 
 #### Column options
 
