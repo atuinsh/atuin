@@ -9,9 +9,9 @@ You provide the starting point, and Atuin computes the stats for 24h from that p
 Date parsing is provided by `interim`, which supports different formats
 for full or relative dates. Certain formats rely on the dialect option in your
 [configuration](../configuration/config.md#dialect) to differentiate day from month.
-Refer to [the module's documentation](https://docs.rs/interim/0.1.0/interim/#supported-formats) for more details on the supported date formats.
+Refer to [the module's documentation](https://docs.rs/interim/latest/interim/#supported-formats) for more details on the supported date formats.
 
-```
+```console
 $ atuin stats last friday
 
 +---------------------+------------+
@@ -33,7 +33,7 @@ $ atuin stats last thursday 3pm  # between last thursday 3:00pm and the followin
 
 ## Full history stats
 
-```
+```console
 $ atuin stats
 # or
 $ atuin stats all

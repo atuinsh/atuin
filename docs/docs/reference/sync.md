@@ -4,10 +4,10 @@ Atuin can back up your history to a server, and use this to ensure multiple
 machines have the same shell history. This is all encrypted end-to-end, so the
 server operator can _never_ see your data!
 
-Anyone can host a server (see the [self-hosting docs](../self-hosting/server-setup.md)), but I
-host one at https://api.atuin.sh. This is the default server address, which can
-be changed in the [config](../configuration/config.md#sync_address). Again, I _cannot_ see your data, and
-do not want to.
+Anyone can host a server (see the [self-hosting docs](../self-hosting/server-setup.md)),
+and we host one at <https://api.atuin.sh>. This is the default server address,
+which can be changed in the [config](../configuration/config.md#sync_address).
+Again, we _cannot_ see your data, and do not want to.
 
 ## Sync frequency
 
@@ -22,7 +22,7 @@ You can manually trigger a sync with `atuin sync`
 
 Register for a sync account with
 
-```
+```shell
 atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
 ```
 
@@ -39,7 +39,7 @@ here!
 
 You can delete your sync account with
 
-```
+```shell
 atuin account delete
 ```
 
@@ -52,7 +52,7 @@ Atuin data directory (`~/.local/share/atuin` on Linux).
 
 You can also get this with
 
-```
+```shell
 atuin key
 ```
 
@@ -63,7 +63,7 @@ Never share this with anyone!
 If you want to log in to a new machine, you will require your encryption key
 (`atuin key`).
 
-```
+```shell
 atuin login -u <USERNAME> -p <PASSWORD> -k <KEY>
 ```
 
@@ -72,6 +72,6 @@ the corresponding flag and you will be prompted to provide it through stdin.
 
 ## Logout
 
-```
+```shell
 atuin logout
 ```
