@@ -284,6 +284,24 @@ cargo update
     }
 
     #[tokio::test]
+    async fn timestamp_near_range_start_does_not_panic_on_backfill() {
+        // first timestamp is near the minimum representable instant, preceded by an
+        // untimestamped command; backfilling before it must not underflow
+        let bytes = b"cargo install atuin\n: -377705116800:0;cargo update\n".to_vec();
+
+        let mut zsh = Zsh { bytes };
+        assert_eq!(zsh.entries().await.unwrap(), 2);
+
+        let mut loader = TestLoader::default();
+        zsh.load(&mut loader).await.unwrap();
+
+        assert_equal(
+            loader.buf.iter().map(|h| h.command.as_str()),
+            ["cargo install atuin", "cargo update"],
+        );
+    }
+
+    #[tokio::test]
     async fn test_parse_metafied() {
         let bytes =
             b"echo \xe4\xbd\x83\x80\xe5\xa5\xbd\nls ~/\xe9\x83\xbf\xb3\xe4\xb9\x83\xb0\n".to_vec();

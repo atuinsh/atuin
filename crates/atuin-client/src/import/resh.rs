@@ -107,22 +107,28 @@ impl Importer for Resh {
 
             #[allow(clippy::cast_possible_truncation)]
             #[allow(clippy::cast_sign_loss)]
-            let timestamp = {
+            let start = {
                 let secs = entry.realtime_before.floor() as i64;
                 let nanosecs = (entry.realtime_before.fract() * 1_000_000_000_f64).round() as i64;
-                // a corrupt entry must not abort the whole import
-                timestamp_from_parts(secs, nanosecs).unwrap_or(OffsetDateTime::UNIX_EPOCH)
+                timestamp_from_parts(secs, nanosecs)
             };
             #[allow(clippy::cast_possible_truncation)]
             #[allow(clippy::cast_sign_loss)]
-            let duration = {
+            let end = {
                 let secs = entry.realtime_after.floor() as i64;
                 let nanosecs = (entry.realtime_after.fract() * 1_000_000_000_f64).round() as i64;
-                match timestamp_from_parts(secs, nanosecs) {
-                    Some(base) => (base - timestamp).whole_nanoseconds() as i64,
-                    None => HistoryImported::DEFAULT_DURATION,
-                }
+                timestamp_from_parts(secs, nanosecs)
             };
+
+            // a corrupt entry must not abort the whole import. only report a duration when
+            // both ends are representable - measuring against the epoch sentinel would
+            // invent a decades-long duration
+            let duration = match (start, end) {
+                (Some(start), Some(end)) => i64::try_from((end - start).whole_nanoseconds())
+                    .unwrap_or(HistoryImported::DEFAULT_DURATION),
+                _ => HistoryImported::DEFAULT_DURATION,
+            };
+            let timestamp = start.unwrap_or(OffsetDateTime::UNIX_EPOCH);
 
             let imported = History::import()
                 // resh shell string matches what we use; see
@@ -238,5 +244,35 @@ mod test {
         assert_eq!(loader.buf[0].timestamp.unix_timestamp(), 1_639_162_832);
         assert_eq!(loader.buf[1].timestamp, OffsetDateTime::UNIX_EPOCH);
         assert_eq!(loader.buf[1].duration, HistoryImported::DEFAULT_DURATION);
+    }
+
+    #[tokio::test]
+    async fn corrupt_realtime_before_falls_back_to_epoch_and_default_duration() {
+        let bytes = format!("{}\n", resh_line("echo corrupt", 1e30, 1_639_162_833.5)).into_bytes();
+
+        let resh = Resh { bytes };
+        let mut loader = TestLoader::default();
+        resh.load(&mut loader).await.expect("import must not fail");
+
+        let commands: Vec<&str> = loader.buf.iter().map(|h| h.command.as_str()).collect();
+        assert_eq!(commands, ["echo corrupt"]);
+
+        assert_eq!(loader.buf[0].timestamp, OffsetDateTime::UNIX_EPOCH);
+        assert_eq!(loader.buf[0].duration, HistoryImported::DEFAULT_DURATION);
+    }
+
+    #[tokio::test]
+    async fn corrupt_realtime_after_keeps_real_timestamp_but_falls_back_to_default_duration() {
+        let bytes = format!("{}\n", resh_line("echo corrupt", 1_639_162_832.5, 1e30)).into_bytes();
+
+        let resh = Resh { bytes };
+        let mut loader = TestLoader::default();
+        resh.load(&mut loader).await.expect("import must not fail");
+
+        let commands: Vec<&str> = loader.buf.iter().map(|h| h.command.as_str()).collect();
+        assert_eq!(commands, ["echo corrupt"]);
+
+        assert_eq!(loader.buf[0].timestamp.unix_timestamp(), 1_639_162_832);
+        assert_eq!(loader.buf[0].duration, HistoryImported::DEFAULT_DURATION);
     }
 }

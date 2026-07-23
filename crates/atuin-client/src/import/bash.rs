@@ -64,9 +64,12 @@ impl Importer for Bash {
 
         // make sure there is a minimum amount of time before the first known timestamp
         // to fit all commands, given the default increment
+        let backfill = timestamp_increment
+            * u32::try_from(commands_before_first_timestamp).unwrap_or(u32::MAX);
+        // a timestamp near the start of the representable range would underflow
         let mut next_timestamp = first_timestamp
-            - timestamp_increment
-                * u32::try_from(commands_before_first_timestamp).unwrap_or(u32::MAX);
+            .checked_sub(backfill)
+            .unwrap_or(first_timestamp);
 
         for line in lines.into_iter() {
             match line {
@@ -220,5 +223,27 @@ cd ../
         iter.into_iter()
             .tuple_windows()
             .all(|(a, b)| matches!(a.partial_cmp(&b), Some(Ordering::Less)))
+    }
+
+    #[tokio::test]
+    async fn timestamp_near_range_start_does_not_panic_on_backfill() {
+        // first timestamp is near the minimum representable instant, preceded by an
+        // untimestamped command; backfilling before it must not underflow
+        let bytes = b"cargo install atuin
+#-377705116800
+cargo update
+"
+        .to_vec();
+
+        let mut bash = Bash { bytes };
+        assert_eq!(bash.entries().await.unwrap(), 2);
+
+        let mut loader = TestLoader::default();
+        bash.load(&mut loader).await.unwrap();
+
+        assert_equal(
+            loader.buf.iter().map(|h| h.command.as_str()),
+            ["cargo install atuin", "cargo update"],
+        );
     }
 }
