@@ -392,13 +392,18 @@ dependencies = [
 name = "atuin-common"
 version = "18.18.0-beta.1"
 dependencies = [
+ "async-trait",
  "base64",
  "derive_more",
  "directories",
  "eyre",
  "getrandom 0.4.3",
+ "http",
+ "parking_lot",
  "pretty_assertions",
  "proptest",
+ "reqwest",
+ "reqwest-middleware",
  "rstest",
  "rustls",
  "semver",
@@ -408,6 +413,7 @@ dependencies = [
  "sysinfo",
  "thiserror 2.0.18",
  "time",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "typed-builder",
@@ -4135,6 +4141,20 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
+]
+
+[[package]]
+name = "reqwest-middleware"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07bc3f1384cffa4f274dad2d4ddd73aed32fed8f786d96c6be8aa4e5fd3c3b58"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "http",
+ "reqwest",
+ "thiserror 2.0.18",
+ "tower-service",
 ]
 
 [[package]]

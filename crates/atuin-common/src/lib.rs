@@ -65,8 +65,10 @@ pub mod path;
 pub mod record;
 pub mod shell;
 pub mod string;
+pub mod sync;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
 pub mod tls;
 pub mod url;
 pub mod utils;
+pub mod caps;
