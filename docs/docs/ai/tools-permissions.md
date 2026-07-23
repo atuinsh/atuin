@@ -158,7 +158,7 @@ allow = [
 
     The command pattern in a `Shell` permission rule is matched against the words in the command. The `*` wildcard has different behavior depending on where it appears:
 
-    | Pattern | Matches | Does Not Match |
+    | Pattern | Matches | Doesn't Match |
     |---------|---------|----------------|
     | `*` | Any command |—|
     | `git commit *` | `git commit`, `git commit -m "msg"` | `git`, `git push` |
@@ -168,10 +168,10 @@ allow = [
 
     Note the difference between `ls *` (with a space) and `ls*` (without). The space-separated form uses **word-boundary** matching—`ls *` matches `ls` and `ls -a` but _not_ `lsof`. The attached form uses **prefix** matching—`ls*` matches all of those, including `lsof`.
 
-    For `allow` and `ask` rules, a pattern without any wildcard (e.g. `git commit`) is an **exact match**—it only matches when the command words are identical. Use `git commit *` if you want to allow `git commit` with any arguments.
+    For `allow` and `ask` rules, a pattern without any wildcard (for example, `git commit`) is an **exact match**—it only matches when the command words are identical. Use `git commit *` if you want to allow `git commit` with any arguments.
 
-    For `deny` rules, a pattern without any wildcard (e.g. `rm`) is a **prefix match**—it matches any command that starts with that prefix. This means that a `deny` rule of `rm` would deny `rm`, `rm -rf /`, and `rm ./README.md` so be careful when writing `deny` rules without explicit wildcards.
+    For `deny` rules, a pattern without any wildcard (for example, `rm`) is a **prefix match**—it matches any command that starts with that prefix. This means that a `deny` rule of `rm` would deny `rm`, `rm -rf /`, and `rm ./README.md` so be careful when writing `deny` rules without explicit wildcards.
 
 !!! warning "Compound Commands"
 
-    When the AI runs a compound command (e.g. `git add . && npm test`), Atuin parses it into individual subcommands. For a command to be automatically allowed, all subcommands must be allowed. This means that `git add . && npm test` must be enabled by both `Shell(git add *)` and `Shell(npm test)` for it to be allowed, else it would fall through and ask for permission. However, our parsing is not perfect, and there may be edge cases where it fails to correctly identify the subcommands, and some shells where command parsing is sub-par. For this reason, we recommend being cautious when allowing compound commands with broad patterns.
+    When the AI runs a compound command (for example, `git add . && npm test`), Atuin parses it into individual subcommands. For a command to be automatically allowed, all subcommands must be allowed. This means that `git add . && npm test` must be enabled by both `Shell(git add *)` and `Shell(npm test)` for it to be allowed, else it would fall through and ask for permission. However, our parsing isn't perfect, and there may be edge cases where it fails to correctly identify the subcommands, and some shells where command parsing is sub-par. For this reason, we recommend being cautious when allowing compound commands with broad patterns.

@@ -155,7 +155,7 @@ If you don't wish to use the installer, the manual installation steps are as fol
 !!! warning "Please be advised"
 
     If you choose to manually install Atuin rather than using the recommended installation script,
-    merely installing the binary is not sufficient, you should also set up the shell plugin.
+    merely installing the binary isn't sufficient, you should also set up the shell plugin.
 
 ---
 

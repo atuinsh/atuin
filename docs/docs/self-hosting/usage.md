@@ -5,7 +5,7 @@
 
     Follow the GitHub releases, and please read the notes for each release. Most of the time, upgrades can occur without any manual intervention.
 
-    We cannot guarantee that all updates will apply cleanly, and some may require some extra steps.
+    We can't guarantee that all updates will apply cleanly, and some may require some extra steps.
 
 ## Client setup
 
