@@ -75,15 +75,14 @@ where
     info!("Frecency map built");
 }
 
-async fn build_index<F, R>(index: F, handle: &DaemonHandle)
+async fn build_index<F, R>(index: F, handle: &DaemonHandle) -> Result<(), ()>
 where
     F: Fn() -> R,
     R: Future<Output: Deref<Target = SearchIndex>>,
 {
-    if build_index_only(&index, handle).await.is_err() {
-        return;
-    }
+    build_index_only(&index, handle).await?;
     build_frecency(index, handle).await;
+    Ok(())
 }
 
 /// Search component - provides fuzzy search over command history.
@@ -161,7 +160,7 @@ impl Component for SearchComponent {
             index.write().await.shells = ShellFilter::from_initial_settings(
                 &handle_for_loader.settings().await.search.shells,
             );
-            build_index(|| index.read(), &handle_for_loader).await;
+            let _ = build_index(|| index.read(), &handle_for_loader).await;
         }));
 
         // Spawn background task to periodically refresh frecency
@@ -268,22 +267,24 @@ pub struct SearchGrpcService {
 }
 
 impl SearchGrpcService {
-    async fn maybe_rebuild_index(&self, shells: Vec<String>) {
-        let Some(new_filter) = self.index.read().await.shells.update(shells) else {
-            return;
-        };
+    async fn maybe_rebuild_index(&self, shells: Vec<String>) -> Option<SearchIndex> {
+        let new_filter = self.index.read().await.shells.update(shells)?;
 
         info!("Rebuilding search index from database after shell filter change");
 
-        // Create a new index
         let new_index = SearchIndex::new(new_filter);
-        build_index(async || &new_index, &self.handle).await;
+        if build_index(async || &new_index, &self.handle)
+            .await
+            .is_err()
+        {
+            return None;
+        }
 
         info!(
             "Search index rebuild complete; {} unique commands",
             new_index.command_count()
         );
-        *self.index.write().await = new_index;
+        Some(new_index)
     }
 }
 
@@ -315,8 +316,6 @@ impl SearchSvc for SearchGrpcService {
                             .unwrap_or(FilterMode::Global);
                         let proto_context = search_req.context;
 
-                        this.maybe_rebuild_index(search_req.shells).await;
-
                         debug!(
                             "search request: query = {}, query_id = {}, filter_mode = {}, context = {:?}",
                             query,
@@ -328,14 +327,24 @@ impl SearchSvc for SearchGrpcService {
                         // Convert proto FilterMode + context to IndexFilterMode
                         let index_filter = convert_filter_mode(filter_mode, &proto_context);
 
+                        let index = if let Some(new_index) =
+                            this.maybe_rebuild_index(search_req.shells).await
+                        {
+                            let mut guard = this.index.write().await;
+                            *guard = new_index;
+                            guard.downgrade()
+                        } else {
+                            this.index.read().await
+                        };
+
                         // Perform the search
                         let history_ids =
                             span!(Level::TRACE, "daemon_search_query", %query, query_id)
                                 .in_scope(|| async {
-                                    let index = this.index.read().await;
                                     index.search(&query, index_filter, RESULTS_LIMIT).await
                                 })
                                 .await;
+                        drop(index);
 
                         // Convert history IDs to bytes
                         let ids: Vec<Vec<u8>> = history_ids
