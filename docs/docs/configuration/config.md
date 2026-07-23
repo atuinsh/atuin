@@ -93,7 +93,7 @@ How often to automatically sync with the server. This can be given in a
 "human-readable" format. For example, `10s`, `20m`, `1h`, etc.
 
 If set to `0`, Atuin will sync after every command. Some servers may rate limit
-very frequent syncs, but this won't cause any issues.
+frequent syncs, but this won't cause any issues.
 
 ```toml
 sync_frequency = "1h"
@@ -562,8 +562,8 @@ Atuin version: >= 18.0
 
 Default: `emacs`
 
-The initial keymap mode of the interactive Atuin search (e.g. started by the
-keybindings in the shells). There are four supported values: `"emacs"`,
+The initial keymap mode of the interactive Atuin search (for example, started by the
+keybindings in the shells). Four values are supported: `"emacs"`,
 `"vim-normal"`, `"vim-insert"`, and `"auto"`. The keymap mode `"emacs"` is the
 most basic one. In the keymap mode `"vim-normal"`, you may use ++k++
 and ++j++ to navigate the history list as in Vim, whilst pressing
@@ -644,7 +644,7 @@ The frecency calculation is `Recency Score * Recency Multiplier + Frequency Scor
 
 For each setting, a value of `1.0` (the default) means the score is used as-is. Values less than `1.0` decrease that score's influence, and values greater than `1.0` increase that score's influence.
 
-So, for example, if you cared a lot about how frequently you run a command but not as much how recently, you could set `frequency_score_multiplier` to `10.0` and `recency_score_multiplier` to `0.1`.
+For example, if you cared a lot about how frequently you run a command but not as much how recently, you could set `frequency_score_multiplier` to `10.0` and `recency_score_multiplier` to `0.1`.
 
 !!! warning "daemon-fuzzy mode only"
     The score multiplier settings shown here only work with the `"daemon-fuzzy"` search mode.
@@ -1220,16 +1220,16 @@ Columns to display in the interactive search, from left to right. The selection
 indicator (`" > "`) is always shown first implicitly.
 
 Each column can be specified as:
-- A simple string (uses default width): `"duration"`
+- A plain string (uses default width): `"duration"`
 - An object with type and optional width/expand: `{ type = "directory", width = 30 }`
 
 #### Available column types
 
 | Column      | Default Width | Description                                     |
 | ----------- | -------------- | ----------------------------------------------- |
-| `duration`  | 5              | Command execution duration (e.g., "123ms")      |
-| `time`      | 8              | Relative time since execution (e.g., "59m ago") |
-| `datetime`  | 16             | Absolute timestamp (e.g., "2025-01-22 14:35")   |
+| `duration`  | 5              | Command execution duration (for example, "123ms")      |
+| `time`      | 8              | Relative time since execution (for example, "59m ago") |
+| `datetime`  | 16             | Absolute timestamp (for example, "2025-01-22 14:35")   |
 | `directory` | 20             | Working directory (truncated if too long)       |
 | `host`      | 15             | Hostname where command was run                  |
 | `user`      | 10             | Username                                        |
@@ -1274,7 +1274,7 @@ The default colors are ANSI palette colors, so they automatically match your
 terminal's color scheme. They can also be customized via the `Syntax*` keys in
 a [theme](../guide/theming.md).
 
-Not available on platforms where tree-sitter doesn't build (e.g. Windows);
+Not available on platforms where tree-sitter doesn't build (for example, Windows);
 commands are shown unhighlighted there.
 
 ```toml

@@ -8,7 +8,7 @@ The Atuin AI server currently supports any **OpenAI-compatible, chat completions
 
 After cloning the repository, copy the example config file, `config.example.toml`, to `config.toml`. Follow the configuration section of the README to set up your instance.
 
-Here's a very basic example of an Ollama-based setup:
+Here's a basic example of an Ollama-based setup:
 
 ```toml
 port = 8080

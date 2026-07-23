@@ -58,7 +58,7 @@ Modifiers are prefixed with a dash separator. Multiple modifiers can be combined
 Available modifiers: `ctrl`, `alt`, `shift`, `super` (also accepted as `cmd` or `win`).
 
 !!! warning
-    The `super` modifier (`Cmd` on macOS, Win on Windows) **requires** the kitty keyboard protocol. Only terminals that implement this protocol will report the Super modifier to applications. Even in supported terminals, some Super+key combinations may be intercepted by the terminal or OS (e.g. Cmd+C for copy, Cmd+V for paste, or Cmd+T for opening a new tab).
+    The `super` modifier (`Cmd` on macOS, Win on Windows) **requires** the kitty keyboard protocol. Only terminals that implement this protocol will report the Super modifier to applications. Even in supported terminals, some Super+key combinations may be intercepted by the terminal or OS (for example, Cmd+C for copy, Cmd+V for paste, or Cmd+T for opening a new tab).
 
 ### Uppercase letters
 
@@ -111,9 +111,9 @@ If the second key doesn't complete a known sequence, both keys are handled indiv
 
 ## Keymap format
 
-Each entry in a keymap section maps a key to either a simple action or a conditional rule list.
+Each entry in a keymap section maps a key to either a direct action or a conditional rule list.
 
-### Simple binding
+### Direct binding
 
 Maps a key directly to a single action, with no conditions:
 
@@ -194,9 +194,9 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | Action | Description |
 |--------|-------------|
 | `accept` | Accept the selected entry and **execute it immediately** |
-| `accept-N` | Accept the Nth entry below the selection and execute it (e.g. `accept-1` through `accept-9`) |
+| `accept-N` | Accept the Nth entry below the selection and execute it (for example, `accept-1` through `accept-9`) |
 | `return-selection` | Return the selected entry to the command line **without executing** |
-| `return-selection-N` | Return the Nth entry below the selection without executing (e.g. `return-selection-1` through `return-selection-9`) |
+| `return-selection-N` | Return the Nth entry below the selection without executing (for example, `return-selection-1` through `return-selection-9`) |
 | `return-original` | Close the TUI and return the original command line text |
 | `return-query` | Close the TUI and return the current search query |
 | `copy` | Copy the selected entry to the clipboard |
@@ -223,7 +223,7 @@ The difference between `accept` and `return-selection`: `accept` runs the comman
 | `vim-enter-insert-at-end` | Move to end of line and enter vim insert mode (like vim `A`) |
 | `vim-search-insert` | Clear the search input and enter vim insert mode (like vim `?` or `/`) |
 | `vim-change-to-end` | Delete to end of line and enter vim insert mode (like vim `C`) |
-| `enter-prefix-mode` | Enter prefix mode (waits for one more key, e.g. `d` for delete) |
+| `enter-prefix-mode` | Enter prefix mode (waits for one more key, for example `d` for delete) |
 
 ### Inspector
 

@@ -7,7 +7,7 @@ Atuin AI allows you to send additional context to the LLM beyond just your promp
 Atuin AI looks for additional context in the current directory and its parent directories, in two locations per directory:
 
 - `.atuin/TERMINAL.md`—scoped inside the `.atuin` dotdir
-- `TERMINAL.md`—at the directory root (e.g. project root)
+- `TERMINAL.md`—at the directory root (for example, project root)
 
 It also checks `TERMINAL.md` in your Atuin config directory (`~/.config/atuin/TERMINAL.md` by default).
 
@@ -21,7 +21,7 @@ You can send dynamic content by using shell substitution in your `TERMINAL.md` f
 My username: !`whoami`
 ```
 
-When Atuin AI reads this file, it will execute the `whoami` command and include its output in the context sent to the LLM. So if your username is `binarymuse`, the context sent to the LLM would include:
+When Atuin AI reads this file, it will execute the `whoami` command and include its output in the context sent to the LLM. If your username is `binarymuse`, the context sent to the LLM would include:
 
 ```markdown
 My username: binarymuse

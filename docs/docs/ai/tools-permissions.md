@@ -58,7 +58,7 @@ deny = [
 
 ### Atuin History
 
-The `AtuinHistory` tool allows Atuin AI to search your Atuin history for relevant commands. This tool is read-only. Atuin AI might ask to use this tool when you ask it to recall a command or information about a command you ran in the past, or when you ask for help with a failing command (e.g. "why did my last command fail?").
+The `AtuinHistory` tool allows Atuin AI to search your Atuin history for relevant commands. This tool is read-only. Atuin AI might ask to use this tool when you ask it to recall a command or information about a command you ran in the past, or when you ask for help with a failing command (for example, "why did my last command fail?").
 
 ![Example of Atuin History tool](images/tool_atuin_history.png)
 
@@ -92,11 +92,11 @@ allow = ["AtuinOutput"]
 
 ### Read
 
-The `Read` tool allows Atuin AI to read files on your system. Atuin AI might ask to use this tool when you ask it to analyze the contents of a file, when you ask for edits to the contents of a file, or when you ask a question that's most easily answered by consulting the contents of a file.
+The `Read` tool allows Atuin AI to read files on your system. Atuin AI might ask to use this tool when you ask it to analyze the contents of a file, when you ask for edits to the contents of a file, or when you ask a question that's best answered by consulting the contents of a file.
 
 ![Example of Atuin FS Tools](images/tool_fs.png)
 
-**Permission rule and scope:** `Read(<glob_pattern>)` (e.g. `Read(**/*.md)` to allow reading all markdown files in the current directory and subdirectories). A missing glob pattern (e.g. `Read`) matches all files.
+**Permission rule and scope:** `Read(<glob_pattern>)` (for example, `Read(**/*.md)` to allow reading all markdown files in the current directory and subdirectories). A missing glob pattern (for example, `Read`) matches all files.
 
 **Config value:** `ai.capabilities.enable_file_tools` (see [settings documentation](./settings.md#capabilities))—this setting enables both the `Read` and `Write` tools.
 
@@ -118,7 +118,7 @@ The `Write` tool allows Atuin AI to create and edit files on your system. Atuin 
 
 ![Example of Atuin FS Tools](images/tool_fs.png)
 
-**Permission rule and scope:** `Write(<glob_pattern>)` (e.g. `Write(**/*.md)` to allow writing all markdown files in the current directory and subdirectories). A missing glob pattern (e.g. `Write`) matches all files.
+**Permission rule and scope:** `Write(<glob_pattern>)` (for example, `Write(**/*.md)` to allow writing all markdown files in the current directory and subdirectories). A missing glob pattern (for example, `Write`) matches all files.
 
 **Config value:** `ai.capabilities.enable_file_tools` (see [settings documentation](./settings.md#capabilities))—this setting enables both the `Read` and `Write` tools.
 
@@ -136,11 +136,11 @@ deny = ["Write(.secret/**)"]
 
 ### Shell Command Execution
 
-The `Shell` tool allows Atuin AI to execute shell commands on your system. Atuin AI might ask to use this tool when you ask it to perform an action that's most easily accomplished by running a shell command itself, or when you ask for help debugging a failing command, or during a multi-step workflow.
+The `Shell` tool allows Atuin AI to execute shell commands on your system. Atuin AI might ask to use this tool when you ask it to perform an action that's best accomplished by running a shell command itself, or when you ask for help debugging a failing command, or during a multi-step workflow.
 
 ![Example of Atuin Shell Tool](images/tool_shell.png)
 
-**Permission rule and scope:** `Shell(<command pattern>)` (e.g. `Shell(git *)` to allow any command that starts with `git`). A missing command pattern (e.g. `Shell`) matches all commands.
+**Permission rule and scope:** `Shell(<command pattern>)` (for example, `Shell(git *)` to allow any command that starts with `git`). A missing command pattern (for example, `Shell`) matches all commands.
 
 **Config value:** `ai.capabilities.enable_command_execution` (see [settings documentation](./settings.md#capabilities))
 

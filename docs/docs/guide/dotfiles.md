@@ -56,7 +56,7 @@ atuin dotfiles alias set ll 'ls -lah'
 
 #### Deleting an alias
 
-Deleting an alias is as simple as:
+Delete an alias with:
 
 ```shell
 atuin dotfiles alias delete NAME
@@ -102,7 +102,7 @@ atuin dotfiles var set -n foo 'bar'
 
 #### Deleting a var
 
-Deleting a var is as simple as:
+Delete a var with:
 
 ```shell
 atuin dotfiles var delete NAME

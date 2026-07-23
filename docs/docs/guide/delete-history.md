@@ -86,7 +86,7 @@ atuin register
 atuin import auto
 ```
 
-This gives you a clean slate on the server with no leftover records. Your other machines can then register with the new account and start fresh too.
+This leaves no leftover records on the server. Your other machines can then register with the new account and start fresh too.
 
 !!! tip
     If you only want to delete specific entries and keep the rest, `atuin search --delete` is the right tool. The account reset approach is only better when you want to wipe everything and start over.

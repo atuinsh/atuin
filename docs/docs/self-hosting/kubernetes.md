@@ -227,7 +227,7 @@ Note that this configuration will store the database folder _outside_ the Kubern
 
 You should also change the password string in `ATUIN_DB_PASSWORD` and `ATUIN_DB_URI` in the`secrets.yaml` file to a more secure one.
 
-The Atuin service is exposed on port `30530` of the host system. That's configured by the `nodePort` property. Kubernetes has a strict rule that you aren't allowed to expose a port numbered lower than 30000. To make the clients work, you can simply set the port in your `config.toml` file, e.g. `sync_address = "http://192.168.1.10:30530"`.
+The Atuin service is exposed on port `30530` of the host system. That's configured by the `nodePort` property. Kubernetes has a strict rule that you aren't allowed to expose a port numbered lower than 30000. To make the clients work, set the port in your `config.toml` file, for example `sync_address = "http://192.168.1.10:30530"`.
 
 Deploy the Atuin server using `kubectl`:
 

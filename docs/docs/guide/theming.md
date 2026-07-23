@@ -60,7 +60,7 @@ to (at present) colors. In future, this may be expanded to allow richer style su
 * `Guidance`: instructing the user as help or context
 * `Important`: drawing the user's attention to information
 * `Title`: titling a section or view
-* `Muted`: anodyne, usually grey, foreground for contrast with other colors. Normally equivalent to the base color, but allows themes to change the base color, with less risk of breaking intentional color contrasts (e.g. stacked bar charts)
+* `Muted`: anodyne, usually grey, foreground for contrast with other colors. Normally equivalent to the base color, but allows themes to change the base color, with less risk of breaking intentional color contrasts (for example, stacked bar charts)
 * `SyntaxCommand`: the command word when syntax highlighting shell commands (`git` in `git status`)
 * `SyntaxFlag`: a `-f`/`--flag` argument
 * `SyntaxString`: a quoted string
@@ -87,7 +87,7 @@ Note that, at present, it's not possible to specify the default terminal color e
 in a theme file. However, the default theme Base color will always be unset and therefore
 will be the user's default terminal color. Hence, you should only override the Base color
 in your theme, or derive from a theme that does so, if your theme would not make sense
-otherwise (e.g. the `marine` theme is intended to make everything green/blue, so it does,
+otherwise (for example, the `marine` theme is intended to make everything green/blue, so it does,
 but the `autumn` theme only seeks to make the custom colors warmer, so it doesn't).
 
 Colors may be specified either as names from the [palette](https://ogeon.github.io/docs/palette/master/palette/named/index.html)

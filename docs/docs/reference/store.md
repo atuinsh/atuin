@@ -85,7 +85,7 @@ Upload local records to the sync server, one way.
 
 | Flag | Description |
 |------|-------------|
-| `--tag`/`-t` | Only push this tag (e.g. `history`). Defaults to all tags |
+| `--tag`/`-t` | Only push this tag (for example, `history`). Defaults to all tags |
 | `--host` | Only push this host, given as a host UUID. Defaults to the current host |
 | `--force` | Clear the remote store, then upload everything local, for all hosts and tags |
 | `--page` | How many records to upload at a time (default: 100) |

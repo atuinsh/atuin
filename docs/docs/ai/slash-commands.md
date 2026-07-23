@@ -1,6 +1,6 @@
 # Atuin AI Slash Commands
 
-Atuin AI includes a number of slash commands to facilitate controlling various aspects of Atuin AI's behavior. To access them, simply type `/` in the Atuin AI prompt, and a list of all available slash commands will appear. You can continue typing to filter the list of commands, and press `tab` to expand the selected command.
+Atuin AI includes a number of slash commands to facilitate controlling various aspects of Atuin AI's behavior. To access them, type `/` in the Atuin AI prompt, and a list of all available slash commands will appear. You can continue typing to filter the list of commands, and press `tab` to expand the selected command.
 
 ## Built-in Slash Commands
 

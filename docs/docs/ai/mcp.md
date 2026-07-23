@@ -6,7 +6,7 @@ The server exposes the same history tools that [Atuin AI](./introduction.md) use
 
 ## Starting the server
 
-The MCP server runs over stdio, so your MCP client starts it for you—there's nothing to keep running in the background. The command is simply:
+The MCP server runs over stdio, so your MCP client starts it for you—there's nothing to keep running in the background. The command is:
 
 ```shell
 atuin mcp
@@ -33,7 +33,7 @@ Most MCP clients accept a JSON configuration like this:
 }
 ```
 
-If the `atuin` binary isn't on your client's `PATH`, use the full path to the binary instead (e.g. `~/.atuin/bin/atuin`).
+If the `atuin` binary isn't on your client's `PATH`, use the full path to the binary instead (for example, `~/.atuin/bin/atuin`).
 
 ## Tools
 

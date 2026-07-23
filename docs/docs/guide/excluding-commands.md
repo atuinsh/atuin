@@ -1,7 +1,7 @@
 # Excluding Commands from History
 
 Sometimes you don't want a command in your history and Atuin gives you four ways
-ways to exclude the commands.
+to exclude the commands.
 
 ## Prefix with a space
 

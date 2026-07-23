@@ -45,13 +45,13 @@ for each command aren't used by Atuin, so it's discarded.
 
 This importer reads from Nushell's text history format, which is stored in
 `$XDG_CONFIG_HOME/nushell/history.txt` or `$HOME/.config/nushell/history.txt`.
-There is no way to set the filename otherwise.
+The filename can't be set otherwise.
 
 ## nu-hist-db
 
 This importer reads from Nushell's SQLite history database, which is stored in
 `$XDG_CONFIG_HOME/nushell/history.sqlite3` or `$HOME/.config/nushell/history.sqlite3`.
-There is no way to set the filename otherwise.
+The filename can't be set otherwise.
 
 ## `powershell`
 
@@ -101,7 +101,7 @@ if present this data will be ignored by Atuin.
 ## zsh
 
 This will read the Zsh history from `$HISTFILE` or `$HOME/.zhistory`
-or `$HOME/.zsh_history` in either the simple or extended format.
+or `$HOME/.zsh_history` in either the basic or extended format.
 
 ## zsh-hist-db
 

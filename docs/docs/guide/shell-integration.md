@@ -98,7 +98,7 @@ Add to your `settings.json` (substitute the shells for whatever you use):
 
 #### Wrapper Script Approach
 
-For tools that don't easily support shell arguments, create a wrapper script:
+For tools that don't support shell arguments, create a wrapper script:
 
 ```shell
 #!/bin/bash

@@ -36,7 +36,7 @@ Current branch: !`git branch --show-current`
 | Project | `.atuin/skills/<name>/SKILL.md`          |
 | Global  | `~/.config/atuin/skills/<name>/SKILL.md` |
 
-Project skills override global skills when names collide. Nested directories are supported for organization (e.g. `.atuin/skills/ops/deploy/SKILL.md`).
+Project skills override global skills when names collide. Nested directories are supported for organization (for example, `.atuin/skills/ops/deploy/SKILL.md`).
 
 ## Frontmatter
 
@@ -77,7 +77,7 @@ Commands run at skill load time (when invoked), not at discovery time.
 
 ## Arguments
 
-When invoking a skill with arguments (e.g. `/deploy patch`), the `$ARGUMENTS` placeholder in the skill body is replaced with the argument string before shell substitution runs:
+When invoking a skill with arguments (for example, `/deploy patch`), the `$ARGUMENTS` placeholder in the skill body is replaced with the argument string before shell substitution runs:
 
 ```yaml
 ---

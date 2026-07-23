@@ -17,7 +17,7 @@ curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 ```
 
 The install script will walk you through importing your shell history and setting
-up a sync account. To skip these interactive prompts (e.g. in CI or
+up a sync account. To skip these interactive prompts (for example, in CI or
 Dockerfiles), pass `--non-interactive`:
 
 ```shell

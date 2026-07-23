@@ -4,7 +4,7 @@
 
 IDEs like PyCharm, VS Code, and others often start non-interactive shells that don't source your shell configuration. This means Atuin's hooks never get installed.
 
-To fix this, configure your IDE to start an interactive shell (e.g., `/bin/bash -i` instead of `/bin/bash`).
+To fix this, configure your IDE to start an interactive shell (for example, `/bin/bash -i` instead of `/bin/bash`).
 
 See [Shell Integration and Interoperability](guide/shell-integration.md) for detailed instructions.
 
@@ -63,13 +63,13 @@ This will delete your account, and all history from the remote server. It won't 
 
 ## I've forgotten my password! How can I reset it?
 
-We don't currently have a password reset system. So long as you're still logged
+We don't currently have a password reset system. As long as you're still logged
 in on at least one machine, it's safe to delete and re-create your account.
 
 ## I didn't set up sync, and now I have to reinstall my system!
 
 If you have a backup of `~/.local/share/atuin`, you can import it by:
-1. disabling Atuin by commenting out the shell integration, e.g. for bash it's `eval "$(atuin init bash)"`
+1. disabling Atuin by commenting out the shell integration; for example, for bash it's `eval "$(atuin init bash)"`
 2. copying the backup to `~/.local/share/atuin`
 3. reenabling Atuin
 4. setting up sync!

@@ -16,7 +16,7 @@ Our default up-arrow binding can be a bit contentious. Some people love it, some
 
 It becomes much more powerful if you consider binding a different filter mode to the up arrow. For example, on "up" Atuin can default to searching all history for the current directory only, while ctrl-r searches history globally. See the [config](config.md#filter_mode_shell_up_key_binding) for more.
 
-Otherwise, if you don't like it, it's easy to disable.
+Otherwise, if you don't like it, you can disable it.
 
 You can also disable either the up-arrow or ++ctrl+r++ bindings individually, by passing
 `--disable-up-arrow` or `--disable-ctrl-r` to the call to `atuin init` in your shell config file:
@@ -102,7 +102,7 @@ used in combination with the config
 ## bash
 
 Atuin (`>= 18.10.0`) provides a shell function `atuin-bind` to set up
-keybindings easily:
+keybindings:
 
 ```shell
 atuin-bind [-m KEYMAP] KEYSEQ COMMAND
@@ -174,7 +174,7 @@ In your terminal, run `fish_key_reader` then press the desired keystrokes.
 
 For example, in Gnome Terminal the output to ++ctrl+up++ is `bind \e\[1\;5A 'do something'`
 
-So, adding this to the above sample, `bind \e\[1\;5A _atuin_search` will provide the additional search keybinding.
+Adding this to the above sample, `bind \e\[1\;5A _atuin_search` will provide the additional search keybinding.
 
 ## nu
 

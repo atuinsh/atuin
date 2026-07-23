@@ -4,7 +4,7 @@ This guide walks through setting Atuin up properly, one step at a time. If you
 just want the commands, the [quickstart on the home page](../index.md#quickstart)
 has them.
 
-There are four steps, and only the first is required:
+Four steps follow, and only the first is required:
 
 1. [Install Atuin](installation.md) and its shell plugin
 2. [Import your existing history](import.md)
