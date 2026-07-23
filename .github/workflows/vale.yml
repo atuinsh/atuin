@@ -11,10 +11,11 @@ on:
 
 # The gate is the job's exit code (fail_on_error), and the default
 # github-pr-annotations reporter posts via workflow log commands, not the API.
-# If a live PR run shows the action needs PR context, add `pull-requests: read`
-# -- it should never need write.
 permissions:
   contents: read
+  # reviewdog fetches the PR diff unconditionally, before it consults
+  # filter_mode. Read is sufficient; it never needs write.
+  pull-requests: read
 
 jobs:
   vale:
@@ -36,3 +37,10 @@ jobs:
           filter_mode: nofilter
           fail_on_error: true
           level: error
+          # reviewdog fails the job once 10 annotations of ANY severity are
+          # reported to it, regardless of `level` or `fail_on_error` -- it has
+          # no severity check on that path. .vale.ini's MinAlertLevel is
+          # suggestion, so without this, warnings and suggestions alone push
+          # us over 10 on nearly every PR. Restricting to errors here also
+          # makes CI identical to the documented local command.
+          vale_flags: "--minAlertLevel=error"

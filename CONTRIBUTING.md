@@ -90,7 +90,7 @@ cd docs && uv run mkdocs serve
 
 Prose is linted with [Vale](https://vale.sh) against the Microsoft, proselint,
 alex, and write-good style guides. CI fails on errors; warnings and suggestions
-are annotated on the PR but never block a merge.
+aren't annotated on the PR, but are visible when you run Vale locally.
 
 Vale is not vendored — install it with your package manager
 ([docs](https://vale.sh/docs/install)), then fetch the pinned style packages
