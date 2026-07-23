@@ -9,13 +9,19 @@ on:
       - ".vale/styles/config/**"
       - ".github/workflows/vale.yml"
 
+# The gate is the job's exit code (fail_on_error), and the default
+# github-pr-annotations reporter posts via workflow log commands, not the API.
+# If a live PR run shows the action needs PR context, add `pull-requests: read`
+# -- it should never need write.
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   vale:
     name: Lint docs prose
+    # Other workflows use depot-ubuntu-24.04. The action fetches a reviewdog
+    # binary built for the stock GitHub runner image; switch only after
+    # confirming it runs on depot.
     runs-on: ubuntu-latest
 
     steps:
