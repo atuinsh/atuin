@@ -61,27 +61,36 @@ struct Entry {
 
 impl Entry {
     pub fn parse(line: &str) -> Self {
-        if let Some(rest) = line.strip_prefix(": ") {
-            let (time, rest) = rest.split_once(':').unwrap();
-            let (duration, command) = rest.split_once(';').unwrap();
-            let time = time
-                .parse::<i64>()
-                .ok()
-                .and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok());
+        // extended history looks like `: <start>:<duration>;<command>`.
+        // anything that does not match that shape is a bare command line
+        let extended = line
+            .strip_prefix(": ")
+            .and_then(|rest| rest.split_once(':'))
+            .and_then(|(time, rest)| rest.split_once(';').map(|(dur, cmd)| (time, dur, cmd)));
 
-            // use nanos, because why the hell not? we won't display them.
-            let duration = duration.parse::<i64>().map_or(-1, |t| t * 1_000_000_000);
-            Self {
-                command: command.trim_end().to_owned(),
-                timestamp: time,
-                duration: Some(duration),
-            }
-        } else {
-            Self {
+        let Some((time, duration, command)) = extended else {
+            return Self {
                 command: line.trim_end().to_owned(),
                 timestamp: None,
                 duration: None,
-            }
+            };
+        };
+
+        let time = time
+            .parse::<i64>()
+            .ok()
+            .and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok());
+
+        // use nanos, because why the hell not? we won't display them.
+        // saturate rather than overflow on an implausible duration
+        let duration = duration
+            .parse::<i64>()
+            .map_or(-1, |t| t.saturating_mul(1_000_000_000));
+
+        Self {
+            command: command.trim_end().to_owned(),
+            timestamp: time,
+            duration: Some(duration),
         }
     }
 }
@@ -127,8 +136,12 @@ impl Importer for Zsh {
             .unwrap_or_else(|| (entries.len(), OffsetDateTime::now_utc()));
 
         let timestamp_increment = Duration::milliseconds(1);
+        let backfill =
+            u32::try_from(commands_until_timestamp).unwrap_or(u32::MAX) * timestamp_increment;
+        // a timestamp near the start of the representable range would underflow
         let mut timestamp = first_timestamp
-            - u32::try_from(commands_until_timestamp).unwrap_or(u32::MAX) * timestamp_increment;
+            .checked_sub(backfill)
+            .unwrap_or(first_timestamp);
 
         for entry in entries {
             if let Some(time) = entry.timestamp {
@@ -214,6 +227,34 @@ mod test {
             parsed.timestamp.unwrap(),
             OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
         );
+    }
+
+    #[test]
+    fn parse_malformed_extended_lines() {
+        // none of these are valid extended history, and none may panic;
+        // they fall through to being treated as a bare command
+        let no_colon = Entry::parse(": not-extended");
+        assert_eq!(no_colon.command, ": not-extended");
+        assert_eq!(no_colon.timestamp, None);
+        assert_eq!(no_colon.duration, None);
+
+        let no_semicolon = Entry::parse(": 1613322469:0");
+        assert_eq!(no_semicolon.command, ": 1613322469:0");
+        assert_eq!(no_semicolon.timestamp, None);
+        assert_eq!(no_semicolon.duration, None);
+    }
+
+    #[test]
+    fn parse_out_of_range_extended_values() {
+        // command survives, timestamp is dropped
+        let bad_time = Entry::parse(": 999999999999999:0;echo hello");
+        assert_eq!(bad_time.command, "echo hello");
+        assert_eq!(bad_time.timestamp, None);
+
+        // seconds -> nanos must saturate rather than overflow
+        let bad_duration = Entry::parse(": 1613322469:9223372036854775807;echo hello");
+        assert_eq!(bad_duration.command, "echo hello");
+        assert_eq!(bad_duration.duration, Some(i64::MAX));
     }
 
     #[tokio::test]

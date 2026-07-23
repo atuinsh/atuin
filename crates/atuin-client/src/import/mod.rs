@@ -77,6 +77,7 @@ fn count_lines(input: &[u8]) -> usize {
 /// `time` can represent. History files and databases are routinely corrupted, and
 /// a single bad entry must never abort an import - see
 /// <https://github.com/atuinsh/atuin/issues/938>.
+#[allow(dead_code)]
 fn timestamp_from_parts(secs: i64, nanos: i64) -> Option<OffsetDateTime> {
     OffsetDateTime::from_unix_timestamp(secs)
         .ok()?
