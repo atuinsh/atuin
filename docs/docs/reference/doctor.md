@@ -8,7 +8,7 @@ Please include its output with issues and support requests.
 
 Example output:
 
-```
+```text
 Atuin Doctor
 Checking for diagnostics
 

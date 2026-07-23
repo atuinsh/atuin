@@ -96,9 +96,9 @@ The `Read` tool allows Atuin AI to read files on your system. Atuin AI might ask
 
 ![Example of Atuin FS Tools](images/tool_fs.png)
 
-**Permission rule and scope:** `Read(<glob_pattern>)` (e.g. `Read(**/\*.md)`to allow reading all markdown files in the current directory and subdirectories). A missing glob pattern (e.g.`Read`) matches all files.
+**Permission rule and scope:** `Read(<glob_pattern>)` (e.g. `Read(**/*.md)` to allow reading all markdown files in the current directory and subdirectories). A missing glob pattern (e.g. `Read`) matches all files.
 
-**Config value:** `ai.capabilities.enable_fs_tools` (see [settings documentation](./settings.md#capabilities)) — this setting enables both the `Read` and `Write` tools.
+**Config value:** `ai.capabilities.enable_file_tools` (see [settings documentation](./settings.md#capabilities)) — this setting enables both the `Read` and `Write` tools.
 
 **Example permissions file:**
 
@@ -118,9 +118,9 @@ The `Write` tool allows Atuin AI to create and edit files on your system. Atuin 
 
 ![Example of Atuin FS Tools](images/tool_fs.png)
 
-**Permission rule and scope:** `Write(<glob_pattern>)` (e.g. `Write(**/\*.md)`to allow reading all markdown files in the current directory and subdirectories). A missing glob pattern (e.g.`Write`) matches all files.
+**Permission rule and scope:** `Write(<glob_pattern>)` (e.g. `Write(**/*.md)` to allow writing all markdown files in the current directory and subdirectories). A missing glob pattern (e.g. `Write`) matches all files.
 
-**Config value:** `ai.capabilities.enable_fs_tools` (see [settings documentation](./settings.md#capabilities)) — this setting enables both the `Read` and `Write` tools.
+**Config value:** `ai.capabilities.enable_file_tools` (see [settings documentation](./settings.md#capabilities)) — this setting enables both the `Read` and `Write` tools.
 
 **Example permissions file:**
 

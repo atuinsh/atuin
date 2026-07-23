@@ -1,48 +1,81 @@
-# Getting started
+# Atuin
 
-Atuin replaces your existing shell history with a SQLite database, and records
-additional context for your commands. With this context, Atuin gives you faster
-and better search of your shell history.
+Atuin replaces your shell history with a SQLite database, and records extra
+context for every command: the directory it ran in, how long it took, whether it
+succeeded, and which machine and session it came from. That context is what
+makes search actually useful.
 
-Additionally, Atuin (optionally) syncs your shell history between all of your
-machines. Fully end-to-end encrypted, of course.
-
-You may use either the server I host, or host your own! Or just don't use sync
-at all. As all history sync is encrypted, I couldn't access your data even if I
-wanted to. And I **really** don't want to.
-
-If you have any problems, please open a topic on the [forum](https://forum.atuin.sh)
-
-Alternatively, get in touch on our [Discord](https://discord.gg/Fq8bJSKPHh) or open an [issue](https://github.com/atuinsh/atuin/issues)
-
-#### Supported Shells
-
-- zsh
-- bash
-- fish
-- nushell
-- xonsh
-- powershell (tier 2 support)
+It can also sync your history across all of your machines, end-to-end encrypted.
+Use our server, [host your own](self-hosting/server-setup.md), or skip sync
+entirely and stay local.
 
 ## Quickstart
 
-Please do try and read this guide, but if you're in a hurry and want to get
-started quickly:
-
 ```bash
 bash <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
+```
 
-atuin register -u <USERNAME> -e <EMAIL>
+Restart your shell, then press ++ctrl+r++ or the ++up++ arrow to search. Type a
+query, press enter to put the selected command on your command line, and enter
+again to run it.
+
+To bring your existing history with you:
+
+```bash
 atuin import auto
+```
+
+To sync it across machines — optional, and covered in
+[Setting up sync](guide/sync.md):
+
+```bash
+atuin register -u <USERNAME> -e <EMAIL>
 atuin sync
 ```
 
-Now restart your shell!
+<div class="grid cards" markdown>
 
-Anytime you press ctrl-r or up, you will see the Atuin search UI. Type your
-query, enter to execute. If you'd like to select a command without executing
-it, press tab.
+-   **Get set up**
 
-You might like to configure an [inline window](configuration/config.md#inline_height), or [disable up arrow bindings](configuration/key-binding.md#disable-up-arrow)
+    ---
 
-[**Installation** - Install and setup Atuin](guide/installation.md)
+    [Installation](guide/installation.md) ·
+    [Import history](guide/import.md) ·
+    [Set up sync](guide/sync.md)
+
+-   **Use it well**
+
+    ---
+
+    [Basic usage](guide/basic-usage.md) ·
+    [Filter and search modes](guide/advanced-usage.md) ·
+    [Key bindings](configuration/key-binding.md)
+
+-   **Tune it**
+
+    ---
+
+    [All config options](configuration/config.md) ·
+    [Theming](guide/theming.md) ·
+    [Excluding commands](guide/excluding-commands.md)
+
+-   **Go further**
+
+    ---
+
+    [Atuin AI](ai/introduction.md) ·
+    [AI agent hooks](guide/agent-hooks.md) ·
+    [Self-hosting](self-hosting/server-setup.md)
+
+</div>
+
+## Supported shells
+
+zsh, bash, fish, nushell, xonsh, and PowerShell (tier 2 support).
+
+## Getting help
+
+Open a topic on the [forum](https://forum.atuin.sh), join our
+[Discord](https://discord.gg/Fq8bJSKPHh), or file an
+[issue](https://github.com/atuinsh/atuin/issues). If something isn't working,
+[`atuin doctor`](reference/doctor.md) collects the details we'll ask for.

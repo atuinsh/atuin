@@ -20,12 +20,12 @@ Customize the output of `history list`
 
 Example
 
-```
+```shell
 atuin history list --format "{time} - {duration} - {command}"
 ```
 
 Supported variables
 
-```
+```text
 {command}, {directory}, {duration}, {user}, {host} and {time}
 ```

@@ -6,7 +6,7 @@ This command shows the location of config files on your system
 
 Example output:
 
-```
+```text
 Config files:
 client config: "/Users/ellie/.config/atuin/config.toml"
 server config: "/Users/ellie/.config/atuin/server.toml"

@@ -13,7 +13,7 @@ so not all features are available with imported data.
 Except as noted otherwise, you can set the `HISTFILE` environment variable to
 control which file is read, otherwise each importer will try some default filenames.
 
-```
+```shell
 HISTFILE=/path/to/history/file atuin import zsh
 ```
 

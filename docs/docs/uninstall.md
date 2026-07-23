@@ -12,9 +12,9 @@ If you used the Atuin installer, you can totally delete it by removing the follo
 
 Otherwise, uninstalling Atuin depends on your system, and how you installed it.
 
-EG, on macOS, you'd want to run
+For example, on macOS, you'd want to run
 
-```
+```shell
 brew uninstall atuin
 ```
 
