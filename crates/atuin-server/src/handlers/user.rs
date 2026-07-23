@@ -62,6 +62,17 @@ async fn send_register_hook(url: &url::Url, username: String, registered: String
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/user/{username}",
+    operation_id = "get_user",
+    params(("username" = String, Path, description = "Username to look up")),
+    responses(
+        (status = 200, description = "User exists", body = UserResponse),
+        (status = "4XX", description = "User not found or request rejected", body = ErrorResponse),
+        (status = "5XX", description = "Server error", body = ErrorResponse),
+    ),
+)]
 #[instrument(skip_all, fields(user.username = username.as_str()))]
 pub async fn get<DB: Database>(
     Path(username): Path<String>,
@@ -86,6 +97,17 @@ pub async fn get<DB: Database>(
     }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/register",
+    operation_id = "register",
+    request_body = RegisterRequest,
+    responses(
+        (status = 200, description = "Registered; returns a session token", body = RegisterResponse),
+        (status = "4XX", description = "Registration rejected", body = ErrorResponse),
+        (status = "5XX", description = "Server error", body = ErrorResponse),
+    ),
+)]
 #[instrument(skip_all)]
 pub async fn register<DB: Database>(
     state: State<AppState<DB>>,
@@ -162,6 +184,17 @@ pub async fn register<DB: Database>(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/account",
+    operation_id = "delete_account",
+    security(("session" = [])),
+    responses(
+        (status = 200, description = "Account deleted", body = DeleteUserResponse),
+        (status = "4XX", description = "Not authenticated", body = ErrorResponse),
+        (status = "5XX", description = "Server error", body = ErrorResponse),
+    ),
+)]
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn delete<DB: Database>(
     UserAuth(user): UserAuth,
@@ -182,6 +215,18 @@ pub async fn delete<DB: Database>(
     Ok(Json(DeleteUserResponse {}))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/account/password",
+    operation_id = "change_password",
+    security(("session" = [])),
+    request_body = ChangePasswordRequest,
+    responses(
+        (status = 200, description = "Password changed", body = ChangePasswordResponse),
+        (status = "4XX", description = "Not authenticated, or current password incorrect", body = ErrorResponse),
+        (status = "5XX", description = "Server error", body = ErrorResponse),
+    ),
+)]
 #[instrument(skip_all, fields(user.id = user.id, change_password))]
 pub async fn change_password<DB: Database>(
     UserAuth(mut user): UserAuth,
@@ -212,6 +257,17 @@ pub async fn change_password<DB: Database>(
     Ok(Json(ChangePasswordResponse {}))
 }
 
+#[utoipa::path(
+    post,
+    path = "/login",
+    operation_id = "login",
+    request_body = LoginRequest,
+    responses(
+        (status = 200, description = "Logged in; returns a session token", body = LoginResponse),
+        (status = "4XX", description = "Invalid credentials", body = ErrorResponse),
+        (status = "5XX", description = "Server error", body = ErrorResponse),
+    ),
+)]
 #[instrument(skip_all, fields(user.username = login.username.as_str()))]
 pub async fn login<DB: Database>(
     state: State<AppState<DB>>,

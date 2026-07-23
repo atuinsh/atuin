@@ -9,6 +9,7 @@ use uuid::Uuid;
 pub struct DecryptedData(pub Vec<u8>);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct EncryptedData {
     pub data: String,
     pub content_encryption_key: String,
@@ -23,7 +24,9 @@ pub struct Diff {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Host {
+    #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
     pub id: HostId,
     pub name: String,
 }
@@ -44,12 +47,22 @@ pub type RecordIdx = u64;
 
 /// A single record stored inside of our local database
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypedBuilder)]
+#[cfg_attr(
+    feature = "openapi",
+    derive(utoipa::ToSchema),
+    // Names the `Record<EncryptedData>` schema. It cannot be called `Record`:
+    // utoipa expands aliases into real type aliases, which would collide with
+    // the struct itself.
+    aliases(RecordEncrypted = Record<EncryptedData>)
+)]
 pub struct Record<Data> {
     /// a unique ID
     #[builder(default = RecordId(crate::utils::uuid_v7()))]
+    #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
     pub id: RecordId,
 
     /// The integer record ID. This is only unique per (host, tag).
+    #[cfg_attr(feature = "openapi", schema(value_type = u64, format = "uint64"))]
     pub idx: RecordIdx,
 
     /// The unique ID of the host.
@@ -60,6 +73,7 @@ pub struct Record<Data> {
 
     /// The creation time in nanoseconds since unix epoch
     #[builder(default = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as u64)]
+    #[cfg_attr(feature = "openapi", schema(value_type = u64, format = "uint64"))]
     pub timestamp: u64,
 
     /// The version the data in the entry conforms to
@@ -95,11 +109,37 @@ impl<Data> Record<Data> {
     }
 }
 
+/// `host id -> tag -> max(idx)`, with `uint64` leaves so that generated clients
+/// use `u64` rather than `i64`. Hand-built because the nesting gives the derive
+/// nowhere to hang a per-leaf format.
+#[cfg(feature = "openapi")]
+fn record_status_hosts_schema() -> utoipa::openapi::Object {
+    use utoipa::openapi::{ObjectBuilder, SchemaFormat, SchemaType, schema::AdditionalProperties};
+
+    let idx = ObjectBuilder::new()
+        .schema_type(SchemaType::Integer)
+        .format(Some(SchemaFormat::Custom("uint64".to_string())))
+        .minimum(Some(0.0))
+        .build();
+
+    let tags = ObjectBuilder::new()
+        .schema_type(SchemaType::Object)
+        .additional_properties(Some(AdditionalProperties::RefOr(idx.into())))
+        .build();
+
+    ObjectBuilder::new()
+        .schema_type(SchemaType::Object)
+        .additional_properties(Some(AdditionalProperties::RefOr(tags.into())))
+        .build()
+}
+
 /// An index representing the current state of the record stores
 /// This can be both remote, or local, and compared in either direction
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RecordStatus {
     // A map of host -> tag -> max(idx)
+    #[cfg_attr(feature = "openapi", schema(schema_with = record_status_hosts_schema))]
     pub hosts: HashMap<HostId, HashMap<String, RecordIdx>>,
 }
 

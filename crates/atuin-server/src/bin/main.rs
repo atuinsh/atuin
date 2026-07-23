@@ -32,6 +32,9 @@ enum Cmd {
 
     /// Print server example configuration
     DefaultConfig,
+
+    /// Print the OpenAPI description of the server API
+    Openapi,
 }
 
 #[tokio::main]
@@ -67,6 +70,10 @@ async fn main() -> Result<()> {
         }
         Cmd::DefaultConfig => {
             println!("{}", example_config());
+            Ok(())
+        }
+        Cmd::Openapi => {
+            print!("{}", atuin_server::openapi::spec());
             Ok(())
         }
     }

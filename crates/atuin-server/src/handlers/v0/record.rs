@@ -11,6 +11,18 @@ use atuin_server_database::Database;
 
 use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 
+#[utoipa::path(
+    post,
+    path = "/api/v0/record",
+    operation_id = "post_records",
+    security(("session" = [])),
+    request_body = Vec<RecordEncrypted>,
+    responses(
+        (status = 200, description = "Records stored (empty body)"),
+        (status = "4XX", description = "Not authenticated, or a record was too large", body = ErrorResponse),
+        (status = "5XX", description = "Server error", body = ErrorResponse),
+    ),
+)]
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn post<DB: Database>(
     UserAuth(user): UserAuth,
@@ -50,6 +62,17 @@ pub async fn post<DB: Database>(
     Ok(())
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v0/record",
+    operation_id = "record_status",
+    security(("session" = [])),
+    responses(
+        (status = 200, description = "Max record index per host and tag", body = RecordStatus),
+        (status = "4XX", description = "Not authenticated", body = ErrorResponse),
+        (status = "5XX", description = "Server error", body = ErrorResponse),
+    ),
+)]
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn index<DB: Database>(
     UserAuth(user): UserAuth,
@@ -83,6 +106,23 @@ pub struct NextParams {
     count: u64,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v0/record/next",
+    operation_id = "next_records",
+    security(("session" = [])),
+    params(
+        ("host" = String, Query, format = Uuid, description = "Host ID (hyphenated lowercase UUID string)"),
+        ("tag" = String, Query, description = "Store tag, e.g. \"history\", \"kv\""),
+        ("start" = Option<u64>, Query, format = "uint64", description = "Record index to start from; omitted means from the beginning"),
+        ("count" = u64, Query, format = "uint64", description = "Maximum number of records to return"),
+    ),
+    responses(
+        (status = 200, description = "A batch of records (bare JSON array)", body = Vec<RecordEncrypted>),
+        (status = "4XX", description = "Not authenticated", body = ErrorResponse),
+        (status = "5XX", description = "Server error", body = ErrorResponse),
+    ),
+)]
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn next<DB: Database>(
     params: Query<NextParams>,

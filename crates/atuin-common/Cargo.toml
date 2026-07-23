@@ -22,6 +22,9 @@ unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
 # sequences, backspaces, carriage returns, cursor motion) into clean plain text
 # via a `vt100` terminal emulator. Compiled only when enabled.
 ansi = ["dep:vt100"]
+# Derives `utoipa::ToSchema` on the wire types in `api` and `record`, so that
+# atuin-server can generate crates/atuin-client/openapi.json from them.
+openapi = ["dep:utoipa", "utoipa/uuid"]
 
 [dependencies]
 derive_more = { workspace = true }
@@ -44,6 +47,7 @@ tracing-subscriber = { workspace = true, optional = true }
 unicode-width = { version = "0.2", optional = true }
 unicode-segmentation = { version = "1.11.0", optional = true }
 vt100 = { workspace = true, optional = true }
+utoipa = { workspace = true, optional = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

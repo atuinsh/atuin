@@ -9,6 +9,7 @@ use eyre::{Context, Result};
 
 mod handlers;
 mod metrics;
+pub mod openapi;
 mod router;
 
 pub use settings::Settings;

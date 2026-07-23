@@ -15,7 +15,7 @@ repository = { workspace = true }
 
 [features]
 default = ["sync", "hub", "daemon"]
-sync = ["reqwest"]
+sync = ["reqwest", "atuin-api-client"]
 hub = ["reqwest"]
 daemon = []
 check-update = []
@@ -66,6 +66,7 @@ rusty_paserk = { version = "0.5.0", default-features = false, features = [
 
 # sync
 reqwest = { workspace = true, optional = true }
+atuin-api-client = { path = "../atuin-api-client", version = "18.18.0-beta.1", optional = true }
 indicatif = "0.18.0"
 tiny-bip39 = "2.0.0"
 

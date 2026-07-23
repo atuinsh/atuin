@@ -19,7 +19,7 @@ name = "atuin-server"
 path = "src/bin/main.rs"
 
 [dependencies]
-atuin-common = { workspace = true }
+atuin-common = { workspace = true, features = ["openapi"] }
 atuin-server-database = { workspace = true }
 atuin-server-postgres = { workspace = true }
 atuin-server-sqlite = { workspace = true }
@@ -31,6 +31,7 @@ serde = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true }
 axum = "0.8"
+utoipa = { workspace = true }
 fs-err = { workspace = true }
 tower = { workspace = true }
 tower-http = { version = "0.6", features = ["trace"] }
@@ -41,3 +42,6 @@ metrics-exporter-prometheus = { version = "0.18", default-features = false }
 metrics = "0.24"
 clap = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

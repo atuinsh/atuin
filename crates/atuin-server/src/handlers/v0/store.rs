@@ -12,6 +12,17 @@ use atuin_server_database::Database;
 #[derive(Deserialize)]
 pub struct DeleteParams {}
 
+#[utoipa::path(
+    delete,
+    path = "/api/v0/store",
+    operation_id = "delete_store",
+    security(("session" = [])),
+    responses(
+        (status = 200, description = "Store deleted (empty body)"),
+        (status = "4XX", description = "Not authenticated", body = ErrorResponse),
+        (status = "5XX", description = "Server error", body = ErrorResponse),
+    ),
+)]
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn delete<DB: Database>(
     _params: Query<DeleteParams>,

@@ -1,0 +1,29 @@
+[package]
+name = "atuin-api-client"
+edition = "2024"
+description = "OpenAPI client for the atuin sync server, generated at build time (see README.md)"
+
+rust-version = { workspace = true }
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+# The progenitor-generated code trips this lint; it is generated and cannot be
+# edited by hand.
+[lints.clippy]
+result_large_err = "allow"
+
+[dependencies]
+progenitor-client = { workspace = true }
+reqwest = { workspace = true, features = ["query"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+
+[build-dependencies]
+prettyplease = "0.2"
+progenitor = { workspace = true }
+serde_json = { workspace = true }
+syn = "2.0"

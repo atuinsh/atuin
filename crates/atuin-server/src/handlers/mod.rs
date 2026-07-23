@@ -10,6 +10,12 @@ pub mod v0;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[utoipa::path(
+    get,
+    path = "/",
+    operation_id = "index",
+    responses((status = 200, description = "Server homage and version", body = IndexResponse)),
+)]
 pub async fn index<DB: Database>(state: State<AppState<DB>>) -> Json<IndexResponse> {
     let homage = r#""Through the fathomless deeps of space swims the star turtle Great A'Tuin, bearing on its back the four giant elephants who carry on their shoulders the mass of the Discworld." -- Sir Terry Pratchett"#;
 

@@ -1,24 +1,31 @@
+//! Thin wrapper over the progenitor-generated sync-server client
+//! (`atuin-api-client`, generated from `crates/atuin-client/openapi.json` —
+//! see `crates/atuin-api-client/README.md` for regeneration instructions).
+//!
+//! This module preserves the historical public surface: free `register`/`login`
+//! functions, the `Client` struct with per-endpoint methods, and
+//! `atuin_common` request/response types at the boundary.
+
 use std::collections::HashMap;
-use std::env;
 use std::time::Duration;
 
-use eyre::{Result, bail};
+use eyre::{Result, bail, eyre};
 use reqwest::{
     Response, StatusCode, Url,
-    header::{AUTHORIZATION, HeaderMap, USER_AGENT},
+    header::{AUTHORIZATION, HeaderMap},
 };
+use uuid::Uuid;
+
+use atuin_api_client::{Client as GeneratedClient, Error as ApiError, types as api_types};
 
 use atuin_common::{
     api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION},
-    record::{EncryptedData, HostId, Record, RecordIdx},
+    record::{EncryptedData, Host, HostId, Record, RecordId, RecordIdx},
     tls::ensure_crypto_provider,
     url::UrlAppendExt,
 };
 use atuin_common::{
-    api::{
-        ChangePasswordRequest, ErrorResponse, LoginRequest, LoginResponse, MeResponse,
-        RegisterResponse,
-    },
+    api::{LoginRequest, LoginResponse, MeResponse, RegisterResponse},
     record::RecordStatus,
 };
 
@@ -54,7 +61,105 @@ impl AuthToken {
 
 pub struct Client<'a> {
     sync_addr: &'a Url,
-    client: reqwest::Client,
+    client: GeneratedClient,
+}
+
+/// The generated client joins paths as `format!("{baseurl}/{path}")`, so the
+/// base URL must not end with a trailing slash (a path prefix is preserved).
+fn base_url(address: &Url) -> String {
+    address.as_str().trim_end_matches('/').to_string()
+}
+
+/// Map a generated-client error to the historical error messages.
+///
+/// `url` is the URL of the request, used in the error messages.
+fn map_api_error(url: &str, err: ApiError<api_types::ErrorResponse>) -> eyre::Report {
+    match err {
+        // Transport errors were previously propagated as bare reqwest errors
+        ApiError::CommunicationError(e) => eyre::Report::new(e),
+        ApiError::ErrorResponse(rv) => {
+            let status = rv.status();
+
+            if status == StatusCode::SERVICE_UNAVAILABLE {
+                return eyre!(
+                    "Service unavailable: check https://status.atuin.sh (or get in touch with your host)"
+                );
+            }
+
+            if status == StatusCode::TOO_MANY_REQUESTS {
+                return eyre!("Rate limited; please wait before doing that again");
+            }
+
+            let reason = &rv.into_inner().reason;
+
+            if status.is_client_error() {
+                return eyre!("Invalid request to the service at {url}, {status} - {reason}.");
+            }
+
+            eyre!(
+                "There was an error with the atuin sync service at {url}, server error {status}: {reason}.\nIf the problem persists, contact the host"
+            )
+        }
+        // A status code that is not documented in the OpenAPI spec (e.g. a 3xx)
+        ApiError::UnexpectedResponse(resp) => {
+            let status = resp.status();
+
+            if status == StatusCode::SERVICE_UNAVAILABLE {
+                return eyre!(
+                    "Service unavailable: check https://status.atuin.sh (or get in touch with your host)"
+                );
+            }
+
+            if status == StatusCode::TOO_MANY_REQUESTS {
+                return eyre!("Rate limited; please wait before doing that again");
+            }
+
+            eyre!(
+                "There was an error with the atuin sync service at {url}, Status {status:?}.\nIf the problem persists, contact the host"
+            )
+        }
+        // Includes InvalidResponsePayload (error body that is not valid
+        // ErrorResponse JSON) and other client-side failures
+        other => eyre!(
+            "There was an error with the atuin sync service at {url}: {other}.\nIf the problem persists, contact the host"
+        ),
+    }
+}
+
+fn record_to_api(record: &Record<EncryptedData>) -> api_types::RecordEncrypted {
+    api_types::RecordEncrypted {
+        data: api_types::EncryptedData {
+            content_encryption_key: record.data.content_encryption_key.clone(),
+            data: record.data.data.clone(),
+        },
+        host: api_types::Host {
+            id: record.host.id.0,
+            name: record.host.name.clone(),
+        },
+        id: record.id.0,
+        idx: record.idx,
+        tag: record.tag.clone(),
+        timestamp: record.timestamp,
+        version: record.version.clone(),
+    }
+}
+
+fn record_from_api(record: api_types::RecordEncrypted) -> Record<EncryptedData> {
+    Record {
+        id: RecordId(record.id),
+        idx: record.idx,
+        host: Host {
+            id: HostId(record.host.id),
+            name: record.host.name,
+        },
+        timestamp: record.timestamp,
+        version: record.version,
+        tag: record.tag,
+        data: EncryptedData {
+            data: record.data.data,
+            content_encryption_key: record.data.content_encryption_key,
+        },
+    }
 }
 
 pub async fn register(
@@ -64,56 +169,72 @@ pub async fn register(
     password: &str,
 ) -> Result<RegisterResponse> {
     ensure_crypto_provider();
-    let mut map = HashMap::new();
-    map.insert("username", username);
-    map.insert("email", email);
-    map.insert("password", password);
 
-    let url = address.append(["user", username])?;
-    let resp = reqwest::get(url).await?;
+    let mut headers = HeaderMap::new();
+    headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
 
-    if resp.status().is_success() {
-        bail!("username already in use");
+    let http = reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .default_headers(headers)
+        .build()?;
+    let client = GeneratedClient::new_with_client(&base_url(address), http);
+
+    // Check username availability first: the server returns a success only if
+    // the user already exists.
+    match client.get_user(username).await {
+        Ok(_) => bail!("username already in use"),
+        Err(ApiError::CommunicationError(e)) => return Err(e.into()),
+        // Any other response (typically a 404) means the name is available
+        Err(_) => {}
     }
 
     let url = address.append(["register"])?;
-    let client = reqwest::Client::new();
     let resp = client
-        .post(url)
-        .header(USER_AGENT, APP_USER_AGENT)
-        .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
-        .json(&map)
-        .send()
-        .await?;
-    let resp = handle_resp_error(resp).await?;
+        .register(&api_types::RegisterRequest {
+            email: email.to_string(),
+            password: password.to_string(),
+            username: username.to_string(),
+        })
+        .await
+        .map_err(|e| map_api_error(url.as_str(), e))?;
 
-    if !ensure_version(&resp)? {
+    if !ensure_version_from_headers(resp.headers())? {
         bail!("could not register user due to version mismatch");
     }
 
-    let session = resp.json::<RegisterResponse>().await?;
-    Ok(session)
+    let session = resp.into_inner();
+    Ok(RegisterResponse {
+        session: session.session,
+        auth: session.auth,
+    })
 }
 
 pub async fn login(address: &Url, req: LoginRequest) -> Result<LoginResponse> {
     ensure_crypto_provider();
+
+    let http = reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .build()?;
+    let client = GeneratedClient::new_with_client(&base_url(address), http);
+
     let url = address.append(["login"])?;
-    let client = reqwest::Client::new();
-
     let resp = client
-        .post(url)
-        .header(USER_AGENT, APP_USER_AGENT)
-        .json(&req)
-        .send()
-        .await?;
-    let resp = handle_resp_error(resp).await?;
+        .login(&api_types::LoginRequest {
+            password: req.password,
+            username: req.username,
+        })
+        .await
+        .map_err(|e| map_api_error(url.as_str(), e))?;
 
-    if !ensure_version(&resp)? {
+    if !ensure_version_from_headers(resp.headers())? {
         bail!("Could not login due to version mismatch");
     }
 
-    let session = resp.json::<LoginResponse>().await?;
-    Ok(session)
+    let session = resp.into_inner();
+    Ok(LoginResponse {
+        session: session.session,
+        auth: session.auth,
+    })
 }
 
 #[cfg(feature = "check-update")]
@@ -126,7 +247,7 @@ pub async fn latest_version() -> Result<Version> {
 
     let resp = client
         .get(url)
-        .header(USER_AGENT, APP_USER_AGENT)
+        .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
         .send()
         .await?;
     let resp = handle_resp_error(resp).await?;
@@ -138,7 +259,11 @@ pub async fn latest_version() -> Result<Version> {
 }
 
 pub fn ensure_version(response: &Response) -> Result<bool> {
-    let version = response.headers().get(ATUIN_HEADER_VERSION);
+    ensure_version_from_headers(response.headers())
+}
+
+fn ensure_version_from_headers(headers: &HeaderMap) -> Result<bool> {
+    let version = headers.get(ATUIN_HEADER_VERSION);
 
     let version = if let Some(version) = version {
         match version.to_str() {
@@ -165,7 +290,10 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
     Ok(true)
 }
 
+#[cfg(feature = "check-update")]
 async fn handle_resp_error(resp: Response) -> Result<Response> {
+    use atuin_common::api::ErrorResponse;
+
     let status = resp.status();
     let url = resp.url().to_string();
 
@@ -214,34 +342,40 @@ impl<'a> Client<'a> {
         // used for semver server check
         headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
 
+        let http = reqwest::Client::builder()
+            .user_agent(APP_USER_AGENT)
+            .default_headers(headers)
+            .connect_timeout(Duration::new(connect_timeout, 0))
+            .timeout(Duration::new(timeout, 0))
+            .build()?;
+
         Ok(Client {
             sync_addr,
-            client: reqwest::Client::builder()
-                .user_agent(APP_USER_AGENT)
-                .default_headers(headers)
-                .connect_timeout(Duration::new(connect_timeout, 0))
-                .timeout(Duration::new(timeout, 0))
-                .build()?,
+            client: GeneratedClient::new_with_client(&base_url(sync_addr), http),
         })
     }
 
     pub async fn me(&self) -> Result<MeResponse> {
         let url = self.sync_addr.append_path("api/v0/me")?;
 
-        let resp = self.client.get(url).send().await?;
-        let resp = handle_resp_error(resp).await?;
+        let resp = self
+            .client
+            .me()
+            .await
+            .map_err(|e| map_api_error(url.as_str(), e))?;
 
-        let status = resp.json::<MeResponse>().await?;
-
-        Ok(status)
+        Ok(MeResponse {
+            username: resp.into_inner().username,
+        })
     }
 
     pub async fn delete_store(&self) -> Result<()> {
         let url = self.sync_addr.append_path("api/v0/store")?;
 
-        let resp = self.client.delete(url).send().await?;
-
-        handle_resp_error(resp).await?;
+        self.client
+            .delete_store()
+            .await
+            .map_err(|e| map_api_error(url.as_str(), e))?;
 
         Ok(())
     }
@@ -251,8 +385,12 @@ impl<'a> Client<'a> {
 
         debug!("uploading {} records to {url}", records.len());
 
-        let resp = self.client.post(url).json(records).send().await?;
-        handle_resp_error(resp).await?;
+        let body: Vec<api_types::RecordEncrypted> = records.iter().map(record_to_api).collect();
+
+        self.client
+            .post_records(&body)
+            .await
+            .map_err(|e| map_api_error(url.as_str(), e))?;
 
         Ok(())
     }
@@ -273,25 +411,36 @@ impl<'a> Client<'a> {
             .append_pair("count", &count.to_string())
             .append_pair("start", &start.to_string());
 
-        let resp = self.client.get(url).send().await?;
-        let resp = handle_resp_error(resp).await?;
+        let resp = self
+            .client
+            .next_records(count, &host.0, Some(start), &tag)
+            .await
+            .map_err(|e| map_api_error(url.as_str(), e))?;
 
-        let records = resp.json::<Vec<Record<EncryptedData>>>().await?;
-
-        Ok(records)
+        Ok(resp.into_inner().into_iter().map(record_from_api).collect())
     }
 
     pub async fn record_status(&self) -> Result<RecordStatus> {
         let url = self.sync_addr.append_path("api/v0/record")?;
 
-        let resp = self.client.get(url).send().await?;
-        let resp = handle_resp_error(resp).await?;
+        let resp = self
+            .client
+            .record_status()
+            .await
+            .map_err(|e| map_api_error(url.as_str(), e))?;
 
-        if !ensure_version(&resp)? {
+        if !ensure_version_from_headers(resp.headers())? {
             bail!("could not sync records due to version mismatch");
         }
 
-        let index = resp.json().await?;
+        let status = resp.into_inner();
+
+        let mut hosts: HashMap<HostId, HashMap<String, RecordIdx>> =
+            HashMap::with_capacity(status.hosts.len());
+        for (host, tags) in status.hosts {
+            hosts.insert(HostId(Uuid::parse_str(&host)?), tags);
+        }
+        let index = RecordStatus { hosts };
 
         debug!("got remote index {index:?}");
 
@@ -299,16 +448,13 @@ impl<'a> Client<'a> {
     }
 
     pub async fn delete(&self) -> Result<()> {
-        let url = self.sync_addr.append(["account"])?;
-
-        let resp = self.client.delete(url).send().await?;
-
-        if resp.status() == 403 {
-            bail!("invalid login details");
-        } else if resp.status() == 200 {
-            Ok(())
-        } else {
-            bail!("Unknown error");
+        match self.client.delete_account().await {
+            Ok(_) => Ok(()),
+            Err(ApiError::CommunicationError(e)) => Err(e.into()),
+            Err(e) if e.status() == Some(StatusCode::FORBIDDEN) => {
+                bail!("invalid login details");
+            }
+            Err(_) => bail!("Unknown error"),
         }
     }
 
@@ -317,26 +463,24 @@ impl<'a> Client<'a> {
         current_password: String,
         new_password: String,
     ) -> Result<()> {
-        let url = self.sync_addr.append_path("account/password")?;
-
         let resp = self
             .client
-            .patch(url)
-            .json(&ChangePasswordRequest {
+            .change_password(&api_types::ChangePasswordRequest {
                 current_password,
                 new_password,
             })
-            .send()
-            .await?;
+            .await;
 
-        if resp.status() == 401 {
-            bail!("current password is incorrect");
-        } else if resp.status() == 403 {
-            bail!("invalid login details");
-        } else if resp.status() == 200 {
-            Ok(())
-        } else {
-            bail!("Unknown error");
+        match resp {
+            Ok(_) => Ok(()),
+            Err(ApiError::CommunicationError(e)) => Err(e.into()),
+            Err(e) if e.status() == Some(StatusCode::UNAUTHORIZED) => {
+                bail!("current password is incorrect");
+            }
+            Err(e) if e.status() == Some(StatusCode::FORBIDDEN) => {
+                bail!("invalid login details");
+            }
+            Err(_) => bail!("Unknown error"),
         }
     }
 }
