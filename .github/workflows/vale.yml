@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: errata-ai/vale-action@v2.1.2
+      - uses: vale-cli/vale-action@v2.1.2
         with:
           version: "3.15.2"
           files: docs/docs
