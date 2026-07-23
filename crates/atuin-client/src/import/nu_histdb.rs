@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use atuin_common::time::OffsetDateTimeExt;
 use directories::BaseDirs;
 use eyre::{Result, eyre};
 use sqlx::{Pool, sqlite::SqlitePool};
@@ -32,8 +33,8 @@ impl From<HistDbEntry> for History {
         let ts_ns = (histdb_item.start_timestamp % 1000) * 1_000_000;
         // a corrupt row must not take down the whole import. the epoch sorts to the
         // bottom of history and is obviously not a real time
-        let timestamp =
-            super::timestamp_from_parts(ts_secs, ts_ns).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        let timestamp = OffsetDateTime::from_timespec(i128::from(ts_secs), i128::from(ts_ns))
+            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
 
         let imported = History::import()
             .shell("nu")

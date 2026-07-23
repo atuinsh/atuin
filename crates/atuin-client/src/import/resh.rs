@@ -5,10 +5,11 @@ use directories::UserDirs;
 use eyre::{Result, eyre};
 use serde::Deserialize;
 
+use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::uuid_v7;
 use time::OffsetDateTime;
 
-use super::{Importer, Loader, get_histfile_path, timestamp_from_parts, unix_byte_lines};
+use super::{Importer, Loader, get_histfile_path, unix_byte_lines};
 use crate::history::History;
 use crate::history::builder::HistoryImported;
 use crate::import::read_to_end;
@@ -110,14 +111,14 @@ impl Importer for Resh {
             let start = {
                 let secs = entry.realtime_before.floor() as i64;
                 let nanosecs = (entry.realtime_before.fract() * 1_000_000_000_f64).round() as i64;
-                timestamp_from_parts(secs, nanosecs)
+                OffsetDateTime::from_timespec(i128::from(secs), i128::from(nanosecs))
             };
             #[allow(clippy::cast_possible_truncation)]
             #[allow(clippy::cast_sign_loss)]
             let end = {
                 let secs = entry.realtime_after.floor() as i64;
                 let nanosecs = (entry.realtime_after.fract() * 1_000_000_000_f64).round() as i64;
-                timestamp_from_parts(secs, nanosecs)
+                OffsetDateTime::from_timespec(i128::from(secs), i128::from(nanosecs))
             };
 
             // a corrupt entry must not abort the whole import. only report a duration when
@@ -126,12 +127,10 @@ impl Importer for Resh {
             // can also make realtime_after precede realtime_before; a negative duration is
             // just as meaningless as an unrepresentable one, so it falls back the same way
             let duration = match (start, end) {
-                (Some(start), Some(end)) => {
-                    match i64::try_from((end - start).whole_nanoseconds()) {
-                        Ok(nanos) if nanos >= 0 => nanos,
-                        _ => HistoryImported::DEFAULT_DURATION,
-                    }
-                }
+                (Ok(start), Ok(end)) => match i64::try_from((end - start).whole_nanoseconds()) {
+                    Ok(nanos) if nanos >= 0 => nanos,
+                    _ => HistoryImported::DEFAULT_DURATION,
+                },
                 _ => HistoryImported::DEFAULT_DURATION,
             };
             let timestamp = start.unwrap_or(OffsetDateTime::UNIX_EPOCH);
