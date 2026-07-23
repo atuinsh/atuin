@@ -23,10 +23,18 @@ fn parse_ngram_size(s: &str) -> Result<usize, String> {
     Ok(value)
 }
 
+fn period_long_help() -> String {
+    format!(
+        "Compute statistics for the specified period, leave blank for statistics since the beginning. See [this]({}) for more details.",
+        atuin_common::docs::url("reference/stats/")
+    )
+}
+
 #[derive(Parser, Debug)]
 #[command(infer_subcommands = true)]
 pub struct Cmd {
-    /// Compute statistics for the specified period, leave blank for statistics since the beginning. See [this](https://docs.atuin.sh/latest/reference/stats/) for more details.
+    /// Compute statistics for the specified period, leave blank for statistics since the beginning
+    #[arg(long_help = period_long_help())]
     period: Vec<String>,
 
     /// How many top commands to list

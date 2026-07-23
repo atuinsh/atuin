@@ -3,4 +3,4 @@ Welcome to Atuin AI, an AI assistant in your terminal. You can ask it to generat
 Commands:
 {commands}
 
-For more information, see [https://docs.atuin.sh/latest/ai/introduction/](https://docs.atuin.sh/latest/ai/introduction/)
+For more information, see [{docs_url}]({docs_url})
