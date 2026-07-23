@@ -1461,7 +1461,7 @@ impl Settings {
             // Existing users will get the default "False", so we don't mess with any potential
             // muscle memory.
             // New users will get the new default, that is more similar to what they are used to.
-            .set_default("enter_accept", false)?
+            .set_default("enter_accept", true)?
             .set_default("keys.scroll_exits", true)?
             .set_default("keys.accept_past_line_end", true)?
             .set_default("keys.exit_past_line_start", true)?
