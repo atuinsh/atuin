@@ -84,11 +84,8 @@ impl Cmd {
                     println!("Detected Xonsh (SQLite backend)");
                     import::<XonshSqlite, DB>(db).await
                 } else if shell.ends_with("/zsh") {
-                    if ZshHistDb::histpath().is_ok() {
-                        println!(
-                            "Detected Zsh-HistDb, using :{}",
-                            ZshHistDb::histpath().unwrap().to_str().unwrap()
-                        );
+                    if let Ok(path) = ZshHistDb::histpath() {
+                        println!("Detected Zsh-HistDb, using :{}", path.to_string_lossy());
                         import::<ZshHistDb, DB>(db).await
                     } else {
                         println!("Detected ZSH");
@@ -101,11 +98,8 @@ impl Cmd {
                     println!("Detected Bash");
                     import::<Bash, DB>(db).await
                 } else if shell.ends_with("/nu") {
-                    if NuHistDb::histpath().is_ok() {
-                        println!(
-                            "Detected Nu-HistDb, using :{}",
-                            NuHistDb::histpath().unwrap().to_str().unwrap()
-                        );
+                    if let Ok(path) = NuHistDb::histpath() {
+                        println!("Detected Nu-HistDb, using :{}", path.to_string_lossy());
                         import::<NuHistDb, DB>(db).await
                     } else {
                         println!("Detected Nushell");
@@ -176,7 +170,7 @@ async fn import<I: Importer + Send, DB: Database>(db: &DB) -> Result<()> {
     println!("Importing history from {}", I::NAME);
 
     let mut importer = I::new().await?;
-    let len = importer.entries().await.unwrap();
+    let len = importer.entries().await?;
     let mut loader = HistoryImporter::new(db, len);
     importer.load(&mut loader).await?;
     loader.flush().await?;
