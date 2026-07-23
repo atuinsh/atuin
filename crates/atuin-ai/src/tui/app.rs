@@ -14,6 +14,7 @@ use ratatui_core::style::{Color, Modifier, Style};
 use tokio::sync::mpsc::UnboundedSender;
 use tui_textarea::TextArea;
 
+use crate::fsm::StreamPhase;
 use crate::fsm::effects::{Effect, ExitAction, PermissionTarget, TimeoutKind};
 use crate::fsm::events::{Event, PermissionChoice, PermissionResponse};
 use crate::fsm::tools::ToolPreviewData;
@@ -795,6 +796,7 @@ impl AiApp {
                 self.pushed_turns == 0 && i == 0,
                 false,
                 false,
+                None,
             ));
             self.pushed_turns += 1;
         }
@@ -1075,6 +1077,17 @@ impl App for AiApp {
                 Some(UiTurnKind::Agent { .. })
             );
 
+        let status_text = if let AgentState::Turn {
+            stream: StreamPhase::Streaming {
+                status: Some(status),
+            },
+        } = &self.fsm.state
+        {
+            Some(capitalize(status.to_str()))
+        } else {
+            None
+        };
+
         col()
             .when_some(
                 (self.pushed_turns == 0)
@@ -1091,15 +1104,23 @@ impl App for AiApp {
                 },
             )
             .children(turns.iter().enumerate().map(|(i, turn)| {
+                let status_text = ((i == last).then_some(status_text.as_deref())).flatten();
+
                 view::turn_view(
                     turn,
                     self.pushed_turns == 0 && i == 0,
                     busy && i == last,
                     asking.is_some(),
+                    status_text,
                 )
             }))
             .when(needs_pending_banner, |c| {
-                c.child(view::agent_turn_view(&[], true, asking.is_some()))
+                c.child(view::agent_turn_view(
+                    &[],
+                    true,
+                    asking.is_some(),
+                    status_text.as_deref(),
+                ))
             })
             .when_some(
                 match &self.fsm.state {
@@ -1219,6 +1240,14 @@ impl App for AiApp {
         }
 
         km
+    }
+}
+
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
     }
 }
 

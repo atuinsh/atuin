@@ -74,6 +74,17 @@ impl StreamingStatus {
     }
 }
 
+impl StreamingStatus {
+    pub(crate) fn to_str(&self) -> &str {
+        match &self {
+            StreamingStatus::Processing => "processing",
+            StreamingStatus::Searching => "searching",
+            StreamingStatus::Thinking => "thinking",
+            StreamingStatus::WaitingForTools => "waiting for tools",
+        }
+    }
+}
+
 /// Pending dangerous command confirmation state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PendingConfirmation {

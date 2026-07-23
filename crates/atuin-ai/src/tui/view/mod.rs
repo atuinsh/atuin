@@ -74,10 +74,11 @@ pub(crate) fn turn_view(
     first: bool,
     busy: bool,
     showing_ui: bool,
+    status_text: Option<&str>,
 ) -> AnyElement<'static> {
     match &turn.kind {
         UiTurnKind::User { events } => user_turn_view(events, first),
-        UiTurnKind::Agent { events } => agent_turn_view(events, busy, showing_ui),
+        UiTurnKind::Agent { events } => agent_turn_view(events, busy, showing_ui, status_text),
         UiTurnKind::OutOfBand { events } => out_of_band_turn_view(events),
     }
 }
@@ -102,6 +103,7 @@ pub(crate) fn agent_turn_view(
     events: &[UiEvent],
     busy: bool,
     showing_ui: bool,
+    status_text: Option<&str>,
 ) -> AnyElement<'static> {
     let label_style = Style::default()
         .fg(Color::Yellow)
@@ -117,10 +119,15 @@ pub(crate) fn agent_turn_view(
         }))
         .when(busy && !showing_ui, |c| {
             c.child(
-                spinner("")
+                spinner(status_text.unwrap_or(""))
                     .spinner_style(
                         Style::default()
                             .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .label_style(
+                        Style::default()
+                            .fg(Color::DarkGray)
                             .add_modifier(Modifier::BOLD),
                     )
                     .pad_left(2)
