@@ -17,6 +17,7 @@ clap = { workspace = true }
 atuin-common = { workspace = true, features = ["ansi"] }
 crossterm = { workspace = true }
 eyre = { workspace = true }
+percent-encoding = "2.3"
 portable-pty = "0.9"
 signal-hook = "0.3"
 vt100 = { workspace = true }

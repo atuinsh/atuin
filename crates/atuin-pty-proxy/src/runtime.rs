@@ -89,6 +89,7 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
             .command_capture_sink
             .as_ref()
             .map(|_| CommandCaptureTracker::new(current_cols));
+        let mut osc7 = crate::osc7::Parser::new();
         let mut buf = [0u8; 8192];
 
         loop {
@@ -101,6 +102,16 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
                     ) {
                         tracker.push(&buf[..n], sink);
                     }
+
+                    // Mirror the inner shell's cwd onto our own process so
+                    // terminals/multiplexers reading our cwd via process
+                    // introspection (e.g. tmux pane_current_path) see where the
+                    // shell actually is. set_current_dir silently fails for
+                    // non-existent paths (e.g. an OSC 7 forwarded from an SSH'd
+                    // remote session), which is the desired behavior.
+                    osc7.push(&buf[..n], |event| {
+                        let _ = std::env::set_current_dir(&event.path);
+                    });
 
                     if let Some(highlighter) = highlighter.as_mut() {
                         let rendered = highlighter.render(&buf[..n]);

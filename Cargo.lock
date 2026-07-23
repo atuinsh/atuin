@@ -540,6 +540,7 @@ dependencies = [
  "clap",
  "crossterm",
  "eyre",
+ "percent-encoding",
  "portable-pty",
  "rstest",
  "signal-hook",
