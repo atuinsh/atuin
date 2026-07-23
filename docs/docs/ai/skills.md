@@ -48,7 +48,7 @@ All frontmatter fields are optional. YAML frontmatter goes between `---` markers
 | `description`              | first paragraph of body | What the skill does. Sent to the server so the LLM knows when to load it.                    |
 | `disable-model-invocation` | `false`                 | If `true`, the LLM cannot discover or load the skill. Only reachable via `/name` in the TUI. |
 
-Multiline descriptions using YAML's `>` (folded) or `|` (literal) syntax are supported.
+Multiline descriptions using `YAML`'s `>` (folded) or `|` (literal) syntax are supported.
 
 ## Invoking Skills
 
@@ -70,8 +70,8 @@ When the LLM determines a skill is relevant to your request, it calls `load_skil
 
 Skills support the same shell substitution as [user context files](user-context.md):
 
-- **Inline:** `!`command`` — replaced with command stdout
-- **Block:** ` ```! ` code block — entire block replaced with script stdout
+- **Inline:** `!`command`` — replaced with command `stdout`
+- **Block:** ` ```! ` code block — entire block replaced with script `stdout`
 
 Commands run at skill load time (when invoked), not at discovery time.
 

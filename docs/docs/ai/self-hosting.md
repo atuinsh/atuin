@@ -1,12 +1,12 @@
 # Self-Hosting the Atuin AI Backend
 
-The core of Atuin AI's backend is open source, available [at atuinsh/atuin-ai-server](https://github.com/atuinsh/atuin-ai-server). It's based on [atuin-ai-core](https://github.com/atuinsh/atuin-ai-core), the same Gleam library that powers the production Atuin AI backend.
+The core of Atuin AI's backend is open source, available at [`atuinsh/atuin-ai-server`](https://github.com/atuinsh/atuin-ai-server). It's based on [`atuin-ai-core`](https://github.com/atuinsh/atuin-ai-core), the same Gleam library that powers the production Atuin AI backend.
 
 The Atuin AI server currently supports any **OpenAI-compatible, chat completions-style endpoint**. For local models, this includes Ollama, vLLM, LM Studio, llama.cpp, and LiteLLM, among others. You can also use OpenAI-compatible web services, like OpenRouter.
 
 ## Getting Started
 
-After cloning the repository, copy the example config file, `config.example.toml`, to `config.toml`. Follow the configuration section of the readme to set up your instance.
+After cloning the repository, copy the example config file, `config.example.toml`, to `config.toml`. Follow the configuration section of the README to set up your instance.
 
 Here's a very basic example of an Ollama-based setup:
 
@@ -33,7 +33,7 @@ description = "Ollama Gemma 4 - Effective 4b"
 model = "gemma4:e4b"
 ```
 
-See the [repository readme](https://github.com/atuinsh/atuin-ai-server#readme) for more setup details, including configuring server-side tools, like web search and web content scraping.
+See the [repository README](https://github.com/atuinsh/atuin-ai-server#readme) for more setup details, including configuring server-side tools, like web search and web content scraping.
 
 Once done, you can start the server one of two ways:
 

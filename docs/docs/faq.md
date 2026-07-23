@@ -69,18 +69,18 @@ in on at least one machine, it's safe to delete and re-create your account.
 ## I did not set up sync, and now I have to reinstall my system!
 
 If you have a backup of `~/.local/share/atuin`, you can import it by:
-1. disabling atuin by commenting out the shell integration, e.g. for bash it's `eval "$(atuin init bash)"`
+1. disabling Atuin by commenting out the shell integration, e.g. for bash it's `eval "$(atuin init bash)"`
 2. copying the backup to `~/.local/share/atuin`
-3. reenabling atuin
+3. reenabling Atuin
 4. setting up sync!
 
 ## Alternative projects
 
-If you don't like atuin, perhaps one of these works better for you:
+If you don't like Atuin, perhaps one of these works better for you:
 
 - https://github.com/ddworken/hishtory
   - written in go
-  - also provides sync'ed history
+  - also provides synced history
 - https://github.com/cantino/mcfly
   - uses a small local neural network for search
   - only local history

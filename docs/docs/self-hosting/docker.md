@@ -68,7 +68,7 @@ chown 1000:1000 config
 docker compose up -d
 ```
 
-## Using systemd to manage your atuin server
+## Using systemd to manage your Atuin server
 
 The following `systemd` unit file can be used to manage your `docker-compose` managed service:
 

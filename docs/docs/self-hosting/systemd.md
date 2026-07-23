@@ -1,4 +1,4 @@
-# Systemd
+# Running the Atuin server under systemd
 
 !!! note
     These instructions assume the `atuin-server` binary is on your `PATH`. Since

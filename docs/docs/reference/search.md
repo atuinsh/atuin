@@ -1,7 +1,7 @@
 # search
 
 Atuin search supports wildcards, with either the `*` or `%` character. By
-default, a prefix search is performed (ie, all queries are automatically
+default, a prefix search is performed (that is, all queries are automatically
 appended with a wildcard).
 
 | Arg                  | Description |

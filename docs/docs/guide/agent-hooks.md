@@ -80,7 +80,7 @@ Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `openco
 atuin hook install claude-code
 ```
 
-This adds hook entries to `~/.claude/settings.json`. Claude Code calls `atuin hook claude-code` on each `Bash` tool use, passing the event as JSON on stdin.
+This adds hook entries to `~/.claude/settings.json`. Claude Code calls `atuin hook claude-code` on each `Bash` tool use, passing the event as JSON on `stdin`.
 
 ### Codex
 

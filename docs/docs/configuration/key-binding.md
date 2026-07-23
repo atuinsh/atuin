@@ -47,7 +47,7 @@ You can then choose to bind Atuin if needed, do this after the call to init.
 
 ## Enter key behavior
 
-By default, the `enter` key will directly execute the selected command instead of letting you edit it like the `tab` key. If you want to change this behavior, set `enter_accept = false` in your config. For more details: [enter_accept](config.md#enter_accept).
+By default, the `enter` key will directly execute the selected command instead of letting you edit it like the `tab` key. If you want to change this behavior, set `enter_accept = false` in your config. For more details: [`enter_accept`](config.md#enter_accept).
 
 ## Ctrl-n key shortcuts
 
@@ -58,7 +58,7 @@ macOS does not have an ++alt++ key, although terminal emulators can often be con
 ctrl_n_shortcuts = true
 ```
 
-Ghostty on Linux maps ++alt+1++ .. ++alt+9++ for switching between tabs by number. To disable this behavior either add the following to ~/.config/ghostty/config:
+Ghostty on Linux maps ++alt+1++ .. ++alt+9++ for switching between tabs by number. To disable this behavior either add the following to `~/.config/ghostty/config`:
 ```ini
 keybind=alt+one=unbind
 keybind=alt+two=unbind
@@ -77,10 +77,10 @@ or use the `ctrl_n_shortcuts` as outlined above.
 
 If you'd like to customize your bindings further, it's possible to do so with custom shell config:
 
-Atuin defines the ZLE widgets "atuin-search" and "atuin-up-search".  The latter
+Atuin defines the ZLE widgets `atuin-search` and `atuin-up-search`.  The latter
 can be used for the keybindings to the ++up++ key and similar keys.
 
-Note: instead use the widget names "\_atuin\_search\_widget" and "\_atuin\_up\_search\_widget", respectively, in `atuin < 18.0`
+Note: instead use the widget names `_atuin_search_widget` and `_atuin_up_search_widget`, respectively, in `atuin < 18.0`
 
 ```shell
 export ATUIN_NOBIND="true"
@@ -93,10 +93,10 @@ bindkey '^[[A' atuin-up-search
 bindkey '^[OA' atuin-up-search
 ```
 
-For the keybindings in vi mode, "atuin-search-viins", "atuin-search-vicmd",
-"atuin-up-search-viins", and "atuin-up-search-vicmd" (`atuin >= 18.0`) can be
+For the keybindings in vi mode, `atuin-search-viins`, `atuin-search-vicmd`,
+`atuin-up-search-viins`, and `atuin-up-search-vicmd` (`atuin >= 18.0`) can be
 used in combination with the config
-["keymap\_mode"](config.md#keymap_mode)
+[`keymap_mode`](config.md#keymap_mode)
 (`atuin >= 18.0`) to start the Atuin search in respective keymap modes.
 
 ## bash
@@ -127,7 +127,7 @@ be used as well as an arbitrary shell command:
 
 The keymap mode controls the initial keymap in the Atuin search and is
 determined in combination with the config
-["keymap\_mode"](config.md#keymap_mode)
+[`keymap_mode`](config.md#keymap_mode)
 (`atuin >= 18.0`).
 
 
@@ -203,33 +203,33 @@ $env.config = (
 
 | Shortcut                                  | Action                                                                        |
 |-------------------------------------------|-------------------------------------------------------------------------------|
-| enter                                     | Execute selected item                                                         |
-| tab                                       | Select item and edit                                                          |
-| ctrl + r                                  | Cycle through filter modes                                                    |
-| ctrl + s                                  | Cycle through search modes                                                    |
-| alt + 1 to alt + 9                        | Select item by the number located near it                                     |
-| ctrl + c / ctrl + d / ctrl + g / esc      | Return original                                                               |
-| ctrl + y                                  | Copy selected item to clipboard                                               |
-| ctrl + ← / alt + b                        | Move the cursor to the previous word                                          |
-| ctrl + → / alt + f                        | Move the cursor to the next word                                              |
-| ctrl + b / ←                              | Move the cursor to the left                                                   |
-| ctrl + f / →                              | Move the cursor to the right                                                  |
-| ctrl + a / home                           | Move the cursor to the start of the line                                      |
-| ctrl + e / end                            | Move the cursor to the end of the line                                        |
-| ctrl + backspace / ctrl + alt + backspace | Remove the previous word / remove the word just before the cursor             |
-| ctrl + delete / ctrl + alt + delete       | Remove the next word or the word just after the cursor                        |
-| ctrl + w                                  | Remove the word before the cursor even if it spans across the word boundaries |
-| ctrl + u                                  | Clear the current line                                                        |
-| ctrl + n / ctrl + j / ↓                   | Select the next item on the list                                              |
-| ctrl + p / ctrl + k / ↑                   | Select the previous item on the list                                          |
-| ctrl + o                                  | Open the [inspector](#inspector)                                              |
+| Enter                                     | Execute selected item                                                         |
+| Tab                                       | Select item and edit                                                          |
+| Ctrl + r                                  | Cycle through filter modes                                                    |
+| Ctrl + s                                  | Cycle through search modes                                                    |
+| Alt + 1 to Alt + 9                        | Select item by the number located near it                                     |
+| Ctrl + c / Ctrl + d / Ctrl + g / Esc      | Return original                                                               |
+| Ctrl + y                                  | Copy selected item to clipboard                                               |
+| Ctrl + ← / Alt + b                        | Move the cursor to the previous word                                          |
+| Ctrl + → / Alt + f                        | Move the cursor to the next word                                              |
+| Ctrl + b / ←                              | Move the cursor to the left                                                   |
+| Ctrl + f / →                              | Move the cursor to the right                                                  |
+| Ctrl + a / home                           | Move the cursor to the start of the line                                      |
+| Ctrl + e / end                            | Move the cursor to the end of the line                                        |
+| Ctrl + backspace / Ctrl + Alt + backspace | Remove the previous word / remove the word just before the cursor             |
+| Ctrl + delete / Ctrl + Alt + delete       | Remove the next word or the word just after the cursor                        |
+| Ctrl + w                                  | Remove the word before the cursor even if it spans across the word boundaries |
+| Ctrl + u                                  | Clear the current line                                                        |
+| Ctrl + n / Ctrl + j / ↓                   | Select the next item on the list                                              |
+| Ctrl + p / Ctrl + k / ↑                   | Select the previous item on the list                                          |
+| Ctrl + o                                  | Open the [inspector](#inspector)                                              |
 | page down                                 | Scroll search results one page down                                           |
 | page up                                   | Scroll search results one page up                                             |
 | ↓ (on the first entry)                    | Return original or return query depending on [settings](config.md#exit_mode)  |
-| ctrl + a, d                               | Delete the selected history entry                                            |
-| ctrl + a, D                               | Delete **all** history entries matching the selected command                  |
-| ctrl + a, a                               | Move cursor to the start of the line                                         |
-| ctrl + a, c                               | Switch to the context of the currently selected command / return to default   |
+| Ctrl + a, d                               | Delete the selected history entry                                            |
+| Ctrl + a, D                               | Delete **all** history entries matching the selected command                  |
+| Ctrl + a, a                               | Move cursor to the start of the line                                         |
+| Ctrl + a, c                               | Switch to the context of the currently selected command / return to default   |
 
 ### Prefix mode
 
@@ -238,7 +238,7 @@ The shortcuts above that start with ++ctrl+a++ use **prefix mode** — a two-ste
 This is useful for less-frequent actions that don't need a dedicated shortcut. The prefix key can be changed with the [`prefix`](config.md#prefix) setting, and the bindings themselves can be customized with [`[keymap.prefix]`](advanced-key-binding.md#custom-prefix-bindings).
 
 ### Vim mode
-If [vim is enabled in the config](config.md#keymap_mode), the following keybindings are enabled:
+If vim is enabled in the config (see [`keymap_mode`](config.md#keymap_mode)), the following keybindings are enabled:
 
 | Shortcut | Mode   | Action                                     |
 | -------- | ------ | ------------------------------------------ |
@@ -264,28 +264,28 @@ If [vim is enabled in the config](config.md#keymap_mode), the following keybindi
 | Ctrl+b   | Normal | Full-page up (toward visual top)           |
 | Ctrl+f   | Normal | Full-page down (toward visual bottom)      |
 | G        | Normal | Jump to visual bottom of history           |
-| gg       | Normal | Jump to visual top of history              |
+| `gg`     | Normal | Jump to visual top of history              |
 | H        | Normal | Jump to top of visible screen              |
 | M        | Normal | Jump to middle of visible screen           |
 | L        | Normal | Jump to bottom of visible screen           |
 | ? or /   | Normal | Clear input and enter insert mode          |
 | 1-9      | Normal | Select item by number                      |
-| enter    | Normal | Execute selected item (respects enter_accept) |
+| Enter    | Normal | Execute selected item (respects `enter_accept`) |
 | Esc      | Insert | Enters normal mode                         |
 
 
 ### Inspector
-Open the inspector with ctrl + o
+Open the inspector with Ctrl + o
 
 | Shortcut  | Action                                        |
 | --------- | --------------------------------------------- |
 | Esc       | Close the inspector, returning to the shell   |
-| ctrl + o  | Close the inspector, returning to search view |
-| ctrl + d  | Delete the inspected item from the history    |
+| Ctrl + o  | Close the inspector, returning to search view |
+| Ctrl + d  | Delete the inspected item from the history    |
 | ↑         | Inspect the previous item in the history      |
 | ↓         | Inspect the next item in the history          |
 | page up   | Inspect the previous item in the history      |
 | page down | Inspect the next item in the history          |
 | j / k     | Navigate items (when vim mode is enabled)     |
-| enter     | Execute selected item (respects enter_accept) |
-| tab       | Select current item and edit                  |
+| Enter     | Execute selected item (respects `enter_accept`) |
+| Tab       | Select current item and edit                  |

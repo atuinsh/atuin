@@ -53,7 +53,7 @@ This importer reads from Nushell's SQLite history database, which is stored in
 `$XDG_CONFIG_HOME/nushell/history.sqlite3` or `$HOME/.config/nushell/history.sqlite3`.
 There is no way to set the filename otherwise.
 
-## powershell
+## `powershell`
 
 This importer reads from
 [PowerShell's history file](https://learn.microsoft.com/en-us/powershell/module/psreadline/about/about_psreadline#command-history).
@@ -88,7 +88,7 @@ environment variables present when each session was initiated, but this data is
 discarded by Atuin. Xonsh optionally stores the output of each command; if present
 this data is also ignored by Atuin.
 
-## xonsh-sqlite
+## `xonsh-sqlite`
 
 The Xonsh SQLite importer will read from the Xonsh SQLite history file. The history
 file's location is determined by the same process as the regular Xonsh importer,

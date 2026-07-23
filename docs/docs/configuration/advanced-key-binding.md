@@ -19,7 +19,7 @@ The Atuin TUI has multiple modes, each with its own keymap. You configure each o
 | `[keymap.inspector]` | Inspector tab (opened with `ctrl-o`) |
 | `[keymap.prefix]`    | After pressing the prefix key (`ctrl-a` by default) |
 
-Vim-insert mode inherits all emacs bindings by default, then overrides `esc` and `ctrl-[` to enter normal mode instead of exiting.
+Vim-insert mode inherits all Emacs bindings by default, then overrides `esc` and `ctrl-[` to enter normal mode instead of exiting.
 
 You only need to specify the keys you want to change. Unmentioned keys keep their default bindings.
 
@@ -58,7 +58,7 @@ Modifiers are prefixed with a dash separator. Multiple modifiers can be combined
 Available modifiers: `ctrl`, `alt`, `shift`, `super` (also accepted as `cmd` or `win`).
 
 !!! warning
-    The `super` modifier (Cmd on macOS, Win on Windows) **requires** the kitty keyboard protocol. Only terminals that implement this protocol will report the Super modifier to applications. Even in supported terminals, some Super+key combinations may be intercepted by the terminal or OS (e.g. Cmd+C for copy, Cmd+V for paste, or Cmd+T for opening a new tab).
+    The `super` modifier (`Cmd` on macOS, Win on Windows) **requires** the kitty keyboard protocol. Only terminals that implement this protocol will report the Super modifier to applications. Even in supported terminals, some Super+key combinations may be intercepted by the terminal or OS (e.g. Cmd+C for copy, Cmd+V for paste, or Cmd+T for opening a new tab).
 
 ### Uppercase letters
 

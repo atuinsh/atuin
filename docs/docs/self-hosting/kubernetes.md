@@ -212,7 +212,7 @@ spec:
       storage: 10Mi
 ```
 
-Finally, you may want to use a separate namespace for atuin, by creating a [`namespaces.yaml`](https://github.com/atuinsh/atuin/blob/main/k8s/namespaces.yaml) file:
+Finally, you may want to use a separate namespace for Atuin, by creating a [`namespaces.yaml`](https://github.com/atuinsh/atuin/blob/main/k8s/namespaces.yaml) file:
 
 ```yaml
 apiVersion: v1
@@ -223,11 +223,11 @@ metadata:
     name: atuin
 ```
 
-Note that this configuration will store the database folder _outside_ the kubernetes cluster, in the folder `/Users/firstname.lastname/.kube/database` of the host system by configuring the `storageClassName` to be `manual`. In a real enterprise setup, you would probably want to store the database content permanently in the cluster, and not in the host system.
+Note that this configuration will store the database folder _outside_ the Kubernetes cluster, in the folder `/Users/firstname.lastname/.kube/database` of the host system by configuring the `storageClassName` to be `manual`. In a real enterprise setup, you would probably want to store the database content permanently in the cluster, and not in the host system.
 
 You should also change the password string in `ATUIN_DB_PASSWORD` and `ATUIN_DB_URI` in the`secrets.yaml` file to a more secure one.
 
-The atuin service is exposed on port `30530` of the host system. That is configured by the `nodePort` property. Kubernetes has a strict rule that you are not allowed to expose a port numbered lower than 30000. To make the clients work, you can simply set the port in your `config.toml` file, e.g. `sync_address = "http://192.168.1.10:30530"`.
+The Atuin service is exposed on port `30530` of the host system. That is configured by the `nodePort` property. Kubernetes has a strict rule that you are not allowed to expose a port numbered lower than 30000. To make the clients work, you can simply set the port in your `config.toml` file, e.g. `sync_address = "http://192.168.1.10:30530"`.
 
 Deploy the Atuin server using `kubectl`:
 
@@ -238,7 +238,7 @@ Deploy the Atuin server using `kubectl`:
                 -f ./atuin.yaml
 ```
 
-The sample files above are also in the [k8s folder](https://github.com/atuinsh/atuin/tree/main/k8s) of the atuin repository.
+The sample files above are also in the [k8s folder](https://github.com/atuinsh/atuin/tree/main/k8s) of the `atuin` repository.
 
 ## Creating backups of the Postgres database
 

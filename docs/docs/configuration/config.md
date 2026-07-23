@@ -176,7 +176,7 @@ Atuin version: >= 17.0
 
 Default: `fuzzy`
 
-The default searchmode to use when searching and being invoked from a shell up-key binding.
+The default `searchmode` to use when searching and being invoked from a shell up-key binding.
 
 Accepts exactly the same options as `search_mode` above
 
@@ -202,7 +202,7 @@ Defaults to the value specified for `filter_mode`.
 
 ### `inline_height_shell_up_key_binding`
 
-The maximum number of lines the interface should take up when atuin is invoked from a shell up-key binding.
+The maximum number of lines the interface should take up when `atuin` is invoked from a shell up-key binding.
 
 The accepted values are identical to those of `inline_height`.
 
@@ -357,7 +357,7 @@ exit_mode = "return-query"
 
 ### `history_format`
 
-The default format used by `history list`. It can also be specified per invocation with the `--format` arg, which takes precedence over this config value.
+The default format used by `history list`. It can also be specified per invocation with the `--format` `arg`, which takes precedence over this config value.
 
 More on [history list](../reference/list.md)
 
@@ -382,7 +382,7 @@ history_filter = [
 
 ### `cwd_filter`
 
-The cwd filter allows you to exclude directories from history tracking.
+The `cwd` filter allows you to exclude directories from history tracking.
 
 This supports regular expressions, so you can hide pretty much whatever you want!
 
@@ -456,7 +456,7 @@ macOS does not have an ++alt++ key, although terminal emulators can often be con
 ctrl_n_shortcuts = true
 ```
 
-### show_numeric_shortcuts
+### `show_numeric_shortcuts`
 
 Atuin version: >= 18.9
 
@@ -520,7 +520,7 @@ Atuin version: >= 18.0
 
 Default: `5`
 
-Timeout (in seconds) for acquiring a local database connection (sqlite).
+Timeout (in seconds) for acquiring a local database connection (SQLite).
 
 ```toml
 local_timeout = 5
@@ -532,7 +532,7 @@ Atuin version: >= 18.8
 
 Default: `false`
 
-Allows building a command chain with the `&&` or `||` operator. When enabled, opening atuin will search for the next command in the chain, and append to the current buffer.
+Allows building a command chain with the `&&` or `||` operator. When enabled, opening Atuin will search for the next command in the chain, and append to the current buffer.
 
 ```toml
 command_chaining = false
@@ -572,7 +572,7 @@ and ++j++ to navigate the history list as in Vim, whilst pressing
 you can search for a string as in the keymap mode `"emacs"`, while pressing ++esc++
 switches the keymap mode to `"vim-normal"`. When set to `"auto"`, the initial
 keymap mode is automatically determined based on the shell's keymap that triggered
-the Atuin search. `"auto"` is not supported by NuShell at present, where it will
+the Atuin search. `"auto"` is not supported by Nushell at present, where it will
 always trigger the Atuin search with the keymap mode `"emacs"`.
 
 ```toml
@@ -995,7 +995,7 @@ If a legacy experimental daemon is already running, restart it manually once bef
 autostart = false
 ```
 
-### sync_frequency
+### `sync_frequency`
 
 Default: `300`
 
@@ -1005,7 +1005,7 @@ How often the daemon should sync, in seconds
 sync_frequency = 300
 ```
 
-### socket_path
+### `socket_path`
 
 Default:
 
@@ -1013,11 +1013,11 @@ Default:
 socket_path = "~/.local/share/atuin/atuin.sock"
 ```
 
-Where to bind a unix socket for client -> daemon communication
+Where to bind a `unix` socket for client -> daemon communication
 
 If XDG_RUNTIME_DIR is available, then we use this directory instead.
 
-### pidfile_path
+### `pidfile_path`
 
 Default:
 
@@ -1025,9 +1025,9 @@ Default:
 pidfile_path = "~/.local/share/atuin/atuin-daemon.pid"
 ```
 
-Path to the daemon pidfile used for process coordination.
+Path to the daemon `pidfile` used for process coordination.
 
-### systemd_socket
+### `systemd_socket`
 
 Default `false`
 
@@ -1037,11 +1037,11 @@ Use a socket passed via systemd socket activation protocol instead of the path
 systemd_socket = false
 ```
 
-### tcp_port
+### `tcp_port`
 
 Default: `8889`
 
-The port to use for client -> daemon communication. Only used on non-unix systems.
+The port to use for client -> daemon communication. Only used on non-`unix` systems.
 
 ```toml
 tcp_port = 8889
@@ -1201,7 +1201,7 @@ need to be added in or changed in normal usage.
 max_depth = 10
 ```
 
-## ui
+## `ui`
 
 Atuin version: >= 18.5
 
@@ -1229,7 +1229,7 @@ Each column can be specified as:
 | --------- | ------------- | ----------------------------------------------- |
 | duration  | 5             | Command execution duration (e.g., "123ms")      |
 | time      | 8             | Relative time since execution (e.g., "59m ago") |
-| datetime  | 16            | Absolute timestamp (e.g., "2025-01-22 14:35")   |
+| `datetime` | 16            | Absolute timestamp (e.g., "2025-01-22 14:35")   |
 | directory | 20            | Working directory (truncated if too long)       |
 | host      | 15            | Hostname where command was run                  |
 | user      | 10            | Username                                        |
@@ -1267,7 +1267,7 @@ Default: `true`
 
 Syntax highlight commands in the search results, parsed with the grammar for
 the shell that ran them: bash/zsh/sh use the bash grammar, fish uses the fish
-grammar, and shells without a grammar (nu, xonsh, powershell) are shown
+grammar, and shells without a grammar (nu, xonsh, PowerShell) are shown
 unhighlighted. The selected row keeps its usual single highlight color.
 
 The default colors are ANSI palette colors, so they automatically match your

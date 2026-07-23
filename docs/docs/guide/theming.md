@@ -91,7 +91,7 @@ otherwise (e.g. the `marine` theme is intended to make everything green/blue, so
 but the `autumn` theme only seeks to make the custom colors warmer, so it does not).
 
 Colors may be specified either as names from the [palette](https://ogeon.github.io/docs/palette/master/palette/named/index.html)
-crate in lowercase, or as six-character hex codes, prefixed with `#`. To explicitly select ANSI colors by integer, or for greater flexibility in general, you can prefix with `@` and the rest of the string will be handled by crossterm's color parsing. For examples, see [crossterm's color deserialization tests](https://github.com/crossterm-rs/crossterm/blob/5d50d8da62c5e034ef8b2787a771a2c0f9b3b2f9/src/style/types/color.rs#L389), remembering the need to add a `@` prefix for atuin.
+crate in lowercase, or as six-character hex codes, prefixed with `#`. To explicitly select ANSI colors by integer, or for greater flexibility in general, you can prefix with `@` and the rest of the string will be handled by crossterm's color parsing. For examples, see [crossterm's color deserialization tests](https://github.com/crossterm-rs/crossterm/blob/5d50d8da62c5e034ef8b2787a771a2c0f9b3b2f9/src/style/types/color.rs#L389), remembering the need to add a `@` prefix for Atuin.
 
 For example, the following are valid color names:
 

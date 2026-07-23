@@ -27,7 +27,7 @@ atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
 ```
 
 If you don't want to have your password be included in shell history, you can omit
-the password flag and you will be prompted to provide it through stdin.
+the password flag and you will be prompted to provide it through `stdin`.
 
 Usernames must be unique and only contain alphanumerics or hyphens,
 and emails shall only be used for important notifications (security breaches, changes to service, etc).
@@ -68,7 +68,7 @@ atuin login -u <USERNAME> -p <PASSWORD> -k <KEY>
 ```
 
 If you don't want to have your password or encryption key be included in shell history, you can omit
-the corresponding flag and you will be prompted to provide it through stdin.
+the corresponding flag and you will be prompted to provide it through `stdin`.
 
 ## Logout
 
