@@ -234,7 +234,7 @@ After installing, remember to restart your shell.
         If you prefer, you can also download and install bash-preexec separately:
 
         ```shell
-        curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
+        curl https://raw.githubusercontent.com/rcaloras/bash-preexec/0.6.0/bash-preexec.sh -o ~/.bash-preexec.sh
         echo '[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh' >> ~/.bashrc
         ```
 
