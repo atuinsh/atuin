@@ -60,11 +60,13 @@ macro_rules! new_uuid {
 #[cfg(feature = "ansi")]
 pub mod ansi;
 pub mod api;
+pub mod caps;
 pub mod logs;
 pub mod path;
 pub mod record;
 pub mod shell;
 pub mod string;
+pub mod sync;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
 pub mod tls;

@@ -1,6 +1,7 @@
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 // the usage of X- has been deprecated for quite along time, it turns out
@@ -89,4 +90,36 @@ pub struct CliVerifyResponse {
     pub token: Option<String>,
     pub success: Option<bool>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CapabilitiesResponse {
+    /// An opaque capability token issued by the server.
+    ///
+    /// The server is free to choose its own scheme (a hash, a monotonic counter, a UUID, ...); the
+    /// client stores and echoes this value back verbatim in `X-Atuin-Capabilities-Known` and never
+    /// interprets it. If the client and server disagree on this token, none of the capabilities are
+    /// to be assumed.
+    pub version: String,
+
+    /// The list of capabilities this server supports. These will be provided as a JSON:
+    ///
+    /// ```json
+    /// {
+    ///   "sh.atuin.server/version": {
+    ///     "version": 1,
+    ///     "server_version": "x.y.z"
+    ///   },
+    ///   "sh.atuin.server/records.batch": {
+    ///     "version": 1,
+    ///     "max_batch_size": 128,
+    ///     "min_batch_size": 12,
+    ///     "max_bytes": 13
+    ///   },
+    ///   "sh.atuin.server/records.stdout": {
+    ///     "version": 1
+    ///   }
+    /// }
+    /// ```
+    pub capabilities: HashMap<String, serde_json::Value>,
 }
