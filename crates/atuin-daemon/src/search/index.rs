@@ -435,7 +435,7 @@ impl SearchIndex {
         // Get precomputed frecency map (may be None if not yet computed)
         let frecency_map = self.frecency_map.read().await.clone();
 
-        // Build filter based on mode and shells
+        // Build filter based on mode
         let filter = self.build_filter(&filter_mode);
         nucleo.set_filter(filter);
 
@@ -508,7 +508,7 @@ impl SearchIndex {
         *self.frecency_map.write().await = Some(Arc::new(frecency_map));
     }
 
-    /// Build filter predicate for the given mode and shell filter.
+    /// Build filter predicate for the given mode.
     fn build_filter(&self, mode: &IndexFilterMode) -> Option<atuin_nucleo::Filter<String>> {
         // Nothing to filter on
         if matches!(mode, IndexFilterMode::Global) {
@@ -520,7 +520,7 @@ impl SearchIndex {
         let passing_commands: Arc<HashSet<String>> = {
             let mut set = HashSet::new();
             for entry in self.commands.iter() {
-                let mode_passes = match mode {
+                let passes = match mode {
                     IndexFilterMode::Global => true,
                     IndexFilterMode::Directory(dir) => {
                         entry.has_invocation_in_dir(dir, &self.interner)
@@ -533,11 +533,10 @@ impl SearchIndex {
                     }
                     IndexFilterMode::Session(session) => entry.has_invocation_in_session(session),
                 };
-                if !mode_passes {
-                    continue;
+                if passes {
+                    // Convert Arc<str> to String for filter lookup
+                    set.insert(entry.key().to_string());
                 }
-                // Convert Arc<str> to String for filter lookup
-                set.insert(entry.key().to_string());
             }
             Arc::new(set)
         };
