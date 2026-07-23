@@ -510,7 +510,7 @@ impl SearchIndex {
 
     /// Build filter predicate for the given mode.
     fn build_filter(&self, mode: &IndexFilterMode) -> Option<atuin_nucleo::Filter<String>> {
-        // Nothing to filter on
+        // For Global mode, no filter needed
         if matches!(mode, IndexFilterMode::Global) {
             return None;
         }
@@ -521,7 +521,7 @@ impl SearchIndex {
             let mut set = HashSet::new();
             for entry in self.commands.iter() {
                 let passes = match mode {
-                    IndexFilterMode::Global => true,
+                    IndexFilterMode::Global => unreachable!(),
                     IndexFilterMode::Directory(dir) => {
                         entry.has_invocation_in_dir(dir, &self.interner)
                     }
