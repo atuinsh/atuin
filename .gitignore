@@ -22,9 +22,7 @@ __pycache__/
 *$py.class
 test-behavior.sh
 
-# Vale: the pinned binary and downloaded style packages are machine-local build
-# state. The vocabulary under .vale/styles/config/ is source.
-/.vale/bin/
-/.vale/.sync-stamp
+# Vale: downloaded style packages are machine-local build state. The
+# vocabulary under .vale/styles/config/ is source.
 /.vale/styles/*
 !/.vale/styles/config/
