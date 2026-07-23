@@ -25,7 +25,7 @@ To bring your existing history with you:
 atuin import auto
 ```
 
-To sync it across machines — optional, and covered in
+To sync it across machines—optional, and covered in
 [Setting up sync](guide/sync.md):
 
 ```bash

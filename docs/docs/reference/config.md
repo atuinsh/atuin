@@ -82,7 +82,7 @@ By default, `set` matches the TOML type of the existing value when the key
 is already in the config file. This prevents accidentally changing a string
 like `"300"` into an integer `300`.
 
-For new keys (not already in the file), `set` auto-detects the type:
+For new keys (not already in the file), `set` automatically detects the type:
 
 | Value         | Detected type |
 |---------------|---------------|

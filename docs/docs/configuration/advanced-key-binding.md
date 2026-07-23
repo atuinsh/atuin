@@ -74,7 +74,7 @@ Some special characters are written out directly:
 
 ### Shifted and punctuation keys
 
-When you press a key like `Shift+1`, your terminal sends the resulting character (`!`) rather than "shift-1". To bind shifted punctuation keys, use the character directly:
+When you press a key like `Shift+1`, your terminal sends the resulting character (`!`) rather than `shift-1`. To bind shifted punctuation keys, use the character directly:
 
 ```toml
 [keymap.emacs]

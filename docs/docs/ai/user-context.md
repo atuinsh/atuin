@@ -6,8 +6,8 @@ Atuin AI allows you to send additional context to the LLM beyond just your promp
 
 Atuin AI looks for additional context in the current directory and its parent directories, in two locations per directory:
 
-- `.atuin/TERMINAL.md` — scoped inside the `.atuin` dotdir
-- `TERMINAL.md` — at the directory root (e.g. project root)
+- `.atuin/TERMINAL.md`—scoped inside the `.atuin` dotdir
+- `TERMINAL.md`—at the directory root (e.g. project root)
 
 It also checks `TERMINAL.md` in your Atuin config directory (`~/.config/atuin/TERMINAL.md` by default).
 

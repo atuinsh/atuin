@@ -111,7 +111,7 @@ atuin-bind [-m KEYMAP] KEYSEQ COMMAND
 `KEYMAP` is one of `emacs`, `vi-insert`, and `vi-command` and specifies the
 target keymap where the keybinding is defined.  `KEYSEQ` specifies a key
 sequence in the format used in `bind '"KEYSEQ": ...'`.  `COMMAND` specifies a
-shell command to run with the keybindings.  The following special commands can
+shell command to run with the keybindings. The following special commands can
 be used as well as an arbitrary shell command:
 
 | Command                 | Description                                                                         |
@@ -148,7 +148,7 @@ atuin-bind '\eOA' atuin-up-search
 With older versions of Atuin, the user needs to bind a bindable shell function
 "`__atuin_history`" directly using Bash's `bind`.  The flag
 `--shell-up-key-binding` can be optionally specified to the first argument for
-keybindings to the <kbd>up</kbd> key or similar keys.  For the keybindings in
+keybindings to the <kbd>up</kbd> key or similar keys. For the keybindings in
 the `vi` editing mode, the options `--keymap-mode=vim-insert` and the keymap
 mode `--keymap-mode=vim-normal` (`atuin >= 18.0`) can be additionally specified
 to the shell function `__atuin_history`.
@@ -233,7 +233,7 @@ $env.config = (
 
 ### Prefix mode
 
-The shortcuts above that start with ++ctrl+a++ use **prefix mode** — a two-step key combination. Pressing the prefix key (++ctrl+a++ by default) enters prefix mode, then the next key you press triggers the action. Prefix mode exits automatically after the action runs.
+The shortcuts above that start with ++ctrl+a++ use **prefix mode**—a two-step key combination. Pressing the prefix key (++ctrl+a++ by default) enters prefix mode, then the next key you press triggers the action. Prefix mode exits automatically after the action runs.
 
 This is useful for less-frequent actions that don't need a dedicated shortcut. The prefix key can be changed with the [`prefix`](config.md#prefix) setting, and the bindings themselves can be customized with [`[keymap.prefix]`](advanced-key-binding.md#custom-prefix-bindings).
 

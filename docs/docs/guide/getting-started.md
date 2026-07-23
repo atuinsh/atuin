@@ -48,7 +48,7 @@ atuin register -u <USERNAME> -e <EMAIL>
 atuin sync
 ```
 
-Registration generates an encryption key. **Save it somewhere safe** — you'll
+Registration generates an encryption key. **Save it somewhere safe**—you'll
 need it to log in on any other machine, and it can't be recovered. See
 [Setting up sync](sync.md) for the details, including logging in elsewhere.
 
@@ -59,13 +59,13 @@ and not synchronized.
 
 Once you're up and running:
 
-- [Basic usage](basic-usage.md) — what Atuin records, and how to drive the TUI
-- [Filter and search modes](advanced-usage.md) — narrow searches to this
+- [Basic usage](basic-usage.md)—what Atuin records, and how to drive the TUI
+- [Filter and search modes](advanced-usage.md)—narrow searches to this
   directory, this machine, or this session
-- [Key bindings](../configuration/key-binding.md) — including how to
+- [Key bindings](../configuration/key-binding.md)—including how to
   [disable the up arrow binding](../configuration/key-binding.md#disable-up-arrow)
   if it isn't for you
-- [Config](../configuration/config.md) — every setting, including an
+- [Config](../configuration/config.md)—every setting, including an
   [inline window](../configuration/config.md#inline_height) instead of full screen
 
 ## Getting help

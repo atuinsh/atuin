@@ -19,13 +19,13 @@ zvm_after_init_commands+=(
 )
 ```
 
-## ble.sh auto-complete (Bash)
+## ble.sh autocomplete (Bash)
 
-If ble.sh is available when Atuin's integration is loaded in Bash, Atuin automatically defines and registers an auto-complete source for the autosuggestion feature of ble.sh.
+If ble.sh is available when Atuin's integration is loaded in Bash, Atuin automatically defines and registers an autocomplete source for the autosuggestion feature of ble.sh.
 
 If you'd like to change the behavior, please overwrite the shell function `ble/complete/auto-complete/source:atuin-history` after `eval "$(atuin init bash)"` in your `.bashrc`.
 
-If you would not like Atuin's auto-complete source, please add the following setting after `eval "$(atuin init bash)"` in your `.bashrc`:
+If you would not like Atuin's autocomplete source, please add the following setting after `eval "$(atuin init bash)"` in your `.bashrc`:
 
 ```shell
 # bashrc (after eval "$(atuin init bash)")

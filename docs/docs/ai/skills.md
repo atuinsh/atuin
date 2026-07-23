@@ -64,14 +64,14 @@ The LLM will see the skill content with `[Loaded skill: deploy]` and `[Arguments
 
 ### By the LLM
 
-When the LLM determines a skill is relevant to your request, it calls `load_skill` automatically to fetch the full content. Skills with `disable-model-invocation: true` are excluded from this — the LLM won't see them.
+When the LLM determines a skill is relevant to your request, it calls `load_skill` automatically to fetch the full content. Skills with `disable-model-invocation: true` are excluded from this—the LLM won't see them.
 
 ## Dynamic Content
 
 Skills support the same shell substitution as [user context files](user-context.md):
 
-- **Inline:** `!`command`` — replaced with command `stdout`
-- **Block:** ` ```! ` code block — entire block replaced with script `stdout`
+- **Inline:** `!`command``—replaced with command `stdout`
+- **Block:** ` ```! ` code block—entire block replaced with script `stdout`
 
 Commands run at skill load time (when invoked), not at discovery time.
 

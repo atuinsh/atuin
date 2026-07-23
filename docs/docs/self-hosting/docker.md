@@ -128,4 +128,4 @@ You can add another service to your `docker-compose.yml` file to have it run dai
 
 This will create daily backups of your database for that additional layer of comfort.
 
-PLEASE NOTE: The `./db_dumps` mount MUST be a POSIX-compliant filesystem to store the backups (mainly with support for hardlinks and softlinks). So filesystems like VFAT, EXFAT, SMB/CIFS, ... can't be used with this docker image. See https://github.com/prodrigestivill/docker-postgres-backup-local for more details on how this works. There are additional settings for the number of backups retained, etc., all explained on the linked page.
+PLEASE NOTE: The `./db_dumps` mount MUST be a POSIX-compliant filesystem to store the backups (mainly with support for hardlinks and softlinks). So filesystems like VFAT, EXFAT, SMB/CIFS, … can't be used with this docker image. See https://github.com/prodrigestivill/docker-postgres-backup-local for more details on how this works. There are additional settings for the number of backups retained, etc., all explained on the linked page.
