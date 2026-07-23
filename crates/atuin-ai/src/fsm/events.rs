@@ -83,6 +83,12 @@ pub(crate) enum Event {
         lines: Vec<String>,
         exit_code: Option<i32>,
     },
+    /// The command behind an atuin_output call's history id was looked up
+    /// locally (`None` when the id isn't in the local history db).
+    OutputCommandResolved {
+        tool_id: String,
+        command: Option<String>,
+    },
 
     // ─── Timers ─────────────────────────────────────────────────
     /// Confirmation timeout expired.

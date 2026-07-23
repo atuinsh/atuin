@@ -45,6 +45,13 @@ pub(crate) enum Effect {
     },
     /// Kill a running tool (send interrupt to shell command).
     AbortTool { tool_id: String },
+    /// Look up the command string behind an atuin_output call's history id
+    /// in the local history db, for display (the model only passes a UUID).
+    /// Resolves via `Event::OutputCommandResolved`.
+    ResolveOutputCommand {
+        tool_id: String,
+        history_id: uuid::Uuid,
+    },
     /// Load a skill's content asynchronously (read + interpolate).
     LoadSkill {
         name: String,

@@ -369,6 +369,29 @@ impl AiApp {
                 Effect::CheckPermission { tool_id, tool } => {
                     self.check_permission(tool_id, tool, ctx)
                 }
+                Effect::ResolveOutputCommand {
+                    tool_id,
+                    history_id,
+                } => {
+                    let Some(io) = &self.io else { continue };
+                    let db = io.app_ctx.history_db.clone();
+                    ctx.perform(async move {
+                        use atuin_client::database::Database as _;
+                        // Ids are stored in simple (no-hyphen) form today,
+                        // but older or imported rows may be hyphenated.
+                        let command = match db.load(&history_id.as_simple().to_string()).await {
+                            Ok(Some(h)) => Some(h.command),
+                            _ => db
+                                .load(&history_id.as_hyphenated().to_string())
+                                .await
+                                .ok()
+                                .flatten()
+                                .map(|h| h.command),
+                        };
+                        Msg::Fsm(Event::OutputCommandResolved { tool_id, command })
+                    })
+                    .detach();
+                }
                 Effect::ExecuteTool { tool_id, tool } => self.execute_tool(tool_id, tool, ctx),
                 Effect::AbortTool { tool_id } => {
                     if let Some(interrupt_tx) = self.tool_interrupts.remove(&tool_id) {
