@@ -187,7 +187,7 @@ impl Cmd {
         );
         println!("You can find your key by running 'atuin key' on the other machine.");
         println!("Do not share this key with anyone.");
-        println!("\nRead more here: https://docs.atuin.sh/guide/sync/#login \n");
+        println!("\nRead more here: https://docs.atuin.sh/latest/guide/sync/#login \n");
 
         let key = or_user_input(
             self.key.clone(),

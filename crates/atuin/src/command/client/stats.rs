@@ -26,7 +26,7 @@ fn parse_ngram_size(s: &str) -> Result<usize, String> {
 #[derive(Parser, Debug)]
 #[command(infer_subcommands = true)]
 pub struct Cmd {
-    /// Compute statistics for the specified period, leave blank for statistics since the beginning. See [this](https://docs.atuin.sh/reference/stats/) for more details.
+    /// Compute statistics for the specified period, leave blank for statistics since the beginning. See [this](https://docs.atuin.sh/latest/reference/stats/) for more details.
     period: Vec<String>,
 
     /// How many top commands to list
