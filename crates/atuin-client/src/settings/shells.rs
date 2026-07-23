@@ -24,6 +24,9 @@ impl Shells {
     /// The returned list is suitable for passing to [`Database::search`] via
     /// [`OptFilters::shells`].
     ///
+    /// Instead of returning a [`Vec`], this method returns a helper type that can be viewed as a
+    /// slice without allocating, or turned into a [`Vec`].
+    ///
     /// [`Database::search`]: crate::database::Database::search
     /// [`OptFilters::shells`]: crate::database::OptFilters::shells
     pub fn to_list(&self) -> ShellList<'_> {
@@ -49,11 +52,15 @@ impl Shells {
     }
 }
 
+/// Helper type for [`ShellList`] to avoid exposing the enum variants directly.
 enum ShellListInner<'a> {
     Inline([String; 2]),
     Reference(&'a [String]),
 }
 
+/// Helper type that allows [`Shells`] to be viewed as a slice without allocating.
+///
+/// Returned by [`Shells::to_list`].
 pub struct ShellList<'a>(ShellListInner<'a>);
 
 impl ShellList<'_> {
