@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use http::Extensions;
 use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::{Client, Request, Response, StatusCode};
-use reqwest_middleware::{Middleware, Next, Result};
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware, Middleware, Next, Result};
 use typed_builder::TypedBuilder;
 
 use crate::caps::CapClient;
@@ -99,6 +99,28 @@ impl Middleware for CapMiddleware {
         self.caps.refresh(&self.http).await?;
         stamp_known(&mut retry_req, self.caps.known_token().as_deref());
         return next.run(retry_req, ext).await;
+    }
+}
+
+/// Install capability negotiation onto a [`reqwest::Client`].
+///
+/// The caller supplies their configured client once; `with_capabilities` clones it for the
+/// middleware's refresh path and wraps the original, so the wiring never leaks to the caller.
+pub trait CapabilitiesExt {
+    /// Wrap this client so it negotiates capabilities. `refresh` controls whether a stale-token
+    /// rejection is transparently refreshed-and-retried (`true`) or surfaced to the caller
+    /// (`false`).
+    fn with_capabilities(self, caps: CapClient, refresh: bool) -> ClientWithMiddleware;
+}
+
+impl CapabilitiesExt for Client {
+    fn with_capabilities(self, caps: CapClient, refresh: bool) -> ClientWithMiddleware {
+        let middleware = CapMiddleware::builder()
+            .caps(caps)
+            .http(self.clone())
+            .refresh(refresh)
+            .build();
+        ClientBuilder::new(self).with(middleware).build()
     }
 }
 
@@ -270,5 +292,52 @@ mod tests {
             }
             None => assert!(req.headers().get(KNOWN_HEADER).is_none()),
         }
+    }
+
+    #[tokio::test]
+    async fn ext_trait_builds_a_negotiating_client() {
+        crate::tls::ensure_crypto_provider();
+        let server = negotiating_server().await;
+        let client = reqwest::Client::new().with_capabilities(cap_client(&server), true);
+
+        let response = client
+            .get(format!("{}/protected", server.uri()))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.text().await.unwrap(), "ok");
+    }
+
+    #[tokio::test]
+    async fn concurrent_burst_fetches_capabilities_once() {
+        crate::tls::ensure_crypto_provider();
+        let server = negotiating_server().await;
+        let client = reqwest::Client::new().with_capabilities(cap_client(&server), true);
+
+        let mut handles = Vec::new();
+        for _ in 0..20 {
+            let client = client.clone();
+            let url = format!("{}/protected", server.uri());
+            handles.push(tokio::spawn(async move {
+                client.get(url).send().await.unwrap().status()
+            }));
+        }
+        for handle in handles {
+            assert_eq!(handle.await.unwrap(), 200);
+        }
+
+        let caps_hits = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.url.path() == "/api/v0/capabilities")
+            .count();
+        assert_eq!(
+            caps_hits, 1,
+            "a burst must coalesce into one capabilities fetch"
+        );
     }
 }

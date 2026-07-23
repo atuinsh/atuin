@@ -19,7 +19,7 @@ mod middleware;
 mod server;
 
 pub use client::{CapClient, ServerSupportError};
-pub use middleware::CapMiddleware;
+pub use middleware::{CapMiddleware, CapabilitiesExt};
 pub use server::CapServer;
 
 /// A capability is always indexed by a String key.
