@@ -97,6 +97,6 @@ Download records from the sync server, one way.
 |------|-------------|
 | `--tag`/`-t` | Only pull this tag. Defaults to all tags |
 | `--force` | Wipe the local store first, then download everything from the remote |
-| `--page-size` | How many records to download at a time (default: 100) |
+| `--page` | How many records to download at a time (default: 100) |
 
 For ordinary two-way syncing, use [`atuin sync`](sync.md) instead.

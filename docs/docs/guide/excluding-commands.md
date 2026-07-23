@@ -1,11 +1,7 @@
 # Excluding Commands from History
 
-Sometimes you *don't* want a command in your history — a secret passed on the
-command line, the noise a build script generates, or the dozens of `git status`
-calls an AI coding agent makes.
-
-Atuin gives you four ways to keep commands out, from a one-off keystroke to
-permanent config.
+Sometimes you don't want a command in your history and Atuin gives you four ways
+ways to exclude the commands.
 
 ## Prefix with a space
 
@@ -41,8 +37,8 @@ and `$` when you want to match the whole command exactly.
 
 ## Filter by directory: `cwd_filter`
 
-[`cwd_filter`](../configuration/config.md#cwd_filter) excludes every command run
-from a matching directory:
+[`cwd_filter`](../configuration/config.md#cwd_filter) excludes every command
+run from a matching directory:
 
 ```toml
 cwd_filter = [
@@ -57,8 +53,8 @@ working directory path.
 
 ## Skip Atuin entirely for a tool
 
-If a tool spawns interactive shells and you'd rather it recorded nothing at all,
-guard the `atuin init` call in your shell config:
+If a tool spawns interactive shells and you'd rather it recorded nothing at
+all, guard the `atuin init` call in your shell config:
 
 ```shell
 # In .bashrc or .zshrc
@@ -67,7 +63,9 @@ if [[ -z "${MY_TOOL_SESSION}" ]]; then
 fi
 ```
 
-Then configure the tool to set `MY_TOOL_SESSION=1` when it spawns a shell. See the [`atuin init` reference](../reference/init.md) for the other ways to change what the plugin sets up.
+Then configure the tool to set `MY_TOOL_SESSION=1` when it spawns a shell. See
+the [`atuin init` reference](../reference/init.md) for the other ways to change
+what the plugin sets up.
 
 !!! tip "Commands from AI agents"
     You don't need to exclude AI agent commands to keep them out of your way.
@@ -88,12 +86,13 @@ atuin history prune
 ```
 
 This deletes existing entries matching your current `history_filter` and
-`cwd_filter`. For deleting entries that don't match a filter, see
-[Deleting History](delete-history.md).
+`cwd_filter`. For deleting entries that don't match a filter, see [Deleting
+History](delete-history.md).
 
 ## Secrets are filtered automatically
 
 Independently of your own filters, Atuin refuses to record commands that look
-like they contain credentials — AWS keys, GitHub and npm tokens, Slack webhooks,
-Stripe keys, and more. This is on by default; see
-[`secrets_filter`](../configuration/config.md#secrets_filter) for the full list.
+like they contain credentials — AWS keys, GitHub and npm tokens, Slack
+webhooks, Stripe keys, and more. This is on by default; see
+[`secrets_filter`](../configuration/config.md#secrets_filter) for the full
+list.
