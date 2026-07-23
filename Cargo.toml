@@ -93,6 +93,13 @@ default-features = false
 version = "0.9"
 features = ["runtime-tokio", "time", "uuid"]
 
+# Release build that keeps symbols, for Instruments/perf
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = "none"
+split-debuginfo = "packed"
+
 # The profile that 'cargo dist' will build with
 [profile.dist]
 inherits = "release"

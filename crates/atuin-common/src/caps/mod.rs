@@ -39,11 +39,6 @@ pub trait Capability: Serialize + DeserializeOwned + Send + Sync + 'static {
 }
 
 /// The capabilities a node advertises about itself.
-///
-/// Held as live typed values keyed by [`Capability::NAME`]; serialized only when they go out on
-/// the wire. Shared behind an `Arc` by whichever node owns it -- and, for a client, by the
-/// middleware that advertises them on outgoing requests.
-#[derive(Default)]
 struct OwnCaps {
     caps: RwLock<HashMap<CapKey, Box<dyn Any + Send + Sync>>>,
 }
