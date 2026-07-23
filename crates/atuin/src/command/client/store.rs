@@ -97,16 +97,16 @@ impl Cmd {
                 if let Some(first) = first {
                     println!("\t\tfirst: {}", first.id.0.as_hyphenated());
 
-                    let time = OffsetDateTime::from_unix_nanos(i128::from(first.timestamp))?
-                        .to_offset(offset);
+                    let time =
+                        OffsetDateTime::from_unix_nanos_u64(first.timestamp).to_offset(offset);
                     println!("\t\t\tcreated: {time}");
                 }
 
                 if let Some(last) = last {
                     println!("\t\tlast: {}", last.id.0.as_hyphenated());
 
-                    let time = OffsetDateTime::from_unix_nanos(i128::from(last.timestamp))?
-                        .to_offset(offset);
+                    let time =
+                        OffsetDateTime::from_unix_nanos_u64(last.timestamp).to_offset(offset);
                     println!("\t\t\tcreated: {time}");
                 }
             }

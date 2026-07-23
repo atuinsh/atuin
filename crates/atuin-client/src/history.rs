@@ -299,7 +299,7 @@ impl History {
 
         Ok(History {
             id: id.into(),
-            timestamp: OffsetDateTime::from_unix_nanos(i128::from(timestamp))?,
+            timestamp: OffsetDateTime::from_unix_nanos_u64(timestamp),
             duration,
             exit,
             command,
@@ -308,9 +308,7 @@ impl History {
             author: author.unwrap_or_else(|| Self::author_from_hostname(&hostname)),
             hostname,
             intent,
-            deleted_at: deleted_at
-                .map(|t| OffsetDateTime::from_unix_nanos(i128::from(t)))
-                .transpose()?,
+            deleted_at: deleted_at.map(OffsetDateTime::from_unix_nanos_u64),
             shell,
         })
     }

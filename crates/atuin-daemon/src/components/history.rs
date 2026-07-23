@@ -147,12 +147,7 @@ impl HistorySvc for HistoryGrpcService {
     ) -> Result<Response<StartHistoryReply>, Status> {
         let req = request.into_inner();
 
-        let timestamp =
-            OffsetDateTime::from_unix_nanos(i128::from(req.timestamp)).map_err(|_| {
-                Status::invalid_argument(
-                    "failed to parse timestamp as unix time (expected nanos since epoch)",
-                )
-            })?;
+        let timestamp = OffsetDateTime::from_unix_nanos_u64(req.timestamp);
 
         let h: History = History::daemon()
             .timestamp(timestamp)

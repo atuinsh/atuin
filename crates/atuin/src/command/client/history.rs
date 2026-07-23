@@ -677,8 +677,7 @@ impl TailEvent {
         let history = reply
             .history
             .ok_or_else(|| eyre::eyre!("daemon sent a history tail event without history"))?;
-        let timestamp = OffsetDateTime::from_unix_nanos(i128::from(history.timestamp))
-            .context("invalid daemon history timestamp")?;
+        let timestamp = OffsetDateTime::from_unix_nanos_u64(history.timestamp);
         let kind = match HistoryEventKind::try_from(reply.kind)
             .unwrap_or(HistoryEventKind::Unspecified)
         {

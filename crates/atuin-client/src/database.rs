@@ -341,12 +341,7 @@ impl Sqlite {
 
         History::from_db()
             .id(row.get("id"))
-            .timestamp(
-                // every i64 nanosecond value is representable, so the fallback is
-                // unreachable -- it is here so a corrupt row cannot panic the process
-                OffsetDateTime::from_unix_nanos(i128::from(row.get::<i64, _>("timestamp")))
-                    .unwrap_or(OffsetDateTime::UNIX_EPOCH),
-            )
+            .timestamp(OffsetDateTime::from_unix_nanos_i64(row.get("timestamp")))
             .duration(row.get("duration"))
             .exit(row.get("exit"))
             .command(row.get("command"))
@@ -355,9 +350,7 @@ impl Sqlite {
             .hostname(hostname)
             .author(author)
             .intent(intent)
-            .deleted_at(
-                deleted_at.and_then(|t| OffsetDateTime::from_unix_nanos(i128::from(t)).ok()),
-            )
+            .deleted_at(deleted_at.map(OffsetDateTime::from_unix_nanos_i64))
             .shell(shell)
             .build()
             .into()

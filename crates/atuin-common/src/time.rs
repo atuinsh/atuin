@@ -70,9 +70,32 @@ pub trait OffsetDateTimeExt {
     /// Build an [`OffsetDateTime`] from nanoseconds since the unix epoch.
     fn from_unix_nanos(nanos: i128) -> Result<OffsetDateTime, TimestampOutOfRange>;
 
+    /// Build an [`OffsetDateTime`] from an `i64` count of nanoseconds since the unix epoch.
+    ///
+    /// Infallible: the whole `i64` range lands within roughly 1677..2262 AD, which
+    /// [`OffsetDateTime`] can always represent. Asserted at compile time below.
+    fn from_unix_nanos_i64(nanos: i64) -> OffsetDateTime;
+
+    /// Build an [`OffsetDateTime`] from a `u64` count of nanoseconds since the unix epoch.
+    ///
+    /// Infallible for the same reason as [`Self::from_unix_nanos_i64`]; the whole
+    /// `u64` range ends in 2554 AD.
+    fn from_unix_nanos_u64(nanos: u64) -> OffsetDateTime;
+
     /// Build an [`OffsetDateTime`] from a seconds/nanoseconds pair counted from the unix epoch.
     fn from_timespec(secs: i128, nsecs: i128) -> Result<OffsetDateTime, TimespecOutOfRange>;
 }
+
+/// Proof that [`OffsetDateTimeExt::from_unix_nanos_i64`] and
+/// [`OffsetDateTimeExt::from_unix_nanos_u64`] cannot fail. If `time` ever narrows
+/// its representable range, this breaks the build rather than letting the
+/// `expect`s below start firing at runtime.
+const _: () = assert!(
+    (i64::MIN as i128) >= MIN_UNIX_NANOS
+        && (i64::MAX as i128) <= MAX_UNIX_NANOS
+        && (u64::MAX as i128) <= MAX_UNIX_NANOS,
+    "the full i64/u64 nanosecond range must be representable as an OffsetDateTime"
+);
 
 impl OffsetDateTimeExt for OffsetDateTime {
     #[allow(clippy::disallowed_methods)]
@@ -83,6 +106,16 @@ impl OffsetDateTimeExt for OffsetDateTime {
 
         // unreachable given the range check above, but map rather than unwrap
         OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|_| TimestampOutOfRange { nanos })
+    }
+
+    fn from_unix_nanos_i64(nanos: i64) -> OffsetDateTime {
+        Self::from_unix_nanos(i128::from(nanos))
+            .expect("the full i64 nanosecond range is representable; asserted at compile time")
+    }
+
+    fn from_unix_nanos_u64(nanos: u64) -> OffsetDateTime {
+        Self::from_unix_nanos(i128::from(nanos))
+            .expect("the full u64 nanosecond range is representable; asserted at compile time")
     }
 
     fn from_timespec(secs: i128, nsecs: i128) -> Result<OffsetDateTime, TimespecOutOfRange> {
@@ -139,6 +172,30 @@ mod tests {
         assert_eq!(
             OffsetDateTime::from_timespec(secs, nsecs).is_ok(),
             representable
+        );
+    }
+
+    #[rstest]
+    #[case::min(i64::MIN)]
+    #[case::negative(-1)]
+    #[case::epoch(0)]
+    #[case::typical(1_639_162_832_500_000_000)]
+    #[case::max(i64::MAX)]
+    fn from_unix_nanos_i64_is_total(#[case] nanos: i64) {
+        assert_eq!(
+            OffsetDateTime::from_unix_nanos_i64(nanos).unix_timestamp_nanos(),
+            i128::from(nanos)
+        );
+    }
+
+    #[rstest]
+    #[case::zero(0)]
+    #[case::typical(1_639_162_832_500_000_000)]
+    #[case::max(u64::MAX)]
+    fn from_unix_nanos_u64_is_total(#[case] nanos: u64) {
+        assert_eq!(
+            OffsetDateTime::from_unix_nanos_u64(nanos).unix_timestamp_nanos(),
+            i128::from(nanos)
         );
     }
 
