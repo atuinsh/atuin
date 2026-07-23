@@ -8,8 +8,9 @@ use serde::Deserialize;
 use atuin_common::utils::uuid_v7;
 use time::OffsetDateTime;
 
-use super::{Importer, Loader, get_histfile_path, unix_byte_lines};
+use super::{Importer, Loader, get_histfile_path, timestamp_from_parts, unix_byte_lines};
 use crate::history::History;
+use crate::history::builder::HistoryImported;
 use crate::import::read_to_end;
 
 #[derive(Deserialize, Debug)]
@@ -109,17 +110,18 @@ impl Importer for Resh {
             let timestamp = {
                 let secs = entry.realtime_before.floor() as i64;
                 let nanosecs = (entry.realtime_before.fract() * 1_000_000_000_f64).round() as i64;
-                OffsetDateTime::from_unix_timestamp(secs)? + time::Duration::nanoseconds(nanosecs)
+                // a corrupt entry must not abort the whole import
+                timestamp_from_parts(secs, nanosecs).unwrap_or(OffsetDateTime::UNIX_EPOCH)
             };
             #[allow(clippy::cast_possible_truncation)]
             #[allow(clippy::cast_sign_loss)]
             let duration = {
                 let secs = entry.realtime_after.floor() as i64;
                 let nanosecs = (entry.realtime_after.fract() * 1_000_000_000_f64).round() as i64;
-                let base = OffsetDateTime::from_unix_timestamp(secs)?
-                    + time::Duration::nanoseconds(nanosecs);
-                let difference = base - timestamp;
-                difference.whole_nanoseconds() as i64
+                match timestamp_from_parts(secs, nanosecs) {
+                    Some(base) => (base - timestamp).whole_nanoseconds() as i64,
+                    None => HistoryImported::DEFAULT_DURATION,
+                }
             };
 
             let imported = History::import()
@@ -139,5 +141,102 @@ impl Importer for Resh {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::import::tests::TestLoader;
+
+    /// resh writes one JSON object per line. Every field on `ReshEntry` is
+    /// required, so spell them all out once here.
+    ///
+    /// Built field-by-field (rather than one big `serde_json::json!{...}`
+    /// call) because a single macro invocation with all 51 fields blows the
+    /// default macro recursion limit.
+    fn resh_line(cmd: &str, realtime_before: f64, realtime_after: f64) -> String {
+        let mut m = serde_json::Map::new();
+        m.insert("cmdLine".into(), serde_json::json!(cmd));
+        m.insert("exitCode".into(), serde_json::json!(0));
+        m.insert("shell".into(), serde_json::json!("bash"));
+        m.insert("uname".into(), serde_json::json!("Linux"));
+        m.insert("sessionId".into(), serde_json::json!("s"));
+        m.insert("home".into(), serde_json::json!("/root"));
+        m.insert("lang".into(), serde_json::json!("C"));
+        m.insert("lcAll".into(), serde_json::json!("C"));
+        m.insert("login".into(), serde_json::json!("root"));
+        m.insert("pwd".into(), serde_json::json!("/tmp"));
+        m.insert("pwdAfter".into(), serde_json::json!("/tmp"));
+        m.insert("shellEnv".into(), serde_json::json!(""));
+        m.insert("term".into(), serde_json::json!("xterm"));
+        m.insert("realPwd".into(), serde_json::json!("/tmp"));
+        m.insert("realPwdAfter".into(), serde_json::json!("/tmp"));
+        m.insert("pid".into(), serde_json::json!(1));
+        m.insert("sessionPid".into(), serde_json::json!(1));
+        m.insert("host".into(), serde_json::json!("box"));
+        m.insert("hosttype".into(), serde_json::json!("x86_64"));
+        m.insert("ostype".into(), serde_json::json!("linux"));
+        m.insert("machtype".into(), serde_json::json!("x86_64"));
+        m.insert("shlvl".into(), serde_json::json!(1));
+        m.insert("timezoneBefore".into(), serde_json::json!("+0000"));
+        m.insert("timezoneAfter".into(), serde_json::json!("+0000"));
+        m.insert("realtimeBefore".into(), serde_json::json!(realtime_before));
+        m.insert("realtimeAfter".into(), serde_json::json!(realtime_after));
+        m.insert(
+            "realtimeBeforeLocal".into(),
+            serde_json::json!(realtime_before),
+        );
+        m.insert(
+            "realtimeAfterLocal".into(),
+            serde_json::json!(realtime_after),
+        );
+        m.insert("realtimeDuration".into(), serde_json::json!(0.0));
+        m.insert("realtimeSinceSessionStart".into(), serde_json::json!(0.0));
+        m.insert("realtimeSinceBoot".into(), serde_json::json!(0.0));
+        m.insert("gitDir".into(), serde_json::json!(""));
+        m.insert("gitRealDir".into(), serde_json::json!(""));
+        m.insert("gitOriginRemote".into(), serde_json::json!(""));
+        m.insert("gitDirAfter".into(), serde_json::json!(""));
+        m.insert("gitRealDirAfter".into(), serde_json::json!(""));
+        m.insert("gitOriginRemoteAfter".into(), serde_json::json!(""));
+        m.insert("machineId".into(), serde_json::json!(""));
+        m.insert("osReleaseId".into(), serde_json::json!(""));
+        m.insert("osReleaseVersionId".into(), serde_json::json!(""));
+        m.insert("osReleaseIdLike".into(), serde_json::json!(""));
+        m.insert("osReleaseName".into(), serde_json::json!(""));
+        m.insert("osReleasePrettyName".into(), serde_json::json!(""));
+        m.insert("reshUuid".into(), serde_json::json!(""));
+        m.insert("reshVersion".into(), serde_json::json!(""));
+        m.insert("reshRevision".into(), serde_json::json!(""));
+        m.insert("partsMerged".into(), serde_json::json!(false));
+        m.insert("recalled".into(), serde_json::json!(false));
+        m.insert("recallLastCmdLine".into(), serde_json::json!(""));
+        m.insert("cols".into(), serde_json::json!("80"));
+        m.insert("lines".into(), serde_json::json!("24"));
+
+        serde_json::Value::Object(m).to_string()
+    }
+
+    #[tokio::test]
+    async fn out_of_range_timestamp_falls_back_to_epoch() {
+        // one good entry, one whose realtime is far outside the representable range
+        let bytes = format!(
+            "{}\n{}\n",
+            resh_line("echo good", 1_639_162_832.5, 1_639_162_833.5),
+            resh_line("echo corrupt", 1e30, 1e30),
+        )
+        .into_bytes();
+
+        let resh = Resh { bytes };
+        let mut loader = TestLoader::default();
+        resh.load(&mut loader).await.expect("import must not fail");
+
+        let commands: Vec<&str> = loader.buf.iter().map(|h| h.command.as_str()).collect();
+        assert_eq!(commands, ["echo good", "echo corrupt"]);
+
+        assert_eq!(loader.buf[0].timestamp.unix_timestamp(), 1_639_162_832);
+        assert_eq!(loader.buf[1].timestamp, OffsetDateTime::UNIX_EPOCH);
+        assert_eq!(loader.buf[1].duration, HistoryImported::DEFAULT_DURATION);
     }
 }
