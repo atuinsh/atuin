@@ -147,7 +147,10 @@ impl Importer for Zsh {
             if let Some(time) = entry.timestamp {
                 timestamp = time;
             } else {
-                timestamp += timestamp_increment;
+                // a timestamp near the end of the representable range would overflow
+                timestamp = timestamp
+                    .checked_add(timestamp_increment)
+                    .unwrap_or(timestamp);
             }
 
             let imported = History::import()
@@ -298,6 +301,29 @@ cargo update
         assert_equal(
             loader.buf.iter().map(|h| h.command.as_str()),
             ["cargo install atuin", "cargo update"],
+        );
+    }
+
+    #[tokio::test]
+    async fn timestamp_near_range_end_does_not_panic_on_increment() {
+        // first timestamp is the maximum representable instant (253402300799 is the
+        // last second `OffsetDateTime` can represent, i.e. 9999-12-31 23:59:59 UTC).
+        // 1000 untimestamped commands walk the 1ms increment past .999 and off the
+        // end of the representable range.
+        let commands: Vec<String> = (0..1_000).map(|i| format!("cmd-{i}")).collect();
+        let bytes = format!(": 253402300799:0;first\n{}\n", commands.join("\n")).into_bytes();
+
+        let mut zsh = Zsh { bytes };
+        assert_eq!(zsh.entries().await.unwrap(), commands.len() + 1);
+
+        let mut loader = TestLoader::default();
+        zsh.load(&mut loader).await.unwrap();
+
+        let mut expected = vec!["first".to_string()];
+        expected.extend(commands);
+        assert_equal(
+            loader.buf.iter().map(|h| h.command.as_str()),
+            expected.iter().map(String::as_str),
         );
     }
 

@@ -90,7 +90,10 @@ impl Importer for Bash {
                         .command(c);
 
                     h.push(imported.build().into()).await?;
-                    next_timestamp += timestamp_increment;
+                    // a timestamp near the end of the representable range would overflow
+                    next_timestamp = next_timestamp
+                        .checked_add(timestamp_increment)
+                        .unwrap_or(next_timestamp);
                 }
             }
         }
@@ -244,6 +247,27 @@ cargo update
         assert_equal(
             loader.buf.iter().map(|h| h.command.as_str()),
             ["cargo install atuin", "cargo update"],
+        );
+    }
+
+    #[tokio::test]
+    async fn timestamp_near_range_end_does_not_panic_on_increment() {
+        // first timestamp is the maximum representable instant (253402300799 is the
+        // last second `OffsetDateTime` can represent, i.e. 9999-12-31 23:59:59 UTC).
+        // 1000 untimestamped commands walk the 1ms increment past .999 and off the
+        // end of the representable range.
+        let commands: Vec<String> = (0..1_000).map(|i| format!("cmd-{i}")).collect();
+        let bytes = format!("#253402300799\n{}\n", commands.join("\n")).into_bytes();
+
+        let mut bash = Bash { bytes };
+        assert_eq!(bash.entries().await.unwrap(), commands.len());
+
+        let mut loader = TestLoader::default();
+        bash.load(&mut loader).await.unwrap();
+
+        assert_equal(
+            loader.buf.iter().map(|h| h.command.as_str()),
+            commands.iter().map(String::as_str),
         );
     }
 }

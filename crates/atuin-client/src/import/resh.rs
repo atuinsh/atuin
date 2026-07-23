@@ -122,10 +122,16 @@ impl Importer for Resh {
 
             // a corrupt entry must not abort the whole import. only report a duration when
             // both ends are representable - measuring against the epoch sentinel would
-            // invent a decades-long duration
+            // invent a decades-long duration. clock skew, an NTP step, or suspend/resume
+            // can also make realtime_after precede realtime_before; a negative duration is
+            // just as meaningless as an unrepresentable one, so it falls back the same way
             let duration = match (start, end) {
-                (Some(start), Some(end)) => i64::try_from((end - start).whole_nanoseconds())
-                    .unwrap_or(HistoryImported::DEFAULT_DURATION),
+                (Some(start), Some(end)) => {
+                    match i64::try_from((end - start).whole_nanoseconds()) {
+                        Ok(nanos) if nanos >= 0 => nanos,
+                        _ => HistoryImported::DEFAULT_DURATION,
+                    }
+                }
                 _ => HistoryImported::DEFAULT_DURATION,
             };
             let timestamp = start.unwrap_or(OffsetDateTime::UNIX_EPOCH);
@@ -273,6 +279,27 @@ mod test {
         assert_eq!(commands, ["echo corrupt"]);
 
         assert_eq!(loader.buf[0].timestamp.unix_timestamp(), 1_639_162_832);
+        assert_eq!(loader.buf[0].duration, HistoryImported::DEFAULT_DURATION);
+    }
+
+    #[tokio::test]
+    async fn clock_skew_negative_duration_falls_back_to_default_duration() {
+        // realtime_after earlier than realtime_before (clock skew, NTP step, or
+        // suspend/resume) must not produce a negative duration
+        let bytes = format!(
+            "{}\n",
+            resh_line("echo skewed", 1_639_162_833.5, 1_639_162_832.5)
+        )
+        .into_bytes();
+
+        let resh = Resh { bytes };
+        let mut loader = TestLoader::default();
+        resh.load(&mut loader).await.expect("import must not fail");
+
+        let commands: Vec<&str> = loader.buf.iter().map(|h| h.command.as_str()).collect();
+        assert_eq!(commands, ["echo skewed"]);
+
+        assert_eq!(loader.buf[0].timestamp.unix_timestamp(), 1_639_162_833);
         assert_eq!(loader.buf[0].duration, HistoryImported::DEFAULT_DURATION);
     }
 }
