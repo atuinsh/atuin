@@ -418,18 +418,32 @@ Default: `true`
 secrets_filter = true
 ```
 
-This matches history against a set of default regex, and will not save it if we get a match. Defaults include
+Matches each command against a set of built-in regular expressions, and refuses
+to save it if any of them match. The patterns currently cover:
 
-1. AWS key id
-2. Github pat (old and new)
-3. Slack oauth tokens (bot, user)
-4. Slack webhooks
-5. Stripe live/test keys
-6. Atuin login command
-7. Cloud environment variable patterns (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AZURE_STORAGE_CLASS_KEY`, `GOOGLE_SERVICE_ACCOUNT_KEY`)
-8. Netlify authentication tokens
-9. Npm pat
-10. Pulumi pat
+| Service | Matches |
+|---------|---------|
+| AWS | Access key IDs, and commands setting `AWS_SECRET_ACCESS_KEY` or `AWS_SESSION_TOKEN` |
+| Azure | Commands setting `AZURE_*_KEY` |
+| Google Cloud | Commands setting `GOOGLE_SERVICE_ACCOUNT_KEY` |
+| GitHub | Personal access tokens (old and new), OAuth access tokens (app and user), app installation tokens, and refresh tokens |
+| GitLab | Personal access tokens |
+| Slack | OAuth v2 bot and user tokens, and webhook URLs |
+| Stripe | Live and test keys |
+| Netlify | Authentication tokens |
+| npm | Tokens |
+| Pulumi | Personal access tokens |
+| Atuin | `atuin login`, which takes your password and encryption key as arguments |
+
+For the exact expressions, see
+[`secrets.rs`](https://github.com/atuinsh/atuin/blob/main/crates/atuin-client/src/secrets.rs).
+
+!!! note
+
+    This is a safety net, not a guarantee. It only catches credentials in
+    recognized formats — use [`history_filter`](#history_filter) for anything
+    else you need kept out, and see
+    [Excluding Commands from History](../guide/excluding-commands.md).
 
 ### macOS Ctrl-n key shortcuts
 

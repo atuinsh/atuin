@@ -40,7 +40,7 @@ atuin account login -u <USERNAME>
 | `--username`/`-u` | Your username |
 | `--password`/`-p` | Omit to be prompted |
 | `--key`/`-k` | Your encryption key. Omit to be prompted |
-| `--totp-code` | Your two-factor authentication code, if your account has 2FA |
+| `--totp-code`/`-t` | Your two-factor authentication code, if your account has 2FA |
 
 Omitting `--password` and `--key` is recommended: you'll be prompted for both,
 so neither ends up in your shell history.
@@ -75,6 +75,11 @@ atuin account delete
 ```
 
 Deletes your account and all synchronized history from the server.
+
+| Flag | Description |
+|------|-------------|
+| `--password`/`-p` | Your password. Omit to be prompted |
+| `--totp-code`/`-t` | Your two-factor authentication code, if your account has 2FA |
 
 !!! warning
     This does not prompt for confirmation, and it cannot be undone. Your local
