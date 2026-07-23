@@ -71,7 +71,7 @@ ATUIN_DB_URI="postgres://user:password@hostname/database"
 Поддерживается образ Docker чтобы сделать проще развертывание сервера в контейнере.
 
 ```sh
-docker run -d -v "$USER/.config/atuin:/config" ghcr.io/ellie/atuin:latest server start
+docker run -d -v "$USER/.config/atuin:/config" ghcr.io/atuinsh/atuin:latest server start
 ```
 
 ## Docker Compose
@@ -94,7 +94,7 @@ version: '3.5'
 services:
   atuin:
     restart: always
-    image: ghcr.io/ellie/atuin:main
+    image: ghcr.io/atuinsh/atuin:main
     command: server start
     volumes:
       - "./config:/config"
