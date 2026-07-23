@@ -1,19 +1,19 @@
-use rmp::decode::DecodeStringError;
-use rmp::decode::ValueReadError;
-use rmp::{Marker, decode::Bytes};
+use rmp::decode::{self, Bytes};
+use rmp::encode;
 use std::env;
 
 use atuin_common::record::DecryptedData;
-use atuin_common::utils::uuid_v7;
+use atuin_common::utils::{normalize_optional_string, uuid_v7};
 
-use eyre::{Result, bail, eyre};
+use eyre::{Result, bail};
 
 use crate::secrets::SECRET_PATTERNS_RE;
 use crate::settings::Settings;
 use crate::utils::get_host_user;
+use crate::utils::rmp::{DecodeError, EncodeError, read_optional, read_string, write_optional};
 use time::OffsetDateTime;
 
-mod builder;
+pub(crate) mod builder;
 pub mod store;
 
 /// Known AI agent author values. Used to expand `$all-agent` and `$all-user` filters.
@@ -34,14 +34,60 @@ pub fn author_matches_filters(author: &str, filters: &[String]) -> bool {
         })
 }
 
-pub(crate) const HISTORY_VERSION_V0: &str = "v0";
-pub(crate) const HISTORY_VERSION_V1: &str = "v1";
-const HISTORY_RECORD_VERSION_V0: u16 = 0;
-const HISTORY_RECORD_VERSION_V1: u16 = 1;
-pub(crate) const HISTORY_VERSION: &str = HISTORY_VERSION_V1;
 pub const HISTORY_TAG: &str = "history";
 const HISTORY_AUTHOR_ENV: &str = "ATUIN_HISTORY_AUTHOR";
 const HISTORY_INTENT_ENV: &str = "ATUIN_HISTORY_INTENT";
+
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, derive_more::Display)]
+#[display("{}", self.name())]
+#[repr(u16)]
+pub enum Version {
+    Zero = 0,
+    One = 1,
+    Two = 2,
+}
+
+impl Version {
+    pub const VARIANTS: [Self; 3] = [Self::Zero, Self::One, Self::Two];
+    pub const LATEST: Self = Version::Two;
+
+    pub fn from_name(s: &str) -> Option<Self> {
+        match s {
+            "v0" => Some(Self::Zero),
+            "v1" => Some(Self::One),
+            "v2" => Some(Self::Two),
+            _ => None,
+        }
+    }
+
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Zero => "v0",
+            Self::One => "v1",
+            Self::Two => "v2",
+        }
+    }
+
+    pub const fn as_int(&self) -> u16 {
+        *self as u16
+    }
+
+    pub fn min_fields(&self) -> u32 {
+        match self {
+            Self::Zero => 9,
+            Self::One => 10,
+            Self::Two => 12,
+        }
+    }
+
+    pub fn max_fields(&self) -> Option<u32> {
+        match self {
+            Self::Zero => Some(9),
+            Self::One => Some(11),
+            Self::Two => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, derive_more::Display, derive_more::From)]
 #[display("{_0}")]
@@ -86,6 +132,8 @@ pub struct History {
     pub intent: Option<String>,
     /// Timestamp, which is set when the entry is deleted, allowing a soft delete.
     pub deleted_at: Option<OffsetDateTime>,
+    /// The shell used to run the command.
+    pub shell: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
@@ -115,17 +163,6 @@ impl History {
             .map_or_else(|| hostname.to_owned(), |(_, user)| user.to_owned())
     }
 
-    fn normalize_optional_field(field: Option<String>) -> Option<String> {
-        field.and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_owned())
-            }
-        })
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn new(
         timestamp: OffsetDateTime,
@@ -138,16 +175,18 @@ impl History {
         author: Option<String>,
         intent: Option<String>,
         deleted_at: Option<OffsetDateTime>,
+        shell: Option<String>,
     ) -> Self {
         let session = session
             .or_else(|| env::var("ATUIN_SESSION").ok())
             .unwrap_or_else(|| uuid_v7().as_simple().to_string());
         let hostname = hostname.unwrap_or_else(get_host_user);
-        let author = Self::normalize_optional_field(author)
-            .or_else(|| Self::normalize_optional_field(env::var(HISTORY_AUTHOR_ENV).ok()))
+        let author = normalize_optional_string(author)
+            .or_else(|| normalize_optional_string(env::var(HISTORY_AUTHOR_ENV).ok()))
             .unwrap_or_else(|| Self::author_from_hostname(hostname.as_str()));
-        let intent = Self::normalize_optional_field(intent)
-            .or_else(|| Self::normalize_optional_field(env::var(HISTORY_INTENT_ENV).ok()));
+        let intent = normalize_optional_string(intent)
+            .or_else(|| normalize_optional_string(env::var(HISTORY_INTENT_ENV).ok()));
+        let shell = normalize_optional_string(shell);
 
         Self {
             id: uuid_v7().as_simple().to_string().into(),
@@ -161,21 +200,26 @@ impl History {
             author,
             intent,
             deleted_at,
+            shell,
         }
     }
 
-    pub fn serialize(&self) -> Result<DecryptedData> {
-        // This is pretty much the same as what we used for the old history, with one difference -
-        // it uses integers for timestamps rather than a string format.
-
-        use rmp::encode;
-
+    /// Serializes a history entry in the V2 format.
+    ///
+    /// Differences from V1:
+    ///
+    /// * `intent` is always written; if `None`, nil is written to the output.
+    /// * Added new field `shell`.
+    ///
+    /// V2 is designed to allow new fields to be added without incrementing the version. V1 cannot
+    /// accommodate this because its deserialization routine errors if more than 11 fields are
+    /// provided.
+    pub fn serialize(&self) -> Result<DecryptedData, EncodeError> {
         let mut output = vec![];
 
         // write the version
-        encode::write_u16(&mut output, HISTORY_RECORD_VERSION_V1)?;
-        let include_intent = self.intent.is_some();
-        encode::write_array_len(&mut output, 10 + u32::from(include_intent))?;
+        encode::write_u16(&mut output, Version::LATEST.as_int())?;
+        encode::write_array_len(&mut output, Version::LATEST.min_fields())?;
 
         encode::write_str(&mut output, &self.id.0)?;
         encode::write_u64(&mut output, self.timestamp.unix_timestamp_nanos() as u64)?;
@@ -186,180 +230,88 @@ impl History {
         encode::write_str(&mut output, &self.session)?;
         encode::write_str(&mut output, &self.hostname)?;
 
-        match self.deleted_at {
-            Some(d) => encode::write_u64(&mut output, d.unix_timestamp_nanos() as u64)?,
-            None => encode::write_nil(&mut output)?,
-        }
-
+        write_optional(
+            &mut output,
+            self.deleted_at.map(|d| d.unix_timestamp_nanos() as u64),
+            encode::write_u64,
+        )?;
         encode::write_str(&mut output, self.author.as_str())?;
-        if let Some(intent) = &self.intent {
-            encode::write_str(&mut output, intent.as_str())?;
-        }
-
+        write_optional(&mut output, self.intent.as_deref(), encode::write_str)?;
+        write_optional(&mut output, self.shell.as_deref(), encode::write_str)?;
         Ok(DecryptedData(output))
     }
 
-    fn read_optional_string(bytes: &[u8]) -> Result<(Option<String>, &[u8])> {
-        use rmp::decode;
-
-        fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
-            eyre!("{err:?}")
-        }
-
-        match decode::read_str_from_slice(bytes) {
-            Ok((value, bytes)) => Ok((Some(value.to_owned()), bytes)),
-            Err(DecodeStringError::TypeMismatch(Marker::Null)) => {
-                let mut cursor = Bytes::new(bytes);
-                decode::read_nil(&mut cursor).map_err(error_report)?;
-
-                Ok((None, cursor.remaining_slice()))
-            }
-            Err(err) => Err(error_report(err)),
-        }
-    }
-
-    fn deserialize_v0(bytes: &[u8]) -> Result<History> {
-        use rmp::decode;
-
-        fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
-            eyre!("{err:?}")
-        }
-
-        let mut bytes = Bytes::new(bytes);
-
-        let version = decode::read_u16(&mut bytes).map_err(error_report)?;
-
-        if version != HISTORY_RECORD_VERSION_V0 {
-            bail!("expected decoding v0 record, found v{version}");
-        }
-
-        let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
-
-        if nfields != 9 {
-            bail!("cannot decrypt history from a different version of Atuin");
-        }
-
-        let bytes = bytes.remaining_slice();
-        let (id, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-
-        let mut bytes = Bytes::new(bytes);
-        let timestamp = decode::read_u64(&mut bytes).map_err(error_report)?;
-        let duration = decode::read_int(&mut bytes).map_err(error_report)?;
-        let exit = decode::read_int(&mut bytes).map_err(error_report)?;
-
-        let bytes = bytes.remaining_slice();
-        let (command, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-        let (cwd, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-        let (session, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-        let (hostname, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-
-        let mut bytes = Bytes::new(bytes);
-
-        let (deleted_at, bytes) = match decode::read_u64(&mut bytes) {
-            Ok(unix) => (Some(unix), bytes.remaining_slice()),
-            // we accept null here
-            Err(ValueReadError::TypeMismatch(Marker::Null)) => (None, bytes.remaining_slice()),
-            Err(err) => return Err(error_report(err)),
+    pub fn deserialize(bytes: &[u8], version: &str) -> Result<History> {
+        let Some(version) = Version::from_name(version) else {
+            bail!("unknown version {version:?}");
         };
-        if !bytes.is_empty() {
-            bail!("trailing bytes in encoded history. malformed")
-        }
-
-        Ok(History {
-            id: id.to_owned().into(),
-            timestamp: OffsetDateTime::from_unix_timestamp_nanos(timestamp as i128)?,
-            duration,
-            exit,
-            command: command.to_owned(),
-            cwd: cwd.to_owned(),
-            session: session.to_owned(),
-            hostname: hostname.to_owned(),
-            author: Self::author_from_hostname(hostname),
-            intent: None,
-            deleted_at: deleted_at
-                .map(|t| OffsetDateTime::from_unix_timestamp_nanos(t as i128))
-                .transpose()?,
-        })
-    }
-
-    fn deserialize_v1(bytes: &[u8]) -> Result<History> {
-        use rmp::decode;
-
-        fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
-            eyre!("{err:?}")
-        }
 
         let mut bytes = Bytes::new(bytes);
 
-        let version = decode::read_u16(&mut bytes).map_err(error_report)?;
-
-        if version != HISTORY_RECORD_VERSION_V1 {
-            bail!("expected decoding v1 record, found v{version}");
+        let real_version = decode::read_u16(&mut bytes).map_err(DecodeError::from)?;
+        if real_version != version.as_int() {
+            bail!("expected to decode {version} record, found v{real_version}");
         }
 
-        let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
-
-        if !(10..=11).contains(&nfields) {
-            bail!("cannot decrypt history from a different version of Atuin");
+        let nfields = decode::read_array_len(&mut bytes).map_err(DecodeError::from)?;
+        let min_fields = version.min_fields();
+        if nfields < min_fields || version.max_fields().is_some_and(|max| nfields > max) {
+            bail!("unexpected number of fields ({nfields}) for history version {version}");
         }
 
-        let bytes = bytes.remaining_slice();
-        let (id, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
+        let id = read_string(&mut bytes)?;
+        let timestamp = decode::read_u64(&mut bytes).map_err(DecodeError::from)?;
+        let duration = decode::read_int(&mut bytes).map_err(DecodeError::from)?;
+        let exit = decode::read_int(&mut bytes).map_err(DecodeError::from)?;
 
-        let mut bytes = Bytes::new(bytes);
-        let timestamp = decode::read_u64(&mut bytes).map_err(error_report)?;
-        let duration = decode::read_int(&mut bytes).map_err(error_report)?;
-        let exit = decode::read_int(&mut bytes).map_err(error_report)?;
+        let command = read_string(&mut bytes)?;
+        let cwd = read_string(&mut bytes)?;
+        let session = read_string(&mut bytes)?;
+        let hostname = read_string(&mut bytes)?;
+        let deleted_at = read_optional(&mut bytes, decode::read_u64)?;
 
-        let bytes = bytes.remaining_slice();
-        let (command, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-        let (cwd, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-        let (session, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-        let (hostname, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-
-        let mut bytes = Bytes::new(bytes);
-
-        let (deleted_at, bytes) = match decode::read_u64(&mut bytes) {
-            Ok(unix) => (Some(unix), bytes.remaining_slice()),
-            // we accept null here
-            Err(ValueReadError::TypeMismatch(Marker::Null)) => (None, bytes.remaining_slice()),
-            Err(err) => return Err(error_report(err)),
-        };
-        let (author, bytes) = Self::read_optional_string(bytes)?;
-        let (intent, bytes) = if nfields > 10 {
-            Self::read_optional_string(bytes)?
+        let author = if version >= Version::One {
+            read_optional(&mut bytes, read_string)?
         } else {
-            (None, bytes)
+            None
         };
 
-        if !bytes.is_empty() {
-            bail!("trailing bytes in encoded history. malformed")
+        let intent = if match version {
+            Version::Zero => false,
+            Version::One => nfields > min_fields,
+            Version::Two => true,
+        } {
+            read_optional(&mut bytes, read_string)?
+        } else {
+            None
+        };
+
+        let shell = if version >= Version::Two {
+            read_optional(&mut bytes, read_string)?
+        } else {
+            None
+        };
+
+        if version < Version::Two && !bytes.remaining_slice().is_empty() {
+            bail!("trailing bytes in encoded history. malformed");
         }
 
         Ok(History {
-            id: id.to_owned().into(),
-            timestamp: OffsetDateTime::from_unix_timestamp_nanos(timestamp as i128)?,
+            id: id.into(),
+            timestamp: OffsetDateTime::from_unix_timestamp_nanos(i128::from(timestamp))?,
             duration,
             exit,
-            command: command.to_owned(),
-            cwd: cwd.to_owned(),
-            session: session.to_owned(),
-            hostname: hostname.to_owned(),
-            author: author.unwrap_or_else(|| Self::author_from_hostname(hostname)),
+            command,
+            cwd,
+            session,
+            author: author.unwrap_or_else(|| Self::author_from_hostname(&hostname)),
+            hostname,
             intent,
             deleted_at: deleted_at
-                .map(|t| OffsetDateTime::from_unix_timestamp_nanos(t as i128))
+                .map(|t| OffsetDateTime::from_unix_timestamp_nanos(i128::from(t)))
                 .transpose()?,
+            shell,
         })
-    }
-
-    pub fn deserialize(bytes: &[u8], version: &str) -> Result<History> {
-        match version {
-            HISTORY_VERSION_V0 => Self::deserialize_v0(bytes),
-            HISTORY_VERSION_V1 => Self::deserialize_v1(bytes),
-
-            _ => bail!("unknown version {version:?}"),
-        }
     }
 
     /// Builder for a history entry that is imported from shell history.
@@ -502,6 +454,7 @@ impl History {
     ///     .author("user".to_string())
     ///     .intent(None)
     ///     .deleted_at(None)
+    ///     .shell(None)
     ///     .build()
     ///     .into();
     /// ```
@@ -528,7 +481,7 @@ mod tests {
     use time::macros::datetime;
 
     use crate::{
-        history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, HISTORY_VERSION},
+        history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, Version},
         settings::Settings,
     };
 
@@ -637,16 +590,17 @@ mod tests {
             author: "conrad.ludgate".to_owned(),
             intent: None,
             deleted_at: None,
+            shell: None,
         };
 
         let serialized = history.serialize().expect("failed to serialize history");
         assert_eq!(
             &serialized.0[0..3],
-            [205, 0, 1],
-            "should encode as history v1"
+            [205, 0, 2],
+            "should encode as history v2"
         );
 
-        let deserialized = History::deserialize(&serialized.0, HISTORY_VERSION)
+        let deserialized = History::deserialize(&serialized.0, Version::LATEST.name())
             .expect("failed to deserialize history");
         assert_eq!(history, deserialized);
     }
@@ -665,11 +619,12 @@ mod tests {
             author: "conrad.ludgate".to_owned(),
             intent: None,
             deleted_at: Some(datetime!(2023-11-19 20:18 +00:00)),
+            shell: Some("bash".into()),
         };
 
         let serialized = history.serialize().expect("failed to serialize history");
 
-        let deserialized = History::deserialize(&serialized.0, HISTORY_VERSION)
+        let deserialized = History::deserialize(&serialized.0, Version::LATEST.name())
             .expect("failed to deserialize history");
 
         assert_eq!(history, deserialized);
@@ -689,10 +644,11 @@ mod tests {
             author: "claude".to_owned(),
             intent: Some("check repository status".to_owned()),
             deleted_at: None,
+            shell: Some("fish".into()),
         };
 
         let serialized = history.serialize().expect("failed to serialize history");
-        let deserialized = History::deserialize(&serialized.0, HISTORY_VERSION)
+        let deserialized = History::deserialize(&serialized.0, Version::LATEST.name())
             .expect("failed to deserialize history");
 
         assert_eq!(history, deserialized);
@@ -700,7 +656,6 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize_version() {
-        // v0
         let bytes_v0 = [
             205, 0, 0, 153, 217, 32, 54, 54, 100, 49, 54, 99, 98, 101, 101, 55, 99, 100, 52, 55,
             53, 51, 56, 101, 53, 99, 53, 98, 56, 98, 52, 52, 101, 57, 48, 48, 54, 101, 207, 23, 99,
@@ -713,13 +668,21 @@ mod tests {
             99, 111, 110, 114, 97, 100, 46, 108, 117, 100, 103, 97, 116, 101, 192,
         ];
 
-        let deserialized = History::deserialize(&bytes_v0, "v0");
-        assert!(deserialized.is_ok());
+        let bytes_v1 = [
+            205, 0, 1, 155, 217, 32, 54, 54, 100, 49, 54, 99, 98, 101, 101, 55, 99, 100, 52, 55,
+            53, 51, 56, 101, 53, 99, 53, 98, 56, 98, 52, 52, 101, 57, 48, 48, 54, 101, 207, 23, 99,
+            98, 117, 24, 210, 246, 128, 206, 2, 238, 210, 240, 0, 170, 103, 105, 116, 32, 115, 116,
+            97, 116, 117, 115, 217, 42, 47, 85, 115, 101, 114, 115, 47, 99, 111, 110, 114, 97, 100,
+            46, 108, 117, 100, 103, 97, 116, 101, 47, 68, 111, 99, 117, 109, 101, 110, 116, 115,
+            47, 99, 111, 100, 101, 47, 97, 116, 117, 105, 110, 217, 32, 98, 57, 55, 100, 57, 97,
+            51, 48, 54, 102, 50, 55, 52, 52, 55, 51, 97, 50, 48, 51, 100, 50, 101, 98, 97, 52, 49,
+            102, 57, 52, 53, 55, 187, 102, 118, 102, 103, 57, 51, 54, 99, 48, 107, 112, 102, 58,
+            99, 111, 110, 114, 97, 100, 46, 108, 117, 100, 103, 97, 116, 101, 207, 24, 194, 83,
+            235, 108, 206, 10, 0, 174, 99, 111, 110, 114, 97, 100, 46, 108, 117, 100, 103, 97, 116,
+            101, 173, 115, 97, 109, 112, 108, 101, 32, 105, 110, 116, 101, 110, 116,
+        ];
 
-        let deserialized = History::deserialize(&bytes_v0, HISTORY_VERSION);
-        assert!(deserialized.is_err());
-
-        let current = History {
+        let expected_v2 = History {
             id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
             timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
             duration: 49206000,
@@ -729,15 +692,42 @@ mod tests {
             session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
             hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
             author: "conrad.ludgate".to_owned(),
-            intent: None,
-            deleted_at: None,
+            intent: Some("sample intent".to_owned()),
+            deleted_at: Some(time::OffsetDateTime::from_unix_timestamp(1784080673).unwrap()),
+            shell: Some("zsh".into()),
         };
+        let bytes_v2 = expected_v2
+            .serialize()
+            .expect("failed to serialize history");
 
-        let bytes_v1 = current.serialize().expect("failed to serialize history");
-        let deserialized = History::deserialize(&bytes_v1.0, HISTORY_VERSION);
-        assert!(deserialized.is_ok());
+        let mut expected_v1 = expected_v2.clone();
+        expected_v1.shell = None;
 
-        let deserialized = History::deserialize(&bytes_v1.0, "v0");
-        assert!(deserialized.is_err());
+        let mut expected_v0 = expected_v1.clone();
+        expected_v0.intent = None;
+        expected_v0.deleted_at = None;
+
+        let cases = [
+            (bytes_v0.as_slice(), expected_v0),
+            (&bytes_v1, expected_v1),
+            (&bytes_v2, expected_v2),
+        ];
+
+        for (i, (bytes, expected)) in cases.into_iter().enumerate() {
+            for version in Version::VARIANTS {
+                let deserialized = History::deserialize(bytes, version.name());
+                if usize::from(version.as_int()) == i {
+                    let Ok(deserialized) = deserialized else {
+                        panic!("failed to deserialize {version}");
+                    };
+                    assert_eq!(deserialized, expected, "{version}");
+                } else {
+                    assert!(
+                        deserialized.is_err(),
+                        "unexpected success deserializing as {version}"
+                    );
+                }
+            }
+        }
     }
 }

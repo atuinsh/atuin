@@ -1,4 +1,4 @@
-use std::{io, path::PathBuf};
+use std::io;
 
 use clap::Parser;
 use eyre::{Context, Result, bail};
@@ -73,7 +73,7 @@ impl Cmd {
 
     /// Hub login: use the browser flow unless the username was provided for headless use.
     async fn run_hub_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        let endpoint = settings.active_hub_endpoint().unwrap_or_default();
+        let endpoint = settings.hub_endpoint();
 
         if let Some(username) = &self.username {
             // Headless login via v0 API (for CI / scripting).
@@ -118,12 +118,12 @@ impl Cmd {
                 self.prompt_and_store_key(settings, store).await?;
             }
 
-            self.ensure_hub_session(settings, endpoint.as_ref()).await?;
+            self.ensure_hub_session(settings, &endpoint).await?;
         }
 
         // Silently attempt to link CLI account to Hub if one exists
         if let Ok(cli_token) = settings.session_token().await
-            && let Err(e) = atuin_client::hub::link_account(endpoint.as_ref(), &cli_token).await
+            && let Err(e) = atuin_client::hub::link_account(&endpoint, &cli_token).await
         {
             tracing::debug!("Could not link CLI account to Hub: {}", e);
         }
@@ -157,7 +157,7 @@ impl Cmd {
         Ok(())
     }
 
-    async fn ensure_hub_session(&self, _settings: &Settings, hub_address: &str) -> Result<()> {
+    async fn ensure_hub_session(&self, _settings: &Settings, hub_address: &url::Url) -> Result<()> {
         tracing::info!("Authenticating with Atuin Hub...");
 
         let session = atuin_client::hub::HubAuthSession::start(hub_address).await?;
@@ -179,8 +179,7 @@ impl Cmd {
     }
 
     async fn prompt_and_store_key(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        let key_path = settings.key_path.as_str();
-        let key_path = PathBuf::from(key_path);
+        let key_path = &settings.key_path;
 
         println!("IMPORTANT");
         println!(
@@ -222,7 +221,7 @@ impl Cmd {
 
         if key.is_empty() {
             if key_path.exists() {
-                let bytes = fs_err::read_to_string(&key_path).context(format!(
+                let bytes = fs_err::read_to_string(key_path).context(format!(
                     "Existing key file at '{}' could not be read",
                     key_path.to_string_lossy()
                 ))?;
@@ -242,7 +241,7 @@ impl Cmd {
                 bail!("The specified key is invalid");
             }
 
-            let mut file = File::create(&key_path).await?;
+            let mut file = File::create(key_path).await?;
             file.write_all(key.as_bytes()).await?;
         } else {
             // we now know that the user has logged in specifying a key, AND that the key path
@@ -263,7 +262,7 @@ impl Cmd {
                 store.re_encrypt(&current_key, &new_key).await?;
 
                 println!("Writing new key");
-                let mut file = File::create(&key_path).await?;
+                let mut file = File::create(key_path).await?;
                 file.write_all(encoded.as_bytes()).await?;
             }
         }

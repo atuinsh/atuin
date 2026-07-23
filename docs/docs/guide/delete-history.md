@@ -32,7 +32,7 @@ Use `atuin search --delete` to delete all entries matching a search query. This 
 
 Always run your query without `--delete` first to verify the results:
 
-```
+```shell
 # Step 1: preview - see what matches
 atuin search "^curl https://internal"
 
@@ -44,7 +44,7 @@ atuin search --delete "^curl https://internal"
 
 You can combine `--delete` with any search filter:
 
-```
+```shell
 # Delete all failed commands run from a specific directory
 atuin search --delete --exit 1 --cwd /home/user/experiments
 
@@ -62,7 +62,7 @@ atuin search --delete --exit 0 --after "yesterday 3pm" cargo
 
 If you want to wipe your entire local history:
 
-```
+```shell
 atuin search --delete-it-all
 ```
 
@@ -75,7 +75,7 @@ If you use sync and want to start completely fresh, `--delete-it-all` alone is n
 
 The cleaner approach is to delete your sync account and start over:
 
-```
+```shell
 # Delete your sync account and all server-side data
 atuin account delete
 
@@ -95,7 +95,7 @@ This gives you a clean slate on the server with no leftover records. Your other 
 
 If you've updated your [`history_filter`](../configuration/config.md#history_filter) config and want to retroactively remove entries that match the new filters:
 
-```
+```shell
 # Preview what will be removed
 atuin history prune --dry-run
 
@@ -117,7 +117,7 @@ atuin store verify
 atuin store purge
 ```
 
-This is useful when one machine ends up with local records that were encrypted with a different key than the one Atuin is currently using.
+This is useful when one machine ends up with local records that were encrypted with a different key than the one Atuin is currently using. See the [store reference](../reference/store.md) for the other record store commands.
 
 !!! warning
     `atuin store purge` only affects the local record store on the current machine. It does not wipe your history, delete your sync account, or reset other machines.
@@ -129,7 +129,7 @@ This is useful when one machine ends up with local records that were encrypted w
 
 Remove duplicate entries (same command, working directory, and hostname):
 
-```
+```shell
 # Preview duplicates that would be removed
 atuin history dedup --dry-run --before "2025-01-01" --dupkeep 1
 
@@ -147,7 +147,7 @@ atuin history dedup --before "2025-01-01" --dupkeep 1
 
 To delete your remote sync account and all server-side history:
 
-```
+```shell
 atuin account delete
 ```
 

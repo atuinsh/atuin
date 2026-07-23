@@ -161,6 +161,7 @@ mod unix {
             .hostname("test-host:ellie".to_string())
             .author("claude".to_string())
             .intent("inspect repository state".to_string())
+            .shell("bash")
             .build()
             .into();
 

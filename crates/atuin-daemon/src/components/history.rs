@@ -130,6 +130,7 @@ fn history_to_tail_reply(kind: HistoryEventKind, history: History) -> TailHistor
             intent: history.intent.unwrap_or_default(),
             exit: history.exit,
             duration: history.duration,
+            shell: history.shell.unwrap_or_default(),
         }),
     }
 }
@@ -160,6 +161,7 @@ impl HistorySvc for HistoryGrpcService {
             .hostname(req.hostname)
             .author(req.author)
             .intent(req.intent)
+            .shell(req.shell)
             .build()
             .into();
 

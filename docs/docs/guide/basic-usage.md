@@ -19,12 +19,7 @@ At any time, you can open the TUI with the default keybindings of the up arrow, 
 
 Once in the TUI, press enter to immediately execute a command, or press tab to insert it into your shell for editing.
 
-While searching in the TUI, you can adjust the "filter mode" by repeatedly pressing `ctrl-r`. Atuin can filter by:
-
-1. All hosts
-2. Just your local machine
-3. The current directory only
-4. The current shell session only
+While searching in the TUI, you can narrow the search scope by pressing `ctrl-r` to cycle through [filter modes](advanced-usage.md#filter-mode) — the full history, this machine, the current directory, the current git repository, or the current shell session.
 
 See the [advanced usage](advanced-usage.md) page for more options.
 
@@ -43,7 +38,7 @@ There are a whole bunch of options there, including disabling the up arrow behav
 
 You may prefer that Atuin always inserts the selected command for editing. To configure this, set
 
-```
+```toml
 enter_accept = false
 ```
 
@@ -53,13 +48,26 @@ in your config file.
 
 If you find the full screen TUI overwhelming or too large, you can adjust it like so:
 
-```
+```toml
 # height of the search window
 inline_height = 40
 ```
 
 You may also prefer the compact UI mode:
 
-```
+```toml
 style = "compact"
 ```
+
+### tmux popup
+
+If you use tmux, Atuin can open the search UI in a popup floating above your
+current pane rather than drawing over it:
+
+```toml
+[tmux]
+enabled = true
+```
+
+See the [`tmux` config reference](../configuration/config.md#tmux) for sizing and
+requirements.

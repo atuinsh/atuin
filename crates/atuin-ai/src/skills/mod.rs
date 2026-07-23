@@ -9,6 +9,9 @@ pub(crate) mod walker;
 
 use std::path::Path;
 
+use atuin_common::string::EllipsizeExt as _;
+use atuin_common::string::Measure;
+use atuin_common::string::ellipsis::{Indicator, Pos};
 use eyre::{Result, eyre};
 
 use crate::user_context::interpolate;
@@ -132,7 +135,16 @@ impl SkillRegistry {
         let mut overflow_names = Vec::new();
 
         for skill in &eligible {
-            let truncated_desc = truncate_description(&skill.description, MAX_DESCRIPTION_LEN);
+            // Truncate to a byte budget (not display columns): descriptions are
+            // packed into a byte-bounded LLM prompt budget.
+            let truncated_desc = skill
+                .description
+                .ellipsize(
+                    Measure::Bytes(MAX_DESCRIPTION_LEN),
+                    Pos::End,
+                    Indicator::ASCII,
+                )
+                .to_string();
             let entry_size = skill.name.len() + truncated_desc.len() + PER_ENTRY_OVERHEAD;
 
             if used + entry_size > budget && !summaries.is_empty() {
@@ -235,19 +247,6 @@ fn first_paragraph(body: &str) -> Option<String> {
     if para.is_empty() { None } else { Some(para) }
 }
 
-/// Truncate a description to `max_len` characters, adding ellipsis if cut.
-fn truncate_description(desc: &str, max_len: usize) -> String {
-    if desc.len() <= max_len {
-        return desc.to_string();
-    }
-    let mut end = max_len.saturating_sub(3);
-    // Avoid splitting a multi-byte char
-    while !desc.is_char_boundary(end) && end > 0 {
-        end -= 1;
-    }
-    format!("{}...", &desc[..end])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,11 +270,6 @@ mod tests {
             first_paragraph("Single line"),
             Some("Single line".to_string())
         );
-    }
-
-    #[test]
-    fn truncate_description_short() {
-        assert_eq!(truncate_description("short", 100), "short");
     }
 
     #[test]
@@ -314,14 +308,6 @@ mod tests {
     fn substitute_arguments_no_args_clears_placeholder() {
         let body = "Deploy $ARGUMENTS to production.";
         assert_eq!(substitute_arguments(body, None), "Deploy  to production.");
-    }
-
-    #[test]
-    fn truncate_description_long() {
-        let long = "a".repeat(600);
-        let result = truncate_description(&long, 512);
-        assert!(result.len() <= 512);
-        assert!(result.ends_with("..."));
     }
 
     #[test]

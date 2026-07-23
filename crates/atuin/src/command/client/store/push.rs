@@ -22,12 +22,14 @@ pub struct Push {
     pub host: Option<Uuid>,
 
     /// Force push records
+    ///
     /// This will override both host and tag, to be all hosts and all tags. First clear the remote store, then upload all of the
     /// local store
     #[arg(long, default_value = "false")]
     pub force: bool,
 
     /// Page Size
+    ///
     /// How many records to upload at once. Defaults to 100
     #[arg(long, default_value = "100")]
     pub page: u64,
@@ -46,7 +48,8 @@ impl Push {
                 settings.sync_auth_token().await?,
                 settings.network_connect_timeout,
                 settings.network_timeout * 10, // we may be deleting a lot of data... so up the
-                                               // timeout
+                // timeout
+                &settings.extra_headers,
             )
             .expect("failed to create client");
 

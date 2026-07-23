@@ -1,9 +1,11 @@
 use std::{
     io::BufRead,
+    num::NonZeroU16,
     path::{Path, PathBuf},
     time::Duration,
 };
 
+use atuin_common::ansi;
 use eyre::Result;
 use uuid::Uuid;
 
@@ -847,27 +849,6 @@ const PREVIEW_HEIGHT: u16 = 10;
 /// Default terminal width for VT100 emulation.
 const PREVIEW_WIDTH: u16 = 120;
 
-/// Normalize newlines for VT100 processing.
-///
-/// When subprocess output is captured via pipes (no PTY), bare `\n` (LF) bytes
-/// are not translated to `\r\n` (CR+LF) the way a kernel terminal driver would
-/// with the `ONLCR` flag. In VT100, LF only moves the cursor down without
-/// returning to column 0. This causes lines to start at progressively higher
-/// column offsets and eventually wrap, producing garbled output.
-///
-/// This function inserts `\r` before any `\n` that isn't already preceded by
-/// `\r`, mimicking the terminal driver's ONLCR behavior.
-fn normalize_newlines_for_vt100(data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len() + data.len() / 8);
-    for (i, &b) in data.iter().enumerate() {
-        if b == b'\n' && (i == 0 || data[i - 1] != b'\r') {
-            out.push(b'\r');
-        }
-        out.push(b);
-    }
-    out
-}
-
 /// Extract plain text lines from a VT100 screen buffer.
 ///
 /// Strips trailing blank lines so the result only contains rows with actual
@@ -891,32 +872,6 @@ fn vt100_screen_lines(screen: &vt100::Screen) -> Vec<String> {
         lines.pop();
     }
     lines
-}
-
-/// Strip ANSI escape sequences from raw bytes using a VT100 parser.
-///
-/// Uses a large virtual screen so scrollback is preserved, then extracts
-/// the plain text contents. This handles all escape sequences (colors,
-/// cursor movement, progress bars, etc.) not just simple SGR codes.
-fn strip_ansi_via_vt100(raw: &[u8]) -> String {
-    if raw.is_empty() {
-        return String::new();
-    }
-    // Normalize bare LF to CR+LF so lines start at column 0 in the VT100 screen.
-    let normalized = normalize_newlines_for_vt100(raw);
-    // Feed bytes into a VT100 parser large enough to hold all output, then
-    // read back the plain text. We estimate rows from the number of newlines
-    // (not total byte length) because real output typically has short lines
-    // that would be severely under-counted by a bytes÷width estimate.
-    let newline_count = normalized.iter().filter(|&&b| b == b'\n').count();
-    let wrap_estimate = normalized.len() / PREVIEW_WIDTH as usize;
-    let estimated_rows = (newline_count + wrap_estimate + 1).min(10_000) as u16;
-    let mut parser = vt100::Parser::new(estimated_rows, PREVIEW_WIDTH, 0);
-    parser.process(&normalized);
-    let screen = parser.screen();
-    // screen.contents() returns the full plain-text content with trailing
-    // whitespace trimmed per line and trailing blank lines removed.
-    screen.contents()
 }
 
 /// Execute a shell command with VT100 emulation and streaming output.
@@ -994,7 +949,7 @@ pub(crate) async fn execute_shell_command_streaming(
                     Ok(0) => stdout_done = true,
                     Ok(n) => {
                         full_stdout.extend_from_slice(&stdout_buf[..n]);
-                        let normalized = normalize_newlines_for_vt100(&stdout_buf[..n]);
+                        let normalized = ansi::onlcr(&stdout_buf[..n]).collect::<Vec<u8>>();
                         parser.process(&normalized);
                     }
                     Err(_) => stdout_done = true,
@@ -1008,7 +963,7 @@ pub(crate) async fn execute_shell_command_streaming(
                     Ok(n) => {
                         full_stderr.extend_from_slice(&stderr_buf[..n]);
                         // Feed stderr to the preview parser too, so it shows in the VT100 screen
-                        let normalized = normalize_newlines_for_vt100(&stderr_buf[..n]);
+                        let normalized = ansi::onlcr(&stderr_buf[..n]).collect::<Vec<u8>>();
                         parser.process(&normalized);
                     }
                     Err(_) => stderr_done = true,
@@ -1048,8 +1003,9 @@ pub(crate) async fn execute_shell_command_streaming(
 
     // Strip ANSI escape sequences for clean LLM output by running
     // the raw bytes through a VT100 parser and extracting plain text.
-    let stdout_text = strip_ansi_via_vt100(&full_stdout);
-    let stderr_text = strip_ansi_via_vt100(&full_stderr);
+    let cols = NonZeroU16::new(PREVIEW_WIDTH).expect("PREVIEW_WIDTH is nonzero");
+    let stdout_text = ansi::to_plain_text(&full_stdout, cols);
+    let stderr_text = ansi::to_plain_text(&full_stderr, cols);
 
     ToolOutcome::Structured {
         stdout: stdout_text,
@@ -1238,6 +1194,10 @@ impl AtuinHistoryToolCall {
 pub(crate) struct AtuinOutputToolCall {
     pub history_id: Uuid,
     pub ranges: Vec<(i64, i64)>,
+    /// The command the history entry ran, resolved from the local history
+    /// db after parsing (`Effect::ResolveOutputCommand`). Display-only:
+    /// `None` until the lookup lands, or when the id isn't known locally.
+    pub command: Option<String>,
 }
 
 impl TryFrom<&serde_json::Value> for AtuinOutputToolCall {
@@ -1275,7 +1235,11 @@ impl TryFrom<&serde_json::Value> for AtuinOutputToolCall {
             })
             .collect::<Result<Vec<(i64, i64)>, eyre::Error>>()?;
 
-        Ok(Self { history_id, ranges })
+        Ok(Self {
+            history_id,
+            ranges,
+            command: None,
+        })
     }
 }
 

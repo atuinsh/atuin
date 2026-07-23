@@ -15,13 +15,13 @@ repository = { workspace = true }
 [features]
 default = []
 daemon = []
-tree-sitter = ["dep:tree-sitter-lib", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
+tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
 
 [dependencies]
 async-trait = { workspace = true }
 atuin-client = { workspace = true }
 derive_more = { workspace = true }
-atuin-common = { workspace = true }
+atuin-common = { workspace = true, features = ["unicode", "ansi"] }
 atuin-daemon = { workspace = true }
 tokio = { workspace = true }
 eyre = { workspace = true }
@@ -48,7 +48,9 @@ async-stream = "0.3"
 uuid = { workspace = true }
 tui-textarea-2 = "0.10.2"
 unicode-width = "0.2"
-eye_declare = "0.5.1"
+# Path dependency until eye_declare 0.6.0 publishes; then just a version.
+eye_declare = "0.6.3"
+eye_declare_engine = { version = "0.6.3", features = ["test-util"] }
 ratatui-core = "0.1"
 ratatui-widgets = "0.3"
 thiserror = { workspace = true }
@@ -57,9 +59,9 @@ regex = { workspace = true }
 time = { workspace = true }
 toml = "1.1"
 toml_edit = { workspace = true }
-tree-sitter-lib = { package = "tree-sitter", version = "0.26.8", optional = true }
-tree-sitter-bash = { version = "0.25.1", optional = true }
-tree-sitter-fish = { version = "3.6.0", optional = true }
+tree-sitter = { workspace = true, optional = true }
+tree-sitter-bash = { workspace = true, optional = true }
+tree-sitter-fish = { workspace = true, optional = true }
 sqlx = { workspace = true, features = ["sqlite"] }
 typed-builder = { workspace = true }
 shellexpand = { workspace = true }
@@ -74,3 +76,4 @@ rmcp = { version = "2.1.0", default-features = false, features = ["server", "tra
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+rstest = { workspace = true }

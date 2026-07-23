@@ -780,7 +780,7 @@ mod tests {
     fn extend_over_max_capacity() {
         let vec = Vec::<u32>::with_capacity(1, 1);
         let count = MAX_ENTRIES as usize + 2;
-        let iter = std::iter::repeat(0).take(count);
+        let iter = std::iter::repeat_n(0, count);
         assert!(std::panic::catch_unwind(|| vec.extend(iter, |_, _| {})).is_err());
     }
 }

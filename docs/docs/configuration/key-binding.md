@@ -6,7 +6,7 @@ It can be useful to use a different filter or search mode on the up arrow. For e
 
 Set your config like this:
 
-```
+```toml
 filter_mode_shell_up_key_binding = "directory" # or global, host, directory, etc
 ```
 
@@ -22,7 +22,7 @@ You can also disable either the up-arrow or ++ctrl+r++ bindings individually, by
 `--disable-up-arrow` or `--disable-ctrl-r` to the call to `atuin init` in your shell config file:
 
 An example for zsh:
-```
+```shell
 # Bind ctrl-r but not up arrow
 eval "$(atuin init zsh --disable-up-arrow)"
 
@@ -33,7 +33,7 @@ eval "$(atuin init zsh --disable-ctrl-r)"
 If you do not want either key to be bound, either pass both `--disable` arguments, or set the
 environment variable `ATUIN_NOBIND` to any value before the call to `atuin init`:
 
-```
+```shell
 ## Do not bind any keys
 # Either:
 eval "$(atuin init zsh --disable-up-arrow --disable-ctrl-r)"
@@ -53,13 +53,13 @@ By default, the `enter` key will directly execute the selected command instead o
 
 macOS does not have an ++alt++ key, although terminal emulators can often be configured to map the ++option++ key to be used as ++alt++. *However*, remapping ++option++ this way may prevent typing some characters, such as using ++option+3++ to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace ++alt+0++ to ++alt+9++ shortcuts with ++ctrl+0++ to ++ctrl+9++ instead:
 
-```
+```toml
 # Use Ctrl-0 .. Ctrl-9 instead of Alt-0 .. Alt-9 UI shortcuts
 ctrl_n_shortcuts = true
 ```
 
 Ghostty on Linux maps ++alt+1++ .. ++alt+9++ for switching between tabs by number. To disable this behavior either add the following to ~/.config/ghostty/config:
-```
+```ini
 keybind=alt+one=unbind
 keybind=alt+two=unbind
 keybind=alt+three=unbind
@@ -82,7 +82,7 @@ can be used for the keybindings to the ++up++ key and similar keys.
 
 Note: instead use the widget names "\_atuin\_search\_widget" and "\_atuin\_up\_search\_widget", respectively, in `atuin < 18.0`
 
-```
+```shell
 export ATUIN_NOBIND="true"
 eval "$(atuin init zsh)"
 
@@ -104,7 +104,7 @@ used in combination with the config
 Atuin (`>= 18.10.0`) provides a shell function `atuin-bind` to set up
 keybindings easily:
 
-```
+```shell
 atuin-bind [-m KEYMAP] KEYSEQ COMMAND
 ```
 
@@ -123,7 +123,7 @@ be used as well as an arbitrary shell command:
 | `atuin-up-search`       | Search command for <kbd>up</kbd> or similar keys                                    |
 | `atuin-up-search-emacs` | Search command for <kbd>up</kbd> or similar keys, with the `emacs` keymap mode      |
 | `atuin-up-search-viins` | Search command for <kbd>up</kbd> or similar keys, with the `vim-insert` keymap mode |
-| `atuin-up-search-vicmd` | Search command for <kbd>up</kbd> or similar keys, with the `vim-nomarl` keymap mode |
+| `atuin-up-search-vicmd` | Search command for <kbd>up</kbd> or similar keys, with the `vim-normal` keymap mode |
 
 The keymap mode controls the initial keymap in the Atuin search and is
 determined in combination with the config
@@ -131,7 +131,7 @@ determined in combination with the config
 (`atuin >= 18.0`).
 
 
-```
+```shell
 export ATUIN_NOBIND="true"
 eval "$(atuin init bash)"
 
@@ -156,7 +156,7 @@ to the shell function `__atuin_history`.
 ## fish
 Edit key bindings in FISH shell by adding the following to ~/.config/fish/config.fish
 
-```
+```shell
 set -gx ATUIN_NOBIND "true"
 atuin init fish | source
 
@@ -167,10 +167,10 @@ bind -M insert \cr _atuin_search
 
 For the ++up++ keybinding, `_atuin_bind_up` can be used instead of `_atuin_search`.
 
-Adding the useful alternative key binding of ++ctrl+up++ is tricky and determined by the terminals adherence to terminfo(5).
+Adding the useful alternative key binding of ++ctrl+up++ is tricky and determined by the terminal's adherence to terminfo(5).
 
-Conveniently FISH uses a command to capture keystrokes and advises you of the exact command to add for your specific terminal.
-In your terminal, run `fish_key_reader` then punch the desired keystroke/s.
+Conveniently, fish provides a command to capture keystrokes and advise you of the exact command to add for your specific terminal.
+In your terminal, run `fish_key_reader` then press the desired keystrokes.
 
 For example, in Gnome Terminal the output to ++ctrl+up++ is `bind \e\[1\;5A 'do something'`
 
@@ -180,7 +180,7 @@ So, adding this to the above sample, `bind \e\[1\;5A _atuin_search` will provide
 
 ```
 $env.ATUIN_NOBIND = true
-atuin init nu | save -f ~/.local/share/atuin/init.nu #make sure you created the directory beforehand with `mkdir ~/.local/share/atuin/init.nu`
+atuin init nu | save -f ~/.local/share/atuin/init.nu #make sure you created the directory beforehand with `mkdir ~/.local/share/atuin`
 source ~/.local/share/atuin/init.nu
 
 #bind to ctrl-r in emacs, vi_normal and vi_insert modes, add any other bindings you want here too
@@ -220,13 +220,12 @@ $env.config = (
 | ctrl + delete / ctrl + alt + delete       | Remove the next word or the word just after the cursor                        |
 | ctrl + w                                  | Remove the word before the cursor even if it spans across the word boundaries |
 | ctrl + u                                  | Clear the current line                                                        |
-| ctrl + n / ctrl + j / ↑                   | Select the next item on the list                                              |
-| ctrl + p / ctrl + k / ↓                   | Select the previous item on the list                                          |
+| ctrl + n / ctrl + j / ↓                   | Select the next item on the list                                              |
+| ctrl + p / ctrl + k / ↑                   | Select the previous item on the list                                          |
 | ctrl + o                                  | Open the [inspector](#inspector)                                              |
 | page down                                 | Scroll search results one page down                                           |
 | page up                                   | Scroll search results one page up                                             |
-| ↓ (with no entry selected)                | Return original or return query depending on [settings](config.md#exit_mode)  |
-| ↓                                         | Select the next item on the list                                              |
+| ↓ (on the first entry)                    | Return original or return query depending on [settings](config.md#exit_mode)  |
 | ctrl + a, d                               | Delete the selected history entry                                            |
 | ctrl + a, D                               | Delete **all** history entries matching the selected command                  |
 | ctrl + a, a                               | Move cursor to the start of the line                                         |
@@ -243,8 +242,8 @@ If [vim is enabled in the config](config.md#keymap_mode), the following keybindi
 
 | Shortcut | Mode   | Action                                     |
 | -------- | ------ | ------------------------------------------ |
-| k        | Normal | Selects the next item on the list          |
-| j        | Normal | Selects the previous item on the list      |
+| k        | Normal | Selects the previous item on the list      |
+| j        | Normal | Selects the next item on the list          |
 | h        | Normal | Move cursor left                           |
 | l        | Normal | Move cursor right                          |
 | 0        | Normal | Move cursor to start of line               |

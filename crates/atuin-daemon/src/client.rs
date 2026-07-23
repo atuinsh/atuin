@@ -85,7 +85,7 @@ impl HistoryClient {
             .wrap_err_with(|| {
                 format!(
                     "failed to connect to local atuin daemon at {}. Is it running?",
-                    &log_path
+                    log_path
                 )
             })?;
 
@@ -125,6 +125,7 @@ impl HistoryClient {
             timestamp: h.timestamp.unix_timestamp_nanos() as u64,
             author: h.author,
             intent: h.intent.unwrap_or_default(),
+            shell: h.shell.unwrap_or_default(),
         };
 
         Ok(self.client.start_history(req).await?.into_inner())
@@ -185,7 +186,7 @@ impl SearchClient {
             .wrap_err_with(|| {
                 format!(
                     "failed to connect to local atuin daemon at {}. Is it running?",
-                    &log_path
+                    log_path
                 )
             })?;
 
@@ -286,7 +287,7 @@ impl SemanticClient {
             .wrap_err_with(|| {
                 format!(
                     "failed to connect to local atuin daemon at {}. Is it running?",
-                    &log_path
+                    log_path
                 )
             })?;
 
@@ -380,7 +381,7 @@ impl ControlClient {
             .wrap_err_with(|| {
                 format!(
                     "failed to connect to local atuin daemon at {}. Is it running?",
-                    &log_path
+                    log_path
                 )
             })?;
 
@@ -451,7 +452,7 @@ fn daemon_event_to_proto(event: DaemonEvent) -> crate::control::send_event_reque
         // These events are internal and not sent via the control service
         DaemonEvent::HistoryStarted(_)
         | DaemonEvent::HistoryEnded(_)
-        | DaemonEvent::RecordsAdded(_)
+        | DaemonEvent::HistorySynced(_)
         | DaemonEvent::SyncCompleted { .. }
         | DaemonEvent::SyncFailed { .. } => {
             // Use shutdown as a fallback, though this shouldn't happen

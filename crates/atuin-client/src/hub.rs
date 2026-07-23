@@ -19,6 +19,7 @@ use atuin_common::{
         ErrorResponse,
     },
     tls::ensure_crypto_provider,
+    url::UrlAppendExt,
 };
 
 use crate::settings::Settings;
@@ -31,9 +32,9 @@ pub struct HubAuthSession {
     /// The code to be verified
     pub code: String,
     /// The URL the user should visit to authenticate
-    pub auth_url: String,
+    pub auth_url: Url,
     /// The hub address being used
-    pub hub_address: String,
+    pub hub_address: Url,
 }
 
 /// The result of polling for hub auth completion
@@ -57,10 +58,9 @@ impl HubAuthSession {
     /// Start a new hub authentication session
     ///
     /// Returns a session containing the code and auth URL that the user should visit.
-    pub async fn start(hub_address: &str) -> Result<Self> {
+    pub async fn start(hub_address: &Url) -> Result<Self> {
         debug!("Starting Hub authentication process...");
 
-        let hub_address = hub_address.trim_end_matches('/');
         let code_response = request_code(hub_address)
             .await
             .context("Failed to request authentication code from Hub")?;
@@ -68,12 +68,13 @@ impl HubAuthSession {
         debug!("Received code from Hub");
 
         let code = code_response.code;
-        let auth_url = format!("{}/auth/cli?code={}", hub_address, code);
+        let mut auth_url = hub_address.append_path("auth/cli")?;
+        auth_url.query_pairs_mut().append_pair("code", &code);
 
         Ok(Self {
             code,
             auth_url,
-            hub_address: hub_address.to_string(),
+            hub_address: hub_address.clone(),
         })
     }
 
@@ -95,7 +96,7 @@ impl HubAuthSession {
             }
             Err(e) => {
                 // Transient errors shouldn't fail the whole flow
-                log::debug!("Verification poll failed: {}", e);
+                tracing::debug!("Verification poll failed: {}", e);
                 Ok(HubAuthStatus::Pending)
             }
         }
@@ -122,7 +123,9 @@ impl HubAuthSession {
 
             match self.poll().await? {
                 HubAuthStatus::Complete(token) => return Ok(token),
-                HubAuthStatus::Failed(error) => bail!("Authentication failed: {}", error),
+                HubAuthStatus::Failed(error) => {
+                    bail!("Authentication failed: {}", error);
+                }
                 HubAuthStatus::Pending => {
                     tokio::time::sleep(poll_interval).await;
                 }
@@ -183,12 +186,12 @@ pub async fn get_session_token() -> Result<Option<String>> {
 /// - Not logged in to Hub
 /// - CLI token is invalid
 /// - CLI account is already linked to a different Hub account
-pub async fn link_account(hub_address: &str, cli_token: &str) -> Result<()> {
+pub async fn link_account(hub_address: &Url, cli_token: &str) -> Result<()> {
     let hub_token = get_session_token()
         .await?
         .ok_or_else(|| eyre::eyre!("Not logged in to Hub - cannot link account"))?;
 
-    let url = make_url(hub_address, "/api/v0/account/link")?;
+    let url = hub_address.append_path("api/v0/account/link")?;
 
     debug!("Linking CLI account to Hub at {}", hub_address);
 
@@ -196,7 +199,7 @@ pub async fn link_account(hub_address: &str, cli_token: &str) -> Result<()> {
     let client = reqwest::Client::new();
 
     let resp = client
-        .post(&url)
+        .post(url)
         .header(USER_AGENT, APP_USER_AGENT)
         .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
         .bearer_auth(&hub_token)
@@ -219,23 +222,6 @@ pub async fn link_account(hub_address: &str, cli_token: &str) -> Result<()> {
 }
 
 // --- Internal HTTP functions ---
-
-fn make_url(address: &str, path: &str) -> Result<String> {
-    let address = if address.ends_with('/') {
-        address.to_string()
-    } else {
-        format!("{address}/")
-    };
-
-    let path = path.strip_prefix('/').unwrap_or(path);
-
-    let url = Url::parse(&address)
-        .context("failed to parse hub address")?
-        .join(path)
-        .context("failed to join hub URL path")?;
-
-    Ok(url.to_string())
-}
 
 async fn handle_resp_error(resp: reqwest::Response) -> Result<reqwest::Response> {
     let status = resp.status();
@@ -263,15 +249,15 @@ async fn handle_resp_error(resp: reqwest::Response) -> Result<reqwest::Response>
 }
 
 /// Request a CLI auth code from the Atuin Hub
-async fn request_code(address: &str) -> Result<CliCodeResponse> {
+async fn request_code(address: &Url) -> Result<CliCodeResponse> {
     ensure_crypto_provider();
-    let url = make_url(address, "/auth/cli/code")?;
+    let url = address.append_path("auth/cli/code")?;
     let client = reqwest::Client::new();
 
     debug!("Requesting code from Hub at {url}");
 
     let resp = client
-        .post(&url)
+        .post(url)
         .header(USER_AGENT, APP_USER_AGENT)
         .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
         .send()
@@ -283,16 +269,18 @@ async fn request_code(address: &str) -> Result<CliCodeResponse> {
 }
 
 /// Poll to verify the CLI auth code and get the session token
-async fn verify_code(address: &str, code: &str) -> Result<CliVerifyResponse> {
+async fn verify_code(address: &Url, code: &str) -> Result<CliVerifyResponse> {
     ensure_crypto_provider();
-    let base = make_url(address, "/auth/cli/verify")?;
-    let url = format!("{base}?code={code}");
+    let mut url = address.append_path("auth/cli/verify")?;
     let client = reqwest::Client::new();
 
-    debug!("Verifying code with Hub at {base}?code=******");
+    // Logged before the code is appended, so the secret stays out of the logs.
+    debug!("Verifying code with Hub at {url}");
+
+    url.query_pairs_mut().append_pair("code", code);
 
     let resp = client
-        .post(&url)
+        .post(url)
         .header(USER_AGENT, APP_USER_AGENT)
         .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
         .send()

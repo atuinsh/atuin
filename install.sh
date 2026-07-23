@@ -11,10 +11,12 @@ for arg in "$@"; do
 done
 
 if [ "$ATUIN_NON_INTERACTIVE" != "yes" ]; then
-  if [ -t 0 ] || { true </dev/tty; } 2>/dev/null; then
-    ATUIN_NON_INTERACTIVE="no"
-  else
-    ATUIN_NON_INTERACTIVE="yes"
+  ATUIN_NON_INTERACTIVE=yes
+  if { exec 3</dev/tty; } 2>/dev/null; then
+    if [ -t 3 ]; then
+        ATUIN_NON_INTERACTIVE=no
+    fi
+    exec 3<&-
   fi
 fi
 
@@ -170,7 +172,10 @@ else
 fi
 
 if [ "$ATUIN_NON_INTERACTIVE" != "yes" ]; then
-  "$ATUIN_BIN" setup </dev/tty
+  if ! "$ATUIN_BIN" setup </dev/tty; then
+    echo ""
+    echo "Setup did not complete. You can run 'atuin setup' any time to finish."
+  fi
 fi
 
 cat << EOF

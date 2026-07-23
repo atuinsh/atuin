@@ -39,6 +39,13 @@ export ATUIN_CONFIG_DIR=/tmp/atuin-config/
 
 These variable exports can be added in a local `.envrc` file, read by [direnv](https://direnv.net/).
 
+## Editor setup (optional)
+
+`cargo fmt` is the source of truth and CI enforces it. We also have a:
+
+- [`.editorconfig`](https://editorconfig.org/) which sets sane defaults for `.rs` files.
+- [`.nvim.lua`](https://github.com/atuinsh/atuin/blob/main/.nvim.lua) which configures neovim. Note you need `vim.o.exrc = true` and `nvim >= 0.11+`. You can disable it if you prefer, please see the docs at the top of that file.
+
 ## PRs
 
 It can speed up the review cycle if you consent to maintainers pushing to your branch. This will only be in the case of small fixes or adjustments, and not anything large. If you feel OK with this, please check the box on the template!

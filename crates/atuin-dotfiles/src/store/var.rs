@@ -80,19 +80,19 @@ impl VarRecord {
                             decode::read_str_from_slice(bytes).map_err(error_report)?;
 
                         if !bytes.is_empty() {
-                            bail!("trailing bytes in encoded dotfiles var record. malformed")
+                            bail!("trailing bytes in encoded dotfiles var record. malformed");
                         }
 
                         Ok(VarRecord::Delete(key.to_owned()))
                     }
 
                     n => {
-                        bail!("unknown Dotfiles var record type {n}")
+                        bail!("unknown Dotfiles var record type {n}");
                     }
                 }
             }
             _ => {
-                bail!("unknown version {version:?}")
+                bail!("unknown version {version:?}");
             }
         }
     }
@@ -399,6 +399,7 @@ mod tests {
 
     use super::{DOTFILES_VAR_VERSION, VarRecord, VarStore};
     use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
+    use rstest::rstest;
 
     #[test]
     fn encode_decode() {
@@ -420,78 +421,48 @@ mod tests {
         assert_eq!(decoded, record);
     }
 
-    #[test]
-    fn test_escape_posix_value() {
-        // Simple values should not be quoted
-        assert_eq!(VarStore::escape_posix_value("simple"), "simple");
-        assert_eq!(VarStore::escape_posix_value("path/to/file"), "path/to/file");
-        assert_eq!(
-            VarStore::escape_posix_value("value_with_underscores"),
-            "value_with_underscores"
-        );
-
-        // Values with spaces should be quoted
-        assert_eq!(
-            VarStore::escape_posix_value("hello world"),
-            "\"hello world\""
-        );
-        assert_eq!(VarStore::escape_posix_value("bar baz"), "\"bar baz\"");
-
-        // Values with special characters should be quoted and escaped
-        assert_eq!(
-            VarStore::escape_posix_value("say \"hello\""),
-            "\"say \\\"hello\\\"\""
-        );
-        assert_eq!(
-            VarStore::escape_posix_value("path\\with\\backslashes"),
-            "\"path\\\\with\\\\backslashes\""
-        );
-        assert_eq!(
-            VarStore::escape_posix_value("say $hello"),
-            "\"say \\$hello\""
-        );
-        assert_eq!(
-            VarStore::escape_posix_value("see `example.md`"),
-            "\"see \\`example.md\\`\""
-        );
+    #[rstest]
+    // Simple values should not be quoted
+    #[case::simple("simple", "simple")]
+    #[case::path("path/to/file", "path/to/file")]
+    #[case::underscores("value_with_underscores", "value_with_underscores")]
+    // Values with spaces should be quoted
+    #[case::spaces("hello world", "\"hello world\"")]
+    #[case::spaces_short("bar baz", "\"bar baz\"")]
+    // Values with special characters should be quoted and escaped
+    #[case::double_quotes("say \"hello\"", "\"say \\\"hello\\\"\"")]
+    #[case::backslashes("path\\with\\backslashes", "\"path\\\\with\\\\backslashes\"")]
+    #[case::dollar("say $hello", "\"say \\$hello\"")]
+    #[case::backticks("see `example.md`", "\"see \\`example.md\\`\"")]
+    fn escapes_posix_value(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(VarStore::escape_posix_value(input), expected);
     }
 
-    #[test]
-    fn test_escape_fish_value() {
-        // Simple values should not be quoted
-        assert_eq!(VarStore::escape_fish_value("simple"), "simple");
-        assert_eq!(VarStore::escape_fish_value("path/to/file"), "path/to/file");
-
-        // Values with spaces should be single-quoted
-        assert_eq!(VarStore::escape_fish_value("hello world"), "'hello world'");
-        assert_eq!(VarStore::escape_fish_value("bar baz"), "'bar baz'");
-
-        // Values with single quotes should be escaped
-        assert_eq!(VarStore::escape_fish_value("don't"), "'don\\'t'");
+    #[rstest]
+    // Simple values should not be quoted
+    #[case::simple("simple", "simple")]
+    #[case::path("path/to/file", "path/to/file")]
+    // Values with spaces should be single-quoted
+    #[case::spaces("hello world", "'hello world'")]
+    #[case::spaces_short("bar baz", "'bar baz'")]
+    // Values with single quotes should be escaped
+    #[case::single_quote("don't", "'don\\'t'")]
+    fn escapes_fish_value(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(VarStore::escape_fish_value(input), expected);
     }
 
-    #[test]
-    fn test_escape_xonsh_value() {
-        // Simple values should not be quoted
-        assert_eq!(VarStore::escape_xonsh_value("simple"), "simple");
-        assert_eq!(VarStore::escape_xonsh_value("path/to/file"), "path/to/file");
-
-        // Values with spaces should be quoted
-        assert_eq!(
-            VarStore::escape_xonsh_value("hello world"),
-            "\"hello world\""
-        );
-        assert_eq!(VarStore::escape_xonsh_value("bar baz"), "\"bar baz\"");
-
-        // Values with special characters should be quoted and escaped
-        assert_eq!(
-            VarStore::escape_xonsh_value("say \"hello\""),
-            "\"say \\\"hello\\\"\""
-        );
-        assert_eq!(
-            VarStore::escape_xonsh_value("path\\with\\backslashes"),
-            "\"path\\\\with\\\\backslashes\""
-        );
+    #[rstest]
+    // Simple values should not be quoted
+    #[case::simple("simple", "simple")]
+    #[case::path("path/to/file", "path/to/file")]
+    // Values with spaces should be quoted
+    #[case::spaces("hello world", "\"hello world\"")]
+    #[case::spaces_short("bar baz", "\"bar baz\"")]
+    // Values with special characters should be quoted and escaped
+    #[case::double_quotes("say \"hello\"", "\"say \\\"hello\\\"\"")]
+    #[case::backslashes("path\\with\\backslashes", "\"path\\\\with\\\\backslashes\"")]
+    fn escapes_xonsh_value(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(VarStore::escape_xonsh_value(input), expected);
     }
 
     #[tokio::test]

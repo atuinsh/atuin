@@ -4,14 +4,14 @@ Atuin search supports wildcards, with either the `*` or `%` character. By
 default, a prefix search is performed (ie, all queries are automatically
 appended with a wildcard).
 
-| Arg &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;| Description |
+| Arg                  | Description |
 | -------------------- | ----------------------------------------------------------------------------- |
 | `--cwd`/`-c`         | The directory to list history for (default: all dirs)                         |
 | `--exclude-cwd`      | Do not include commands that ran in this directory (default: none)            |
 | `--exit`/`-e`        | Filter by exit code (default: none)                                           |
 | `--exclude-exit`     | Do not include commands that exited with this value (default: none)           |
-| `--before`           | Only include commands ran before this time(default: none)                     |
-| `--after`            | Only include commands ran after this time(default: none)                      |
+| `--before`           | Only include commands run before this time (default: none)                    |
+| `--after`            | Only include commands run after this time (default: none)                     |
 | `--interactive`/`-i` | Open the interactive search UI (default: false)                               |
 | `--human`            | Use human-readable formatting for the timestamp and duration (default: false) |
 | `--limit`            | Limit the number of results (default: none)                                   |
@@ -35,7 +35,7 @@ Note: This is not yet supported on macOS.
 
 ## Examples
 
-```
+```shell
 # Open the interactive search TUI
 atuin search -i
 

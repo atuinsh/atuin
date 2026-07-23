@@ -1,5 +1,8 @@
+use std::num::NonZeroU16;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
+
+use atuin_common::ansi;
 
 use crate::osc133::{Event, Params, Parser, Zone};
 
@@ -137,12 +140,13 @@ impl CommandCaptureTracker {
 
     fn finish_capture(&mut self) -> Option<CommandCapture> {
         let buffers = std::mem::take(&mut self.buffers);
-        let cols = self.cols.load(Ordering::Relaxed).max(1);
-        let prompt = render_plain_text(&buffers.prompt, cols);
-        let command = render_plain_text(&buffers.command, cols)
+        // A terminal width of 0 (e.g. before the size is known) falls back to 1.
+        let cols = NonZeroU16::new(self.cols.load(Ordering::Relaxed)).unwrap_or(NonZeroU16::MIN);
+        let prompt = ansi::to_plain_text(&buffers.prompt, cols);
+        let command = ansi::to_plain_text(&buffers.command, cols)
             .trim_matches(|c| c == '\r' || c == '\n')
             .to_string();
-        let output = render_plain_text(&buffers.output, cols);
+        let output = ansi::to_plain_text(&buffers.output, cols);
         let output_truncated = buffers.output_truncated;
         let output_observed_bytes = buffers.output_observed_bytes;
         let exit_code = buffers.exit_code;
@@ -166,36 +170,6 @@ impl CommandCaptureTracker {
     }
 }
 
-const CLEAN_TEXT_MAX_ROWS: usize = 10_000;
-
-fn render_plain_text(bytes: &[u8], cols: u16) -> String {
-    if bytes.is_empty() {
-        return String::new();
-    }
-
-    let cols = cols.max(1);
-    let mut parser = vt100::Parser::new(estimated_rows(bytes, cols), cols, 0);
-    parser.process(bytes);
-    normalize_screen_contents(&parser.screen().contents())
-}
-
-fn normalize_screen_contents(contents: &str) -> String {
-    let mut lines = contents.lines().map(str::trim_end).collect::<Vec<_>>();
-    while lines.last().is_some_and(|line| line.is_empty()) {
-        lines.pop();
-    }
-    lines.join("\n")
-}
-
-fn estimated_rows(bytes: &[u8], cols: u16) -> u16 {
-    let newline_rows = bytes.iter().filter(|byte| **byte == b'\n').count() + 1;
-    let wrapped_rows = bytes.len() / cols as usize;
-    newline_rows
-        .saturating_add(wrapped_rows)
-        .saturating_add(1)
-        .clamp(1, CLEAN_TEXT_MAX_ROWS) as u16
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,38 +185,6 @@ mod tests {
                 .any(|ch| ch.is_control() && ch != '\n' && ch != '\t'),
             "text still contains terminal controls: {text:?}"
         );
-    }
-
-    #[test]
-    fn command_text_collapses_terminal_echo_edits() {
-        assert_eq!(render_plain_text(b"e\x08echo hi", 80), "echo hi");
-        assert_eq!(
-            render_plain_text(
-                b"e\x08echo\x08 \x08\x08 \x08\x08\x08e \x08\x08 \x08e\x08echo hi",
-                80
-            ),
-            "echo hi"
-        );
-        assert_eq!(render_plain_text(b"echo hi", 80), "echo hi");
-    }
-
-    #[test]
-    fn text_cleaning_strips_ansi_and_terminal_controls() {
-        let text = render_plain_text(
-            b"\x1b[32mhi\x1b[0m\r\n%                                    \r \r",
-            80,
-        );
-
-        assert_eq!(text, "hi");
-        assert_no_terminal_controls(&text);
-    }
-
-    #[test]
-    fn text_cleaning_preserves_valid_utf8_after_backspace() {
-        let text = render_plain_text("🦀x\x08 \x08 crab".as_bytes(), 80);
-
-        assert_eq!(text, "🦀 crab");
-        assert_no_terminal_controls(&text);
     }
 
     #[test]

@@ -1,0 +1,48 @@
+name: Deploy release docs
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: docs-pages
+  cancel-in-progress: false
+
+jobs:
+  stable:
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    env:
+      MKDOCS_GIT_COMMITTERS_ENABLED: true
+      MKDOCS_GIT_COMMITTERS_APIKEY: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/docs-setup
+      - uses: ./.github/actions/docs-deploy-stable
+        with:
+          version: ${{ github.ref_name }}
+      - uses: ./.github/actions/docs-root-files
+
+  prerelease:
+    if: ${{ contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    env:
+      MKDOCS_GIT_COMMITTERS_ENABLED: true
+      MKDOCS_GIT_COMMITTERS_APIKEY: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/docs-setup
+      - uses: ./.github/actions/docs-deploy-prerelease
+        with:
+          version: ${{ github.ref_name }}
+      - uses: ./.github/actions/docs-root-files

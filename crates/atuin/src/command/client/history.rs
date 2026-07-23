@@ -1,11 +1,14 @@
 use std::{
     fmt::{self, Display},
     io::{self, IsTerminal, Write},
-    path::PathBuf,
     time::Duration,
 };
 
-use atuin_common::utils::{self, Escapable as _};
+use atuin_common::logs::LogConfig;
+use atuin_common::{
+    string::{EscapeNonPrintablePosixExt as _, NonNulStr},
+    utils,
+};
 use clap::Subcommand;
 use eyre::{Context, Result, bail};
 use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
@@ -17,6 +20,8 @@ use colored::Colorize;
 #[cfg(feature = "daemon")]
 use serde::Serialize;
 
+#[cfg(feature = "daemon")]
+use atuin_common::utils::normalize_optional_string;
 #[cfg(feature = "daemon")]
 use atuin_daemon::history::{HistoryEventKind, TailHistoryReply};
 
@@ -32,10 +37,10 @@ use atuin_client::{
 };
 
 #[cfg(feature = "sync")]
-use atuin_client::{record, sync};
+use atuin_client::record;
 
-use log::{debug, warn};
 use time::{OffsetDateTime, macros::format_description};
+use tracing::{debug, warn};
 
 #[cfg(feature = "daemon")]
 use super::daemon;
@@ -60,6 +65,11 @@ pub enum Cmd {
         intent: Option<String>,
 
         command: Vec<String>,
+
+        /// Passed by shell hooks; this flag disables logging to avoid corrupting the terminal and
+        /// to minimize the amount of time the command takes to run.
+        #[arg(long, hide = true)]
+        hook: bool,
     },
 
     /// Finishes a new command in the history (adds time, exit code)
@@ -69,6 +79,11 @@ pub enum Cmd {
         exit: i64,
         #[arg(long, short)]
         duration: Option<u64>,
+
+        /// Passed by shell hooks; this flag disables logging to avoid corrupting the terminal and
+        /// to minimize the amount of time the command takes to run.
+        #[arg(long, hide = true)]
+        hook: bool,
     },
 
     /// Stream history events from the daemon as they are received
@@ -103,18 +118,20 @@ pub enum Cmd {
         /// Display the command time in another timezone other than the configured default.
         ///
         /// This option takes one of the following kinds of values:
+        ///
         /// - the special value "local" (or "l") which refers to the system time zone
         /// - an offset from UTC (e.g. "+9", "-2:30")
-        #[arg(long, visible_alias = "tz")]
+        #[arg(long, visible_alias = "tz", verbatim_doc_comment)]
         timezone: Option<Timezone>,
 
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {author}, {intent}, {exit}, {time}, {session}, and {uuid}
+        ///
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
         #[arg(long, short)]
         format: Option<String>,
     },
 
-    /// Get the last command ran
+    /// Get the last command that was run
     Last {
         #[arg(long)]
         human: bool,
@@ -126,12 +143,14 @@ pub enum Cmd {
         /// Display the command time in another timezone other than the configured default.
         ///
         /// This option takes one of the following kinds of values:
+        ///
         /// - the special value "local" (or "l") which refers to the system time zone
         /// - an offset from UTC (e.g. "+9", "-2:30")
-        #[arg(long, visible_alias = "tz")]
+        #[arg(long, visible_alias = "tz", verbatim_doc_comment)]
         timezone: Option<Timezone>,
 
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {author}, {intent}, {time}, {session}, {uuid} and {relativetime}.
+        ///
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
         #[arg(long, short)]
         format: Option<String>,
@@ -310,7 +329,9 @@ impl FormatKey for FmtHistory<'_> {
         match key {
             "command" => match self.cmd_format {
                 CmdFormat::Literal => f.write_str(self.history.command.trim()),
-                CmdFormat::Escaped => f.write_str(&self.history.command.trim().escape_control()),
+                CmdFormat::Escaped => {
+                    f.write_str(&self.history.command.trim().escape_non_printable())
+                }
             }?,
             "directory" => f.write_str(self.history.cwd.trim())?,
             "exit" => f.write_str(&self.history.exit.to_string())?,
@@ -374,18 +395,6 @@ fn parse_fmt(format: &str) -> ParsedFmt<'_> {
     }
 }
 
-fn apply_start_metadata(history: &mut History, author: Option<&str>, intent: Option<&str>) {
-    if let Some(author) = author.map(str::trim).filter(|author| !author.is_empty()) {
-        author.clone_into(&mut history.author);
-    }
-
-    if let Some(intent) = intent.map(str::trim).filter(|intent| !intent.is_empty()) {
-        history.intent = Some(intent.to_owned());
-    } else if intent.is_some() {
-        history.intent = None;
-    }
-}
-
 fn normalize_command_for_storage<'a>(command: &'a str, settings: &Settings) -> &'a str {
     if !settings.strip_trailing_whitespace {
         return command;
@@ -410,6 +419,41 @@ fn normalize_command_for_storage<'a>(command: &'a str, settings: &Settings) -> &
     }
 }
 
+fn make_starting_history(
+    settings: &Settings,
+    command: &str,
+    author: Option<&str>,
+    intent: Option<&str>,
+) -> Option<History> {
+    // It's better for atuin to silently fail here and attempt to
+    // store whatever is ran, than to throw an error to the terminal
+    let cwd = utils::get_current_dir();
+    let command = normalize_command_for_storage(command, settings);
+
+    // A command containing a NUL byte could never have been executed by a shell
+    // (argv entries are C strings), so it can only come from a broken caller such
+    // as an agent hook. Drop it rather than committing garbage to history.
+    if let Err(err) = NonNulStr::new(command) {
+        debug!(
+            "dropping command containing a NUL byte at index {}",
+            err.index
+        );
+        return None;
+    }
+
+    let h: History = History::capture()
+        .timestamp(OffsetDateTime::now_utc())
+        .command(command)
+        .cwd(cwd)
+        .author_opt(author.map(String::from))
+        .intent_opt(intent.map(String::from))
+        .shell_opt(std::env::var("ATUIN_SHELL").ok())
+        .build()
+        .into();
+
+    h.should_save(settings).then_some(h)
+}
+
 async fn handle_start(
     db: &impl Database,
     settings: &Settings,
@@ -417,24 +461,9 @@ async fn handle_start(
     author: Option<&str>,
     intent: Option<&str>,
 ) -> Result<Option<String>> {
-    // It's better for atuin to silently fail here and attempt to
-    // store whatever is ran, than to throw an error to the terminal
-    let cwd = utils::get_current_dir();
-    let command = normalize_command_for_storage(command, settings);
-
-    let mut h: History = History::capture()
-        .timestamp(OffsetDateTime::now_utc())
-        .command(command)
-        .cwd(cwd)
-        .build()
-        .into();
-    apply_start_metadata(&mut h, author, intent);
-
-    if !h.should_save(settings) {
+    let Some(h) = make_starting_history(settings, command, author, intent) else {
         return Ok(None);
-    }
-
-    let id = h.id.0.clone();
+    };
 
     // Silently ignore database errors to avoid breaking the shell
     // This is important when disk is full or database is locked
@@ -442,7 +471,7 @@ async fn handle_start(
         debug!("failed to save history: {e}");
     }
 
-    Ok(Some(id))
+    Ok(Some(h.id.0.clone()))
 }
 
 #[cfg(feature = "daemon")]
@@ -452,30 +481,19 @@ async fn handle_daemon_start(
     author: Option<&str>,
     intent: Option<&str>,
 ) -> Result<Option<String>> {
-    // It's better for atuin to silently fail here and attempt to
-    // store whatever is ran, than to throw an error to the terminal
-    let cwd = utils::get_current_dir();
-    let command = normalize_command_for_storage(command, settings);
-
-    let mut h: History = History::capture()
-        .timestamp(OffsetDateTime::now_utc())
-        .command(command)
-        .cwd(cwd)
-        .build()
-        .into();
-    apply_start_metadata(&mut h, author, intent);
-
-    if !h.should_save(settings) {
+    let Some(h) = make_starting_history(settings, command, author, intent) else {
         return Ok(None);
-    }
+    };
+
+    let local_id = h.id.0.clone();
 
     // Attempt to start history via daemon, but silently ignore errors
     // to avoid breaking the shell when the daemon is unavailable or disk is full
-    let resp = match daemon::start_history(settings, h.clone()).await {
+    let resp = match daemon::start_history(settings, h).await {
         Ok(id) => id,
         Err(e) => {
             debug!("failed to start history via daemon: {e}");
-            h.id.0.clone()
+            local_id
         }
     };
 
@@ -530,16 +548,11 @@ async fn handle_end(
     if settings.should_sync().await? {
         #[cfg(feature = "sync")]
         {
-            if settings.sync.records {
-                let (_, downloaded) =
-                    record::sync::sync(settings, &store, &history_store.encryption_key).await?;
-                Settings::save_sync_time().await?;
+            let (_, downloaded) =
+                record::sync::sync(settings, &store, &history_store.encryption_key).await?;
+            Settings::save_sync_time().await?;
 
-                crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
-            } else {
-                debug!("running periodic background sync");
-                sync::sync(settings, false, db).await?;
-            }
+            crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
         }
         #[cfg(not(feature = "sync"))]
         debug!("not compiled with sync support");
@@ -578,7 +591,7 @@ pub(super) async fn start_history_entry(
         return handle_daemon_start(settings, command, author, intent).await;
     }
 
-    let db_path = PathBuf::from(settings.db_path.as_str());
+    let db_path = &settings.db_path;
     let db = Sqlite::new(db_path, settings.local_timeout).await?;
     handle_start(&db, settings, command, author, intent).await
 }
@@ -594,8 +607,8 @@ pub(super) async fn end_history_entry(
         return handle_daemon_end(settings, id, exit, duration).await;
     }
 
-    let db_path = PathBuf::from(settings.db_path.as_str());
-    let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+    let db_path = &settings.db_path;
+    let record_store_path = &settings.record_store_path;
 
     let db = Sqlite::new(db_path, settings.local_timeout).await?;
     let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
@@ -685,7 +698,8 @@ impl TailEvent {
                 session: history.session,
                 hostname: history.hostname,
                 author: history.author,
-                intent: normalize_optional_field(&history.intent),
+                intent: normalize_optional_string(history.intent),
+                shell: normalize_optional_string(history.shell),
                 deleted_at: None,
             },
         })
@@ -743,7 +757,7 @@ impl TailEvent {
         out.push('\n');
 
         let command = self.history.command.trim();
-        let escaped_command = command.escape_control();
+        let escaped_command = command.escape_non_printable();
         let mut command_lines = escaped_command.lines();
         let header = format!(
             "{} {}",
@@ -900,16 +914,6 @@ fn push_pretty_field(out: &mut String, label: &str, value: &str) {
     }
 }
 
-#[cfg(feature = "daemon")]
-fn normalize_optional_field(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_owned())
-    }
-}
-
 impl Cmd {
     #[cfg(feature = "daemon")]
     async fn handle_tail(settings: &Settings) -> Result<()> {
@@ -960,7 +964,7 @@ impl Cmd {
         };
 
         let history = db
-            .list(&filters, &context, None, false, include_deleted)
+            .list(&filters, &context, None, false, include_deleted, None)
             .await?;
 
         print_list(
@@ -988,7 +992,7 @@ impl Cmd {
         // Grab all executed commands and filter them using History::should_save.
         // We could iterate or paginate here if memory usage becomes an issue.
         let matches: Vec<History> = db
-            .list(&[Global], &context, None, false, false)
+            .list(&[Global], &context, None, false, false, None)
             .await?
             .into_iter()
             .filter(|h| !h.should_save(settings))
@@ -1021,12 +1025,8 @@ impl Cmd {
 
             for entry in matches {
                 eprintln!("deleting {}", entry.id);
-                if settings.sync.records {
-                    let (id, _) = history_store.delete(entry.id.clone()).await?;
-                    history_store.incremental_build(db, &[id]).await?;
-                } else {
-                    db.delete(entry.clone()).await?;
-                }
+                let (id, _) = history_store.delete(entry.id.clone()).await?;
+                history_store.build_all(db, &[id]).await?;
             }
 
             #[cfg(feature = "daemon")]
@@ -1082,12 +1082,8 @@ impl Cmd {
 
             for entry in matches {
                 eprintln!("deleting {}", entry.id);
-                if settings.sync.records {
-                    let (id, _) = history_store.delete(entry.id).await?;
-                    history_store.incremental_build(db, &[id]).await?;
-                } else {
-                    db.delete(entry).await?;
-                }
+                let (id, _) = history_store.delete(entry.id).await?;
+                history_store.build_all(db, &[id]).await?;
             }
 
             #[cfg(feature = "daemon")]
@@ -1105,6 +1101,7 @@ impl Cmd {
                 author,
                 intent,
                 command,
+                ..
             } => {
                 let command = if cmd_env {
                     std::env::var("ATUIN_COMMAND_LINE").unwrap_or_default()
@@ -1121,9 +1118,9 @@ impl Cmd {
 
                 Ok(())
             }
-            Self::End { id, exit, duration } => {
-                end_history_entry(settings, &id, exit, duration).await
-            }
+            Self::End {
+                id, exit, duration, ..
+            } => end_history_entry(settings, &id, exit, duration).await,
             Self::Tail => {
                 #[cfg(feature = "daemon")]
                 {
@@ -1136,8 +1133,8 @@ impl Cmd {
             cmd => {
                 let context = current_context().await?;
 
-                let db_path = PathBuf::from(settings.db_path.as_str());
-                let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+                let db_path = &settings.db_path;
+                let record_store_path = &settings.record_store_path;
 
                 let db = Sqlite::new(db_path, settings.local_timeout).await?;
                 let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
@@ -1220,6 +1217,18 @@ impl Cmd {
             }
         }
     }
+
+    fn logs_enabled(&self) -> bool {
+        match self {
+            // Enable logs if not invoked from a shell hook.
+            Self::Start { hook, .. } | Self::End { hook, .. } => !*hook,
+            _ => true,
+        }
+    }
+
+    pub fn log_config(&self) -> Option<LogConfig> {
+        self.logs_enabled().then(LogConfig::stderr_only)
+    }
 }
 
 #[cfg(test)]
@@ -1290,6 +1299,25 @@ mod tests {
         assert_eq!(history.command, "ls   \t");
     }
 
+    #[tokio::test]
+    async fn handle_start_drops_command_with_nul_byte() {
+        let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
+        let settings = Settings::utc();
+
+        // A command containing a NUL byte can never have been executed by a shell;
+        // it should be dropped rather than committed to history.
+        let id = handle_start(&db, &settings, "hello\0world", None, None)
+            .await
+            .unwrap();
+        assert!(id.is_none());
+
+        let stored = db
+            .before(OffsetDateTime::now_utc() + time::Duration::SECOND, 1)
+            .await
+            .unwrap();
+        assert!(stored.is_empty());
+    }
+
     #[test]
     fn test_format_string_no_panic() {
         // Don't panic but provide helpful output (issue #2776)
@@ -1322,6 +1350,7 @@ mod tests {
                 author: "claude".to_owned(),
                 intent: Some("inspect repository state".to_owned()),
                 deleted_at: None,
+                shell: Some("zsh".into()),
             },
         }
     }

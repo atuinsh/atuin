@@ -59,7 +59,7 @@ pub(crate) fn parse_shell_command(code: &str, shell: ShellKind) -> ParsedShellCo
 #[cfg(feature = "tree-sitter")]
 mod ts {
     use super::{ParsedShellCommand, ShellCommand, parse_fallback};
-    use tree_sitter_lib::{Parser, Tree};
+    use tree_sitter::{Parser, Tree};
 
     fn bash_parser() -> Parser {
         let mut parser = Parser::new();
@@ -104,11 +104,7 @@ mod ts {
         walk_bash_node(tree.root_node(), source, commands);
     }
 
-    fn walk_bash_node(
-        node: tree_sitter_lib::Node,
-        source: &[u8],
-        commands: &mut Vec<ShellCommand>,
-    ) {
+    fn walk_bash_node(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<ShellCommand>) {
         match node.kind() {
             "command" => {
                 if let Some(cmd) = extract_bash_command(node, source) {
@@ -134,7 +130,7 @@ mod ts {
     }
 
     /// Extract the full command string and name from a bash `command` node.
-    fn extract_bash_command(node: tree_sitter_lib::Node, source: &[u8]) -> Option<ShellCommand> {
+    fn extract_bash_command(node: tree_sitter::Node, source: &[u8]) -> Option<ShellCommand> {
         // A `command` node has children like:
         //   variable_assignment* command_name argument* redirect*
         // We want the command_name and all arguments (skipping assignments and redirects).
@@ -219,11 +215,7 @@ mod ts {
         walk_fish_node(tree.root_node(), source, commands);
     }
 
-    fn walk_fish_node(
-        node: tree_sitter_lib::Node,
-        source: &[u8],
-        commands: &mut Vec<ShellCommand>,
-    ) {
+    fn walk_fish_node(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<ShellCommand>) {
         match node.kind() {
             "command" => {
                 if let Some(cmd) = extract_fish_command(node, source) {
@@ -247,7 +239,7 @@ mod ts {
         }
     }
 
-    fn extract_fish_command(node: tree_sitter_lib::Node, source: &[u8]) -> Option<ShellCommand> {
+    fn extract_fish_command(node: tree_sitter::Node, source: &[u8]) -> Option<ShellCommand> {
         // In fish, a `command` node has:
         //   name (command_name or word) followed by arguments (word, string, etc.)
         let mut name = None;
@@ -749,508 +741,123 @@ mod tests {
 #[cfg(all(test, feature = "tree-sitter"))]
 mod adversarial {
     use super::*;
+    use rstest::rstest;
 
     fn cmd_names(cmds: &[ShellCommand]) -> Vec<&str> {
         cmds.iter().map(|c| c.name.as_str()).collect()
     }
 
-    /// Helper: assert that parsing POSIX extracts all expected command names
-    fn assert_posix(code: &str, expected: &[&str]) {
-        let result = parse_shell_command(code, ShellKind::Posix);
-        let mut got: Vec<&str> = result.subcommands.iter().map(|c| c.name.as_str()).collect();
-        got.sort();
-        let mut want: Vec<&str> = expected.to_vec();
-        want.sort();
-        assert_eq!(
-            got, want,
-            "POSIX parse of {:?}:\n  got:  {:?}\n  want: {:?}",
-            code, got, want
-        );
-    }
-
-    fn assert_fish(code: &str, expected: &[&str]) {
-        let result = parse_shell_command(code, ShellKind::Fish);
-        let mut got: Vec<&str> = result.subcommands.iter().map(|c| c.name.as_str()).collect();
-        got.sort();
-        let mut want: Vec<&str> = expected.to_vec();
-        want.sort();
-        assert_eq!(
-            got, want,
-            "Fish parse of {:?}:\n  got:  {:?}\n  want: {:?}",
-            code, got, want
-        );
-    }
-
-    // ────────────────────────────────────────────────────────────
+    #[rstest]
     // Level 1: Basic compounds
-    // ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn a01_triple_chain() {
-        assert_posix("a && b && c", &["a", "b", "c"]);
-    }
-
-    #[test]
-    fn a02_or_chain() {
-        assert_posix("a || b || c", &["a", "b", "c"]);
-    }
-
-    #[test]
-    fn a03_mixed_chain() {
-        assert_posix("a && b || c && d", &["a", "b", "c", "d"]);
-    }
-
-    #[test]
-    fn a04_long_pipeline() {
-        assert_posix(
-            "cat foo | grep bar | awk '{print $1}' | sort | uniq -c",
-            &["cat", "grep", "awk", "sort", "uniq"],
+    #[case::triple_chain(ShellKind::Posix, "a && b && c", &["a", "b", "c"])]
+    #[case::or_chain(ShellKind::Posix, "a || b || c", &["a", "b", "c"])]
+    #[case::mixed_chain(ShellKind::Posix, "a && b || c && d", &["a", "b", "c", "d"])]
+    #[case::long_pipeline(
+        ShellKind::Posix,
+        "cat foo | grep bar | awk '{print $1}' | sort | uniq -c",
+        &["cat", "grep", "awk", "sort", "uniq"]
+    )]
+    #[case::semicolons(ShellKind::Posix, "a; b; c; d", &["a", "b", "c", "d"])]
+    // Command substitution
+    #[case::nested_dollar(ShellKind::Posix, "echo $(basename $(dirname /foo/bar))", &["echo", "basename", "dirname"])]
+    #[case::deeply_nested(ShellKind::Posix, "echo $(echo $(echo $(echo deep)))", &["echo", "echo", "echo", "echo"])]
+    #[case::backtick_in_echo(ShellKind::Posix, "echo `hostname`", &["echo", "hostname"])]
+    #[case::mixed_substitutions(ShellKind::Posix, "echo $(date) `uname`", &["echo", "date", "uname"])]
+    // Subshells and groups
+    #[case::subshell_chain(ShellKind::Posix, "(cd /tmp && ls -la)", &["cd", "ls"])]
+    #[case::nested_subshells(ShellKind::Posix, "( (inner_cmd) )", &["inner_cmd"])]
+    #[case::brace_group(ShellKind::Posix, "{ cd /tmp; ls; }", &["cd", "ls"])]
+    // Variable assignments
+    #[case::var_assignment_no_command(ShellKind::Posix, "FOO=bar", &[])]
+    #[case::var_assignment_in_pipeline(ShellKind::Posix, "FOO=bar ls | BAZ=qux grep foo", &["ls", "grep"])]
+    // Control flow
+    #[case::if_then_else(ShellKind::Posix, "if [ -f foo ]; then cat foo; else echo missing; fi", &["cat", "echo"])]
+    #[case::elif_chain(ShellKind::Posix, "if [ -f a ]; then cat a; elif [ -f b ]; then cat b; else echo none; fi", &["cat", "cat", "echo"])]
+    #[case::for_loop(ShellKind::Posix, "for f in *.txt; do cat \"$f\"; done", &["cat"])]
+    #[case::while_loop(ShellKind::Posix, "while read line; do echo \"$line\"; done < input.txt", &["echo", "read"])]
+    #[case::case_statement(ShellKind::Posix, "case $x in foo) echo foo;; bar) echo bar;; esac", &["echo", "echo"])]
+    // Redirection
+    #[case::redirect_out(ShellKind::Posix, "ls > output.txt", &["ls"])]
+    #[case::redirect_append(ShellKind::Posix, "ls >> output.txt 2>&1", &["ls"])]
+    #[case::here_string(ShellKind::Posix, "grep foo <<< \"hello world\"", &["grep"])]
+    #[case::redirect_in_pipeline(ShellKind::Posix, "cat < input.txt | sort | uniq", &["cat", "sort", "uniq"])]
+    #[case::process_substitution(ShellKind::Posix, "diff <(sort a.txt) <(sort b.txt)", &["diff", "sort", "sort"])]
+    // Functions
+    #[case::function_def(ShellKind::Posix, "foo() { echo hello; }", &["echo"])]
+    #[case::function_with_subshell(ShellKind::Posix, "build() { cargo build && cargo test; }", &["cargo", "cargo"])]
+    // Edge cases
+    #[case::empty_string(ShellKind::Posix, "", &[])]
+    #[case::whitespace_only(ShellKind::Posix, "   \t  \n  ", &[])]
+    #[case::single_command_no_args(ShellKind::Posix, "ls", &["ls"])]
+    #[case::single_quotes(ShellKind::Posix, "echo 'hello world'", &["echo"])]
+    #[case::double_quotes(ShellKind::Posix, "echo \"hello world\"", &["echo"])]
+    #[case::escaped_spaces(ShellKind::Posix, "ls\\ -la", &["ls\\ -la"])]
+    #[case::dollar_var(ShellKind::Posix, "echo $HOME/.bashrc", &["echo"])]
+    #[case::background_job(ShellKind::Posix, "sleep 10 &", &["sleep"])]
+    #[case::background_chain(ShellKind::Posix, "sleep 10 && echo done &", &["sleep", "echo"])]
+    // Real-world
+    #[case::docker_build_and_run(ShellKind::Posix, "docker build -t app . && docker run --rm app npm test", &["docker", "docker"])]
+    #[case::git_rebase_interactive(ShellKind::Posix, "GIT_SEQUENCE_EDITOR=\"sed -i 's/pick/reword/'\" git rebase -i HEAD~5", &["git"])]
+    #[case::find_with_exec(ShellKind::Posix, "find . -name '*.rs' -exec grep -l 'unsafe' {} +", &["find"])]
+    #[case::curl_pipe_sh(ShellKind::Posix, "curl -sSL https://example.com/install.sh | bash", &["curl", "bash"])]
+    #[case::xargs(ShellKind::Posix, "find . -name '*.tmp' | xargs rm -f", &["find", "xargs"])]
+    #[case::npm_script_chain(ShellKind::Posix, "npm run build && npm run test && npm run lint", &["npm", "npm", "npm"])]
+    #[case::make_with_redirect(ShellKind::Posix, "make -j$(nproc) 2>&1 | tee build.log", &["make", "nproc", "tee"])]
+    #[case::sudo_chain(ShellKind::Posix, "sudo apt update && sudo apt upgrade -y", &["sudo", "sudo"])]
+    #[case::here_doc_with_subcommand(ShellKind::Posix, "cat <<EOF\nhello $(whoami)\nEOF", &["cat", "whoami"])]
+    #[case::eval_with_command(ShellKind::Posix, "eval \"echo hello\"", &["eval"])]
+    #[case::exec_replace(ShellKind::Posix, "exec ls", &["exec"])]
+    #[case::source_script(ShellKind::Posix, "source ~/.bashrc", &["source"])]
+    // Fish
+    #[case::fish_simple(ShellKind::Fish, "ls -la /tmp", &["ls"])]
+    #[case::fish_pipe(ShellKind::Fish, "cat foo | grep bar | sort", &["cat", "grep", "sort"])]
+    #[case::fish_and(ShellKind::Fish, "git add .; and git commit -m hi", &["git", "git"])]
+    #[case::fish_or(ShellKind::Fish, "test -f foo; or echo missing", &["test", "echo"])]
+    #[case::fish_not(ShellKind::Fish, "not test -f foo", &["test"])]
+    #[case::fish_command_substitution(ShellKind::Fish, "echo (date)", &["echo", "date"])]
+    #[case::fish_nested_substitution(ShellKind::Fish, "echo (basename (dirname /foo/bar))", &["echo", "basename", "dirname"])]
+    #[case::fish_begin_end(ShellKind::Fish, "begin; ls; echo done; end", &["ls", "echo"])]
+    #[case::fish_if_statement(ShellKind::Fish, "if test -f foo; cat foo; else; echo missing; end", &["cat", "echo", "test"])]
+    #[case::fish_while_loop(ShellKind::Fish, "while true; echo tick; sleep 1; end", &["echo", "sleep", "true"])]
+    #[case::fish_for_loop(ShellKind::Fish, "for f in *.txt; cat $f; end", &["cat"])]
+    #[case::fish_switch(ShellKind::Fish, "switch $x; case foo; echo foo; case bar; echo bar; end", &["echo", "echo"])]
+    #[case::fish_function_def(ShellKind::Fish, "function greet; echo hello $argv; end", &["echo"])]
+    #[case::fish_redirect(ShellKind::Fish, "ls > output.txt", &["ls"])]
+    #[case::fish_redirect_append(ShellKind::Fish, "ls >> output.txt", &["ls"])]
+    #[case::fish_here_string(ShellKind::Fish, "grep foo <<< \"hello\"", &["grep"])]
+    #[case::fish_curl_pipe(ShellKind::Fish, "curl -sSL https://example.com/install.sh | bash", &["curl", "bash"])]
+    #[case::fish_double_ampersand(ShellKind::Fish, "git add . && git commit -m hi", &["git", "git"])]
+    #[case::fish_double_pipe(ShellKind::Fish, "test -f foo || echo missing", &["test", "echo"])]
+    #[case::fish_empty(ShellKind::Fish, "", &[])]
+    #[case::fish_whitespace(ShellKind::Fish, "   ", &[])]
+    fn extracts_subcommand_names(
+        #[case] kind: ShellKind,
+        #[case] code: &str,
+        #[case] expected: &[&str],
+    ) {
+        let result = parse_shell_command(code, kind);
+        let mut got: Vec<&str> = result.subcommands.iter().map(|c| c.name.as_str()).collect();
+        got.sort();
+        let mut want: Vec<&str> = expected.to_vec();
+        want.sort();
+        assert_eq!(
+            got, want,
+            "{:?} parse of {:?}:\n  got:  {:?}\n  want: {:?}",
+            kind, code, got, want
         );
     }
 
-    #[test]
-    fn a05_semicolons() {
-        assert_posix("a; b; c; d", &["a", "b", "c", "d"]);
-    }
-
-    // ────────────────────────────────────────────────────────────
-    // Level 2: Nested substitution
-    // ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn a06_nested_dollar() {
-        assert_posix(
-            "echo $(basename $(dirname /foo/bar))",
-            &["echo", "basename", "dirname"],
-        );
-    }
-
-    #[test]
-    fn a07_deeply_nested() {
-        // 4 nested echos, all should be extracted
-        assert_posix(
-            "echo $(echo $(echo $(echo deep)))",
-            &["echo", "echo", "echo", "echo"],
-        );
-    }
-
-    #[test]
-    fn a08_backtick_in_echo() {
-        assert_posix("echo `hostname`", &["echo", "hostname"]);
-    }
-
-    #[test]
-    fn a09_mixed_substitutions() {
-        assert_posix("echo $(date) `uname`", &["echo", "date", "uname"]);
-    }
-
-    // ────────────────────────────────────────────────────────────
-    // Level 3: Subshells and grouping
-    // ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn a10_subshell_chain() {
-        assert_posix("(cd /tmp && ls -la)", &["cd", "ls"]);
-    }
-
-    #[test]
-    fn a11_nested_subshells() {
-        assert_posix("( (inner_cmd) )", &["inner_cmd"]);
-    }
-
-    #[test]
-    fn a12_brace_group() {
-        assert_posix("{ cd /tmp; ls; }", &["cd", "ls"]);
-    }
-
-    // ────────────────────────────────────────────────────────────
-    // Level 4: Variable assignments
-    // ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn a13_single_var_assignment() {
-        let result = parse_shell_command("FOO=bar ls", ShellKind::Posix);
-        assert_eq!(cmd_names(&result.subcommands), &["ls"]);
-        assert_eq!(result.subcommands[0].full, "ls");
-    }
-
-    #[test]
-    fn a14_multiple_var_assignments() {
-        let result = parse_shell_command("A=1 B=2 C=3 git status", ShellKind::Posix);
-        assert_eq!(cmd_names(&result.subcommands), &["git"]);
-        assert_eq!(result.subcommands[0].full, "git status");
-    }
-
-    #[test]
-    fn a15_var_assignment_no_command() {
-        // Variable assignment only — no command to extract
-        assert_posix("FOO=bar", &[]);
-    }
-
-    #[test]
-    fn a16_var_assignment_in_pipeline() {
-        assert_posix("FOO=bar ls | BAZ=qux grep foo", &["ls", "grep"]);
-    }
-
-    // ────────────────────────────────────────────────────────────
-    // Level 5: Control flow
-    // ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn a17_if_then_else() {
-        assert_posix(
-            "if [ -f foo ]; then cat foo; else echo missing; fi",
-            &["cat", "echo"],
-        );
-    }
-
-    #[test]
-    fn a18_elif_chain() {
-        // Two cat commands (then + elif branch), one echo (else branch).
-        // [ is part of the test_condition, not extracted as a command.
-        assert_posix(
-            "if [ -f a ]; then cat a; elif [ -f b ]; then cat b; else echo none; fi",
-            &["cat", "cat", "echo"],
-        );
-    }
-
-    #[test]
-    fn a19_for_loop() {
-        assert_posix("for f in *.txt; do cat \"$f\"; done", &["cat"]);
-    }
-
-    #[test]
-    fn a20_while_loop() {
-        // read in the condition is a real command
-        assert_posix(
-            "while read line; do echo \"$line\"; done < input.txt",
-            &["echo", "read"],
-        );
-    }
-
-    #[test]
-    fn f07_if_statement() {
-        // test in if-condition is a real command
-        assert_fish(
-            "if test -f foo; cat foo; else; echo missing; end",
-            &["cat", "echo", "test"],
-        );
-    }
-
-    #[test]
-    fn f09_while_loop() {
-        // `true` in the condition is a real command
-        assert_fish(
-            "while true; echo tick; sleep 1; end",
-            &["echo", "sleep", "true"],
-        );
-    }
-
-    // ────────────────────────────────────────────────────────────
-    // Level 6: Redirections
-    // ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn a23_redirect_out() {
-        assert_posix("ls > output.txt", &["ls"]);
-    }
-
-    #[test]
-    fn a24_redirect_append() {
-        assert_posix("ls >> output.txt 2>&1", &["ls"]);
-    }
-
-    #[test]
-    fn a25_here_string() {
-        assert_posix("grep foo <<< \"hello world\"", &["grep"]);
-    }
-
-    #[test]
-    fn a26_redirect_in_pipeline() {
-        assert_posix("cat < input.txt | sort | uniq", &["cat", "sort", "uniq"]);
-    }
-
-    #[test]
-    fn a27_process_substitution() {
-        assert_posix(
-            "diff <(sort a.txt) <(sort b.txt)",
-            &["diff", "sort", "sort"],
-        );
-    }
-
-    // ────────────────────────────────────────────────────────────
-    // Level 7: Function definitions
-    // ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn a28_function_def() {
-        assert_posix("foo() { echo hello; }", &["echo"]);
-    }
-
-    #[test]
-    fn a29_function_with_subshell() {
-        assert_posix(
-            "build() { cargo build && cargo test; }",
-            &["cargo", "cargo"],
-        );
-    }
-
-    // ────────────────────────────────────────────────────────────
-    // Level 8: Edge cases — empties, weird quoting
-    // ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn a30_empty_string() {
-        let result = parse_shell_command("", ShellKind::Posix);
-        assert!(result.subcommands.is_empty());
-    }
-
-    #[test]
-    fn a31_whitespace_only() {
-        let result = parse_shell_command("   \t  \n  ", ShellKind::Posix);
-        assert!(result.subcommands.is_empty());
-    }
-
-    #[test]
-    fn a32_single_command_no_args() {
-        assert_posix("ls", &["ls"]);
-    }
-
-    #[test]
-    fn a33_command_with_single_quotes() {
-        assert_posix("echo 'hello world'", &["echo"]);
-    }
-
-    #[test]
-    fn a34_command_with_double_quotes() {
-        assert_posix("echo \"hello world\"", &["echo"]);
-    }
-
-    #[test]
-    fn a35_escaped_spaces() {
-        // ls\ -la is a single word in bash, not "ls" with flag "-la"
-        assert_posix("ls\\ -la", &["ls\\ -la"]);
-    }
-
-    #[test]
-    fn a36_command_with_dollar_var() {
-        assert_posix("echo $HOME/.bashrc", &["echo"]);
-    }
-
-    // ────────────────────────────────────────────────────────────
-    // Level 9: Background jobs and coproc
-    // ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn a37_background_job() {
-        assert_posix("sleep 10 &", &["sleep"]);
-    }
-
-    #[test]
-    fn a38_background_chain() {
-        assert_posix("sleep 10 && echo done &", &["sleep", "echo"]);
-    }
-
-    // ────────────────────────────────────────────────────────────
-    // Level 10: Real-world complex commands
-    // ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn a39_docker_build_and_run() {
-        assert_posix(
-            "docker build -t app . && docker run --rm app npm test",
-            &["docker", "docker"],
-        );
-    }
-
-    #[test]
-    fn a40_git_rebase_interactive() {
-        assert_posix(
-            "GIT_SEQUENCE_EDITOR=\"sed -i 's/pick/reword/'\" git rebase -i HEAD~5",
-            &["git"],
-        );
-    }
-
-    #[test]
-    fn a41_find_with_exec() {
-        // tree-sitter-bash does not parse -exec body as commands — only `find` is extracted.
-        // This is a known limitation: args to -exec/-execdir are opaque to the parser.
-        assert_posix("find . -name '*.rs' -exec grep -l 'unsafe' {} +", &["find"]);
-    }
-
-    #[test]
-    fn a42_curl_pipe_sh() {
-        assert_posix(
-            "curl -sSL https://example.com/install.sh | bash",
-            &["curl", "bash"],
-        );
-    }
-
-    #[test]
-    fn a43_xargs() {
-        assert_posix("find . -name '*.tmp' | xargs rm -f", &["find", "xargs"]);
-    }
-
-    #[test]
-    fn a44_npm_script_chain() {
-        assert_posix(
-            "npm run build && npm run test && npm run lint",
-            &["npm", "npm", "npm"],
-        );
-    }
-
-    #[test]
-    fn a45_make_with_redirect() {
-        assert_posix(
-            "make -j$(nproc) 2>&1 | tee build.log",
-            &["make", "nproc", "tee"],
-        );
-    }
-
-    #[test]
-    fn a46_sudo_chain() {
-        assert_posix("sudo apt update && sudo apt upgrade -y", &["sudo", "sudo"]);
-    }
-
-    #[test]
-    fn a47_here_doc_with_subcommand() {
-        assert_posix("cat <<EOF\nhello $(whoami)\nEOF", &["cat", "whoami"]);
-    }
-
-    #[test]
-    fn a48_eval_with_command() {
-        assert_posix("eval \"echo hello\"", &["eval"]);
-    }
-
-    #[test]
-    fn a49_exec_replace() {
-        assert_posix("exec ls", &["exec"]);
-    }
-
-    #[test]
-    fn a50_source_script() {
-        assert_posix("source ~/.bashrc", &["source"]);
-    }
-
-    // ────────────────────────────────────────────────────────────
-    // Level 11: Fish-specific tests
-    // ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn f01_simple() {
-        assert_fish("ls -la /tmp", &["ls"]);
-    }
-
-    #[test]
-    fn f02_pipe() {
-        assert_fish("cat foo | grep bar | sort", &["cat", "grep", "sort"]);
-    }
-
-    #[test]
-    fn f03_and() {
-        assert_fish("git add .; and git commit -m hi", &["git", "git"]);
-    }
-
-    #[test]
-    fn f04_or() {
-        assert_fish("test -f foo; or echo missing", &["test", "echo"]);
-    }
-
-    #[test]
-    fn f04_not() {
-        // fish parses `not test -f foo` — `not` is a modifier, `test` is the command
-        assert_fish("not test -f foo", &["test"]);
-    }
-
-    #[test]
-    fn f05_command_substitution() {
-        assert_fish("echo (date)", &["echo", "date"]);
-    }
-
-    #[test]
-    fn f06_nested_substitution() {
-        assert_fish(
-            "echo (basename (dirname /foo/bar))",
-            &["echo", "basename", "dirname"],
-        );
-    }
-
-    #[test]
-    fn f06_begin_end() {
-        assert_fish("begin; ls; echo done; end", &["ls", "echo"]);
-    }
-
-    #[test]
-    fn f10_switch() {
-        // Two echo commands, one per case branch
-        assert_fish(
-            "switch $x; case foo; echo foo; case bar; echo bar; end",
-            &["echo", "echo"],
-        );
-    }
-
-    #[test]
-    fn f08_for_loop() {
-        assert_fish("for f in *.txt; cat $f; end", &["cat"]);
-    }
-
-    #[test]
-    fn a21_case_statement() {
-        // Two echo branches
-        assert_posix(
-            "case $x in foo) echo foo;; bar) echo bar;; esac",
-            &["echo", "echo"],
-        );
-    }
-
-    #[test]
-    fn f11_function_def() {
-        assert_fish("function greet; echo hello $argv; end", &["echo"]);
-    }
-
-    #[test]
-    fn f12_redirect() {
-        assert_fish("ls > output.txt", &["ls"]);
-    }
-
-    #[test]
-    fn f13_redirect_append() {
-        assert_fish("ls >> output.txt", &["ls"]);
-    }
-
-    #[test]
-    fn f14_here_string() {
-        assert_fish("grep foo <<< \"hello\"", &["grep"]);
-    }
-
-    #[test]
-    fn f15_curl_pipe() {
-        assert_fish(
-            "curl -sSL https://example.com/install.sh | bash",
-            &["curl", "bash"],
-        );
-    }
-
-    #[test]
-    fn f16_double_ampersand() {
-        assert_fish("git add . && git commit -m hi", &["git", "git"]);
-    }
-
-    #[test]
-    fn f17_double_pipe() {
-        assert_fish("test -f foo || echo missing", &["test", "echo"]);
-    }
-
-    #[test]
-    fn f18_empty() {
-        let result = parse_shell_command("", ShellKind::Fish);
-        assert!(result.subcommands.is_empty());
-    }
-
-    #[test]
-    fn f19_whitespace() {
-        let result = parse_shell_command("   ", ShellKind::Fish);
-        assert!(result.subcommands.is_empty());
+    #[rstest]
+    #[case::single_var_assignment("FOO=bar ls", "ls", "ls")]
+    #[case::multiple_var_assignments("A=1 B=2 C=3 git status", "git", "git status")]
+    fn strips_var_assignments_keeping_full_command(
+        #[case] code: &str,
+        #[case] expected_name: &str,
+        #[case] expected_full: &str,
+    ) {
+        let result = parse_shell_command(code, ShellKind::Posix);
+        assert_eq!(cmd_names(&result.subcommands), &[expected_name]);
+        assert_eq!(result.subcommands[0].full, expected_full);
     }
 
     // ────────────────────────────────────────────────────────────

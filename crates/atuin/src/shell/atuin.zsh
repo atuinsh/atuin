@@ -70,7 +70,7 @@ __atuin_osc133_wrap_prompt() {
 
 _atuin_preexec() {
     local id
-    id=$(atuin history start -- "$1" 2>/dev/null)
+    id=$(ATUIN_SHELL=zsh atuin history start --hook -- "$1" 2>/dev/null)
     export ATUIN_HISTORY_ID="$id"
     __atuin_osc133_command_executed
     __atuin_preexec_time=${EPOCHREALTIME-}
@@ -89,8 +89,29 @@ _atuin_precmd() {
     fi
 
     __atuin_osc133_command_finished "$EXIT"
-    (ATUIN_LOG=error atuin history end --exit $EXIT ${duration:+--duration=$duration} -- $ATUIN_HISTORY_ID &) >/dev/null 2>&1
+    (atuin history end --hook --exit $EXIT ${duration:+--duration=$duration} -- $ATUIN_HISTORY_ID >/dev/null 2>&1 &)
     export ATUIN_HISTORY_ID=""
+}
+
+# Allow comment lines at the interactive prompt, matching the default
+# behavior of bash and fish (oh-my-zsh also enables this).
+setopt interactive_comments
+
+# With interactive_comments, a line starting with '#' is added to history
+# without executing anything, so preexec never fires for it. Record such
+# lines from the history hook instead.
+_atuin_zshaddhistory() {
+    # Guard in case the user unset the option after atuin init: the line then
+    # executes as a normal command and is recorded by preexec/precmd.
+    [[ -o interactive_comments ]] || return 0
+    local line=${1%$'\n'}
+    # Skip multi-line buffers: anything after the comment executes, so the
+    # whole buffer is recorded by preexec/precmd.
+    [[ $line == \#* && $line != *$'\n'* ]] || return 0
+    local id
+    id=$(ATUIN_SHELL=zsh atuin history start --hook -- "$line" 2>/dev/null)
+    [[ -n $id ]] && (atuin history end --hook --exit 0 --duration=0 -- "$id" >/dev/null 2>&1 &)
+    return 0
 }
 
 # Check if tmux popup is available (tmux >= 3.2)
@@ -141,7 +162,7 @@ __atuin_search_cmd() {
         popup_width="${ATUIN_TMUX_POPUP_WIDTH:-80%}" # Keep default value anyways
         popup_height="${ATUIN_TMUX_POPUP_HEIGHT:-60%}"
         tmux display-popup -d "$cdir" -w "$popup_width" -h "$popup_height" -E -E -- \
-            sh -c "PATH='$PATH' ATUIN_SESSION='$ATUIN_SESSION' ATUIN_SHELL=zsh ATUIN_LOG=error ATUIN_QUERY='$escaped_query' atuin search $escaped_args -i 2>'$result_file'"
+            sh -c "PATH='$PATH' ATUIN_SESSION='$ATUIN_SESSION' ATUIN_SHELL=zsh ATUIN_QUERY='$escaped_query' atuin search $escaped_args -i 2>'$result_file'"
 
         if [[ -f "$result_file" ]]; then
             cat "$result_file"
@@ -150,7 +171,7 @@ __atuin_search_cmd() {
         __atuin_tmux_popup_cleanup
         trap - EXIT HUP INT TERM
     else
-        ATUIN_SHELL=zsh ATUIN_LOG=error ATUIN_QUERY=$BUFFER atuin search "${search_args[@]}" -i 3>&1 1>&2 2>&3 3>&-
+        ATUIN_SHELL=zsh ATUIN_QUERY=$BUFFER atuin search "${search_args[@]}" -i 3>&1 1>&2 2>&3 3>&-
     fi
 }
 
@@ -210,6 +231,7 @@ _atuin_up_search_viins() {
 
 add-zsh-hook preexec _atuin_preexec
 add-zsh-hook precmd _atuin_precmd
+add-zsh-hook zshaddhistory _atuin_zshaddhistory
 
 zle -N atuin-search _atuin_search
 zle -N atuin-search-vicmd _atuin_search_vicmd

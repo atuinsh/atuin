@@ -6,7 +6,7 @@ use std::{
 #[cfg(unix)]
 use std::io::Read as _;
 
-use atuin_common::{shell::Shell, utils::Escapable as _};
+use atuin_common::{shell::Shell, string::EscapeNonPrintablePosixExt as _};
 use eyre::Result;
 use futures_util::FutureExt;
 use semver::Version;
@@ -276,11 +276,14 @@ impl State {
     }
 
     /// Whether the current mode supports character insertion on unmatched keys.
+    /// The inspector tab has no text input, so unmatched keys are dropped there
+    /// rather than leaking into the (hidden) search input.
     fn is_insert_mode(&self) -> bool {
-        matches!(
-            self.keymap_mode,
-            KeymapMode::Emacs | KeymapMode::Auto | KeymapMode::VimInsert
-        )
+        self.tab_index == 0
+            && matches!(
+                self.keymap_mode,
+                KeymapMode::Emacs | KeymapMode::Auto | KeymapMode::VimInsert
+            )
     }
 
     fn handle_key_input(&mut self, settings: &Settings, input: &KeyEvent) -> InputAction {
@@ -745,7 +748,7 @@ impl State {
             && tab_index == 0
             && !results.is_empty()
         {
-            let length_current_cmd = results[selected].command.len() as u16;
+            let length_current_cmd = results[selected].command.width() as u16;
             // calculate the number of newlines in the command
             let num_newlines = results[selected]
                 .command
@@ -974,6 +977,7 @@ impl State {
                     theme,
                     history_highlighter,
                     settings.show_numeric_shortcuts,
+                    settings.ui.syntax_highlight,
                     &settings.ui.columns,
                 );
                 f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
@@ -1161,6 +1165,7 @@ impl State {
         theme: &'a Theme,
         history_highlighter: HistoryHighlighter<'a>,
         show_numeric_shortcuts: bool,
+        syntax_highlight: bool,
         columns: &'a [UiColumn],
     ) -> HistoryList<'a> {
         let results_list = HistoryList::new(
@@ -1172,6 +1177,7 @@ impl State {
             theme,
             history_highlighter,
             show_numeric_shortcuts,
+            syntax_highlight,
             columns,
         );
 
@@ -1197,7 +1203,9 @@ impl State {
     }
 
     fn build_input(&self, style: StyleState, prefix_width: u16) -> Paragraph<'_> {
-        let (pref, mode) = if self.switched_search_mode {
+        let (pref, mode) = if self.prefix {
+            ("", "PREFIX")
+        } else if self.switched_search_mode {
             (" SRCH:", self.search_mode.as_str())
         } else if self.search.custom_context.is_some() {
             (" CTX:", self.search.filter_mode.as_str())
@@ -1246,7 +1254,7 @@ impl State {
             let s = &results[selected].command;
             let mut lines = Vec::new();
             for line in s.split('\n') {
-                let line = line.escape_control();
+                let line = line.escape_non_printable();
                 let mut width = 0;
                 let mut start = 0;
                 for (idx, ch) in line.char_indices() {
@@ -1853,7 +1861,7 @@ pub async fn history(
                                 let entry = results.remove(index);
 
                                 let ids = history_store.delete_entries([entry]).await?;
-                                history_store.incremental_build(&db, &ids).await?;
+                                history_store.build_all(&db, &ids).await?;
 
                                 app.tab_index  = 0;
                             },
@@ -1876,7 +1884,7 @@ pub async fn history(
                                 ).await?;
 
                                 let ids = history_store.delete_entries(all_matching).await?;
-                                history_store.incremental_build(&db, &ids).await?;
+                                history_store.build_all(&db, &ids).await?;
 
                                 app.results_len = results.len();
                                 app.results_state = ListState::default();
@@ -2036,7 +2044,9 @@ pub async fn history(
         InputAction::ReturnOriginal => Ok(String::new()),
         InputAction::Copy(index) => {
             let cmd = results.swap_remove(index).command;
-            set_clipboard(cmd);
+            if let Err(e) = set_clipboard(cmd) {
+                tracing::warn!(?e, "failed to copy to clipboard");
+            }
             Ok(String::new())
         }
         InputAction::ReturnQuery | InputAction::Accept(_) => {
@@ -2061,18 +2071,21 @@ pub async fn history(
     feature = "clipboard",
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 ))]
-fn set_clipboard(s: String) {
-    let mut ctx = arboard::Clipboard::new().unwrap();
-    ctx.set_text(s).unwrap();
+fn set_clipboard(s: String) -> Result<(), arboard::Error> {
+    let mut ctx = arboard::Clipboard::new()?;
+    ctx.set_text(s)?;
     // Use the clipboard context to make sure it is saved
-    ctx.get_text().unwrap();
+    ctx.get_text()?;
+    Ok(())
 }
 
 #[cfg(not(all(
     feature = "clipboard",
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 )))]
-fn set_clipboard(_s: String) {}
+fn set_clipboard(_s: String) -> Result<(), std::convert::Infallible> {
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
@@ -2286,6 +2299,7 @@ mod tests {
         state.scroll_down(1);
     }
 
+    #[allow(clippy::too_many_lines)]
     #[test]
     fn test_accept_keybindings() {
         use atuin_client::settings::Keys;
@@ -2626,15 +2640,19 @@ mod tests {
         // Ctrl+d should return Continue and clear pending key
         // (scroll amount depends on max_entries which is 0 in tests)
         state.pending_vim_key = Some('g');
-        let ctrl_d_event = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
-        let result = state.handle_key_input(&settings, &ctrl_d_event);
+        let result = state.handle_key_input(
+            &settings,
+            &KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
         assert!(matches!(result, super::InputAction::Continue));
         assert_eq!(state.pending_vim_key, None);
 
         // Ctrl+u should return Continue and clear pending key
         state.pending_vim_key = Some('g');
-        let ctrl_u_event = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
-        let result = state.handle_key_input(&settings, &ctrl_u_event);
+        let result = state.handle_key_input(
+            &settings,
+            &KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
         assert!(matches!(result, super::InputAction::Continue));
         assert_eq!(state.pending_vim_key, None);
     }
@@ -2686,15 +2704,19 @@ mod tests {
         // Ctrl+f should return Continue and clear pending key
         // (scroll amount depends on max_entries which is 0 in tests)
         state.pending_vim_key = Some('g');
-        let ctrl_f_event = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
-        let result = state.handle_key_input(&settings, &ctrl_f_event);
+        let result = state.handle_key_input(
+            &settings,
+            &KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+        );
         assert!(matches!(result, super::InputAction::Continue));
         assert_eq!(state.pending_vim_key, None);
 
         // Ctrl+b should return Continue and clear pending key
         state.pending_vim_key = Some('g');
-        let ctrl_b_event = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL);
-        let result = state.handle_key_input(&settings, &ctrl_b_event);
+        let result = state.handle_key_input(
+            &settings,
+            &KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+        );
         assert!(matches!(result, super::InputAction::Continue));
         assert_eq!(state.pending_vim_key, None);
     }
@@ -2707,7 +2729,7 @@ mod tests {
     fn make_executor_state(results_len: usize, selected: usize) -> State {
         let settings = Settings::utc();
         let mut state = State {
-            history_count: results_len as i64,
+            history_count: i64::try_from(results_len).unwrap(),
             update_needed: None,
             results_state: ListState::default(),
             switched_search_mode: false,
@@ -2897,6 +2919,65 @@ mod tests {
         assert!(!state.prefix);
         state.execute_action(&Action::EnterPrefixMode, &settings);
         assert!(state.prefix);
+    }
+
+    #[test]
+    fn prefix_chord_ctrl_a_c_switches_context() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut state = make_executor_state(100, 7);
+        let settings = Settings::utc();
+
+        let ctrl_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        let result = state.handle_key_input(&settings, &ctrl_a);
+        assert!(matches!(result, super::InputAction::Continue));
+        assert!(state.prefix, "ctrl-a should enter prefix mode");
+
+        let c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
+        let result = state.handle_key_input(&settings, &c);
+        assert!(
+            matches!(result, super::InputAction::SwitchContext(Some(7))),
+            "prefix + c should switch context"
+        );
+        assert_eq!(state.search.input.as_str(), "", "c should not be inserted");
+    }
+
+    #[test]
+    fn inspector_prefix_chord_switches_context() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut state = make_executor_state(100, 7);
+        state.tab_index = 1;
+        let settings = Settings::utc();
+
+        let ctrl_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        state.handle_key_input(&settings, &ctrl_a);
+        assert!(state.prefix, "ctrl-a should enter prefix mode in inspector");
+
+        let c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
+        let result = state.handle_key_input(&settings, &c);
+        assert!(
+            matches!(result, super::InputAction::SwitchContext(Some(7))),
+            "prefix + c should switch context in inspector"
+        );
+    }
+
+    #[test]
+    fn inspector_unmatched_key_does_not_edit_search_input() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut state = make_executor_state(100, 7);
+        state.tab_index = 1;
+        let settings = Settings::utc();
+
+        let x = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        let result = state.handle_key_input(&settings, &x);
+        assert!(matches!(result, super::InputAction::Continue));
+        assert_eq!(
+            state.search.input.as_str(),
+            "",
+            "unmatched keys in the inspector must not leak into the search input"
+        );
     }
 
     #[test]

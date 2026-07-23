@@ -55,7 +55,7 @@ impl KvRecord {
                 let (value, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
 
                 if !bytes.is_empty() {
-                    bail!("trailing bytes in encoded kvrecord. malformed")
+                    bail!("trailing bytes in encoded kvrecord. malformed");
                 }
 
                 Ok(KvRecord {
@@ -86,7 +86,7 @@ impl KvRecord {
                 };
 
                 if !bytes.is_empty() {
-                    bail!("trailing bytes in encoded kvrecord. malformed")
+                    bail!("trailing bytes in encoded kvrecord. malformed");
                 }
 
                 Ok(KvRecord {
@@ -96,7 +96,7 @@ impl KvRecord {
                 })
             }
             _ => {
-                bail!("unknown version {version:?}")
+                bail!("unknown version {version:?}");
             }
         }
     }

@@ -10,6 +10,7 @@ message StartHistoryRequest {
   string hostname = 5;
   string author = 6;
   string intent = 7;
+  string shell = 8;
 }
 
 message EndHistoryRequest {
@@ -75,6 +76,7 @@ message HistoryEntry {
   string intent = 8;
   int64 exit = 9;
   int64 duration = 10;
+  string shell = 11;
 }
 
 message TailHistoryReply {

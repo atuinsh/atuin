@@ -189,12 +189,22 @@ enter_accept = true
 # network_connect_timeout = 5
 # network_timeout = 30
 
+## Extra HTTP headers to send on every request to the sync server. Useful when
+## a self-hosted server sits behind a proxy that requires its own auth header,
+## e.g. Cloudflare Access. Headers that Atuin sets itself (e.g. Authorization)
+## cannot be overridden. When set, cross-origin redirects are refused so these
+## headers are never sent to a different origin.
+# extra_headers = { "CF-Access-Client-Id" = "...", "CF-Access-Client-Secret" = "..." }
+
 ## Timeout (in seconds) for acquiring a local database connection (sqlite)
 # local_timeout = 5
 
 ## Set this to true and Atuin will minimize motion in the UI - timers will not update live, etc.
 ## Alternatively, set env NO_MOTION=true
 # prefers_reduced_motion = false
+
+## Defaults to true. Configures whether to store commands that failed (those with non-zero exit status) or not.
+# store_failed = true
 
 [stats]
 ## Set commands where we should consider the subcommand for statistics. Eg, kubectl get vs just kubectl
@@ -247,12 +257,6 @@ enter_accept = true
 
 # Defaults to false. The backspace key performs the same functionality as Tab and copies the selected line to the command line to be modified when at the start of the line.
 # accept_with_backspace = false
-
-[sync]
-# Enable sync v2 by default
-# This ensures that sync v2 is enabled for new installs only
-# In a later release it will become the default across the board
-records = true
 
 [preview]
 ## which preview strategy to use to calculate the preview height (respects max_preview_height).
@@ -368,3 +372,7 @@ records = true
 ##
 ## Make directory expand instead of command:
 # columns = ["duration", "time", { type = "directory", expand = true }, { type = "command", expand = false }]
+
+## Syntax highlight commands in the search results, using the theme's colors.
+## Not available on all platforms (e.g. Windows).
+# syntax_highlight = true

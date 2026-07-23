@@ -10,7 +10,7 @@ Atuin ships with only a couple of built-in alternative themes, but more can be a
 
 The following is required in your config file (`~/.config/atuin/config.toml`)
 
-```
+```toml
 [theme]
 name = "THEMENAME"
 ```
@@ -27,7 +27,7 @@ will need to download themes or make your own.
 
 If you are writing your own themes, you can add the following line to get additional output:
 
-```
+```toml
 debug = true
 ```
 
@@ -36,8 +36,8 @@ the requested theme.
 
 A final optional setting is available:
 
-```
-max_depth: 10
+```toml
+max_depth = 10
 ```
 
 which sets the maximum levels of theme parents to traverse. This should not need to be
@@ -61,6 +61,12 @@ to (at present) colors. In future, this may be expanded to allow richer style su
 * `Important`: drawing the user's attention to information
 * `Title`: titling a section or view
 * `Muted`: anodyne, usually grey, foreground for contrast with other colors. Normally equivalent to the base color, but allows themes to change the base color, with less risk of breaking intentional color contrasts (e.g. stacked bar charts)
+* `SyntaxCommand`: the command word when syntax highlighting shell commands (`git` in `git status`)
+* `SyntaxFlag`: a `-f`/`--flag` argument
+* `SyntaxString`: a quoted string
+* `SyntaxVariable`: `$VAR`, `${VAR}` or a `FOO=bar` assignment
+* `SyntaxOperator`: operators such as `|`, `&&`, `;`, `>`
+* `SyntaxComment`: a `# comment`
 
 These may expand over time as they are added to Atuin's codebase, but Atuin
 should have fallbacks added for any new *Meanings* so that, whether themes limit to
@@ -124,13 +130,13 @@ then the color will be chosen from the parent theme, if one is defined, or if th
 key is missing in the `theme` block, from the `default` theme.
 
 If the entire named theme is missing, which is inherently an error, then the theme
-will drop to `(none)` and leave Atuin unstyled, rather than trying to fallback to
-the any default, or other, theme.
+will drop to `(none)` and leave Atuin unstyled, rather than trying to fall back to
+the default or any other theme.
 
 This theme file should be moved to `~/.config/atuin/themes/my-theme.toml` and the
 following added to `~/.config/atuin/config.toml`:
 
-```
+```toml
 [theme]
 name = "my-theme"
 ```

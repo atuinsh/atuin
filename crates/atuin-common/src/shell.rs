@@ -58,11 +58,7 @@ impl Shell {
     }
 
     pub fn config_file(&self) -> Option<std::path::PathBuf> {
-        let mut path = if let Some(base) = directories::BaseDirs::new() {
-            base.home_dir().to_owned()
-        } else {
-            return None;
-        };
+        let mut path = directories::BaseDirs::new()?.home_dir().to_owned();
 
         // TODO: handle all shells
         match self {

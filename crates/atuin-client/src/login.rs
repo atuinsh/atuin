@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use atuin_common::api::LoginRequest;
 use eyre::{Context, Result, bail};
 use tokio::fs::File;
@@ -27,26 +25,25 @@ pub async fn login(
                 // assume they copied in the base64 key
                 bip39::ErrorKind::InvalidWord(_) => key,
                 bip39::ErrorKind::InvalidChecksum => {
-                    bail!("key mnemonic was not valid")
+                    bail!("key mnemonic was not valid");
                 }
                 bip39::ErrorKind::InvalidKeysize(_)
                 | bip39::ErrorKind::InvalidWordLength(_)
                 | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
-                    bail!("key was not the correct length")
+                    bail!("key was not the correct length");
                 }
             }
         }
     };
 
-    let key_path = settings.key_path.as_str();
-    let key_path = PathBuf::from(key_path);
+    let key_path = &settings.key_path;
 
     if !key_path.exists() {
         if decode_key(key.clone()).is_err() {
             bail!("the specified key was invalid");
         }
 
-        let mut file = File::create(&key_path).await?;
+        let mut file = File::create(key_path).await?;
         file.write_all(key.as_bytes()).await?;
     } else {
         // we now know that the user has logged in specifying a key, AND that the key path
@@ -67,14 +64,15 @@ pub async fn login(
             store.re_encrypt(&current_key, &new_key).await?;
 
             println!("Writing new key");
-            let mut file = File::create(&key_path).await?;
+            let mut file = File::create(key_path).await?;
             file.write_all(encoded.as_bytes()).await?;
         }
     }
 
     let session = api_client::login(
-        settings.sync_address.as_str(),
+        &settings.sync_address,
         LoginRequest { username, password },
+        &settings.extra_headers,
     )
     .await?;
 

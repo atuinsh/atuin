@@ -116,6 +116,7 @@ mod tests {
             author: String::new(),
             intent: None,
             deleted_at: None,
+            shell: Some("zsh".into()),
         }
     }
 

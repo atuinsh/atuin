@@ -56,7 +56,7 @@ If you don't wish to use the installer, the manual installation steps are as fol
     toolchain, then you can run:
 
     ```shell
-    cargo install atuin
+    cargo install atuin --locked
     ```
 
 === "Homebrew"
@@ -148,8 +148,8 @@ If you don't wish to use the installer, the manual installation steps are as fol
 
     ```shell
     git clone https://github.com/atuinsh/atuin.git
-    cd atuin/crates/atuin
-    cargo install --path .
+    cd atuin
+    cargo install --path crates/atuin --locked
     ```
 
 !!! warning "Please be advised"
@@ -204,14 +204,15 @@ After installing, remember to restart your shell.
 
     === "bash-preexec"
 
-        [Bash-preexec](https://github.com/rcaloras/bash-preexec) can also be used, but you may experience
+        [bash-preexec](https://github.com/rcaloras/bash-preexec) can also be used, but you may experience
          some minor problems with the recorded duration and exit status of some commands.
 
         !!! warning "Please note"
 
-            bash-preexec currently has an issue where it will stop honoring `ignorespace`.
-            While Atuin will ignore commands prefixed with whitespace, they may still end up in your bash history.
-            Please check your configuration! All other shells do not have this issue.
+            bash-preexec currently has [an issue][bp-ignorespace] where it will stop
+            honoring `ignorespace`. While Atuin will ignore commands prefixed with
+            whitespace, they may still end up in your bash history. Please check your
+            configuration! All other shells do not have this issue.
 
             To use `atuin < 18.10.0` in `bash < 4` with bash-preexec, the option
             `enter_accept` needs to be turned on (which is so by default).  There is no
@@ -222,14 +223,22 @@ After installing, remember to restart your shell.
             i in; do ...; done`, etc., so those commands and duration may not be recorded
             in the Atuin's history correctly.
 
-        To use bash-preexec, download and initialize it
+        As of Atuin 18.18.0, `atuin init bash` will automatically load bash-preexec if no other
+        preexec backend has been loaded (ble.sh or an external copy of bash-preexec). To disable
+        this behavior, pass `ATUIN_NO_BUILTIN_PREEXEC=1` to `atuin init`, e.g.:
+
+        ```shell
+        eval "$(ATUIN_NO_BUILTIN_PREEXEC=1 atuin init bash)"
+        ```
+
+        If you prefer, you can also download and install bash-preexec separately:
 
         ```shell
         curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
         echo '[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh' >> ~/.bashrc
         ```
 
-        Then set up Atuin
+        Then set up Atuin:
 
         ```shell
         echo 'eval "$(atuin init bash)"' >> ~/.bashrc
@@ -306,3 +315,5 @@ If you used a package manager to install Atuin, then you should also use your pa
 ## Uninstall
 
 If you'd like to uninstall Atuin, please check out [the uninstall page](../uninstall.md).
+
+[bp-ignorespace]: https://github.com/rcaloras/bash-preexec/issues/115

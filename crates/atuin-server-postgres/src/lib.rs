@@ -1,20 +1,16 @@
 use std::collections::HashMap;
-use std::ops::Range;
 
 use rand::Rng;
 
 use async_trait::async_trait;
 use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
-use atuin_server_database::models::{History, NewHistory, NewSession, NewUser, Session, User};
-use atuin_server_database::{Database, DbError, DbResult, DbSettings, into_utc};
-use futures_util::TryStreamExt;
-use sqlx::Row;
+use atuin_server_database::models::{NewSession, NewUser, Session, User};
+use atuin_server_database::{Database, DbError, DbResult, DbSettings};
 use sqlx::postgres::PgPoolOptions;
 
-use time::OffsetDateTime;
 use tracing::instrument;
 use uuid::Uuid;
-use wrappers::{DbHistory, DbRecord, DbSession, DbUser};
+use wrappers::{DbRecord, DbSession, DbUser};
 
 mod wrappers;
 
@@ -132,36 +128,6 @@ impl Database for Postgres {
         .map(|DbUser(user)| user)
     }
 
-    #[instrument(skip_all)]
-    async fn count_history(&self, user: &User) -> DbResult<i64> {
-        // The cache is new, and the user might not yet have a cache value.
-        // They will have one as soon as they post up some new history, but handle that
-        // edge case.
-
-        let res: (i64,) = sqlx::query_as(
-            "select count(1) from history
-            where user_id = $1",
-        )
-        .bind(user.id)
-        .fetch_one(self.read_pool())
-        .await?;
-
-        Ok(res.0)
-    }
-
-    #[instrument(skip_all)]
-    async fn count_history_cached(&self, user: &User) -> DbResult<i64> {
-        let res: (i32,) = sqlx::query_as(
-            "select total from total_history_count_user
-            where user_id = $1",
-        )
-        .bind(user.id)
-        .fetch_one(self.read_pool())
-        .await?;
-
-        Ok(res.0 as i64)
-    }
-
     async fn delete_store(&self, user: &User) -> DbResult<()> {
         let mut tx = self.pool.begin().await?;
 
@@ -180,128 +146,6 @@ impl Database for Postgres {
         .bind(user.id)
         .execute(&mut *tx)
         .await?;
-
-        tx.commit().await?;
-
-        Ok(())
-    }
-
-    async fn delete_history(&self, user: &User, id: String) -> DbResult<()> {
-        sqlx::query(
-            "update history
-            set deleted_at = $3
-            where user_id = $1
-            and client_id = $2
-            and deleted_at is null", // don't just keep setting it
-        )
-        .bind(user.id)
-        .bind(id)
-        .bind(OffsetDateTime::now_utc())
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    async fn deleted_history(&self, user: &User) -> DbResult<Vec<String>> {
-        // The cache is new, and the user might not yet have a cache value.
-        // They will have one as soon as they post up some new history, but handle that
-        // edge case.
-
-        let res = sqlx::query(
-            "select client_id from history
-            where user_id = $1
-            and deleted_at is not null",
-        )
-        .bind(user.id)
-        .fetch_all(self.read_pool())
-        .await?;
-
-        let res = res
-            .iter()
-            .map(|row| row.get::<String, _>("client_id"))
-            .collect();
-
-        Ok(res)
-    }
-
-    #[instrument(skip_all)]
-    async fn count_history_range(
-        &self,
-        user: &User,
-        range: Range<OffsetDateTime>,
-    ) -> DbResult<i64> {
-        let res: (i64,) = sqlx::query_as(
-            "select count(1) from history
-            where user_id = $1
-            and timestamp >= $2::date
-            and timestamp < $3::date",
-        )
-        .bind(user.id)
-        .bind(into_utc(range.start))
-        .bind(into_utc(range.end))
-        .fetch_one(self.read_pool())
-        .await?;
-
-        Ok(res.0)
-    }
-
-    #[instrument(skip_all)]
-    async fn list_history(
-        &self,
-        user: &User,
-        created_after: OffsetDateTime,
-        since: OffsetDateTime,
-        host: &str,
-        page_size: i64,
-    ) -> DbResult<Vec<History>> {
-        let res = sqlx::query_as(
-            "select id, client_id, user_id, hostname, timestamp, data, created_at from history
-            where user_id = $1
-            and hostname != $2
-            and created_at >= $3
-            and timestamp >= $4
-            order by timestamp asc
-            limit $5",
-        )
-        .bind(user.id)
-        .bind(host)
-        .bind(into_utc(created_after))
-        .bind(into_utc(since))
-        .bind(page_size)
-        .fetch(self.read_pool())
-        .map_ok(|DbHistory(h)| h)
-        .try_collect()
-        .await?;
-
-        Ok(res)
-    }
-
-    #[instrument(skip_all)]
-    async fn add_history(&self, history: &[NewHistory]) -> DbResult<()> {
-        let mut tx = self.pool.begin().await?;
-
-        for i in history {
-            let client_id: &str = &i.client_id;
-            let hostname: &str = &i.hostname;
-            let data: &str = &i.data;
-
-            sqlx::query(
-                "insert into history
-                    (client_id, user_id, hostname, timestamp, data) 
-                values ($1, $2, $3, $4, $5)
-                on conflict do nothing
-                ",
-            )
-            .bind(client_id)
-            .bind(i.user_id)
-            .bind(hostname)
-            .bind(i.timestamp)
-            .bind(data)
-            .execute(&mut *tx)
-            .await?;
-        }
 
         tx.commit().await?;
 
@@ -402,21 +246,6 @@ impl Database for Postgres {
     }
 
     #[instrument(skip_all)]
-    async fn oldest_history(&self, user: &User) -> DbResult<History> {
-        sqlx::query_as(
-            "select id, client_id, user_id, hostname, timestamp, data, created_at from history
-            where user_id = $1
-            order by timestamp asc
-            limit 1",
-        )
-        .bind(user.id)
-        .fetch_one(self.read_pool())
-        .await
-        .map_err(Into::into)
-        .map(|DbHistory(h)| h)
-    }
-
-    #[instrument(skip_all)]
     async fn add_records(&self, user: &User, records: &[Record<EncryptedData>]) -> DbResult<()> {
         let mut tx = self.pool.begin().await?;
 
@@ -434,7 +263,7 @@ impl Database for Postgres {
 
             let result = sqlx::query(
                 "insert into store
-                    (id, client_id, host, idx, timestamp, version, tag, data, cek, user_id) 
+                    (id, client_id, host, idx, timestamp, version, tag, data, cek, user_id)
                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 on conflict do nothing
                 ",
@@ -469,7 +298,7 @@ impl Database for Postgres {
         for ((host, tag), idx) in heads {
             sqlx::query(
                 "insert into store_idx_cache
-                    (user_id, host, tag, idx) 
+                    (user_id, host, tag, idx)
                 values ($1, $2, $3, $4)
                 on conflict(user_id, host, tag) do update set idx = greatest(store_idx_cache.idx, $4)
                 ",
