@@ -61,9 +61,21 @@ struct Entry {
 
 impl Entry {
     pub fn parse(line: &str) -> Self {
-        if let Some(rest) = line.strip_prefix(": ") {
-            let (time, rest) = rest.split_once(':').unwrap();
-            let (duration, command) = rest.split_once(';').unwrap();
+        // Extended history lines look like `: <timestamp>:<duration>;<command>`.
+        // A line beginning with `: ` is not guaranteed to be in that format
+        // though: a plain command such as `: > file` (using the `:` no-op) or a
+        // non-extended history file produces a `: `-prefixed line with no `:`
+        // or `;` separator. Fall back to treating the whole line as a command
+        // rather than panicking and aborting the entire import.
+        if let Some((time, duration, command)) = line.strip_prefix(": ").and_then(|rest| {
+            let (time, rest) = rest.split_once(':')?;
+            let (duration, command) = rest.split_once(';')?;
+            // Require numeric EXTENDED_HISTORY metadata. A plain command like
+            // `: foo:bar;baz` also contains ':' and ';', but must stay intact.
+            time.parse::<i64>().ok()?;
+            duration.parse::<i64>().ok()?;
+            Some((time, duration, command))
+        }) {
             let time = time
                 .parse::<i64>()
                 .ok()
@@ -214,6 +226,29 @@ mod test {
             parsed.timestamp.unwrap(),
             OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
         );
+    }
+
+    #[test]
+    fn test_parse_colon_prefixed_but_not_extended() {
+        // A `: `-prefixed line that is not valid extended history (e.g. the
+        // `:` no-op builtin, or a non-extended history file) must not panic on
+        // the missing `:`/`;` separators; the whole line is the command.
+        let parsed = Entry::parse(": > file");
+        assert_eq!(parsed.command, ": > file");
+        assert_eq!(parsed.timestamp, None);
+        assert_eq!(parsed.duration, None);
+
+        // Has a colon (so the timestamp split succeeds) but no `;` separator.
+        let parsed = Entry::parse(": 1613322469:no semicolon here");
+        assert_eq!(parsed.command, ": 1613322469:no semicolon here");
+        assert_eq!(parsed.timestamp, None);
+        assert_eq!(parsed.duration, None);
+
+        // Both separators present but non-numeric metadata: keep the whole line.
+        let parsed = Entry::parse(": foo:bar;baz");
+        assert_eq!(parsed.command, ": foo:bar;baz");
+        assert_eq!(parsed.timestamp, None);
+        assert_eq!(parsed.duration, None);
     }
 
     #[tokio::test]
