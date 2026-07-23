@@ -1,0 +1,32 @@
+name: Vale
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/docs/**"
+      - ".vale.ini"
+      - ".vale/styles/config/**"
+      - ".github/workflows/vale.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  vale:
+    name: Lint docs prose
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: errata-ai/vale-action@v2.1.2
+        with:
+          version: "3.15.2"
+          files: docs/docs
+          # Gate the whole tree, not just added lines: the tree is clean, and
+          # an edit that breaks a neighbouring line must not pass.
+          filter_mode: nofilter
+          fail_on_error: true
+          level: error
