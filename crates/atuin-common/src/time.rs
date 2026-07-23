@@ -17,8 +17,7 @@ pub struct DurationOverflow {
 pub trait DurationExt<D> {
     /// Create a `Duration` from whole seconds plus a nanosecond offset.
     ///
-    /// Mirrors [`Duration::new`], except it returns [`DurationOverflow`] instead of panicking on
-    /// overflow.
+    /// [`Duration::new`], but returns [`DurationOverflow`] instead of panicking on overflow.
     fn try_new(secs: u64, nsecs: u64) -> Result<D, DurationOverflow>;
 }
 
@@ -48,9 +47,8 @@ const MAX_UNIX_NANOS: i128 = 253_402_300_799 * 1_000_000_000 + 999_999_999;
 
 /// Returned when an instant cannot be represented by an [`OffsetDateTime`].
 ///
-/// [`OffsetDateTime::from_unix_timestamp_nanos`] reports some of these as a
-/// *successful* conversion to the wrong date -- see
-/// <https://github.com/time-rs/time/issues/802>.
+/// [`OffsetDateTime::from_unix_timestamp_nanos`] reports some of these as a *successful* conversion
+/// to the wrong date -- see <https://github.com/time-rs/time/issues/802>.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("timestamp of {nanos}ns since the unix epoch is out of range")]
 pub struct TimestampOutOfRange {
@@ -71,25 +69,15 @@ pub trait OffsetDateTimeExt {
     fn from_unix_nanos(nanos: i128) -> Result<OffsetDateTime, TimestampOutOfRange>;
 
     /// Build an [`OffsetDateTime`] from an `i64` count of nanoseconds since the unix epoch.
-    ///
-    /// Infallible: the whole `i64` range lands within roughly 1677..2262 AD, which
-    /// [`OffsetDateTime`] can always represent. Asserted at compile time below.
     fn from_unix_nanos_i64(nanos: i64) -> OffsetDateTime;
 
     /// Build an [`OffsetDateTime`] from a `u64` count of nanoseconds since the unix epoch.
-    ///
-    /// Infallible for the same reason as [`Self::from_unix_nanos_i64`]; the whole
-    /// `u64` range ends in 2554 AD.
     fn from_unix_nanos_u64(nanos: u64) -> OffsetDateTime;
 
     /// Build an [`OffsetDateTime`] from a seconds/nanoseconds pair counted from the unix epoch.
     fn from_timespec(secs: i128, nsecs: i128) -> Result<OffsetDateTime, TimespecOutOfRange>;
 }
 
-/// Proof that [`OffsetDateTimeExt::from_unix_nanos_i64`] and
-/// [`OffsetDateTimeExt::from_unix_nanos_u64`] cannot fail. If `time` ever narrows
-/// its representable range, this breaks the build rather than letting the
-/// `expect`s below start firing at runtime.
 const _: () = assert!(
     (i64::MIN as i128) >= MIN_UNIX_NANOS
         && (i64::MAX as i128) <= MAX_UNIX_NANOS
@@ -104,7 +92,6 @@ impl OffsetDateTimeExt for OffsetDateTime {
             return Err(TimestampOutOfRange { nanos });
         }
 
-        // unreachable given the range check above, but map rather than unwrap
         OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|_| TimestampOutOfRange { nanos })
     }
 
