@@ -503,6 +503,10 @@ its own authentication header — for example Cloudflare Access.
 Headers that Atuin sets itself (such as `Authorization`) cannot be overridden;
 Atuin's values always win.
 
+To avoid leaking credentials, Atuin refuses to follow cross-origin redirects
+when extra headers are configured — they are never sent to an origin other
+than the one you configured.
+
 ```toml
 extra_headers = { "CF-Access-Client-Id" = "...", "CF-Access-Client-Secret" = "..." }
 ```

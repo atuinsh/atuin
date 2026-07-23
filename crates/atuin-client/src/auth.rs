@@ -138,7 +138,7 @@ impl LegacyAuthClient {
         headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
         headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
 
-        Ok(reqwest::Client::builder()
+        Ok(crate::api_client::client_builder(&self.extra_headers)
             .default_headers(headers)
             .connect_timeout(std::time::Duration::new(self.connect_timeout, 0))
             .timeout(std::time::Duration::new(self.timeout, 0))

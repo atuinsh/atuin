@@ -192,7 +192,8 @@
 ## Extra HTTP headers to send on every request to the sync server. Useful when
 ## a self-hosted server sits behind a proxy that requires its own auth header,
 ## e.g. Cloudflare Access. Headers that Atuin sets itself (e.g. Authorization)
-## cannot be overridden.
+## cannot be overridden. When set, cross-origin redirects are refused so these
+## headers are never sent to a different origin.
 # extra_headers = { "CF-Access-Client-Id" = "...", "CF-Access-Client-Secret" = "..." }
 
 ## Timeout (in seconds) for acquiring a local database connection (sqlite)
