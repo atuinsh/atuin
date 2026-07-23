@@ -131,7 +131,13 @@ impl PASETO_V4 {
 
         ensure!(
             current_kid == kid,
-            "attempting to decrypt with incorrect key. currently using {current_kid}, expecting {kid}"
+            "This record was encrypted with a different key than the one currently configured.\n\
+             Currently using {current_kid}, expecting {kid}.\n\n\
+             This usually means keys were rotated or do not match across machines. Run `atuin store verify` \
+             to check the store. Before purging, back up the store: purging permanently deletes every local \
+             record that cannot be decrypted, including records that may still be recoverable with an old key \
+             or another machine's key. If the configured key is the one you intend to keep, run \
+             `atuin store purge`."
         );
 
         // decrypt the random key
@@ -262,7 +268,37 @@ mod tests {
         let data = DecryptedData(vec![1, 2, 3, 4]);
 
         let encrypted = PASETO_V4::encrypt(data, ad, &key.to_bytes());
-        let _ = PASETO_V4::decrypt(encrypted, ad, &fake_key.to_bytes()).unwrap_err();
+        let error = PASETO_V4::decrypt(encrypted, ad, &fake_key.to_bytes()).unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains(
+            "This record was encrypted with a different key than the one currently configured."
+        ));
+        assert!(message.contains(&format!(
+            "Currently using {}, expecting {}.",
+            fake_key.to_id(),
+            key.to_id()
+        )));
+        assert!(message.contains("keys were rotated or do not match across machines"));
+        assert!(message.contains("`atuin store verify`"));
+        assert!(message.contains("Before purging, back up the store"));
+        assert!(message.contains("purging permanently deletes every local record"));
+        assert!(message.contains("recoverable with an old key or another machine's key"));
+        assert!(message.contains("`atuin store purge`"));
+    }
+
+    #[test]
+    fn cannot_decrypt_cek_with_missing_footer_contents() {
+        let key = Key::<V4, Local>::new_os_random();
+
+        let Err(error) = PASETO_V4::decrypt_cek("{}".to_owned(), &key.to_bytes()) else {
+            panic!("missing footer contents should result in an error");
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "wrapped cek did not contain the correct contents"
+        );
     }
 
     #[test]
