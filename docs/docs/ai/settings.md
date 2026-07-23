@@ -56,7 +56,7 @@ Default: `false`
 
 Enables YOLO mode, which automatically allows all permission checks. **Use this setting with caution.**
 
-This setting doesn't enable any capabilities; it bypasses any permission checks.
+This setting _doesn't_ enable any capabilities; it only bypasses any permission checks.
 
 ## Capabilities
 

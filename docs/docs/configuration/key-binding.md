@@ -14,7 +14,7 @@ filter_mode_shell_up_key_binding = "directory" # or global, host, directory, etc
 
 Our default up-arrow binding can be a bit contentious. Some people love it, some people hate it. Many people who found it a bit jarring at first have since come to love it, so give it a try!
 
-It becomes much more powerful if you consider binding a different filter mode to the up arrow. For example, on "up" Atuin can default to searching all history for the current directory only, while ctrl-r searches history globally. See the [config](config.md#filter_mode_shell_up_key_binding) for more.
+It becomes much more powerful if you consider binding a different filter mode to the up arrow. For example, on "up" Atuin can default to searching all history for the current directory only, while Ctrl-r searches history globally. See the [config](config.md#filter_mode_shell_up_key_binding) for more.
 
 Otherwise, if you don't like it, you can disable it.
 
@@ -214,17 +214,17 @@ $env.config = (
 | Ctrl + → / Alt + f                        | Move the cursor to the next word                                              |
 | Ctrl + b / ←                              | Move the cursor to the left                                                   |
 | Ctrl + f / →                              | Move the cursor to the right                                                  |
-| Ctrl + a / home                           | Move the cursor to the start of the line                                      |
-| Ctrl + e / end                            | Move the cursor to the end of the line                                        |
-| Ctrl + backspace / Ctrl + Alt + backspace | Remove the previous word / remove the word just before the cursor             |
-| Ctrl + delete / Ctrl + Alt + delete       | Remove the next word or the word just after the cursor                        |
+| Ctrl + a / Home                           | Move the cursor to the start of the line                                      |
+| Ctrl + e / End                            | Move the cursor to the end of the line                                        |
+| Ctrl + Backspace / Ctrl + Alt + Backspace | Remove the previous word / remove the word just before the cursor             |
+| Ctrl + Delete / Ctrl + Alt + Delete       | Remove the next word or the word just after the cursor                        |
 | Ctrl + w                                  | Remove the word before the cursor even if it spans across the word boundaries |
 | Ctrl + u                                  | Clear the current line                                                        |
 | Ctrl + n / Ctrl + j / ↓                   | Select the next item on the list                                              |
 | Ctrl + p / Ctrl + k / ↑                   | Select the previous item on the list                                          |
 | Ctrl + o                                  | Open the [inspector](#inspector)                                              |
-| page down                                 | Scroll search results one page down                                           |
-| page up                                   | Scroll search results one page up                                             |
+| Page Down                                 | Scroll search results one page down                                           |
+| Page Up                                   | Scroll search results one page up                                             |
 | ↓ (on the first entry)                    | Return original or return query depending on [settings](config.md#exit_mode)  |
 | Ctrl + a, d                               | Delete the selected history entry                                            |
 | Ctrl + a, D                               | Delete **all** history entries matching the selected command                  |
@@ -284,8 +284,8 @@ Open the inspector with Ctrl + o
 | Ctrl + d  | Delete the inspected item from the history    |
 | ↑         | Inspect the previous item in the history      |
 | ↓         | Inspect the next item in the history          |
-| page up   | Inspect the previous item in the history      |
-| page down | Inspect the next item in the history          |
+| Page Up   | Inspect the previous item in the history      |
+| Page Down | Inspect the next item in the history          |
 | j / k     | Navigate items (when vim mode is enabled)     |
 | Enter     | Execute selected item (respects `enter_accept`) |
 | Tab       | Select current item and edit                  |

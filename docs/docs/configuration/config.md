@@ -107,8 +107,8 @@ Which search mode to use. Atuin supports `prefix`, `fulltext`, `fuzzy`, `daemon-
 `skim` search modes.
 
 Prefix mode searches for "query\*"; fulltext mode searches for "\*query\*";
-"fuzzy" applies the [fuzzy search syntax](#fuzzy-search-syntax);
-"skim" applies the [skim search syntax](https://github.com/lotabout/skim#search-syntax).
+`fuzzy` applies the [fuzzy search syntax](#fuzzy-search-syntax);
+`skim` applies the [skim search syntax](https://github.com/lotabout/skim#search-syntax).
 
 ```toml
 search_mode = "fuzzy"
@@ -132,7 +132,7 @@ search_mode = "fuzzy"
 
 #### `fuzzy` search syntax
 
-The "fuzzy" and "daemon-fuzzy" search syntax is based on the
+The `fuzzy` and `daemon-fuzzy` search syntax is based on the
 [fzf search syntax](https://github.com/junegunn/fzf#search-syntax).
 
 | Token     | Match type                 | Description                          |
