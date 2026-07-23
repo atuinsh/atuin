@@ -265,24 +265,21 @@ pub struct SearchGrpcService {
 }
 
 impl SearchGrpcService {
-    async fn maybe_rebuild_index(&self, shells: Vec<String>) -> Option<SearchIndex> {
-        let new_filter = self.index.read().await.shells.update(shells)?;
+    async fn maybe_rebuild_index(&self, shells: Vec<String>) -> Result<Option<SearchIndex>, ()> {
+        let Some(new_filter) = self.index.read().await.shells.update(shells) else {
+            return Ok(None);
+        };
 
         info!("Rebuilding search index from database after shell filter change");
 
         let new_index = SearchIndex::new(new_filter);
-        if build_index(async || &new_index, &self.handle)
-            .await
-            .is_err()
-        {
-            return None;
-        }
+        build_index(async || &new_index, &self.handle).await?;
 
         info!(
             "Search index rebuild complete; {} unique commands",
             new_index.command_count()
         );
-        Some(new_index)
+        Ok(Some(new_index))
     }
 }
 
@@ -304,64 +301,66 @@ impl SearchSvc for SearchGrpcService {
         // Spawn task to handle incoming requests and send responses
         tokio::spawn(async move {
             while let Some(req) = in_stream.message().await.transpose() {
-                match req {
-                    Ok(search_req) => {
-                        let query = search_req.query;
-                        let query_id = search_req.query_id;
-                        let filter_mode: FilterMode = search_req
-                            .filter_mode
-                            .try_into()
-                            .unwrap_or(FilterMode::Global);
-                        let proto_context = search_req.context;
-
-                        debug!(
-                            "search request: query = {}, query_id = {}, filter_mode = {}, context = {:?}",
-                            query,
-                            query_id,
-                            filter_mode.as_str_name(),
-                            proto_context
-                        );
-
-                        // Convert proto FilterMode + context to IndexFilterMode
-                        let index_filter = convert_filter_mode(filter_mode, &proto_context);
-
-                        let index = if let Some(new_index) =
-                            this.maybe_rebuild_index(search_req.shells).await
-                        {
-                            let mut guard = this.index.write().await;
-                            *guard = new_index;
-                            guard.downgrade()
-                        } else {
-                            this.index.read().await
-                        };
-
-                        // Perform the search
-                        let history_ids =
-                            span!(Level::TRACE, "daemon_search_query", %query, query_id)
-                                .in_scope(|| async {
-                                    index.search(&query, index_filter, RESULTS_LIMIT).await
-                                })
-                                .await;
-                        drop(index);
-
-                        // Convert history IDs to bytes
-                        let ids: Vec<Vec<u8>> = history_ids
-                            .iter()
-                            .filter_map(|id| {
-                                Uuid::parse_str(id)
-                                    .ok()
-                                    .map(|uuid| uuid.as_bytes().to_vec())
-                            })
-                            .collect();
-
-                        if tx.send(Ok(SearchResponse { query_id, ids })).await.is_err() {
-                            break; // Client disconnected
-                        }
-                    }
+                let search_req = match req {
+                    Ok(req) => req,
                     Err(e) => {
                         let _ = tx.send(Err(e)).await;
                         break;
                     }
+                };
+
+                let query = search_req.query;
+                let query_id = search_req.query_id;
+                let filter_mode: FilterMode = search_req
+                    .filter_mode
+                    .try_into()
+                    .unwrap_or(FilterMode::Global);
+                let proto_context = search_req.context;
+
+                debug!(
+                    "search request: query = {}, query_id = {}, filter_mode = {}, context = {:?}",
+                    query,
+                    query_id,
+                    filter_mode.as_str_name(),
+                    proto_context
+                );
+
+                // Convert proto FilterMode + context to IndexFilterMode
+                let index_filter = convert_filter_mode(filter_mode, &proto_context);
+
+                let index = match this.maybe_rebuild_index(search_req.shells).await {
+                    Ok(Some(new_index)) => {
+                        let mut guard = this.index.write().await;
+                        *guard = new_index;
+                        guard.downgrade()
+                    }
+                    Ok(None) => this.index.read().await,
+                    Err(()) => {
+                        let _ = tx
+                            .send(Err(Status::internal("failed to build index")))
+                            .await;
+                        break;
+                    }
+                };
+
+                // Perform the search
+                let history_ids = span!(Level::TRACE, "daemon_search_query", %query, query_id)
+                    .in_scope(|| async { index.search(&query, index_filter, RESULTS_LIMIT).await })
+                    .await;
+                drop(index);
+
+                // Convert history IDs to bytes
+                let ids: Vec<Vec<u8>> = history_ids
+                    .iter()
+                    .filter_map(|id| {
+                        Uuid::parse_str(id)
+                            .ok()
+                            .map(|uuid| uuid.as_bytes().to_vec())
+                    })
+                    .collect();
+
+                if tx.send(Ok(SearchResponse { query_id, ids })).await.is_err() {
+                    break; // Client disconnected
                 }
             }
         });
