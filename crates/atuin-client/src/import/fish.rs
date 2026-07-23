@@ -92,10 +92,14 @@ impl Importer for Fish {
 
                 cmd = Some(c);
             } else if let Some(t) = s.strip_prefix("  when: ") {
-                // if t is not an int, just ignore this line
-                if let Ok(t) = t.parse::<i64>() {
-                    time = Some(OffsetDateTime::from_unix_timestamp(t)?);
-                }
+                // ignore the line if it is not an int, or is outside the range we can
+                // represent - keeping the previous entry's timestamp preserves ordering,
+                // and a corrupt entry must not abort the import
+                time = t
+                    .parse::<i64>()
+                    .ok()
+                    .and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok())
+                    .or(time);
             } else {
                 // ... ignore paths lines
             }
@@ -113,6 +117,33 @@ mod test {
     use crate::import::{Importer, tests::TestLoader};
 
     use super::Fish;
+
+    #[tokio::test]
+    async fn parse_out_of_range_timestamp() {
+        // A corrupt `when:` must degrade that one entry, not abort the import.
+        // https://github.com/atuinsh/atuin/issues/938
+        let bytes = r"- cmd: echo before
+  when: 1639162832
+- cmd: echo corrupt
+  when: 999999999999999
+- cmd: echo after
+  when: 1639162851
+"
+        .as_bytes()
+        .to_owned();
+
+        let fish = Fish { bytes };
+        let mut loader = TestLoader::default();
+        fish.load(&mut loader).await.expect("import must not fail");
+
+        let commands: Vec<&str> = loader.buf.iter().map(|h| h.command.as_str()).collect();
+        assert_eq!(commands, ["echo before", "echo corrupt", "echo after"]);
+
+        // the corrupt entry inherits its predecessor's timestamp, so ordering holds
+        assert_eq!(loader.buf[0].timestamp.unix_timestamp(), 1_639_162_832);
+        assert_eq!(loader.buf[1].timestamp.unix_timestamp(), 1_639_162_832);
+        assert_eq!(loader.buf[2].timestamp.unix_timestamp(), 1_639_162_851);
+    }
 
     #[tokio::test]
     async fn parse_complex() {
