@@ -131,4 +131,45 @@ impl CapClient {
                 source,
             });
     }
+
+    /// The capability token this client currently knows, or `None` if it has never fetched.
+    ///
+    /// The token is opaque: it is the server's [`ServerCaps::version`] stringified, echoed back to
+    /// the server verbatim. The client never interprets it.
+    pub(crate) fn known_token(&self) -> Option<String> {
+        return self.inner.server.get().map(|caps| caps.version.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn known_token_reflects_the_last_refresh() {
+        crate::tls::ensure_crypto_provider();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v0/capabilities"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "version": 7,
+                "capabilities": {}
+            })))
+            .mount(&server)
+            .await;
+
+        let caps_url: Url = format!("{}/api/v0/capabilities", server.uri()).parse().unwrap();
+        let client = CapClient::new(caps_url);
+
+        // Nothing fetched yet.
+        assert_eq!(client.known_token(), None);
+
+        client.refresh(&reqwest::Client::new()).await.unwrap();
+
+        // The token is the server's version, stringified and opaque.
+        assert_eq!(client.known_token(), Some("7".to_string()));
+    }
 }
