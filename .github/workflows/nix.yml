@@ -32,3 +32,14 @@ jobs:
 
       - name: Run nix build
         run: nix build --print-build-logs
+
+  nixfmt:
+    runs-on: depot-ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+
+      # Run `nix fmt` to fix any failures here
+      - name: Check nix formatting
+        run: nix fmt -- --check $(git ls-files '*.nix')
