@@ -16,8 +16,8 @@ bash <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
 ```
 
 Restart your shell, then press ++ctrl+r++ or the ++up++ arrow to search. Type a
-query, press enter to put the selected command on your command line, and enter
-again to run it.
+query, press enter to run the selected command, or tab to put it on your command
+line for editing.
 
 To bring your existing history with you:
 

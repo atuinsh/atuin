@@ -47,7 +47,7 @@ You can then choose to bind Atuin if needed, do this after the call to init.
 
 ## Enter key behavior
 
-By default, the `enter` key inserts the selected command into your shell for editing, the same as `tab`; press enter again to run it. To make `enter` execute the command immediately, set `enter_accept = true` in your config. For more details: [enter_accept](config.md#enter_accept).
+By default, the `enter` key will directly execute the selected command instead of letting you edit it like the `tab` key. If you want to change this behavior, set `enter_accept = false` in your config. For more details: [enter_accept](config.md#enter_accept).
 
 ## Ctrl-n key shortcuts
 
@@ -203,7 +203,7 @@ $env.config = (
 
 | Shortcut                                  | Action                                                                        |
 |-------------------------------------------|-------------------------------------------------------------------------------|
-| enter                                     | Select item and edit, or execute it if [`enter_accept`](config.md#enter_accept) is set |
+| enter                                     | Execute selected item                                                         |
 | tab                                       | Select item and edit                                                          |
 | ctrl + r                                  | Cycle through filter modes                                                    |
 | ctrl + s                                  | Cycle through search modes                                                    |

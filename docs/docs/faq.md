@@ -45,11 +45,11 @@ Add `--disable-ai`, e.g.:
 eval "$(atuin init zsh --disable-ai)"
 ```
 
-## How do I run a command immediately instead of editing it?
+## How do I edit a command instead of running it immediately?
 
-By default, both enter and tab insert the selected command into your shell ready for editing — press enter again to run it.
+Press tab! By default, enter will execute a command, and tab will insert it ready for editing.
 
-To make enter execute the selected command straight away, put `enter_accept = true` into your config file (`~/.config/atuin/config.toml`). Tab will still insert the command for editing.
+You can make `enter` edit a command by putting `enter_accept = false` into your config file (`~/.config/atuin/config.toml`)
 
 ## How do I delete my account?
 

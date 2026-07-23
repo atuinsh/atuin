@@ -511,15 +511,16 @@ Atuin version: >= 17.0
 
 Default: `false`
 
-Controls what ++enter++ does with the selected command.
+When set to true, Atuin will default to immediately executing a command rather
+than the user having to press enter twice. Pressing tab will return to the
+shell and give the user a chance to edit.
 
-By default, ++enter++ returns the command to your shell for editing, and you
-press ++enter++ again to run it. Set `enter_accept = true` to have ++enter++
-execute the command immediately instead. ++tab++ always returns the command for
-editing, whichever way this is set.
+This technically defaults to true for new users, but false for existing. We
+have set `enter_accept = true` in the default config file. This is likely to
+change to be the default for everyone in a later release.
 
 ```toml
-enter_accept = true
+enter_accept = false
 ```
 
 ### `keymap_mode`
@@ -874,8 +875,10 @@ strategy = "auto"
 
 ## tmux
 
-Show the search UI in a tmux popup instead of in the current pane. Requires
-tmux >= 3.2.
+When you are inside tmux, open the search UI in a
+[popup](https://github.com/tmux/tmux/wiki/Getting-Started#popups) floating above
+your current pane, instead of drawing over the pane itself. The popup opens in
+your current working directory, and closes when you accept a command or exit.
 
 ```toml
 [tmux]
@@ -884,23 +887,51 @@ width = "80%"
 height = "60%"
 ```
 
+Atuin falls back to its normal rendering, with no error, whenever the popup
+can't be used — outside tmux, on tmux older than 3.2, or in a shell that doesn't
+support it.
+
+!!! note "Requirements"
+
+    - tmux >= 3.2, which is where `display-popup` gained the behavior Atuin needs
+    - zsh, bash, or fish — nushell, xonsh, and PowerShell don't support the popup yet
+
+These settings are read by `atuin init` and passed to the shell plugin through
+environment variables, so **restart your shell after changing them**. To disable
+the popup for a single session without touching your config, set
+`ATUIN_TMUX_POPUP=false` before Atuin's key bindings run.
+
 ### `enabled`
 
 Default: `false`
 
-Whether to open the search UI in a tmux popup.
+Whether to show the search UI in a tmux popup.
+
+```toml
+enabled = true
+```
 
 ### `width`
 
 Default: `"80%"`
 
-Width of the popup, as a percentage of the terminal.
+Width of the popup, passed to `tmux display-popup -w`. Accepts a percentage of
+the terminal width, or an absolute number of columns.
+
+```toml
+width = "80%"
+```
 
 ### `height`
 
 Default: `"60%"`
 
-Height of the popup, as a percentage of the terminal.
+Height of the popup, passed to `tmux display-popup -h`. Accepts a percentage of
+the terminal height, or an absolute number of rows.
+
+```toml
+height = "60%"
+```
 
 ## Daemon
 

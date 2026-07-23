@@ -17,7 +17,7 @@ While you work, Atuin records:
 
 At any time, you can open the TUI with the default keybindings of the up arrow, or `ctrl-r`.
 
-Once in the TUI, press enter to insert the selected command into your shell for editing, then enter again to run it. To run the selected command immediately instead, see [Enter to run](#enter-to-run) below.
+Once in the TUI, press enter to immediately execute a command, or press tab to insert it into your shell for editing.
 
 While searching in the TUI, you can narrow the search scope by pressing `ctrl-r` to cycle through [filter modes](advanced-usage.md#filter-mode) — the full history, this machine, the current directory, the current git repository, or the current shell session.
 
@@ -36,13 +36,13 @@ There are a whole bunch of options there, including disabling the up arrow behav
 
 ### Enter to run
 
-You may prefer that enter runs the selected command immediately, rather than inserting it for editing. To configure this, set
+You may prefer that Atuin always inserts the selected command for editing. To configure this, set
 
 ```toml
-enter_accept = true
+enter_accept = false
 ```
 
-in your config file. Tab always inserts the command for editing, either way.
+in your config file.
 
 ### Inline window
 
@@ -58,3 +58,16 @@ You may also prefer the compact UI mode:
 ```toml
 style = "compact"
 ```
+
+### tmux popup
+
+If you use tmux, Atuin can open the search UI in a popup floating above your
+current pane rather than drawing over it:
+
+```toml
+[tmux]
+enabled = true
+```
+
+See the [`tmux` config reference](../configuration/config.md#tmux) for sizing and
+requirements.
