@@ -2,6 +2,7 @@ use std::env;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use atuin_common::time::OffsetDateTimeExt;
 use directories::BaseDirs;
 use eyre::{Result, eyre};
 use futures::TryStreamExt;
@@ -29,8 +30,8 @@ impl HistDbEntry {
     fn into_hist_with_hostname(self, hostname: String) -> History {
         let ts_nanos = (self.tsb * 1_000_000_000_f64) as i128;
         // a corrupt row must not take down the whole import
-        let timestamp = OffsetDateTime::from_unix_timestamp_nanos(ts_nanos)
-            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        let timestamp =
+            OffsetDateTime::from_unix_nanos(ts_nanos).unwrap_or(OffsetDateTime::UNIX_EPOCH);
 
         let session_ts_seconds = self.session_start.trunc() as u64;
         let session_ts_nanos = (self.session_start.fract() * 1_000_000_000_f64) as u32;

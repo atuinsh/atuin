@@ -77,7 +77,7 @@ impl AiSessionStore {
             .create_if_missing(true);
 
         let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::from_secs_f64(timeout))
+            .acquire_timeout(Duration::try_from_secs_f64(timeout)?)
             .connect_with(opts)
             .await?;
 

@@ -5,6 +5,7 @@ use std::{
 };
 
 use atuin_common::logs::LogConfig;
+use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::{
     string::{EscapeNonPrintablePosixExt as _, NonNulStr},
     utils,
@@ -676,7 +677,7 @@ impl TailEvent {
         let history = reply
             .history
             .ok_or_else(|| eyre::eyre!("daemon sent a history tail event without history"))?;
-        let timestamp = OffsetDateTime::from_unix_timestamp_nanos(i128::from(history.timestamp))
+        let timestamp = OffsetDateTime::from_unix_nanos(i128::from(history.timestamp))
             .context("invalid daemon history timestamp")?;
         let kind = match HistoryEventKind::try_from(reply.kind)
             .unwrap_or(HistoryEventKind::Unspecified)

@@ -3,6 +3,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use atuin_common::time::OffsetDateTimeExt;
 use directories::BaseDirs;
 use eyre::{Result, eyre};
 use serde::Deserialize;
@@ -121,8 +122,8 @@ impl Importer for Xonsh {
                 let (start, end) = cmd.ts;
                 let ts_nanos = (start * 1_000_000_000_f64) as i128;
                 // a corrupt entry must not abort the whole import
-                let timestamp = OffsetDateTime::from_unix_timestamp_nanos(ts_nanos)
-                    .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+                let timestamp =
+                    OffsetDateTime::from_unix_nanos(ts_nanos).unwrap_or(OffsetDateTime::UNIX_EPOCH);
 
                 let duration = (end - start) * 1_000_000_000_f64;
 

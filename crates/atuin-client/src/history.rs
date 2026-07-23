@@ -3,6 +3,7 @@ use rmp::encode;
 use std::env;
 
 use atuin_common::record::DecryptedData;
+use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::{normalize_optional_string, uuid_v7};
 
 use eyre::{Result, bail};
@@ -298,7 +299,7 @@ impl History {
 
         Ok(History {
             id: id.into(),
-            timestamp: OffsetDateTime::from_unix_timestamp_nanos(i128::from(timestamp))?,
+            timestamp: OffsetDateTime::from_unix_nanos(i128::from(timestamp))?,
             duration,
             exit,
             command,
@@ -308,7 +309,7 @@ impl History {
             hostname,
             intent,
             deleted_at: deleted_at
-                .map(|t| OffsetDateTime::from_unix_timestamp_nanos(i128::from(t)))
+                .map(|t| OffsetDateTime::from_unix_nanos(i128::from(t)))
                 .transpose()?,
             shell,
         })

@@ -134,8 +134,8 @@ impl LegacyAuthClient {
 
         Ok(reqwest::Client::builder()
             .default_headers(headers)
-            .connect_timeout(std::time::Duration::new(self.connect_timeout, 0))
-            .timeout(std::time::Duration::new(self.timeout, 0))
+            .connect_timeout(std::time::Duration::from_secs(self.connect_timeout))
+            .timeout(std::time::Duration::from_secs(self.timeout))
             .build()?)
     }
 }

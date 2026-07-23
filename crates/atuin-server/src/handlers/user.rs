@@ -50,7 +50,7 @@ async fn send_register_hook(url: &url::Url, username: String, registered: String
 
     let resp = client
         .post(url.clone())
-        .timeout(Duration::new(5, 0))
+        .timeout(Duration::from_secs(5))
         .header(CONTENT_TYPE, "application/json")
         .json(&hook)
         .send()
