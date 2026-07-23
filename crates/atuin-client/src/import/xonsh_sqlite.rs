@@ -28,7 +28,9 @@ struct HistDbEntry {
 impl HistDbEntry {
     fn into_hist_with_hostname(self, hostname: String) -> History {
         let ts_nanos = (self.tsb * 1_000_000_000_f64) as i128;
-        let timestamp = OffsetDateTime::from_unix_timestamp_nanos(ts_nanos).unwrap();
+        // a corrupt row must not take down the whole import
+        let timestamp = OffsetDateTime::from_unix_timestamp_nanos(ts_nanos)
+            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
 
         let session_ts_seconds = self.session_start.trunc() as u64;
         let session_ts_nanos = (self.session_start.fract() * 1_000_000_000_f64) as u32;
@@ -143,6 +145,22 @@ mod tests {
             db_path,
             PathBuf::from("/home/user/xonsh_data/xonsh-history.sqlite")
         );
+    }
+
+    #[test]
+    fn out_of_range_timestamp_falls_back_to_epoch() {
+        let entry = HistDbEntry {
+            inp: "echo hello".to_string(),
+            rtn: Some(0),
+            tsb: 1e30,
+            tse: 1e30,
+            cwd: "/tmp".to_string(),
+            session_start: 0.0,
+        };
+
+        let hist = entry.into_hist_with_hostname("box:user".to_string());
+        assert_eq!(hist.timestamp, OffsetDateTime::UNIX_EPOCH);
+        assert_eq!(hist.command, "echo hello");
     }
 
     #[tokio::test]

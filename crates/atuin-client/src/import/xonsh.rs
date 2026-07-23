@@ -120,7 +120,9 @@ impl Importer for Xonsh {
             for cmd in session.cmds {
                 let (start, end) = cmd.ts;
                 let ts_nanos = (start * 1_000_000_000_f64) as i128;
-                let timestamp = OffsetDateTime::from_unix_timestamp_nanos(ts_nanos)?;
+                // a corrupt entry must not abort the whole import
+                let timestamp = OffsetDateTime::from_unix_timestamp_nanos(ts_nanos)
+                    .unwrap_or(OffsetDateTime::UNIX_EPOCH);
 
                 let duration = (end - start) * 1_000_000_000_f64;
 
@@ -156,6 +158,29 @@ mod tests {
             hist_dir,
             PathBuf::from("/home/user/xonsh_data/history_json")
         );
+    }
+
+    #[tokio::test]
+    async fn out_of_range_timestamp_falls_back_to_epoch() {
+        let xonsh = Xonsh {
+            sessions: vec![HistoryData {
+                sessionid: "8ea62c1c-cf1d-4d7f-8b03-f6d7d02b4f9b".to_string(),
+                cmds: vec![HistoryCmd {
+                    cwd: "/tmp".to_string(),
+                    inp: "echo hello".to_string(),
+                    rtn: Some(0),
+                    ts: (1e30, 1e30),
+                }],
+            }],
+            hostname: "box:user".to_string(),
+        };
+
+        let mut loader = TestLoader::default();
+        xonsh.load(&mut loader).await.expect("import must not fail");
+
+        assert_eq!(loader.buf.len(), 1);
+        assert_eq!(loader.buf[0].timestamp, OffsetDateTime::UNIX_EPOCH);
+        assert_eq!(loader.buf[0].command, "echo hello");
     }
 
     #[tokio::test]
