@@ -19,7 +19,7 @@ atuin-server start
 ```
 
 !!! note
-    Prior to v18.12.0, the server was bundled into the main `atuin` binary and started with `atuin server start`. If you are upgrading from an older release, you will need to install the new `atuin-server` binary and update any service files (systemd, docker, k8s) to invoke `atuin-server` instead of `atuin server`. See the [release notes](https://github.com/atuinsh/atuin/releases) for details.
+    Prior to v18.12.0, the server was bundled into the main `atuin` binary and started with `atuin server start`. If you're upgrading from an older release, you will need to install the new `atuin-server` binary and update any service files (systemd, docker, k8s) to invoke `atuin-server` instead of `atuin server`. See the [release notes](https://github.com/atuinsh/atuin/releases) for details.
 
 ## Configuration
 

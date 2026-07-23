@@ -219,7 +219,7 @@ Atuin version: >= 17.0
 Default: `false`
 
 This flag enables a pseudo filter-mode named "workspace": the filter is automatically
-activated when you are in a git repository.
+activated when you're in a git repository.
 
 With workspace filtering enabled, Atuin will filter for commands executed in any directory
 within a git repository tree.
@@ -908,7 +908,7 @@ strategy = "auto"
 
 ## tmux
 
-When you are inside tmux, open the search UI in a
+When you're inside tmux, open the search UI in a
 [popup](https://github.com/tmux/tmux/wiki/Getting-Started#popups) floating above
 your current pane, instead of drawing over the pane itself. The popup opens in
 your current working directory, and closes when you accept a command or exit.

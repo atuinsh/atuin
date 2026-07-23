@@ -50,7 +50,7 @@ atuin store purge
     This only touches the local record store on the current machine. It doesn't
     wipe your history, delete your sync account, or affect other machines.
 
-Run `atuin store verify` first, so you know you are clearing up a genuine key
+Run `atuin store verify` first, so you know you're clearing up a genuine key
 mismatch rather than deleting data blindly. See
 [Deleting History](../guide/delete-history.md#purging-undecryptable-local-store-records)
 for the full procedure.

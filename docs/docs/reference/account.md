@@ -94,4 +94,4 @@ atuin account link
 ```
 
 Opens a browser to authenticate with Hub, then associates the two accounts. If
-you are already signed in to Hub, the accounts are linked immediately.
+you're already signed in to Hub, the accounts are linked immediately.

@@ -25,7 +25,7 @@ Where `THEMENAME` is a known theme. The following themes are available out-of-th
 These are present to ensure users and developers can try out theming, but in general, you
 will need to download themes or make your own.
 
-If you are writing your own themes, you can add the following line to get additional output:
+If you're writing your own themes, you can add the following line to get additional output:
 
 ```toml
 debug = true

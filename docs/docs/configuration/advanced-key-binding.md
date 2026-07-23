@@ -433,7 +433,7 @@ The `[keymap]` section is a more powerful replacement for the `[keys]` section. 
 - If you have any `[keymap]` settings, the entire `[keys]` section is ignored. Defaults are built from the standard `[keys]` values, and then your `[keymap]` overrides are applied on top.
 - If you have no `[keymap]` settings, the `[keys]` section works as before for backward compatibility.
 
-If you are migrating from `[keys]` to `[keymap]`, here is how the old flags map:
+If you're migrating from `[keys]` to `[keymap]`, here is how the old flags map:
 
 | `[keys]` setting | Equivalent `[keymap]` |
 |------------------|-----------------------|

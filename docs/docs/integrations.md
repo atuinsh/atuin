@@ -10,7 +10,7 @@ If you'd like to override this, add your own config after `"$(atuin init zsh)"` 
 
 ## zsh-vi-mode
 
-If you are using [Zsh Vi Mode](https://github.com/jeffreytse/zsh-vi-mode), you may want to add the following to your `.zshrc` to prevent overriding the default Atuin binds:
+If you're using [Zsh Vi Mode](https://github.com/jeffreytse/zsh-vi-mode), you may want to add the following to your `.zshrc` to prevent overriding the default Atuin binds:
 
 ```shell
 # Append a command directly (after sourcing zvm)

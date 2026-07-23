@@ -1,7 +1,7 @@
 # Docker
 
 !!! warning
-    If you are self hosting, we strongly suggest you stick to [tagged releases](https://github.com/atuinsh/atuin/releases), and don't follow `main` or `latest`
+    If you're self hosting, we strongly suggest you stick to [tagged releases](https://github.com/atuinsh/atuin/releases), and don't follow `main` or `latest`
 
     Follow the GitHub releases, and please read the notes for each release. Most of the time, upgrades can occur without any manual intervention.
 

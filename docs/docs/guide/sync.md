@@ -40,7 +40,7 @@ atuin sync
 ```
 
 Atuin tries to be smart with a sync, and not waste data transfer. However, if
-you are seeing some missing data, please try running
+you're seeing some missing data, please try running
 
 ```shell
 atuin sync -f
@@ -54,7 +54,7 @@ When only signed in on one machine, Atuin sync operates as a backup. This is
 pretty useful by itself, but syncing multiple machines is where the magic
 happens.
 
-First, ensure you are [registered with the sync server](#register) and make a
+First, ensure you're [registered with the sync server](#register) and make a
 note of your key. You can see this with `atuin key`.
 
 Then, install Atuin on a new machine. Once installed, login with
