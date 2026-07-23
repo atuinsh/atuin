@@ -139,6 +139,7 @@ impl Cmd {
                 &username,
                 &email,
                 &password,
+                &settings.extra_headers,
             )
             .await?;
 

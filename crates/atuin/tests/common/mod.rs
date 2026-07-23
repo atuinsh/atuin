@@ -77,15 +77,17 @@ pub async fn register_inner<'a>(
     let email = format!("{}@example.com", uuid_v7().as_simple());
 
     // registration works
-    let registration_response = api_client::register(address, username, &email, password)
-        .await
-        .unwrap();
+    let registration_response =
+        api_client::register(address, username, &email, password, &Default::default())
+            .await
+            .unwrap();
 
     api_client::Client::new(
         address,
         api_client::AuthToken::Token(registration_response.session),
         5,
         30,
+        &Default::default(),
     )
     .unwrap()
 }
@@ -100,6 +102,7 @@ pub async fn login(
     let login_response = api_client::login(
         address,
         atuin_common::api::LoginRequest { username, password },
+        &Default::default(),
     )
     .await
     .unwrap();
@@ -109,6 +112,7 @@ pub async fn login(
         api_client::AuthToken::Token(login_response.session),
         5,
         30,
+        &Default::default(),
     )
     .unwrap()
 }
