@@ -4,7 +4,7 @@
 
 Read, write, and inspect Atuin configuration values. Atuin resolves
 configuration from multiple sources (defaults, config file, environment
-variables). The `config` command lets you see what is set where, and change
+variables). The `config` command lets you see what's set where, and change
 values in your `config.toml` without opening an editor.
 
 ## Subcommands
@@ -23,7 +23,7 @@ enabled = true
 socket_path = "/tmp/atuin_daemon.sock"
 ```
 
-If the key is not present in the config file, you'll see:
+If the key isn't present in the config file, you'll see:
 
 ```console
 $ atuin config get enter_accept
@@ -104,7 +104,7 @@ $ atuin config set sync_frequency 600 --type string
 
 Possible values: `auto`, `string`, `boolean`, `integer`, `float`.
 
-Setting a key that is currently a table will produce an error directing you
+Setting a key that's currently a table will produce an error directing you
 to use a dotted key instead:
 
 ```console

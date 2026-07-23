@@ -7,7 +7,7 @@ Atuin can import your history from your "old" history file
 `atuin import auto` will attempt to figure out your shell (via \$SHELL) and run
 the correct importer
 
-Unfortunately these older files do not store as much information as Atuin does,
+Unfortunately these older files don't store as much information as Atuin does,
 so not all features are available with imported data.
 
 Except as noted otherwise, you can set the `HISTFILE` environment variable to
@@ -39,7 +39,7 @@ session unless the `fish_history` environment variable is set. The file to be re
 will be `{session}_history` in `$XDG_DATA_HOME/fish/` (or `$HOME/.local/share/fish`).
 
 Not all of the data in the fish history is preserved, some data about filenames used
-for each command are not used by Atuin, so it is discarded.
+for each command aren't used by Atuin, so it's discarded.
 
 ## nu
 
@@ -59,7 +59,7 @@ This importer reads from
 [PowerShell's history file](https://learn.microsoft.com/en-us/powershell/module/psreadline/about/about_psreadline#command-history).
 On Windows, the file is located at
 `$APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt`.
-On other systems, it is located at
+On other systems, it's located at
 `$XDG_DATA_HOME/powershell/PSReadLine/ConsoleHost_history.txt`
 or `$HOME/.local/share/powershell/PSReadLine/ConsoleHost_history.txt`.
 
@@ -94,7 +94,7 @@ The Xonsh SQLite importer will read from the Xonsh SQLite history file. The hist
 file's location is determined by the same process as the regular Xonsh importer,
 but with `history_json` replaced by `xonsh-history.sqlite`.
 
-The Xonsh SQLite backend does not store environment variables, but like the JSON
+The Xonsh SQLite backend doesn't store environment variables, but like the JSON
 backend it can optionally store the output of each command. As with the JSON backend,
 if present this data will be ignored by Atuin.
 

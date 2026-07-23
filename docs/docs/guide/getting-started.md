@@ -49,7 +49,7 @@ atuin sync
 ```
 
 Registration generates an encryption key. **Save it somewhere safe** — you'll
-need it to log in on any other machine, and it cannot be recovered. See
+need it to log in on any other machine, and it can't be recovered. See
 [Setting up sync](sync.md) for the details, including logging in elsewhere.
 
 Skipping this step is fine. Your history stays on this machine, not backed up

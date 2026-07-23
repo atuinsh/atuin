@@ -31,7 +31,7 @@ If you are writing your own themes, you can add the following line to get additi
 debug = true
 ```
 
-to the same config block. This will print out any color names that cannot be parsed from
+to the same config block. This will print out any color names that can't be parsed from
 the requested theme.
 
 A final optional setting is available:
@@ -40,7 +40,7 @@ A final optional setting is available:
 max_depth = 10
 ```
 
-which sets the maximum levels of theme parents to traverse. This should not need to be
+which sets the maximum levels of theme parents to traverse. This shouldn't need to be
 explicitly added in normal use.
 
 ## Usage
@@ -68,7 +68,7 @@ to (at present) colors. In future, this may be expanded to allow richer style su
 * `SyntaxOperator`: operators such as `|`, `&&`, `;`, `>`
 * `SyntaxComment`: a `# comment`
 
-These may expand over time as they are added to Atuin's codebase, but Atuin
+These may expand over time as they're added to Atuin's codebase, but Atuin
 should have fallbacks added for any new *Meanings* so that, whether themes limit to
 the present list or take advantage of new *Meanings* in future, they should
 keep working sensibly.
@@ -83,12 +83,12 @@ When a theme name is read but not yet loaded, Atuin will look for it in the fold
 variable. It will attempt to open a file of name `THEMENAME.toml` and read it as a
 map from *Meanings* to foreground colors.
 
-Note that, at present, it is not possible to specify the default terminal color explicitly
+Note that, at present, it's not possible to specify the default terminal color explicitly
 in a theme file. However, the default theme Base color will always be unset and therefore
 will be the user's default terminal color. Hence, you should only override the Base color
 in your theme, or derive from a theme that does so, if your theme would not make sense
 otherwise (e.g. the `marine` theme is intended to make everything green/blue, so it does,
-but the `autumn` theme only seeks to make the custom colors warmer, so it does not).
+but the `autumn` theme only seeks to make the custom colors warmer, so it doesn't).
 
 Colors may be specified either as names from the [palette](https://ogeon.github.io/docs/palette/master/palette/named/index.html)
 crate in lowercase, or as six-character hex codes, prefixed with `#`. To explicitly select ANSI colors by integer, or for greater flexibility in general, you can prefix with `@` and the rest of the string will be handled by crossterm's color parsing. For examples, see [crossterm's color deserialization tests](https://github.com/crossterm-rs/crossterm/blob/5d50d8da62c5e034ef8b2787a771a2c0f9b3b2f9/src/style/types/color.rs#L389), remembering the need to add a `@` prefix for Atuin.
@@ -107,7 +107,7 @@ For example,
 * `@ansi_(123)`
 * `@dark_yellow`
 
-While there is not currently an official reference, you can see examples in the
+While there isn't currently an official reference, you can see examples in the
 [crossterm tests](https://docs.rs/crossterm/latest/src/crossterm/style/types/color.rs.html#376).
 As this is passed straight to Crossterm, using [ANSI codes](https://www.ditig.com/256-colors-cheat-sheet)
 can be helpful for ensuring your theme is compatible with 256-color terminals.
@@ -125,7 +125,7 @@ Guidance = "#888844"
 
 ```
 
-where not all of the *Meanings* need to be explicitly defined. If they are absent,
+where not all of the *Meanings* need to be explicitly defined. If they're absent,
 then the color will be chosen from the parent theme, if one is defined, or if that
 key is missing in the `theme` block, from the `default` theme.
 

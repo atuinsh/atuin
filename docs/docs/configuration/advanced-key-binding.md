@@ -5,13 +5,13 @@ Atuin includes a powerful keybinding system that can be used to fully customize 
 The `[keymap]` section in your config replaces the older `[keys]` section. If any `[keymap]` settings are present, the `[keys]` section is ignored entirely.
 
 !!! warning
-    Modifier keys, F1-F24 keys, and some special characters work best - or _only_ work - with a terminal that implements the kitty keyboard protocol. Notably, the default macOS Terminal app does _not_ include this feature. For more information and a list of terminals that are known to support this protocol, see [https://sw.kovidgoyal.net/kitty/keyboard-protocol/](https://sw.kovidgoyal.net/kitty/keyboard-protocol/).
+    Modifier keys, F1-F24 keys, and some special characters work best - or _only_ work - with a terminal that implements the kitty keyboard protocol. Notably, the default macOS Terminal app doesn't include this feature. For more information and a list of terminals that are known to support this protocol, see [https://sw.kovidgoyal.net/kitty/keyboard-protocol/](https://sw.kovidgoyal.net/kitty/keyboard-protocol/).
 
 ## Keymaps
 
 The Atuin TUI has multiple modes, each with its own keymap. You configure each one under a separate TOML table:
 
-| Config section       | When it is active |
+| Config section       | When it's active |
 |----------------------|-------------------|
 | `[keymap.emacs]`     | Search tab, `keymap_mode = "emacs"` |
 | `[keymap.vim-normal]`| Search tab, vim normal mode (see [`keymap_mode`](config.md#keymap_mode)) |
@@ -24,7 +24,7 @@ Vim-insert mode inherits all Emacs bindings by default, then overrides `esc` and
 You only need to specify the keys you want to change. Unmentioned keys keep their default bindings.
 
 !!! warning
-    If you specify a key in your keymap that would normally be changed by an option, like the `enter` key with the `enter_accept` setting, the setting will not take effect. Those options modify the default keymap based on their setting, but if you override the key in the keymap, you're responsible for managing correct behavior.
+    If you specify a key in your keymap that would normally be changed by an option, like the `enter` key with the `enter_accept` setting, the setting won't take effect. Those options modify the default keymap based on their setting, but if you override the key in the keymap, you're responsible for managing correct behavior.
 
 ## Key format
 
@@ -107,7 +107,7 @@ Separate keys with a space to define a sequence. The first key is buffered until
 "g g"
 ```
 
-If the second key does not complete a known sequence, both keys are handled individually.
+If the second key doesn't complete a known sequence, both keys are handled individually.
 
 ## Keymap format
 
@@ -137,7 +137,7 @@ Maps a key to an ordered list of rules. Each rule has an `action` and an optiona
 
 In this example, pressing left when the cursor is at position 0 exits the TUI. Otherwise, it moves the cursor left.
 
-A rule without a `when` field is unconditional and always matches. It is typically placed last as a fallback.
+A rule without a `when` field is unconditional and always matches. It's typically placed last as a fallback.
 
 !!! warning "Override semantics"
     When you specify a key in `[keymap]`, it **replaces** the **entire** default binding for that key. Other keys you don't mention keep their defaults.
@@ -240,7 +240,7 @@ The difference between `accept` and `return-selection`: `accept` runs the comman
 
 ## Conditions
 
-Conditions let a single key do different things depending on the current state. They are specified as strings in the `when` field of a rule.
+Conditions let a single key do different things depending on the current state. They're specified as strings in the `when` field of a rule.
 
 ### Condition atoms
 

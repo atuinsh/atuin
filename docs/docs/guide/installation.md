@@ -308,7 +308,7 @@ After installing, remember to restart your shell.
 
 ## Upgrade
 
-Run `atuin update`, and if that command is not available, run the install script again.
+Run `atuin update`, and if that command isn't available, run the install script again.
 
 If you used a package manager to install Atuin, then you should also use your package manager to update Atuin.
 

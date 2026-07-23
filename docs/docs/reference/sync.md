@@ -7,7 +7,7 @@ server operator can _never_ see your data!
 Anyone can host a server (see the [self-hosting docs](../self-hosting/server-setup.md)),
 and we host one at <https://api.atuin.sh>. This is the default server address,
 which can be changed in the [config](../configuration/config.md#sync_address).
-Again, we _cannot_ see your data, and do not want to.
+Again, we _can't_ see your data, and don't want to.
 
 ## Sync frequency
 
@@ -43,7 +43,7 @@ You can delete your sync account with
 atuin account delete
 ```
 
-This will remove your account and all synchronized history from the server. Local data will not be touched!
+This will remove your account and all synchronized history from the server. Local data won't be touched!
 
 ## Key
 

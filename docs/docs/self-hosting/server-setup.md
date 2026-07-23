@@ -1,6 +1,6 @@
 # Server setup
 
-While we offer a public sync server, and cannot view your data (as it is encrypted), you may still wish to self host your own Atuin sync server.
+While we offer a public sync server, and can't view your data (as it's encrypted), you may still wish to self host your own Atuin sync server.
 
 The requirements to do so are pretty minimal! You need to be able to run a binary or docker container, and have a PostgreSQL database set up. Atuin requires PostgreSQL 14 or above.
 
@@ -64,7 +64,7 @@ Alternatively, provide the Database URI via an environment variable
 ATUIN_DB_URI="sqlite:///config/atuin.db"
 ```
 
-These will create the database in the `/config` directory. Be sure to map a persistent volume to the `/config` directory that is writable by the Atuin server.
+These will create the database in the `/config` directory. Be sure to map a persistent volume to the `/config` directory that's writable by the Atuin server.
 
 ### TLS
 

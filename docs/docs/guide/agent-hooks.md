@@ -44,13 +44,13 @@ By default, Atuin's interactive search shows only your own commands. Agent-run c
 
 Today this default is built into the search UI rather than configurable via `config.toml`. Interactive search uses the equivalent of:
 
-- `$all-user` — any author that is **not** a known AI agent
+- `$all-user` — any author that's **not** a known AI agent
 
 For explicit author filtering, use the CLI `atuin search --author ...` flag. Special values:
 
 | Value | Meaning |
 |-------|---------|
-| `$all-user` | Any author that is **not** a known AI agent |
+| `$all-user` | Any author that's **not** a known AI agent |
 | `$all-agent` | Any known AI agent author |
 
 You can also use literal author names:

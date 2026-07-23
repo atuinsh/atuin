@@ -32,7 +32,7 @@ When Atuin initializes, it sets several environment variables:
 | `ATUIN_HISTORY_INTENT` | Optional command intent/rationale text |
 
 These variables are used internally to track command execution and associate commands with sessions.
-If `ATUIN_HISTORY_AUTHOR` is not set, Atuin defaults to the local shell username.
+If `ATUIN_HISTORY_AUTHOR` isn't set, Atuin defaults to the local shell username.
 
 ## Embedded Terminals and IDE Integrations
 

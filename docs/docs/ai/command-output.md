@@ -59,7 +59,7 @@ Add the pty-proxy init line to your shell's init script, as high in the file as 
     source ~/.local/share/atuin/pty-proxy-init.nu
     ```
 
-See the [pty-proxy documentation](../reference/pty-proxy.md) for more detail, including what to do if `atuin` is not on your `PATH` when your shell starts.
+See the [pty-proxy documentation](../reference/pty-proxy.md) for more detail, including what to do if `atuin` isn't on your `PATH` when your shell starts.
 
 ### 3. Restart your shell
 

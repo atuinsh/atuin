@@ -30,7 +30,7 @@ eval "$(atuin init zsh --disable-up-arrow)"
 eval "$(atuin init zsh --disable-ctrl-r)"
 ```
 
-If you do not want either key to be bound, either pass both `--disable` arguments, or set the
+If you don't want either key to be bound, either pass both `--disable` arguments, or set the
 environment variable `ATUIN_NOBIND` to any value before the call to `atuin init`:
 
 ```shell
@@ -51,7 +51,7 @@ By default, the `enter` key will directly execute the selected command instead o
 
 ## Ctrl-n key shortcuts
 
-macOS does not have an ++alt++ key, although terminal emulators can often be configured to map the ++option++ key to be used as ++alt++. *However*, remapping ++option++ this way may prevent typing some characters, such as using ++option+3++ to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace ++alt+0++ to ++alt+9++ shortcuts with ++ctrl+0++ to ++ctrl+9++ instead:
+macOS doesn't have an ++alt++ key, although terminal emulators can often be configured to map the ++option++ key to be used as ++alt++. *However*, remapping ++option++ this way may prevent typing some characters, such as using ++option+3++ to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace ++alt+0++ to ++alt+9++ shortcuts with ++ctrl+0++ to ++ctrl+9++ instead:
 
 ```toml
 # Use Ctrl-0 .. Ctrl-9 instead of Alt-0 .. Alt-9 UI shortcuts

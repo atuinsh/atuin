@@ -31,7 +31,7 @@ The default configuration file is located at `~/.config/atuin/config.toml`.
 
 ### Keybindings
 
-We have a [full page dedicated to keybinding adjustments](../configuration/key-binding.md).
+We've got a [full page dedicated to keybinding adjustments](../configuration/key-binding.md).
 There are a whole bunch of options there, including disabling the up arrow behavior if you don't like it.
 
 ### Enter to run

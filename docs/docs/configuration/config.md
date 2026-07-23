@@ -141,9 +141,9 @@ The "fuzzy" and "daemon-fuzzy" search syntax is based on the
 | `'wild`   | exact-match (quoted)       | Items that include `wild`            |
 | `^music`  | prefix-exact-match         | Items that start with `music`        |
 | `.mp3$`   | suffix-exact-match         | Items that end with `.mp3`           |
-| `!fire`   | inverse-exact-match        | Items that do not include `fire`     |
-| `!^music` | inverse-prefix-exact-match | Items that do not start with `music` |
-| `!.mp3$`  | inverse-suffix-exact-match | Items that do not end with `.mp3`    |
+| `!fire`   | inverse-exact-match        | Items that don't include `fire`      |
+| `!^music` | inverse-prefix-exact-match | Items that don't start with `music`  |
+| `!.mp3$`  | inverse-suffix-exact-match | Items that don't end with `.mp3`     |
 
 A single bar character term acts as an OR operator. For example, the following
 query matches entries that start with `core` and end with either `go`, `rb`,
@@ -154,7 +154,7 @@ or `py`.
 ```
 
 !!! warning "Bar not supported in daemon-fuzzy"
-    The "daemon-fuzzy" search mode does not currently support the bar character operator.
+    The "daemon-fuzzy" search mode doesn't currently support the bar character operator.
 
 ### `filter_mode`
 
@@ -449,7 +449,7 @@ For the exact expressions, see
 
 Default: `true`
 
-macOS does not have an ++alt++ key, although terminal emulators can often be configured to map the ++option++ key to be used as ++alt++. _However_, remapping ++option++ this way may prevent typing some characters, such as using ++option+3++ to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace ++alt+0++ to ++alt+9++ shortcuts with ++ctrl+0++ to ++ctrl+9++ instead:
+macOS doesn't have an ++alt++ key, although terminal emulators can often be configured to map the ++option++ key to be used as ++alt++. _However_, remapping ++option++ this way may prevent typing some characters, such as using ++option+3++ to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace ++alt+0++ to ++alt+9++ shortcuts with ++ctrl+0++ to ++ctrl+9++ instead:
 
 ```toml
 # Use Ctrl-0 .. Ctrl-9 instead of Alt-0 .. Alt-9 UI shortcuts
@@ -503,11 +503,11 @@ Extra HTTP headers to send on every request to the sync server. This is useful
 when a self-hosted server sits behind a proxy or access gateway that requires
 its own authentication header — for example Cloudflare Access.
 
-Headers that Atuin sets itself (such as `Authorization`) cannot be overridden;
+Headers that Atuin sets itself (such as `Authorization`) can't be overridden;
 Atuin's values always win.
 
 To avoid leaking credentials, Atuin refuses to follow cross-origin redirects
-when extra headers are configured — they are never sent to an origin other
+when extra headers are configured — they're never sent to an origin other
 than the one you configured.
 
 ```toml
@@ -572,7 +572,7 @@ and ++j++ to navigate the history list as in Vim, whilst pressing
 you can search for a string as in the keymap mode `"emacs"`, while pressing ++esc++
 switches the keymap mode to `"vim-normal"`. When set to `"auto"`, the initial
 keymap mode is automatically determined based on the shell's keymap that triggered
-the Atuin search. `"auto"` is not supported by Nushell at present, where it will
+the Atuin search. `"auto"` isn't supported by Nushell at present, where it will
 always trigger the Atuin search with the keymap mode `"emacs"`.
 
 ```toml
@@ -697,7 +697,7 @@ frecency_score_multiplier = 2.0
 ### Filtering by author
 
 Interactive search shows only commands you ran yourself, hiding those recorded
-by AI coding agents through [agent hooks](../guide/agent-hooks.md). This is not
+by AI coding agents through [agent hooks](../guide/agent-hooks.md). This isn't
 currently configurable in `config.toml`.
 
 To filter by author on the command line, use `atuin search --author`. See
@@ -988,7 +988,7 @@ enabled = true
 Default: `false`
 
 Automatically start and manage the daemon when needed.
-This is not compatible with `systemd_socket = true`.
+This isn't compatible with `systemd_socket = true`.
 If a legacy experimental daemon is already running, restart it manually once before using autostart.
 
 ```toml
@@ -1182,7 +1182,7 @@ name = "my-theme"
 
 Default: `false`
 
-Output information about why a theme will not load. Independent from other log
+Output information about why a theme won't load. Independent from other log
 levels as it can cause data from the theme file to be printed unfiltered to the
 terminal.
 
@@ -1194,7 +1194,7 @@ debug = false
 
 Default: 10
 
-Number of levels of "parenthood" that will be traversed for a theme. This should not
+Number of levels of "parenthood" that will be traversed for a theme. This shouldn't
 need to be added in or changed in normal usage.
 
 ```toml

@@ -33,7 +33,7 @@ Most MCP clients accept a JSON configuration like this:
 }
 ```
 
-If the `atuin` binary is not on your client's `PATH`, use the full path to the binary instead (e.g. `~/.atuin/bin/atuin`).
+If the `atuin` binary isn't on your client's `PATH`, use the full path to the binary instead (e.g. `~/.atuin/bin/atuin`).
 
 ## Tools
 

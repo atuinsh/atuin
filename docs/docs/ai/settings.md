@@ -30,13 +30,13 @@ The amount of time after the last interaction with Atuin AI that a session is co
 
 Default: `null`
 
-The address of the Atuin AI endpoint. Used for AI features like command generation. Most users will not need this setting; it is only necessary for custom AI endpoints.
+The address of the Atuin AI endpoint. Used for AI features like command generation. Most users won't need this setting; it's only necessary for custom AI endpoints.
 
 ### `api_token`
 
 Default: `null`
 
-The API token for the Atuin AI endpoint. Used for AI features like command generation. Most users will not need this setting; it is only necessary for custom AI endpoints.
+The API token for the Atuin AI endpoint. Used for AI features like command generation. Most users won't need this setting; it's only necessary for custom AI endpoints.
 
 ### `endpoint_protocol`
 
@@ -56,7 +56,7 @@ Default: `false`
 
 Enables YOLO mode, which automatically allows all permission checks. **Use this setting with caution.**
 
-This setting does _not_ enable any capabilities; it simply bypasses any permission checks.
+This setting doesn't enable any capabilities; it simply bypasses any permission checks.
 
 ## Capabilities
 

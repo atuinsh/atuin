@@ -11,7 +11,7 @@ or when a machine ends up holding records encrypted with a key it no longer has.
 
 !!! danger
     `rekey`, `purge`, and the `--force` forms of `push`/`pull` can destroy data
-    that cannot be recovered. Read the description of a command before running
+    that can't be recovered. Read the description of a command before running
     it, and make sure you know which key Atuin is currently using.
 
 ## Subcommands
@@ -47,7 +47,7 @@ atuin store purge
 ```
 
 !!! warning
-    This only touches the local record store on the current machine. It does not
+    This only touches the local record store on the current machine. It doesn't
     wipe your history, delete your sync account, or affect other machines.
 
 Run `atuin store verify` first, so you know you are clearing up a genuine key

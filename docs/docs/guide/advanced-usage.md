@@ -19,7 +19,7 @@ modes by pressing **ctrl-r** inside the TUI.
 | session-preload  | The current session, plus all global history from before the session started         |
 
 `workspace` mode requires [`workspaces = true`](../configuration/config.md#workspaces),
-and is skipped when you are not inside a git repository.
+and is skipped when you aren't inside a git repository.
 
 To change which mode searches start in, set
 [`filter_mode`](../configuration/config.md#filter_mode). To remove modes from the

@@ -83,7 +83,7 @@ Atuin pty-proxy needs to be initialized separately from your existing Atuin conf
 
 ---
 
-If the `atuin` binary is not in your `PATH` by default, you should initialize pty-proxy as soon as it is set. For example, for a bash user with Atuin installed in `~/.atuin/bin/atuin`, a config file might look like this:
+If the `atuin` binary isn't in your `PATH` by default, you should initialize pty-proxy as soon as it's set. For example, for a bash user with Atuin installed in `~/.atuin/bin/atuin`, a config file might look like this:
 
 ```bash
 export PATH=$HOME/.atuin/bin:$PATH

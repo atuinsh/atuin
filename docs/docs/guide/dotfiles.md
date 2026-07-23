@@ -1,6 +1,6 @@
 # Syncing dotfiles
 
-While Atuin started as a tool for syncing and searching shell history, we are
+While Atuin started as a tool for syncing and searching shell history, we're
 building tooling for syncing dotfiles across machines, and making them easier
 to work with.
 
@@ -15,7 +15,7 @@ The following shells are supported:
 - xonsh
 - PowerShell
 
-Note: Atuin handles your configuration internally, so once it is installed you
+Note: Atuin handles your configuration internally, so once it's installed you
 no longer need to edit your config files manually.
 
 ## Required config

@@ -82,8 +82,8 @@ Deletes your account and all synchronized history from the server.
 | `--totp-code`/`-t` | Your two-factor authentication code, if your account has 2FA |
 
 !!! warning
-    This does not prompt for confirmation, and it cannot be undone. Your local
-    history is not affected — only the server copy.
+    This doesn't prompt for confirmation, and it can't be undone. Your local
+    history isn't affected — only the server copy.
 
 ### `atuin account link`
 
