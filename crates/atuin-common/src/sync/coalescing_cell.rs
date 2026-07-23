@@ -68,7 +68,7 @@ impl<T> CoalescingCell<T> {
         *self.value.write() = Some(fresh.clone());
         self.generation.fetch_add(1, Ordering::Release);
 
-        return Ok(fresh);
+        Ok(fresh)
     }
 }
 
@@ -165,7 +165,11 @@ mod tests {
         // never did more work than the naive path.
         assert!((1..=CALLERS).contains(&probe.count()));
         // Expected under real contention: the whole herd collapses onto one fetch.
-        assert_eq!(probe.count(), 1, "the herd should collapse to a single fetch");
+        assert_eq!(
+            probe.count(),
+            1,
+            "the herd should collapse to a single fetch"
+        );
         assert_eq!(cell.get().map(|v| *v), Some(42));
     }
 

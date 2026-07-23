@@ -38,14 +38,14 @@ struct ServerCaps {
 
 impl From<CapabilitiesResponse> for ServerCaps {
     fn from(resp: CapabilitiesResponse) -> Self {
-        return Self {
+        Self {
             version: resp.version,
             caps: resp
                 .capabilities
                 .into_iter()
                 .map(|(name, value)| (CapKey(name), value))
                 .collect(),
-        };
+        }
     }
 }
 
@@ -70,13 +70,13 @@ pub enum ServerSupportError {
 impl CapClient {
     /// Create a client that will negotiate against the given capabilities endpoint.
     pub fn new(capabilities_url: Url) -> Self {
-        return Self {
+        Self {
             inner: Arc::new(CapClientInner {
                 own: OwnCaps::default(),
                 server: CoalescingCell::default(),
                 capabilities_url,
             }),
-        };
+        }
     }
 
     /// Register a capability this client advertises.
@@ -86,7 +86,7 @@ impl CapClient {
 
     /// Check whether this client advertises the given capability.
     pub fn support<C: Capability + Clone>(&self) -> Option<C> {
-        return self.inner.own.support();
+        self.inner.own.support()
     }
 
     /// Fetch the server's capabilities over the caller's client and patch the local cache.
@@ -102,11 +102,11 @@ impl CapClient {
                     .await?
                     .json()
                     .await?;
-                return Ok(ServerCaps::from(resp));
+                Ok(ServerCaps::from(resp))
             })
             .await?;
 
-        return Ok(());
+        Ok(())
     }
 
     /// Read whether the server supports the given capability, from the last [`CapClient::refresh`].
@@ -124,12 +124,12 @@ impl CapClient {
             return Ok(None);
         };
 
-        return serde_json::from_value(raw.clone())
+        serde_json::from_value(raw.clone())
             .map(Some)
             .map_err(|source| ServerSupportError::Malformed {
                 name: C::NAME,
                 source,
-            });
+            })
     }
 
     /// The capability token this client currently knows, or `None` if it has never fetched.
@@ -137,7 +137,7 @@ impl CapClient {
     /// The token is opaque: it is the server's [`ServerCaps::version`] stringified, echoed back to
     /// the server verbatim. The client never interprets it.
     pub(crate) fn known_token(&self) -> Option<String> {
-        return self.inner.server.get().map(|caps| caps.version.to_string());
+        self.inner.server.get().map(|caps| caps.version.to_string())
     }
 }
 
@@ -161,7 +161,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let caps_url: Url = format!("{}/api/v0/capabilities", server.uri()).parse().unwrap();
+        let caps_url: Url = format!("{}/api/v0/capabilities", server.uri())
+            .parse()
+            .unwrap();
         let client = CapClient::new(caps_url);
 
         // Nothing fetched yet.

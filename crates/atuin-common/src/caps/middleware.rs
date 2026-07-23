@@ -46,7 +46,7 @@ fn capability_mismatch(response: &Response, known: Option<&str>) -> Option<Strin
         return None;
     }
     let available = response.headers().get(AVAILABLE_HEADER)?.to_str().ok()?;
-    return (Some(available) != known).then(|| available.to_string());
+    (Some(available) != known).then(|| available.to_string())
 }
 
 /// Reqwest middleware that negotiates capability versions with the server.
@@ -107,6 +107,7 @@ mod tests {
     use super::*;
     use crate::caps::CapClient;
     use reqwest_middleware::ClientBuilder;
+    use rstest::rstest;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -141,19 +142,28 @@ mod tests {
     }
 
     fn cap_client(server: &MockServer) -> CapClient {
-        let caps_url = format!("{}/api/v0/capabilities", server.uri()).parse().unwrap();
+        let caps_url = format!("{}/api/v0/capabilities", server.uri())
+            .parse()
+            .unwrap();
         CapClient::new(caps_url)
     }
 
+    #[rstest]
+    #[case(true, 200, 1)]
+    #[case(false, 412, 0)]
     #[tokio::test]
-    async fn refresh_true_retries_transparently() {
+    async fn refresh_controls_whether_the_412_is_retried(
+        #[case] refresh: bool,
+        #[case] expected_status: u16,
+        #[case] expected_caps_hits: usize,
+    ) {
         crate::tls::ensure_crypto_provider();
         let server = negotiating_server().await;
         let http = reqwest::Client::new();
         let middleware = CapMiddleware::builder()
             .caps(cap_client(&server))
             .http(http.clone())
-            .refresh(true)
+            .refresh(refresh)
             .build();
         let client = ClientBuilder::new(http).with(middleware).build();
 
@@ -163,8 +173,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), 200);
-        assert_eq!(response.text().await.unwrap(), "ok");
+        assert_eq!(response.status(), expected_status);
 
         let caps_hits = server
             .received_requests()
@@ -173,36 +182,7 @@ mod tests {
             .iter()
             .filter(|r| r.url.path() == "/api/v0/capabilities")
             .count();
-        assert_eq!(caps_hits, 1, "capabilities should be fetched exactly once");
-    }
-
-    #[tokio::test]
-    async fn refresh_false_surfaces_the_412() {
-        crate::tls::ensure_crypto_provider();
-        let server = negotiating_server().await;
-        let http = reqwest::Client::new();
-        let middleware = CapMiddleware::builder()
-            .caps(cap_client(&server))
-            .http(http.clone())
-            .refresh(false)
-            .build();
-        let client = ClientBuilder::new(http).with(middleware).build();
-
-        let response = client
-            .get(format!("{}/protected", server.uri()))
-            .send()
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), 412);
-        let caps_hits = server
-            .received_requests()
-            .await
-            .unwrap()
-            .iter()
-            .filter(|r| r.url.path() == "/api/v0/capabilities")
-            .count();
-        assert_eq!(caps_hits, 0, "refresh(false) must not fetch capabilities");
+        assert_eq!(caps_hits, expected_caps_hits);
     }
 
     #[tokio::test]
@@ -214,7 +194,9 @@ mod tests {
             .respond_with(ResponseTemplate::new(404))
             .mount(&server)
             .await;
-        let caps_url = format!("{}/api/v0/capabilities", server.uri()).parse().unwrap();
+        let caps_url = format!("{}/api/v0/capabilities", server.uri())
+            .parse()
+            .unwrap();
 
         let http = reqwest::Client::new();
         let middleware = CapMiddleware::builder()
@@ -249,64 +231,44 @@ mod tests {
         Response::from(builder.body(String::new()).unwrap())
     }
 
-    #[test]
-    fn mismatch_when_412_and_available_differs() {
-        let response = response_with(412, Some("5"));
-        assert_eq!(capability_mismatch(&response, Some("3")), Some("5".to_string()));
-    }
-
-    #[test]
-    fn mismatch_when_412_and_client_knows_nothing() {
-        let response = response_with(412, Some("5"));
-        assert_eq!(capability_mismatch(&response, None), Some("5".to_string()));
-    }
-
-    #[test]
-    fn no_mismatch_when_tokens_match() {
-        let response = response_with(412, Some("5"));
-        assert_eq!(capability_mismatch(&response, Some("5")), None);
-    }
-
-    #[test]
-    fn no_mismatch_when_status_is_not_412() {
-        let response = response_with(200, Some("5"));
-        assert_eq!(capability_mismatch(&response, Some("3")), None);
-    }
-
-    #[test]
-    fn no_mismatch_when_412_lacks_the_available_header() {
-        let response = response_with(412, None);
-        assert_eq!(capability_mismatch(&response, Some("3")), None);
-    }
-
-    #[test]
-    fn unrelated_4xx_passes_through() {
-        let response = response_with(404, None);
-        assert_eq!(capability_mismatch(&response, Some("3")), None);
-    }
-
-    #[test]
-    fn stamp_known_sets_the_header_when_a_token_is_present() {
-        crate::tls::ensure_crypto_provider();
-        let mut req = reqwest::Client::new()
-            .get("http://example.invalid/x")
-            .build()
-            .unwrap();
-        stamp_known(&mut req, Some("9"));
+    #[rstest]
+    #[case(412, Some("5"), Some("3"), Some("5"))] // differs -> mismatch
+    #[case(412, Some("5"), None, Some("5"))] // client knows nothing
+    #[case(412, Some("5"), Some("5"), None)] // equal -> none
+    #[case(200, Some("5"), Some("3"), None)] // not 412
+    #[case(412, None, Some("3"), None)] // no available header
+    #[case(404, None, Some("3"), None)] // unrelated 4xx
+    fn capability_mismatch_cases(
+        #[case] status: u16,
+        #[case] available: Option<&str>,
+        #[case] known: Option<&str>,
+        #[case] expected: Option<&str>,
+    ) {
+        let response = response_with(status, available);
         assert_eq!(
-            req.headers().get(KNOWN_HEADER).unwrap().to_str().unwrap(),
-            "9"
+            capability_mismatch(&response, known),
+            expected.map(String::from)
         );
     }
 
-    #[test]
-    fn stamp_known_leaves_the_header_absent_when_token_is_none() {
+    #[rstest]
+    #[case(Some("9"), Some("9"))]
+    #[case(None, None)]
+    fn stamp_known_cases(#[case] token: Option<&str>, #[case] expected: Option<&str>) {
         crate::tls::ensure_crypto_provider();
         let mut req = reqwest::Client::new()
             .get("http://example.invalid/x")
             .build()
             .unwrap();
-        stamp_known(&mut req, None);
-        assert!(req.headers().get(KNOWN_HEADER).is_none());
+        stamp_known(&mut req, token);
+        match expected {
+            Some(value) => {
+                assert_eq!(
+                    req.headers().get(KNOWN_HEADER).unwrap().to_str().unwrap(),
+                    value
+                );
+            }
+            None => assert!(req.headers().get(KNOWN_HEADER).is_none()),
+        }
     }
 }

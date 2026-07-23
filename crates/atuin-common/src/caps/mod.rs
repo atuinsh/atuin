@@ -19,8 +19,8 @@ mod middleware;
 mod server;
 
 pub use client::{CapClient, ServerSupportError};
-pub use server::CapServer;
 pub use middleware::CapMiddleware;
+pub use server::CapServer;
 
 /// A capability is always indexed by a String key.
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, derive_more::AsRef)]
