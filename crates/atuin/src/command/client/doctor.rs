@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::Command;
 use std::{env, str::FromStr};
 
@@ -250,7 +251,6 @@ impl SystemInfo {
 #[derive(Debug, Serialize)]
 struct SyncInfo {
     pub auth_state: String,
-    pub records: bool,
     pub auto_sync: bool,
 
     pub last_sync: String,
@@ -289,7 +289,6 @@ impl SyncInfo {
         Self {
             auth_state,
             auto_sync: settings.auto_sync,
-            records: settings.sync.records,
             last_sync: Settings::last_sync()
                 .await
                 .map_or_else(|_| "no last sync".to_string(), |v| v.to_string()),
@@ -299,9 +298,9 @@ impl SyncInfo {
 
 #[derive(Debug)]
 struct SettingPaths {
-    db: String,
-    record_store: String,
-    key: String,
+    db: PathBuf,
+    record_store: PathBuf,
+    key: PathBuf,
 }
 
 impl SettingPaths {
@@ -321,9 +320,10 @@ impl SettingPaths {
         ];
 
         for (path_env_var, path) in paths {
-            if utils::broken_symlink(path) {
+            if utils::broken_symlink(path.as_path()) {
                 eprintln!(
-                    "{path} (${path_env_var}) is a broken symlink. This may cause issues with Atuin."
+                    "{} (${path_env_var}) is a broken symlink. This may cause issues with Atuin.",
+                    path.display()
                 );
             }
         }

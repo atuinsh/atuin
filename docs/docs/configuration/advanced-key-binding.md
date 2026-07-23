@@ -14,8 +14,8 @@ The Atuin TUI has multiple modes, each with its own keymap. You configure each o
 | Config section       | When it is active |
 |----------------------|-------------------|
 | `[keymap.emacs]`     | Search tab, `keymap_mode = "emacs"` |
-| `[keymap.vim-normal]`| Search tab, `keymap_mode = "vim"`, normal mode |
-| `[keymap.vim-insert]`| Search tab, `keymap_mode = "vim"`, insert mode |
+| `[keymap.vim-normal]`| Search tab, vim normal mode (see [`keymap_mode`](config.md#keymap_mode)) |
+| `[keymap.vim-insert]`| Search tab, vim insert mode (see [`keymap_mode`](config.md#keymap_mode)) |
 | `[keymap.inspector]` | Inspector tab (opened with `ctrl-o`) |
 | `[keymap.prefix]`    | After pressing the prefix key (`ctrl-a` by default) |
 
@@ -24,7 +24,7 @@ Vim-insert mode inherits all emacs bindings by default, then overrides `esc` and
 You only need to specify the keys you want to change. Unmentioned keys keep their default bindings.
 
 !!! warning
-    If you specify a key in your keymap that would normally be changed by an option, like the `enter` key with the `enter_accept` setting, the setting will not take any affect. Those options modify the default keymap based on their setting, but if you override the key in the keymap, you're responsible for managing correct behavior.
+    If you specify a key in your keymap that would normally be changed by an option, like the `enter` key with the `enter_accept` setting, the setting will not take effect. Those options modify the default keymap based on their setting, but if you override the key in the keymap, you're responsible for managing correct behavior.
 
 ## Key format
 
@@ -204,8 +204,8 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `delete-all` | Delete **all** history entries matching the selected command text |
 | `exit` | Exit the TUI (behavior depends on the `exit_mode` setting) |
 | `redraw` | Redraw the screen |
-| `cycle-filter-mode` | Cycle through filter modes (global, host, session, directory) |
-| `cycle-search-mode` | Cycle through search modes (fuzzy, prefix, fulltext, skim) |
+| `cycle-filter-mode` | Cycle through the enabled [filter modes](config.md#filter_mode) |
+| `cycle-search-mode` | Cycle through [search modes](config.md#search_mode) (fuzzy, prefix, fulltext, skim) |
 | `toggle-tab` | Toggle between the search tab and inspector tab |
 | `switch-context` | Switch to the [context](../guide/advanced-usage.md#context-switch) of the currently selected command |
 | `clear-context` | Return to the initial [context](../guide/advanced-usage.md#context-switch) |

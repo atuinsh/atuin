@@ -11,6 +11,7 @@ use time::{Duration, OffsetDateTime};
 
 use super::{Importer, Loader, get_histfile_path, unix_byte_lines};
 use crate::history::History;
+use crate::history::builder::HistoryImported;
 use crate::import::read_to_end;
 
 #[derive(Debug)]
@@ -136,15 +137,12 @@ impl Importer for Zsh {
                 timestamp += timestamp_increment;
             }
 
-            let builder = History::import()
+            let imported = History::import()
+                .shell("zsh")
                 .timestamp(timestamp)
-                .command(entry.command);
-
-            let imported = if let Some(duration) = entry.duration {
-                builder.duration(duration).build()
-            } else {
-                builder.build()
-            };
+                .duration(entry.duration.unwrap_or(HistoryImported::DEFAULT_DURATION))
+                .command(entry.command)
+                .build();
             h.push(imported.into()).await?;
         }
         Ok(())

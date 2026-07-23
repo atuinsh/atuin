@@ -5,11 +5,13 @@ description = "Atuin CLI documentation"
 requires-python = ">=3.11"
 dependencies = [
   "mkdocs-material>=9.5",
-  "mkdocs-multirepo-plugin @ git+https://github.com/atuinsh/mkdocs-multirepo-plugin@mkt/imported_repo",
   "mkdocs-git-revision-date-localized-plugin>=1.2",
   "mkdocs-glightbox>=0.4",
   "mkdocs-redirects>=1.2.2",
   "mkdocs-llmstxt>=0.5",
+  "mkdocs-minify-plugin>=0.8",
+  "mkdocs-git-committers-plugin-2>=2.5",
+  "mike>=2.1",
 ]
 
 [tool.uv]

@@ -41,7 +41,9 @@ impl Rebuild {
                 self.rebuild_scripts(settings, store.clone()).await?;
             }
 
-            tag => bail!("unknown tag: {tag}"),
+            tag => {
+                bail!("unknown tag: {tag}");
+            }
         }
 
         Ok(())

@@ -7,7 +7,7 @@ pub(crate) const SCORE_MATCH: u16 = 16;
 pub(crate) const PENALTY_GAP_START: u16 = 3;
 pub(crate) const PENALTY_GAP_EXTENSION: u16 = 1;
 /// If the prefer_prefix option is enabled we want to penalize
-/// the initial gap. The prefix should not be too much  
+/// the initial gap. The prefix should not be too much
 pub(crate) const PREFIX_BONUS_SCALE: u16 = 2;
 pub(crate) const MAX_PREFIX_BONUS: u16 = BONUS_BOUNDARY;
 

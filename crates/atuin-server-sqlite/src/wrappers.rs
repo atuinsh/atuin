@@ -1,14 +1,12 @@
 use ::sqlx::{FromRow, Result};
 use atuin_common::record::{EncryptedData, Host, Record};
-use atuin_server_database::models::{History, Session, User};
+use atuin_server_database::models::{Session, User};
 use sqlx::{Row, sqlite::SqliteRow};
 
 #[derive(derive_more::Into)]
 pub struct DbUser(pub User);
 #[derive(derive_more::Into)]
 pub struct DbSession(pub Session);
-#[derive(derive_more::Into)]
-pub struct DbHistory(pub History);
 #[derive(derive_more::Into)]
 pub struct DbRecord(pub Record<EncryptedData>);
 
@@ -29,20 +27,6 @@ impl<'a> ::sqlx::FromRow<'a, SqliteRow> for DbSession {
             id: row.try_get("id")?,
             user_id: row.try_get("user_id")?,
             token: row.try_get("token")?,
-        }))
-    }
-}
-
-impl<'a> ::sqlx::FromRow<'a, SqliteRow> for DbHistory {
-    fn from_row(row: &'a SqliteRow) -> ::sqlx::Result<Self> {
-        Ok(Self(History {
-            id: row.try_get("id")?,
-            client_id: row.try_get("client_id")?,
-            user_id: row.try_get("user_id")?,
-            hostname: row.try_get("hostname")?,
-            timestamp: row.try_get("timestamp")?,
-            data: row.try_get("data")?,
-            created_at: row.try_get("created_at")?,
         }))
     }
 }

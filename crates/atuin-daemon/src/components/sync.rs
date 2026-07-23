@@ -2,14 +2,19 @@
 //!
 //! Handles periodic synchronization with the Atuin cloud server.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use eyre::Result;
+use futures::{StreamExt, TryStreamExt, stream::TryChunksError};
 use rand::Rng;
 use tokio::sync::mpsc;
 use tokio::time::{self, MissedTickBehavior};
 
-use atuin_client::{history::store::HistoryStore, record::sync, settings::Settings};
+use atuin_client::{
+    history::{HistoryId, store::HistoryStore},
+    record::sync,
+    settings::Settings,
+};
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
 
 use crate::{
@@ -244,22 +249,41 @@ async fn do_sync_tick(
             SyncState::Retrying
         }
         Ok((uploaded_count, downloaded_records)) => {
+            // Controls how large of a Vec<History> we should try to process at a time.
+            // This is used limit how much memory we use at a time.
+            //
+            // An initial sync (on backfill, eg.), risks being dozens of GB of RAM
+            const HISTORY_BATCH_SIZE: usize = 5000;
+
             tracing::info!(
                 uploaded = uploaded_count,
                 downloaded = downloaded_records.len(),
                 "sync complete"
             );
 
-            // Build history from downloaded records
-            if let Err(e) = history_store
+            let batches = history_store
                 .incremental_build(handle.history_db(), &downloaded_records)
-                .await
-            {
-                tracing::error!("failed to build history from downloaded records: {e}");
-            }
+                // intentional try_chunks -- legacy behavior was to abort on the first error.
+                .try_chunks(HISTORY_BATCH_SIZE);
+            futures::pin_mut!(batches);
 
-            // Emit the records added event (for search indexing)
-            handle.emit(DaemonEvent::RecordsAdded(downloaded_records.clone()));
+            while let Some(batch) = batches.next().await {
+                let (histories, failure) = match batch {
+                    Ok(histories) => (histories, None),
+                    Err(TryChunksError(histories, e)) => (histories, Some(e)),
+                };
+
+                if !histories.is_empty() {
+                    // Only the IDs go on the bus; the rows themselves are already in sqlite.
+                    let ids: Arc<[HistoryId]> = histories.iter().map(|h| h.id.clone()).collect();
+                    handle.emit(DaemonEvent::HistorySynced(ids));
+                }
+
+                if let Some(e) = failure {
+                    tracing::error!("failed to build history from downloaded records: {e}");
+                    break;
+                }
+            }
 
             // Emit sync completed event
             handle.emit(DaemonEvent::SyncCompleted {

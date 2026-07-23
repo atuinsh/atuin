@@ -113,7 +113,10 @@ impl Importer for PowerShell {
             let offset = Duration::milliseconds(counter);
             counter += 1;
 
-            let entry = History::import().timestamp(start + offset).command(cmd);
+            let entry = History::import()
+                .shell("powershell")
+                .timestamp(start + offset)
+                .command(cmd);
             h.push(entry.build().into()).await?;
         }
 

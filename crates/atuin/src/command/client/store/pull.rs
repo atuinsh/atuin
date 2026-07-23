@@ -17,11 +17,13 @@ pub struct Pull {
     pub tag: Option<String>,
 
     /// Force push records
+    ///
     /// This will first wipe the local store, and then download all records from the remote
     #[arg(long, default_value = "false")]
     pub force: bool,
 
     /// Page Size
+    ///
     /// How many records to download at once. Defaults to 100
     #[arg(long, default_value = "100")]
     pub page: u64,

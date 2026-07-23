@@ -109,6 +109,41 @@ fn stream_tool_call_tracks_tool_and_emits_check_permission() {
 }
 
 #[test]
+fn atuin_output_call_emits_command_lookup_and_stores_result() {
+    let mut fsm = AgentFsm::new(
+        vec!["client_v1_atuin_output".to_string()],
+        "test-inv".to_string(),
+    );
+    fsm.handle(Event::UserSubmit("show output".into()));
+    fsm.handle(Event::StreamStarted);
+
+    let effects = fsm.handle(Event::StreamToolCall {
+        id: "t1".into(),
+        name: "atuin_output".into(),
+        input: json!({"history_id": "018f011c-9a0a-7000-8000-000000000001"}),
+    });
+
+    // The command lookup runs alongside the permission check.
+    assert!(matches!(
+        effects[0],
+        Effect::ResolveOutputCommand { ref tool_id, .. } if tool_id == "t1"
+    ));
+    assert!(matches!(effects[1], Effect::CheckPermission { .. }));
+
+    let effects = fsm.handle(Event::OutputCommandResolved {
+        tool_id: "t1".into(),
+        command: Some("cargo test".into()),
+    });
+
+    assert!(effects.is_empty());
+    let crate::tools::ClientToolCall::AtuinOutput(call) = &fsm.ctx.tools.get("t1").unwrap().tool
+    else {
+        panic!("expected AtuinOutput tool");
+    };
+    assert_eq!(call.command.as_deref(), Some("cargo test"));
+}
+
+#[test]
 fn permission_allowed_transitions_to_executing() {
     let mut fsm = new_fsm();
     fsm.handle(Event::UserSubmit("read".into()));

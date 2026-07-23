@@ -13,7 +13,7 @@ values in your `config.toml` without opening an editor.
 
 Print the value of a key as it appears in your config file.
 
-```
+```console
 $ atuin config get search_mode
 fuzzy
 
@@ -25,7 +25,7 @@ socket_path = "/tmp/atuin_daemon.sock"
 
 If the key is not present in the config file, you'll see:
 
-```
+```console
 $ atuin config get enter_accept
 (not set in config file)
 ```
@@ -35,7 +35,7 @@ $ atuin config get enter_accept
 Print the effective value after merging defaults, the config file, and
 environment variable overrides:
 
-```
+```console
 $ atuin config get enter_accept --resolved
 false
 ```
@@ -43,7 +43,7 @@ false
 This also works for table keys, showing all resolved children as flat
 dotted key=value pairs:
 
-```
+```console
 $ atuin config get logs --resolved
 logs.ai.file = ai.log
 logs.daemon.file = daemon.log
@@ -57,7 +57,7 @@ logs.search.file = search.log
 
 Show both the config file value and the resolved value side by side:
 
-```
+```console
 $ atuin config get enter_accept --verbose
 Config file:
   (not set in config file)
@@ -71,7 +71,7 @@ Resolved:
 Set a configuration value in your `config.toml`. The file's existing
 formatting and comments are preserved.
 
-```
+```shell
 $ atuin config set search_mode fuzzy
 $ atuin config set daemon.enabled true
 ```
@@ -98,7 +98,7 @@ For new keys (not already in the file), `set` auto-detects the type:
 
 Override type detection with an explicit type:
 
-```
+```shell
 $ atuin config set sync_frequency 600 --type string
 ```
 
@@ -107,7 +107,7 @@ Possible values: `auto`, `string`, `boolean`, `integer`, `float`.
 Setting a key that is currently a table will produce an error directing you
 to use a dotted key instead:
 
-```
+```console
 $ atuin config set logs true
 Error: 'logs' is a table; use a dotted key like 'logs.key' to set a value within it
 ```
@@ -117,7 +117,7 @@ Error: 'logs' is a table; use a dotted key like 'logs.key' to set a value within
 Print configuration values from your config file in TOML format. Without a
 key, prints the entire file. With a key, prints that section:
 
-```
+```console
 $ atuin config print daemon
 [daemon]
 enabled = true

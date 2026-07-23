@@ -301,6 +301,7 @@ pub fn compute(
 mod tests {
     use atuin_client::history::History;
     use atuin_client::settings::Settings;
+    use rstest::rstest;
     use time::OffsetDateTime;
 
     use super::compute;
@@ -443,106 +444,36 @@ mod tests {
         );
     }
 
-    #[test]
-    fn split_simple() {
-        assert_eq!(split_at_pipe("fd | rg"), ["fd ", " rg"]);
+    #[rstest]
+    #[case::simple("fd | rg", &["fd ", " rg"])]
+    #[case::multi("kubectl | jq | rg", &["kubectl ", " jq ", " rg"])]
+    #[case::simple_quoted(
+        "foo | bar 'baz {} | quux' | xyzzy",
+        &["foo ", " bar 'baz {} | quux' ", " xyzzy"]
+    )]
+    #[case::multi_quoted(
+        "foo | bar 'baz \"{}\" | quux' | xyzzy",
+        &["foo ", " bar 'baz \"{}\" | quux' ", " xyzzy"]
+    )]
+    #[case::escaped_pipes("foo | bar baz \\| quux", &["foo ", " bar baz \\| quux"])]
+    #[case::emoji("git commit -m \"🚀\"", &["git commit -m \"🚀\""])]
+    #[case::starts_with_pipe("| sed 's/[0-9a-f]//g'", &["", " sed 's/[0-9a-f]//g'"])]
+    #[case::starts_with_spaces_and_pipe("  | sed 's/[0-9a-f]//g'", &["  ", " sed 's/[0-9a-f]//g'"])]
+    fn splits_at_pipe(#[case] input: &str, #[case] expected: &[&str]) {
+        assert_eq!(split_at_pipe(input), expected);
     }
 
-    #[test]
-    fn split_multi() {
-        assert_eq!(
-            split_at_pipe("kubectl | jq | rg"),
-            ["kubectl ", " jq ", " rg"]
-        );
-    }
-
-    #[test]
-    fn split_simple_quoted() {
-        assert_eq!(
-            split_at_pipe("foo | bar 'baz {} | quux' | xyzzy"),
-            ["foo ", " bar 'baz {} | quux' ", " xyzzy"]
-        );
-    }
-
-    #[test]
-    fn split_multi_quoted() {
-        assert_eq!(
-            split_at_pipe("foo | bar 'baz \"{}\" | quux' | xyzzy"),
-            ["foo ", " bar 'baz \"{}\" | quux' ", " xyzzy"]
-        );
-    }
-
-    #[test]
-    fn escaped_pipes() {
-        assert_eq!(
-            split_at_pipe("foo | bar baz \\| quux"),
-            ["foo ", " bar baz \\| quux"]
-        );
-    }
-
-    #[test]
-    fn emoji() {
-        assert_eq!(
-            split_at_pipe("git commit -m \"🚀\""),
-            ["git commit -m \"🚀\""]
-        );
-    }
-
-    #[test]
-    fn starts_with_pipe() {
-        assert_eq!(
-            split_at_pipe("| sed 's/[0-9a-f]//g'"),
-            ["", " sed 's/[0-9a-f]//g'"]
-        );
-    }
-
-    #[test]
-    fn starts_with_spaces_and_pipe() {
-        assert_eq!(
-            split_at_pipe("  | sed 's/[0-9a-f]//g'"),
-            ["  ", " sed 's/[0-9a-f]//g'"]
-        );
-    }
-
-    #[test]
-    fn strip_leading_env_vars_simple() {
-        assert_eq!(
-            strip_leading_env_vars("FOO=bar BAZ=quux echo foo"),
-            "echo foo"
-        );
-    }
-
-    #[test]
-    fn strip_leading_env_vars_quoted_single() {
-        assert_eq!(strip_leading_env_vars("FOO='BAR=baz' echo foo"), "echo foo");
-    }
-
-    #[test]
-    fn strip_leading_env_vars_quoted_double() {
-        assert_eq!(
-            strip_leading_env_vars("FOO=\"BAR=baz\" echo foo"),
-            "echo foo"
-        );
-    }
-
-    #[test]
-    fn strip_leading_env_vars_quoted_single_and_double() {
-        assert_eq!(
-            strip_leading_env_vars("FOO='BAR=\"baz\"' echo foo \"BAR=quux\""),
-            "echo foo \"BAR=quux\""
-        );
-    }
-
-    #[test]
-    fn strip_leading_env_vars_emojis() {
-        assert_eq!(
-            strip_leading_env_vars("FOO='BAR=🚀' echo foo \"BAR=quux\" foo"),
-            "echo foo \"BAR=quux\" foo"
-        );
-    }
-
-    #[test]
-    fn strip_leading_env_vars_name_same_as_command() {
-        assert_eq!(strip_leading_env_vars("FOO='bar' bar baz"), "bar baz");
+    #[rstest]
+    #[case::simple("FOO=bar BAZ=quux echo foo", "echo foo")]
+    #[case::quoted_single("FOO='BAR=baz' echo foo", "echo foo")]
+    #[case::quoted_double("FOO=\"BAR=baz\" echo foo", "echo foo")]
+    #[case::quoted_single_and_double(
+        "FOO='BAR=\"baz\"' echo foo \"BAR=quux\"",
+        "echo foo \"BAR=quux\""
+    )]
+    #[case::emojis("FOO='BAR=🚀' echo foo \"BAR=quux\" foo", "echo foo \"BAR=quux\" foo")]
+    #[case::name_same_as_command("FOO='bar' bar baz", "bar baz")]
+    fn strips_leading_env_vars(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(strip_leading_env_vars(input), expected);
     }
 }

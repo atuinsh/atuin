@@ -2,31 +2,27 @@ use std::collections::HashMap;
 use std::env;
 use std::time::Duration;
 
-use eyre::{Result, bail, eyre};
+use eyre::{Result, bail};
 use reqwest::{
     Response, StatusCode, Url,
-    header::{AUTHORIZATION, HeaderMap, USER_AGENT},
+    header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT},
 };
 
 use atuin_common::{
     api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION},
     record::{EncryptedData, HostId, Record, RecordIdx},
     tls::ensure_crypto_provider,
+    url::UrlAppendExt,
 };
 use atuin_common::{
     api::{
-        AddHistoryRequest, ChangePasswordRequest, CountResponse, DeleteHistoryRequest,
-        ErrorResponse, LoginRequest, LoginResponse, MeResponse, RegisterResponse, StatusResponse,
-        SyncHistoryResponse,
+        ChangePasswordRequest, ErrorResponse, LoginRequest, LoginResponse, MeResponse,
+        RegisterResponse,
     },
     record::RecordStatus,
 };
 
 use semver::Version;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
-
-use crate::{history::History, sync::hash_str, utils::get_host_user};
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
@@ -57,34 +53,64 @@ impl AuthToken {
 }
 
 pub struct Client<'a> {
-    sync_addr: &'a str,
+    sync_addr: &'a Url,
     client: reqwest::Client,
 }
 
-fn make_url(address: &str, path: &str) -> Result<String> {
-    // `join()` expects a trailing `/` in order to join paths
-    // e.g. it treats `http://host:port/subdir` as a file called `subdir`
-    let address = if address.ends_with("/") {
-        address
-    } else {
-        &format!("{address}/")
-    };
+/// A [`reqwest::ClientBuilder`] appropriate for the given extra headers.
+///
+/// reqwest only strips its own well-known sensitive headers (Authorization,
+/// Cookie, ...) when following a cross-host redirect; user-configured extra
+/// headers would be forwarded as-is. Since those often carry credentials
+/// (e.g. Cloudflare Access secrets), refuse cross-origin redirects entirely
+/// whenever extra headers are configured.
+pub(crate) fn client_builder(extra_headers: &HashMap<String, String>) -> reqwest::ClientBuilder {
+    let builder = reqwest::Client::builder();
 
-    // passing a path with a leading `/` will cause `join()` to replace the entire URL path
-    let path = path.strip_prefix("/").unwrap_or(path);
+    if extra_headers.is_empty() {
+        return builder;
+    }
 
-    let url = Url::parse(address)
-        .map(|url| url.join(path))?
-        .map_err(|_| eyre!("invalid address"))?;
+    builder.redirect(reqwest::redirect::Policy::custom(|attempt| {
+        let same_origin = attempt.previous().last().is_some_and(|prev| {
+            prev.scheme() == attempt.url().scheme()
+                && prev.host_str() == attempt.url().host_str()
+                && prev.port_or_known_default() == attempt.url().port_or_known_default()
+        });
 
-    Ok(url.to_string())
+        if !same_origin {
+            attempt.error(
+                "refusing to follow cross-origin redirect: extra_headers are configured and will not be sent to a different origin",
+            )
+        } else if attempt.previous().len() > 10 {
+            attempt.error("too many redirects")
+        } else {
+            attempt.follow()
+        }
+    }))
+}
+
+/// Build a [`HeaderMap`] from user-configured extra headers (the
+/// `extra_headers` setting). Headers Atuin sets itself should be inserted
+/// after these so that Atuin's values win.
+pub(crate) fn extra_headers_map(extra_headers: &HashMap<String, String>) -> Result<HeaderMap> {
+    let mut headers = HeaderMap::new();
+    for (name, value) in extra_headers {
+        let name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|e| eyre::eyre!("invalid extra_headers name {name:?}: {e}"))?;
+        let value = HeaderValue::from_str(value)
+            .map_err(|e| eyre::eyre!("invalid extra_headers value for {name:?}: {e}"))?;
+        headers.insert(name, value);
+    }
+    Ok(headers)
 }
 
 pub async fn register(
-    address: &str,
+    address: &Url,
     username: &str,
     email: &str,
     password: &str,
+    extra_headers: &HashMap<String, String>,
 ) -> Result<RegisterResponse> {
     ensure_crypto_provider();
     let mut map = HashMap::new();
@@ -92,22 +118,21 @@ pub async fn register(
     map.insert("email", email);
     map.insert("password", password);
 
-    let url = make_url(address, &format!("/user/{username}"))?;
-    let resp = reqwest::get(url).await?;
+    let mut headers = extra_headers_map(extra_headers)?;
+    headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
+    headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
+
+    let client = client_builder(extra_headers).build()?;
+
+    let url = address.append(["user", username])?;
+    let resp = client.get(url).headers(headers.clone()).send().await?;
 
     if resp.status().is_success() {
         bail!("username already in use");
     }
 
-    let url = make_url(address, "/register")?;
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(url)
-        .header(USER_AGENT, APP_USER_AGENT)
-        .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
-        .json(&map)
-        .send()
-        .await?;
+    let url = address.append(["register"])?;
+    let resp = client.post(url).headers(headers).json(&map).send().await?;
     let resp = handle_resp_error(resp).await?;
 
     if !ensure_version(&resp)? {
@@ -118,17 +143,19 @@ pub async fn register(
     Ok(session)
 }
 
-pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
+pub async fn login(
+    address: &Url,
+    req: LoginRequest,
+    extra_headers: &HashMap<String, String>,
+) -> Result<LoginResponse> {
     ensure_crypto_provider();
-    let url = make_url(address, "/login")?;
-    let client = reqwest::Client::new();
+    let url = address.append(["login"])?;
+    let client = client_builder(extra_headers).build()?;
 
-    let resp = client
-        .post(url)
-        .header(USER_AGENT, APP_USER_AGENT)
-        .json(&req)
-        .send()
-        .await?;
+    let mut headers = extra_headers_map(extra_headers)?;
+    headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
+
+    let resp = client.post(url).headers(headers).json(&req).send().await?;
     let resp = handle_resp_error(resp).await?;
 
     if !ensure_version(&resp)? {
@@ -144,7 +171,7 @@ pub async fn latest_version() -> Result<Version> {
     use atuin_common::api::IndexResponse;
 
     ensure_crypto_provider();
-    let url = "https://api.atuin.sh";
+    let url = crate::settings::DEFAULT_SYNC_URL.clone();
     let client = reqwest::Client::new();
 
     let resp = client
@@ -166,7 +193,9 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
     let version = if let Some(version) = version {
         match version.to_str() {
             Ok(v) => Version::parse(v),
-            Err(e) => bail!("failed to parse server version: {:?}", e),
+            Err(e) => {
+                bail!("failed to parse server version: {:?}", e);
+            }
         }
     } else {
         bail!("Server not reporting its version: it is either too old or unhealthy");
@@ -205,17 +234,17 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
             let reason = error.reason;
 
             if status.is_client_error() {
-                bail!("Invalid request to the service at {url}, {status} - {reason}.")
+                bail!("Invalid request to the service at {url}, {status} - {reason}.");
             }
 
             bail!(
                 "There was an error with the atuin sync service at {url}, server error {status}: {reason}.\nIf the problem persists, contact the host"
-            )
+            );
         }
 
         bail!(
             "There was an error with the atuin sync service at {url}, Status {status:?}.\nIf the problem persists, contact the host"
-        )
+        );
     }
 
     Ok(resp)
@@ -223,22 +252,23 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
 
 impl<'a> Client<'a> {
     pub fn new(
-        sync_addr: &'a str,
+        sync_addr: &'a Url,
         auth: AuthToken,
         connect_timeout: u64,
         timeout: u64,
+        extra_headers: &HashMap<String, String>,
     ) -> Result<Self> {
         ensure_crypto_provider();
-        let mut headers = HeaderMap::new();
+        let mut headers = extra_headers_map(extra_headers)?;
         headers.insert(AUTHORIZATION, auth.to_header_value().parse()?);
+        headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
 
         // used for semver server check
         headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
 
         Ok(Client {
             sync_addr,
-            client: reqwest::Client::builder()
-                .user_agent(APP_USER_AGENT)
+            client: client_builder(extra_headers)
                 .default_headers(headers)
                 .connect_timeout(Duration::new(connect_timeout, 0))
                 .timeout(Duration::new(timeout, 0))
@@ -246,45 +276,8 @@ impl<'a> Client<'a> {
         })
     }
 
-    pub async fn count(&self) -> Result<i64> {
-        let url = make_url(self.sync_addr, "/sync/count")?;
-        let url = Url::parse(url.as_str())?;
-
-        let resp = self.client.get(url).send().await?;
-        let resp = handle_resp_error(resp).await?;
-
-        if !ensure_version(&resp)? {
-            bail!("could not sync due to version mismatch");
-        }
-
-        if resp.status() != StatusCode::OK {
-            bail!("failed to get count (are you logged in?)");
-        }
-
-        let count = resp.json::<CountResponse>().await?;
-
-        Ok(count.count)
-    }
-
-    pub async fn status(&self) -> Result<StatusResponse> {
-        let url = make_url(self.sync_addr, "/sync/status")?;
-        let url = Url::parse(url.as_str())?;
-
-        let resp = self.client.get(url).send().await?;
-        let resp = handle_resp_error(resp).await?;
-
-        if !ensure_version(&resp)? {
-            bail!("could not sync due to version mismatch");
-        }
-
-        let status = resp.json::<StatusResponse>().await?;
-
-        Ok(status)
-    }
-
     pub async fn me(&self) -> Result<MeResponse> {
-        let url = make_url(self.sync_addr, "/api/v0/me")?;
-        let url = Url::parse(url.as_str())?;
+        let url = self.sync_addr.append_path("api/v0/me")?;
 
         let resp = self.client.get(url).send().await?;
         let resp = handle_resp_error(resp).await?;
@@ -294,62 +287,8 @@ impl<'a> Client<'a> {
         Ok(status)
     }
 
-    pub async fn get_history(
-        &self,
-        sync_ts: OffsetDateTime,
-        history_ts: OffsetDateTime,
-        host: Option<String>,
-    ) -> Result<SyncHistoryResponse> {
-        let host = host.unwrap_or_else(|| hash_str(&get_host_user()));
-
-        let url = make_url(
-            self.sync_addr,
-            &format!(
-                "/sync/history?sync_ts={}&history_ts={}&host={}",
-                urlencoding::encode(sync_ts.format(&Rfc3339)?.as_str()),
-                urlencoding::encode(history_ts.format(&Rfc3339)?.as_str()),
-                host,
-            ),
-        )?;
-
-        let resp = self.client.get(url).send().await?;
-        let resp = handle_resp_error(resp).await?;
-
-        let history = resp.json::<SyncHistoryResponse>().await?;
-        Ok(history)
-    }
-
-    pub async fn post_history(&self, history: &[AddHistoryRequest]) -> Result<()> {
-        let url = make_url(self.sync_addr, "/history")?;
-        let url = Url::parse(url.as_str())?;
-
-        let resp = self.client.post(url).json(history).send().await?;
-        handle_resp_error(resp).await?;
-
-        Ok(())
-    }
-
-    pub async fn delete_history(&self, h: History) -> Result<()> {
-        let url = make_url(self.sync_addr, "/history")?;
-        let url = Url::parse(url.as_str())?;
-
-        let resp = self
-            .client
-            .delete(url)
-            .json(&DeleteHistoryRequest {
-                client_id: h.id.to_string(),
-            })
-            .send()
-            .await?;
-
-        handle_resp_error(resp).await?;
-
-        Ok(())
-    }
-
     pub async fn delete_store(&self) -> Result<()> {
-        let url = make_url(self.sync_addr, "/api/v0/store")?;
-        let url = Url::parse(url.as_str())?;
+        let url = self.sync_addr.append_path("api/v0/store")?;
 
         let resp = self.client.delete(url).send().await?;
 
@@ -359,8 +298,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn post_records(&self, records: &[Record<EncryptedData>]) -> Result<()> {
-        let url = make_url(self.sync_addr, "/api/v0/record")?;
-        let url = Url::parse(url.as_str())?;
+        let url = self.sync_addr.append_path("api/v0/record")?;
 
         debug!("uploading {} records to {url}", records.len());
 
@@ -379,15 +317,12 @@ impl<'a> Client<'a> {
     ) -> Result<Vec<Record<EncryptedData>>> {
         debug!("fetching record/s from host {}/{}/{}", host.0, tag, start);
 
-        let url = make_url(
-            self.sync_addr,
-            &format!(
-                "/api/v0/record/next?host={}&tag={}&count={}&start={}",
-                host.0, tag, count, start
-            ),
-        )?;
-
-        let url = Url::parse(url.as_str())?;
+        let mut url = self.sync_addr.append_path("api/v0/record/next")?;
+        url.query_pairs_mut()
+            .append_pair("host", &host.0.to_string())
+            .append_pair("tag", &tag)
+            .append_pair("count", &count.to_string())
+            .append_pair("start", &start.to_string());
 
         let resp = self.client.get(url).send().await?;
         let resp = handle_resp_error(resp).await?;
@@ -398,8 +333,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn record_status(&self) -> Result<RecordStatus> {
-        let url = make_url(self.sync_addr, "/api/v0/record")?;
-        let url = Url::parse(url.as_str())?;
+        let url = self.sync_addr.append_path("api/v0/record")?;
 
         let resp = self.client.get(url).send().await?;
         let resp = handle_resp_error(resp).await?;
@@ -416,8 +350,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn delete(&self) -> Result<()> {
-        let url = make_url(self.sync_addr, "/account")?;
-        let url = Url::parse(url.as_str())?;
+        let url = self.sync_addr.append(["account"])?;
 
         let resp = self.client.delete(url).send().await?;
 
@@ -435,8 +368,7 @@ impl<'a> Client<'a> {
         current_password: String,
         new_password: String,
     ) -> Result<()> {
-        let url = make_url(self.sync_addr, "/account/password")?;
-        let url = Url::parse(url.as_str())?;
+        let url = self.sync_addr.append_path("account/password")?;
 
         let resp = self
             .client
@@ -449,7 +381,7 @@ impl<'a> Client<'a> {
             .await?;
 
         if resp.status() == 401 {
-            bail!("current password is incorrect")
+            bail!("current password is incorrect");
         } else if resp.status() == 403 {
             bail!("invalid login details");
         } else if resp.status() == 200 {
@@ -457,5 +389,116 @@ impl<'a> Client<'a> {
         } else {
             bail!("Unknown error");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extra_headers_map_parses_headers() {
+        let mut extra = HashMap::new();
+        extra.insert("X-Auth-Token".to_string(), "secret".to_string());
+        let headers = extra_headers_map(&extra).unwrap();
+        assert_eq!(headers.get("x-auth-token").unwrap(), "secret");
+    }
+
+    #[test]
+    fn atuin_headers_override_extra_headers() {
+        let mut extra = HashMap::new();
+        extra.insert("Authorization".to_string(), "Token user-value".to_string());
+
+        let mut headers = extra_headers_map(&extra).unwrap();
+        headers.insert(AUTHORIZATION, "Token atuin-value".parse().unwrap());
+
+        assert_eq!(headers.get(AUTHORIZATION).unwrap(), "Token atuin-value");
+        assert_eq!(headers.get_all(AUTHORIZATION).iter().count(), 1);
+    }
+
+    #[test]
+    fn extra_headers_map_rejects_invalid_names() {
+        let mut extra = HashMap::new();
+        extra.insert("bad header".to_string(), "value".to_string());
+        assert!(extra_headers_map(&extra).is_err());
+    }
+
+    /// Serve a single connection with a canned HTTP response.
+    async fn serve_one(listener: &tokio::net::TcpListener, response: String) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut sock, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = sock.read(&mut buf).await;
+        sock.write_all(response.as_bytes()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cross_origin_redirects_refused_with_extra_headers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // A different port on the same host is a different origin
+        tokio::spawn(async move {
+            serve_one(
+                &listener,
+                format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{}/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    port + 1
+                ),
+            )
+            .await;
+        });
+
+        let mut extra = HashMap::new();
+        extra.insert("X-Auth-Token".to_string(), "secret".to_string());
+
+        ensure_crypto_provider();
+        let client = client_builder(&extra).build().unwrap();
+        let err = client
+            .get(format!("http://127.0.0.1:{port}/"))
+            .send()
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.is_redirect(),
+            "expected a redirect policy error: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn same_origin_redirects_followed_with_extra_headers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        tokio::spawn(async move {
+            serve_one(
+                &listener,
+                format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{port}/ok\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                ),
+            )
+            .await;
+            serve_one(
+                &listener,
+                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string(),
+            )
+            .await;
+        });
+
+        let mut extra = HashMap::new();
+        extra.insert("X-Auth-Token".to_string(), "secret".to_string());
+
+        ensure_crypto_provider();
+        let client = client_builder(&extra).build().unwrap();
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/"))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.url().path(), "/ok");
     }
 }

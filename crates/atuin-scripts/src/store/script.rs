@@ -90,7 +90,7 @@ impl Script {
         let (script, bytes) = decode::read_str_from_slice(bytes).unwrap();
 
         if !bytes.is_empty() {
-            bail!("trailing bytes in encoded script record. malformed")
+            bail!("trailing bytes in encoded script record. malformed");
         }
 
         Ok(Script {

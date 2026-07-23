@@ -28,12 +28,12 @@ use std::{
 };
 
 use eyre::{Result, WrapErr};
-use log::{debug, error, info, warn};
 use notify::{
     Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher,
     event::{EventKind, ModifyKind},
 };
 use tokio::sync::watch;
+use tracing::{debug, error, info, warn};
 
 use super::Settings;
 

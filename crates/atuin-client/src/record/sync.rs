@@ -66,6 +66,7 @@ pub async fn build_client(settings: &Settings) -> Result<Client<'_>, SyncError> 
             .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?,
         settings.network_connect_timeout,
         settings.network_timeout,
+        &settings.extra_headers,
     )
     .map_err(|e| SyncError::OperationalError { msg: e.to_string() })
 }

@@ -1,3 +1,4 @@
+use atuin_common::logs::LogConfig;
 use clap::Subcommand;
 use eyre::Result;
 
@@ -40,22 +41,34 @@ pub enum AtuinCmd {
 
 impl AtuinCmd {
     pub fn run(self) -> Result<()> {
+        // set umask before we potentially open/create files
+        // or in other words, 077. Do not allow any access to any other user.
+        // Keep the previous umask so pty-proxy can restore it in the shell it
+        // spawns — the shell must not inherit ours (#3695).
         #[cfg(not(windows))]
-        {
-            // set umask before we potentially open/create files
-            // or in other words, 077. Do not allow any access to any other user
-            let mode = Mode::RWXG | Mode::RWXO;
-            umask(mode);
+        let prev_umask = umask(Mode::RWXG | Mode::RWXO);
+
+        match self {
+            // Client commands initialize their own logging
+            #[cfg(feature = "client")]
+            Self::Client(_) => {}
+            _ => crate::logs::init_logging(&LogConfig::stderr_only()),
         }
 
         match self {
             #[cfg(feature = "client")]
             Self::Client(client) => client.run(),
 
-            #[cfg(feature = "pty-proxy")]
+            #[cfg(all(feature = "pty-proxy", unix))]
             Self::PtyProxy(proxy) => {
-                run_pty_proxy(proxy);
+                run_pty_proxy(proxy, prev_umask);
                 Ok(())
+            }
+
+            #[cfg(all(feature = "pty-proxy", not(unix)))]
+            Self::PtyProxy(_) => {
+                eprintln!("atuin pty-proxy currently supports unix platforms");
+                std::process::exit(1);
             }
 
             Self::Contributors => {
@@ -73,18 +86,17 @@ impl AtuinCmd {
 }
 
 #[cfg(all(feature = "pty-proxy", unix))]
-fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy) {
+fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
+    // `Mode::bits()` returns u16 on macOS/BSD but u32 on Linux, where this
+    // conversion is a no-op.
+    #[allow(clippy::useless_conversion)]
+    let child_umask = Some(u32::from(prev_umask.bits()));
+
     #[cfg(feature = "daemon")]
-    proxy.run(semantic_command_capture_sink());
+    proxy.run(semantic_command_capture_sink(), child_umask);
 
     #[cfg(not(feature = "daemon"))]
-    proxy.run(None);
-}
-
-#[cfg(all(feature = "pty-proxy", not(unix)))]
-fn run_pty_proxy(_proxy: atuin_pty_proxy::PtyProxy) {
-    eprintln!("atuin pty-proxy currently supports unix platforms");
-    std::process::exit(1);
+    proxy.run(None, child_umask);
 }
 
 #[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]

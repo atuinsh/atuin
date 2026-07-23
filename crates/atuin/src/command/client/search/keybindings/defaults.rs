@@ -366,6 +366,10 @@ pub fn default_inspector_keymap(settings: &Settings) -> Keymap {
     km.bind(key("tab"), Action::ReturnSelection);
     km.bind(key("ctrl-o"), Action::ToggleTab);
 
+    // Prefix key: ctrl-<prefix_char> → enter prefix mode
+    let prefix_char = settings.keys.prefix.chars().next().unwrap_or('a');
+    km.bind(key(&format!("ctrl-{prefix_char}")), Action::EnterPrefixMode);
+
     // Accept behavior respects enter_accept setting
     let accept = if settings.enter_accept {
         Action::Accept
@@ -529,6 +533,7 @@ impl KeymapSet {
 mod tests {
     use super::*;
     use crate::command::client::search::keybindings::conditions::EvalContext;
+    use rstest::rstest;
 
     fn make_ctx(cursor: usize, width: usize, selected: usize, len: usize) -> EvalContext {
         EvalContext {
@@ -548,40 +553,42 @@ mod tests {
 
     // -- Emacs keymap tests --
 
-    #[test]
-    fn emacs_ctrl_c_returns_original() {
+    #[rstest]
+    #[case::ctrl_c_returns_original("ctrl-c", 0, 0, 0, 10, Action::ReturnOriginal)]
+    #[case::esc_exits("esc", 0, 0, 0, 10, Action::Exit)]
+    // enter_accept=false in test defaults → ReturnSelection
+    #[case::tab_returns_selection("tab", 0, 0, 0, 10, Action::ReturnSelection)]
+    // enter_accept=false in test defaults → ReturnSelection
+    #[case::enter_returns_selection("enter", 0, 0, 0, 10, Action::ReturnSelection)]
+    // cursor at end of "hello" (width 5)
+    #[case::right_at_end_returns_selection("right", 5, 5, 0, 10, Action::ReturnSelection)]
+    #[case::right_not_at_end_moves("right", 2, 5, 0, 10, Action::CursorRight)]
+    #[case::left_at_start_exits("left", 0, 5, 0, 10, Action::Exit)]
+    #[case::left_not_at_start_moves("left", 3, 5, 0, 10, Action::CursorLeft)]
+    // selected=0 → ListAtStart → Exit
+    #[case::down_at_start_exits("down", 0, 0, 0, 10, Action::Exit)]
+    // selected=5 → not at start → SelectNext
+    #[case::down_not_at_start_selects_next("down", 0, 0, 5, 10, Action::SelectNext)]
+    // Non-inverted: up never exits (moves away from index 0)
+    #[case::up_selects_previous("up", 0, 0, 5, 10, Action::SelectPrevious)]
+    // input empty (byte_len = 0)
+    #[case::ctrl_d_empty_returns_original("ctrl-d", 0, 0, 0, 10, Action::ReturnOriginal)]
+    #[case::ctrl_d_nonempty_deletes("ctrl-d", 2, 5, 0, 10, Action::DeleteCharAfter)]
+    // at start, but ctrl-n should NOT exit (no exit condition bound)
+    #[case::ctrl_n_selects_next_no_exit_condition("ctrl-n", 0, 0, 0, 10, Action::SelectNext)]
+    #[case::prefix_key_enters_prefix("ctrl-a", 0, 0, 0, 10, Action::EnterPrefixMode)]
+    #[case::home_cursor_start("home", 5, 10, 0, 10, Action::CursorStart)]
+    fn emacs_keymap_resolves(
+        #[case] k: &str,
+        #[case] cursor: usize,
+        #[case] width: usize,
+        #[case] selected: usize,
+        #[case] len: usize,
+        #[case] expected: Action,
+    ) {
         let km = default_emacs_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(
-            km.resolve(&key("ctrl-c"), &ctx),
-            Some(Action::ReturnOriginal)
-        );
-    }
-
-    #[test]
-    fn emacs_esc_exits() {
-        let km = default_emacs_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("esc"), &ctx), Some(Action::Exit));
-    }
-
-    #[test]
-    fn emacs_tab_returns_selection() {
-        // enter_accept=false in test defaults → ReturnSelection
-        let km = default_emacs_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("tab"), &ctx), Some(Action::ReturnSelection));
-    }
-
-    #[test]
-    fn emacs_enter_returns_selection() {
-        // enter_accept=false in test defaults → ReturnSelection
-        let km = default_emacs_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(
-            km.resolve(&key("enter"), &ctx),
-            Some(Action::ReturnSelection)
-        );
+        let ctx = make_ctx(cursor, width, selected, len);
+        assert_eq!(km.resolve(&key(k), &ctx), Some(expected));
     }
 
     #[test]
@@ -594,205 +601,36 @@ mod tests {
         assert_eq!(km.resolve(&key("tab"), &ctx), Some(Action::ReturnSelection));
     }
 
-    #[test]
-    fn emacs_right_at_end_returns_selection() {
-        let km = default_emacs_keymap(&default_settings());
-        // cursor at end of "hello" (width 5)
-        let ctx = make_ctx(5, 5, 0, 10);
-        assert_eq!(
-            km.resolve(&key("right"), &ctx),
-            Some(Action::ReturnSelection)
-        );
-    }
-
-    #[test]
-    fn emacs_right_not_at_end_moves() {
-        let km = default_emacs_keymap(&default_settings());
-        let ctx = make_ctx(2, 5, 0, 10);
-        assert_eq!(km.resolve(&key("right"), &ctx), Some(Action::CursorRight));
-    }
-
-    #[test]
-    fn emacs_left_at_start_exits() {
-        let km = default_emacs_keymap(&default_settings());
-        let ctx = make_ctx(0, 5, 0, 10);
-        assert_eq!(km.resolve(&key("left"), &ctx), Some(Action::Exit));
-    }
-
-    #[test]
-    fn emacs_left_not_at_start_moves() {
-        let km = default_emacs_keymap(&default_settings());
-        let ctx = make_ctx(3, 5, 0, 10);
-        assert_eq!(km.resolve(&key("left"), &ctx), Some(Action::CursorLeft));
-    }
-
-    #[test]
-    fn emacs_down_at_start_exits() {
-        let km = default_emacs_keymap(&default_settings());
-        // selected=0 → ListAtStart → Exit
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("down"), &ctx), Some(Action::Exit));
-    }
-
-    #[test]
-    fn emacs_down_not_at_start_selects_next() {
-        let km = default_emacs_keymap(&default_settings());
-        // selected=5 → not at start → SelectNext
-        let ctx = make_ctx(0, 0, 5, 10);
-        assert_eq!(km.resolve(&key("down"), &ctx), Some(Action::SelectNext));
-    }
-
-    #[test]
-    fn emacs_up_selects_previous() {
-        let km = default_emacs_keymap(&default_settings());
-        // Non-inverted: up never exits (moves away from index 0)
-        let ctx = make_ctx(0, 0, 5, 10);
-        assert_eq!(km.resolve(&key("up"), &ctx), Some(Action::SelectPrevious));
-    }
-
-    #[test]
-    fn emacs_ctrl_d_empty_returns_original() {
-        let km = default_emacs_keymap(&default_settings());
-        // input empty (byte_len = 0)
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(
-            km.resolve(&key("ctrl-d"), &ctx),
-            Some(Action::ReturnOriginal)
-        );
-    }
-
-    #[test]
-    fn emacs_ctrl_d_nonempty_deletes() {
-        let km = default_emacs_keymap(&default_settings());
-        let ctx = make_ctx(2, 5, 0, 10);
-        assert_eq!(
-            km.resolve(&key("ctrl-d"), &ctx),
-            Some(Action::DeleteCharAfter)
-        );
-    }
-
-    #[test]
-    fn emacs_ctrl_n_selects_next_no_exit_condition() {
-        let km = default_emacs_keymap(&default_settings());
-        // at start, but ctrl-n should NOT exit (no exit condition bound)
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("ctrl-n"), &ctx), Some(Action::SelectNext));
-    }
-
-    #[test]
-    fn emacs_prefix_key_enters_prefix() {
-        let km = default_emacs_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(
-            km.resolve(&key("ctrl-a"), &ctx),
-            Some(Action::EnterPrefixMode)
-        );
-    }
-
-    #[test]
-    fn emacs_home_cursor_start() {
-        let km = default_emacs_keymap(&default_settings());
-        let ctx = make_ctx(5, 10, 0, 10);
-        assert_eq!(km.resolve(&key("home"), &ctx), Some(Action::CursorStart));
-    }
-
     // -- Vim Normal keymap tests --
 
-    #[test]
-    fn vim_normal_j_at_start_exits() {
+    #[rstest]
+    // selected=0 → ListAtStart → Exit (non-inverted: j moves toward index 0)
+    #[case::j_at_start_exits("j", 0, 0, 0, 10, Action::Exit)]
+    #[case::j_not_at_start_selects_next("j", 0, 0, 5, 10, Action::SelectNext)]
+    // Non-inverted: k never exits (moves away from index 0)
+    #[case::k_selects_previous("k", 0, 0, 5, 10, Action::SelectPrevious)]
+    #[case::i_enters_insert("i", 0, 0, 0, 10, Action::VimEnterInsert)]
+    #[case::slash_search_insert("/", 0, 0, 0, 10, Action::VimSearchInsert)]
+    #[case::gg_scroll_to_top("g g", 0, 0, 50, 100, Action::ScrollToTop)]
+    #[case::big_g_scroll_to_bottom("G", 0, 0, 50, 100, Action::ScrollToBottom)]
+    #[case::numeric_returns_selection("3", 0, 0, 0, 10, Action::ReturnSelectionNth(3))]
+    #[case::ctrl_u_half_page_up("ctrl-u", 0, 0, 50, 100, Action::ScrollHalfPageUp)]
+    #[case::screen_jump_top("H", 0, 0, 50, 100, Action::ScrollToScreenTop)]
+    #[case::screen_jump_middle("M", 0, 0, 50, 100, Action::ScrollToScreenMiddle)]
+    #[case::screen_jump_bottom("L", 0, 0, 50, 100, Action::ScrollToScreenBottom)]
+    // enter_accept=false in test defaults → ReturnSelection
+    #[case::enter_returns_selection("enter", 0, 0, 0, 10, Action::ReturnSelection)]
+    fn vim_normal_keymap_resolves(
+        #[case] k: &str,
+        #[case] cursor: usize,
+        #[case] width: usize,
+        #[case] selected: usize,
+        #[case] len: usize,
+        #[case] expected: Action,
+    ) {
         let km = default_vim_normal_keymap(&default_settings());
-        // selected=0 → ListAtStart → Exit (non-inverted: j moves toward index 0)
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("j"), &ctx), Some(Action::Exit));
-    }
-
-    #[test]
-    fn vim_normal_j_not_at_start_selects_next() {
-        let km = default_vim_normal_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 5, 10);
-        assert_eq!(km.resolve(&key("j"), &ctx), Some(Action::SelectNext));
-    }
-
-    #[test]
-    fn vim_normal_k_selects_previous() {
-        let km = default_vim_normal_keymap(&default_settings());
-        // Non-inverted: k never exits (moves away from index 0)
-        let ctx = make_ctx(0, 0, 5, 10);
-        assert_eq!(km.resolve(&key("k"), &ctx), Some(Action::SelectPrevious));
-    }
-
-    #[test]
-    fn vim_normal_i_enters_insert() {
-        let km = default_vim_normal_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("i"), &ctx), Some(Action::VimEnterInsert));
-    }
-
-    #[test]
-    fn vim_normal_slash_search_insert() {
-        let km = default_vim_normal_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("/"), &ctx), Some(Action::VimSearchInsert));
-    }
-
-    #[test]
-    fn vim_normal_gg_scroll_to_top() {
-        let km = default_vim_normal_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 50, 100);
-        assert_eq!(km.resolve(&key("g g"), &ctx), Some(Action::ScrollToTop));
-    }
-
-    #[test]
-    fn vim_normal_big_g_scroll_to_bottom() {
-        let km = default_vim_normal_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 50, 100);
-        assert_eq!(km.resolve(&key("G"), &ctx), Some(Action::ScrollToBottom));
-    }
-
-    #[test]
-    fn vim_normal_numeric_returns_selection() {
-        let km = default_vim_normal_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(
-            km.resolve(&key("3"), &ctx),
-            Some(Action::ReturnSelectionNth(3))
-        );
-    }
-
-    #[test]
-    fn vim_normal_ctrl_u_half_page_up() {
-        let km = default_vim_normal_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 50, 100);
-        assert_eq!(
-            km.resolve(&key("ctrl-u"), &ctx),
-            Some(Action::ScrollHalfPageUp)
-        );
-    }
-
-    #[test]
-    fn vim_normal_screen_jumps() {
-        let km = default_vim_normal_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 50, 100);
-        assert_eq!(km.resolve(&key("H"), &ctx), Some(Action::ScrollToScreenTop));
-        assert_eq!(
-            km.resolve(&key("M"), &ctx),
-            Some(Action::ScrollToScreenMiddle)
-        );
-        assert_eq!(
-            km.resolve(&key("L"), &ctx),
-            Some(Action::ScrollToScreenBottom)
-        );
-    }
-
-    #[test]
-    fn vim_normal_enter_returns_selection() {
-        // enter_accept=false in test defaults → ReturnSelection
-        let km = default_vim_normal_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(
-            km.resolve(&key("enter"), &ctx),
-            Some(Action::ReturnSelection)
-        );
+        let ctx = make_ctx(cursor, width, selected, len);
+        assert_eq!(km.resolve(&key(k), &ctx), Some(expected));
     }
 
     #[test]
@@ -806,104 +644,66 @@ mod tests {
 
     // -- Vim Insert keymap tests --
 
-    #[test]
-    fn vim_insert_inherits_emacs_enter() {
+    #[rstest]
+    // enter_accept=false → ReturnSelection
+    #[case::inherits_emacs_enter("enter", 0, 0, 0, 10, Action::ReturnSelection)]
+    #[case::esc_enters_normal("esc", 0, 0, 0, 10, Action::VimEnterNormal)]
+    #[case::ctrl_bracket_enters_normal("ctrl-[", 0, 0, 0, 10, Action::VimEnterNormal)]
+    // input empty → return original
+    #[case::inherits_emacs_ctrl_d("ctrl-d", 0, 0, 0, 10, Action::ReturnOriginal)]
+    fn vim_insert_keymap_resolves(
+        #[case] k: &str,
+        #[case] cursor: usize,
+        #[case] width: usize,
+        #[case] selected: usize,
+        #[case] len: usize,
+        #[case] expected: Action,
+    ) {
         let km = default_vim_insert_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 0, 10);
-        // enter_accept=false → ReturnSelection
-        assert_eq!(
-            km.resolve(&key("enter"), &ctx),
-            Some(Action::ReturnSelection)
-        );
-    }
-
-    #[test]
-    fn vim_insert_esc_enters_normal() {
-        let km = default_vim_insert_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("esc"), &ctx), Some(Action::VimEnterNormal));
-    }
-
-    #[test]
-    fn vim_insert_ctrl_bracket_enters_normal() {
-        let km = default_vim_insert_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(
-            km.resolve(&key("ctrl-["), &ctx),
-            Some(Action::VimEnterNormal)
-        );
-    }
-
-    #[test]
-    fn vim_insert_inherits_emacs_ctrl_d() {
-        let km = default_vim_insert_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 0, 10);
-        // input empty → return original
-        assert_eq!(
-            km.resolve(&key("ctrl-d"), &ctx),
-            Some(Action::ReturnOriginal)
-        );
+        let ctx = make_ctx(cursor, width, selected, len);
+        assert_eq!(km.resolve(&key(k), &ctx), Some(expected));
     }
 
     // -- Inspector keymap tests --
 
-    #[test]
-    fn inspector_ctrl_d_deletes() {
+    #[rstest]
+    #[case::ctrl_d_deletes("ctrl-d", 0, 0, 0, 10, Action::Delete)]
+    #[case::up_inspects_previous("up", 0, 0, 0, 10, Action::InspectPrevious)]
+    #[case::down_inspects_next("down", 0, 0, 0, 10, Action::InspectNext)]
+    #[case::esc_exits("esc", 0, 0, 0, 10, Action::Exit)]
+    // enter_accept=false → ReturnSelection
+    #[case::tab_returns_selection("tab", 0, 0, 0, 10, Action::ReturnSelection)]
+    #[case::prefix_key_enters_prefix("ctrl-a", 0, 0, 0, 10, Action::EnterPrefixMode)]
+    fn inspector_keymap_resolves(
+        #[case] k: &str,
+        #[case] cursor: usize,
+        #[case] width: usize,
+        #[case] selected: usize,
+        #[case] len: usize,
+        #[case] expected: Action,
+    ) {
         let km = default_inspector_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("ctrl-d"), &ctx), Some(Action::Delete));
-    }
-
-    #[test]
-    fn inspector_up_inspects_previous() {
-        let km = default_inspector_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("up"), &ctx), Some(Action::InspectPrevious));
-    }
-
-    #[test]
-    fn inspector_down_inspects_next() {
-        let km = default_inspector_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("down"), &ctx), Some(Action::InspectNext));
-    }
-
-    #[test]
-    fn inspector_esc_exits() {
-        let km = default_inspector_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("esc"), &ctx), Some(Action::Exit));
-    }
-
-    #[test]
-    fn inspector_tab_returns_selection() {
-        // enter_accept=false → ReturnSelection
-        let km = default_inspector_keymap(&default_settings());
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("tab"), &ctx), Some(Action::ReturnSelection));
+        let ctx = make_ctx(cursor, width, selected, len);
+        assert_eq!(km.resolve(&key(k), &ctx), Some(expected));
     }
 
     // -- Prefix keymap tests --
 
-    #[test]
-    fn prefix_d_deletes() {
+    #[rstest]
+    #[case::d_deletes("d", 0, 0, 0, 10, Some(Action::Delete))]
+    #[case::a_cursor_start("a", 0, 0, 0, 10, Some(Action::CursorStart))]
+    #[case::unknown_key_returns_none("x", 0, 0, 0, 10, None)]
+    fn prefix_keymap_resolves(
+        #[case] k: &str,
+        #[case] cursor: usize,
+        #[case] width: usize,
+        #[case] selected: usize,
+        #[case] len: usize,
+        #[case] expected: Option<Action>,
+    ) {
         let km = default_prefix_keymap();
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("d"), &ctx), Some(Action::Delete));
-    }
-
-    #[test]
-    fn prefix_a_cursor_start() {
-        let km = default_prefix_keymap();
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("a"), &ctx), Some(Action::CursorStart));
-    }
-
-    #[test]
-    fn prefix_unknown_key_returns_none() {
-        let km = default_prefix_keymap();
-        let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("x"), &ctx), None);
+        let ctx = make_ctx(cursor, width, selected, len);
+        assert_eq!(km.resolve(&key(k), &ctx), expected);
     }
 
     // -- KeymapSet tests --

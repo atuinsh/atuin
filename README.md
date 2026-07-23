@@ -63,10 +63,10 @@ I wanted to. And I **really** don't want to.
 ## Documentation
 
 - [Quickstart](#quickstart)
-- [Install](https://docs.atuin.sh/guide/installation/)
-- [Setting up sync](https://docs.atuin.sh/guide/sync/)
-- [Import history](https://docs.atuin.sh/guide/import/)
-- [Basic usage](https://docs.atuin.sh/guide/basic-usage/)
+- [Install](https://docs.atuin.sh/latest/guide/installation/)
+- [Setting up sync](https://docs.atuin.sh/latest/guide/sync/)
+- [Import history](https://docs.atuin.sh/latest/guide/import/)
+- [Basic usage](https://docs.atuin.sh/latest/guide/basic-usage/)
 
 ## Supported Shells
 
@@ -111,7 +111,7 @@ Then restart your shell!
 >
 > **For Bash users**: The above sets up `bash-preexec` for necessary hooks, but
 > `bash-preexec` has limitations. For details, please see the
-> [Bash](https://docs.atuin.sh/guide/installation/#installing-the-shell-plugin)
+> [Bash](https://docs.atuin.sh/latest/guide/installation/#installing-the-shell-plugin)
 > section of the shell plugin documentation.
 
 # Security

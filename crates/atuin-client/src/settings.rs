@@ -1,6 +1,4 @@
-use std::{collections::HashMap, io::prelude::*, path::PathBuf, str::FromStr, sync::OnceLock};
-use tokio::sync::OnceCell;
-
+use atuin_common::logs::LogLevel;
 use atuin_common::record::HostId;
 use atuin_common::utils;
 use clap::ValueEnum;
@@ -14,9 +12,17 @@ use regex::RegexSet;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_with::DeserializeFromStr;
+use std::{
+    collections::HashMap,
+    io::prelude::*,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::{LazyLock, OnceLock},
+};
 use time::{OffsetDateTime, UtcOffset, format_description::FormatItem, macros::format_description};
+use tokio::sync::OnceCell;
+use url::Url;
 
-pub const HISTORY_PAGE_SIZE: i64 = 100;
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
 static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -29,21 +35,13 @@ pub(crate) mod meta;
 mod scripts;
 pub mod watcher;
 
-#[derive(derive_more::AsRef)]
-#[as_ref(str)]
-pub struct HubEndpoint(String);
+/// Default sync address for Atuin's hosted service, parsed once.
+pub static DEFAULT_SYNC_URL: LazyLock<Url> =
+    LazyLock::new(|| Url::parse("https://api.atuin.sh").expect("default sync address is valid"));
 
-/// Default sync address for Atuin's hosted service
-pub const DEFAULT_SYNC_ADDRESS: &str = "https://api.atuin.sh";
-
-/// Default Hub web/API endpoint for Atuin's hosted service
-pub const DEFAULT_HUB_ENDPOINT: &str = "https://hub.atuin.sh";
-
-impl Default for HubEndpoint {
-    fn default() -> Self {
-        HubEndpoint(DEFAULT_HUB_ENDPOINT.to_string())
-    }
-}
+/// Default Hub web/API endpoint for Atuin's hosted service, parsed once.
+pub static DEFAULT_HUB_URL: LazyLock<Url> =
+    LazyLock::new(|| Url::parse("https://hub.atuin.sh").expect("default hub endpoint is valid"));
 
 #[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq, Serialize)]
 pub enum SearchMode {
@@ -198,7 +196,7 @@ impl FromStr for Timezone {
         // that we currently use - `time`. If ever we migrate to using `chrono`, this would
         // be a good feature to add.
 
-        bail!(r#""{s}" is not a valid timezone spec"#)
+        bail!(r#""{s}" is not a valid timezone spec"#);
     }
 }
 
@@ -349,11 +347,6 @@ impl Default for Stats {
             ignored_commands: Self::ignored_commands_default(),
         }
     }
-}
-
-#[derive(Clone, Debug, Deserialize, Default, Serialize)]
-pub struct Sync {
-    pub records: bool,
 }
 
 /// Sync protocol type for authentication.
@@ -573,31 +566,6 @@ pub struct Tmux {
     pub height: String,
 }
 
-/// Log level for file logging. Maps to tracing's LevelFilter.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum LogLevel {
-    Trace,
-    Debug,
-    #[default]
-    Info,
-    Warn,
-    Error,
-}
-
-impl LogLevel {
-    /// Convert to a tracing directive string for use with EnvFilter.
-    pub fn as_directive(&self) -> &'static str {
-        match self {
-            LogLevel::Trace => "trace",
-            LogLevel::Debug => "debug",
-            LogLevel::Info => "info",
-            LogLevel::Warn => "warn",
-            LogLevel::Error => "error",
-        }
-    }
-}
-
 /// Configuration for a specific log type (search or daemon).
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct LogConfig {
@@ -612,6 +580,15 @@ pub struct LogConfig {
 
     /// Override global retention days setting for this log type.
     pub retention: Option<u64>,
+}
+
+impl LogConfig {
+    pub fn new(file: impl Into<String>) -> Self {
+        Self {
+            file: file.into(),
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -632,7 +609,7 @@ pub struct Logs {
     #[serde(default = "Logs::default_retention")]
     pub retention: u64,
 
-    /// Search log settings
+    /// Search log settings; only used with `--interactive`
     #[serde(default)]
     pub search: LogConfig,
 
@@ -645,6 +622,25 @@ pub struct Logs {
     pub ai: LogConfig,
 }
 
+/// Endpoint protocol for Atuin AI.
+///
+/// When set to "auto" (default), the protocol is inferred from `ai.endpoint`:
+/// an unset or official Atuin address is treated as Hub, anything else as an
+/// OSS server. Set explicitly to "hub" to keep Hub behavior with a custom
+/// endpoint (useful for local development against a Hub instance).
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AiEndpointProtocol {
+    /// Atuin Hub: browser-based login flow, stored Hub session, usage reporting.
+    Hub,
+    /// A standalone AI server (e.g. atuin-ai-server): requests go straight to
+    /// the endpoint, authenticated with `ai.api_token` if set.
+    Oss,
+    /// Infer from ai.endpoint (default behavior)
+    #[default]
+    Auto,
+}
+
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
 pub struct Ai {
     /// Whether or not the AI features are enabled.
@@ -652,7 +648,11 @@ pub struct Ai {
 
     /// The address of the Atuin AI endpoint. Used for AI features like command generation.
     /// Only necessary for custom AI endpoints.
-    pub endpoint: Option<String>,
+    pub endpoint: Option<Url>,
+
+    /// How to talk to `endpoint`. See [`AiEndpointProtocol`].
+    #[serde(default)]
+    pub endpoint_protocol: AiEndpointProtocol,
 
     /// The API token for the Atuin AI endpoint. Used for AI features like command generation.
     /// Only necessary for custom AI endpoints.
@@ -666,6 +666,10 @@ pub struct Ai {
 
     /// The AI model to use for AI chats, based on the Atuin AI model alias.
     pub model: Option<String>,
+
+    /// Whether to enable YOLO mode (skips all permission checks)
+    #[serde(default)]
+    pub yolo: bool,
 
     /// Deprecated: use opening.send_cwd instead. Kept for backwards compatibility.
     #[serde(default)]
@@ -740,18 +744,9 @@ impl Default for Logs {
             dir: "".to_string(),
             level: LogLevel::default(),
             retention: Self::default_retention(),
-            search: LogConfig {
-                file: "search.log".to_string(),
-                ..Default::default()
-            },
-            daemon: LogConfig {
-                file: "daemon.log".to_string(),
-                ..Default::default()
-            },
-            ai: LogConfig {
-                file: "ai.log".to_string(),
-                ..Default::default()
-            },
+            search: LogConfig::new("search.log"),
+            daemon: LogConfig::new("daemon.log"),
+            ai: LogConfig::new("ai.log"),
         }
     }
 }
@@ -763,78 +758,6 @@ impl Logs {
 
     fn default_retention() -> u64 {
         4
-    }
-
-    /// Returns whether search logging is enabled.
-    /// Uses search-specific setting if set, otherwise falls back to global.
-    pub fn search_enabled(&self) -> bool {
-        self.search.enabled.unwrap_or(self.enabled)
-    }
-
-    /// Returns whether daemon logging is enabled.
-    /// Uses daemon-specific setting if set, otherwise falls back to global.
-    pub fn daemon_enabled(&self) -> bool {
-        self.daemon.enabled.unwrap_or(self.enabled)
-    }
-
-    /// Returns whether AI logging is enabled.
-    /// Uses AI-specific setting if set, otherwise falls back to global.
-    pub fn ai_enabled(&self) -> bool {
-        self.ai.enabled.unwrap_or(self.enabled)
-    }
-
-    /// Returns the log level for search logging.
-    /// Uses search-specific setting if set, otherwise falls back to global.
-    pub fn search_level(&self) -> LogLevel {
-        self.search.level.unwrap_or(self.level)
-    }
-
-    /// Returns the log level for daemon logging.
-    /// Uses daemon-specific setting if set, otherwise falls back to global.
-    pub fn daemon_level(&self) -> LogLevel {
-        self.daemon.level.unwrap_or(self.level)
-    }
-
-    /// Returns the log level for AI logging.
-    /// Uses AI-specific setting if set, otherwise falls back to global.
-    pub fn ai_level(&self) -> LogLevel {
-        self.ai.level.unwrap_or(self.level)
-    }
-
-    /// Returns the retention days for search logging.
-    /// Uses search-specific setting if set, otherwise falls back to global.
-    pub fn search_retention(&self) -> u64 {
-        self.search.retention.unwrap_or(self.retention)
-    }
-
-    /// Returns the retention days for daemon logging.
-    /// Uses daemon-specific setting if set, otherwise falls back to global.
-    pub fn daemon_retention(&self) -> u64 {
-        self.daemon.retention.unwrap_or(self.retention)
-    }
-
-    /// Returns the retention days for AI logging.
-    /// Uses AI-specific setting if set, otherwise falls back to global.
-    pub fn ai_retention(&self) -> u64 {
-        self.ai.retention.unwrap_or(self.retention)
-    }
-
-    /// Returns the full path for the search log file.
-    pub fn search_path(&self) -> PathBuf {
-        let path = PathBuf::from(&self.search.file);
-        PathBuf::from(&self.dir).join(path)
-    }
-
-    /// Returns the full path for the daemon log file.
-    pub fn daemon_path(&self) -> PathBuf {
-        let path = PathBuf::from(&self.daemon.file);
-        PathBuf::from(&self.dir).join(path)
-    }
-
-    /// Returns the full path for the AI log file.
-    pub fn ai_path(&self) -> PathBuf {
-        let path = PathBuf::from(&self.ai.file);
-        PathBuf::from(&self.dir).join(path)
     }
 }
 
@@ -1034,6 +957,10 @@ pub struct Ui {
     /// Can be simple strings or objects with type and width.
     #[serde(default = "Ui::default_columns")]
     pub columns: Vec<UiColumn>,
+
+    /// Syntax highlight commands in the interactive search results.
+    #[serde(default = "Ui::default_syntax_highlight")]
+    pub syntax_highlight: bool,
 }
 
 impl Ui {
@@ -1043,6 +970,10 @@ impl Ui {
             UiColumn::new(UiColumnType::Time),
             UiColumn::new(UiColumnType::Command),
         ]
+    }
+
+    fn default_syntax_highlight() -> bool {
+        true
     }
 
     /// Validate the UI configuration.
@@ -1063,6 +994,7 @@ impl Default for Ui {
     fn default() -> Self {
         Self {
             columns: Self::default_columns(),
+            syntax_highlight: Self::default_syntax_highlight(),
         }
     }
 }
@@ -1077,7 +1009,7 @@ pub struct Settings {
     pub update_check: bool,
 
     /// The sync address for atuin.
-    pub sync_address: String,
+    pub sync_address: Url,
 
     /// Sync protocol for authentication. When set to "auto" (default), the protocol
     /// is inferred from sync_address. Set to "hub" to force Hub auth with a custom
@@ -1086,9 +1018,9 @@ pub struct Settings {
     pub sync_protocol: SyncProtocol,
 
     pub sync_frequency: String,
-    pub db_path: String,
-    pub record_store_path: String,
-    pub key_path: String,
+    pub db_path: PathBuf,
+    pub record_store_path: PathBuf,
+    pub key_path: PathBuf,
     pub search_mode: SearchMode,
     pub filter_mode: Option<FilterMode>,
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
@@ -1129,15 +1061,20 @@ pub struct Settings {
     pub network_connect_timeout: u64,
     pub network_timeout: u64,
     pub local_timeout: f64,
+
+    /// Extra HTTP headers to send on every request to the sync server, e.g.
+    /// for services like Cloudflare Access that sit in front of a self-hosted
+    /// server. Headers that Atuin sets itself (e.g. Authorization) win over
+    /// values configured here.
+    #[serde(default)]
+    pub extra_headers: HashMap<String, String>,
+
     pub enter_accept: bool,
     pub smart_sort: bool,
     pub command_chaining: bool,
 
     #[serde(default)]
     pub stats: Stats,
-
-    #[serde(default)]
-    pub sync: Sync,
 
     #[serde(default)]
     pub keys: Keys,
@@ -1270,16 +1207,10 @@ impl Settings {
         }
     }
 
-    /// Normalize a URL for comparison by trimming trailing slashes
-    fn normalize_url(url: &str) -> &str {
-        url.trim_end_matches('/')
-    }
-
-    /// Check if a URL matches one of Atuin's official hosted addresses
-    fn is_official_address(url: &str) -> bool {
-        let normalized = Self::normalize_url(url);
-        normalized == Self::normalize_url(DEFAULT_SYNC_ADDRESS)
-            || normalized == Self::normalize_url(DEFAULT_HUB_ENDPOINT)
+    /// Check if a URL matches one of Atuin's official hosted addresses.
+    fn is_official_address(url: &Url) -> bool {
+        let origin = url.origin();
+        origin == DEFAULT_SYNC_URL.origin() || origin == DEFAULT_HUB_URL.origin()
     }
 
     /// Returns whether this configuration uses Hub-style sync.
@@ -1296,20 +1227,31 @@ impl Settings {
         }
     }
 
-    /// Returns the base URL for the Hub endpoint.
+    /// Returns whether the resolved AI endpoint should be treated as an Atuin
+    /// Hub instance (browser login flow, Hub session management, usage
+    /// reporting) rather than a standalone OSS server.
     ///
-    /// For Atuin's official hosted service, this always returns `https://hub.atuin.sh`
+    /// `endpoint` is the resolved AI endpoint — the `--api-endpoint` flag or
+    /// `ai.endpoint` setting, after defaults are applied — which is why it's a
+    /// parameter rather than read from `self.ai.endpoint`.
+    pub fn is_hub_ai_endpoint(&self, endpoint: &Url) -> bool {
+        match self.ai.endpoint_protocol {
+            AiEndpointProtocol::Hub => true,
+            AiEndpointProtocol::Oss => false,
+            AiEndpointProtocol::Auto => Self::is_official_address(endpoint),
+        }
+    }
+
+    /// The base URL for the Hub endpoint.
+    ///
+    /// For Atuin's official hosted service this is always `https://hub.atuin.sh`,
     /// regardless of whether `sync_address` is `api.atuin.sh` or `hub.atuin.sh`.
-    /// For self-hosted instances, returns the configured `sync_address`.
-    pub fn active_hub_endpoint(&self) -> Option<HubEndpoint> {
-        if self.is_hub_sync() {
-            if Self::is_official_address(&self.sync_address) {
-                Some(HubEndpoint::default())
-            } else {
-                Some(HubEndpoint(self.sync_address.clone()))
-            }
+    /// For a self-hosted Hub, it is the configured `sync_address`.
+    pub fn hub_endpoint(&self) -> Url {
+        if self.is_hub_sync() && !Self::is_official_address(&self.sync_address) {
+            self.sync_address.clone()
         } else {
-            None
+            DEFAULT_HUB_URL.clone()
         }
     }
 
@@ -1493,7 +1435,7 @@ impl Settings {
             .set_default("timezone", "local")?
             .set_default("auto_sync", true)?
             .set_default("update_check", cfg!(feature = "check-update"))?
-            .set_default("sync_address", "https://api.atuin.sh")?
+            .set_default("sync_address", DEFAULT_SYNC_URL.as_str())?
             .set_default("sync_frequency", "5m")?
             .set_default("search_mode", "fuzzy")?
             .set_default("filter_mode", None::<String>)?
@@ -1521,6 +1463,7 @@ impl Settings {
             .set_default("strip_trailing_whitespace", true)?
             .set_default("network_connect_timeout", 5)?
             .set_default("network_timeout", 30)?
+            .set_default("extra_headers", HashMap::<String, String>::new())?
             .set_default("local_timeout", 2.0)?
             // enter_accept defaults to false here, but true in the default config file. The dissonance is
             // intentional!
@@ -1528,7 +1471,6 @@ impl Settings {
             // muscle memory.
             // New users will get the new default, that is more similar to what they are used to.
             .set_default("enter_accept", false)?
-            .set_default("sync.records", true)?
             .set_default("keys.scroll_exits", true)?
             .set_default("keys.accept_past_line_end", true)?
             .set_default("keys.exit_past_line_start", true)?
@@ -1565,6 +1507,7 @@ impl Settings {
             .set_default("ai.send_cwd", false)?
             .set_default("ai.opening.send_cwd", false)?
             .set_default("ai.opening.send_last_command", false)?
+            .set_default("ui.syntax_highlight", true)?
             .set_default(
                 "search.filters",
                 vec![
@@ -1697,7 +1640,7 @@ impl Settings {
         .filter_map(|(key, value)| match Self::expand_path(value) {
             Ok(expanded) => Some((key, expanded)),
             Err(e) => {
-                log::warn!("failed to expand path for {key}: {e}");
+                tracing::warn!("failed to expand path for {key}: {e}");
                 None
             }
         })
@@ -1802,13 +1745,13 @@ impl Settings {
     }
 
     pub fn paths_ok(&self) -> bool {
-        let paths = [
-            &self.db_path,
-            &self.record_store_path,
-            &self.key_path,
-            &self.meta.db_path,
+        let paths: [&Path; 4] = [
+            self.db_path.as_path(),
+            self.record_store_path.as_path(),
+            self.key_path.as_path(),
+            Path::new(&self.meta.db_path),
         ];
-        paths.iter().all(|p| !utils::broken_symlink(p))
+        paths.iter().all(|p| !utils::broken_symlink(*p))
     }
 }
 
@@ -1854,37 +1797,74 @@ mod tests {
     use std::str::FromStr;
 
     use eyre::Result;
+    use rstest::rstest;
 
-    use super::Timezone;
+    use super::{AiEndpointProtocol, Settings, Timezone};
+    use url::Url;
 
-    #[test]
-    fn can_parse_offset_timezone_spec() -> Result<()> {
-        assert_eq!(Timezone::from_str("+02")?.0.as_hms(), (2, 0, 0));
-        assert_eq!(Timezone::from_str("-04")?.0.as_hms(), (-4, 0, 0));
-        assert_eq!(Timezone::from_str("+05:30")?.0.as_hms(), (5, 30, 0));
-        assert_eq!(Timezone::from_str("-09:30")?.0.as_hms(), (-9, -30, 0));
-
-        // single digit hours are allowed
-        assert_eq!(Timezone::from_str("+2")?.0.as_hms(), (2, 0, 0));
-        assert_eq!(Timezone::from_str("-4")?.0.as_hms(), (-4, 0, 0));
-        assert_eq!(Timezone::from_str("+5:30")?.0.as_hms(), (5, 30, 0));
-        assert_eq!(Timezone::from_str("-9:30")?.0.as_hms(), (-9, -30, 0));
-
-        // fully qualified form
-        assert_eq!(Timezone::from_str("+09:30:00")?.0.as_hms(), (9, 30, 0));
-        assert_eq!(Timezone::from_str("-09:30:00")?.0.as_hms(), (-9, -30, 0));
-
-        // these offsets don't really exist but are supported anyway
-        assert_eq!(Timezone::from_str("+0:5")?.0.as_hms(), (0, 5, 0));
-        assert_eq!(Timezone::from_str("-0:5")?.0.as_hms(), (0, -5, 0));
-        assert_eq!(Timezone::from_str("+01:23:45")?.0.as_hms(), (1, 23, 45));
-        assert_eq!(Timezone::from_str("-01:23:45")?.0.as_hms(), (-1, -23, -45));
-
-        // require a leading sign for clarity
-        assert!(Timezone::from_str("5").is_err());
-        assert!(Timezone::from_str("10:30").is_err());
-
+    #[rstest]
+    #[case::plus_two_digit_hours("+02", (2, 0, 0))]
+    #[case::minus_two_digit_hours("-04", (-4, 0, 0))]
+    #[case::plus_hours_minutes("+05:30", (5, 30, 0))]
+    #[case::minus_hours_minutes("-09:30", (-9, -30, 0))]
+    // single digit hours are allowed
+    #[case::plus_single_digit_hour("+2", (2, 0, 0))]
+    #[case::minus_single_digit_hour("-4", (-4, 0, 0))]
+    #[case::plus_single_digit_hour_minutes("+5:30", (5, 30, 0))]
+    #[case::minus_single_digit_hour_minutes("-9:30", (-9, -30, 0))]
+    // fully qualified form
+    #[case::plus_fully_qualified("+09:30:00", (9, 30, 0))]
+    #[case::minus_fully_qualified("-09:30:00", (-9, -30, 0))]
+    // these offsets don't really exist but are supported anyway
+    #[case::plus_zero_hour_minutes("+0:5", (0, 5, 0))]
+    #[case::minus_zero_hour_minutes("-0:5", (0, -5, 0))]
+    #[case::plus_with_seconds("+01:23:45", (1, 23, 45))]
+    #[case::minus_with_seconds("-01:23:45", (-1, -23, -45))]
+    fn can_parse_offset_timezone_spec(
+        #[case] input: &str,
+        #[case] expected: (i8, i8, i8),
+    ) -> Result<()> {
+        assert_eq!(Timezone::from_str(input)?.0.as_hms(), expected);
         Ok(())
+    }
+
+    /// A leading sign is required, for clarity.
+    #[rstest]
+    #[case::bare_hour("5")]
+    #[case::bare_hour_minutes("10:30")]
+    fn rejects_timezone_spec_without_leading_sign(#[case] input: &str) {
+        assert!(Timezone::from_str(input).is_err());
+    }
+
+    #[rstest]
+    // Auto: official addresses are Hub, anything else is OSS
+    #[case::auto_hub_address(AiEndpointProtocol::Auto, "https://hub.atuin.sh", true)]
+    #[case::auto_api_address(AiEndpointProtocol::Auto, "https://api.atuin.sh", true)]
+    #[case::auto_third_party_address(AiEndpointProtocol::Auto, "https://ai.example.com", false)]
+    #[case::auto_localhost(AiEndpointProtocol::Auto, "http://localhost:4000", false)]
+    // An explicit protocol overrides the address check
+    #[case::explicit_hub_overrides_address(AiEndpointProtocol::Hub, "http://localhost:4000", true)]
+    #[case::explicit_oss_overrides_address(AiEndpointProtocol::Oss, "https://hub.atuin.sh", false)]
+    fn ai_endpoint_protocol_resolution(
+        #[case] protocol: AiEndpointProtocol,
+        #[case] endpoint: &str,
+        #[case] expected: bool,
+    ) {
+        let mut settings = Settings::default();
+        settings.ai.endpoint_protocol = protocol;
+
+        assert_eq!(
+            settings.is_hub_ai_endpoint(&Url::parse(endpoint).unwrap()),
+            expected,
+        );
+    }
+
+    /// Forces both `LazyLock`s, so a typo in either constant fails here rather
+    /// than panicking at runtime.
+    #[test]
+    fn default_addresses_parse() {
+        assert_eq!(super::DEFAULT_SYNC_URL.host_str(), Some("api.atuin.sh"));
+        assert_eq!(super::DEFAULT_HUB_URL.host_str(), Some("hub.atuin.sh"));
     }
 
     #[test]

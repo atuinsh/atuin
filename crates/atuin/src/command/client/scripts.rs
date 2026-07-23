@@ -36,6 +36,7 @@ pub struct NewScript {
     #[allow(clippy::option_option)]
     #[arg(long)]
     /// Use the last command as the script content
+    ///
     /// Optionally specify a number to use the last N commands
     pub last: Option<Option<usize>>,
 
@@ -49,6 +50,7 @@ pub struct Run {
     pub name: String,
 
     /// Specify template variables in the format KEY=VALUE
+    ///
     /// Example: -v name=John -v greeting="Hello there"
     #[arg(short, long = "var")]
     pub var: Vec<String>,
@@ -233,7 +235,7 @@ impl Cmd {
             let filters = [settings.default_filter_mode(context.git_root.is_some())];
 
             let mut history = history_db
-                .list(&filters, &context, Some(count), false, false)
+                .list(&filters, &context, Some(count), false, false, None)
                 .await?;
 
             // Reverse to get chronological order

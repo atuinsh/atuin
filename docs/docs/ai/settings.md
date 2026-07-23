@@ -6,7 +6,7 @@ All the settings that control the behavior of [Atuin AI](./introduction.md) are 
 
 Default: `false`
 
-Whether or not the AI feature are enabled. When set to `false`, the question mark keybinding will output a message with instructions to run `atuin setup` to enable the feature.
+Whether or not the AI features are enabled. When set to `false`, the question mark keybinding will output a message with instructions to run `atuin setup` to enable the feature.
 
 ### model
 
@@ -37,6 +37,26 @@ The address of the Atuin AI endpoint. Used for AI features like command generati
 Default: `null`
 
 The API token for the Atuin AI endpoint. Used for AI features like command generation. Most users will not need this setting; it is only necessary for custom AI endpoints.
+
+### endpoint_protocol
+
+Default: `"auto"`
+
+How the client talks to the configured `endpoint`. One of:
+
+- `"auto"` — infer from `endpoint`: official Atuin addresses use the Hub protocol, anything else is treated as an OSS server.
+- `"hub"` — treat the endpoint as an Atuin Hub instance: log in via the browser-based Hub flow and report credit usage. Mostly useful for developing against a local Hub instance.
+- `"oss"` — treat the endpoint as a standalone AI server, such as [atuin-ai-server](https://github.com/atuinsh/atuin-ai-server). No login flow; requests are authenticated with `api_token` if set.
+
+With the default of `"auto"`, pointing `endpoint` at your own server just works: set `api_token` if your server requires one.
+
+### yolo
+
+Default: `false`
+
+Enables YOLO mode, which automatically allows all permission checks. **Use this setting with caution.**
+
+This setting does _not_ enable any capabilities; it simply bypasses any permission checks.
 
 ## Capabilities
 

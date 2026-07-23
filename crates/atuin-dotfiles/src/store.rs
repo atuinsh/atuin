@@ -82,7 +82,7 @@ impl AliasRecord {
                             decode::read_str_from_slice(bytes).map_err(error_report)?;
 
                         if !bytes.is_empty() {
-                            bail!("trailing bytes in encoded shell alias record. malformed")
+                            bail!("trailing bytes in encoded shell alias record. malformed");
                         }
 
                         Ok(AliasRecord::Create(Alias {
@@ -105,19 +105,19 @@ impl AliasRecord {
                             decode::read_str_from_slice(bytes).map_err(error_report)?;
 
                         if !bytes.is_empty() {
-                            bail!("trailing bytes in encoded shell alias record. malformed")
+                            bail!("trailing bytes in encoded shell alias record. malformed");
                         }
 
                         Ok(AliasRecord::Delete(key.to_owned()))
                     }
 
                     n => {
-                        bail!("unknown AliasRecord type {n}")
+                        bail!("unknown AliasRecord type {n}");
                     }
                 }
             }
             _ => {
-                bail!("unknown version {version:?}")
+                bail!("unknown version {version:?}");
             }
         }
     }

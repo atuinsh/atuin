@@ -9,6 +9,11 @@ use serde_json::Value;
 
 use super::history;
 
+mod event;
+mod wire;
+
+use event::HookEvent;
+
 const HOOK_EVENT_TYPES: &[&str] = &["PreToolUse", "PostToolUse", "PostToolUseFailure"];
 const PI_EXTENSION_SOURCE: &str = include_str!("../../../contrib/pi/atuin.ts");
 
@@ -113,74 +118,13 @@ impl Cmd {
         match (self.action, self.agent) {
             (Some(Action::Install { agent }), None) => install(&agent),
             (None, Some(agent)) => handle(&agent, settings).await,
-            (None, None) => bail!("expected `atuin hook <agent>` or `atuin hook install <agent>`"),
-            (Some(_), Some(_)) => bail!("hook action cannot be combined with a positional agent"),
-        }
-    }
-}
-
-#[derive(Debug)]
-enum HookEvent {
-    Start {
-        command: String,
-        intent: Option<String>,
-        tool_use_id: String,
-    },
-    End {
-        tool_use_id: String,
-        exit: i64,
-    },
-    Skip,
-}
-
-fn parse_hook_stdin(input: &str) -> Result<HookEvent> {
-    let v: Value = serde_json::from_str(input)?;
-
-    if v.get("tool_name").and_then(|t| t.as_str()) != Some("Bash") {
-        return Ok(HookEvent::Skip);
-    }
-
-    let tool_use_id = match v.get("tool_use_id").and_then(|t| t.as_str()) {
-        Some(id) if !id.is_empty() => id.to_string(),
-        _ => return Ok(HookEvent::Skip),
-    };
-
-    match v.get("hook_event_name").and_then(|e| e.as_str()) {
-        Some("PreToolUse") => {
-            let tool_input = v.get("tool_input");
-            let command = tool_input
-                .and_then(|ti| ti.get("command"))
-                .and_then(|c| c.as_str())
-                .unwrap_or("");
-
-            if command.is_empty() {
-                return Ok(HookEvent::Skip);
+            (None, None) => {
+                bail!("expected `atuin hook <agent>` or `atuin hook install <agent>`");
             }
-
-            let intent = tool_input
-                .and_then(|ti| ti.get("description"))
-                .and_then(|d| d.as_str())
-                .map(String::from);
-
-            Ok(HookEvent::Start {
-                command: command.to_string(),
-                intent,
-                tool_use_id,
-            })
+            (Some(_), Some(_)) => {
+                bail!("hook action cannot be combined with a positional agent");
+            }
         }
-        Some(event @ ("PostToolUse" | "PostToolUseFailure")) => {
-            let exit = if event == "PostToolUseFailure" {
-                1
-            } else {
-                v.get("tool_response")
-                    .and_then(|tr| tr.get("exitCode"))
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0)
-            };
-
-            Ok(HookEvent::End { tool_use_id, exit })
-        }
-        _ => Ok(HookEvent::Skip),
     }
 }
 
@@ -202,12 +146,12 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
         return Ok(());
     }
 
-    match parse_hook_stdin(&input)? {
-        HookEvent::Start {
+    match HookEvent::from_json_str(&input)? {
+        Some(HookEvent::Start {
             command,
             intent,
             tool_use_id,
-        } => {
+        }) => {
             if let Some(history_id) = history::start_history_entry(
                 settings,
                 &command,
@@ -219,7 +163,7 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
                 std::fs::write(id_file_path(&tool_use_id), &history_id)?;
             }
         }
-        HookEvent::End { tool_use_id, exit } => {
+        Some(HookEvent::End { tool_use_id, exit }) => {
             let id_path = id_file_path(&tool_use_id);
 
             if let Ok(history_id) = std::fs::read_to_string(&id_path) {
@@ -230,7 +174,7 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
                 let _ = std::fs::remove_file(&id_path);
             }
         }
-        HookEvent::Skip => {}
+        None => {}
     }
 
     Ok(())
@@ -310,7 +254,7 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
         matcher,
     } = agent.install_kind()
     else {
-        bail!("agent does not use JSON hooks")
+        bail!("agent does not use JSON hooks");
     };
 
     for event_type in HOOK_EVENT_TYPES {
@@ -325,10 +269,14 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
             .ok_or_else(|| eyre::eyre!("hooks.{event_type} is not an array"))?;
 
         let already_installed = arr.iter().any(|entry| {
-            entry["hooks"].as_array().is_some_and(|h| {
-                h.iter()
-                    .any(|hook| hook["command"].as_str() == Some(hook_command))
-            })
+            entry
+                .get("hooks")
+                .and_then(Value::as_array)
+                .is_some_and(|hooks| {
+                    hooks.iter().any(|hook| {
+                        hook.get("command").and_then(Value::as_str) == Some(hook_command)
+                    })
+                })
         });
 
         if already_installed {
@@ -338,7 +286,7 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
 
         arr.push(serde_json::json!({
             "matcher": matcher,
-            "hooks": [{"type": "command", "command": hook_command}]
+            "hooks": [{"type": "command", "command": hook_command}],
         }));
         eprintln!("hooks.{event_type}: installed atuin hook");
     }
@@ -404,76 +352,5 @@ mod tests {
             AtuinCmd::Client(client::Cmd::Hook(Cmd { action: None, agent: Some(agent) }))
                 if agent == "codex"
         ));
-    }
-
-    #[test]
-    fn test_parse_pre_tool_use() {
-        let input = r#"{
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": "echo hello", "description": "Test greeting"},
-            "tool_use_id": "toolu_abc123",
-            "session_id": "sess1",
-            "cwd": "/tmp"
-        }"#;
-
-        match parse_hook_stdin(input).unwrap() {
-            HookEvent::Start {
-                command,
-                intent,
-                tool_use_id,
-            } => {
-                assert_eq!(command, "echo hello");
-                assert_eq!(intent.as_deref(), Some("Test greeting"));
-                assert_eq!(tool_use_id, "toolu_abc123");
-            }
-            _ => panic!("expected Start event"),
-        }
-    }
-
-    #[test]
-    fn test_parse_post_tool_use() {
-        let input = r#"{
-            "hook_event_name": "PostToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": "echo hello"},
-            "tool_response": {"exitCode": 0},
-            "tool_use_id": "toolu_abc123"
-        }"#;
-
-        match parse_hook_stdin(input).unwrap() {
-            HookEvent::End { tool_use_id, exit } => {
-                assert_eq!(tool_use_id, "toolu_abc123");
-                assert_eq!(exit, 0);
-            }
-            _ => panic!("expected End event"),
-        }
-    }
-
-    #[test]
-    fn test_parse_non_bash_tool_skipped() {
-        let input = r#"{
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Write",
-            "tool_input": {"file_path": "/tmp/test.txt", "content": "hello"},
-            "tool_use_id": "toolu_abc123"
-        }"#;
-
-        assert!(matches!(parse_hook_stdin(input).unwrap(), HookEvent::Skip));
-    }
-
-    #[test]
-    fn test_parse_failure_event() {
-        let input = r#"{
-            "hook_event_name": "PostToolUseFailure",
-            "tool_name": "Bash",
-            "tool_input": {"command": "false"},
-            "tool_use_id": "toolu_abc123"
-        }"#;
-
-        match parse_hook_stdin(input).unwrap() {
-            HookEvent::End { exit, .. } => assert_eq!(exit, 1),
-            _ => panic!("expected End event"),
-        }
     }
 }
