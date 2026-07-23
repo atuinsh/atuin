@@ -248,8 +248,31 @@ mod test {
         assert_eq!(commands, ["echo good", "echo corrupt"]);
 
         assert_eq!(loader.buf[0].timestamp.unix_timestamp(), 1_639_162_832);
+        assert_eq!(loader.buf[0].duration, 1_000_000_000);
         assert_eq!(loader.buf[1].timestamp, OffsetDateTime::UNIX_EPOCH);
         assert_eq!(loader.buf[1].duration, HistoryImported::DEFAULT_DURATION);
+    }
+
+    #[tokio::test]
+    async fn zero_duration_command_is_not_default_duration() {
+        // realtime_after == realtime_before is a legitimate zero-length command,
+        // not an unrepresentable/corrupt one - it must not be swallowed into
+        // DEFAULT_DURATION
+        let bytes = format!(
+            "{}\n",
+            resh_line("echo instant", 1_639_162_832.5, 1_639_162_832.5)
+        )
+        .into_bytes();
+
+        let resh = Resh { bytes };
+        let mut loader = TestLoader::default();
+        resh.load(&mut loader).await.expect("import must not fail");
+
+        let commands: Vec<&str> = loader.buf.iter().map(|h| h.command.as_str()).collect();
+        assert_eq!(commands, ["echo instant"]);
+
+        assert_eq!(loader.buf[0].duration, 0);
+        assert_ne!(loader.buf[0].duration, HistoryImported::DEFAULT_DURATION);
     }
 
     #[tokio::test]

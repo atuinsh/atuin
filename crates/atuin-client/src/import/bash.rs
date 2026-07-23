@@ -269,5 +269,12 @@ cargo update
             loader.buf.iter().map(|h| h.command.as_str()),
             commands.iter().map(String::as_str),
         );
+
+        // the increment saturates at the maximum representable instant rather than
+        // wrapping or resetting to the epoch
+        assert_eq!(
+            loader.buf.last().unwrap().timestamp.unix_timestamp(),
+            253_402_300_799
+        );
     }
 }

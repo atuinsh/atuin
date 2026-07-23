@@ -325,6 +325,17 @@ cargo update
             loader.buf.iter().map(|h| h.command.as_str()),
             expected.iter().map(String::as_str),
         );
+
+        // the first entry's timestamp must actually resolve; without this, every
+        // entry would silently fall back to untimestamped and the overflow this
+        // test targets would never be exercised
+        assert_eq!(loader.buf[0].timestamp.unix_timestamp(), 253_402_300_799);
+        // the increment saturates at the maximum representable instant rather than
+        // wrapping or resetting to the epoch
+        assert_eq!(
+            loader.buf.last().unwrap().timestamp.unix_timestamp(),
+            253_402_300_799
+        );
     }
 
     #[tokio::test]
