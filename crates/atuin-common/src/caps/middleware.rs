@@ -12,42 +12,7 @@ use reqwest_middleware::{ClientBuilder, ClientWithMiddleware, Middleware, Next, 
 use typed_builder::TypedBuilder;
 
 use crate::caps::CapClient;
-
-/// Request header carrying the token the client believes is current.
-const KNOWN_HEADER: &str = "x-atuin-capabilities-known";
-/// Response header carrying the token the server actually has.
-const AVAILABLE_HEADER: &str = "x-atuin-capabilities-available";
-
-/// Stamp the known-capability token onto `req`, overwriting any prior value.
-///
-/// A `None` token (capabilities never fetched) leaves the request without the header, which the
-/// server reads as "the client knows nothing". A token that is not a valid header value is skipped
-/// rather than panicking -- the token is server-issued and expected to be ASCII, but we never trust
-/// it enough to crash the request path.
-fn stamp_known(req: &mut Request, token: Option<&str>) {
-    let Some(token) = token else {
-        return;
-    };
-    let Ok(value) = HeaderValue::from_str(token) else {
-        return;
-    };
-    req.headers_mut()
-        .insert(HeaderName::from_static(KNOWN_HEADER), value);
-}
-
-/// Decide whether `response` is a capability mismatch relative to the `known` token we sent.
-///
-/// Returns `Some(available_token)` only when all three hold: the status is `412 Precondition
-/// Failed`, an `X-Atuin-Capabilities-Available` header is present, and its value differs from
-/// `known`. Every other response -- a plain 4xx, a 412 without the header, a matching token --
-/// yields `None` and is passed through untouched. The response body is never inspected.
-fn capability_mismatch(response: &Response, known: Option<&str>) -> Option<String> {
-    if response.status() != StatusCode::PRECONDITION_FAILED {
-        return None;
-    }
-    let available = response.headers().get(AVAILABLE_HEADER)?.to_str().ok()?;
-    (Some(available) != known).then(|| available.to_string())
-}
+use crate::caps::http::{AVAILABLE_HEADER, KNOWN_HEADER};
 
 /// Reqwest middleware that negotiates capability versions with the server.
 ///
@@ -59,12 +24,10 @@ fn capability_mismatch(response: &Response, known: Option<&str>) -> Option<Strin
 pub struct CapMiddleware {
     /// Source of the known token and the `/api/v0/capabilities` refresh.
     caps: CapClient,
-    /// Plain client used only for the refresh fetch -- never the wrapped client, to avoid
-    /// re-entering this middleware.
+    /// Client used to request the capabilities from the server.
     http: Client,
-    /// Whether to retry the original request once after a successful refresh. Defaults to `false`
-    /// (surface the 412 to the caller).
-    #[builder(default = false)]
+    /// Whether to retry the original request once after a successful refresh.
+    #[builder(default = true)]
     refresh: bool,
 }
 
@@ -76,17 +39,25 @@ impl Middleware for CapMiddleware {
         ext: &mut Extensions,
         next: Next<'_>,
     ) -> Result<Response> {
+        // Stamp our known token onto the request; a `None` or non-ASCII token leaves the header off
+        // rather than panicking the request path.
         let known = self.caps.known_token();
-        stamp_known(&mut req, known.as_deref());
+        if let Some(value) = known.as_deref().and_then(|t| HeaderValue::from_str(t).ok()) {
+            req.headers_mut()
+                .insert(HeaderName::from_static(KNOWN_HEADER), value);
+        }
 
-        // Save a replayable copy only if we might retry. `try_clone` yields `None` for streaming
-        // bodies, in which case we cannot retry and will surface the 412 instead.
         let retry_req = if self.refresh { req.try_clone() } else { None };
 
         let response = next.clone().run(req, ext).await?;
 
-        // Not a capability mismatch -> pass the response straight through.
-        if capability_mismatch(&response, known.as_deref()).is_none() {
+        let is_mismatch = response.status() == StatusCode::PRECONDITION_FAILED
+            && response
+                .headers()
+                .get(AVAILABLE_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|available| Some(available) != known.as_deref());
+        if !is_mismatch {
             return Ok(response);
         }
 
@@ -97,19 +68,20 @@ impl Middleware for CapMiddleware {
 
         // Refresh (coalesced across concurrent callers) and retry exactly once with the new token.
         self.caps.refresh(&self.http).await?;
-        stamp_known(&mut retry_req, self.caps.known_token().as_deref());
-        return next.run(retry_req, ext).await;
+        let fresh = self.caps.known_token();
+        if let Some(value) = fresh.as_deref().and_then(|t| HeaderValue::from_str(t).ok()) {
+            retry_req
+                .headers_mut()
+                .insert(HeaderName::from_static(KNOWN_HEADER), value);
+        }
+
+        next.run(retry_req, ext).await
     }
 }
 
 /// Install capability negotiation onto a [`reqwest::Client`].
-///
-/// The caller supplies their configured client once; `with_capabilities` clones it for the
-/// middleware's refresh path and wraps the original, so the wiring never leaks to the caller.
 pub trait CapabilitiesExt {
-    /// Wrap this client so it negotiates capabilities. `refresh` controls whether a stale-token
-    /// rejection is transparently refreshed-and-retried (`true`) or surfaced to the caller
-    /// (`false`).
+    /// Wrap this client so it negotiates capabilities.
     fn with_capabilities(self, caps: CapClient, refresh: bool) -> ClientWithMiddleware;
 }
 
@@ -244,53 +216,47 @@ mod tests {
         assert_eq!(caps_hits, 0, "a plain 404 must not trigger a refresh");
     }
 
-    fn response_with(status: u16, available: Option<&str>) -> Response {
-        let mut builder = http::Response::builder().status(status);
-        if let Some(token) = available {
-            builder = builder.header(AVAILABLE_HEADER, token);
-        }
-        Response::from(builder.body(String::new()).unwrap())
-    }
-
-    #[rstest]
-    #[case(412, Some("5"), Some("3"), Some("5"))] // differs -> mismatch
-    #[case(412, Some("5"), None, Some("5"))] // client knows nothing
-    #[case(412, Some("5"), Some("5"), None)] // equal -> none
-    #[case(200, Some("5"), Some("3"), None)] // not 412
-    #[case(412, None, Some("3"), None)] // no available header
-    #[case(404, None, Some("3"), None)] // unrelated 4xx
-    fn capability_mismatch_cases(
-        #[case] status: u16,
-        #[case] available: Option<&str>,
-        #[case] known: Option<&str>,
-        #[case] expected: Option<&str>,
-    ) {
-        let response = response_with(status, available);
-        assert_eq!(
-            capability_mismatch(&response, known),
-            expected.map(String::from)
-        );
-    }
-
-    #[rstest]
-    #[case(Some("9"), Some("9"))]
-    #[case(None, None)]
-    fn stamp_known_cases(#[case] token: Option<&str>, #[case] expected: Option<&str>) {
+    #[tokio::test]
+    async fn bare_412_without_caps_header_passes_through() {
         crate::tls::ensure_crypto_provider();
-        let mut req = reqwest::Client::new()
-            .get("http://example.invalid/x")
-            .build()
+        // A 412 that carries no `X-Atuin-Capabilities-Available` header is an ordinary precondition
+        // failure, not a capability signal -- the middleware must pass it through and never refresh.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/precondition"))
+            .respond_with(ResponseTemplate::new(412))
+            .mount(&server)
+            .await;
+        let caps_url = format!("{}/api/v0/capabilities", server.uri())
+            .parse()
             .unwrap();
-        stamp_known(&mut req, token);
-        match expected {
-            Some(value) => {
-                assert_eq!(
-                    req.headers().get(KNOWN_HEADER).unwrap().to_str().unwrap(),
-                    value
-                );
-            }
-            None => assert!(req.headers().get(KNOWN_HEADER).is_none()),
-        }
+
+        let http = reqwest::Client::new();
+        let middleware = CapMiddleware::builder()
+            .caps(CapClient::new(caps_url))
+            .http(http.clone())
+            .refresh(true)
+            .build();
+        let client = ClientBuilder::new(http).with(middleware).build();
+
+        let response = client
+            .get(format!("{}/precondition", server.uri()))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 412);
+        let caps_hits = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.url.path() == "/api/v0/capabilities")
+            .count();
+        assert_eq!(
+            caps_hits, 0,
+            "a 412 without the caps header must not trigger a refresh"
+        );
     }
 
     #[tokio::test]

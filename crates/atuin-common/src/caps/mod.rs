@@ -14,6 +14,8 @@ use std::{any::Any, borrow::Borrow, collections::HashMap, fmt};
 
 use serde::{Serialize, de::DeserializeOwned};
 
+pub mod http;
+
 mod client;
 mod middleware;
 mod server;
@@ -39,6 +41,7 @@ pub trait Capability: Serialize + DeserializeOwned + Send + Sync + 'static {
 }
 
 /// The capabilities a node advertises about itself.
+#[derive(Default)]
 struct OwnCaps {
     caps: RwLock<HashMap<CapKey, Box<dyn Any + Send + Sync>>>,
 }
