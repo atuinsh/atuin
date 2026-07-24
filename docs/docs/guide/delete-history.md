@@ -2,7 +2,7 @@
 
 Atuin provides several ways to delete history, whether you want to remove a single entry, bulk delete by query, clean up duplicates, or wipe everything.
 
-All deletion methods are local-first. If you have sync enabled, deletions are propagated to other machines automatically.
+All deletion methods are local-first. If you have sync enabled, Atuin propagates deletions to other machines automatically.
 
 ## Deleting a single entry
 
@@ -26,7 +26,7 @@ Both methods remove the entry immediately with no further confirmation.
 
 ## Deleting entries matching a query
 
-Use `atuin search --delete` to delete all entries matching a search query. This uses the same query syntax as regular search, so you can preview what will be deleted before committing.
+Use `atuin search --delete` to delete all entries matching a search query. This uses the same query syntax as regular search, so you can preview what `--delete` would remove before running it.
 
 ### Preview first, then delete
 
@@ -103,7 +103,7 @@ atuin history prune --dry-run
 atuin history prune
 ```
 
-This is useful when you add a new pattern to `history_filter` - future commands matching the filter are never recorded, but old entries that were recorded before the filter was set up remain. `prune` cleans those up.
+This is useful when you add a new pattern to `history_filter`: Atuin never records future commands matching the filter, but old entries you recorded before you set up the filter remain. `prune` cleans those up.
 
 ## Purging undecryptable local store records
 
@@ -117,7 +117,7 @@ atuin store verify
 atuin store purge
 ```
 
-This is useful when one machine ends up with local records that were encrypted with a different key than the one Atuin is currently using. See the [store reference](../reference/store.md) for the other record store commands.
+This is useful when one machine ends up with local records that Atuin encrypted with a different key than the one it's currently using. See the [store reference](../reference/store.md) for the other record store commands.
 
 !!! warning
     `atuin store purge` only affects the local record store on the current machine. It doesn't wipe your history, delete your sync account, or reset other machines.

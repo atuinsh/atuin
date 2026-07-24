@@ -64,7 +64,7 @@ The LLM will see the skill content with `[Loaded skill: deploy]` and `[Arguments
 
 ### By the LLM
 
-When the LLM determines a skill is relevant to your request, it calls `load_skill` automatically to fetch the full content. Skills with `disable-model-invocation: true` are excluded from this—the LLM won't see them.
+When the LLM determines a skill is relevant to your request, it calls `load_skill` automatically to fetch the full content. Atuin excludes skills with `disable-model-invocation: true` from this—the LLM won't see them.
 
 ## Dynamic Content
 
@@ -90,8 +90,8 @@ Deploy $ARGUMENTS to production.
 Current status: !`kubectl get deployment $ARGUMENTS`
 ```
 
-If the body doesn't contain `$ARGUMENTS` and arguments were provided, they're appended as `ARGUMENTS: <value>`.
+If the body doesn't contain `$ARGUMENTS` and you provided arguments, Atuin appends them as `ARGUMENTS: <value>`.
 
 ## Description Budget
 
-Skill descriptions are packed into the request to the server under a total character budget. Each description is truncated at 512 characters, then skills are included until the budget is exhausted. If skills are omitted, the server is told which ones were left out.
+Atuin sends skill descriptions to the server under a total character budget. It cuts each description to 512 characters, then adds skills until it reaches the budget. If Atuin leaves any skills out, it tells the server which ones.

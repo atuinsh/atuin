@@ -34,8 +34,7 @@ Atuin only records commands run after it's installed, so bring the old ones in:
 atuin import auto
 ```
 
-This detects your shell and imports from its history file, which stays untouched
-and keeps being written to. See [Import existing history](import.md) for
+This detects your shell and imports from its history file, which stays untouched—your shell keeps writing to it as usual. See [Import existing history](import.md) for
 importing from a specific shell or a non-default file.
 
 ## 3. Set up sync (optional)

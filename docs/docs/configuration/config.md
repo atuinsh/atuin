@@ -1,6 +1,6 @@
 # Config
 
-Atuin maintains two configuration files, stored in `~/.config/atuin/`. We store
+Atuin maintains two configuration files, stored in `~/.config/atuin/`. Atuin stores
 data in `~/.local/share/atuin` (unless overridden by XDG\_\*).
 
 The full path to the config file would be `~/.config/atuin/config.toml`
@@ -489,7 +489,7 @@ Atuin version: >= 18.0
 
 Default: `5`
 
-The max time (in seconds) we wait for a connection to become established with a
+The max time (in seconds) Atuin waits for a connection to become established with a
 remote sync server. Any longer than this and the request will fail.
 
 ```toml
@@ -744,7 +744,7 @@ common_subcommands = [
 ]
 ```
 
-Configures commands where we should consider the subcommand as part of the statistics. For example, consider `kubectl get` rather than just `kubectl`.
+Configures commands where Atuin should consider the subcommand as part of the statistics. For example, consider `kubectl get` rather than just `kubectl`.
 
 ### `common_prefix`
 
@@ -1016,7 +1016,7 @@ socket_path = "~/.local/share/atuin/atuin.sock"
 
 Where to bind a Unix socket for client -> daemon communication
 
-If XDG_RUNTIME_DIR is available, then we use this directory instead.
+If XDG_RUNTIME_DIR is available, Atuin uses this directory instead.
 
 ### `pidfile_path`
 

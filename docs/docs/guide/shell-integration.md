@@ -17,7 +17,7 @@ These hooks only activate under specific conditions:
 - Your shell configuration file must be **sourced** (`.bashrc`, `.zshrc`, etc.)
 - The `atuin init` command must run during shell startup
 
-If any of these conditions aren't met, Atuin's hooks won't be installed, and commands won't be recorded.
+If any of these conditions aren't met, Atuin won't install its hooks, and it won't record commands.
 
 ### Environment Variables
 
@@ -31,7 +31,7 @@ When Atuin initializes, it sets several environment variables:
 | `ATUIN_HISTORY_AUTHOR` | Optional command author identity (for example `ellie`, `claude`, `copilot`) |
 | `ATUIN_HISTORY_INTENT` | Optional command intent/rationale text |
 
-These variables are used internally to track command execution and associate commands with sessions.
+Atuin uses these variables internally to track command execution and associate commands with sessions.
 If `ATUIN_HISTORY_AUTHOR` isn't set, Atuin defaults to the local shell username.
 
 ## Embedded Terminals and IDE Integrations

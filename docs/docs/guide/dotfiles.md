@@ -4,7 +4,7 @@ While Atuin started as a tool for syncing and searching shell history, we're
 building tooling for syncing dotfiles across machines, and making them easier
 to work with.
 
-At the moment, we support managing and syncing of shell aliases and environment variables - with more
+At the moment, Atuin supports managing and syncing of shell aliases and environment variables - with more
 coming soon.
 
 The following shells are supported:

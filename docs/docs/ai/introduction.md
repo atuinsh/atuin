@@ -36,7 +36,7 @@ You can also follow-up with questions to get responses in natural language.
 
 [![Basic Atuin AI refinement informational usage](./images/basic-followup-questions.png)](./images/basic-followup-questions.png)
 
-You can still use `enter` or `tab` to run or insert the last suggested command, even if it was suggested in a previous turn.
+You can still use `enter` or `tab` to run or insert the last suggested command, even if the LLM suggested it in a previous turn.
 
 ### Conversational and search usage
 

@@ -10,7 +10,7 @@ Atuin pty-proxy is an experimental lightweight PTY proxy, providing new features
 
 The search TUI exposes a tradeoff: the UI is either in fullscreen alt-screen mode that takes over your terminal, or inline mode that clears your previous output. Neither is great.
 
-With pty-proxy, the Atuin popup renders over the top of your previous output, but when it's closed we can restore the output successfully.
+With pty-proxy, the Atuin popup renders over the top of your previous output, but when it's closed, pty-proxy restores the output successfully.
 
 !!! tip "Already using tmux?"
 

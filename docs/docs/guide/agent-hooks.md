@@ -1,6 +1,6 @@
 # AI Agent Hooks
 
-Atuin can capture commands run by AI coding agents (like Claude Code, Codex, and pi) alongside your regular shell history. Each command is tagged with the agent that ran it, so you can filter your history by author.
+Atuin can capture commands run by AI coding agents (like Claude Code, Codex, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
 
 ## Quick Start
 
@@ -36,7 +36,7 @@ The hook lifecycle:
 1. **PreToolUse** -- the agent is about to run a Bash command. Atuin records the command, working directory, and timestamp (same as `history start`).
 2. **PostToolUse / PostToolUseFailure** -- the command finished. Atuin records the exit code and duration (same as `history end`).
 
-Only `Bash` tool invocations are captured. Other tool types (file writes, web fetches, etc.) are ignored.
+Atuin only captures `Bash` tool invocations. It ignores other tool types (file writes, web fetches, etc.).
 
 ## Filtering by Author
 
