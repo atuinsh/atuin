@@ -648,6 +648,37 @@ Interactive search shows only commands you ran yourself, hiding those recorded b
 
 To filter by author on the command line, use `atuin search --author`. See [Filtering by Author](https://docs.atuin.sh/guide/agent-hooks/#filtering-by-author) for the available values.
 
+#### `shells`
+
+Atuin version: >= 18.18
+
+Default: `"auto"`
+
+Filter interactive search results by the shell that was used to run each command.
+
+| Value            | Meaning                                                                                                                      |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `"all"`          | Show commands from all shells.                                                                                               |
+| `"auto"`         | Show commands from the current shell, or commands that have no recorded shell (for example, from an older version of Atuin). |
+| array of strings | Show commands run by any shell in the array. `""` includes commands that have no shell recorded.                             |
+
+The current shell is detected from the `ATUIN_SHELL` environment variable (set by the shell init script).
+
+```
+[search]
+# Default: show commands from the current shell. Atuin will show Bash commands
+# when invoked from Bash, Zsh commands when invoked from Zsh, etc. Also
+# includes commands that have no shell recorded (most likely from an older
+# version of Atuin).
+shells = "auto"
+
+# Show commands from all shells.
+# shells = "all"
+
+# Show only Bash and Zsh commands.
+# shells = ["bash", "zsh"]
+```
+
 ## Stats
 
 This section of client config is specifically for configuring Atuin stats calculations
