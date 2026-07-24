@@ -2,9 +2,9 @@
 
 ## `atuin history prune`
 
-This command deletes history entries matching the [history_filter](https://docs.atuin.sh/configuration/config/#history_filter) configuration parameter.
+This command deletes history entries matching the [`history_filter`](https://docs.atuin.sh/configuration/config/#history_filter) configuration parameter.
 
-These may be commands that match the current `history_filter` configuration, but were saved to history before the filter was set up, and therefore were not excluded from history at the time of execution.
+These may be commands that match the current `history_filter` configuration, but were saved to history before the filter excluded them.
 
 It may be useful to run the prune command after updating `history_filter` to remove old history entries that match the new filters.
 

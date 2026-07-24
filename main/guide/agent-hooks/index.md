@@ -1,6 +1,6 @@
 # AI Agent Hooks
 
-Atuin can capture commands run by AI coding agents (like Claude Code, Codex, and pi) alongside your regular shell history. Each command is tagged with the agent that ran it, so you can filter your history by author.
+Atuin can capture commands run by AI coding agents (like Claude Code, Codex, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
 
 ## Quick Start
 
@@ -36,7 +36,7 @@ The hook lifecycle:
 1. **PreToolUse** -- the agent is about to run a Bash command. Atuin records the command, working directory, and timestamp (same as `history start`).
 1. **PostToolUse / PostToolUseFailure** -- the command finished. Atuin records the exit code and duration (same as `history end`).
 
-Only `Bash` tool invocations are captured. Other tool types (file writes, web fetches, etc.) are ignored.
+Atuin only captures `Bash` tool invocations. It ignores other tool types (file writes, web fetches, etc.).
 
 ## Filtering by Author
 
@@ -44,14 +44,14 @@ By default, Atuin's interactive search shows only your own commands. Agent-run c
 
 Today this default is built into the search UI rather than configurable via `config.toml`. Interactive search uses the equivalent of:
 
-- `$all-user` — any author that is **not** a known AI agent
+- `$all-user` — any author that's **not** a known AI agent
 
 For explicit author filtering, use the CLI `atuin search --author ...` flag. Special values:
 
-| Value        | Meaning                                     |
-| ------------ | ------------------------------------------- |
-| `$all-user`  | Any author that is **not** a known AI agent |
-| `$all-agent` | Any known AI agent author                   |
+| Value        | Meaning                                    |
+| ------------ | ------------------------------------------ |
+| `$all-user`  | Any author that's **not** a known AI agent |
+| `$all-agent` | Any known AI agent author                  |
 
 You can also use literal author names:
 
@@ -80,7 +80,7 @@ Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `openco
 atuin hook install claude-code
 ```
 
-This adds hook entries to `~/.claude/settings.json`. Claude Code calls `atuin hook claude-code` on each `Bash` tool use, passing the event as JSON on stdin.
+This adds hook entries to `~/.claude/settings.json`. Claude Code calls `atuin hook claude-code` on each `Bash` tool use, passing the event as JSON on `stdin`.
 
 ### Codex
 
@@ -98,7 +98,7 @@ atuin hook install pi
 
 This writes Atuin's extension to `~/.pi/agent/extensions/atuin.ts`.
 
-Then restart pi or run `/reload`. The extension listens to pi's tool events and records every `bash` tool command with author `pi` by calling `atuin history start` before execution and `atuin history end` afterwards. Because it observes events rather than registering its own `bash` tool, it works alongside other extensions that replace pi's bash tool (such as sandboxes or RTK implementations).
+Then restart pi or run `/reload`. The extension listens to pi's tool events and records every `bash` tool command with author `pi` by calling `atuin history start` before execution and `atuin history end` afterward. Because it observes events rather than registering its own `bash` tool, it works alongside other extensions that replace pi's bash tool (such as sandboxes or RTK implementations).
 
 ## Verifying Installation
 

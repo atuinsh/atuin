@@ -1,13 +1,13 @@
 # search
 
-Atuin search supports wildcards, with either the `*` or `%` character. By default, a prefix search is performed (ie, all queries are automatically appended with a wildcard).
+Atuin search supports wildcards, with either the `*` or `%` character. By default, a prefix search is performed (that is, all queries are automatically appended with a wildcard).
 
 | Arg                  | Description                                                                                                                                                                      |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--cwd`/`-c`         | The directory to list history for (default: all dirs)                                                                                                                            |
-| `--exclude-cwd`      | Do not include commands that ran in this directory (default: none)                                                                                                               |
+| `--exclude-cwd`      | Don't include commands that ran in this directory (default: none)                                                                                                                |
 | `--exit`/`-e`        | Filter by exit code (default: none)                                                                                                                                              |
-| `--exclude-exit`     | Do not include commands that exited with this value (default: none)                                                                                                              |
+| `--exclude-exit`     | Don't include commands that exited with this value (default: none)                                                                                                               |
 | `--before`           | Only include commands run before this time (default: none)                                                                                                                       |
 | `--after`            | Only include commands run after this time (default: none)                                                                                                                        |
 | `--interactive`/`-i` | Open the interactive search UI (default: false)                                                                                                                                  |
@@ -23,11 +23,11 @@ Atuin search supports wildcards, with either the `*` or `%` character. By defaul
 
 ## `atuin search -i`
 
-Atuin's interactive search TUI allows you to fuzzy search through your history.
+Use Atuin's interactive search TUI to fuzzy search through your history.
 
 You can replay the `nth` command with `alt + #` where `#` is the line number of the command you would like to replay.
 
-Note: This is not yet supported on macOS.
+Note: This isn't yet supported on macOS.
 
 ## Examples
 

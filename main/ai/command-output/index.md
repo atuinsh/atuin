@@ -51,17 +51,17 @@ Add to `config.nu`, **before** the regular `atuin init`:
 source ~/.local/share/atuin/pty-proxy-init.nu
 ```
 
-See the [pty-proxy documentation](https://docs.atuin.sh/reference/pty-proxy/index.md) for more detail, including what to do if `atuin` is not on your `PATH` when your shell starts.
+See the [pty-proxy documentation](https://docs.atuin.sh/reference/pty-proxy/index.md) for more detail, including what to do if `atuin` isn't on your `PATH` when your shell starts.
 
 ### 3. Restart your shell
 
-Open a new terminal (or re-source your shell config). From now on, the output of every command you run in that session is captured and available to the AI.
+Open a new terminal (or re-source your shell config). From now on, pty-proxy captures the output of every command you run in that session and makes it available to the AI.
 
 To try it out, run a command that fails, then press `?` and ask Atuin AI why it failed. It will ask permission to use the `AtuinOutput` tool, then read the output and answer.
 
 ## How it works
 
-pty-proxy sits between your terminal and your shell, and uses your shell's prompt markers to work out where each command's output starts and ends. Each captured command is sent to the daemon, which keeps it in memory alongside its Atuin history ID. When Atuin AI wants to see what a command printed, it asks the daemon for the output by history ID.
+pty-proxy sits between your terminal and your shell, and uses your shell's prompt markers to work out where each command's output starts and ends. It then sends each captured command to the daemon, which keeps it in memory alongside its Atuin history ID. When Atuin AI wants to see what a command printed, it asks the daemon for the output by history ID.
 
 ## Privacy and retention
 
@@ -70,7 +70,7 @@ Captured output is stored in memory, on your machine:
 - The daemon keeps up to 1MB of output per command, and the most recent 128 commands (up to 32MB of output) per shell session.
 - Output is lost when the daemon stops. Only commands captured while the daemon was running are available.
 
-Nothing is sent to the LLM until it requests the output of a specific command, and by default Atuin AI asks your permission first.
+Atuin sends nothing to the LLM until the LLM requests the output of a specific command, and by default Atuin AI asks your permission first.
 
 ## Permissions
 

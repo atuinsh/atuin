@@ -2,7 +2,7 @@
 
 ## `atuin config`
 
-Read, write, and inspect Atuin configuration values. Atuin resolves configuration from multiple sources (defaults, config file, environment variables). The `config` command lets you see what is set where, and change values in your `config.toml` without opening an editor.
+Read, write, and inspect Atuin configuration values. Atuin resolves configuration from multiple sources (defaults, config file, environment variables). The `config` command lets you see what's set where, and change values in your `config.toml` without opening an editor.
 
 ## Subcommands
 
@@ -20,7 +20,7 @@ enabled = true
 socket_path = "/tmp/atuin_daemon.sock"
 ```
 
-If the key is not present in the config file, you'll see:
+If the key isn't present in the config file, you'll see:
 
 ```
 $ atuin config get enter_accept
@@ -74,7 +74,7 @@ $ atuin config set daemon.enabled true
 
 By default, `set` matches the TOML type of the existing value when the key is already in the config file. This prevents accidentally changing a string like `"300"` into an integer `300`.
 
-For new keys (not already in the file), `set` auto-detects the type:
+For new keys (not already in the file), `set` automatically detects the type:
 
 | Value          | Detected type |
 | -------------- | ------------- |
@@ -85,7 +85,7 @@ For new keys (not already in the file), `set` auto-detects the type:
 
 Scalar values only
 
-`atuin config set` can only set config entries with scalar values; for tables or arrays, edit the config file manually.
+`atuin config set` can only set config entries with scalar values, so for tables or arrays, edit the config file manually.
 
 #### `--type` / `-t`
 
@@ -97,7 +97,7 @@ $ atuin config set sync_frequency 600 --type string
 
 Possible values: `auto`, `string`, `boolean`, `integer`, `float`.
 
-Setting a key that is currently a table will produce an error directing you to use a dotted key instead:
+Setting a key that's currently a table will produce an error directing you to use a dotted key instead:
 
 ```
 $ atuin config set logs true

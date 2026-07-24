@@ -2,7 +2,7 @@
 
 Atuin provides several ways to delete history, whether you want to remove a single entry, bulk delete by query, clean up duplicates, or wipe everything.
 
-All deletion methods are local-first. If you have sync enabled, deletions are propagated to other machines automatically.
+All deletion methods are local-first. If you have sync enabled, Atuin propagates deletions to other machines automatically.
 
 ## Deleting a single entry
 
@@ -26,7 +26,7 @@ Both methods remove the entry immediately with no further confirmation.
 
 ## Deleting entries matching a query
 
-Use `atuin search --delete` to delete all entries matching a search query. This uses the same query syntax as regular search, so you can preview what will be deleted before committing.
+Use `atuin search --delete` to delete all entries matching a search query. This uses the same query syntax as regular search, so you can preview what `--delete` would remove before running it.
 
 ### Preview first, then delete
 
@@ -57,7 +57,7 @@ atuin search --delete --exit 0 --after "yesterday 3pm" cargo
 
 Warning
 
-`--delete` requires a query or filter. It will not run without one. This is intentional to prevent accidental bulk deletion.
+`--delete` requires a query or filter. It won't run without one. This is intentional to prevent accidental bulk deletion.
 
 ## Deleting all history
 
@@ -69,11 +69,11 @@ atuin search --delete-it-all
 
 Danger
 
-This deletes every entry in your local history database. It cannot be combined with a query or filters. This action is irreversible.
+This deletes every entry in your local history database. It can't be combined with a query or filters. This action is irreversible.
 
 ### Starting fresh with sync
 
-If you use sync and want to start completely fresh, `--delete-it-all` alone is not enough. Atuin sync works by recording every action (including deletions) as encrypted records. Deleting 100,000 entries locally creates 100,000 delete records that still need to sync. When your other machines pull those records, they process every single one, and your database still contains the overhead of all that history.
+If you use sync and want to start completely fresh, `--delete-it-all` alone isn't enough. Atuin sync works by recording every action (including deletions) as encrypted records. Deleting 100,000 entries locally creates 100,000 delete records that still need to sync. When your other machines pull those records, they process every single one, and your database still contains the overhead of all that history.
 
 The cleaner approach is to delete your sync account and start over:
 
@@ -88,7 +88,7 @@ atuin register
 atuin import auto
 ```
 
-This gives you a clean slate on the server with no leftover records. Your other machines can then register with the new account and start fresh too.
+This leaves no leftover records on the server. Your other machines can then register with the new account and start fresh too.
 
 Tip
 
@@ -106,11 +106,11 @@ atuin history prune --dry-run
 atuin history prune
 ```
 
-This is useful when you add a new pattern to `history_filter` - future commands matching the filter are never recorded, but old entries that were recorded before the filter was set up remain. `prune` cleans those up.
+This is useful when you add a new pattern to `history_filter`: Atuin never records future commands matching the filter, but old entries Atuin recorded before you set up the filter remain. `prune` cleans those up.
 
 ## Purging undecryptable local store records
 
-If `atuin store verify` reports that some local store records cannot be decrypted with your current key, you can remove only those broken local records:
+If `atuin store verify` reports that some local store records can't be decrypted with your current key, you can remove only those broken local records:
 
 ```
 # Check whether every local store record can be decrypted
@@ -120,15 +120,15 @@ atuin store verify
 atuin store purge
 ```
 
-This is useful when one machine ends up with local records that were encrypted with a different key than the one Atuin is currently using. See the [store reference](https://docs.atuin.sh/reference/store/index.md) for the other record store commands.
+This is useful when one machine ends up with local records that Atuin encrypted with a different key than the one it's currently using. See the [store reference](https://docs.atuin.sh/reference/store/index.md) for the other record store commands.
 
 Warning
 
-`atuin store purge` only affects the local record store on the current machine. It does not wipe your history, delete your sync account, or reset other machines.
+`atuin store purge` only affects the local record store on the current machine. It doesn't wipe your history, delete your sync account, or reset other machines.
 
 Danger
 
-`atuin store purge` permanently deletes the records it cannot decrypt. Before running it, make sure Atuin is using the key you intend to keep, and back up the local store if the records may still be recoverable. Run `atuin store verify` first so you know whether you are cleaning up a real key mismatch and not just deleting data blindly.
+`atuin store purge` permanently deletes the records it can't decrypt. Before running it, make sure Atuin is using the key you intend to keep, and back up the local store if the records may still be recoverable. Run `atuin store verify` first so you know whether you're cleaning up a real key mismatch and not just deleting data blindly.
 
 ## Deduplicating history
 
@@ -156,7 +156,7 @@ To delete your remote sync account and all server-side history:
 atuin account delete
 ```
 
-This removes your account and all synchronized history from the server. **Local history is not affected.** See the [sync reference](https://docs.atuin.sh/reference/sync/index.md) for more details.
+This removes your account and all synchronized history from the server. **Local history isn't affected.** See the [sync reference](https://docs.atuin.sh/reference/sync/index.md) for more details.
 
 ## Summary
 

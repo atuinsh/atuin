@@ -12,7 +12,7 @@ It will install a binary to `~/.atuin/bin`, and if you'd rather do something els
 curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 ```
 
-The install script will walk you through importing your shell history and setting up a sync account. To skip these interactive prompts (e.g. in CI or Dockerfiles), pass `--non-interactive`:
+The install script will walk you through importing your shell history and setting up a sync account. To skip these interactive prompts (for example, in CI or Dockerfiles), pass `--non-interactive`:
 
 ```
 curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh -s -- --non-interactive
@@ -122,7 +122,7 @@ cargo install --path crates/atuin --locked
 
 Please be advised
 
-If you choose to manually install Atuin rather than using the recommended installation script, merely installing the binary is not sufficient, you should also set up the shell plugin.
+If you choose to manually install Atuin rather than using the recommended installation script, merely installing the binary isn't sufficient, you should also set up the shell plugin.
 
 ______________________________________________________________________
 
@@ -159,11 +159,11 @@ echo 'eval "$(atuin init bash)"' >> ~/.bashrc
 
 Please note
 
-bash-preexec currently has [an issue](https://github.com/rcaloras/bash-preexec/issues/115) where it will stop honoring `ignorespace`. While Atuin will ignore commands prefixed with whitespace, they may still end up in your bash history. Please check your configuration! All other shells do not have this issue.
+bash-preexec currently has [an issue](https://github.com/rcaloras/bash-preexec/issues/115) where it will stop honoring `ignorespace`. While Atuin will ignore commands prefixed with whitespace, they may still end up in your bash history. Please check your configuration! All other shells don't have this issue.
 
 To use `atuin < 18.10.0` in `bash < 4` with bash-preexec, the option `enter_accept` needs to be turned on (which is so by default). There is no restriction in the latest version of Atuin (>= 18.10.0).
 
-bash-preexec cannot properly invoke the `preexec` hook for subshell commands `(...)`, function definitions `func() { ...; }`, empty for-in-statements `for i in; do ...; done`, etc., so those commands and duration may not be recorded in the Atuin's history correctly.
+bash-preexec can't properly invoke the `preexec` hook for subshell commands `(...)`, function definitions `func() { ...; }`, empty for-in-statements `for i in; do ...; done`, etc., so those commands and duration may not be recorded in the Atuin's history correctly.
 
 As of Atuin 18.18.0, `atuin init bash` will automatically load bash-preexec if no other preexec backend has been loaded (ble.sh or an external copy of bash-preexec). To disable this behavior, pass `ATUIN_NO_BUILTIN_PREEXEC=1` to `atuin init`, e.g.:
 
@@ -239,7 +239,7 @@ atuin init powershell | Out-String | Invoke-Expression
 
 ## Upgrade
 
-Run `atuin update`, and if that command is not available, run the install script again.
+Run `atuin update`, and if that command isn't available, run the install script again.
 
 If you used a package manager to install Atuin, then you should also use your package manager to update Atuin.
 

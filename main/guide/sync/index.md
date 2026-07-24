@@ -32,7 +32,7 @@ To run a sync manually, please run
 atuin sync
 ```
 
-Atuin tries to be smart with a sync, and not waste data transfer. However, if you are seeing some missing data, please try running
+Atuin tries to be smart with a sync, and not waste data transfer. However, if you're seeing some missing data, please try running
 
 ```
 atuin sync -f
@@ -44,7 +44,7 @@ This triggers a full sync, which may take longer as it works through historical 
 
 When only signed in on one machine, Atuin sync operates as a backup. This is pretty useful by itself, but syncing multiple machines is where the magic happens.
 
-First, ensure you are [registered with the sync server](#register) and make a note of your key. You can see this with `atuin key`.
+First, make sure you're [registered with the sync server](#register) and make a note of your key. You can see this with `atuin key`.
 
 Then, install Atuin on a new machine. Once installed, login with
 
@@ -52,7 +52,7 @@ Then, install Atuin on a new machine. Once installed, login with
 atuin login -u <USERNAME>
 ```
 
-You will be prompted for your password, and for your key.
+Atuin asks for your password, and for your key.
 
 Syncing will happen automatically in the background, but you may wish to run it manually with
 

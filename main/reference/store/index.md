@@ -8,7 +8,7 @@ Most people never need these commands. Reach for them when sync is misbehaving, 
 
 Danger
 
-`rekey`, `purge`, and the `--force` forms of `push`/`pull` can destroy data that cannot be recovered. Read the description of a command before running it, and make sure you know which key Atuin is currently using.
+`rekey`, `purge`, and the `--force` forms of `push`/`pull` can destroy data that can't be recovered. Read the description of a command before running it, and make sure you know which key Atuin is currently using.
 
 ## Subcommands
 
@@ -42,9 +42,9 @@ atuin store purge
 
 Warning
 
-This only touches the local record store on the current machine. It does not wipe your history, delete your sync account, or affect other machines.
+This only touches the local record store on the current machine. It doesn't wipe your history, delete your sync account, or affect other machines.
 
-Run `atuin store verify` first, so you know you are clearing up a genuine key mismatch rather than deleting data blindly. See [Deleting History](https://docs.atuin.sh/guide/delete-history/#purging-undecryptable-local-store-records) for the full procedure.
+Run `atuin store verify` first, so you know you're clearing up a genuine key mismatch rather than deleting data blindly. See [Deleting History](https://docs.atuin.sh/guide/delete-history/#purging-undecryptable-local-store-records) for the full procedure.
 
 ### `atuin store rekey [KEY]`
 
@@ -74,7 +74,7 @@ Upload local records to the sync server, one way.
 
 | Flag         | Description                                                                  |
 | ------------ | ---------------------------------------------------------------------------- |
-| `--tag`/`-t` | Only push this tag (e.g. `history`). Defaults to all tags                    |
+| `--tag`/`-t` | Only push this tag (for example, `history`). Defaults to all tags            |
 | `--host`     | Only push this host, given as a host UUID. Defaults to the current host      |
 | `--force`    | Clear the remote store, then upload everything local, for all hosts and tags |
 | `--page`     | How many records to upload at a time (default: 100)                          |

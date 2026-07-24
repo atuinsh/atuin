@@ -2,7 +2,7 @@
 
 This guide walks through setting Atuin up properly, one step at a time. If you just want the commands, the [quickstart on the home page](https://docs.atuin.sh/#quickstart) has them.
 
-There are four steps, and only the first is required:
+Setup takes four steps, and only the first is required:
 
 1. [Install Atuin](https://docs.atuin.sh/guide/installation/index.md) and its shell plugin
 1. [Import your existing history](https://docs.atuin.sh/guide/import/index.md)
@@ -29,7 +29,7 @@ Atuin only records commands run after it's installed, so bring the old ones in:
 atuin import auto
 ```
 
-This detects your shell and imports from its history file, which stays untouched and keeps being written to. See [Import existing history](https://docs.atuin.sh/guide/import/index.md) for importing from a specific shell or a non-default file.
+This detects your shell and imports from its history file, which stays untouched — your shell keeps writing to it as usual. See [Import existing history](https://docs.atuin.sh/guide/import/index.md) for importing from a specific shell or a non-default file.
 
 ## 3. Set up sync (optional)
 
@@ -40,7 +40,7 @@ atuin register -u <USERNAME> -e <EMAIL>
 atuin sync
 ```
 
-Registration generates an encryption key. **Save it somewhere safe** — you'll need it to log in on any other machine, and it cannot be recovered. See [Setting up sync](https://docs.atuin.sh/guide/sync/index.md) for the details, including logging in elsewhere.
+Registration generates an encryption key. **Save it somewhere safe** — you'll need it to log in on any other machine, and it can't be recovered. See [Setting up sync](https://docs.atuin.sh/guide/sync/index.md) for the details, including logging in elsewhere.
 
 Skipping this step is fine. Your history stays on this machine, not backed up and not synchronized.
 

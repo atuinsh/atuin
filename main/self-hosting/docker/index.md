@@ -2,13 +2,13 @@
 
 Warning
 
-If you are self hosting, we strongly suggest you stick to [tagged releases](https://github.com/atuinsh/atuin/releases), and do not follow `main` or `latest`
+If you're self hosting, we strongly suggest you stick to [tagged releases](https://github.com/atuinsh/atuin/releases), and don't follow `main` or `latest`
 
 Follow the GitHub releases, and please read the notes for each release. Most of the time, upgrades can occur without any manual intervention.
 
-We cannot guarantee that all updates will apply cleanly, and some may require some extra steps.
+We can't guarantee that all updates will apply cleanly, and some may require some extra steps.
 
-There is a supplied docker image to make deploying a server as a container easier. The "LATEST TAGGED RELEASE" can be found on the [releases page](https://github.com/atuinsh/atuin/releases).
+A supplied docker image lets you deploy a server as a container. The "LATEST TAGGED RELEASE" can be found on the [releases page](https://github.com/atuinsh/atuin/releases).
 
 ```
 CONFIG="$HOME/.config/atuin"
@@ -68,7 +68,7 @@ chown 1000:1000 config
 docker compose up -d
 ```
 
-## Using systemd to manage your atuin server
+## Using systemd to manage your Atuin server
 
 The following `systemd` unit file can be used to manage your `docker-compose` managed service:
 
@@ -128,4 +128,6 @@ You can add another service to your `docker-compose.yml` file to have it run dai
 
 This will create daily backups of your database for that additional layer of comfort.
 
-PLEASE NOTE: The `./db_dumps` mount MUST be a POSIX-compliant filesystem to store the backups (mainly with support for hardlinks and softlinks). So filesystems like VFAT, EXFAT, SMB/CIFS, ... can't be used with this docker image. See https://github.com/prodrigestivill/docker-postgres-backup-local for more details on how this works. There are additional settings for the number of backups retained, etc., all explained on the linked page.
+Warning
+
+The `./db_dumps` mount must use a POSIX-compliant filesystem that supports hard links and symlinks. Filesystems such as VFAT, exFAT, and SMB/CIFS won't work with this image. See [`docker-postgres-backup-local`](https://github.com/prodrigestivill/docker-postgres-backup-local) for the retention settings and how backups work.

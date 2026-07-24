@@ -1,6 +1,6 @@
 # Excluding Commands from History
 
-Sometimes you don't want a command in your history and Atuin gives you four ways ways to exclude the commands.
+Sometimes you don't want a command in your history and Atuin gives you four ways to exclude the commands.
 
 ## Prefix with a space
 
@@ -75,4 +75,4 @@ This deletes existing entries matching your current `history_filter` and `cwd_fi
 
 ## Secrets are filtered automatically
 
-Independently of your own filters, Atuin refuses to record commands that look like they contain credentials — AWS keys, GitHub and npm tokens, Slack webhooks, Stripe keys, and more. This is on by default; see [`secrets_filter`](https://docs.atuin.sh/configuration/config/#secrets_filter) for the full list.
+Independently of your own filters, Atuin refuses to record commands that look like they contain credentials — AWS keys, GitHub and npm tokens, Slack webhooks, Stripe keys, and more. This is on by default. For the full list, see [`secrets_filter`](https://docs.atuin.sh/configuration/config/#secrets_filter).

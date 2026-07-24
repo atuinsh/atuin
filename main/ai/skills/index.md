@@ -36,19 +36,19 @@ Current branch: !`git branch --show-current`
 | Project | `.atuin/skills/<name>/SKILL.md`          |
 | Global  | `~/.config/atuin/skills/<name>/SKILL.md` |
 
-Project skills override global skills when names collide. Nested directories are supported for organization (e.g. `.atuin/skills/ops/deploy/SKILL.md`).
+Project skills override global skills when names collide. Nested directories are supported for organization (for example, `.atuin/skills/ops/deploy/SKILL.md`).
 
 ## Frontmatter
 
 All frontmatter fields are optional. YAML frontmatter goes between `---` markers at the top of `SKILL.md`.
 
-| Field                      | Default                 | Description                                                                                  |
-| -------------------------- | ----------------------- | -------------------------------------------------------------------------------------------- |
-| `name`                     | directory name          | Display name. Lowercase letters, numbers, hyphens.                                           |
-| `description`              | first paragraph of body | What the skill does. Sent to the server so the LLM knows when to load it.                    |
-| `disable-model-invocation` | `false`                 | If `true`, the LLM cannot discover or load the skill. Only reachable via `/name` in the TUI. |
+| Field                      | Default                 | Description                                                                                 |
+| -------------------------- | ----------------------- | ------------------------------------------------------------------------------------------- |
+| `name`                     | directory name          | Display name. Lowercase letters, numbers, hyphens.                                          |
+| `description`              | first paragraph of body | What the skill does. Sent to the server so the LLM knows when to load it.                   |
+| `disable-model-invocation` | `false`                 | If `true`, the LLM can't discover or load the skill. Only reachable via `/name` in the TUI. |
 
-Multiline descriptions using YAML's `>` (folded) or `|` (literal) syntax are supported.
+Multiline descriptions using the YAML `>` (folded) or `|` (literal) syntax are supported.
 
 ## Invoking Skills
 
@@ -64,20 +64,20 @@ The LLM will see the skill content with `[Loaded skill: deploy]` and `[Arguments
 
 ### By the LLM
 
-When the LLM determines a skill is relevant to your request, it calls `load_skill` automatically to fetch the full content. Skills with `disable-model-invocation: true` are excluded from this — the LLM won't see them.
+When the LLM determines a skill is relevant to your request, it calls `load_skill` automatically to fetch the full content. Atuin excludes skills with `disable-model-invocation: true` from this — the LLM won't see them.
 
 ## Dynamic Content
 
 Skills support the same shell substitution as [user context files](https://docs.atuin.sh/ai/user-context/index.md):
 
-- **Inline:** `!`command\`\` — replaced with command stdout
-- **Block:** ```` ```! ```` code block — entire block replaced with script stdout
+- **Inline:** `!`command`` ` — replaced with command ``stdout\`
+- **Block:** ```` ```! ```` code block — entire block replaced with script `stdout`
 
 Commands run at skill load time (when invoked), not at discovery time.
 
 ## Arguments
 
-When invoking a skill with arguments (e.g. `/deploy patch`), the `$ARGUMENTS` placeholder in the skill body is replaced with the argument string before shell substitution runs:
+When invoking a skill with arguments (for example, `/deploy patch`), the `$ARGUMENTS` placeholder in the skill body is replaced with the argument string before shell substitution runs:
 
 ```
 ---
@@ -90,8 +90,8 @@ Deploy $ARGUMENTS to production.
 Current status: !`kubectl get deployment $ARGUMENTS`
 ```
 
-If the body doesn't contain `$ARGUMENTS` and arguments were provided, they're appended as `ARGUMENTS: <value>`.
+If the body doesn't contain `$ARGUMENTS` and you provided arguments, Atuin appends them as `ARGUMENTS: <value>`.
 
 ## Description Budget
 
-Skill descriptions are packed into the request to the server under a total character budget. Each description is truncated at 512 characters, then skills are included until the budget is exhausted. If skills are omitted, the server is told which ones were left out.
+Atuin sends skill descriptions to the server under a total character budget. It cuts each description to 1024 bytes, then skips any skill whose entry would exceed the budget and continues packing the rest. If Atuin leaves any skills out, it tells the server which ones.

@@ -23,7 +23,7 @@ While searching in the TUI, you can narrow the search scope by pressing `ctrl-r`
 
 See the [advanced usage](https://docs.atuin.sh/guide/advanced-usage/index.md) page for more options.
 
-## Common config adjustment
+## Common config changes
 
 For a full set of config values, please see the [config reference page](https://docs.atuin.sh/configuration/config/index.md).
 
@@ -31,7 +31,7 @@ The default configuration file is located at `~/.config/atuin/config.toml`.
 
 ### Keybindings
 
-We have a [full page dedicated to keybinding adjustments](https://docs.atuin.sh/configuration/key-binding/index.md). There are a whole bunch of options there, including disabling the up arrow behavior if you don't like it.
+We've got a [full page dedicated to keybinding adjustments](https://docs.atuin.sh/configuration/key-binding/index.md). It covers a whole bunch of options, including disabling the up arrow behavior if you don't like it.
 
 ### Enter to run
 

@@ -1,8 +1,8 @@
 # Syncing dotfiles
 
-While Atuin started as a tool for syncing and searching shell history, we are building tooling for syncing dotfiles across machines, and making them easier to work with.
+While Atuin started as a tool for syncing and searching shell history, we're building tooling for syncing dotfiles across machines, and making them easier to work with.
 
-At the moment, we support managing and syncing of shell aliases and environment variables - with more coming soon.
+At the moment, Atuin supports managing and syncing of shell aliases and environment variables - with more coming soon.
 
 The following shells are supported:
 
@@ -10,9 +10,9 @@ The following shells are supported:
 - bash
 - fish
 - xonsh
-- powershell
+- PowerShell
 
-Note: Atuin handles your configuration internally, so once it is installed you no longer need to edit your config files manually.
+Note: Atuin handles your configuration internally, so once it's installed you no longer need to edit your config files manually.
 
 ## Required config
 
@@ -51,7 +51,7 @@ atuin dotfiles alias set ll 'ls -lah'
 
 #### Deleting an alias
 
-Deleting an alias is as simple as:
+Delete an alias with:
 
 ```
 atuin dotfiles alias delete NAME
@@ -95,7 +95,7 @@ atuin dotfiles var set -n foo 'bar'
 
 #### Deleting a var
 
-Deleting a var is as simple as:
+Delete a var with:
 
 ```
 atuin dotfiles var delete NAME

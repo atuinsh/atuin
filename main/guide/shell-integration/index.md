@@ -17,7 +17,7 @@ These hooks only activate under specific conditions:
 - Your shell configuration file must be **sourced** (`.bashrc`, `.zshrc`, etc.)
 - The `atuin init` command must run during shell startup
 
-If any of these conditions aren't met, Atuin's hooks won't be installed, and commands won't be recorded.
+If any of these conditions aren't met, Atuin won't install its hooks, and it won't record commands.
 
 ### Environment Variables
 
@@ -31,7 +31,7 @@ When Atuin initializes, it sets several environment variables:
 | `ATUIN_HISTORY_AUTHOR` | Optional command author identity (for example `ellie`, `claude`, `copilot`) |
 | `ATUIN_HISTORY_INTENT` | Optional command intent/rationale text                                      |
 
-These variables are used internally to track command execution and associate commands with sessions. If `ATUIN_HISTORY_AUTHOR` is not set, Atuin defaults to the local shell username.
+Atuin uses these variables internally to track command execution and associate commands with sessions. If `ATUIN_HISTORY_AUTHOR` isn't set, Atuin defaults to the local shell username.
 
 ## Embedded Terminals and IDE Integrations
 
@@ -61,7 +61,7 @@ Look for the `shell.preexec` field in the output. If it shows `none`, Atuin's ho
 
 ### Enabling Atuin in Embedded Terminals
 
-If you want Atuin to record commands from an embedded terminal, you'll need to ensure it starts an interactive shell that sources your configuration.
+If you want Atuin to record commands from an embedded terminal, you'll need to make sure it starts an interactive shell that sources your configuration.
 
 #### IDE Terminal Settings
 
@@ -97,7 +97,7 @@ Add to your `settings.json` (substitute the shells for whatever you use):
 
 #### Wrapper Script Approach
 
-For tools that don't easily support shell arguments, create a wrapper script:
+For tools that don't support shell arguments, create a wrapper script:
 
 ```
 #!/bin/bash
@@ -115,7 +115,7 @@ After configuring, open a new terminal in your IDE and run:
 atuin doctor | grep preexec
 ```
 
-You should see `built-in`, `bash-preexec`, `blesh`, or similar—not `none`.
+You should see `built-in`, `bash-preexec`, `blesh`, or similar — not `none`.
 
 ## Shell-Specific Notes
 
@@ -141,8 +141,8 @@ Zsh has native hook support via `add-zsh-hook`. The integration is straightforwa
 
 ### Fish
 
-Fish uses its event system (`fish_preexec` and `fish_postexec` events). It also respects Fish's private mode—commands run with `fish --private` aren't recorded.
+Fish uses its event system (`fish_preexec` and `fish_postexec` events). It also respects Fish's private mode — commands run with `fish --private` aren't recorded.
 
 ### Nushell, xonsh, and PowerShell
 
-These shells are supported too; see [installation](https://docs.atuin.sh/guide/installation/#installing-the-shell-plugin) for how to load the plugin in each.
+These shells are supported too. For how to load the plugin in each, see [installation](https://docs.atuin.sh/guide/installation/#installing-the-shell-plugin).

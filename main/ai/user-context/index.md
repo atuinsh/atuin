@@ -1,13 +1,13 @@
 # Sending Additional Context in Atuin AI
 
-Atuin AI allows you to send additional context to the LLM beyond just your prompt, similar to `CLAUDE.md` or `AGENTS.md`.
+Use Atuin AI to send additional context to the LLM beyond just your prompt, similar to `CLAUDE.md` or `AGENTS.md`.
 
 ## Additional Context Search Paths
 
 Atuin AI looks for additional context in the current directory and its parent directories, in two locations per directory:
 
 - `.atuin/TERMINAL.md` — scoped inside the `.atuin` dotdir
-- `TERMINAL.md` — at the directory root (e.g. project root)
+- `TERMINAL.md` — at the directory root (for example, project root)
 
 It also checks `TERMINAL.md` in your Atuin config directory (`~/.config/atuin/TERMINAL.md` by default).
 
@@ -21,7 +21,7 @@ You can send dynamic content by using shell substitution in your `TERMINAL.md` f
 My username: !`whoami`
 ```
 
-When Atuin AI reads this file, it will execute the `whoami` command and include its output in the context sent to the LLM. So if your username is `binarymuse`, the context sent to the LLM would include:
+When Atuin AI reads this file, it will execute the `whoami` command and include its output in the context sent to the LLM. If your username is `binarymuse`, the context sent to the LLM would include:
 
 ```
 My username: binarymuse
@@ -40,11 +40,11 @@ git status --short
 
 ## Caching
 
-`TERMINAL.md` files are cached after they are first loaded; if you make changes to them mid-session, use the `/reload` slash command to refresh the data. This will invalidate the server cache on the next request, increasing the latency and token usage for that request.
+Atuin AI caches `TERMINAL.md` files after it first loads them, so if you change them mid-session, use the `/reload` slash command to refresh the data. This will invalidate the server cache on the next request, increasing the latency and token usage for that request.
 
 ## Why not `AGENTS.md`?
 
-Most agent files are optimized for *coding* agents: patterns, tools, coding style, and so on. This is great for coding agents, but not as useful for general-purpose agents. By using `TERMINAL.md` instead, we can provide a more flexible way to send additional context that is not tied to coding-specific patterns. This allows users to provide any kind of context they want, without being constrained by the structure of an agent file.
+Most agent files are optimized for *coding* agents: patterns, tools, coding style, and so on. This is great for coding agents, but not as useful for general-purpose agents. By using `TERMINAL.md` instead, Atuin AI provides a more flexible way to send additional context that's not tied to coding-specific patterns. Users can then provide any kind of context they want, without being constrained by the structure of an agent file.
 
 If your agent file has relevant information, you can instruct the LLM in `TERMINAL.md` to read from it.```
 ````

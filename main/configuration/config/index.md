@@ -1,6 +1,6 @@
 # Config
 
-Atuin maintains two configuration files, stored in `~/.config/atuin/`. We store data in `~/.local/share/atuin` (unless overridden by XDG\_\*).
+Atuin maintains two configuration files in `~/.config/atuin/`, and stores data in `~/.local/share/atuin` (unless overridden by XDG\_\*).
 
 The full path to the config file would be `~/.config/atuin/config.toml`
 
@@ -56,7 +56,7 @@ dialect = "us"
 
 Default: `true`
 
-Configures whether or not to automatically sync, when logged in.
+Configures whether to automatically sync, when logged in.
 
 ```
 auto_sync = true/false
@@ -66,7 +66,7 @@ auto_sync = true/false
 
 Default: `true`
 
-Configures whether or not to automatically check for updates.
+Configures whether to automatically check for updates.
 
 ```
 update_check = true/false
@@ -88,7 +88,7 @@ Default: `1h`
 
 How often to automatically sync with the server. This can be given in a "human-readable" format. For example, `10s`, `20m`, `1h`, etc.
 
-If set to `0`, Atuin will sync after every command. Some servers may rate limit very frequent syncs, but this won't cause any issues.
+If set to `0`, Atuin will sync after every command. Some servers may rate limit frequent syncs, but this won't cause any issues.
 
 ```
 sync_frequency = "1h"
@@ -98,9 +98,12 @@ sync_frequency = "1h"
 
 Default: `fuzzy`
 
-Which search mode to use. Atuin supports "prefix", "fulltext", "fuzzy", "daemon-fuzzy", and "skim" search modes.
+Which search mode to use. Atuin supports `prefix`, `fulltext`, `fuzzy`, `daemon-fuzzy`, and `skim` search modes.
 
-Prefix mode searches for "query\*"; fulltext mode searches for "\*query\*"; "fuzzy" applies the [fuzzy search syntax](#fuzzy-search-syntax); "skim" applies the [skim search syntax](https://github.com/lotabout/skim#search-syntax).
+- `prefix` mode searches for "query\*".
+- `fulltext` mode searches for "\*query\*".
+- `fuzzy` applies the [fuzzy search syntax](#fuzzy-search-syntax).
+- `skim` applies the [skim search syntax](https://github.com/lotabout/skim#search-syntax).
 
 ```
 search_mode = "fuzzy"
@@ -124,17 +127,17 @@ You can customize the priority given to frequency, recency, and frecency scores 
 
 #### `fuzzy` search syntax
 
-The "fuzzy" and "daemon-fuzzy" search syntax is based on the [fzf search syntax](https://github.com/junegunn/fzf#search-syntax).
+The `fuzzy` and `daemon-fuzzy` search syntax is based on the [fzf search syntax](https://github.com/junegunn/fzf#search-syntax).
 
-| Token     | Match type                 | Description                          |
-| --------- | -------------------------- | ------------------------------------ |
-| `sbtrkt`  | fuzzy-match                | Items that match `sbtrkt`            |
-| `'wild`   | exact-match (quoted)       | Items that include `wild`            |
-| `^music`  | prefix-exact-match         | Items that start with `music`        |
-| `.mp3$`   | suffix-exact-match         | Items that end with `.mp3`           |
-| `!fire`   | inverse-exact-match        | Items that do not include `fire`     |
-| `!^music` | inverse-prefix-exact-match | Items that do not start with `music` |
-| `!.mp3$`  | inverse-suffix-exact-match | Items that do not end with `.mp3`    |
+| Token     | Match type                 | Description                         |
+| --------- | -------------------------- | ----------------------------------- |
+| `sbtrkt`  | fuzzy-match                | Items that match `sbtrkt`           |
+| `'wild`   | exact-match (quoted)       | Items that include `wild`           |
+| `^music`  | prefix-exact-match         | Items that start with `music`       |
+| `.mp3$`   | suffix-exact-match         | Items that end with `.mp3`          |
+| `!fire`   | inverse-exact-match        | Items that don't include `fire`     |
+| `!^music` | inverse-prefix-exact-match | Items that don't start with `music` |
+| `!.mp3$`  | inverse-suffix-exact-match | Items that don't end with `.mp3`    |
 
 A single bar character term acts as an OR operator. For example, the following query matches entries that start with `core` and end with either `go`, `rb`, or `py`.
 
@@ -144,7 +147,7 @@ A single bar character term acts as an OR operator. For example, the following q
 
 Bar not supported in daemon-fuzzy
 
-The "daemon-fuzzy" search mode does not currently support the bar character operator.
+The "daemon-fuzzy" search mode doesn't currently support the bar character operator.
 
 ### `filter_mode`
 
@@ -164,7 +167,7 @@ Atuin version: >= 17.0
 
 Default: `fuzzy`
 
-The default searchmode to use when searching and being invoked from a shell up-key binding.
+The default search mode to use when searching and being invoked from a shell up-key binding.
 
 Accepts exactly the same options as `search_mode` above
 
@@ -190,7 +193,7 @@ Defaults to the value specified for `filter_mode`.
 
 ### `inline_height_shell_up_key_binding`
 
-The maximum number of lines the interface should take up when atuin is invoked from a shell up-key binding.
+The maximum number of lines the interface should take up when `atuin` is invoked from a shell up-key binding.
 
 The accepted values are identical to those of `inline_height`.
 
@@ -206,7 +209,7 @@ Atuin version: >= 17.0
 
 Default: `false`
 
-This flag enables a pseudo filter-mode named "workspace": the filter is automatically activated when you are in a git repository.
+This flag enables a pseudo filter-mode named "workspace": the filter is automatically activated when you're in a git repository.
 
 With workspace filtering enabled, Atuin will filter for commands executed in any directory within a git repository tree.
 
@@ -260,7 +263,7 @@ inline_height = 40
 
 Default: `true`
 
-Configure whether or not to show a preview of the selected command.
+Configure whether to show a preview of the selected command.
 
 Useful when the command is longer than the terminal width and is cut off.
 
@@ -288,7 +291,7 @@ Atuin version: >= 17.0
 
 Default: `true`
 
-Configure whether or not to show the help row, which includes the current Atuin version (and whether an update is available), a keymap hint, and the total amount of commands in your history.
+Configure whether to show the help row, which includes the current Atuin version (and whether an update is available), a keymap hint, and the total amount of commands in your history.
 
 ```
 show_help = true
@@ -300,7 +303,7 @@ Atuin version: >= 18.0
 
 Default: `true`
 
-Configure whether or not to show tabs for search and inspect.
+Configure whether to show tabs for search and inspect.
 
 ```
 show_tabs = true
@@ -337,7 +340,7 @@ exit_mode = "return-query"
 
 ### `history_format`
 
-The default format used by `history list`. It can also be specified per invocation with the `--format` arg, which takes precedence over this config value.
+The default format used by `history list`. It can also be specified per invocation with the `--format` argument, which takes precedence over this config value.
 
 More on [history list](https://docs.atuin.sh/reference/list/index.md)
 
@@ -347,7 +350,7 @@ history_format = "{time}\t{command}\t{duration}"
 
 ### `history_filter`
 
-The history filter allows you to exclude commands from history tracking - maybe you want to keep ALL of your `curl` commands totally out of your shell history, or maybe just some matching a pattern.
+Use the history filter to exclude commands from history tracking - maybe you want to keep ALL of your `curl` commands totally out of your shell history, or maybe just some matching a pattern.
 
 This supports regular expressions, so you can hide pretty much whatever you want!
 
@@ -362,7 +365,7 @@ history_filter = [
 
 ### `cwd_filter`
 
-The cwd filter allows you to exclude directories from history tracking.
+Use the `cwd` filter to exclude directories from history tracking.
 
 This supports regular expressions, so you can hide pretty much whatever you want!
 
@@ -424,14 +427,14 @@ This is a safety net, not a guarantee. It only catches credentials in recognized
 
 Default: `true`
 
-macOS does not have an `Alt` key, although terminal emulators can often be configured to map the `Option` key to be used as `Alt`. *However*, remapping `Option` this way may prevent typing some characters, such as using `Option`+`3` to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace `Alt`+`0` to `Alt`+`9` shortcuts with `Ctrl`+`0` to `Ctrl`+`9` instead:
+macOS doesn't have an `Alt` key, although terminal emulators can often be configured to map the `Option` key to be used as `Alt`. *However*, remapping `Option` this way may prevent typing some characters, such as using `Option`+`3` to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace `Alt`+`0` to `Alt`+`9` shortcuts with `Ctrl`+`0` to `Ctrl`+`9` instead:
 
 ```
 # Use Ctrl-0 .. Ctrl-9 instead of Alt-0 .. Alt-9 UI shortcuts
 ctrl_n_shortcuts = true
 ```
 
-### show_numeric_shortcuts
+### `show_numeric_shortcuts`
 
 Atuin version: >= 18.9
 
@@ -461,7 +464,7 @@ Atuin version: >= 18.0
 
 Default: `5`
 
-The max time (in seconds) we wait for a connection to become established with a remote sync server. Any longer than this and the request will fail.
+The max time (in seconds) Atuin waits for a connection to become established with a remote sync server. Any longer than this and the request will fail.
 
 ```
 network_connect_timeout = 5
@@ -473,9 +476,9 @@ Default: `{}`
 
 Extra HTTP headers to send on every request to the sync server. This is useful when a self-hosted server sits behind a proxy or access gateway that requires its own authentication header — for example Cloudflare Access.
 
-Headers that Atuin sets itself (such as `Authorization`) cannot be overridden; Atuin's values always win.
+Headers that Atuin sets itself (such as `Authorization`) can't be overridden, because Atuin's values always win.
 
-To avoid leaking credentials, Atuin refuses to follow cross-origin redirects when extra headers are configured — they are never sent to an origin other than the one you configured.
+To avoid leaking credentials, Atuin refuses to follow cross-origin redirects when extra headers are configured — they're never sent to an origin other than the one you configured.
 
 ```
 extra_headers = { "CF-Access-Client-Id" = "...", "CF-Access-Client-Secret" = "..." }
@@ -487,7 +490,7 @@ Atuin version: >= 18.0
 
 Default: `5`
 
-Timeout (in seconds) for acquiring a local database connection (sqlite).
+Timeout (in seconds) for acquiring a local database connection (SQLite).
 
 ```
 local_timeout = 5
@@ -499,7 +502,7 @@ Atuin version: >= 18.8
 
 Default: `false`
 
-Allows building a command chain with the `&&` or `||` operator. When enabled, opening atuin will search for the next command in the chain, and append to the current buffer.
+Use this to build a command chain with the `&&` or `||` operator. When enabled, opening Atuin will search for the next command in the chain, and append to the current buffer.
 
 ```
 command_chaining = false
@@ -525,9 +528,9 @@ Atuin version: >= 18.0
 
 Default: `emacs`
 
-The initial keymap mode of the interactive Atuin search (e.g. started by the keybindings in the shells). There are four supported values: `"emacs"`, `"vim-normal"`, `"vim-insert"`, and `"auto"`. The keymap mode `"emacs"` is the most basic one. In the keymap mode `"vim-normal"`, you may use `K` and `J` to navigate the history list as in Vim, whilst pressing
+The initial keymap mode of the interactive Atuin search (for example, started by the keybindings in the shells). Four values are supported: `"emacs"`, `"vim-normal"`, `"vim-insert"`, and `"auto"`. The keymap mode `"emacs"` is the most basic one. In the keymap mode `"vim-normal"`, you may use `K` and `J` to navigate the history list as in Vim, whilst pressing
 
-`I` changes the keymap mode to `"vim-insert"`. In the keymap mode `"vim-insert"`, you can search for a string as in the keymap mode `"emacs"`, while pressing `Esc` switches the keymap mode to `"vim-normal"`. When set to `"auto"`, the initial keymap mode is automatically determined based on the shell's keymap that triggered the Atuin search. `"auto"` is not supported by NuShell at present, where it will always trigger the Atuin search with the keymap mode `"emacs"`.
+`I` changes the keymap mode to `"vim-insert"`. In the keymap mode `"vim-insert"`, you can search for a string as in the keymap mode `"emacs"`, while pressing `Esc` switches the keymap mode to `"vim-normal"`. When set to `"auto"`, the initial keymap mode is automatically determined based on the shell's keymap that triggered the Atuin search. `"auto"` isn't supported by Nushell at present, where it will always trigger the Atuin search with the keymap mode `"emacs"`.
 
 ```
 keymap_mode = "emacs"
@@ -580,15 +583,15 @@ filters = ["global", "host", "session", "directory"]
 
 For the [`"daemon-fuzzy"` search mode](#search_mode), you can control the scoring of matched items. The system scores matches based on three numbers: frequency, recency, and frecency:
 
-- Frequency — how often this exact match has been run, with diminishing returns
-- Recency — how recently this exact match was last run
+- Frequency — how often this exact match has been run, with diminishing returns
+- Recency — how recently this exact match was last run
 - Frecency — a combination of frequency and recency
 
 The frecency calculation is `Recency Score * Recency Multiplier + Frequency Score * Frequency Multiplier`. By changing the options below, you can customize the relative importance of each part of the score calculation.
 
 For each setting, a value of `1.0` (the default) means the score is used as-is. Values less than `1.0` decrease that score's influence, and values greater than `1.0` increase that score's influence.
 
-So, for example, if you cared a lot about how frequently you run a command but not as much how recently, you could set `frequency_score_multiplier` to `10.0` and `recency_score_multiplier` to `0.1`.
+For example, if you cared a lot about how frequently you run a command but not as much how recently, you could set `frequency_score_multiplier` to `10.0` and `recency_score_multiplier` to `0.1`.
 
 daemon-fuzzy mode only
 
@@ -598,7 +601,7 @@ The score multiplier settings shown here only work with the `"daemon-fuzzy"` sea
 
 Default: `1.0`
 
-The multiplier to apply to the frequency score in the frecency calculation. Setting this to `0` disables the frequency portion of the frecency scoring altogether.
+The multiplier to apply to the frequency score in the frecency calculation. Setting this to `0` disables the frequency part of the frecency scoring altogether.
 
 ```
 frequency_score_multiplier = 1.0
@@ -608,7 +611,7 @@ frequency_score_multiplier = 1.0
 
 Default: `1.0`
 
-The multiplier to apply to the recency score in the frecency calculation. Setting this to `0` disables the recency portion of the frecency scoring altogether.
+The multiplier to apply to the recency score in the frecency calculation. Setting this to `0` disables the recency part of the frecency scoring altogether.
 
 ```
 recency_score_multiplier = 1.0
@@ -641,7 +644,7 @@ frecency_score_multiplier = 2.0
 
 ### Filtering by author
 
-Interactive search shows only commands you ran yourself, hiding those recorded by AI coding agents through [agent hooks](https://docs.atuin.sh/guide/agent-hooks/index.md). This is not currently configurable in `config.toml`.
+Interactive search shows only commands you ran yourself, hiding those recorded by AI coding agents through [agent hooks](https://docs.atuin.sh/guide/agent-hooks/index.md). This isn't currently configurable in `config.toml`.
 
 To filter by author on the command line, use `atuin search --author`. See [Filtering by Author](https://docs.atuin.sh/guide/agent-hooks/#filtering-by-author) for the available values.
 
@@ -684,7 +687,7 @@ common_subcommands = [
 ]
 ```
 
-Configures commands where we should consider the subcommand as part of the statistics. For example, consider `kubectl get` rather than just `kubectl`.
+Configures commands where Atuin should consider the subcommand as part of the statistics. For example, consider `kubectl get` rather than just `kubectl`.
 
 ### `common_prefix`
 
@@ -845,7 +848,7 @@ strategy = "auto"
 
 ## tmux
 
-When you are inside tmux, open the search UI in a [popup](https://github.com/tmux/tmux/wiki/Getting-Started#popups) floating above your current pane, instead of drawing over the pane itself. The popup opens in your current working directory, and closes when you accept a command or exit.
+When you're inside tmux, open the search UI in a [popup](https://github.com/tmux/tmux/wiki/Getting-Started#popups) floating above your current pane, instead of drawing over the pane itself. The popup opens in your current working directory, and closes when you accept a command or exit.
 
 ```
 [tmux]
@@ -914,13 +917,13 @@ enabled = true
 
 Default: `false`
 
-Automatically start and manage the daemon when needed. This is not compatible with `systemd_socket = true`. If a legacy experimental daemon is already running, restart it manually once before using autostart.
+Automatically start and manage the daemon when needed. This isn't compatible with `systemd_socket = true`. If a legacy experimental daemon is already running, restart it manually once before using autostart.
 
 ```
 autostart = false
 ```
 
-### sync_frequency
+### `sync_frequency`
 
 Default: `300`
 
@@ -930,7 +933,7 @@ How often the daemon should sync, in seconds
 sync_frequency = 300
 ```
 
-### socket_path
+### `socket_path`
 
 Default:
 
@@ -938,11 +941,11 @@ Default:
 socket_path = "~/.local/share/atuin/atuin.sock"
 ```
 
-Where to bind a unix socket for client -> daemon communication
+Where to bind a Unix socket for client -> daemon communication
 
-If XDG_RUNTIME_DIR is available, then we use this directory instead.
+If XDG_RUNTIME_DIR is available, Atuin uses this directory instead.
 
-### pidfile_path
+### `pidfile_path`
 
 Default:
 
@@ -950,9 +953,9 @@ Default:
 pidfile_path = "~/.local/share/atuin/atuin-daemon.pid"
 ```
 
-Path to the daemon pidfile used for process coordination.
+Path to the daemon `pidfile` used for process coordination.
 
-### systemd_socket
+### `systemd_socket`
 
 Default `false`
 
@@ -962,11 +965,11 @@ Use a socket passed via systemd socket activation protocol instead of the path
 systemd_socket = false
 ```
 
-### tcp_port
+### `tcp_port`
 
 Default: `8889`
 
-The port to use for client -> daemon communication. Only used on non-unix systems.
+The port to use for client -> daemon communication. Only used on non-Unix systems.
 
 ```
 tcp_port = 8889
@@ -990,7 +993,7 @@ retention = 4
 
 Default: `true`
 
-Whether or not to enable file-based logging.
+Whether to enable file-based logging.
 
 ```
 enabled = true
@@ -1104,7 +1107,7 @@ name = "my-theme"
 
 Default: `false`
 
-Output information about why a theme will not load. Independent from other log levels as it can cause data from the theme file to be printed unfiltered to the terminal.
+Output information about why a theme won't load. Independent from other log levels as it can cause data from the theme file to be printed unfiltered to the terminal.
 
 ```
 debug = false
@@ -1114,13 +1117,13 @@ debug = false
 
 Default: 10
 
-Number of levels of "parenthood" that will be traversed for a theme. This should not need to be added in or changed in normal usage.
+Number of levels of "parenthood" that will be traversed for a theme. This shouldn't need to be added in or changed in normal usage.
 
 ```
 max_depth = 10
 ```
 
-## ui
+## `ui`
 
 Atuin version: >= 18.5
 
@@ -1139,21 +1142,21 @@ Columns to display in the interactive search, from left to right. The selection 
 
 Each column can be specified as:
 
-- A simple string (uses default width): `"duration"`
+- A plain string (uses default width): `"duration"`
 - An object with type and optional width/expand: `{ type = "directory", width = 30 }`
 
 #### Available column types
 
-| Column    | Default Width | Description                                     |
-| --------- | ------------- | ----------------------------------------------- |
-| duration  | 5             | Command execution duration (e.g., "123ms")      |
-| time      | 8             | Relative time since execution (e.g., "59m ago") |
-| datetime  | 16            | Absolute timestamp (e.g., "2025-01-22 14:35")   |
-| directory | 20            | Working directory (truncated if too long)       |
-| host      | 15            | Hostname where command was run                  |
-| user      | 10            | Username                                        |
-| exit      | 3             | Exit code (colored by success/failure)          |
-| command   | \*            | The command itself (expands by default)         |
+| Column      | Default Width | Description                                            |
+| ----------- | ------------- | ------------------------------------------------------ |
+| `duration`  | 5             | Command execution duration (for example, "123ms")      |
+| `time`      | 8             | Relative time since execution (for example, "59m ago") |
+| `datetime`  | 16            | Absolute timestamp (for example, "2025-01-22 14:35")   |
+| `directory` | 20            | Working directory (truncated if too long)              |
+| `host`      | 15            | Hostname where command was run                         |
+| `user`      | 10            | Username                                               |
+| `exit`      | 3             | Exit code (colored by success/failure)                 |
+| `command`   | \*            | The command itself (expands by default)                |
 
 #### Column options
 
@@ -1184,11 +1187,11 @@ columns = ["duration", "time", { type = "directory", expand = true }, { type = "
 
 Default: `true`
 
-Syntax highlight commands in the search results, parsed with the grammar for the shell that ran them: bash/zsh/sh use the bash grammar, fish uses the fish grammar, and shells without a grammar (nu, xonsh, powershell) are shown unhighlighted. The selected row keeps its usual single highlight color.
+Syntax highlight commands in the search results, parsed with the grammar for the shell that ran them: bash/zsh/sh use the bash grammar, fish uses the fish grammar, and shells without a grammar (nu, xonsh, PowerShell) are shown unhighlighted. The selected row keeps its usual single highlight color.
 
 The default colors are ANSI palette colors, so they automatically match your terminal's color scheme. They can also be customized via the `Syntax*` keys in a [theme](https://docs.atuin.sh/guide/theming/index.md).
 
-Not available on platforms where tree-sitter doesn't build (e.g. Windows); commands are shown unhighlighted there.
+Not available on platforms where tree-sitter doesn't build (for example, Windows), so commands are shown unhighlighted there.
 
 ```
 syntax_highlight = false
