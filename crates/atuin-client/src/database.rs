@@ -833,11 +833,14 @@ impl Database for Sqlite {
     }
 
     async fn stats(&self, h: &History) -> Result<HistoryStats> {
-        // We select the previous in the session by time
+        // We select the previous in the session by time. Excluding deleted
+        // history matches every other read path, and lets the query use the
+        // partial (session, timestamp) index.
         let mut prev = SqlBuilder::select_from("history");
         prev.field("*")
             .and_where("timestamp < ?1")
             .and_where("session = ?2")
+            .and_where_is_null("deleted_at")
             .order_by("timestamp", true)
             .limit(1);
 
@@ -845,6 +848,7 @@ impl Database for Sqlite {
         next.field("*")
             .and_where("timestamp > ?1")
             .and_where("session = ?2")
+            .and_where_is_null("deleted_at")
             .order_by("timestamp", false)
             .limit(1);
 
