@@ -8,13 +8,13 @@ tiers and records what works where.
 
 - **Tier 1** — Actively supported by the Atuin team.
 - **Tier 2** — Supported by the community. Complex issues under this support
-               level don't block a release; support is best-effort and
-               non-blocking.
+               level don't block a release; support is best-effort.
 
 ## Shells
 
 Feature coverage varies by shell:
 
+<div class="support-matrix">
 <table>
   <thead>
     <tr>
@@ -37,6 +37,7 @@ Feature coverage varies by shell:
     <tr><td>PowerShell</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-no">✗</td></tr>
   </tbody>
 </table>
+</div>
 
 ## Operating systems and architectures
 
@@ -44,6 +45,7 @@ Atuin runs on a range of operating systems and CPU architectures. The matrix
 below shows, for each platform, whether an official prebuilt binary is published
 and how far continuous integration (CI) exercises it.
 
+<div class="support-matrix">
 <table>
   <thead>
     <tr>
@@ -79,12 +81,7 @@ and how far continuous integration (CI) exercises it.
     </tr>
   </tbody>
 </table>
-
-!!! warning
-
-    Atuin supports running on all filesystems. ZFS and network filesystems are
-    treated as _Experimental_. For more info, see [Known
-    issues](known-issues.md).
+</div>
 
 ## Terminals
 
