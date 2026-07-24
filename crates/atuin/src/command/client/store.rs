@@ -21,6 +21,9 @@ mod rebuild;
 mod rekey;
 mod verify;
 
+#[cfg(feature = "sync")]
+mod repair;
+
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
@@ -46,6 +49,11 @@ pub enum Cmd {
     /// Pull records from the remote sync server (one way sync)
     #[cfg(feature = "sync")]
     Pull(pull::Pull),
+
+    /// Repair undecryptable records left over from a botched key change,
+    /// both on the server and in the local store.
+    #[cfg(feature = "sync")]
+    Repair(repair::Repair),
 }
 
 impl Cmd {
@@ -67,6 +75,9 @@ impl Cmd {
 
             #[cfg(feature = "sync")]
             Self::Pull(pull) => pull.run(settings, store, database).await,
+
+            #[cfg(feature = "sync")]
+            Self::Repair(repair) => repair.run(settings, store).await,
         }
     }
 
