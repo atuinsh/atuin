@@ -31,7 +31,7 @@ When `atuin hook install` runs, it writes the agent's config file or extension t
 | Codex | `~/.codex/hooks.json` |
 | pi | `~/.pi/agent/extensions/atuin.ts` |
 
-For Claude Code and Codex, the installer writes an **absolute path** to the `atuin` binary (via `current_exe`) so the hook does not depend on `PATH` inside the agent's process. That matters when your default shell never runs `atuin init`, or when the agent spawns hooks with a minimal environment.
+For Claude Code and Codex, the installer writes an **absolute path** to the `atuin` binary (via `current_exe`) so the hook doesn't depend on `PATH` inside the agent's process. That matters when your default shell never runs `atuin init`, or when the agent spawns hooks with a minimal environment.
 
 The hook lifecycle:
 
