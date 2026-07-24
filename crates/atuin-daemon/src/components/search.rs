@@ -69,7 +69,6 @@ where
     F: Fn() -> R,
     R: Future<Output: Deref<Target = SearchIndex>>,
 {
-    // Build frecency map with current settings
     let settings = handle.settings().await;
     index().await.rebuild_frecency(&settings.search).await;
     info!("Frecency map built");
