@@ -27,7 +27,7 @@ stringData:
 immutable: true
 ```
 
-Create a [`atuin.yaml`](https://github.com/atuinsh/atuin/blob/main/k8s/atuin.yaml) file for the Atuin server:
+Create a [`atuin.yaml`](https://github.com/atuinsh/atuin/blob/main/k8s/atuin.yaml) file for the Atuin server. As with the Docker image, there is no `latest` tag, so substitute the "LATEST TAGGED RELEASE" from the [releases page](https://github.com/atuinsh/atuin/releases):
 
 ```yaml
 ---
@@ -119,7 +119,7 @@ spec:
               value: "8888"
             - name: ATUIN_OPEN_REGISTRATION
               value: "true"
-          image: ghcr.io/atuinsh/atuin:latest
+          image: ghcr.io/atuinsh/atuin:<LATEST TAGGED RELEASE>
           name: atuin
           ports:
             - containerPort: 8888

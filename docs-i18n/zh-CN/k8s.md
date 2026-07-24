@@ -20,7 +20,7 @@ stringData:
 immutable: true
 ```
 
-为 Atuin 服务器创建 [`atuin.yaml`](../../k8s/atuin.yaml) 文件：
+为 Atuin 服务器创建 [`atuin.yaml`](../../k8s/atuin.yaml) 文件。与 Docker 镜像一样，没有发布 `latest` 标签，请在[发布页面](https://github.com/atuinsh/atuin/releases)查找最新的发布版本号，替换下面的 `<LATEST TAGGED RELEASE>`：
 
 
 ```yaml
@@ -56,7 +56,7 @@ spec:
               value: "8888"
             - name: ATUIN_OPEN_REGISTRATION
               value: "true"
-          image: ghcr.io/atuinsh/atuin:latest
+          image: ghcr.io/atuinsh/atuin:<LATEST TAGGED RELEASE>
           name: atuin
           ports:
             - containerPort: 8888

@@ -87,33 +87,17 @@ Atuin 有一个 Discord 社区, 可以在 [这里](https://discord.gg/Fq8bJSKPHh
 阅读下面的更多信息，了解仅供离线使用或托管您自己的服务器。
 
 ```
-bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
+curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 
 atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
 atuin import auto
 atuin sync
 ```
 
-### 使用活跃图
-
-除了托管 Atuin 服务器外，还有一个服务可以用来生成你的 shell 历史记录使用活跃图！这个功能的灵感来自于 GitHub 的使用活跃图。
-
-例如，这是我的：
-
-![](https://api.atuin.sh/img/ellie.png?token=0722830c382b42777bdb652da5b71efb61d8d387)
-
-如果你也想要，请在登陆你的同步服务器后，执行
-
-```
-curl https://api.atuin.sh/enable -d $(cat ~/.local/share/atuin/session)
-```
-
-执行结果为你的活跃图 URL 地址。可以共享或嵌入这个 URL 地址，令牌（token）并<i>不是</i>加密的，只是用来防止被枚举攻击。
-
 ## 仅离线 (不同步)
 
 ```
-bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
+curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 
 atuin import auto
 ```
@@ -126,7 +110,7 @@ atuin import auto
 
 ```
 # 不要以root身份运行，如果需要的话，会要求root。
-bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
+curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 ```
 
 然后可直接看 <a href="#shell-plugin">Shell 插件</a>
@@ -161,7 +145,7 @@ sudo port install atuin
 
 ### Pacman
 
-Atuin 在 Arch Linux 的 [社区存储库](https://archlinux.org/packages/community/x86_64/atuin/) 中可用。
+Atuin 在 Arch Linux 的 [extra 存储库](https://archlinux.org/packages/extra/x86_64/atuin/) 中可用。
 
 ```
 pacman -S atuin
@@ -172,7 +156,7 @@ pacman -S atuin
 ### 从源码编译安装
 
 ```
-git clone https://github.com/ellie/atuin.git
+git clone https://github.com/atuinsh/atuin.git
 cd atuin/crates/atuin
 cargo install --path .
 ```
@@ -192,7 +176,7 @@ echo 'eval "$(atuin init zsh)"' >> ~/.zshrc
 或使用插件管理器:
 
 ```
-zinit load ellie/atuin
+zinit load atuinsh/atuin
 ```
 
 ### bash
@@ -219,12 +203,6 @@ atuin init fish | source
 ```
 
 到 `~/.config/fish/config.fish` 文件中的 `is-interactive` 块中
-
-### Fig
-
-通过 [Fig](https://fig.io) 可为 zsh， bash 或 fish 一键安装 `atuin` 脚本插件。
-
-<a href="https://fig.io/plugins/other/atuin" target="_blank"><img src="https://fig.io/badges/install-with-fig.svg" /></a>
 
 ## ...这个名字是什么意思?
 

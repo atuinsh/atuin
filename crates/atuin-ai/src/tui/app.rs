@@ -882,7 +882,9 @@ impl AiApp {
                     .map(|cmd| format!("- `/{}` — {}", cmd.name, cmd.description))
                     .collect::<Vec<_>>()
                     .join("\n");
-                include_str!("content/help.md").replace("{commands}", &commands)
+                include_str!("content/help.md")
+                    .replace("{commands}", &commands)
+                    .replace("{docs_url}", &atuin_common::docs::url("ai/introduction/"))
             }
             other => format!("Unknown command: {other}"),
         }
