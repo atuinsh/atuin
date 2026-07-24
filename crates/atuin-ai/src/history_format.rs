@@ -1,4 +1,5 @@
 use atuin_client::history::{History, is_known_agent};
+use atuin_common::time::DATETIME_FMT;
 use time::UtcOffset;
 
 pub(crate) fn current_local_offset() -> UtcOffset {
@@ -56,16 +57,11 @@ fn format_attribution(history: &History) -> String {
 }
 
 fn format_timestamp(history: &History, local_offset: UtcOffset) -> String {
-    let ts = history.timestamp.to_offset(local_offset);
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        ts.year(),
-        ts.month() as u8,
-        ts.day(),
-        ts.hour(),
-        ts.minute(),
-        ts.second(),
-    )
+    history
+        .timestamp
+        .to_offset(local_offset)
+        .format(DATETIME_FMT)
+        .unwrap_or_else(|_| "????-??-?? ??:??:??".to_string())
 }
 
 fn format_duration(nanos: i64) -> String {
