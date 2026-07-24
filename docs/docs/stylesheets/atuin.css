@@ -565,3 +565,27 @@
 [data-md-color-scheme="default"] .md-main::before {
   opacity: 0.03;
 }
+
+.md-typeset .support-yes {
+  color: var(--atuin-green-400);
+}
+
+.md-typeset .support-no {
+  color: #ef5350;
+}
+
+[data-md-color-scheme="default"] .md-typeset .support-yes {
+  color: var(--atuin-green-600);
+}
+
+[data-md-color-scheme="default"] .md-typeset .support-no {
+  color: #c62828;
+}
+
+.md-typeset .support-matrix table th.tier,
+.md-typeset .support-matrix table td.tier {
+  min-width: 0;
+  width: 1%;
+  white-space: nowrap;
+  text-align: center;
+}
