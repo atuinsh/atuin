@@ -96,7 +96,7 @@ pub async fn boot(
     server::run_grpc_server(
         settings,
         history_service,
-        search_service,
+        search_service.build(handle.clone()),
         semantic_service,
         control_service.into_server(),
         handle,

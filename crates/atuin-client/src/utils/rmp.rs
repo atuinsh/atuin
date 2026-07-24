@@ -24,6 +24,8 @@ pub struct EncodeError<E: RmpWriteErr = std::io::Error>(ValueWriteError<E>);
 /// Conversion to [`eyre::Report`] is supported. This cannot be done by implementing
 /// [`std::error::Error`] because this type is not, in general, `'static`, so a manual
 /// implementation is provided.
+///
+/// [`Display`]: fmt::Display
 #[derive(Debug, derive_more::Display, derive_more::From)]
 #[display("could not decode MessagePack value: {_0:?}")]
 pub enum DecodeError<'a, E: RmpReadErr = BytesReadError> {

@@ -63,6 +63,8 @@ async fn load_all_history(db: &dyn Database) -> Vec<(History, i32)> {
 
 #[allow(clippy::too_many_lines)]
 #[instrument(skip_all, level = Level::TRACE, name = "fuzzy_match", fields(history_count = all_history.len()))]
+// TODO: This function ignores `state.shell_filter`; the skim engine will be removed soon so it's
+// not worth adding.
 async fn fuzzy_search(
     engine: &SkimMatcherV2,
     state: &SearchState,

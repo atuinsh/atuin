@@ -7,5 +7,5 @@ mod index;
 // Include the generated proto code
 tonic::include_proto!("search");
 
-// Re-export the service and index
-pub use index::{IndexFilterMode, QueryContext, SearchIndex};
+// Re-export the index and related types
+pub use index::{IndexFilterMode, SearchIndex, ShellFilter};

@@ -42,25 +42,27 @@ pub struct Context {
     pub git_root: Option<PathBuf>,
 }
 
-#[derive(Default, Clone)]
-pub struct OptFilters {
+#[derive(Default, Clone, Copy)]
+pub struct OptFilters<'a> {
     pub exit: Option<i64>,
     pub exclude_exit: Option<i64>,
     /// Only commands that recorded a non-zero exit. Unlike `exclude_exit: 0`,
     /// this also skips the `exit = -1` sentinel rows for commands still
     /// running (or whose end hook never fired).
     pub only_failed: bool,
-    pub cwd: Option<String>,
-    pub exclude_cwd: Option<String>,
-    pub before: Option<String>,
-    pub after: Option<String>,
+    pub cwd: Option<&'a str>,
+    pub exclude_cwd: Option<&'a str>,
+    pub before: Option<&'a str>,
+    pub after: Option<&'a str>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
     pub reverse: bool,
     pub include_duplicates: bool,
     /// Author filter. Supports special values `$all-user` and `$all-agent`.
-    pub authors: Vec<String>,
-    pub shells: Vec<String>,
+    pub authors: &'a [String],
+    /// Shell filter. If empty, show commands from all shells. Empty string includes commands that
+    /// have no recorded shell.
+    pub shells: &'a [String],
 }
 
 /// Build a query [`Context`] without requiring a live shell session.
@@ -107,9 +109,10 @@ impl Context {
 }
 
 /// Each entry is OR'd: `$all-user` → NOT IN agents, `$all-agent` → IN agents, literal → exact match.
-fn apply_author_filter(sql: &mut SqlBuilder, authors: &[String]) {
-    let mut conditions: Vec<String> = Vec::new();
-    let agent_list: String = KNOWN_AGENTS.iter().map(quote).join(", ");
+fn apply_author_filter<A>(sql: &mut SqlBuilder, authors: A)
+where
+    A: IntoIterator<Item: AsRef<str>>,
+{
     let author_expr = "CASE \
         WHEN author IS NULL OR trim(author) = '' THEN \
             CASE \
@@ -119,29 +122,36 @@ fn apply_author_filter(sql: &mut SqlBuilder, authors: &[String]) {
         ELSE author \
     END";
 
-    for author in authors {
-        match author.as_str() {
-            AUTHOR_FILTER_ALL_USER => {
-                conditions.push(format!("{author_expr} NOT IN ({agent_list})"));
-            }
-            AUTHOR_FILTER_ALL_AGENT => {
-                conditions.push(format!("{author_expr} IN ({agent_list})"));
-            }
-            literal => {
-                conditions.push(format!("{author_expr} = {}", quote(literal)));
-            }
-        }
-    }
+    let mut agent_list: Option<String> = None;
+    let get_agent_list = || KNOWN_AGENTS.iter().map(quote).join(", ");
 
-    if !conditions.is_empty() {
-        sql.and_where(format!("({})", conditions.join(" OR ")));
+    let mut conditions = authors.into_iter().map(|author| match author.as_ref() {
+        AUTHOR_FILTER_ALL_USER => {
+            format!(
+                "{author_expr} NOT IN ({})",
+                agent_list.get_or_insert_with(get_agent_list)
+            )
+        }
+        AUTHOR_FILTER_ALL_AGENT => {
+            format!(
+                "{author_expr} IN ({})",
+                agent_list.get_or_insert_with(get_agent_list)
+            )
+        }
+        literal => {
+            format!("{author_expr} = {}", quote(literal))
+        }
+    });
+
+    let conditions_expr = conditions.join(" OR ");
+    if !conditions_expr.is_empty() {
+        sql.and_where(format!("({})", conditions_expr));
     }
 }
 
 fn apply_shell_filter<S>(sql: &mut SqlBuilder, shells: S)
 where
-    S: IntoIterator,
-    S::Item: AsRef<str>,
+    S: IntoIterator<Item: AsRef<str>>,
 {
     let mut include_null = false;
     let nonempty_shells = shells.into_iter().filter(|s| {
@@ -156,6 +166,8 @@ where
     let mut cond = (!shell_list.is_empty()).then(|| format!("shell in ({shell_list})"));
 
     if include_null {
+        // `SqlBuilder::and_where` wraps the whole expression in parentheses; we don't need to add
+        // them here.
         cond = Some(cond.map_or_else(String::new, |s| s + " OR ") + "shell IS NULL");
     }
     if let Some(cond) = cond {
@@ -217,7 +229,7 @@ pub trait Database: Send + Sync + 'static {
         filter: FilterMode,
         context: &Context,
         query: &str,
-        filter_options: OptFilters,
+        filter_options: OptFilters<'_>,
     ) -> Result<Vec<History>>;
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>>;
@@ -574,7 +586,7 @@ impl Database for Sqlite {
         filter: FilterMode,
         context: &Context,
         query: &str,
-        filter_options: OptFilters,
+        filter_options: OptFilters<'_>,
     ) -> Result<Vec<History>> {
         // Build the inner query holding all of the user's filters (filter mode,
         // fuzzy/regex command matches, exit/cwd/date filters, author, deleted_at).
@@ -685,33 +697,27 @@ impl Database for Sqlite {
             .map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
 
         if let Some(before) = filter_options.before {
-            let parsed = interim::parse_date_string(
-                before.as_str(),
-                OffsetDateTime::now_utc(),
-                interim::Dialect::Uk,
-            )
-            .map_err(|e| {
-                sqlx::Error::Decode(format!("invalid `before` filter {before:?}: {e}").into())
-            })?;
+            let parsed =
+                interim::parse_date_string(before, OffsetDateTime::now_utc(), interim::Dialect::Uk)
+                    .map_err(|e| {
+                        sqlx::Error::Decode(
+                            format!("invalid `before` filter {before:?}: {e}").into(),
+                        )
+                    })?;
             sql.and_where_lt("timestamp", quote(parsed.unix_timestamp_nanos() as i64));
         }
 
         if let Some(after) = filter_options.after {
-            let parsed = interim::parse_date_string(
-                after.as_str(),
-                OffsetDateTime::now_utc(),
-                interim::Dialect::Uk,
-            )
-            .map_err(|e| {
-                sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
-            })?;
+            let parsed =
+                interim::parse_date_string(after, OffsetDateTime::now_utc(), interim::Dialect::Uk)
+                    .map_err(|e| {
+                        sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
+                    })?;
             sql.and_where_gt("timestamp", quote(parsed.unix_timestamp_nanos() as i64));
         }
 
-        if !filter_options.authors.is_empty() {
-            apply_author_filter(&mut sql, &filter_options.authors);
-        }
-        apply_shell_filter(&mut sql, &filter_options.shells);
+        apply_author_filter(&mut sql, filter_options.authors);
+        apply_shell_filter(&mut sql, filter_options.shells);
 
         sql.and_where_is_null("deleted_at");
 
@@ -1172,9 +1178,8 @@ impl<'a> Iterator for QueryTokenizer<'a> {
 
 #[cfg(test)]
 mod test {
-    use crate::settings::test_local_timeout;
-
     use super::*;
+    use crate::settings::test_local_timeout;
     use rstest::rstest;
     use std::time::{Duration, Instant};
     use time::format_description::well_known::Rfc3339;
@@ -1465,8 +1470,8 @@ mod test {
                 &context,
                 "",
                 OptFilters {
-                    after,
-                    before,
+                    after: after.as_deref(),
+                    before: before.as_deref(),
                     include_duplicates: true,
                     ..Default::default()
                 },
@@ -1519,8 +1524,8 @@ mod test {
 
         let mut filters = OptFilters::default();
         match which {
-            "before" => filters.before = Some("not a date".to_string()),
-            "after" => filters.after = Some("not a date".to_string()),
+            "before" => filters.before = Some("not a date"),
+            "after" => filters.after = Some("not a date"),
             _ => unreachable!(),
         }
 
@@ -1814,5 +1819,68 @@ mod test {
         let duration = start.elapsed();
 
         assert!(duration < Duration::from_secs(15));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[rstest]
+    #[case::empty_filter([], 7)]
+    #[case::bash(["bash"], 1)]
+    #[case::bash_unknown(["bash", ""], 5)]
+    #[case::bash_zsh(["bash", "zsh"], 3)]
+    #[case::unknown([""], 4)]
+    #[case::fish(["fish"], 0)]
+    #[case::fish_unknown(["fish", ""], 4)]
+    async fn test_search_shells<const N: usize>(
+        #[case] shells: [&str; N],
+        #[case] expected_count: usize,
+    ) {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        for (command, shell) in [
+            ("echo unknown1", None),
+            ("echo zsh1", Some("zsh")),
+            ("echo unknown2", None),
+            ("echo bash", Some("bash")),
+            ("echo unknown3", None),
+            ("echo unknown4", None),
+            ("echo zsh2", Some("zsh")),
+        ] {
+            let history = History::capture()
+                .timestamp(OffsetDateTime::now_utc())
+                .command(command)
+                .cwd("/tmp")
+                .shell_opt(shell.map(str::to_owned))
+                .build()
+                .into();
+            db.save(&history).await.unwrap();
+        }
+
+        let context = Context {
+            hostname: "hostname".into(),
+            session: "session".into(),
+            cwd: "/tmp".into(),
+            host_id: "host".into(),
+            git_root: None,
+        };
+
+        let filters = OptFilters {
+            shells: &shells.map(str::to_owned),
+            ..Default::default()
+        };
+
+        let results = db
+            .search(
+                SearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "echo",
+                filters,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), expected_count, "{results:?}");
     }
 }

@@ -1799,6 +1799,7 @@ pub async fn history(
             filter_mode: default_filter_mode,
             context: initial_context.clone(),
             custom_context: None,
+            shells: settings.search.shells.clone(),
         },
         engine: engines::engine(search_mode, settings),
         results_len: 0,
@@ -2123,7 +2124,7 @@ mod tests {
     use atuin_client::database::Context;
     use atuin_client::history::History;
     use atuin_client::settings::{
-        FilterMode, KeymapMode, Preview, PreviewStrategy, SearchMode, Settings,
+        FilterMode, KeymapMode, Preview, PreviewStrategy, SearchMode, Settings, Shells,
     };
     use time::OffsetDateTime;
 
@@ -2321,6 +2322,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                shells: Shells::All,
             },
             engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2377,6 +2379,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                shells: Shells::All,
             },
             engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2496,6 +2499,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                shells: Shells::All,
             },
             engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2555,6 +2559,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                shells: Shells::All,
             },
             engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2610,6 +2615,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                shells: Shells::All,
             },
             engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2661,6 +2667,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                shells: Shells::All,
             },
             engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2725,6 +2732,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                shells: Shells::All,
             },
             engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2790,6 +2798,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                shells: Shells::All,
             },
             engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
@@ -3228,6 +3237,7 @@ mod tests {
                     git_root: None,
                 },
                 custom_context: None,
+                shells: Shells::All,
             },
             engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),

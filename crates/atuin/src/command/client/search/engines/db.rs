@@ -31,7 +31,8 @@ impl SearchEngine for Search {
                 state.input.as_str(),
                 OptFilters {
                     limit: Some(200),
-                    authors: vec![AUTHOR_FILTER_ALL_USER.to_string()],
+                    authors: &[AUTHOR_FILTER_ALL_USER.to_owned()],
+                    shells: state.shells.to_list().as_slice(),
                     ..Default::default()
                 },
             )

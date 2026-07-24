@@ -31,7 +31,10 @@ mod dotfiles;
 mod kv;
 pub(crate) mod meta;
 mod scripts;
+mod shells;
 pub mod watcher;
+
+pub use shells::Shells;
 
 /// Default sync address for Atuin's hosted service, parsed once.
 pub static DEFAULT_SYNC_URL: LazyLock<Url> =
@@ -504,6 +507,11 @@ pub struct Search {
     /// The overall frecency score multiplier for the search index (default: 1.0).
     /// Applied after combining recency and frequency scores.
     pub frecency_score_multiplier: f64,
+
+    /// Controls which shells' commands are shown in interactive search.
+    ///
+    /// One of: `"all"`, `"auto"`, or an array of strings.
+    pub shells: Shells,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -728,6 +736,7 @@ impl Default for Search {
             recency_score_multiplier: 1.0,
             frequency_score_multiplier: 1.0,
             frecency_score_multiplier: 1.0,
+            shells: Default::default(),
         }
     }
 }
@@ -1453,6 +1462,7 @@ impl Settings {
             .set_default("search.recency_score_multiplier", 1.0)?
             .set_default("search.frequency_score_multiplier", 1.0)?
             .set_default("search.frecency_score_multiplier", 1.0)?
+            .set_default("search.shells", "auto")?
             .set_default("meta.db_path", meta_path.to_str())?
             .set_default("ai.db_path", ai_sessions_path.to_str())?
             .set_default("ai.session_continue_minutes", 60)?
