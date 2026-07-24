@@ -45,6 +45,28 @@ Add `--disable-ai`, e.g.:
 eval "$(atuin init zsh --disable-ai)"
 ```
 
+## How do I show absolute timestamps instead of relative time in search?
+
+Interactive search defaults to a relative `time` column (for example `59m ago`).
+To show wall-clock timestamps instead, replace `time` with `datetime` under
+`[ui]` in `~/.config/atuin/config.toml`:
+
+```toml
+[ui]
+columns = ["duration", "datetime", "command"]
+```
+
+`datetime` renders values like `2025-01-22 14:35` (width 16 by default). You can
+keep both:
+
+```toml
+[ui]
+columns = ["duration", "time", "datetime", "command"]
+```
+
+See the [UI columns](configuration/config.md#columns) config reference for the
+full list of column types and width options.
+
 ## How do I edit a command instead of running it immediately?
 
 Press tab! By default, enter will execute a command, and tab will insert it ready for editing.
