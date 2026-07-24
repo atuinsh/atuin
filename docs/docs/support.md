@@ -78,12 +78,6 @@ and how far continuous integration (CI) exercises it.
   </tbody>
 </table>
 
-- **Prebuilt binary** — an official binary is published through the install
-  script and GitHub releases. Linux binaries are provided for both glibc and
-  musl.
-- **CI** — _tested_: unit tests run in CI; _build-only_: compiled and checked,
-  but tests aren't run; _✗_: not built in CI.
-
 !!! warning
 
     Atuin supports running on all filesystems. ZFS and network filesystems are
