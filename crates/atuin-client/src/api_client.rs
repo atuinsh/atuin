@@ -67,7 +67,7 @@ pub struct Client {
 /// (e.g. Cloudflare Access secrets), refuse cross-origin redirects entirely
 /// whenever extra headers are configured.
 pub(crate) fn client_builder(extra_headers: &HashMap<String, String>) -> reqwest::ClientBuilder {
-    let builder = reqwest::Client::builder();
+    let builder = atuin_domain::http::client_builder();
 
     if extra_headers.is_empty() {
         return builder;
@@ -171,7 +171,7 @@ pub async fn latest_version() -> Result<Version> {
     use atuin_domain::api::IndexResponse;
 
     let url = crate::settings::DEFAULT_SYNC_URL.clone();
-    let client = reqwest::Client::new();
+    let client = atuin_domain::http::client();
 
     let resp = client
         .get(url)
@@ -297,7 +297,7 @@ impl Client {
         Ok(Client {
             sync_addr,
             client,
-            lfs_client: reqwest::Client::builder()
+            lfs_client: atuin_domain::http::client_builder()
                 .connect_timeout(Duration::from_secs(connect_timeout))
                 .timeout(Duration::from_secs(timeout))
                 .build()?,

@@ -35,6 +35,13 @@ tokio = { workspace = true }
 axum = { version = "0.8", optional = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
+tracing = { workspace = true }
+
+# See `http::musl_dns`: musl's resolver races all of resolv.conf's nameservers
+# and takes the first reply, which breaks split-horizon DNS. We drive
+# hickory-dns ourselves so negative responses don't end a lookup early.
+[target.'cfg(target_env = "musl")'.dependencies]
+hickory-resolver = "0.26"
 
 [features]
 # Feature-gated axum integration for the server-side capability handlers (`caps::axum`).

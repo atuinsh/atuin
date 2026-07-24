@@ -30,7 +30,7 @@ pub(crate) struct ModelList {
 pub(crate) async fn fetch_models(endpoint: &reqwest::Url, token: &str) -> Result<ModelList> {
     let url = endpoint.append_path("api/cli/models")?;
 
-    let mut request = reqwest::Client::new()
+    let mut request = atuin_domain::http::client()
         .get(url)
         .header(USER_AGENT, crate::stream::APP_USER_AGENT)
         .timeout(Duration::from_secs(10));
