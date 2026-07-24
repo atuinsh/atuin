@@ -94,4 +94,4 @@ If the body doesn't contain `$ARGUMENTS` and you provided arguments, Atuin appen
 
 ## Description Budget
 
-Atuin sends skill descriptions to the server under a total character budget. It cuts each description to 512 characters, then adds skills until it reaches the budget. If Atuin leaves any skills out, it tells the server which ones.
+Atuin sends skill descriptions to the server under a total character budget. It cuts each description to 1024 bytes, then skips any skill whose entry would exceed the budget and continues packing the rest. If Atuin leaves any skills out, it tells the server which ones.

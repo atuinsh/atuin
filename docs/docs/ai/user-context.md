@@ -39,7 +39,7 @@ git status --short
 
 ## Caching
 
-The server caches `TERMINAL.md` files after they're first loaded, so if you make changes to them mid-session, use the `/reload` slash command to refresh the data. This will invalidate the server cache on the next request, increasing the latency and token usage for that request.
+Atuin AI caches `TERMINAL.md` files after it first loads them, so if you change them mid-session, use the `/reload` slash command to refresh the data. This will invalidate the server cache on the next request, increasing the latency and token usage for that request.
 
 ## Why not `AGENTS.md`?
 

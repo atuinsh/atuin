@@ -103,7 +103,7 @@ atuin history prune --dry-run
 atuin history prune
 ```
 
-This is useful when you add a new pattern to `history_filter`: Atuin never records future commands matching the filter, but old entries you recorded before you set up the filter remain. `prune` cleans those up.
+This is useful when you add a new pattern to `history_filter`: Atuin never records future commands matching the filter, but old entries Atuin recorded before you set up the filter remain. `prune` cleans those up.
 
 ## Purging undecryptable local store records
 

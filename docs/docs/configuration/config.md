@@ -1,7 +1,7 @@
 # Config
 
-Atuin maintains two configuration files, stored in `~/.config/atuin/`. Atuin stores
-data in `~/.local/share/atuin` (unless overridden by XDG\_\*).
+Atuin maintains two configuration files in `~/.config/atuin/`, and stores data
+in `~/.local/share/atuin` (unless overridden by XDG\_\*).
 
 The full path to the config file would be `~/.config/atuin/config.toml`
 

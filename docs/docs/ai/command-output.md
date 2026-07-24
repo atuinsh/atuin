@@ -69,7 +69,7 @@ To try it out, run a command that fails, then press `?` and ask Atuin AI why it 
 
 ## How it works
 
-pty-proxy sits between your terminal and your shell, and uses your shell's prompt markers to work out where each command's output starts and ends. pty-proxy sends each captured command to the daemon, which keeps it in memory alongside its Atuin history ID. When Atuin AI wants to see what a command printed, it asks the daemon for the output by history ID.
+pty-proxy sits between your terminal and your shell, and uses your shell's prompt markers to work out where each command's output starts and ends. It then sends each captured command to the daemon, which keeps it in memory alongside its Atuin history ID. When Atuin AI wants to see what a command printed, it asks the daemon for the output by history ID.
 
 ## Privacy and retention
 
@@ -78,7 +78,7 @@ Captured output is stored in memory, on your machine:
 - The daemon keeps up to 1MB of output per command, and the most recent 128 commands (up to 32MB of output) per shell session.
 - Output is lost when the daemon stops. Only commands captured while the daemon was running are available.
 
-Atuin sends nothing to the LLM until it requests the output of a specific command, and by default Atuin AI asks your permission first.
+Atuin sends nothing to the LLM until the LLM requests the output of a specific command, and by default Atuin AI asks your permission first.
 
 ## Permissions
 

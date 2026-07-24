@@ -92,7 +92,7 @@ the Base color, but the `autumn` theme only seeks to make the custom colors
 warmer, so it doesn't.
 
 Colors may be specified either as names from the [palette](https://ogeon.github.io/docs/palette/master/palette/named/index.html)
-crate in lowercase, or as six-character hex codes, prefixed with `#`. To explicitly select ANSI colors by integer, or for more general flexibility, prefix the color with `@`. Crossterm handles the rest of the string with its own color parsing. For examples, see [crossterm's color deserialization tests](https://github.com/crossterm-rs/crossterm/blob/5d50d8da62c5e034ef8b2787a771a2c0f9b3b2f9/src/style/types/color.rs#L389), remembering the need to add a `@` prefix for Atuin.
+crate in lowercase, or as six-character hex codes, prefixed with `#`. To explicitly select ANSI colors by integer, or for more flexibility in general, prefix the color with `@`. Crossterm handles the rest of the string with its own color parsing. For examples, see [crossterm's color deserialization tests](https://github.com/crossterm-rs/crossterm/blob/5d50d8da62c5e034ef8b2787a771a2c0f9b3b2f9/src/style/types/color.rs#L389), remembering the need to add a `@` prefix for Atuin.
 
 For example, the following are valid color names:
 
@@ -130,9 +130,9 @@ where not all of the *Meanings* need to be explicitly defined. If they're absent
 then the color will be chosen from the parent theme, if one is defined, or if that
 key is missing in the `theme` block, from the `default` theme.
 
-Missing an entire named theme is inherently an error. When that happens, the
-theme drops to `(none)` and leaves Atuin unstyled, rather than falling back to
-the default or any other theme.
+If the named theme is missing entirely, that's an error. The theme then drops
+to `(none)` and leaves Atuin unstyled, rather than falling back to the default
+or any other theme.
 
 This theme file should be moved to `~/.config/atuin/themes/my-theme.toml` and the
 following added to `~/.config/atuin/config.toml`:

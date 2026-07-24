@@ -4,7 +4,7 @@
 
 This command deletes history entries matching the [`history_filter`](../configuration/config.md#history_filter) configuration parameter.
 
-These are commands that match the current `history_filter` configuration, but Atuin saved them to history before you set up the filter. Because the filter didn't exist yet, Atuin didn't exclude them from history at the time.
+These may be commands that match the current `history_filter` configuration, but were saved to history before the filter excluded them.
 
 It may be useful to run the prune command after updating `history_filter` to remove old history entries that match the new filters.
 
