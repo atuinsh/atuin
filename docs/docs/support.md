@@ -39,7 +39,7 @@ and how far continuous integration (CI) exercises it.
 | `windows-x86_64` | ✓ | tested | No syntax highlighting or pty-proxy. |
 | `wsl2-x86_64` | ✓ | tested | |
 | `illumos-x86_64` | ✗ | build-only | Build from source. |
-| Other (riscv64, …) | ✗ | ✗ | Build from source. May not compile: TLS (`ring`) supports only x86_64, x86, arm, and aarch64. |
+| Other | ✗ | ✗ | Build from source; untested. Needs a C toolchain. |
 
 - **Prebuilt binary** — an official binary is published through the install
   script and GitHub releases. Linux binaries are provided for both glibc and

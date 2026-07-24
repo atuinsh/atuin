@@ -65,6 +65,7 @@ sudo
 systemd
 Termux
 tmux
+toolchain
 Traefik
 unhighlighted
 unstyled
