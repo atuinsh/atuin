@@ -116,7 +116,7 @@ After configuring, open a new terminal in your IDE and run:
 atuin doctor | grep preexec
 ```
 
-You should see `built-in`, `bash-preexec`, `blesh`, or similar—not `none`.
+You should see `built-in`, `bash-preexec`, `blesh`, or similar — not `none`.
 
 ## Shell-Specific Notes
 
@@ -142,7 +142,7 @@ Zsh has native hook support via `add-zsh-hook`. The integration is straightforwa
 
 ### Fish
 
-Fish uses its event system (`fish_preexec` and `fish_postexec` events). It also respects Fish's private mode—commands run with `fish --private` aren't recorded.
+Fish uses its event system (`fish_preexec` and `fish_postexec` events). It also respects Fish's private mode — commands run with `fish --private` aren't recorded.
 
 ### Nushell, xonsh, and PowerShell
 

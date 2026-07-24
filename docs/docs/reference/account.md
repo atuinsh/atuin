@@ -24,7 +24,7 @@ atuin account register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
 | `--email`/`-e` | Used only for important notifications, such as security issues |
 | `--password`/`-p` | Omit this and Atuin asks for it instead, keeping it out of your shell history |
 
-Registering logs you in and generates your encryption key. Save the key—see
+Registering logs you in and generates your encryption key. Save the key — see
 [`atuin key`](sync.md#key).
 
 ### `atuin account login`
@@ -83,7 +83,7 @@ Deletes your account and all synchronized history from the server.
 
 !!! warning
     This doesn't prompt for confirmation, and it can't be undone. Your local
-    history isn't affected—only the server copy.
+    history isn't affected — only the server copy.
 
 ### `atuin account link`
 

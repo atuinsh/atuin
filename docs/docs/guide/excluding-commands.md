@@ -70,7 +70,7 @@ what the plugin sets up.
 !!! tip "Commands from AI agents"
     You don't need to exclude AI agent commands to keep them out of your way.
     Atuin tags them with the agent that ran them and hides them from interactive
-    search by default—see [AI Agent Hooks](agent-hooks.md).
+    search by default — see [AI Agent Hooks](agent-hooks.md).
 
 ## Cleaning up commands you already recorded
 
@@ -92,6 +92,6 @@ History](delete-history.md).
 ## Secrets are filtered automatically
 
 Independently of your own filters, Atuin refuses to record commands that look
-like they contain credentials—AWS keys, GitHub and npm tokens, Slack
+like they contain credentials — AWS keys, GitHub and npm tokens, Slack
 webhooks, Stripe keys, and more. This is on by default. For the full list,
 see [`secrets_filter`](../configuration/config.md#secrets_filter).

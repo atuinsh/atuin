@@ -24,7 +24,7 @@ Atuin skips it when you aren't inside a git repository.
 To change which mode searches start in, set
 [`filter_mode`](../configuration/config.md#filter_mode). To remove modes from the
 ctrl-r rotation entirely, set [`search.filters`](../configuration/config.md#filters).
-The up arrow can start in a different mode than ctrl-r—see
+The up arrow can start in a different mode than ctrl-r — see
 [`filter_mode_shell_up_key_binding`](../configuration/config.md#filter_mode_shell_up_key_binding).
 
 ## Search mode
@@ -34,7 +34,7 @@ modes by pressing **ctrl-s** inside the TUI.
 
 | Mode            | Matches                                                                                                        |
 |-----------------|----------------------------------------------------------------------------------------------------------------|
-| fuzzy (default) | Fuzzily, using the [fzf syntax](https://github.com/junegunn/fzf#search-syntax)—see [fuzzy search syntax](../configuration/config.md#fuzzy-search-syntax) |
+| fuzzy (default) | Fuzzily, using the [fzf syntax](https://github.com/junegunn/fzf#search-syntax) — see [fuzzy search syntax](../configuration/config.md#fuzzy-search-syntax) |
 | prefix          | Commands that start with your query                                                                            |
 | fulltext        | Commands that contain your query anywhere                                                                      |
 | skim            | Using the [skim syntax](https://github.com/lotabout/skim#search-syntax)                                         |

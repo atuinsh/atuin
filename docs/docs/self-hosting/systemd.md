@@ -2,7 +2,7 @@
 
 !!! note
     These instructions assume the `atuin-server` binary is on your `PATH`. Since
-    v18.12.0, the server is distributed as a separate binary—install it from
+    v18.12.0, the server is distributed as a separate binary — install it from
     the [releases page](https://github.com/atuinsh/atuin/releases) (see [Server
     setup](./server-setup.md) for the installer).
 

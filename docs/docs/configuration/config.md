@@ -162,7 +162,7 @@ or `py`.
 Default: `global`
 
 The filter mode that interactive search starts in. Accepted values are `global`,
-`host`, `session`, `directory`, `workspace`, and `session-preload`—see
+`host`, `session`, `directory`, `workspace`, and `session-preload` — see
 [Filter mode](../guide/advanced-usage.md#filter-mode) for what each one searches.
 
 Whichever mode you start in, you can still cycle through the rest with ctrl-r.
@@ -442,7 +442,7 @@ For the exact expressions, see
 !!! note
 
     This is a safety net, not a guarantee. It only catches credentials in
-    recognized formats—use [`history_filter`](#history_filter) for anything
+    recognized formats — use [`history_filter`](#history_filter) for anything
     else you need kept out, and see
     [Excluding Commands from History](../guide/excluding-commands.md).
 
@@ -502,13 +502,13 @@ Default: `{}`
 
 Extra HTTP headers to send on every request to the sync server. This is useful
 when a self-hosted server sits behind a proxy or access gateway that requires
-its own authentication header—for example Cloudflare Access.
+its own authentication header — for example Cloudflare Access.
 
 Headers that Atuin sets itself (such as `Authorization`) can't be overridden,
 because Atuin's values always win.
 
 To avoid leaking credentials, Atuin refuses to follow cross-origin redirects
-when extra headers are configured—they're never sent to an origin other
+when extra headers are configured — they're never sent to an origin other
 than the one you configured.
 
 ```toml
@@ -637,9 +637,9 @@ filters = ["global", "host", "session", "directory"]
 
 For the [`"daemon-fuzzy"` search mode](#search_mode), you can control the scoring of matched items. The system scores matches based on three numbers: frequency, recency, and frecency:
 
-* Frequency—how often this exact match has been run, with diminishing returns
-* Recency—how recently this exact match was last run
-* Frecency—a combination of frequency and recency
+* Frequency — how often this exact match has been run, with diminishing returns
+* Recency — how recently this exact match was last run
+* Frecency — a combination of frequency and recency
 
 The frecency calculation is `Recency Score * Recency Multiplier + Frequency Score * Frequency Multiplier`. By changing the options below, you can customize the relative importance of each part of the score calculation.
 
@@ -922,13 +922,13 @@ height = "60%"
 ```
 
 Atuin falls back to its normal rendering, with no error, whenever the popup
-can't be used—outside tmux, on tmux older than 3.2, or in a shell that doesn't
+can't be used — outside tmux, on tmux older than 3.2, or in a shell that doesn't
 support it.
 
 !!! note "Requirements"
 
     - tmux >= 3.2, which is where `display-popup` gained the behavior Atuin needs
-    - zsh, bash, or fish—nushell, xonsh, and PowerShell don't support the popup yet
+    - zsh, bash, or fish — nushell, xonsh, and PowerShell don't support the popup yet
 
 These settings are read by `atuin init` and passed to the shell plugin through
 environment variables, so **restart your shell after changing them**. To disable

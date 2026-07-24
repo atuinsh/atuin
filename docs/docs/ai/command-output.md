@@ -2,7 +2,7 @@
 
 Atuin AI can read the output of commands you've run. Ask "why did that fail?" and it can look at the actual error message, rather than guessing from the command alone.
 
-Atuin doesn't capture output by default—it needs two pieces set up: the [daemon](../reference/daemon.md), which stores recent output in memory, and [pty-proxy](../reference/pty-proxy.md), which captures it from your terminal.
+Atuin doesn't capture output by default — it needs two pieces set up: the [daemon](../reference/daemon.md), which stores recent output in memory, and [pty-proxy](../reference/pty-proxy.md), which captures it from your terminal.
 
 ## Setup
 
@@ -82,7 +82,7 @@ Atuin sends nothing to the LLM until it requests the output of a specific comman
 
 ## Permissions
 
-Output retrieval is controlled by the `AtuinOutput` permission rule—see [Tools & Permissions](./tools-permissions.md). To let Atuin AI read command output without asking every time:
+Output retrieval is controlled by the `AtuinOutput` permission rule — see [Tools & Permissions](./tools-permissions.md). To let Atuin AI read command output without asking every time:
 
 ```toml
 [permissions]

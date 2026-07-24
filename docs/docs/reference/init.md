@@ -11,7 +11,7 @@ atuin init zsh
 ```
 
 See [installation](../guide/installation.md#installing-the-shell-plugin) for the
-exact line to add for your shell—the syntax differs between shells.
+exact line to add for your shell — the syntax differs between shells.
 
 Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`.
 
@@ -21,7 +21,7 @@ Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`.
   [Shell Integration](../guide/shell-integration.md).
 - **Key bindings** for ++ctrl+r++ and the ++up++ arrow, and ++question++ for
   [Atuin AI](../ai/introduction.md).
-- **Dotfiles**, if [enabled](../configuration/config.md#dotfiles)—your synced
+- **Dotfiles**, if [enabled](../configuration/config.md#dotfiles) — your synced
   aliases and environment variables are defined here.
 
 ## Flags

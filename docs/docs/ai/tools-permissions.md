@@ -40,7 +40,7 @@ Most rules can be scoped to a particular path or other context. For example, you
 
 ### Example Config
 
-Here's an example of a permission file that allows Atuin AI to read and write any markdown files in the current project (because Write implies Read—see below), but denies it access to any `.env` files. Attempts to read or write any _other_ files will result in Atuin AI requesting permission before proceeding.
+Here's an example of a permission file that allows Atuin AI to read and write any markdown files in the current project (because Write implies Read — see below), but denies it access to any `.env` files. Attempts to read or write any _other_ files will result in Atuin AI requesting permission before proceeding.
 
 ```toml
 [permissions]
@@ -76,7 +76,7 @@ allow = ["AtuinHistory"]
 
 ### Atuin Output
 
-The `AtuinOutput` tool allows Atuin AI to read the captured output of commands in your Atuin history. This tool is read-only. Atuin AI might ask to use this tool when you ask about the result of a command you ran, or for help with a failing command. Output capture requires the daemon and pty-proxy to be set up—see [Reading Command Output](./command-output.md).
+The `AtuinOutput` tool allows Atuin AI to read the captured output of commands in your Atuin history. This tool is read-only. Atuin AI might ask to use this tool when you ask about the result of a command you ran, or for help with a failing command. Output capture requires the daemon and pty-proxy to be set up — see [Reading Command Output](./command-output.md).
 
 **Permission rule and scope:** `AtuinOutput`
 
@@ -98,7 +98,7 @@ The `Read` tool allows Atuin AI to read files on your system. Atuin AI might ask
 
 **Permission rule and scope:** `Read(<glob_pattern>)` (for example, `Read(**/*.md)` to allow reading all markdown files in the current directory and subdirectories). A missing glob pattern (for example, `Read`) matches all files.
 
-**Config value:** `ai.capabilities.enable_file_tools` (see [settings documentation](./settings.md#capabilities))—this setting enables both the `Read` and `Write` tools.
+**Config value:** `ai.capabilities.enable_file_tools` (see [settings documentation](./settings.md#capabilities)) — this setting enables both the `Read` and `Write` tools.
 
 **Example permissions file:**
 
@@ -120,7 +120,7 @@ The `Write` tool allows Atuin AI to create and edit files on your system. Atuin 
 
 **Permission rule and scope:** `Write(<glob_pattern>)` (for example, `Write(**/*.md)` to allow writing all markdown files in the current directory and subdirectories). A missing glob pattern (for example, `Write`) matches all files.
 
-**Config value:** `ai.capabilities.enable_file_tools` (see [settings documentation](./settings.md#capabilities))—this setting enables both the `Read` and `Write` tools.
+**Config value:** `ai.capabilities.enable_file_tools` (see [settings documentation](./settings.md#capabilities)) — this setting enables both the `Read` and `Write` tools.
 
 **Example permissions file:**
 
@@ -160,17 +160,17 @@ allow = [
 
     | Pattern | Matches | Doesn't Match |
     |---------|---------|----------------|
-    | `*` | Any command |—|
+    | `*` | Any command | — |
     | `git commit *` | `git commit`, `git commit -m "msg"` | `git`, `git push` |
     | `ls*` | `ls`, `ls -a`, `lsof` | `cat` |
     | `git * --amend` | `git commit --amend`, `git rebase --amend` | `git commit` |
     | `git commit` | `git commit` | `git`, `git push`, `git commit -m "msg"` |
 
-    Note the difference between `ls *` (with a space) and `ls*` (without). The space-separated form uses **word-boundary** matching—`ls *` matches `ls` and `ls -a` but _not_ `lsof`. The attached form uses **prefix** matching—`ls*` matches all of those, including `lsof`.
+    Note the difference between `ls *` (with a space) and `ls*` (without). The space-separated form uses **word-boundary** matching — `ls *` matches `ls` and `ls -a` but _not_ `lsof`. The attached form uses **prefix** matching — `ls*` matches all of those, including `lsof`.
 
-    For `allow` and `ask` rules, a pattern without any wildcard (for example, `git commit`) is an **exact match**—it only matches when the command words are identical. Use `git commit *` if you want to allow `git commit` with any arguments.
+    For `allow` and `ask` rules, a pattern without any wildcard (for example, `git commit`) is an **exact match** — it only matches when the command words are identical. Use `git commit *` if you want to allow `git commit` with any arguments.
 
-    For `deny` rules, a pattern without any wildcard (for example, `rm`) is a **prefix match**—it matches any command that starts with that prefix. This means that a `deny` rule of `rm` would deny `rm`, `rm -rf /`, and `rm ./README.md` so be careful when writing `deny` rules without explicit wildcards.
+    For `deny` rules, a pattern without any wildcard (for example, `rm`) is a **prefix match** — it matches any command that starts with that prefix. This means that a `deny` rule of `rm` would deny `rm`, `rm -rf /`, and `rm ./README.md` so be careful when writing `deny` rules without explicit wildcards.
 
 !!! warning "Compound Commands"
 

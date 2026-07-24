@@ -233,7 +233,7 @@ $env.config = (
 
 ### Prefix mode
 
-The shortcuts above that start with ++ctrl+a++ use **prefix mode**—a two-step key combination. Pressing the prefix key (++ctrl+a++ by default) enters prefix mode, then the next key you press triggers the action. Prefix mode exits automatically after the action runs.
+The shortcuts above that start with ++ctrl+a++ use **prefix mode** — a two-step key combination. Pressing the prefix key (++ctrl+a++ by default) enters prefix mode, then the next key you press triggers the action. Prefix mode exits automatically after the action runs.
 
 This is useful for less-frequent actions that don't need a dedicated shortcut. The prefix key can be changed with the [`prefix`](config.md#prefix) setting, and the bindings themselves can be customized with [`[keymap.prefix]`](advanced-key-binding.md#custom-prefix-bindings).
 

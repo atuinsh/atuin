@@ -44,9 +44,9 @@ Default: `"auto"`
 
 How the client talks to the configured `endpoint`. One of:
 
-- `"auto"`—infer from `endpoint`: official Atuin addresses use the Hub protocol, anything else is treated as an OSS server.
-- `"hub"`—treat the endpoint as an Atuin Hub instance: log in via the browser-based Hub flow and report credit usage. Mostly useful for developing against a local Hub instance.
-- `"oss"`—treat the endpoint as a standalone AI server, such as [`atuin-ai-server`](https://github.com/atuinsh/atuin-ai-server). No login flow; requests are authenticated with `api_token` if set.
+- `"auto"` — infer from `endpoint`: official Atuin addresses use the Hub protocol, anything else is treated as an OSS server.
+- `"hub"` — treat the endpoint as an Atuin Hub instance: log in via the browser-based Hub flow and report credit usage. Mostly useful for developing against a local Hub instance.
+- `"oss"` — treat the endpoint as a standalone AI server, such as [`atuin-ai-server`](https://github.com/atuinsh/atuin-ai-server). No login flow; requests are authenticated with `api_token` if set.
 
 With the default of `"auto"`, pointing `endpoint` at your own server just works: set `api_token` if your server requires one.
 
@@ -72,7 +72,7 @@ Whether to include the "history search" capability in the context sent to the LL
 
 Default: `true`
 
-Whether to include the "history output" capability in the context sent to the LLM. The AI can then request to view the output of previous commands. This requires the [pty-proxy](../reference/pty-proxy.md) and [daemon](../reference/daemon.md) to be enabled and running in order for Atuin to capture commands' outputs—see [Reading Command Output](./command-output.md) for setup.
+Whether to include the "history output" capability in the context sent to the LLM. The AI can then request to view the output of previous commands. This requires the [pty-proxy](../reference/pty-proxy.md) and [daemon](../reference/daemon.md) to be enabled and running in order for Atuin to capture commands' outputs — see [Reading Command Output](./command-output.md) for setup.
 
 ### `enable_file_tools`
 

@@ -18,7 +18,7 @@ or when a machine ends up holding records encrypted with a key it no longer has.
 
 ### `atuin store status`
 
-Print the current state of the record store—how many records exist locally,
+Print the current state of the record store — how many records exist locally,
 per tag and per host.
 
 ```shell
@@ -35,7 +35,7 @@ Check that every local record can be decrypted with your current key.
 atuin store verify
 ```
 
-Failures mean some records were written with a different key—usually because
+Failures mean some records were written with a different key — usually because
 a machine was logged in with an old key, or a key was regenerated.
 
 ### `atuin store purge`
@@ -70,7 +70,7 @@ atuin store rekey
 
 ### `atuin store rebuild <TAG>`
 
-Rebuild derived state from the record store—for example, regenerate the
+Rebuild derived state from the record store — for example, regenerate the
 history database from `history` records.
 
 ```shell

@@ -271,7 +271,7 @@ After installing, remember to restart your shell.
 
     ??? tip "Optional: Atuin pty-proxy"
         pty-proxy is a lightweight pty proxy that renders the Atuin popup over
-        your previous output, restoring it when closed—no clearing, no
+        your previous output, restoring it when closed — no clearing, no
         fullscreen. To use pty-proxy with Nushell, generate the init script:
 
         ```shell

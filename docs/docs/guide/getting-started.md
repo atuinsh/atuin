@@ -34,7 +34,7 @@ Atuin only records commands run after it's installed, so bring the old ones in:
 atuin import auto
 ```
 
-This detects your shell and imports from its history file, which stays untouched—your shell keeps writing to it as usual. See [Import existing history](import.md) for
+This detects your shell and imports from its history file, which stays untouched — your shell keeps writing to it as usual. See [Import existing history](import.md) for
 importing from a specific shell or a non-default file.
 
 ## 3. Set up sync (optional)
@@ -47,7 +47,7 @@ atuin register -u <USERNAME> -e <EMAIL>
 atuin sync
 ```
 
-Registration generates an encryption key. **Save it somewhere safe**—you'll
+Registration generates an encryption key. **Save it somewhere safe** — you'll
 need it to log in on any other machine, and it can't be recovered. See
 [Setting up sync](sync.md) for the details, including logging in elsewhere.
 
@@ -58,13 +58,13 @@ and not synchronized.
 
 Once you're up and running:
 
-- [Basic usage](basic-usage.md)—what Atuin records, and how to drive the TUI
-- [Filter and search modes](advanced-usage.md)—narrow searches to this
+- [Basic usage](basic-usage.md) — what Atuin records, and how to drive the TUI
+- [Filter and search modes](advanced-usage.md) — narrow searches to this
   directory, this machine, or this session
-- [Key bindings](../configuration/key-binding.md)—including how to
+- [Key bindings](../configuration/key-binding.md) — including how to
   [disable the up arrow binding](../configuration/key-binding.md#disable-up-arrow)
   if it isn't for you
-- [Config](../configuration/config.md)—every setting, including an
+- [Config](../configuration/config.md) — every setting, including an
   [inline window](../configuration/config.md#inline_height) instead of full screen
 
 ## Getting help
