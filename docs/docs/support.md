@@ -18,19 +18,19 @@ Feature coverage varies by shell:
 <table>
   <thead>
     <tr>
-      <th>Tier</th><th>Shell</th><th>History search</th><th>Inline popup</th>
+      <th class="tier">Tier</th><th>Shell</th><th>History search</th><th>Inline popup</th>
       <th>Dotfiles</th><th>Atuin AI</th><th>pty-proxy</th>
     </tr>
   </thead>
   <tbody>
     <tr>
-      <td rowspan="3"><strong>1</strong></td>
+      <td rowspan="3" class="tier"><strong>1</strong></td>
       <td>zsh</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td>
     </tr>
     <tr><td>bash</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td></tr>
     <tr><td>fish</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td></tr>
     <tr>
-      <td rowspan="3"><strong>2</strong></td>
+      <td rowspan="3" class="tier"><strong>2</strong></td>
       <td>nushell</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-no">✗</td><td class="support-no">✗</td><td class="support-yes">✓</td>
     </tr>
     <tr><td>xonsh</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-no">✗</td></tr>
@@ -49,12 +49,12 @@ and how far continuous integration (CI) exercises it.
 <table>
   <thead>
     <tr>
-      <th>Tier</th><th>OS</th><th>Arch</th><th>Prebuilt</th><th>CI</th><th>Notes</th>
+      <th class="tier">Tier</th><th>OS</th><th>Arch</th><th>Prebuilt</th><th>CI</th><th>Notes</th>
     </tr>
   </thead>
   <tbody>
     <tr>
-      <td rowspan="6"><strong>1</strong></td>
+      <td rowspan="6" class="tier"><strong>1</strong></td>
       <td rowspan="2"><code>Linux</code></td>
       <td><code>x86_64</code></td><td class="support-yes">✓</td><td>tested</td><td></td>
     </tr>
@@ -71,7 +71,7 @@ and how far continuous integration (CI) exercises it.
     </tr>
     <tr><td><code>WSL-2</code></td><td><code>x86_64</code></td><td class="support-yes">✓</td><td>tested</td><td></td></tr>
     <tr>
-      <td rowspan="2"><strong>2</strong></td>
+      <td rowspan="2" class="tier"><strong>2</strong></td>
       <td><code>Illumos</code></td><td><code>x86_64</code></td><td class="support-no">✗</td><td>build-only</td>
       <td></td>
     </tr>

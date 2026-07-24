@@ -582,8 +582,8 @@
   color: #c62828;
 }
 
-.md-typeset .support-matrix table td:first-child,
-.md-typeset .support-matrix table th:first-child {
+.md-typeset .support-matrix table th.tier,
+.md-typeset .support-matrix table td.tier {
   min-width: 0;
   width: 1%;
   white-space: nowrap;
