@@ -45,35 +45,35 @@ and how far continuous integration (CI) exercises it.
 <table>
   <thead>
     <tr>
-      <th>Tier</th><th>OS</th><th>Arch</th><th>Prebuilt binary</th><th>CI</th><th>Notes</th>
+      <th>Tier</th><th>OS</th><th>Arch</th><th>Prebuilt</th><th>CI</th><th>Notes</th>
     </tr>
   </thead>
   <tbody>
     <tr>
       <td rowspan="6"><strong>1</strong></td>
-      <td rowspan="2"><code>linux</code></td>
+      <td rowspan="2"><code>Linux</code></td>
       <td><code>x86_64</code></td><td>✓</td><td>tested</td><td></td>
     </tr>
     <tr><td><code>arm64</code></td><td>✓</td><td>build-only</td><td></td></tr>
     <tr>
-      <td rowspan="2"><code>macos</code></td>
+      <td rowspan="2"><code>macOS</code></td>
       <td><code>arm64</code></td><td>✓</td><td>tested</td>
       <td rowspan="2">Replaying a result with <kbd>alt</kbd>+<kbd>#</kbd> isn't available.</td>
     </tr>
     <tr><td><code>x86_64</code></td><td>✓</td><td>build-only</td></tr>
     <tr>
-      <td><code>windows</code></td><td><code>x86_64</code></td><td>✓</td><td>tested</td>
-      <td>No syntax highlighting or pty-proxy.</td>
+      <td><code>Windows</code></td><td><code>x86_64</code></td><td>✓</td><td>tested</td>
+      <td>No syntax highlighting or <code>pty-proxy</code>.</td>
     </tr>
-    <tr><td><code>wsl2</code></td><td><code>x86_64</code></td><td>✓</td><td>tested</td><td></td></tr>
+    <tr><td><code>WSL-2</code></td><td><code>x86_64</code></td><td>✓</td><td>tested</td><td></td></tr>
     <tr>
       <td rowspan="2"><strong>2</strong></td>
-      <td><code>illumos</code></td><td><code>x86_64</code></td><td>✗</td><td>build-only</td>
-      <td>Build from source.</td>
+      <td><code>Illumos</code></td><td><code>x86_64</code></td><td>✗</td><td>build-only</td>
+      <td></td>
     </tr>
     <tr>
-      <td><em>other</em></td><td>—</td><td>✗</td><td>✗</td>
-      <td>Build from source; untested. Needs a C toolchain.</td>
+      <td><em>Other</em></td><td>—</td><td>✗</td><td>✗</td>
+      <td>Build from source.</td>
     </tr>
   </tbody>
 </table>
