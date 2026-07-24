@@ -150,7 +150,7 @@ impl From<Dialect> for interim::Dialect {
     }
 }
 
-use atuin_common::time::Timezone;
+use atuin_common::time::UtcOffsetSpec;
 
 #[derive(Clone, Debug, Deserialize, Copy, Serialize)]
 pub enum Style {
@@ -955,7 +955,7 @@ impl Default for Ui {
 pub struct Settings {
     pub data_dir: Option<String>,
     pub dialect: Dialect,
-    pub timezone: Timezone,
+    pub timezone: UtcOffsetSpec,
     pub style: Style,
     pub auto_sync: bool,
     pub update_check: bool,
@@ -1742,7 +1742,7 @@ mod tests {
     use eyre::Result;
     use rstest::rstest;
 
-    use super::{AiEndpointProtocol, Settings, Timezone};
+    use super::{AiEndpointProtocol, Settings, UtcOffsetSpec};
     use url::Url;
 
     #[rstest]
@@ -1767,7 +1767,7 @@ mod tests {
         #[case] input: &str,
         #[case] expected: (i8, i8, i8),
     ) -> Result<()> {
-        assert_eq!(Timezone::from_str(input)?.0.as_hms(), expected);
+        assert_eq!(UtcOffsetSpec::from_str(input)?.0.as_hms(), expected);
         Ok(())
     }
 
@@ -1776,7 +1776,7 @@ mod tests {
     #[case::bare_hour("5")]
     #[case::bare_hour_minutes("10:30")]
     fn rejects_timezone_spec_without_leading_sign(#[case] input: &str) {
-        assert!(Timezone::from_str(input).is_err());
+        assert!(UtcOffsetSpec::from_str(input).is_err());
     }
 
     #[rstest]

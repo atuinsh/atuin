@@ -5,7 +5,7 @@ use std::{
 };
 
 use atuin_common::logs::LogConfig;
-use atuin_common::time::{DurationExt, OffsetDateTimeExt, Timezone};
+use atuin_common::time::{DurationExt, OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::{
     string::{EscapeNonPrintablePosixExt as _, NonNulStr},
     utils,
@@ -122,7 +122,7 @@ pub enum Cmd {
         /// - the special value "local" (or "l") which refers to the system time zone
         /// - an offset from UTC (e.g. "+9", "-2:30")
         #[arg(long, visible_alias = "tz", verbatim_doc_comment)]
-        timezone: Option<Timezone>,
+        timezone: Option<UtcOffsetSpec>,
 
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {author}, {intent}, {exit}, {time}, {session}, and {uuid}
         ///
@@ -147,7 +147,7 @@ pub enum Cmd {
         /// - the special value "local" (or "l") which refers to the system time zone
         /// - an offset from UTC (e.g. "+9", "-2:30")
         #[arg(long, visible_alias = "tz", verbatim_doc_comment)]
-        timezone: Option<Timezone>,
+        timezone: Option<UtcOffsetSpec>,
 
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {author}, {intent}, {time}, {session}, {uuid} and {relativetime}.
         ///
@@ -207,7 +207,7 @@ pub fn print_list(
     format: Option<&str>,
     print0: bool,
     reverse: bool,
-    tz: Timezone,
+    tz: UtcOffsetSpec,
 ) {
     let w = std::io::stdout();
     let mut w = w.lock();
@@ -301,7 +301,7 @@ fn check_for_write_errors(write: Result<(), io::Error>) {
 struct FmtHistory<'a> {
     history: &'a History,
     cmd_format: CmdFormat,
-    tz: &'a Timezone,
+    tz: &'a UtcOffsetSpec,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -700,7 +700,7 @@ impl TailEvent {
         })
     }
 
-    fn render(&self, tty: bool, tz: Timezone) -> Result<String> {
+    fn render(&self, tty: bool, tz: UtcOffsetSpec) -> Result<String> {
         if tty {
             Ok(self.render_pretty(tz))
         } else {
@@ -710,7 +710,7 @@ impl TailEvent {
         }
     }
 
-    fn render_json(&self, tz: Timezone) -> Result<String> {
+    fn render_json(&self, tz: UtcOffsetSpec) -> Result<String> {
         let payload = TailJsonEvent {
             event: self.kind.as_str(),
             history: TailJsonHistory {
@@ -750,7 +750,7 @@ impl TailEvent {
         Ok(serde_json::to_string(&payload)?)
     }
 
-    fn render_pretty(&self, tz: Timezone) -> String {
+    fn render_pretty(&self, tz: UtcOffsetSpec) -> String {
         let mut out = String::new();
         let border = match self.kind {
             TailKind::Started => "-".repeat(72).bright_blue().to_string(),
@@ -946,7 +946,7 @@ impl Cmd {
         include_deleted: bool,
         print0: bool,
         reverse: bool,
-        tz: Timezone,
+        tz: UtcOffsetSpec,
     ) -> Result<()> {
         let filters = match (session, cwd) {
             (true, true) => [Session, Directory],
@@ -1354,7 +1354,7 @@ mod tests {
     #[test]
     fn test_tail_json_output_contains_history_fields() {
         let json = sample_tail_event(TailKind::Ended)
-            .render(false, Timezone(time::UtcOffset::UTC))
+            .render(false, UtcOffsetSpec(time::UtcOffset::UTC))
             .unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
@@ -1369,7 +1369,7 @@ mod tests {
     #[test]
     fn test_tail_pretty_output_shows_pending_fields_for_started_events() {
         let rendered = sample_tail_event(TailKind::Started)
-            .render(true, Timezone(time::UtcOffset::UTC))
+            .render(true, UtcOffsetSpec(time::UtcOffset::UTC))
             .unwrap();
         let plain = regex::Regex::new(r"\x1b\[[0-9;]*m")
             .unwrap()

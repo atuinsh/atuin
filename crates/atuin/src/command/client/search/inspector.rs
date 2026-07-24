@@ -16,7 +16,7 @@ use ratatui::{
     widgets::{Bar, BarChart, BarGroup, Block, Borders, Padding, Paragraph, Row, Table},
 };
 
-use atuin_common::time::{DurationExt, Timezone};
+use atuin_common::time::{DurationExt, UtcOffsetSpec};
 
 use super::super::theme::{Meaning, Theme};
 use super::interactive::{Compactness, to_compactness};
@@ -114,7 +114,7 @@ pub fn draw_stats_table(
     f: &mut Frame<'_>,
     parent: Rect,
     history: &History,
-    tz: Timezone,
+    tz: UtcOffsetSpec,
     stats: &HistoryStats,
     theme: &Theme,
 ) {
@@ -292,7 +292,7 @@ pub fn draw(
     stats: &HistoryStats,
     settings: &Settings,
     theme: &Theme,
-    tz: Timezone,
+    tz: UtcOffsetSpec,
 ) {
     let compactness = to_compactness(f, settings);
 
@@ -318,7 +318,7 @@ pub fn draw_full(
     history: &History,
     stats: &HistoryStats,
     theme: &Theme,
-    tz: Timezone,
+    tz: UtcOffsetSpec,
 ) {
     let vert_layout = Layout::default()
         .direction(Direction::Vertical)

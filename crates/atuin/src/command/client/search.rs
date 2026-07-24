@@ -25,7 +25,7 @@ mod interactive;
 pub mod keybindings;
 mod syntax;
 
-use atuin_common::time::Timezone;
+use atuin_common::time::UtcOffsetSpec;
 
 #[allow(clippy::struct_excessive_bools, clippy::struct_field_names)]
 #[derive(Parser, Debug)]
@@ -121,7 +121,7 @@ pub struct Cmd {
     // `Option<Option<T>>` field type), so let's keep supporting it to avoid breaking existing
     // scripts.
     #[arg(allow_hyphen_values = true, num_args = 0..=1)]
-    timezone: Option<Timezone>,
+    timezone: Option<UtcOffsetSpec>,
 
     /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and
     /// {relativetime}.

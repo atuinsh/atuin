@@ -200,9 +200,9 @@ pub static YMD_HM: &[FormatItem<'_>] =
 #[cfg(test)]
 mod tests {
     use super::*;
-    use time::macros::datetime;
     use proptest::prelude::*;
     use rstest::rstest;
+    use time::macros::datetime;
 
     fn expected_nanos(secs: i128, nsecs: i128) -> Option<i128> {
         secs.checked_mul(1_000_000_000)?.checked_add(nsecs)
@@ -330,7 +330,10 @@ mod tests {
     #[case::negative_year(datetime!(-0044-03-15 00:00:00 UTC))]
     #[case::max(datetime!(9999-12-31 23:59:59 UTC))]
     fn display_matches_the_format_descriptors(#[case] t: OffsetDateTime) {
-        assert_eq!(t.display().ymd_hms().to_string(), t.format(YMD_HMS).unwrap());
+        assert_eq!(
+            t.display().ymd_hms().to_string(),
+            t.format(YMD_HMS).unwrap()
+        );
         assert_eq!(t.display().ymd_hm().to_string(), t.format(YMD_HM).unwrap());
     }
 
