@@ -476,7 +476,12 @@ impl Database for Sqlite {
         for filter in filters {
             match filter {
                 FilterMode::Global => &mut query,
-                FilterMode::Host => query.and_where_eq("hostname", quote(&context.hostname)),
+                FilterMode::Host => query.and_where_eq(
+                    // Case-insensitive, matching `search()` - the reported casing of a
+                    // hostname changes over time. lower() is indexed as an expression.
+                    "lower(hostname)",
+                    quote(context.hostname.to_lowercase()),
+                ),
                 FilterMode::Session => query.and_where_eq("session", quote(&context.session)),
                 FilterMode::SessionPreload => {
                     query.and_where_eq("session", quote(&context.session));
