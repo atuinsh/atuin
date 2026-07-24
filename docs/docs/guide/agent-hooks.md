@@ -74,6 +74,8 @@ Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `openco
 
 ## Supported Agents
 
+For support tiers, see [Supported platforms](../support.md).
+
 ### Claude Code
 
 ```shell

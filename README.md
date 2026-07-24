@@ -70,12 +70,9 @@ I wanted to. And I **really** don't want to.
 
 ## Supported Shells
 
-- zsh
-- bash
-- fish
-- nushell
-- xonsh
-- powershell (tier 2 support)
+Atuin supports zsh, bash, fish, nushell, xonsh, and PowerShell. See
+[Supported platforms](https://docs.atuin.sh/support/) for the full matrix and
+what each tier means.
 
 ## Community
 

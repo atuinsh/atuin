@@ -38,9 +38,10 @@ walks through the same thing with more explanation. From there,
 [Basic usage](guide/basic-usage.md) covers driving the TUI, and
 [Config](configuration/config.md) documents every setting.
 
-## Supported shells
+## Supported platforms
 
-zsh, bash, fish, nushell, xonsh, and PowerShell (tier 2 support).
+Atuin supports zsh, bash, fish, nushell, xonsh, and PowerShell. See
+[Supported platforms](support.md) for the full matrix and what each tier means.
 
 ## Getting help
 
