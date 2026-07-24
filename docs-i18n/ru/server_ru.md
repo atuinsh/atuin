@@ -68,10 +68,10 @@ ATUIN_DB_URI="postgres://user:password@hostname/database"
 
 ## Docker
 
-Поддерживается образ Docker чтобы сделать проще развертывание сервера в контейнере.
+Поддерживается образ Docker чтобы сделать проще развертывание сервера в контейнере. Тег `latest` не публикуется, поэтому найдите номер последнего релиза на [странице релизов](https://github.com/atuinsh/atuin/releases) и подставьте его вместо `<LATEST TAGGED RELEASE>`.
 
 ```sh
-docker run -d -v "$USER/.config/atuin:/config" ghcr.io/atuinsh/atuin:latest server start
+docker run -d -v "$USER/.config/atuin:/config" ghcr.io/atuinsh/atuin:<LATEST TAGGED RELEASE> start
 ```
 
 ## Docker Compose
@@ -94,8 +94,8 @@ version: '3.5'
 services:
   atuin:
     restart: always
-    image: ghcr.io/atuinsh/atuin:main
-    command: server start
+    image: ghcr.io/atuinsh/atuin:<LATEST TAGGED RELEASE>
+    command: start
     volumes:
       - "./config:/config"
     links:

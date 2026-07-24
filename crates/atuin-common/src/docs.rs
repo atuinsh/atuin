@@ -3,18 +3,7 @@
 //! docs.atuin.sh is versioned with mike, and the three kinds of version it
 //! publishes are not equally durable (see `.github/actions/docs-deploy-*`):
 //!
-//! - a stable release publishes an `X.Y` directory, kept forever
-//! - `main` tracks unreleased docs and is never pruned
-//! - a prerelease publishes its *full* version, which is pruned as soon as the
-//!   matching stable release lands
-//!
-//! So a prerelease build must not link to its own preview: those links would
-//! start 404ing the moment the release it previews ships. Only stable builds
-//! pin to themselves; everything else points at `main`, which is both durable
-//! and the closest match for a build that is ahead of the last release.
-//!
-//! `atuin-common` shares the workspace version, so `CARGO_PKG_VERSION` here is
-//! the version of the binary being built.
+//! TODO(markovejnovic): This file is debt and slop. Probably doesn't belong in atuin-common even.
 
 /// The docs.atuin.sh version segment matching this build.
 pub const VERSION: &str = version_segment(env!("CARGO_PKG_VERSION"));
@@ -29,14 +18,12 @@ const fn version_segment(version: &str) -> &str {
 
     let mut i = 0;
     while i < bytes.len() {
-        // A prerelease has no directory that outlives the release it previews.
         if bytes[i] == b'-' {
             return "main";
         }
         i += 1;
     }
 
-    // Stable releases are published as `X.Y`, so cut at the second dot.
     let mut end = 0;
     let mut dots = 0;
     while end < bytes.len() {
@@ -51,7 +38,6 @@ const fn version_segment(version: &str) -> &str {
 
     match std::str::from_utf8(bytes.split_at(end).0) {
         Ok(segment) => segment,
-        // Unreachable: an ASCII-delimited prefix of a `str` is still UTF-8.
         Err(_) => "main",
     }
 }
