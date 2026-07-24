@@ -190,8 +190,6 @@ impl HistorySvc for HistoryGrpcService {
         if let Some((_, mut history)) = self.inner.running.remove(&id) {
             history.exit = req.exit;
             history.duration = match req.duration {
-                // saturating: a clock that moved backwards must not persist a negative
-                // duration, and must not take the daemon down either
                 0 => i64::try_from(
                     OffsetDateTime::now_utc()
                         .saturating_duration_since(history.timestamp)

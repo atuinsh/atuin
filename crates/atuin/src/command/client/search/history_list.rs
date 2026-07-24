@@ -269,7 +269,7 @@ impl DrawState<'_> {
             Meaning::AlertError
         });
         let duration = Duration::saturating_from_nanos_i64(h.duration);
-        let formatted = duration.display().compact().to_string();
+        let formatted = duration.display().largest_unit().to_string();
         let w = width as usize;
         // Right-align within the column, ellipsizing if it somehow overflows.
         let display = formatted.pad_ellipsize(
@@ -287,7 +287,7 @@ impl DrawState<'_> {
         let time = (self.now)()
             .saturating_duration_since(h.timestamp)
             .display()
-            .compact();
+            .largest_unit();
 
         // Format as "Xs ago" right-aligned within column width
         let w = width as usize;

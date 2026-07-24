@@ -94,28 +94,38 @@ impl OffsetDateTimeDisplay {
         self.style = OffsetDateTimeStyle::YmdHm;
         self
     }
-
-    /// Render with a style chosen at runtime.
-    #[must_use]
-    pub const fn with_style(mut self, style: OffsetDateTimeStyle) -> Self {
-        self.style = style;
-        self
-    }
 }
-
-/// `format` fails only when the type lacks a component the description asks for, or on
-/// an IO error writing the output -- neither of which can happen for an `OffsetDateTime`
-/// and a description built from date and time components.
-pub const DATETIME_FMT_ERROR: &str = "an OffsetDateTime has every component YMD_HM(S) asks for";
 
 impl fmt::Display for OffsetDateTimeDisplay {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let description = match self.style {
-            OffsetDateTimeStyle::YmdHms => YMD_HMS,
-            OffsetDateTimeStyle::YmdHm => YMD_HM,
-        };
+        // Written component-by-component rather than via `OffsetDateTime::format`, which
+        // returns a `Result` that cannot actually fail here. Threading that back through
+        // `Display` would only relocate the panic: `ToString::to_string` expects on an
+        // `Err`. This way there is nothing to fail.
+        let t = self.datetime;
 
-        f.write_str(&self.datetime.format(description).expect(DATETIME_FMT_ERROR))
+        // `{:04}` counts the sign toward the width, so a negative year has to be padded
+        // by hand: year -44 is `-0044`, not `-044`.
+        let year = t.year();
+        if year < 0 {
+            write!(f, "-{:04}", -year)?;
+        } else {
+            write!(f, "{year:04}")?;
+        }
+
+        write!(
+            f,
+            "-{:02}-{:02} {:02}:{:02}",
+            t.month() as u8,
+            t.day(),
+            t.hour(),
+            t.minute()
+        )?;
+
+        match self.style {
+            OffsetDateTimeStyle::YmdHms => write!(f, ":{:02}", t.second()),
+            OffsetDateTimeStyle::YmdHm => Ok(()),
+        }
     }
 }
 
@@ -190,6 +200,7 @@ pub static YMD_HM: &[FormatItem<'_>] =
 #[cfg(test)]
 mod tests {
     use super::*;
+    use time::macros::datetime;
     use proptest::prelude::*;
     use rstest::rstest;
 
@@ -305,8 +316,22 @@ mod tests {
     #[test]
     fn datetime_formats_render_as_documented() {
         let t = OffsetDateTime::from_unix_nanos_i64(1_705_934_107_000_000_000);
-        assert_eq!(t.format(YMD_HMS).unwrap(), "2024-01-22 14:35:07");
-        assert_eq!(t.format(YMD_HM).unwrap(), "2024-01-22 14:35");
+        assert_eq!(t.display().ymd_hms().to_string(), "2024-01-22 14:35:07");
+        assert_eq!(t.display().ymd_hm().to_string(), "2024-01-22 14:35");
+    }
+
+    /// The `Display` impl writes components by hand so that it cannot fail. These
+    /// descriptors are the specification it has to match -- including the padding of a
+    /// negative year, where a naive `{:04}` would render `-044` instead of `-0044`.
+    #[rstest]
+    #[case::epoch(OffsetDateTime::UNIX_EPOCH)]
+    #[case::single_digit_components(datetime!(2024-02-06 04:05:06 UTC))]
+    #[case::year_one(datetime!(0001-01-01 00:00:00 UTC))]
+    #[case::negative_year(datetime!(-0044-03-15 00:00:00 UTC))]
+    #[case::max(datetime!(9999-12-31 23:59:59 UTC))]
+    fn display_matches_the_format_descriptors(#[case] t: OffsetDateTime) {
+        assert_eq!(t.display().ymd_hms().to_string(), t.format(YMD_HMS).unwrap());
+        assert_eq!(t.display().ymd_hm().to_string(), t.format(YMD_HM).unwrap());
     }
 
     #[allow(clippy::disallowed_methods)]

@@ -29,12 +29,12 @@ pub trait DurationExt<D> {
 
     /// Begin rendering this duration.
     ///
-    /// Pick a style with [`DurationDisplay::compact`] or [`DurationDisplay::stopwatch`];
+    /// Pick a style with [`DurationDisplay::largest_unit`] or [`DurationDisplay::stopwatch`];
     /// the result implements [`Display`](fmt::Display).
     ///
     /// ```ignore
-    /// duration.display().stopwatch()  // 1h2m3s
-    /// duration.display().compact()    // 1h
+    /// duration.display().stopwatch()     // 1h2m3s
+    /// duration.display().largest_unit()  // 1h
     /// ```
     fn display(self) -> DurationDisplay;
 }
@@ -42,17 +42,14 @@ pub trait DurationExt<D> {
 /// How a [`DurationDisplay`] renders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DurationStyle {
-    /// The most significant unit only: `1s`, `3d`, `814ms`, `0s`.
-    ///
-    /// Deliberately lossy -- sized for narrow, right-aligned terminal columns where a
-    /// full breakdown would not fit. Scales all the way up to years.
+    /// The largest non-zero unit only: `1s`, `3d`, `814ms`, `0s`.
     #[default]
-    Compact,
+    LargestUnit,
     /// A stopwatch readout: `1h2m3s`, `1m30s`, `1.234s`, `5ms`.
     ///
     /// Keeps everything down to seconds, and sub-second resolution when that is all
     /// there is. Like a real stopwatch it never rolls past hours, so a three-day
-    /// duration reads `72h0m0s` -- use [`Compact`](Self::Compact) if that matters.
+    /// duration reads `72h0m0s`.
     Stopwatch,
 }
 
@@ -64,10 +61,10 @@ pub struct DurationDisplay {
 }
 
 impl DurationDisplay {
-    /// Render as [`DurationStyle::Compact`].
+    /// Render as [`DurationStyle::LargestUnit`].
     #[must_use]
-    pub const fn compact(mut self) -> Self {
-        self.style = DurationStyle::Compact;
+    pub const fn largest_unit(mut self) -> Self {
+        self.style = DurationStyle::LargestUnit;
         self
     }
 
@@ -78,14 +75,7 @@ impl DurationDisplay {
         self
     }
 
-    /// Render with a style chosen at runtime.
-    #[must_use]
-    pub const fn with_style(mut self, style: DurationStyle) -> Self {
-        self.style = style;
-        self
-    }
-
-    fn fmt_compact(self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt_largest_unit(self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fn item(unit: &'static str, value: u64) -> ControlFlow<(&'static str, u64)> {
             if value > 0 {
                 ControlFlow::Break((unit, value))
@@ -164,7 +154,7 @@ impl DurationDisplay {
 impl fmt::Display for DurationDisplay {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.style {
-            DurationStyle::Compact => self.fmt_compact(f),
+            DurationStyle::LargestUnit => self.fmt_largest_unit(f),
             DurationStyle::Stopwatch => self.fmt_stopwatch(f),
         }
     }
@@ -283,11 +273,13 @@ mod tests {
     #[case::sub_second(814_000_000, "814ms")]
     #[case::seconds(1_500_000_000, "1s")]
     #[case::minutes(90_000_000_000, "1m")]
+    // truncates rather than rounds
+    #[case::truncates_not_rounds(7_199_000_000_000, "1h")]
     fn format_duration_shows_most_significant_unit(#[case] nanos: u64, #[case] expected: &str) {
         assert_eq!(
             std::time::Duration::from_nanos(nanos)
                 .display()
-                .compact()
+                .largest_unit()
                 .to_string(),
             expected
         );
@@ -298,11 +290,11 @@ mod tests {
     #[case::millis(5_000_000, "5ms")]
     #[case::sub_second_only(814_000_000, "814ms")]
     #[case::whole_second(1_000_000_000, "1s")]
-    // sub-second precision is kept, unlike the compact style
+    // sub-second precision is kept, unlike the largest-unit style
     #[case::fractional_second(1_234_000_000, "1.234s")]
     #[case::minutes(90_000_000_000, "1m30s")]
     #[case::hours(3_723_000_000_000, "1h2m3s")]
-    // never rolls past hours, unlike the compact style
+    // never rolls past hours, unlike the largest-unit style
     #[case::days_stay_in_hours(259_200_000_000_000, "72h0m0s")]
     fn stopwatch_keeps_subsecond_resolution(#[case] nanos: i64, #[case] expected: &str) {
         assert_eq!(

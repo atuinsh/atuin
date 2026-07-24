@@ -49,7 +49,11 @@ impl UtcOffsetExt for UtcOffset {
     }
 }
 
-/// Wrapper around [`UtcOffset`] supporting a wider variety of timezone formats.
+/// A user-supplied timezone spec, resolved to a [`UtcOffset`].
+///
+/// [`UtcOffset`] is foreign, so it cannot implement `FromStr`/`Deserialize` here. This
+/// newtype carries those impls for the config file and CLI flags; convert with
+/// [`From`]/[`Into`] or read the wrapped offset directly.
 #[derive(
     Clone,
     Copy,
@@ -63,7 +67,15 @@ impl UtcOffsetExt for UtcOffset {
     derive_more::Into,
 )]
 #[display("{_0}")]
-pub struct Timezone(pub UtcOffset);
+pub struct UtcOffsetSpec(pub UtcOffset);
+
+impl FromStr for UtcOffsetSpec {
+    type Err = TimezoneDecodingError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(UtcOffset::resolve_spec(s)?.into())
+    }
+}
 
 /// format: `<+|-><hour>[:<minute>[:<second>]]`
 static OFFSET_FMT: &[FormatItem<'_>] = format_description!(
@@ -78,35 +90,26 @@ pub enum TimezoneDecodingError {
     InvalidTimezone(#[from] time::error::Parse),
 }
 
-impl FromStr for Timezone {
-    type Err = TimezoneDecodingError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(UtcOffset::resolve_spec(s)?.into())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use rstest::rstest;
 
     #[rstest]
-    #[case::local("local")]
-    #[case::l("l")]
-    #[case::utc("utc")]
-    #[case::zero("0")]
-    #[case::plus_offset("+09:30")]
-    #[case::minus_offset("-2:30")]
-    fn timezone_parses(#[case] spec: &str) {
-        assert!(Timezone::from_str(spec).is_ok());
-    }
-
-    #[rstest]
     #[case::no_sign("09:30")]
     #[case::garbage("not-a-timezone")]
-    fn timezone_rejects_invalid(#[case] spec: &str) {
-        assert!(Timezone::from_str(spec).is_err());
+    fn resolve_spec_rejects_invalid(#[case] spec: &str) {
+        assert!(UtcOffset::resolve_spec(spec).is_err());
+        assert!(UtcOffsetSpec::from_str(spec).is_err());
+    }
+
+    #[test]
+    fn spec_wraps_the_resolved_offset() {
+        let spec = UtcOffsetSpec::from_str("+09:30").unwrap();
+        assert_eq!(spec.0.as_hms(), (9, 30, 0));
+        // derive_more gives the conversion both ways
+        let offset: UtcOffset = spec.into();
+        assert_eq!(UtcOffsetSpec::from(offset), spec);
     }
 
     #[rstest]

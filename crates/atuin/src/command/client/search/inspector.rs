@@ -131,11 +131,11 @@ pub fn draw_stats_table(
         ]),
         Row::new(vec![
             "Duration".to_string(),
-            duration.display().compact().to_string(),
+            duration.display().largest_unit().to_string(),
         ]),
         Row::new(vec![
             "Avg duration".to_string(),
-            avg_duration.display().compact().to_string(),
+            avg_duration.display().largest_unit().to_string(),
         ]),
         Row::new(vec!["Exit".to_string(), history.exit.to_string()]),
         Row::new(vec!["Directory".to_string(), history.cwd.clone()]),
@@ -253,7 +253,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, them
             Bar::default()
                 .label(date.clone())
                 .value(u64_or_zero(*duration))
-                .text_value(d.display().compact().to_string())
+                .text_value(d.display().largest_unit().to_string())
         })
         .collect();
 

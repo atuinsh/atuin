@@ -334,7 +334,7 @@ impl FormatKey for FmtHistory<'_> {
             "exit" => f.write_str(&self.history.exit.to_string())?,
             "duration" => {
                 let dur = Duration::saturating_from_nanos_i64(self.history.duration);
-                write!(f, "{}", dur.display().compact())?;
+                write!(f, "{}", dur.display().largest_unit())?;
             }
             "time" => {
                 self.history
@@ -346,7 +346,7 @@ impl FormatKey for FmtHistory<'_> {
             }
             "relativetime" => {
                 let d = OffsetDateTime::now_utc().saturating_duration_since(self.history.timestamp);
-                write!(f, "{}", d.display().compact())?;
+                write!(f, "{}", d.display().largest_unit())?;
             }
             "host" => f.write_str(
                 self.history
@@ -737,7 +737,7 @@ impl TailEvent {
                 duration: self.duration_value().map(|d| {
                     Duration::saturating_from_nanos_i64(d)
                         .display()
-                        .compact()
+                        .largest_unit()
                         .to_string()
                 }),
                 success: self.success_value(),
@@ -861,7 +861,7 @@ impl TailEvent {
         match self.duration_value() {
             Some(duration) if duration >= 0 => Duration::saturating_from_nanos_i64(duration)
                 .display()
-                .compact()
+                .largest_unit()
                 .to_string(),
             Some(_) => "unknown".bright_yellow().to_string(),
             None => "running".bright_yellow().to_string(),

@@ -61,8 +61,6 @@ fn format_timestamp(history: &History, local_offset: UtcOffset) -> String {
         .to_string()
 }
 
-/// The leading comma is presentation: this slots into `format_history_metadata`'s
-/// sentence, and a non-positive duration is omitted from it entirely.
 fn format_duration(nanos: i64) -> String {
     if nanos <= 0 {
         return String::new();
