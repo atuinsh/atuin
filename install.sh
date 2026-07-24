@@ -42,14 +42,14 @@ Please file an issue or reach out on the forum if you encounter any problems!
 EOF
 
 __atuin_install_binary(){
-  curl --proto '=https' --tlsv1.2 -LsSf https://github.com/atuinsh/atuin/releases/latest/download/atuin-installer.sh | sh
+  install_script=$(curl --proto '=https' --tlsv1.2 -LsSf https://github.com/atuinsh/atuin/releases/latest/download/atuin-installer.sh)
+  echo "$install_script" | sh
 }
 
 if ! command -v curl > /dev/null; then
     echo "curl not installed. Please install curl."
     exit
 fi
-
 
 __atuin_install_binary
 
