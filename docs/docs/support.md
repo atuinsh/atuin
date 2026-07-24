@@ -7,7 +7,9 @@ tiers and records what works where.
 ## Support tiers
 
 - **Tier 1** — Actively supported by the Atuin team.
-- **Tier 2** — Actively supported by the community.
+- **Tier 2** — Supported by the community. Complex issues under this support
+               level don't block a release; support is best-effort and
+               non-blocking.
 
 ## Shells
 
@@ -23,16 +25,16 @@ Feature coverage varies by shell:
   <tbody>
     <tr>
       <td rowspan="3"><strong>1</strong></td>
-      <td>zsh</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td>
+      <td>zsh</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td>
     </tr>
-    <tr><td>bash</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
-    <tr><td>fish</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+    <tr><td>bash</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td></tr>
+    <tr><td>fish</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td></tr>
     <tr>
       <td rowspan="3"><strong>2</strong></td>
-      <td>nushell</td><td>✓</td><td>✗</td><td>✗</td><td>✗</td><td>✓</td>
+      <td>nushell</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-no">✗</td><td class="support-no">✗</td><td class="support-yes">✓</td>
     </tr>
-    <tr><td>xonsh</td><td>✓</td><td>✗</td><td>✓</td><td>✗</td><td>✗</td></tr>
-    <tr><td>PowerShell</td><td>✓</td><td>✗</td><td>✓</td><td>✗</td><td>✗</td></tr>
+    <tr><td>xonsh</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-no">✗</td></tr>
+    <tr><td>PowerShell</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-no">✗</td></tr>
   </tbody>
 </table>
 
@@ -52,27 +54,27 @@ and how far continuous integration (CI) exercises it.
     <tr>
       <td rowspan="6"><strong>1</strong></td>
       <td rowspan="2"><code>Linux</code></td>
-      <td><code>x86_64</code></td><td>✓</td><td>tested</td><td></td>
+      <td><code>x86_64</code></td><td class="support-yes">✓</td><td>tested</td><td></td>
     </tr>
-    <tr><td><code>arm64</code></td><td>✓</td><td>build-only</td><td></td></tr>
+    <tr><td><code>arm64</code></td><td class="support-yes">✓</td><td>build-only</td><td></td></tr>
     <tr>
       <td rowspan="2"><code>macOS</code></td>
-      <td><code>arm64</code></td><td>✓</td><td>tested</td>
+      <td><code>arm64</code></td><td class="support-yes">✓</td><td>tested</td>
       <td rowspan="2">Replaying a result with <kbd>alt</kbd>+<kbd>#</kbd> isn't available.</td>
     </tr>
-    <tr><td><code>x86_64</code></td><td>✓</td><td>build-only</td></tr>
+    <tr><td><code>x86_64</code></td><td class="support-yes">✓</td><td>build-only</td></tr>
     <tr>
-      <td><code>Windows</code></td><td><code>x86_64</code></td><td>✓</td><td>tested</td>
+      <td><code>Windows</code></td><td><code>x86_64</code></td><td class="support-yes">✓</td><td>tested</td>
       <td>No syntax highlighting or <code>pty-proxy</code>.</td>
     </tr>
-    <tr><td><code>WSL-2</code></td><td><code>x86_64</code></td><td>✓</td><td>tested</td><td></td></tr>
+    <tr><td><code>WSL-2</code></td><td><code>x86_64</code></td><td class="support-yes">✓</td><td>tested</td><td></td></tr>
     <tr>
       <td rowspan="2"><strong>2</strong></td>
-      <td><code>Illumos</code></td><td><code>x86_64</code></td><td>✗</td><td>build-only</td>
+      <td><code>Illumos</code></td><td><code>x86_64</code></td><td class="support-no">✗</td><td>build-only</td>
       <td></td>
     </tr>
     <tr>
-      <td><em>Other</em></td><td>—</td><td>✗</td><td>✗</td>
+      <td><em>Other</em></td><td>—</td><td class="support-no">✗</td><td class="support-no">✗</td>
       <td>Build from source.</td>
     </tr>
   </tbody>
