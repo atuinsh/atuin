@@ -180,6 +180,9 @@ pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
     // --- Copy ---
     km.bind(key("ctrl-y"), Action::Copy);
 
+    // --- Edit and accept (fc-style) ---
+    km.bind(key("ctrl-v"), Action::EditAccept);
+
     // --- Numeric shortcuts (alt-1..9 by default, ctrl-1..9 if ctrl_n_shortcuts) ---
     // These return the selection without executing, regardless of enter_accept.
     let num_mod = if settings.ctrl_n_shortcuts {
@@ -323,6 +326,9 @@ pub fn default_vim_normal_keymap(settings: &Settings) -> Keymap {
     // --- Accept ---
     let accept = accept_action(settings);
     km.bind(key("enter"), accept);
+
+    // --- Edit and accept (fc-style) ---
+    km.bind(key("ctrl-v"), Action::EditAccept);
 
     km
 }
