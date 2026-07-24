@@ -125,6 +125,8 @@ impl Importer for NuHistDb {
 
 #[cfg(test)]
 mod test {
+    use rstest::rstest;
+
     use super::*;
 
     fn entry(start_timestamp: i64, command_line: Vec<u8>) -> HistDbEntry {
@@ -141,25 +143,29 @@ mod test {
         }
     }
 
-    #[test]
-    fn valid_timestamp_is_converted() {
-        let h: History = entry(1_639_162_832_500, b"echo hello".to_vec()).into();
-        assert_eq!(h.timestamp.unix_timestamp(), 1_639_162_832);
-        assert_eq!(h.timestamp.nanosecond(), 500_000_000);
-        assert_eq!(h.command, "echo hello");
-    }
+    /// A corrupt row must degrade to something representable rather than
+    /// panicking; the command is what matters and must always survive.
+    #[rstest]
+    #[case::valid(
+        1_639_162_832_500,
+        b"echo hello",
+        1_639_162_832,
+        500_000_000,
+        "echo hello"
+    )]
+    #[case::out_of_range_timestamp(i64::MAX, b"echo hello", 0, 0, "echo hello")]
+    #[case::invalid_utf8_command(0, &[0x65, 0x63, 0x68, 0x6f, 0xff], 0, 0, "echo\u{fffd}")]
+    fn corrupt_rows_degrade(
+        #[case] start_timestamp: i64,
+        #[case] command_line: &[u8],
+        #[case] seconds: i64,
+        #[case] nanoseconds: u32,
+        #[case] command: &str,
+    ) {
+        let h: History = entry(start_timestamp, command_line.to_vec()).into();
 
-    #[test]
-    fn out_of_range_timestamp_falls_back_to_epoch() {
-        let h: History = entry(i64::MAX, b"echo hello".to_vec()).into();
-        assert_eq!(h.timestamp, OffsetDateTime::UNIX_EPOCH);
-        // the command is what matters - it must survive
-        assert_eq!(h.command, "echo hello");
-    }
-
-    #[test]
-    fn invalid_utf8_command_is_kept_lossily() {
-        let h: History = entry(0, vec![0x65, 0x63, 0x68, 0x6f, 0xff]).into();
-        assert_eq!(h.command, "echo\u{fffd}");
+        assert_eq!(h.timestamp.unix_timestamp(), seconds);
+        assert_eq!(h.timestamp.nanosecond(), nanoseconds);
+        assert_eq!(h.command, command);
     }
 }

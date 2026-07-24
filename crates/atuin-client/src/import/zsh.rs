@@ -188,6 +188,7 @@ fn unmetafy(line: &[u8]) -> Option<Cow<'_, str>> {
 #[cfg(test)]
 mod test {
     use itertools::assert_equal;
+    use rstest::rstest;
 
     use crate::import::tests::TestLoader;
 
@@ -232,32 +233,33 @@ mod test {
         );
     }
 
-    #[test]
-    fn parse_malformed_extended_lines() {
-        // none of these are valid extended history, and none may panic;
-        // they fall through to being treated as a bare command
-        let no_colon = Entry::parse(": not-extended");
-        assert_eq!(no_colon.command, ": not-extended");
-        assert_eq!(no_colon.timestamp, None);
-        assert_eq!(no_colon.duration, None);
+    /// Lines that are not valid extended history must not panic. Anything that
+    /// does not match `: <start>:<duration>;<command>` is a bare command line;
+    /// values that do match but cannot be represented are dropped or saturated.
+    #[rstest]
+    #[case::no_colon(": not-extended", ": not-extended", None, None)]
+    #[case::no_semicolon(": 1613322469:0", ": 1613322469:0", None, None)]
+    #[case::out_of_range_time(": 999999999999999:0;echo hello", "echo hello", None, Some(0))]
+    #[case::duration_saturates(
+        ": 1613322469:9223372036854775807;echo hello",
+        "echo hello",
+        Some(1_613_322_469),
+        Some(i64::MAX)
+    )]
+    fn parse_malformed_extended_lines(
+        #[case] line: &str,
+        #[case] command: &str,
+        #[case] timestamp: Option<i64>,
+        #[case] duration: Option<i64>,
+    ) {
+        let parsed = Entry::parse(line);
 
-        let no_semicolon = Entry::parse(": 1613322469:0");
-        assert_eq!(no_semicolon.command, ": 1613322469:0");
-        assert_eq!(no_semicolon.timestamp, None);
-        assert_eq!(no_semicolon.duration, None);
-    }
-
-    #[test]
-    fn parse_out_of_range_extended_values() {
-        // command survives, timestamp is dropped
-        let bad_time = Entry::parse(": 999999999999999:0;echo hello");
-        assert_eq!(bad_time.command, "echo hello");
-        assert_eq!(bad_time.timestamp, None);
-
-        // seconds -> nanos must saturate rather than overflow
-        let bad_duration = Entry::parse(": 1613322469:9223372036854775807;echo hello");
-        assert_eq!(bad_duration.command, "echo hello");
-        assert_eq!(bad_duration.duration, Some(i64::MAX));
+        assert_eq!(parsed.command, command);
+        assert_eq!(
+            parsed.timestamp.map(OffsetDateTime::unix_timestamp),
+            timestamp
+        );
+        assert_eq!(parsed.duration, duration);
     }
 
     #[tokio::test]
