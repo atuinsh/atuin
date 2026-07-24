@@ -13,14 +13,14 @@ tiers and records what works where.
 
 Feature coverage varies by shell:
 
-| Shell | History search | Inline popup | Dotfiles | Atuin AI | pty-proxy |
-| ----- | :---: | :---: | :---: | :---: | :---: |
-| zsh (T1) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| bash (T1) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| fish (T1) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| nushell (T2) | ✓ | ✗ | ✗ | ✗ | ✓ |
-| xonsh (T2) | ✓ | ✗ | ✓ | ✗ | ✗ |
-| PowerShell (T2) | ✓ | ✗ | ✓ | ✗ | ✗ |
+| Tier | Shell | History search | Inline popup | Dotfiles | Atuin AI | pty-proxy |
+| :--: | ----- | :---: | :---: | :---: | :---: | :---: |
+| 1 | zsh | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 1 | bash | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 1 | fish | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 2 | nushell | ✓ | ✗ | ✗ | ✗ | ✓ |
+| 2 | xonsh | ✓ | ✗ | ✓ | ✗ | ✗ |
+| 2 | PowerShell | ✓ | ✗ | ✓ | ✗ | ✗ |
 
 ## Operating systems and architectures
 
@@ -28,16 +28,16 @@ Atuin runs on a range of operating systems and CPU architectures. The matrix
 below shows, for each platform, whether an official prebuilt binary is published
 and how far continuous integration (CI) exercises it.
 
-| Platform | Prebuilt binary | CI | Notes |
-| --- | :--: | :--: | --- |
-| `linux-x86_64` | ✓ | tested | |
-| `linux-arm64` | ✓ | build-only | |
-| `macos-arm64` | ✓ | tested | Replaying a result with ++alt+"&num;"++ isn't available. |
-| `macos-x86_64` | ✓ | build-only | Replaying a result with ++alt+"&num;"++ isn't available. |
-| `windows-x86_64` | ✓ | tested | No syntax highlighting or pty-proxy. |
-| `wsl2-x86_64` | ✓ | tested | |
-| `illumos-x86_64` | ✗ | build-only | Build from source. |
-| Other | ✗ | ✗ | Build from source; untested. Needs a C toolchain. |
+| Tier | Platform | Prebuilt binary | CI | Notes |
+| :--: | --- | :--: | :--: | --- |
+| 1 | `linux-x86_64` | ✓ | tested | |
+| 1 | `linux-arm64` | ✓ | build-only | |
+| 1 | `macos-arm64` | ✓ | tested | Replaying a result with ++alt+"&num;"++ isn't available. |
+| 1 | `macos-x86_64` | ✓ | build-only | Replaying a result with ++alt+"&num;"++ isn't available. |
+| 1 | `windows-x86_64` | ✓ | tested | No syntax highlighting or pty-proxy. |
+| 1 | `wsl2-x86_64` | ✓ | tested | |
+| 2 | `illumos-x86_64` | ✗ | build-only | Build from source. |
+| 2 | Other | ✗ | ✗ | Build from source; untested. Needs a C toolchain. |
 
 - **Prebuilt binary** — an official binary is published through the install
   script and GitHub releases. Linux binaries are provided for both glibc and
