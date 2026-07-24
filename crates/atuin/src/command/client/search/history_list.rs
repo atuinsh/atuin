@@ -22,7 +22,7 @@ use ratatui::{
     style::{Modifier, Style},
     widgets::{Block, StatefulWidget, Widget},
 };
-use time::OffsetDateTime;
+use time::{OffsetDateTime, UtcOffset};
 
 pub struct HistoryHighlighter<'a> {
     pub engine: &'a dyn SearchEngine,
@@ -44,6 +44,8 @@ pub struct HistoryList<'a> {
     /// Apply an alternative highlighting to the selected row
     alternate_highlight: bool,
     now: &'a dyn Fn() -> OffsetDateTime,
+    /// Offset absolute timestamps are rendered in
+    tz: UtcOffset,
     indicator: &'a str,
     theme: &'a Theme,
     history_highlighter: HistoryHighlighter<'a>,
@@ -106,6 +108,7 @@ impl StatefulWidget for HistoryList<'_> {
             inverted: self.inverted,
             alternate_highlight: self.alternate_highlight,
             now: &self.now,
+            tz: self.tz,
             indicator: self.indicator,
             theme: self.theme,
             history_highlighter: self.history_highlighter,
@@ -131,6 +134,7 @@ impl<'a> HistoryList<'a> {
         inverted: bool,
         alternate_highlight: bool,
         now: &'a dyn Fn() -> OffsetDateTime,
+        tz: UtcOffset,
         indicator: &'a str,
         theme: &'a Theme,
         history_highlighter: HistoryHighlighter<'a>,
@@ -144,6 +148,7 @@ impl<'a> HistoryList<'a> {
             inverted,
             alternate_highlight,
             now,
+            tz,
             indicator,
             theme,
             history_highlighter,
@@ -183,6 +188,8 @@ struct DrawState<'a> {
     inverted: bool,
     alternate_highlight: bool,
     now: &'a dyn Fn() -> OffsetDateTime,
+    /// Offset absolute timestamps are rendered in
+    tz: UtcOffset,
     indicator: &'a str,
     theme: &'a Theme,
     history_highlighter: HistoryHighlighter<'a>,
@@ -364,10 +371,12 @@ impl DrawState<'_> {
     /// Render the absolute datetime column (e.g., "2025-01-22 14:35")
     fn datetime(&mut self, h: &History, width: u16) {
         let style = self.theme.as_style(Meaning::Annotation);
-        // FIXME: this renders UTC, not the configured timezone -- unlike every other
-        // display site, which calls `.to_offset(...)` first. Fixing it means threading a
-        // `Timezone` into `HistoryList`.
-        let formatted = h.timestamp.display().ymd_hm().to_string();
+        let formatted = h
+            .timestamp
+            .to_offset(self.tz)
+            .display()
+            .ymd_hm()
+            .to_string();
         let w = width as usize;
         let display = formatted.pad_ellipsize(
             Measure::Columns(w),
