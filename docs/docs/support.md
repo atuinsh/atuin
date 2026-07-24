@@ -36,7 +36,6 @@ and how far continuous integration (CI) exercises it.
 | `linux-x86_64` | ✓ | tested | |
 | `linux-arm64` | ✓ | build-only | |
 | `macos-arm64` | ✓ | tested | Replaying a result with ++alt+"&num;"++ isn't available. |
-| `macos-x86_64` | ✗ | ✗ | Intel Macs. Install with Homebrew, `cargo install`, or run the ARM64 build under Rosetta. |
 | `windows-x86_64` | ✓ | tested | No syntax highlighting or pty-proxy. |
 | `wsl2-x86_64` | ✓ | tested | |
 | `illumos-x86_64` | ✗ | build-only | Build from source. |
