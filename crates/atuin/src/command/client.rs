@@ -163,6 +163,10 @@ impl Cmd {
     ) -> Result<()> {
         tracing::trace!(command = ?self, "client command");
 
+        if let Self::Search(search) = &self {
+            settings.search_mode = search.effective_search_mode(&settings)?;
+        }
+
         // Skip initializing any databases for history
         // This is a pretty hot path, as it runs before and after every single command the user
         // runs
