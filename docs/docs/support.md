@@ -33,12 +33,35 @@ built and tested in CI. Other architectures, such as riscv64 or armv7, have no
 prebuilt binary. Rust can still build Atuin from source on them, but they're
 _Experimental_ and untested.
 
-| OS | Tier | Prebuilt architectures | Notes |
-| --- | --- | --- | --- |
-| Linux | Tier 1 | x86_64, ARM64 (gnu, musl) | |
-| macOS | Tier 1 | ARM64 | No Intel binary — use Homebrew, `cargo install`, or Rosetta. Replaying a result with ++alt+"&num;"++ isn't available. |
-| Windows Native | Tier 2 | x86_64 | No ARM64 binary. Syntax highlighting isn't supported. |
-| WSL | Tier 2 | x86_64, ARM64 | |
+<table>
+  <thead>
+    <tr><th>Tier</th><th>OS</th><th>Additional notes</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td rowspan="4"><strong>1</strong></td>
+      <td><code>linux-x86_64</code></td>
+      <td></td>
+    </tr>
+    <tr>
+      <td><code>linux-arm64</code></td>
+      <td></td>
+    </tr>
+    <tr>
+      <td><code>macOS-arm64</code></td>
+      <td>Replaying a result with <kbd>alt</kbd>+<kbd>#</kbd> isn't available.</td>
+    </tr>
+    <tr>
+      <td><code>wsl-x86_64</code></td>
+      <td></td>
+    </tr>
+    <tr>
+      <td><strong>2</strong></td>
+      <td><code>win32-x86_64</code></td>
+      <td>Syntax highlighting isn't supported.</td>
+    </tr>
+  </tbody>
+</table>
 
 !!! warning
 
