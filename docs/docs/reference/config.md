@@ -92,7 +92,7 @@ For new keys (not already in the file), `set` automatically detects the type:
 | anything else | string        |
 
 !!! warning "Scalar values only"
-    `atuin config set` can only set config entries with scalar values; for tables or arrays, edit the config file manually.
+    `atuin config set` can only set config entries with scalar values, so for tables or arrays, edit the config file manually.
 
 #### `--type` / `-t`
 

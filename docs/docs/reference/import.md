@@ -85,7 +85,7 @@ from within Xonsh), `$XONSH_DATA_DIR/history_json` is used.
 
 Not all data present in Xonsh history JSON files is used by Atuin. Xonsh stores the
 environment variables present when each session was initiated, but this data is
-discarded by Atuin. Xonsh optionally stores the output of each command; if present
+discarded by Atuin. Xonsh optionally stores the output of each command. If present,
 this data is also ignored by Atuin.
 
 ## `xonsh-sqlite`

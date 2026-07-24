@@ -2,8 +2,8 @@
 
 ## `atuin account`
 
-Manage your sync account. Registering and logging in are covered as a walkthrough
-in [Setting up Sync](../guide/sync.md); this page is the command reference.
+Manage your sync account. While registering and logging in are covered as a walkthrough
+in [Setting up Sync](../guide/sync.md), this page is the command reference.
 
 `atuin register`, `atuin login`, and `atuin logout` are shorthand for the
 corresponding `atuin account` subcommands.

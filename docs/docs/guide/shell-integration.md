@@ -146,4 +146,4 @@ Fish uses its event system (`fish_preexec` and `fish_postexec` events). It also 
 
 ### Nushell, xonsh, and PowerShell
 
-These shells are supported too; see [installation](installation.md#installing-the-shell-plugin) for how to load the plugin in each.
+These shells are supported too. For how to load the plugin in each, see [installation](installation.md#installing-the-shell-plugin).

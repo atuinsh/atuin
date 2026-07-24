@@ -39,7 +39,7 @@ git status --short
 
 ## Caching
 
-`TERMINAL.md` files are cached after they're first loaded; if you make changes to them mid-session, use the `/reload` slash command to refresh the data. This will invalidate the server cache on the next request, increasing the latency and token usage for that request.
+`TERMINAL.md` files are cached after they're first loaded, so if you make changes to them mid-session, use the `/reload` slash command to refresh the data. This will invalidate the server cache on the next request, increasing the latency and token usage for that request.
 
 ## Why not `AGENTS.md`?
 

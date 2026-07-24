@@ -93,6 +93,5 @@ History](delete-history.md).
 
 Independently of your own filters, Atuin refuses to record commands that look
 like they contain credentials—AWS keys, GitHub and npm tokens, Slack
-webhooks, Stripe keys, and more. This is on by default; see
-[`secrets_filter`](../configuration/config.md#secrets_filter) for the full
-list.
+webhooks, Stripe keys, and more. This is on by default. For the full list,
+see [`secrets_filter`](../configuration/config.md#secrets_filter).

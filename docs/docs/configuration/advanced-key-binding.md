@@ -125,7 +125,7 @@ Maps a key directly to a single action, with no conditions:
 
 ### Conditional binding
 
-Maps a key to an ordered list of rules. Each rule has an `action` and an optional `when` condition. Rules are evaluated top-to-bottom; the first rule whose condition matches (or that has no condition) wins.
+Maps a key to an ordered list of rules. Each rule has an `action` and an optional `when` condition. Rules are evaluated top-to-bottom, and the first rule whose condition matches (or that has no condition) wins.
 
 ```toml
 [keymap.emacs]

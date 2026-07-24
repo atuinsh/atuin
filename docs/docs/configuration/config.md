@@ -106,9 +106,10 @@ Default: `fuzzy`
 Which search mode to use. Atuin supports `prefix`, `fulltext`, `fuzzy`, `daemon-fuzzy`, and
 `skim` search modes.
 
-Prefix mode searches for "query\*"; fulltext mode searches for "\*query\*";
-`fuzzy` applies the [fuzzy search syntax](#fuzzy-search-syntax);
-`skim` applies the [skim search syntax](https://github.com/lotabout/skim#search-syntax).
+- `prefix` mode searches for "query\*".
+- `fulltext` mode searches for "\*query\*".
+- `fuzzy` applies the [fuzzy search syntax](#fuzzy-search-syntax).
+- `skim` applies the [skim search syntax](https://github.com/lotabout/skim#search-syntax).
 
 ```toml
 search_mode = "fuzzy"
@@ -503,8 +504,8 @@ Extra HTTP headers to send on every request to the sync server. This is useful
 when a self-hosted server sits behind a proxy or access gateway that requires
 its own authentication header—for example Cloudflare Access.
 
-Headers that Atuin sets itself (such as `Authorization`) can't be overridden;
-Atuin's values always win.
+Headers that Atuin sets itself (such as `Authorization`) can't be overridden,
+because Atuin's values always win.
 
 To avoid leaking credentials, Atuin refuses to follow cross-origin redirects
 when extra headers are configured—they're never sent to an origin other
@@ -1274,8 +1275,8 @@ The default colors are ANSI palette colors, so they automatically match your
 terminal's color scheme. They can also be customized via the `Syntax*` keys in
 a [theme](../guide/theming.md).
 
-Not available on platforms where tree-sitter doesn't build (for example, Windows);
-commands are shown unhighlighted there.
+Not available on platforms where tree-sitter doesn't build (for example, Windows),
+so commands are shown unhighlighted there.
 
 ```toml
 syntax_highlight = false
