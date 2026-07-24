@@ -56,6 +56,7 @@ theme:
     - content.code.copy            # copy affordance on terminal
     - content.action.edit          # edit the page easily
     - content.action.view          # view the raw md
+    - content.tooltips              # improved tooltips for abbreviations/glossary
 
 plugins:
   - search
@@ -214,6 +215,10 @@ markdown_extensions:
       alternate_style: true
   - admonition
   - pymdownx.details
+  - abbr
+  - pymdownx.snippets:
+      auto_append:
+        - includes/abbreviations.md
   - attr_list
   - md_in_html
   - tables
