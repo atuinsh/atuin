@@ -28,7 +28,8 @@
 *[SQLite]: The embedded database engine Atuin stores your history in
 
 <!-- Shell integration -->
-*[shell]: The program that reads and runs the commands you type — bash, zsh, fish, and others
+<!-- "shell" is intentionally NOT tooltipped: it recurs ~20x on some pages and
+     the underline noise outweighs the value. It is defined on glossary.md. -->
 *[preexec]: The shell hook Atuin uses to record a command just before it runs
 *[precmd]: The shell hook Atuin uses to capture a command's result after it finishes
 *[PTY]: Pseudo-terminal — the virtual terminal device a program reads from and writes to
