@@ -59,7 +59,7 @@ docker run \
   ghcr.io/atuinsh/atuin-ai-server:latest
 ```
 
-If you're running via Docker and want the Atuin AI server to connect with a local LLM service running on the host, like Ollama, use `host.docker.internal` as the endpoint instead of `localhost` (which would resolve to the container's own loopback interface).
+If you're running via Docker and want the Atuin AI server to connect to a local LLM service on the host (for example, Ollama), use `host.docker.internal` as the endpoint instead of `localhost`. `localhost` would otherwise resolve to the container's own loopback interface, not the host machine.
 
 ## Configuring Atuin AI
 

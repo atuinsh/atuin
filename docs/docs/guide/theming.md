@@ -68,10 +68,10 @@ to (at present) colors. In future, this may be expanded to allow richer style su
 * `SyntaxOperator`: operators such as `|`, `&&`, `;`, `>`
 * `SyntaxComment`: a `# comment`
 
-These may expand over time as they're added to Atuin's codebase, but Atuin
-should have fallbacks added for any new *Meanings* so that, whether themes limit to
-the present list or take advantage of new *Meanings* in future, they should
-keep working sensibly.
+These may expand over time as they're added to Atuin's codebase. Atuin should
+have fallbacks for any new *Meanings*, so themes keep working sensibly whether
+they limit themselves to the present list or take advantage of new *Meanings*
+later.
 
 **Note for Atuin contributors**: please do identify and, where appropriate during your own
 PRs, extend the Meanings enum if needed (along with a fallback Meaning!).
@@ -85,13 +85,14 @@ map from *Meanings* to foreground colors.
 
 Note that, at present, it's not possible to specify the default terminal color explicitly
 in a theme file. However, the default theme Base color will always be unset and therefore
-will be the user's default terminal color. Hence, you should only override the Base color
-in your theme, or derive from a theme that does so, if your theme would not make sense
-otherwise (for example, the `marine` theme is intended to make everything green/blue, so it does,
-but the `autumn` theme only seeks to make the custom colors warmer, so it doesn't).
+will be the user's default terminal color. Hence, you should only override the Base color in your theme, or derive from a
+theme that does so, if your theme wouldn't make sense otherwise. For example,
+the `marine` theme is intended to make everything green/blue, so it overrides
+the Base color, but the `autumn` theme only seeks to make the custom colors
+warmer, so it doesn't.
 
 Colors may be specified either as names from the [palette](https://ogeon.github.io/docs/palette/master/palette/named/index.html)
-crate in lowercase, or as six-character hex codes, prefixed with `#`. To explicitly select ANSI colors by integer, or for greater flexibility in general, you can prefix with `@` and the rest of the string will be handled by crossterm's color parsing. For examples, see [crossterm's color deserialization tests](https://github.com/crossterm-rs/crossterm/blob/5d50d8da62c5e034ef8b2787a771a2c0f9b3b2f9/src/style/types/color.rs#L389), remembering the need to add a `@` prefix for Atuin.
+crate in lowercase, or as six-character hex codes, prefixed with `#`. To explicitly select ANSI colors by integer, or for more general flexibility, prefix the color with `@`. Crossterm handles the rest of the string with its own color parsing. For examples, see [crossterm's color deserialization tests](https://github.com/crossterm-rs/crossterm/blob/5d50d8da62c5e034ef8b2787a771a2c0f9b3b2f9/src/style/types/color.rs#L389), remembering the need to add a `@` prefix for Atuin.
 
 For example, the following are valid color names:
 
@@ -129,8 +130,8 @@ where not all of the *Meanings* need to be explicitly defined. If they're absent
 then the color will be chosen from the parent theme, if one is defined, or if that
 key is missing in the `theme` block, from the `default` theme.
 
-If the entire named theme is missing, which is inherently an error, then the theme
-will drop to `(none)` and leave Atuin unstyled, rather than trying to fall back to
+Missing an entire named theme is inherently an error. When that happens, the
+theme drops to `(none)` and leaves Atuin unstyled, rather than falling back to
 the default or any other theme.
 
 This theme file should be moved to `~/.config/atuin/themes/my-theme.toml` and the
