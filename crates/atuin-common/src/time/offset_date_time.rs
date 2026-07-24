@@ -103,11 +103,11 @@ impl OffsetDateTimeExt for OffsetDateTime {
 }
 
 /// `2024-01-22 14:35:07` -- the default rendering for a history timestamp.
-pub static DATETIME_FMT: &[FormatItem<'_>] =
+pub static YMD_HMS: &[FormatItem<'_>] =
     format_description!("[year]-[month]-[day] [hour repr:24]:[minute]:[second]");
 
 /// `2024-01-22 14:35` -- the same, without seconds, for width-constrained columns.
-pub static DATETIME_MINUTE_FMT: &[FormatItem<'_>] =
+pub static YMD_HM: &[FormatItem<'_>] =
     format_description!("[year]-[month]-[day] [hour repr:24]:[minute]");
 
 #[cfg(test)]
@@ -228,8 +228,8 @@ mod tests {
     #[test]
     fn datetime_formats_render_as_documented() {
         let t = OffsetDateTime::from_unix_nanos_i64(1_705_934_107_000_000_000);
-        assert_eq!(t.format(DATETIME_FMT).unwrap(), "2024-01-22 14:35:07");
-        assert_eq!(t.format(DATETIME_MINUTE_FMT).unwrap(), "2024-01-22 14:35");
+        assert_eq!(t.format(YMD_HMS).unwrap(), "2024-01-22 14:35:07");
+        assert_eq!(t.format(YMD_HM).unwrap(), "2024-01-22 14:35");
     }
 
     #[allow(clippy::disallowed_methods)]

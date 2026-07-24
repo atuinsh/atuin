@@ -1,5 +1,5 @@
 use atuin_client::history::{History, is_known_agent};
-use atuin_common::time::DATETIME_FMT;
+use atuin_common::time::YMD_HMS;
 use time::UtcOffset;
 
 pub(crate) fn format_last_command(history: &History, local_offset: UtcOffset) -> String {
@@ -56,7 +56,7 @@ fn format_timestamp(history: &History, local_offset: UtcOffset) -> String {
     history
         .timestamp
         .to_offset(local_offset)
-        .format(DATETIME_FMT)
+        .format(YMD_HMS)
         .unwrap_or_else(|_| "????-??-?? ??:??:??".to_string())
 }
 

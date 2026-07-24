@@ -12,7 +12,7 @@ use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use atuin_common::string::Measure;
 use atuin_common::string::align::Alignment;
 use atuin_common::string::ellipsis::{Indicator, Pos};
-use atuin_common::time::{DATETIME_MINUTE_FMT, DurationExt, OffsetDateTimeExt, format_duration};
+use atuin_common::time::{DurationExt, OffsetDateTimeExt, YMD_HM, format_duration};
 use itertools::Itertools;
 use ratatui::{
     backend::FromCrossterm,
@@ -366,7 +366,7 @@ impl DrawState<'_> {
         // `Timezone` into `HistoryList`.
         let formatted = h
             .timestamp
-            .format(DATETIME_MINUTE_FMT)
+            .format(YMD_HM)
             .unwrap_or_else(|_| "????-??-?? ??:??".to_string());
         let w = width as usize;
         let display = formatted.pad_ellipsize(

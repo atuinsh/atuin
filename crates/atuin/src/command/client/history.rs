@@ -5,7 +5,7 @@ use std::{
 };
 
 use atuin_common::logs::LogConfig;
-use atuin_common::time::{DATETIME_FMT, DurationExt, OffsetDateTimeExt, format_duration};
+use atuin_common::time::{DurationExt, OffsetDateTimeExt, YMD_HMS, format_duration};
 use atuin_common::{
     string::{EscapeNonPrintablePosixExt as _, NonNulStr},
     utils,
@@ -341,7 +341,7 @@ impl FormatKey for FmtHistory<'_> {
                 self.history
                     .timestamp
                     .to_offset(self.tz.0)
-                    .format(DATETIME_FMT)
+                    .format(YMD_HMS)
                     .map_err(|_| fmt::Error)?
                     .fmt(f)?;
             }
@@ -877,7 +877,7 @@ impl TailKind {
 
 #[cfg(feature = "daemon")]
 fn format_history_time(timestamp: OffsetDateTime, tz: Timezone) -> Result<String> {
-    Ok(timestamp.to_offset(tz.0).format(DATETIME_FMT)?)
+    Ok(timestamp.to_offset(tz.0).format(YMD_HMS)?)
 }
 
 #[cfg(feature = "daemon")]

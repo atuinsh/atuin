@@ -6,6 +6,6 @@ mod timezone;
 
 pub use duration::{DurationExt, DurationOverflow, format_duration, format_duration_into};
 pub use offset_date_time::{
-    DATETIME_FMT, DATETIME_MINUTE_FMT, OffsetDateTimeExt, TimespecOutOfRange, TimestampOutOfRange,
+    OffsetDateTimeExt, TimespecOutOfRange, TimestampOutOfRange, YMD_HM, YMD_HMS,
 };
 pub use timezone::{Timezone, TimezoneDecodingError};
