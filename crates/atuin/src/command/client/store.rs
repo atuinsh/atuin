@@ -1,4 +1,4 @@
-use atuin_common::time::OffsetDateTimeExt;
+use atuin_common::time::{OffsetDateTimeExt, UtcOffsetExt};
 use clap::Subcommand;
 use eyre::Result;
 
@@ -72,7 +72,7 @@ impl Cmd {
 
     pub async fn status(&self, store: SqliteStore) -> Result<()> {
         let host_id = Settings::host_id().await?;
-        let offset = time::UtcOffset::current_local_offset()?;
+        let offset = time::UtcOffset::local_or_utc();
 
         let status = store.status().await?;
 
