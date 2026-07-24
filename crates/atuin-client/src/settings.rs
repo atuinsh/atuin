@@ -250,6 +250,8 @@ pub struct Stats {
     pub common_subcommands: Vec<String>, // kubectl, commands we should consider subcommands for
     #[serde(default = "Stats::ignored_commands_default")]
     pub ignored_commands: Vec<String>, // cd, ls, etc. commands we want to completely hide from stats
+    #[serde(default)]
+    pub command_aliases: HashMap<String, String>, // e.g., "g" -> "git", "k" -> "kubectl"
 }
 
 impl Stats {
@@ -297,6 +299,7 @@ impl Default for Stats {
             common_prefix: Self::common_prefix_default(),
             common_subcommands: Self::common_subcommands_default(),
             ignored_commands: Self::ignored_commands_default(),
+            command_aliases: HashMap::new(),
         }
     }
 }
