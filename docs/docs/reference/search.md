@@ -25,7 +25,7 @@ appended with a wildcard).
 
 ## `atuin search -i`
 
-Atuin's interactive search TUI allows you to fuzzy search through your history.
+Use Atuin's interactive search TUI to fuzzy search through your history.
 
 ![compact](https://user-images.githubusercontent.com/1710904/161623659-4fec047f-ea4b-471c-9581-861d2eb701a9.png)
 

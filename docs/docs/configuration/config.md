@@ -368,7 +368,7 @@ history_format = "{time}\t{command}\t{duration}"
 
 ### `history_filter`
 
-The history filter allows you to exclude commands from history tracking - maybe you want to keep ALL of your `curl` commands totally out of your shell history, or maybe just some matching a pattern.
+Use the history filter to exclude commands from history tracking - maybe you want to keep ALL of your `curl` commands totally out of your shell history, or maybe just some matching a pattern.
 
 This supports regular expressions, so you can hide pretty much whatever you want!
 
@@ -383,7 +383,7 @@ history_filter = [
 
 ### `cwd_filter`
 
-The `cwd` filter allows you to exclude directories from history tracking.
+Use the `cwd` filter to exclude directories from history tracking.
 
 This supports regular expressions, so you can hide pretty much whatever you want!
 

@@ -111,8 +111,8 @@ atuin-bind [-m KEYMAP] KEYSEQ COMMAND
 `KEYMAP` is one of `emacs`, `vi-insert`, and `vi-command` and specifies the
 target keymap where the keybinding is defined.  `KEYSEQ` specifies a key
 sequence in the format used in `bind '"KEYSEQ": ...'`.  `COMMAND` specifies a
-shell command to run with the keybindings. The following special commands can
-be used as well as an arbitrary shell command:
+shell command to run with the keybindings. You can use the following special
+commands and any arbitrary shell command:
 
 | Command                 | Description                                                                         |
 | ----------------------- | ----------------------------------------------------------------------------------- |

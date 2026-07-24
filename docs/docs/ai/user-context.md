@@ -1,6 +1,6 @@
 # Sending Additional Context in Atuin AI
 
-Atuin AI allows you to send additional context to the LLM beyond just your prompt, similar to `CLAUDE.md` or `AGENTS.md`.
+Use Atuin AI to send additional context to the LLM beyond just your prompt, similar to `CLAUDE.md` or `AGENTS.md`.
 
 ## Additional Context Search Paths
 
