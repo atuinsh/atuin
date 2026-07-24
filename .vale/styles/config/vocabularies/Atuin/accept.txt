@@ -49,6 +49,7 @@ nginx
 npm
 OAuth
 Ollama
+opencode
 Pacman
 Podman
 Postgres

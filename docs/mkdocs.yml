@@ -134,6 +134,7 @@ plugins:
       sections:
         Overview:
           - index.md: Getting started with Atuin - quickstart, supported shells, and links.
+          - support.md: Support tiers and the platform/shell/feature matrix - which shells, OSes, terminals, and AI agents are supported and how well.
         Guide:
           - guide/getting-started.md: First steps - install, import history, and start using Atuin.
           - guide/installation.md: Install via script, Homebrew, WinGet, Cargo, Nix, or from source.
@@ -261,6 +262,7 @@ nav:
       - Deleting history: guide/delete-history.md
       - Syncing dotfiles: guide/dotfiles.md
       - Theming: guide/theming.md
+  - Supported platforms: support.md
   - Configuration:
       - Config: configuration/config.md
       - Key Binding: configuration/key-binding.md
