@@ -127,6 +127,10 @@ pub struct Cmd {
     /// {relativetime}.
     ///
     /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
+    ///
+    /// Pass --format json to emit one JSON object per line (NDJSON) with all
+    /// fields included, suitable for piping into jq or saving to a file for
+    /// backup or migration.
     #[arg(long, short)]
     format: Option<String>,
 
