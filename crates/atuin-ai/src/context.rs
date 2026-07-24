@@ -4,6 +4,7 @@ use std::sync::Arc;
 use atuin_client::distro::detect_linux_distribution;
 use atuin_client::history::History;
 use atuin_client::settings::AiCapabilities;
+use atuin_common::time::UtcOffsetExt;
 
 /// Session-scoped context for the AI chat session.
 /// Holds the API configuration and client settings needed by the event loop and stream task.
@@ -109,7 +110,7 @@ impl ClientContext {
         if let Some(history) = last_command {
             ctx["last_command"] = serde_json::json!(crate::history_format::format_last_command(
                 history,
-                time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC),
+                time::UtcOffset::local_or_utc(),
             ));
         }
 

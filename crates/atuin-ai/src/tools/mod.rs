@@ -6,6 +6,7 @@ use std::{
 };
 
 use atuin_common::ansi;
+use atuin_common::time::UtcOffsetExt;
 use eyre::Result;
 use uuid::Uuid;
 
@@ -1176,7 +1177,7 @@ impl AtuinHistoryToolCall {
             return ToolOutcome::Success("No matching history entries found.".to_string());
         }
 
-        let local_offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
+        let local_offset = time::UtcOffset::local_or_utc();
 
         let formatted: Vec<String> = results
             .iter()

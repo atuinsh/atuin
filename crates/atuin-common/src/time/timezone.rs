@@ -5,6 +5,27 @@ use std::str::FromStr;
 use serde::Serialize;
 use serde_with::DeserializeFromStr;
 use time::{UtcOffset, format_description::FormatItem, macros::format_description};
+use tracing::warn;
+
+/// Extensions to [`UtcOffset`].
+pub trait UtcOffsetExt {
+    /// The system's current local UTC offset, falling back to UTC if it cannot be
+    /// determined.
+    ///
+    /// Warns on the fallback, so rendering everything in UTC is at least traceable
+    /// rather than silent. Prefer [`UtcOffset::current_local_offset`] where the caller
+    /// can propagate the failure instead.
+    fn local_or_utc() -> UtcOffset;
+}
+
+impl UtcOffsetExt for UtcOffset {
+    fn local_or_utc() -> UtcOffset {
+        UtcOffset::current_local_offset().unwrap_or_else(|e| {
+            warn!("could not determine local UTC offset, falling back to UTC: {e}");
+            UtcOffset::UTC
+        })
+    }
+}
 
 /// Wrapper around [`UtcOffset`] supporting a wider variety of timezone formats.
 #[derive(
