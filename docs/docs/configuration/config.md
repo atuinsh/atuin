@@ -618,6 +618,26 @@ Alternatively, set env var NO_MOTION
 prefers_reduced_motion = false
 ```
 
+### `smart_sort`
+
+Atuin version: >= 18.0
+
+Default: `false`
+
+When enabled, interactive search reorders returned history after the active
+search mode runs. Ranking prefers:
+
+1. Commands that are **prefixed** by the query
+2. Commands that contain the query as a **whole substring**
+3. More **recent** commands (lightly — time does not dominate match quality)
+
+This applies on top of prefix, fulltext, fuzzy, skim, and daemon-fuzzy modes in
+the interactive TUI. It does not change non-interactive `atuin search` output.
+
+```toml
+smart_sort = true
+```
+
 ## search
 
 ### `filters`
@@ -704,6 +724,45 @@ currently configurable in `config.toml`.
 To filter by author on the command line, use `atuin search --author`. See
 [Filtering by Author](../guide/agent-hooks.md#filtering-by-author) for the
 available values.
+
+## tmux
+
+```toml
+[tmux]
+enabled = false
+width = "80%"
+height = "60%"
+```
+
+### `enabled`
+
+Atuin version: >= 18.12
+
+Default: `false`
+
+When `true` and Atuin is started inside a tmux session (tmux >= 3.2), interactive
+search uses `tmux display-popup` instead of drawing inline in the current pane.
+Supported shell integrations: zsh, bash, and fish.
+
+`atuin init` reflects this section into the shell environment: when `enabled =
+true` it exports `ATUIN_TMUX_POPUP_WIDTH` / `ATUIN_TMUX_POPUP_HEIGHT`; when
+`enabled = false` it exports `ATUIN_TMUX_POPUP=false`. You can also override these
+env vars in your shell (set `ATUIN_TMUX_POPUP=false` to force-disable, or set
+`ATUIN_TMUX_POPUP_WIDTH` / `ATUIN_TMUX_POPUP_HEIGHT` to resize).
+
+!!! note "iTerm2 native tmux"
+
+    iTerm2's native tmux integration does not support `display-popup`. Leave
+    `enabled = false` (the default) if you rely on that integration.
+
+### `width` / `height`
+
+Atuin version: >= 18.12
+
+Defaults: `width = "80%"`, `height = "60%"`
+
+Popup size. Each value may be a percentage string (for example `"80%"`) or an
+integer character/line count (for example `"100"`).
 
 ## Stats
 
