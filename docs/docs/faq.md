@@ -68,6 +68,8 @@ There is no `atuin search --host` flag. From a script you can print the host wit
 atuin search --filter-mode global --format '{host}|{command}' | grep '^bucket|'
 ```
 
+Because `grep` is line-oriented, this only matches the first line of each entry, so multiline commands are truncated in the output. If you need the full command text, drop the `| grep` and filter with a tool that keeps whole records instead.
+
 See [filter modes](guide/advanced-usage.md#filter-mode) and [UI columns](configuration/config.md#columns).
 
 ## How do I edit a command instead of running it immediately?
