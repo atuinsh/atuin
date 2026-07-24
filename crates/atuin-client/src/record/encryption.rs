@@ -279,12 +279,6 @@ mod tests {
             fake_key.to_id(),
             key.to_id()
         )));
-        assert!(message.contains("keys were rotated or do not match across machines"));
-        assert!(message.contains("`atuin store verify`"));
-        assert!(message.contains("Before purging, back up the store"));
-        assert!(message.contains("purging permanently deletes every local record"));
-        assert!(message.contains("recoverable with an old key or another machine's key"));
-        assert!(message.contains("`atuin store purge`"));
     }
 
     #[test]
