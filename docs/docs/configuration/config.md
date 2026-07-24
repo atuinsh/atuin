@@ -710,7 +710,7 @@ Filter interactive search results by the shell that was used to run each command
 | Value  | Meaning |
 |--------|---------|
 | `"all"` | Show commands from all shells. |
-| `"auto"` | Show commands from the current shell, or commands that have no recorded shell (e.g., from an older version of Atuin). |
+| `"auto"` | Show commands from the current shell, or commands that have no recorded shell (for example, from an older version of Atuin). |
 | array of strings | Show commands run by any shell in the array. `""` includes commands that have no shell recorded. |
 
 The current shell is detected from the `ATUIN_SHELL` environment variable (set by the shell init script).
