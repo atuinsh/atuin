@@ -1,6 +1,6 @@
 # Atuin AI Tools & Permissions
 
-Atuin AI has a number of tools that it can use to interact with your system, given your permission. The AI can use these tools to help answer questions and perform actions on your behalf.
+Atuin AI has several tools that it can use to interact with your system, given your permission. The AI can use these tools to help answer questions and perform actions on your behalf.
 
 ## Permission System
 
@@ -36,7 +36,7 @@ Within a permissions file, `ask` rules take priority over `deny` rules, which ta
 
 ### Permission Scopes
 
-Most rules can be scoped to a particular path or other context. For example, you can allow Atuin AI to read files in a particular directory, but not in others. For rules pertaining to file operations, the scope is a glob pattern that matches file paths.
+Most rules can be scoped to a particular path or other context. For example, you can allow Atuin AI to read files in a particular directory, but not in others. For rules about file operations, the scope is a glob pattern that matches file paths.
 
 ### Example Config
 

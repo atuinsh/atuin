@@ -169,7 +169,7 @@ For the ++up++ keybinding, `_atuin_bind_up` can be used instead of `_atuin_searc
 
 Adding the useful alternative key binding of ++ctrl+up++ is tricky and determined by the terminal's adherence to terminfo(5).
 
-Conveniently, fish provides a command to capture keystrokes and advise you of the exact command to add for your specific terminal.
+Conveniently, fish provides a command to capture keystrokes and tell you the exact command to add for your specific terminal.
 In your terminal, run `fish_key_reader` then press the desired keystrokes.
 
 For example, in Gnome Terminal the output to ++ctrl+up++ is `bind \e\[1\;5A 'do something'`

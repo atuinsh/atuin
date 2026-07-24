@@ -23,7 +23,7 @@ While searching in the TUI, you can narrow the search scope by pressing `ctrl-r`
 
 See the [advanced usage](advanced-usage.md) page for more options.
 
-## Common config adjustment
+## Common config changes
 
 For a full set of config values, please see the [config reference page](../configuration/config.md).
 

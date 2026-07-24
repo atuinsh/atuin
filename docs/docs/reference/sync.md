@@ -30,7 +30,7 @@ If you don't want to have your password be included in shell history, you can om
 the password flag and you will be prompted to provide it through `stdin`.
 
 Usernames must be unique and only contain alphanumerics or hyphens,
-and emails shall only be used for important notifications (security breaches, changes to service, etc).
+and emails will only be used for important notifications (security breaches, changes to service, etc).
 
 Upon success, you're also logged in :) Syncing should happen automatically from
 here!

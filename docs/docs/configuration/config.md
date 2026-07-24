@@ -654,7 +654,7 @@ For example, if you cared a lot about how frequently you run a command but not a
 
 Default: `1.0`
 
-The multiplier to apply to the frequency score in the frecency calculation. Setting this to `0` disables the frequency portion of the frecency scoring altogether.
+The multiplier to apply to the frequency score in the frecency calculation. Setting this to `0` disables the frequency part of the frecency scoring altogether.
 
 ```toml
 frequency_score_multiplier = 1.0
@@ -664,7 +664,7 @@ frequency_score_multiplier = 1.0
 
 Default: `1.0`
 
-The multiplier to apply to the recency score in the frecency calculation. Setting this to `0` disables the recency portion of the frecency scoring altogether.
+The multiplier to apply to the recency score in the frecency calculation. Setting this to `0` disables the recency part of the frecency scoring altogether.
 
 ```toml
 recency_score_multiplier = 1.0
