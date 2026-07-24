@@ -760,7 +760,17 @@ impl Database for Sqlite {
             .fetch_all(&self.pool)
             .await?;
 
-        Ok(ordering::reorder_fuzzy(search_mode, orig_query, res))
+        // Rank against the same characters SQL matched: drop spaces and operators.
+        let reorder_query: String = QueryTokenizer::new(orig_query)
+            .filter_map(|token| match token {
+                QueryToken::Match(term, _)
+                | QueryToken::MatchStart(term, _)
+                | QueryToken::MatchEnd(term, _)
+                | QueryToken::MatchFull(term, _) => Some(term),
+                QueryToken::Or | QueryToken::Regex(_) => None,
+            })
+            .collect();
+        Ok(ordering::reorder_fuzzy(search_mode, &reorder_query, res))
     }
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>> {
@@ -1645,6 +1655,185 @@ mod test {
         assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "", 2)
             .await
             .unwrap();
+    }
+
+    // Reproduces the trailing-space ranking bug (atuinsh/atuin#3603).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fuzzy_trailing_space() {
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        let now = OffsetDateTime::now_utc();
+        let irssi = "screen irssi";
+        let ls_l = "ls -l secrets/rendered";
+        let ls_ld = "ls -ld secrets/rendered";
+        let screen_r = "screen -r";
+
+        new_history_item_at(&mut db, irssi, Some(now - time::Duration::days(5)))
+            .await
+            .unwrap();
+        new_history_item_at(&mut db, ls_l, Some(now - time::Duration::days(4)))
+            .await
+            .unwrap();
+        new_history_item_at(
+            &mut db,
+            ls_ld,
+            Some(now - time::Duration::days(4) + time::Duration::seconds(1)),
+        )
+        .await
+        .unwrap();
+        new_history_item_at(&mut db, screen_r, Some(now - time::Duration::hours(1)))
+            .await
+            .unwrap();
+
+        // Baseline: "screen" ranks the screen rows first, most-recent on top.
+        let results = assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "screen", 4)
+            .await
+            .unwrap();
+        assert_eq!(
+            results[0].command,
+            screen_r,
+            "\"screen\" should rank the screen command first, got: {:?}",
+            results.iter().map(|h| &h.command).collect::<Vec<_>>()
+        );
+
+        // "screen " should still rank the row that literally contains "screen " first,
+        // not an unrelated `ls` row.
+        let results = assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "screen ", 4)
+            .await
+            .unwrap();
+        assert_eq!(
+            results[0].command,
+            screen_r,
+            "\"screen \" should rank the literal \"screen \" match first, got: {:?}",
+            results.iter().map(|h| &h.command).collect::<Vec<_>>()
+        );
+    }
+
+    // Isolates the whitespace fix: for "screen " both rows score None and fall back to recency,
+    // so only stripping the trailing space ranks them by span and the tight match wins.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fuzzy_trailing_space_true_span() {
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        let now = OffsetDateTime::now_utc();
+        let exact = "screen";
+        let loose = "search green";
+
+        new_history_item_at(&mut db, exact, Some(now - time::Duration::days(5)))
+            .await
+            .unwrap();
+        new_history_item_at(&mut db, loose, Some(now - time::Duration::hours(1)))
+            .await
+            .unwrap();
+
+        let results = assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "screen ", 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            results[0].command,
+            exact,
+            "\"screen \" should rank the tight match first, got: {:?}",
+            results.iter().map(|h| &h.command).collect::<Vec<_>>()
+        );
+    }
+
+    // Queries the normalization does not alter must rank identically: a space-free and a two-word
+    // query both rank by span, unchanged by stripping spaces from the ranking query.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fuzzy_plain_query_unchanged() {
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        let now = OffsetDateTime::now_utc();
+        new_history_item_at(&mut db, "screen", Some(now - time::Duration::days(5)))
+            .await
+            .unwrap();
+        new_history_item_at(&mut db, "search green", Some(now - time::Duration::hours(1)))
+            .await
+            .unwrap();
+        new_history_item_at(&mut db, "foo bar", Some(now - time::Duration::days(5)))
+            .await
+            .unwrap();
+        new_history_item_at(&mut db, "foo qux bar", Some(now - time::Duration::hours(1)))
+            .await
+            .unwrap();
+
+        // Single token: tight "screen" beats loose "search green".
+        assert_search_commands(
+            &db,
+            SearchMode::Fuzzy,
+            FilterMode::Global,
+            "screen",
+            vec!["screen", "search green"],
+        )
+        .await;
+
+        // Two tokens: tight "foo bar" beats loose "foo qux bar".
+        assert_search_commands(
+            &db,
+            SearchMode::Fuzzy,
+            FilterMode::Global,
+            "foo bar",
+            vec!["foo bar", "foo qux bar"],
+        )
+        .await;
+    }
+
+    // Isolates the operator fix: the "$" survives whitespace stripping, so both rows score None
+    // and fall back to recency; only dropping operators ranks them by span and the tight match wins.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fuzzy_operator_true_span() {
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        let now = OffsetDateTime::now_utc();
+        let tight = "foo screen";
+        let loose = "foo x screen";
+
+        new_history_item_at(&mut db, tight, Some(now - time::Duration::days(5)))
+            .await
+            .unwrap();
+        new_history_item_at(&mut db, loose, Some(now - time::Duration::hours(1)))
+            .await
+            .unwrap();
+
+        let results =
+            assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "foo screen$", 2)
+                .await
+                .unwrap();
+        assert_eq!(
+            results[0].command,
+            tight,
+            "\"foo screen$\" should rank the tight match first, got: {:?}",
+            results.iter().map(|h| &h.command).collect::<Vec<_>>()
+        );
+    }
+
+    // Dropping operators from the ranking query must not disturb SQL matching: the end-anchor
+    // still selects only commands ending in the term.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fuzzy_operator_query_returns_expected() {
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        new_history_item(&mut db, "use screen").await.unwrap();
+        new_history_item(&mut db, "screenshot tool").await.unwrap();
+
+        assert_search_commands(
+            &db,
+            SearchMode::Fuzzy,
+            FilterMode::Global,
+            "screen$",
+            vec!["use screen"],
+        )
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
