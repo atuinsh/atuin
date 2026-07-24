@@ -9,11 +9,24 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
   - package-ecosystem: "docker" # See documentation for possible values
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+    # Every action is pinned to a commit SHA, so each release upstream is a
+    # separate PR. taiki-e/install-action alone ships ~0.8 releases a day;
+    # without grouping this ecosystem drowns the review queue.
+    groups:
+      actions:
+        patterns:
+          - "*"
