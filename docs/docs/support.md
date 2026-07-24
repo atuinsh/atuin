@@ -31,7 +31,7 @@ Feature coverage varies by shell:
 | --- | --- | --- |
 | Linux | Tier 1 | |
 | macOS | Tier 1 | Replaying a result with ++alt+"&num;"++ isn't available. |
-| Windows Native | Tier 2 | Syntax highlighting is not supported. |
+| Windows Native | Tier 2 | Syntax highlighting isn't supported. |
 | WSL | Tier 2 | |
 
 !!! warning
@@ -39,6 +39,26 @@ Feature coverage varies by shell:
     Atuin supports running on all filesystems. ZFS and network filesystems are
     treated as _Experimental_. For more info, see [Known
     issues](known-issues.md).
+
+## Architectures
+
+Atuin ships official prebuilt binaries — through the install script and GitHub
+releases — for two CPU architectures: x86_64 and ARM64 (aarch64). Both are
+Tier 1: built and tested in CI. Other architectures, such as riscv64 or armv7,
+have no prebuilt binary. Rust can still build Atuin from source on them, but
+they're _Experimental_ and untested.
+
+A prebuilt binary isn't available for every architecture and operating system
+combination:
+
+| Architecture | Linux | macOS | Windows |
+| --- | :---: | :---: | :---: |
+| x86_64 | ✓ (gnu, musl) | ✗ | ✓ |
+| ARM64 (aarch64) | ✓ (gnu, musl) | ✓ | ✗ |
+
+- Intel Macs have no prebuilt binary. Install with Homebrew or `cargo install`,
+  or run the ARM64 build under Rosetta.
+- Windows on ARM has no native binary yet.
 
 ## Terminals
 

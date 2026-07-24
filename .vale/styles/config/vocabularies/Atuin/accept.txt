@@ -43,6 +43,7 @@ ignorespace
 LLM
 loopback
 matcher
+musl
 namespace
 Netlify
 nginx
