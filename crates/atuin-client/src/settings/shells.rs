@@ -87,39 +87,27 @@ impl<'a> Deserialize<'a> for Shells {
     where
         D: Deserializer<'a>,
     {
-        struct Visitor;
-
-        impl<'a> de::Visitor<'a> for Visitor {
-            type Value = Shells;
-
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str(r#""all", "auto", or an array of strings"#)
-            }
-
-            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                match value {
-                    "all" => Ok(Shells::All),
-                    "auto" => Ok(Shells::Auto),
-                    other => Err(E::invalid_value(de::Unexpected::Str(other), &self)),
-                }
-            }
-
-            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-            where
-                A: de::SeqAccess<'a>,
-            {
-                let mut shells = Vec::new();
-                while let Some(shell) = seq.next_element()? {
-                    shells.push(shell);
-                }
-                Ok(Shells::List(shells))
-            }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "lowercase")]
+        enum Keyword {
+            All,
+            Auto,
         }
-
-        deserializer.deserialize_any(Visitor)
+ 
+        /// Untagged unit variants only ever match `null`, so the keywords have to live one
+        /// level down in [`Keyword`] rather than sitting alongside `List` here.
+        #[derive(Deserialize)]
+        #[serde(untagged, expecting = r#""all", "auto", or an array of strings"#)]
+        enum Repr {
+            Keyword(Keyword),
+            List(Vec<String>),
+        }
+ 
+        Ok(match Repr::deserialize(deserializer)? {
+            Repr::Keyword(Keyword::All) => Self::All,
+            Repr::Keyword(Keyword::Auto) => Self::Auto,
+            Repr::List(shells) => Self::List(shells),
+        })
     }
 }
 
