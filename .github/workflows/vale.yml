@@ -29,11 +29,11 @@ jobs:
           # an edit that breaks a neighbouring line must not pass.
           filter_mode: nofilter
           fail_on_error: true
-          level: error
+          level: warning
           # reviewdog fails the job once 10 annotations of ANY severity are
           # reported to it, regardless of `level` or `fail_on_error` -- it has
           # no severity check on that path. .vale.ini's MinAlertLevel is
           # suggestion, so without this, warnings and suggestions alone push
-          # us over 10 on nearly every PR. Restricting to errors here also
+          # us over 10 on nearly every PR. Restricting to warnings here also
           # makes CI identical to the documented local command.
-          vale_flags: "--minAlertLevel=error"
+          vale_flags: "--minAlertLevel=warning"
