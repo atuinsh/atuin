@@ -42,7 +42,7 @@ Feature coverage varies by shell:
 
 Some gaps depend on the operating system rather than the shell:
 
-- Inline history search isn't available on macOS yet.
+- Replaying a result with `alt+#` isn't available on macOS yet.
 - Syntax highlighting (tree-sitter) doesn't build on Windows.
 
 ## Operating systems
