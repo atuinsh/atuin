@@ -223,6 +223,7 @@ pub enum IndexFilterMode {
     Session(String),
 }
 
+/// Controls which shells' commands are included in the index.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ShellFilter {
     /// The list of shells to include. This list must be sorted and contain no duplicates. If empty,
@@ -233,6 +234,9 @@ pub struct ShellFilter {
 impl ShellFilter {
     pub const ALL: Self = Self { sorted: Vec::new() };
 
+    /// Create a [`ShellFilter`] from a sorted list of shells with no duplicates.
+    ///
+    /// If the list is empty, all shells will be included.
     fn from_vec_unchecked(shells: Vec<String>) -> Self {
         debug_assert_eq!(
             {
@@ -247,6 +251,7 @@ impl ShellFilter {
         Self { sorted: shells }
     }
 
+    /// Create a [`ShellFilter`] suitable for when `search.shells` in `config.toml` is "auto".
     fn auto(current_shell: Option<String>) -> Self {
         let Some(shell) = current_shell else {
             return Self::ALL;
@@ -254,6 +259,10 @@ impl ShellFilter {
         Self::from_vec_unchecked(vec!["".into(), shell])
     }
 
+    /// Create a [`ShellFilter`] from the `search.shells` setting.
+    ///
+    /// This should only be done once on startup; after that, we abide by the `shells` field on each
+    /// search request instead.
     pub fn from_initial_settings(shells: &settings::Shells) -> Self {
         // The current shell might be in `ATUIN_SHELL` if the daemon was autostarted by the shell
         // hooks. If it isn't or we're wrong, the index will be rebuilt if necessary when a search
@@ -277,6 +286,7 @@ impl ShellFilter {
         }
     }
 
+    /// Check whether this filter contains exactly the same shells as an iterator.
     pub fn matches<'a, I>(&'a self, shells: I) -> bool
     where
         I: IntoIterator<Item = &'a str>,
@@ -284,6 +294,8 @@ impl ShellFilter {
         SortedDedupedSliceComparer::new(&self.sorted, shells).eq::<16>()
     }
 
+    /// Check whether this filter contains exactly the same shells as a vector, and if not, return a
+    /// new [`ShellFilter`] with the new set of shells.
     pub fn update(&self, shells: Vec<String>) -> Option<Self> {
         if self.matches(shells.iter().map(|s| s.as_str())) {
             None
@@ -292,6 +304,7 @@ impl ShellFilter {
         }
     }
 
+    /// Check whether a given shell should be permitted according to this filter.
     fn contains(&self, shell: Option<&str>) -> bool {
         if self.sorted.is_empty() {
             return true;
