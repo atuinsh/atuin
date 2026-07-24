@@ -1,5 +1,4 @@
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
-use std::fmt;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Controls which shells' commands are included in interactive search.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -93,14 +92,14 @@ impl<'a> Deserialize<'a> for Shells {
             All,
             Auto,
         }
- 
+
         #[derive(Deserialize)]
         #[serde(untagged, expecting = r#""all", "auto", or an array of strings"#)]
         enum Repr {
             Keyword(Keyword),
             List(Vec<String>),
         }
- 
+
         Ok(match Repr::deserialize(deserializer)? {
             Repr::Keyword(Keyword::All) => Self::All,
             Repr::Keyword(Keyword::Auto) => Self::Auto,
