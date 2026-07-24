@@ -6,6 +6,7 @@ use atuin_client::{
     history::{History, is_known_agent},
     settings::FilterMode,
 };
+use atuin_common::time::OffsetDateTimeExt;
 use eyre::Result;
 use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
 use itertools::Itertools;
@@ -124,9 +125,9 @@ async fn fuzzy_search(
                         continue;
                     };
                     let (seconds, nanos) = timestamp.to_unix();
-                    let Ok(session_start) = time::OffsetDateTime::from_unix_timestamp_nanos(
-                        i128::from(seconds) * 1_000_000_000 + i128::from(nanos),
-                    ) else {
+                    let Ok(session_start) =
+                        time::OffsetDateTime::from_timespec(i128::from(seconds), i128::from(nanos))
+                    else {
                         warn!(
                             "failed to create OffsetDateTime from second: {seconds}, nanosecond: {nanos}"
                         );

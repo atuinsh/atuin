@@ -1,0 +1,8 @@
+disallowed-methods = [
+    { path = "std::time::Duration::new", reason = "panics on overflow; use atuin_common::time::DurationExt::try_new, or Duration::from_secs when nanos are 0" },
+    { path = "time::Duration::new", reason = "panics on overflow; use atuin_common::time::DurationExt::try_new" },
+    { path = "std::time::Duration::from_secs_f64", reason = "panics on NaN/negative/overflow; use Duration::try_from_secs_f64" },
+    # https://github.com/time-rs/time/issues/802
+    { path = "time::OffsetDateTime::from_unix_timestamp_nanos", reason = "wraps out-of-range input to a valid-looking wrong date (time-rs/time#802); use atuin_common::time::OffsetDateTimeExt::from_unix_nanos" },
+    { path = "time::UtcDateTime::from_unix_timestamp_nanos", reason = "same truncation bug as OffsetDateTime (time-rs/time#802); range-check the full i128 before converting" },
+]

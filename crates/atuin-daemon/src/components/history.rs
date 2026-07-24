@@ -9,6 +9,7 @@ use atuin_client::{
     history::{History, HistoryId, store::HistoryStore},
     settings::Settings,
 };
+use atuin_common::time::OffsetDateTimeExt;
 use dashmap::DashMap;
 use eyre::Result;
 use time::OffsetDateTime;
@@ -146,12 +147,7 @@ impl HistorySvc for HistoryGrpcService {
     ) -> Result<Response<StartHistoryReply>, Status> {
         let req = request.into_inner();
 
-        let timestamp =
-            OffsetDateTime::from_unix_timestamp_nanos(req.timestamp as i128).map_err(|_| {
-                Status::invalid_argument(
-                    "failed to parse timestamp as unix time (expected nanos since epoch)",
-                )
-            })?;
+        let timestamp = OffsetDateTime::from_unix_nanos_u64(req.timestamp);
 
         let h: History = History::daemon()
             .timestamp(timestamp)
@@ -195,10 +191,12 @@ impl HistorySvc for HistoryGrpcService {
             history.exit = req.exit;
             history.duration = match req.duration {
                 0 => i64::try_from(
-                    (OffsetDateTime::now_utc() - history.timestamp).whole_nanoseconds(),
+                    OffsetDateTime::now_utc()
+                        .saturating_duration_since(history.timestamp)
+                        .as_nanos(),
                 )
-                .expect("failed to convert calculated duration to i64"),
-                value => i64::try_from(value).expect("failed to get i64 duration"),
+                .unwrap_or(i64::MAX),
+                value => i64::try_from(value).unwrap_or(i64::MAX),
             };
 
             // Get the handle and store to save the history

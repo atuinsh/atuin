@@ -5,21 +5,19 @@ use clap::ValueEnum;
 use config::{
     Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat, builder::DefaultState,
 };
-use eyre::{Context, Error, Result, bail, eyre};
+use eyre::{Context, Result, bail, eyre};
 use fs_err::{File, create_dir_all};
 use humantime::parse_duration;
 use regex::RegexSet;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use serde_with::DeserializeFromStr;
 use std::{
     collections::HashMap,
     io::prelude::*,
     path::{Path, PathBuf},
-    str::FromStr,
     sync::{LazyLock, OnceLock},
 };
-use time::{OffsetDateTime, UtcOffset, format_description::FormatItem, macros::format_description};
+use time::OffsetDateTime;
 use tokio::sync::OnceCell;
 use url::Url;
 
@@ -152,53 +150,7 @@ impl From<Dialect> for interim::Dialect {
     }
 }
 
-/// Type wrapper around `time::UtcOffset` to support a wider variety of timezone formats.
-///
-/// Note that the parsing of this struct needs to be done before starting any
-/// multithreaded runtime, otherwise it will fail on most Unix systems.
-///
-/// See: <https://github.com/atuinsh/atuin/pull/1517#discussion_r1447516426>
-#[derive(
-    Clone, Copy, Debug, Eq, PartialEq, DeserializeFromStr, Serialize, derive_more::Display,
-)]
-#[display("{_0}")]
-pub struct Timezone(pub UtcOffset);
-/// format: `<+|-><hour>[:<minute>[:<second>]]`
-static OFFSET_FMT: &[FormatItem<'_>] = format_description!(
-    "[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional [:[offset_second padding:none]]]]]"
-);
-impl FromStr for Timezone {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self> {
-        // local timezone
-        if matches!(s.to_lowercase().as_str(), "l" | "local") {
-            // There have been some timezone issues, related to errors fetching it on some
-            // platforms
-            // Rather than fail to start, fallback to UTC. The user should still be able to specify
-            // their timezone manually in the config file.
-            let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
-            return Ok(Self(offset));
-        }
-
-        if matches!(s.to_lowercase().as_str(), "0" | "utc") {
-            let offset = UtcOffset::UTC;
-            return Ok(Self(offset));
-        }
-
-        // offset from UTC
-        if let Ok(offset) = UtcOffset::parse(s, OFFSET_FMT) {
-            return Ok(Self(offset));
-        }
-
-        // IDEA: Currently named timezones are not supported, because the well-known crate
-        // for this is `chrono_tz`, which is not really interoperable with the datetime crate
-        // that we currently use - `time`. If ever we migrate to using `chrono`, this would
-        // be a good feature to add.
-
-        bail!(r#""{s}" is not a valid timezone spec"#);
-    }
-}
+use atuin_common::time::UtcOffsetSpec;
 
 #[derive(Clone, Debug, Deserialize, Copy, Serialize)]
 pub enum Style {
@@ -1003,7 +955,7 @@ impl Default for Ui {
 pub struct Settings {
     pub data_dir: Option<String>,
     pub dialect: Dialect,
-    pub timezone: Timezone,
+    pub timezone: UtcOffsetSpec,
     pub style: Style,
     pub auto_sync: bool,
     pub update_check: bool,
@@ -1799,7 +1751,7 @@ mod tests {
     use eyre::Result;
     use rstest::rstest;
 
-    use super::{AiEndpointProtocol, Settings, Timezone};
+    use super::{AiEndpointProtocol, Settings, UtcOffsetSpec};
     use url::Url;
 
     #[rstest]
@@ -1824,7 +1776,7 @@ mod tests {
         #[case] input: &str,
         #[case] expected: (i8, i8, i8),
     ) -> Result<()> {
-        assert_eq!(Timezone::from_str(input)?.0.as_hms(), expected);
+        assert_eq!(UtcOffsetSpec::from_str(input)?.0.as_hms(), expected);
         Ok(())
     }
 
@@ -1833,7 +1785,7 @@ mod tests {
     #[case::bare_hour("5")]
     #[case::bare_hour_minutes("10:30")]
     fn rejects_timezone_spec_without_leading_sign(#[case] input: &str) {
-        assert!(Timezone::from_str(input).is_err());
+        assert!(UtcOffsetSpec::from_str(input).is_err());
     }
 
     #[rstest]

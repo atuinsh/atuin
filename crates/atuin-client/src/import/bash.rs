@@ -64,9 +64,12 @@ impl Importer for Bash {
 
         // make sure there is a minimum amount of time before the first known timestamp
         // to fit all commands, given the default increment
+        let backfill = timestamp_increment
+            * u32::try_from(commands_before_first_timestamp).unwrap_or(u32::MAX);
+        // a timestamp near the start of the representable range would underflow
         let mut next_timestamp = first_timestamp
-            - timestamp_increment
-                * u32::try_from(commands_before_first_timestamp).unwrap_or(u32::MAX);
+            .checked_sub(backfill)
+            .unwrap_or(first_timestamp);
 
         for line in lines.into_iter() {
             match line {
@@ -87,7 +90,10 @@ impl Importer for Bash {
                         .command(c);
 
                     h.push(imported.build().into()).await?;
-                    next_timestamp += timestamp_increment;
+                    // a timestamp near the end of the representable range would overflow
+                    next_timestamp = next_timestamp
+                        .checked_add(timestamp_increment)
+                        .unwrap_or(next_timestamp);
                 }
             }
         }
@@ -220,5 +226,55 @@ cd ../
         iter.into_iter()
             .tuple_windows()
             .all(|(a, b)| matches!(a.partial_cmp(&b), Some(Ordering::Less)))
+    }
+
+    #[tokio::test]
+    async fn timestamp_near_range_start_does_not_panic_on_backfill() {
+        // first timestamp is near the minimum representable instant, preceded by an
+        // untimestamped command; backfilling before it must not underflow
+        let bytes = b"cargo install atuin
+#-377705116800
+cargo update
+"
+        .to_vec();
+
+        let mut bash = Bash { bytes };
+        assert_eq!(bash.entries().await.unwrap(), 2);
+
+        let mut loader = TestLoader::default();
+        bash.load(&mut loader).await.unwrap();
+
+        assert_equal(
+            loader.buf.iter().map(|h| h.command.as_str()),
+            ["cargo install atuin", "cargo update"],
+        );
+    }
+
+    #[tokio::test]
+    async fn timestamp_near_range_end_does_not_panic_on_increment() {
+        // first timestamp is the maximum representable instant (253402300799 is the
+        // last second `OffsetDateTime` can represent, i.e. 9999-12-31 23:59:59 UTC).
+        // 1000 untimestamped commands walk the 1ms increment past .999 and off the
+        // end of the representable range.
+        let commands: Vec<String> = (0..1_000).map(|i| format!("cmd-{i}")).collect();
+        let bytes = format!("#253402300799\n{}\n", commands.join("\n")).into_bytes();
+
+        let mut bash = Bash { bytes };
+        assert_eq!(bash.entries().await.unwrap(), commands.len());
+
+        let mut loader = TestLoader::default();
+        bash.load(&mut loader).await.unwrap();
+
+        assert_equal(
+            loader.buf.iter().map(|h| h.command.as_str()),
+            commands.iter().map(String::as_str),
+        );
+
+        // the increment saturates at the maximum representable instant rather than
+        // wrapping or resetting to the epoch
+        assert_eq!(
+            loader.buf.last().unwrap().timestamp.unix_timestamp(),
+            253_402_300_799
+        );
     }
 }

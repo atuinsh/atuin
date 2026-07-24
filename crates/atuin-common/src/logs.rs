@@ -15,7 +15,6 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
-    #[cfg(feature = "tracing")]
     pub fn to_tracing(&self) -> tracing::Level {
         use tracing::Level;
         match self {

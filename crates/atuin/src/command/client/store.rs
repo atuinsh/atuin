@@ -1,3 +1,4 @@
+use atuin_common::time::{OffsetDateTimeExt, UtcOffsetExt};
 use clap::Subcommand;
 use eyre::Result;
 
@@ -7,7 +8,7 @@ use atuin_client::{
     settings::Settings,
 };
 use itertools::Itertools;
-use time::{OffsetDateTime, UtcOffset};
+use time::OffsetDateTime;
 
 #[cfg(feature = "sync")]
 mod push;
@@ -71,7 +72,7 @@ impl Cmd {
 
     pub async fn status(&self, store: SqliteStore) -> Result<()> {
         let host_id = Settings::host_id().await?;
-        let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
+        let offset = time::UtcOffset::local_or_utc();
 
         let status = store.status().await?;
 
@@ -97,8 +98,7 @@ impl Cmd {
                     println!("\t\tfirst: {}", first.id.0.as_hyphenated());
 
                     let time =
-                        OffsetDateTime::from_unix_timestamp_nanos(i128::from(first.timestamp))?
-                            .to_offset(offset);
+                        OffsetDateTime::from_unix_nanos_u64(first.timestamp).to_offset(offset);
                     println!("\t\t\tcreated: {time}");
                 }
 
@@ -106,8 +106,7 @@ impl Cmd {
                     println!("\t\tlast: {}", last.id.0.as_hyphenated());
 
                     let time =
-                        OffsetDateTime::from_unix_timestamp_nanos(i128::from(last.timestamp))?
-                            .to_offset(offset);
+                        OffsetDateTime::from_unix_nanos_u64(last.timestamp).to_offset(offset);
                     println!("\t\t\tcreated: {time}");
                 }
             }

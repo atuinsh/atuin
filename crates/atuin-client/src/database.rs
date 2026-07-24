@@ -7,6 +7,7 @@ use std::{
 
 use crate::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNOWN_AGENTS};
 use async_trait::async_trait;
+use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils;
 use fs_err as fs;
 use itertools::Itertools;
@@ -265,7 +266,9 @@ impl Sqlite {
             .create_if_missing(true);
 
         let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::from_secs_f64(timeout))
+            .acquire_timeout(Duration::try_from_secs_f64(timeout).map_err(|e| {
+                sqlx::Error::Decode(format!("invalid db timeout {timeout}: {e}").into())
+            })?)
             .connect_with(opts)
             .await?;
 
@@ -337,10 +340,7 @@ impl Sqlite {
 
         History::from_db()
             .id(row.get("id"))
-            .timestamp(
-                OffsetDateTime::from_unix_timestamp_nanos(row.get::<i64, _>("timestamp") as i128)
-                    .unwrap(),
-            )
+            .timestamp(OffsetDateTime::from_unix_nanos_i64(row.get("timestamp")))
             .duration(row.get("duration"))
             .exit(row.get("exit"))
             .command(row.get("command"))
@@ -349,9 +349,7 @@ impl Sqlite {
             .hostname(hostname)
             .author(author)
             .intent(intent)
-            .deleted_at(
-                deleted_at.and_then(|t| OffsetDateTime::from_unix_timestamp_nanos(t as i128).ok()),
-            )
+            .deleted_at(deleted_at.map(OffsetDateTime::from_unix_nanos_i64))
             .shell(shell)
             .build()
             .into()

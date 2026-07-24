@@ -10,7 +10,7 @@ use atuin_common::{shell::Shell, string::EscapeNonPrintablePosixExt as _};
 use eyre::Result;
 use futures_util::FutureExt;
 use semver::Version;
-use time::OffsetDateTime;
+use time::{OffsetDateTime, UtcOffset};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{
@@ -974,6 +974,7 @@ impl State {
                     results,
                     self.keymap_mode,
                     &self.now,
+                    settings.timezone.0,
                     indicator.as_str(),
                     theme,
                     history_highlighter,
@@ -1162,6 +1163,7 @@ impl State {
         results: &'a [History],
         keymap_mode: KeymapMode,
         now: &'a dyn Fn() -> OffsetDateTime,
+        tz: UtcOffset,
         indicator: &'a str,
         theme: &'a Theme,
         history_highlighter: HistoryHighlighter<'a>,
@@ -1174,6 +1176,7 @@ impl State {
             style.invert,
             keymap_mode == KeymapMode::VimNormal,
             now,
+            tz,
             indicator,
             theme,
             history_highlighter,

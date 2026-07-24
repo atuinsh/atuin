@@ -55,7 +55,9 @@ impl Importer for Replxx {
         let mut timestamp = OffsetDateTime::UNIX_EPOCH;
 
         for b in unix_byte_lines(&self.bytes) {
-            let s = std::str::from_utf8(b)?;
+            let Ok(s) = std::str::from_utf8(b) else {
+                continue; // we can skip past things like invalid utf8
+            };
             match try_parse_line_as_timestamp(s) {
                 Some(t) => timestamp = t,
                 None => {
@@ -136,5 +138,23 @@ CREATE TABLE test( stamp DateTime('UTC'))ENGINE = MergeTreePARTITION BY toDat
             1708600533,
             "CREATE TABLE test\n( stamp DateTime('UTC'))\nENGINE = MergeTree\nPARTITION BY toDate(stamp)\norder by tuple() as select toDateTime('2020-01-01')+number*60 from numbers(80000);"
         );
+    }
+
+    #[tokio::test]
+    async fn skips_invalid_utf8_line() {
+        let mut bytes = b"### 2024-02-10 22:16:28.302\nselect 1\n".to_vec();
+        bytes.extend_from_slice(b"\xff\xfe\n");
+        bytes.extend_from_slice(b"### 2024-02-10 22:16:36.919\nselect 2\n");
+
+        let replxx = Replxx { bytes };
+
+        let mut loader = TestLoader::default();
+        replxx
+            .load(&mut loader)
+            .await
+            .expect("import must not fail");
+
+        let commands: Vec<&str> = loader.buf.iter().map(|h| h.command.as_str()).collect();
+        assert_eq!(commands, ["select 1", "select 2"]);
     }
 }

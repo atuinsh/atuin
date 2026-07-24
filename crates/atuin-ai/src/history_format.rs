@@ -1,9 +1,6 @@
 use atuin_client::history::{History, is_known_agent};
+use atuin_common::time::{DurationExt, OffsetDateTimeExt};
 use time::UtcOffset;
-
-pub(crate) fn current_local_offset() -> UtcOffset {
-    UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC)
-}
 
 pub(crate) fn format_last_command(history: &History, local_offset: UtcOffset) -> String {
     format!(
@@ -56,16 +53,12 @@ fn format_attribution(history: &History) -> String {
 }
 
 fn format_timestamp(history: &History, local_offset: UtcOffset) -> String {
-    let ts = history.timestamp.to_offset(local_offset);
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        ts.year(),
-        ts.month() as u8,
-        ts.day(),
-        ts.hour(),
-        ts.minute(),
-        ts.second(),
-    )
+    history
+        .timestamp
+        .to_offset(local_offset)
+        .display()
+        .ymd_hms()
+        .to_string()
 }
 
 fn format_duration(nanos: i64) -> String {
@@ -73,27 +66,12 @@ fn format_duration(nanos: i64) -> String {
         return String::new();
     }
 
-    let total_secs = nanos / 1_000_000_000;
-    let millis = (nanos % 1_000_000_000) / 1_000_000;
-
-    if total_secs >= 3600 {
-        let hours = total_secs / 3600;
-        let mins = (total_secs % 3600) / 60;
-        let secs = total_secs % 60;
-        format!(", {hours}h{mins}m{secs}s")
-    } else if total_secs >= 60 {
-        let mins = total_secs / 60;
-        let secs = total_secs % 60;
-        format!(", {mins}m{secs}s")
-    } else if total_secs > 0 {
-        if millis > 0 {
-            format!(", {total_secs}.{millis:03}s")
-        } else {
-            format!(", {total_secs}s")
-        }
-    } else {
-        format!(", {millis}ms")
-    }
+    format!(
+        ", {}",
+        std::time::Duration::saturating_from_nanos_i64(nanos)
+            .display()
+            .stopwatch()
+    )
 }
 
 #[cfg(test)]

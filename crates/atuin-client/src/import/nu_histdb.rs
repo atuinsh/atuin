@@ -4,10 +4,11 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use atuin_common::time::OffsetDateTimeExt;
 use directories::BaseDirs;
 use eyre::{Result, eyre};
 use sqlx::{Pool, sqlite::SqlitePool};
-use time::{Duration, OffsetDateTime};
+use time::OffsetDateTime;
 
 use super::Importer;
 use crate::history::History;
@@ -30,18 +31,21 @@ impl From<HistDbEntry> for History {
     fn from(histdb_item: HistDbEntry) -> Self {
         let ts_secs = histdb_item.start_timestamp / 1000;
         let ts_ns = (histdb_item.start_timestamp % 1000) * 1_000_000;
+        // a corrupt row must not take down the whole import. the epoch sorts to the
+        // bottom of history and is obviously not a real time
+        let timestamp = OffsetDateTime::from_timespec(i128::from(ts_secs), i128::from(ts_ns))
+            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+
         let imported = History::import()
             .shell("nu")
-            .timestamp(
-                OffsetDateTime::from_unix_timestamp(ts_secs).unwrap()
-                    + Duration::nanoseconds(ts_ns),
-            )
-            .command(String::from_utf8(histdb_item.command_line).unwrap())
-            .cwd(String::from_utf8(histdb_item.cwd).unwrap())
+            .timestamp(timestamp)
+            // nushell stores raw bytes: keep the entry even if it is not valid utf8
+            .command(String::from_utf8_lossy(&histdb_item.command_line).into_owned())
+            .cwd(String::from_utf8_lossy(&histdb_item.cwd).into_owned())
             .exit(histdb_item.exit_status)
             .duration(histdb_item.duration_ms)
             .session(format!("{:x}", histdb_item.session_id))
-            .hostname(String::from_utf8(histdb_item.hostname).unwrap());
+            .hostname(String::from_utf8_lossy(&histdb_item.hostname).into_owned());
 
         imported.build().into()
     }
@@ -54,7 +58,13 @@ pub struct NuHistDb {
 
 /// Read db at given file, return vector of entries.
 async fn hist_from_db(dbpath: PathBuf) -> Result<Vec<HistDbEntry>> {
-    let pool = SqlitePool::connect(dbpath.to_str().unwrap()).await?;
+    let connection_str = dbpath.to_str().ok_or_else(|| {
+        eyre!(
+            "Invalid path for SQLite database: {}",
+            dbpath.to_string_lossy()
+        )
+    })?;
+    let pool = SqlitePool::connect(connection_str).await?;
     hist_from_db_conn(pool).await
 }
 
@@ -110,5 +120,52 @@ impl Importer for NuHistDb {
             h.push(i.into()).await?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use rstest::rstest;
+
+    use super::*;
+
+    fn entry(start_timestamp: i64, command_line: Vec<u8>) -> HistDbEntry {
+        HistDbEntry {
+            id: 1,
+            command_line,
+            start_timestamp,
+            session_id: 1,
+            hostname: b"host".to_vec(),
+            cwd: b"/tmp".to_vec(),
+            duration_ms: 100,
+            exit_status: 0,
+            more_info: Vec::new(),
+        }
+    }
+
+    /// A corrupt row must degrade to something representable rather than
+    /// panicking; the command is what matters and must always survive.
+    #[rstest]
+    #[case::valid(
+        1_639_162_832_500,
+        b"echo hello",
+        1_639_162_832,
+        500_000_000,
+        "echo hello"
+    )]
+    #[case::out_of_range_timestamp(i64::MAX, b"echo hello", 0, 0, "echo hello")]
+    #[case::invalid_utf8_command(0, &[0x65, 0x63, 0x68, 0x6f, 0xff], 0, 0, "echo\u{fffd}")]
+    fn corrupt_rows_degrade(
+        #[case] start_timestamp: i64,
+        #[case] command_line: &[u8],
+        #[case] seconds: i64,
+        #[case] nanoseconds: u32,
+        #[case] command: &str,
+    ) {
+        let h: History = entry(start_timestamp, command_line.to_vec()).into();
+
+        assert_eq!(h.timestamp.unix_timestamp(), seconds);
+        assert_eq!(h.timestamp.nanosecond(), nanoseconds);
+        assert_eq!(h.command, command);
     }
 }

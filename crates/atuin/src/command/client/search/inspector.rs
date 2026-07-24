@@ -3,7 +3,7 @@ use time::macros::format_description;
 
 use atuin_client::{
     history::{History, HistoryStats},
-    settings::{Settings, Timezone},
+    settings::Settings,
 };
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use ratatui::{
@@ -16,7 +16,7 @@ use ratatui::{
     widgets::{Bar, BarChart, BarGroup, Block, Borders, Padding, Paragraph, Row, Table},
 };
 
-use super::duration::format_duration;
+use atuin_common::time::{DurationExt, UtcOffsetSpec};
 
 use super::super::theme::{Meaning, Theme};
 use super::interactive::{Compactness, to_compactness};
@@ -114,11 +114,11 @@ pub fn draw_stats_table(
     f: &mut Frame<'_>,
     parent: Rect,
     history: &History,
-    tz: Timezone,
+    tz: UtcOffsetSpec,
     stats: &HistoryStats,
     theme: &Theme,
 ) {
-    let duration = Duration::from_nanos(u64_or_zero(history.duration));
+    let duration = Duration::saturating_from_nanos_i64(history.duration);
     let avg_duration = Duration::from_nanos(stats.average_duration);
     let (host, user) = history.hostname.split_once(':').unwrap_or(("", ""));
 
@@ -129,10 +129,13 @@ pub fn draw_stats_table(
             "Time".to_string(),
             history.timestamp.to_offset(tz.0).to_string(),
         ]),
-        Row::new(vec!["Duration".to_string(), format_duration(duration)]),
+        Row::new(vec![
+            "Duration".to_string(),
+            duration.display().largest_unit().to_string(),
+        ]),
         Row::new(vec![
             "Avg duration".to_string(),
-            format_duration(avg_duration),
+            avg_duration.display().largest_unit().to_string(),
         ]),
         Row::new(vec!["Exit".to_string(), history.exit.to_string()]),
         Row::new(vec!["Directory".to_string(), history.cwd.clone()]),
@@ -246,11 +249,11 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, them
     let duration_over_time: Vec<Bar> = duration_over_time
         .iter()
         .map(|(date, duration)| {
-            let d = Duration::from_nanos(u64_or_zero(*duration));
+            let d = Duration::saturating_from_nanos_i64(*duration);
             Bar::default()
                 .label(date.clone())
                 .value(u64_or_zero(*duration))
-                .text_value(format_duration(d))
+                .text_value(d.display().largest_unit().to_string())
         })
         .collect();
 
@@ -289,7 +292,7 @@ pub fn draw(
     stats: &HistoryStats,
     settings: &Settings,
     theme: &Theme,
-    tz: Timezone,
+    tz: UtcOffsetSpec,
 ) {
     let compactness = to_compactness(f, settings);
 
@@ -315,7 +318,7 @@ pub fn draw_full(
     history: &History,
     stats: &HistoryStats,
     theme: &Theme,
-    tz: Timezone,
+    tz: UtcOffsetSpec,
 ) {
     let vert_layout = Layout::default()
         .direction(Direction::Vertical)

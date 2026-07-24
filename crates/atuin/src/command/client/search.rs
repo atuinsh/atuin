@@ -11,14 +11,13 @@ use atuin_client::{
     encryption,
     history::{History, store::HistoryStore},
     record::sqlite_store::SqliteStore,
-    settings::{FilterMode, KeymapMode, SearchMode, Settings, Timezone},
+    settings::{FilterMode, KeymapMode, SearchMode, Settings},
     theme::Theme,
 };
 
 use super::history::ListMode;
 
 mod cursor;
-mod duration;
 mod engines;
 mod history_list;
 mod inspector;
@@ -26,7 +25,7 @@ mod interactive;
 pub mod keybindings;
 mod syntax;
 
-pub use duration::format_duration_into;
+use atuin_common::time::UtcOffsetSpec;
 
 #[allow(clippy::struct_excessive_bools, clippy::struct_field_names)]
 #[derive(Parser, Debug)]
@@ -122,7 +121,7 @@ pub struct Cmd {
     // `Option<Option<T>>` field type), so let's keep supporting it to avoid breaking existing
     // scripts.
     #[arg(allow_hyphen_values = true, num_args = 0..=1)]
-    timezone: Option<Timezone>,
+    timezone: Option<UtcOffsetSpec>,
 
     /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and
     /// {relativetime}.

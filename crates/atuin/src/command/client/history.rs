@@ -5,6 +5,7 @@ use std::{
 };
 
 use atuin_common::logs::LogConfig;
+use atuin_common::time::{DurationExt, OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::{
     string::{EscapeNonPrintablePosixExt as _, NonNulStr},
     utils,
@@ -32,19 +33,18 @@ use atuin_client::{
     record::sqlite_store::SqliteStore,
     settings::{
         FilterMode::{Directory, Global, Session},
-        Settings, Timezone,
+        Settings,
     },
 };
 
 #[cfg(feature = "sync")]
 use atuin_client::record;
 
-use time::{OffsetDateTime, macros::format_description};
+use time::OffsetDateTime;
 use tracing::{debug, warn};
 
 #[cfg(feature = "daemon")]
 use super::daemon;
-use super::search::format_duration_into;
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
@@ -122,7 +122,7 @@ pub enum Cmd {
         /// - the special value "local" (or "l") which refers to the system time zone
         /// - an offset from UTC (e.g. "+9", "-2:30")
         #[arg(long, visible_alias = "tz", verbatim_doc_comment)]
-        timezone: Option<Timezone>,
+        timezone: Option<UtcOffsetSpec>,
 
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {author}, {intent}, {exit}, {time}, {session}, and {uuid}
         ///
@@ -147,7 +147,7 @@ pub enum Cmd {
         /// - the special value "local" (or "l") which refers to the system time zone
         /// - an offset from UTC (e.g. "+9", "-2:30")
         #[arg(long, visible_alias = "tz", verbatim_doc_comment)]
-        timezone: Option<Timezone>,
+        timezone: Option<UtcOffsetSpec>,
 
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {author}, {intent}, {time}, {session}, {uuid} and {relativetime}.
         ///
@@ -207,7 +207,7 @@ pub fn print_list(
     format: Option<&str>,
     print0: bool,
     reverse: bool,
-    tz: Timezone,
+    tz: UtcOffsetSpec,
 ) {
     let w = std::io::stdout();
     let mut w = w.lock();
@@ -301,7 +301,7 @@ fn check_for_write_errors(write: Result<(), io::Error>) {
 struct FmtHistory<'a> {
     history: &'a History,
     cmd_format: CmdFormat,
-    tz: &'a Timezone,
+    tz: &'a UtcOffsetSpec,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -319,9 +319,6 @@ impl CmdFormat {
     }
 }
 
-static TIME_FMT: &[time::format_description::FormatItem<'static>] =
-    format_description!("[year]-[month]-[day] [hour repr:24]:[minute]:[second]");
-
 /// defines how to format the history
 impl FormatKey for FmtHistory<'_> {
     #[allow(clippy::cast_sign_loss)]
@@ -336,21 +333,20 @@ impl FormatKey for FmtHistory<'_> {
             "directory" => f.write_str(self.history.cwd.trim())?,
             "exit" => f.write_str(&self.history.exit.to_string())?,
             "duration" => {
-                let dur = Duration::from_nanos(std::cmp::max(self.history.duration, 0) as u64);
-                format_duration_into(dur, f)?;
+                let dur = Duration::saturating_from_nanos_i64(self.history.duration);
+                write!(f, "{}", dur.display().largest_unit())?;
             }
             "time" => {
                 self.history
                     .timestamp
                     .to_offset(self.tz.0)
-                    .format(TIME_FMT)
-                    .map_err(|_| fmt::Error)?
+                    .display()
+                    .ymd_hms()
                     .fmt(f)?;
             }
             "relativetime" => {
-                let since = OffsetDateTime::now_utc() - self.history.timestamp;
-                let d = Duration::try_from(since).unwrap_or_default();
-                format_duration_into(d, f)?;
+                let d = OffsetDateTime::now_utc().saturating_duration_since(self.history.timestamp);
+                write!(f, "{}", d.display().largest_unit())?;
             }
             "host" => f.write_str(
                 self.history
@@ -676,8 +672,7 @@ impl TailEvent {
         let history = reply
             .history
             .ok_or_else(|| eyre::eyre!("daemon sent a history tail event without history"))?;
-        let timestamp = OffsetDateTime::from_unix_timestamp_nanos(i128::from(history.timestamp))
-            .context("invalid daemon history timestamp")?;
+        let timestamp = OffsetDateTime::from_unix_nanos_u64(history.timestamp);
         let kind = match HistoryEventKind::try_from(reply.kind)
             .unwrap_or(HistoryEventKind::Unspecified)
         {
@@ -705,7 +700,7 @@ impl TailEvent {
         })
     }
 
-    fn render(&self, tty: bool, tz: Timezone) -> Result<String> {
+    fn render(&self, tty: bool, tz: UtcOffsetSpec) -> Result<String> {
         if tty {
             Ok(self.render_pretty(tz))
         } else {
@@ -715,12 +710,18 @@ impl TailEvent {
         }
     }
 
-    fn render_json(&self, tz: Timezone) -> Result<String> {
+    fn render_json(&self, tz: UtcOffsetSpec) -> Result<String> {
         let payload = TailJsonEvent {
             event: self.kind.as_str(),
             history: TailJsonHistory {
                 id: &self.history.id.0,
-                timestamp: format_history_time(self.history.timestamp, tz)?,
+                timestamp: self
+                    .history
+                    .timestamp
+                    .to_offset(tz.0)
+                    .display()
+                    .ymd_hms()
+                    .to_string(),
                 timestamp_unix_ns: u64::try_from(self.history.timestamp.unix_timestamp_nanos())
                     .context("history timestamp predates unix epoch")?,
                 command: &self.history.command,
@@ -733,19 +734,23 @@ impl TailEvent {
                 intent: self.history.intent.as_deref(),
                 exit: self.exit_value(),
                 duration_ns: self.duration_value(),
-                duration: self.duration_value().map(format_duration_ns),
+                duration: self.duration_value().map(|d| {
+                    Duration::saturating_from_nanos_i64(d)
+                        .display()
+                        .largest_unit()
+                        .to_string()
+                }),
                 success: self.success_value(),
                 finished_at: self
                     .finished_at()
-                    .map(|time| format_history_time(time, tz))
-                    .transpose()?,
+                    .map(|time| time.to_offset(tz.0).display().ymd_hms().to_string()),
             },
         };
 
         Ok(serde_json::to_string(&payload)?)
     }
 
-    fn render_pretty(&self, tz: Timezone) -> String {
+    fn render_pretty(&self, tz: UtcOffsetSpec) -> String {
         let mut out = String::new();
         let border = match self.kind {
             TailKind::Started => "-".repeat(72).bright_blue().to_string(),
@@ -776,8 +781,13 @@ impl TailEvent {
         push_pretty_field(
             &mut out,
             "start",
-            &format_history_time(self.history.timestamp, tz)
-                .unwrap_or_else(|_| "invalid".to_owned()),
+            &self
+                .history
+                .timestamp
+                .to_offset(tz.0)
+                .display()
+                .ymd_hms()
+                .to_string(),
         );
         push_pretty_field(&mut out, "history", &self.history.id.0);
         push_pretty_field(&mut out, "session", &self.history.session);
@@ -797,8 +807,7 @@ impl TailEvent {
         }
 
         if let Some(finished) = self.finished_at() {
-            let finished =
-                format_history_time(finished, tz).unwrap_or_else(|_| "invalid".to_owned());
+            let finished = finished.to_offset(tz.0).display().ymd_hms().to_string();
             push_pretty_field(&mut out, "finished", &finished);
         }
 
@@ -850,7 +859,10 @@ impl TailEvent {
 
     fn duration_display(&self) -> String {
         match self.duration_value() {
-            Some(duration) if duration >= 0 => format_duration_ns(duration),
+            Some(duration) if duration >= 0 => Duration::saturating_from_nanos_i64(duration)
+                .display()
+                .largest_unit()
+                .to_string(),
             Some(_) => "unknown".bright_yellow().to_string(),
             None => "running".bright_yellow().to_string(),
         }
@@ -873,23 +885,6 @@ impl TailKind {
             Self::Ended => "ENDED".bold().bright_red(),
         }
     }
-}
-
-#[cfg(feature = "daemon")]
-fn format_history_time(timestamp: OffsetDateTime, tz: Timezone) -> Result<String> {
-    Ok(timestamp.to_offset(tz.0).format(TIME_FMT)?)
-}
-
-#[cfg(feature = "daemon")]
-fn format_duration_ns(duration_ns: i64) -> String {
-    struct F(Duration);
-    impl Display for F {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            format_duration_into(self.0, f)
-        }
-    }
-
-    F(Duration::from_nanos(duration_ns.max(0).cast_unsigned())).to_string()
 }
 
 #[cfg(feature = "daemon")]
@@ -951,7 +946,7 @@ impl Cmd {
         include_deleted: bool,
         print0: bool,
         reverse: bool,
-        tz: Timezone,
+        tz: UtcOffsetSpec,
     ) -> Result<()> {
         let filters = match (session, cwd) {
             (true, true) => [Session, Directory],
@@ -1359,7 +1354,7 @@ mod tests {
     #[test]
     fn test_tail_json_output_contains_history_fields() {
         let json = sample_tail_event(TailKind::Ended)
-            .render(false, Timezone(time::UtcOffset::UTC))
+            .render(false, UtcOffsetSpec(time::UtcOffset::UTC))
             .unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
@@ -1374,7 +1369,7 @@ mod tests {
     #[test]
     fn test_tail_pretty_output_shows_pending_fields_for_started_events() {
         let rendered = sample_tail_event(TailKind::Started)
-            .render(true, Timezone(time::UtcOffset::UTC))
+            .render(true, UtcOffsetSpec(time::UtcOffset::UTC))
             .unwrap();
         let plain = regex::Regex::new(r"\x1b\[[0-9;]*m")
             .unwrap()

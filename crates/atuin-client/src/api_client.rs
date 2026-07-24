@@ -270,8 +270,8 @@ impl<'a> Client<'a> {
             sync_addr,
             client: client_builder(extra_headers)
                 .default_headers(headers)
-                .connect_timeout(Duration::new(connect_timeout, 0))
-                .timeout(Duration::new(timeout, 0))
+                .connect_timeout(Duration::from_secs(connect_timeout))
+                .timeout(Duration::from_secs(timeout))
                 .build()?,
         })
     }

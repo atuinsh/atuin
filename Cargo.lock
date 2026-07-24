@@ -407,6 +407,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "serde_with",
  "sqlx",
  "sysinfo",
  "thiserror 2.0.18",
