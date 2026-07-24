@@ -225,6 +225,8 @@ pub enum IndexFilterMode {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ShellFilter {
+    /// The list of shells to include. This list must be sorted and contain no duplicates. If empty,
+    /// all shells will be included.
     sorted: Vec<String>,
 }
 

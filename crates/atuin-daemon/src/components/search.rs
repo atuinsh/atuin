@@ -29,6 +29,16 @@ const RESULTS_LIMIT: u32 = 200;
 /// How often to rebuild the frecency map (in seconds).
 const FRECENCY_REFRESH_INTERVAL_SECS: u64 = 60;
 
+/// Build the search index without building the frecency map.
+///
+/// `index` is a closure to support both shared `RwLock` indices and owned indices:
+///
+/// * Owned: `async || &my_owned_index`
+/// * Shared: `|| my_rwlock_index.read()`
+///
+/// In the shared case, this ensures that the lock isn't held while this function does expensive
+/// computation.
+#[instrument(level = Level::TRACE)]
 async fn build_index_only<F, R>(index: F, handle: &DaemonHandle) -> Result<(), ()>
 where
     F: Fn() -> R,
@@ -64,6 +74,16 @@ where
     }
 }
 
+/// Build the frecency map.
+///
+/// `index` is a closure to support both shared `RwLock` indices and owned indices:
+///
+/// * Owned: `async || &my_owned_index`
+/// * Shared: `|| my_rwlock_index.read()`
+///
+/// In the shared case, this ensures that the lock isn't held while this function does expensive
+/// computation.
+#[instrument(level = Level::TRACE)]
 async fn build_frecency<F, R>(index: F, handle: &DaemonHandle)
 where
     F: Fn() -> R,
@@ -74,6 +94,15 @@ where
     info!("Frecency map built");
 }
 
+/// Build the search index and frecency map.
+///
+/// `index` is a closure to support both shared `RwLock` indices and owned indices:
+///
+/// * Owned: `async || &my_owned_index`
+/// * Shared: `|| my_rwlock_index.read()`
+///
+/// In the shared case, this ensures that the lock isn't held while this function does expensive
+/// computation.
 async fn build_index<F, R>(index: F, handle: &DaemonHandle) -> Result<(), ()>
 where
     F: Fn() -> R,
