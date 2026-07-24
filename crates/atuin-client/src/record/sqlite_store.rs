@@ -9,8 +9,9 @@ use async_trait::async_trait;
 use eyre::{Result, eyre};
 use fs_err as fs;
 
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use sqlx::{
-    Row,
+    Row, TypeInfo, ValueRef,
     sqlite::{
         SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
         SqliteSynchronous,
@@ -25,6 +26,84 @@ use uuid::Uuid;
 
 use super::encryption::PASETO_V4;
 use super::store::Store;
+
+// Storage codec: encrypted payloads reach us as base64 text (a PASETO token
+// and a JSON-wrapped PASERK key), which costs ~35% over the raw bytes - tens
+// of MB on a large store. Payloads matching these exact shapes are stored
+// with the base64 decoded to a blob; anything else is stored as text
+// verbatim, and the column's storage type says which form a row is in. The
+// sync wire format is unchanged: reads rebuild the original string, and
+// compaction is only applied when re-expansion reproduces it byte for byte.
+const DATA_PREFIX: &str = "v4.local.";
+const CEK_PREFIX: &str = "{\"wpk\":\"k4.local-wrap.pie.";
+const CEK_INFIX: &str = "\",\"kid\":\"k4.lid.";
+const CEK_SUFFIX: &str = "\"}";
+
+fn compact_data(data: &str) -> Option<Vec<u8>> {
+    let payload = data.strip_prefix(DATA_PREFIX)?;
+    // a '.' would mean the token carries a footer, which expand_data can't rebuild
+    if payload.contains('.') {
+        return None;
+    }
+    let blob = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    (expand_data(&blob) == data).then_some(blob)
+}
+
+fn expand_data(blob: &[u8]) -> String {
+    format!("{DATA_PREFIX}{}", URL_SAFE_NO_PAD.encode(blob))
+}
+
+fn compact_cek(cek: &str) -> Option<Vec<u8>> {
+    let (wpk, kid) = cek
+        .strip_prefix(CEK_PREFIX)?
+        .strip_suffix(CEK_SUFFIX)?
+        .split_once(CEK_INFIX)?;
+    let wpk = URL_SAFE_NO_PAD.decode(wpk).ok()?;
+    let kid = URL_SAFE_NO_PAD.decode(kid).ok()?;
+
+    let mut blob = Vec::with_capacity(1 + wpk.len() + kid.len());
+    blob.push(u8::try_from(wpk.len()).ok()?);
+    blob.extend_from_slice(&wpk);
+    blob.extend_from_slice(&kid);
+    (expand_cek(&blob).as_deref() == Some(cek)).then_some(blob)
+}
+
+fn expand_cek(blob: &[u8]) -> Option<String> {
+    let (&wpk_len, rest) = blob.split_first()?;
+    let (wpk, kid) = rest.split_at_checked(wpk_len as usize)?;
+    Some(format!(
+        "{CEK_PREFIX}{}{CEK_INFIX}{}{CEK_SUFFIX}",
+        URL_SAFE_NO_PAD.encode(wpk),
+        URL_SAFE_NO_PAD.encode(kid)
+    ))
+}
+
+fn column_is_blob(row: &SqliteRow, col: &str) -> bool {
+    row.try_get_raw(col)
+        .expect("missing column in store row")
+        .type_info()
+        .name()
+        == "BLOB"
+}
+
+/// Read a payload column, re-expanding the compact blob form to its original text.
+fn column_payload(row: &SqliteRow, col: &str, expand: impl Fn(&[u8]) -> Option<String>) -> String {
+    if column_is_blob(row, col) {
+        expand(&row.get::<Vec<u8>, _>(col)).expect("invalid compact payload in sqlite DB")
+    } else {
+        row.get(col)
+    }
+}
+
+/// Read a uuid column: a 16-byte blob, or hyphenated text from before the
+/// compact-ids migration (which converts everything, but be lenient).
+fn column_uuid(row: &SqliteRow, col: &str) -> Uuid {
+    if column_is_blob(row, col) {
+        Uuid::from_slice(&row.get::<Vec<u8>, _>(col)).expect("invalid uuid blob in sqlite DB")
+    } else {
+        Uuid::from_str(row.get(col)).expect("invalid uuid format in sqlite DB")
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct SqliteStore {
@@ -80,20 +159,27 @@ impl SqliteStore {
         r: &Record<EncryptedData>,
     ) -> Result<()> {
         // In sqlite, we are "limited" to i64. But that is still fine, until 2262.
-        sqlx::query(
+        let query = sqlx::query(
             "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek)
                 values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
-        .bind(r.id.0.as_hyphenated().to_string())
+        .bind(r.id.0.as_bytes().as_slice())
         .bind(r.idx as i64)
-        .bind(r.host.id.0.as_hyphenated().to_string())
+        .bind(r.host.id.0.as_bytes().as_slice())
         .bind(r.tag.as_str())
         .bind(r.timestamp as i64)
-        .bind(r.version.as_str())
-        .bind(r.data.data.as_str())
-        .bind(r.data.content_encryption_key.as_str())
-        .execute(&mut **tx)
-        .await?;
+        .bind(r.version.as_str());
+
+        let query = match compact_data(&r.data.data) {
+            Some(blob) => query.bind(blob),
+            None => query.bind(r.data.data.as_str()),
+        };
+        let query = match compact_cek(&r.data.content_encryption_key) {
+            Some(blob) => query.bind(blob),
+            None => query.bind(r.data.content_encryption_key.as_str()),
+        };
+
+        query.execute(&mut **tx).await?;
 
         Ok(())
     }
@@ -103,8 +189,8 @@ impl SqliteStore {
         let timestamp: i64 = row.get("timestamp");
 
         // tbh at this point things are pretty fucked so just panic
-        let id = Uuid::from_str(row.get("id")).expect("invalid id UUID format in sqlite DB");
-        let host = Uuid::from_str(row.get("host")).expect("invalid host UUID format in sqlite DB");
+        let id = column_uuid(&row, "id");
+        let host = column_uuid(&row, "host");
 
         Record {
             id: RecordId(id),
@@ -114,8 +200,8 @@ impl SqliteStore {
             tag: row.get("tag"),
             version: row.get("version"),
             data: EncryptedData {
-                data: row.get("data"),
-                content_encryption_key: row.get("cek"),
+                data: column_payload(&row, "data", |blob| Some(expand_data(blob))),
+                content_encryption_key: column_payload(&row, "cek", expand_cek),
             },
         }
     }
@@ -127,6 +213,59 @@ impl SqliteStore {
             .await?;
 
         Ok(res)
+    }
+
+    /// Rewrite rows saved before the compact encoding existed (base64 text
+    /// payloads) into the blob form, then vacuum to give the space back to the
+    /// filesystem. Returns the number of rows rewritten. One-off maintenance:
+    /// new rows are always written compact.
+    pub async fn compact(&self) -> Result<u64> {
+        let mut rewritten = 0u64;
+        let mut cursor = 0i64;
+
+        loop {
+            let rows = sqlx::query(
+                "select rowid, data, cek from store
+                    where rowid > ?1 and (typeof(data) = 'text' or typeof(cek) = 'text')
+                    order by rowid asc limit 1000",
+            )
+            .bind(cursor)
+            .fetch_all(&self.pool)
+            .await?;
+
+            let Some(last) = rows.last() else { break };
+            cursor = last.get("rowid");
+
+            let mut tx = self.pool.begin().await?;
+            for row in &rows {
+                let rowid: i64 = row.get("rowid");
+                let data = compact_data(&column_payload(row, "data", |b| Some(expand_data(b))));
+                let cek = compact_cek(&column_payload(row, "cek", expand_cek));
+                if data.is_none() && cek.is_none() {
+                    // not in a shape we can compact - leave it as text
+                    continue;
+                }
+
+                sqlx::query(
+                    "update store set data = coalesce(?2, data), cek = coalesce(?3, cek)
+                        where rowid = ?1",
+                )
+                .bind(rowid)
+                .bind(data)
+                .bind(cek)
+                .execute(&mut *tx)
+                .await?;
+                rewritten += 1;
+            }
+            tx.commit().await?;
+        }
+
+        sqlx::query("vacuum").execute(&self.pool).await?;
+        sqlx::query("pragma wal_checkpoint(truncate)")
+            .execute(&self.pool)
+            .await?;
+
+        Ok(rewritten)
     }
 }
 
@@ -149,7 +288,7 @@ impl Store for SqliteStore {
 
     async fn get(&self, id: RecordId) -> Result<Record<EncryptedData>> {
         let res = sqlx::query("select * from store where store.id = ?1")
-            .bind(id.0.as_hyphenated().to_string())
+            .bind(id.0.as_bytes().as_slice())
             .map(Self::query_row)
             .fetch_one(&self.pool)
             .await?;
@@ -159,7 +298,7 @@ impl Store for SqliteStore {
 
     async fn delete(&self, id: RecordId) -> Result<()> {
         sqlx::query("delete from store where id = ?1")
-            .bind(id.0.as_hyphenated().to_string())
+            .bind(id.0.as_bytes().as_slice())
             .execute(&self.pool)
             .await?;
 
@@ -175,7 +314,7 @@ impl Store for SqliteStore {
     async fn last(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>> {
         let res =
             sqlx::query("select * from store where host=?1 and tag=?2 order by idx desc limit 1")
-                .bind(host.0.as_hyphenated().to_string())
+                .bind(host.0.as_bytes().as_slice())
                 .bind(tag)
                 .map(Self::query_row)
                 .fetch_one(&self.pool)
@@ -235,7 +374,7 @@ impl Store for SqliteStore {
             "select * from store where idx >= ?1 and host = ?2 and tag = ?3 order by idx asc limit ?4",
         )
         .bind(idx as i64)
-        .bind(host.0.as_hyphenated().to_string())
+        .bind(host.0.as_bytes().as_slice())
         .bind(tag)
         .bind(limit as i64)
         .map(Self::query_row)
@@ -253,7 +392,7 @@ impl Store for SqliteStore {
     ) -> Result<Option<Record<EncryptedData>>> {
         let res = sqlx::query("select * from store where idx = ?1 and host = ?2 and tag = ?3")
             .bind(idx as i64)
-            .bind(host.0.as_hyphenated().to_string())
+            .bind(host.0.as_bytes().as_slice())
             .bind(tag)
             .map(Self::query_row)
             .fetch_one(&self.pool)
@@ -269,22 +408,21 @@ impl Store for SqliteStore {
     async fn status(&self) -> Result<RecordStatus> {
         let mut status = RecordStatus::new();
 
-        let res: Result<Vec<(String, String, i64)>, sqlx::Error> =
-            sqlx::query_as("select host, tag, max(idx) from store group by host, tag")
-                .fetch_all(&self.pool)
-                .await;
+        let res = sqlx::query("select host, tag, max(idx) as idx from store group by host, tag")
+            .fetch_all(&self.pool)
+            .await;
 
         let res = match res {
             Err(e) => return Err(eyre!("failed to fetch local store status: {}", e)),
             Ok(v) => v,
         };
 
-        for i in res {
-            let host = HostId(
-                Uuid::from_str(i.0.as_str()).expect("failed to parse uuid for local store status"),
-            );
+        for row in res {
+            let host = HostId(column_uuid(&row, "host"));
+            let tag: String = row.get("tag");
+            let idx: i64 = row.get("idx");
 
-            status.set_raw(host, i.1, i.2 as u64);
+            status.set_raw(host, tag, idx as u64);
         }
 
         Ok(status)
@@ -400,6 +538,88 @@ mod tests {
             })
             .idx(0)
             .build()
+    }
+
+    #[test]
+    fn codec_round_trips_real_encrypted_record() {
+        let record = Record::builder()
+            .host(Host::new(HostId(uuid_v7())))
+            .version("v0".into())
+            .tag("history".into())
+            .idx(0)
+            .data(DecryptedData(vec![1, 2, 3, 4]))
+            .build()
+            .encrypt::<PASETO_V4>(&[7; 32]);
+
+        let data_blob = super::compact_data(&record.data.data).expect("real token should compact");
+        assert_eq!(super::expand_data(&data_blob), record.data.data);
+        assert!(data_blob.len() < record.data.data.len());
+
+        let cek_blob = super::compact_cek(&record.data.content_encryption_key)
+            .expect("real cek should compact");
+        assert_eq!(
+            super::expand_cek(&cek_blob).as_deref(),
+            Some(record.data.content_encryption_key.as_str())
+        );
+        assert!(cek_blob.len() < record.data.content_encryption_key.len());
+    }
+
+    #[test]
+    fn codec_leaves_unknown_shapes_alone() {
+        // not a token at all, a token with a footer, invalid base64
+        assert_eq!(super::compact_data("1234"), None);
+        assert_eq!(super::compact_data("v4.local.abc.Zm9vdGVy"), None);
+        assert_eq!(super::compact_data("v4.local.!!!"), None);
+        // base64 that would not round-trip byte for byte (padding)
+        assert_eq!(super::compact_data("v4.local.YQ=="), None);
+        assert_eq!(super::compact_cek("1234"), None);
+        assert_eq!(super::compact_cek("{\"wpk\":\"nope\"}"), None);
+    }
+
+    #[tokio::test]
+    async fn legacy_text_rows_read_back_and_compact() {
+        let db = SqliteStore::new(":memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        // a realistic encrypted record, inserted the way pre-codec atuin
+        // stored it: uuids and payloads all as text
+        let record = Record::builder()
+            .host(Host::new(HostId(uuid_v7())))
+            .version("v0".into())
+            .tag("history".into())
+            .idx(0)
+            .data(DecryptedData(vec![1, 2, 3, 4]))
+            .build()
+            .encrypt::<PASETO_V4>(&[7; 32]);
+
+        sqlx::query(
+            "insert into store(id, idx, host, tag, timestamp, version, data, cek)
+                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )
+        .bind(record.id.0.as_hyphenated().to_string())
+        .bind(record.idx as i64)
+        .bind(record.host.id.0.as_hyphenated().to_string())
+        .bind(record.tag.as_str())
+        .bind(record.timestamp as i64)
+        .bind(record.version.as_str())
+        .bind(record.data.data.as_str())
+        .bind(record.data.content_encryption_key.as_str())
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        let read = db.load_all().await.unwrap();
+        assert_eq!(read, vec![record.clone()], "text row should read unchanged");
+
+        let rewritten = db.compact().await.unwrap();
+        assert_eq!(rewritten, 1);
+
+        let read = db.load_all().await.unwrap();
+        assert_eq!(read, vec![record], "compacted row should read unchanged");
+
+        // compact again: nothing left to rewrite
+        assert_eq!(db.compact().await.unwrap(), 0);
     }
 
     #[tokio::test]

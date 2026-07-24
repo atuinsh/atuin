@@ -38,6 +38,9 @@ pub enum Cmd {
     /// Verify that all records in the store can be decrypted with the current key
     Verify(verify::Verify),
 
+    /// Rewrite the store in a compact encoding and reclaim free space
+    Compact,
+
     /// Push all records to the remote sync server (one way sync)
     #[cfg(feature = "sync")]
     Push(push::Push),
@@ -56,6 +59,7 @@ impl Cmd {
     ) -> Result<()> {
         match self {
             Self::Status => self.status(store).await,
+            Self::Compact => self.compact(settings, store).await,
             Self::Rebuild(rebuild) => rebuild.run(settings, store, database).await,
             Self::Rekey(rekey) => rekey.run(settings, store).await,
             Self::Verify(verify) => verify.run(settings, store).await,
@@ -67,6 +71,24 @@ impl Cmd {
             #[cfg(feature = "sync")]
             Self::Pull(pull) => pull.run(settings, store, database).await,
         }
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    async fn compact(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
+        let store_mb = || {
+            std::fs::metadata(&settings.record_store_path)
+                .map_or(0.0, |m| m.len() as f64 / 1_048_576.0)
+        };
+        let before = store_mb();
+
+        let rewritten = store.compact().await?;
+
+        println!(
+            "compacted {rewritten} records: {before:.1}MB -> {:.1}MB",
+            store_mb()
+        );
+
+        Ok(())
     }
 
     pub async fn status(&self, store: SqliteStore) -> Result<()> {
