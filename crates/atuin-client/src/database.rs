@@ -903,45 +903,42 @@ impl Database for Sqlite {
             .sql()
             .expect("issue in stats duration over time query");
 
-        let prev = sqlx::query(sqlx::AssertSqlSafe(prev))
-            .bind(h.timestamp.unix_timestamp_nanos() as i64)
-            .bind(&h.session)
-            .map(Self::query_history)
-            .fetch_optional(&self.pool)
-            .await?;
-
-        let next = sqlx::query(sqlx::AssertSqlSafe(next))
-            .bind(h.timestamp.unix_timestamp_nanos() as i64)
-            .bind(&h.session)
-            .map(Self::query_history)
-            .fetch_optional(&self.pool)
-            .await?;
-
-        let total: (i64,) = sqlx::query_as(sqlx::AssertSqlSafe(total))
-            .bind(&h.command)
-            .fetch_one(&self.pool)
-            .await?;
-
-        let average: (f64,) = sqlx::query_as(sqlx::AssertSqlSafe(average))
-            .bind(&h.command)
-            .fetch_one(&self.pool)
-            .await?;
-
-        let exits: Vec<(i64, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(exits))
-            .bind(&h.command)
-            .fetch_all(&self.pool)
-            .await?;
-
-        let day_of_week: Vec<(String, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(day_of_week))
-            .bind(&h.command)
-            .fetch_all(&self.pool)
-            .await?;
-
-        let duration_over_time: Vec<(String, f64)> =
+        // The queries are all independent, so run them concurrently on the pool.
+        let (prev, next, total, average, exits, day_of_week, duration_over_time): (
+            _,
+            _,
+            (i64,),
+            (f64,),
+            Vec<(i64, i64)>,
+            Vec<(String, i64)>,
+            Vec<(String, f64)>,
+        ) = tokio::try_join!(
+            sqlx::query(sqlx::AssertSqlSafe(prev))
+                .bind(h.timestamp.unix_timestamp_nanos() as i64)
+                .bind(&h.session)
+                .map(Self::query_history)
+                .fetch_optional(&self.pool),
+            sqlx::query(sqlx::AssertSqlSafe(next))
+                .bind(h.timestamp.unix_timestamp_nanos() as i64)
+                .bind(&h.session)
+                .map(Self::query_history)
+                .fetch_optional(&self.pool),
+            sqlx::query_as(sqlx::AssertSqlSafe(total))
+                .bind(&h.command)
+                .fetch_one(&self.pool),
+            sqlx::query_as(sqlx::AssertSqlSafe(average))
+                .bind(&h.command)
+                .fetch_one(&self.pool),
+            sqlx::query_as(sqlx::AssertSqlSafe(exits))
+                .bind(&h.command)
+                .fetch_all(&self.pool),
+            sqlx::query_as(sqlx::AssertSqlSafe(day_of_week))
+                .bind(&h.command)
+                .fetch_all(&self.pool),
             sqlx::query_as(sqlx::AssertSqlSafe(duration_over_time))
                 .bind(&h.command)
-                .fetch_all(&self.pool)
-                .await?;
+                .fetch_all(&self.pool),
+        )?;
 
         let duration_over_time = duration_over_time
             .iter()

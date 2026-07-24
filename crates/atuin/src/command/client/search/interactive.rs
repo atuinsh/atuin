@@ -1832,6 +1832,9 @@ pub async fn history(
     let mut results = app.query_results(&mut db, settings.smart_sort).await?;
 
     let mut stats: Option<HistoryStats> = None;
+    // The id of the history entry `stats` was computed for, so the render loop
+    // only hits the database when the inspected entry actually changes.
+    let mut stats_for: Option<HistoryId> = None;
     let mut inspecting: Option<History> = None;
     let accept;
     let result = 'render: loop {
@@ -1980,6 +1983,7 @@ pub async fn history(
         }
 
         stats = if app.tab_index == 0 {
+            stats_for = None;
             None
         } else if !results.is_empty() {
             // If we have stats, then we can indicate next available IDs. This avoids passing
@@ -1988,18 +1992,26 @@ pub async fn history(
                 Some(insp) => insp,
                 None => results[app.results_state.selected()].clone(),
             };
-            let stats = db.stats(&selected).await?;
-            app.inspecting_state.current = Some(selected.id);
-            app.inspecting_state.previous = match stats.previous.clone() {
-                Some(p) => Some(p.id),
-                _ => None,
-            };
-            app.inspecting_state.next = match stats.next.clone() {
-                Some(p) => Some(p.id),
-                _ => None,
-            };
-            Some(stats)
+            if stats_for.as_ref() == Some(&selected.id) {
+                // Already computed for this entry - the render loop iterates on every
+                // input event and poll timeout, and stats() is several queries.
+                stats
+            } else {
+                let stats = db.stats(&selected).await?;
+                stats_for = Some(selected.id.clone());
+                app.inspecting_state.current = Some(selected.id);
+                app.inspecting_state.previous = match stats.previous.clone() {
+                    Some(p) => Some(p.id),
+                    _ => None,
+                };
+                app.inspecting_state.next = match stats.next.clone() {
+                    Some(p) => Some(p.id),
+                    _ => None,
+                };
+                Some(stats)
+            }
         } else {
+            stats_for = None;
             None
         };
     };
