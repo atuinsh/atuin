@@ -6,11 +6,8 @@ tiers and records what works where.
 
 ## Support tiers
 
-- **Tier 1 — Supported.** Exercised in CI, feature-complete, and bugs are
-  prioritized.
-- **Tier 2 — Best-effort.** Ships and works, but some features are missing and
-it's largely community-maintained. Not fully covered by continuous integration.
-- **Experimental.** May change or break between releases. Use at your own risk.
+- **Tier 1** — Actively supported by the Atuin team.
+- **Tier 2** — Actively supported by the community.
 
 ## Shells
 
