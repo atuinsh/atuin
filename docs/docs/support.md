@@ -27,41 +27,26 @@ Feature coverage varies by shell:
 
 ## Operating systems and architectures
 
-Atuin ships official prebuilt binaries — through the install script and GitHub
-releases — for the x86_64 and ARM64 (aarch64) architectures. Both are Tier 1:
-built and tested in CI. Other architectures, such as riscv64 or armv7, have no
-prebuilt binary. Rust can still build Atuin from source on them, but they're
-_Experimental_ and untested.
+Atuin runs on a range of operating systems and CPU architectures. The matrix
+below shows, for each platform, whether an official prebuilt binary is published
+and how far continuous integration (CI) exercises it.
 
-<table>
-  <thead>
-    <tr><th>Tier</th><th>OS</th><th>Additional notes</th></tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td rowspan="4"><strong>1</strong></td>
-      <td><code>linux-x86_64</code></td>
-      <td></td>
-    </tr>
-    <tr>
-      <td><code>linux-arm64</code></td>
-      <td></td>
-    </tr>
-    <tr>
-      <td><code>macOS-arm64</code></td>
-      <td>Replaying a result with <kbd>alt</kbd>+<kbd>#</kbd> isn't available.</td>
-    </tr>
-    <tr>
-      <td><code>wsl-x86_64</code></td>
-      <td></td>
-    </tr>
-    <tr>
-      <td><strong>2</strong></td>
-      <td><code>win32-x86_64</code></td>
-      <td>Syntax highlighting isn't supported.</td>
-    </tr>
-  </tbody>
-</table>
+| Platform | Prebuilt binary | CI | Notes |
+| --- | :--: | :--: | --- |
+| `linux-x86_64` | ✓ | tested | |
+| `linux-arm64` | ✓ | build-only | |
+| `macos-arm64` | ✓ | tested | Replaying a result with ++alt+"&num;"++ isn't available. |
+| `macos-x86_64` | ✗ | ✗ | Intel Macs. Install with Homebrew, `cargo install`, or run the ARM64 build under Rosetta. |
+| `windows-x86_64` | ✓ | tested | No syntax highlighting or pty-proxy. |
+| `wsl2-x86_64` | ✓ | tested | |
+| `illumos-x86_64` | ✗ | build-only | Build from source. |
+| Other (riscv64, …) | ✗ | ✗ | Build from source. May not compile: TLS (`ring`) supports only x86_64, x86, arm, and aarch64. |
+
+- **Prebuilt binary** — an official binary is published through the install
+  script and GitHub releases. Linux binaries are provided for both glibc and
+  musl.
+- **CI** — _tested_: unit tests run in CI; _build-only_: compiled and checked,
+  but tests aren't run; _✗_: not built in CI.
 
 !!! warning
 

@@ -37,6 +37,7 @@ fullscreen
 fulltext
 fzf
 Ghostty
+glibc
 histdb
 IDE
 ignorespace
