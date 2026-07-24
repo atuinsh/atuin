@@ -25,40 +25,26 @@ Feature coverage varies by shell:
 | xonsh (T2) | ✓ | ✗ | ✓ | ✗ | ✗ |
 | PowerShell (T2) | ✓ | ✗ | ✓ | ✗ | ✗ |
 
-## Operating systems
+## Operating systems and architectures
 
-| OS | Tier | Notes |
-| --- | --- | --- |
-| Linux | Tier 1 | |
-| macOS | Tier 1 | Replaying a result with ++alt+"&num;"++ isn't available. |
-| Windows Native | Tier 2 | Syntax highlighting isn't supported. |
-| WSL | Tier 2 | |
+Atuin ships official prebuilt binaries — through the install script and GitHub
+releases — for the x86_64 and ARM64 (aarch64) architectures. Both are Tier 1:
+built and tested in CI. Other architectures, such as riscv64 or armv7, have no
+prebuilt binary. Rust can still build Atuin from source on them, but they're
+_Experimental_ and untested.
+
+| OS | Tier | Prebuilt architectures | Notes |
+| --- | --- | --- | --- |
+| Linux | Tier 1 | x86_64, ARM64 (gnu, musl) | |
+| macOS | Tier 1 | ARM64 | No Intel binary — use Homebrew, `cargo install`, or Rosetta. Replaying a result with ++alt+"&num;"++ isn't available. |
+| Windows Native | Tier 2 | x86_64 | No ARM64 binary. Syntax highlighting isn't supported. |
+| WSL | Tier 2 | x86_64, ARM64 | |
 
 !!! warning
 
     Atuin supports running on all filesystems. ZFS and network filesystems are
     treated as _Experimental_. For more info, see [Known
     issues](known-issues.md).
-
-## Architectures
-
-Atuin ships official prebuilt binaries — through the install script and GitHub
-releases — for two CPU architectures: x86_64 and ARM64 (aarch64). Both are
-Tier 1: built and tested in CI. Other architectures, such as riscv64 or armv7,
-have no prebuilt binary. Rust can still build Atuin from source on them, but
-they're _Experimental_ and untested.
-
-A prebuilt binary isn't available for every architecture and operating system
-combination:
-
-| Architecture | Linux | macOS | Windows |
-| --- | :---: | :---: | :---: |
-| x86_64 | ✓ (gnu, musl) | ✗ | ✓ |
-| ARM64 (aarch64) | ✓ (gnu, musl) | ✓ | ✗ |
-
-- Intel Macs have no prebuilt binary. Install with Homebrew or `cargo install`,
-  or run the ARM64 build under Rosetta.
-- Windows on ARM has no native binary yet.
 
 ## Terminals
 
