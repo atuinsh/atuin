@@ -22,7 +22,7 @@ Where `THEMENAME` is a known theme. The following themes are available out-of-th
 * `marine` theme
 * `(none)` theme (removes all styling)
 
-These are present to ensure users and developers can try out theming, but in general, you
+These are present to make sure users and developers can try out theming, but in general, you
 will need to download themes or make your own.
 
 If you're writing your own themes, you can add the following line to get additional output:
@@ -60,7 +60,7 @@ to (at present) colors. In future, this may be expanded to allow richer style su
 * `Guidance`: instructing the user as help or context
 * `Important`: drawing the user's attention to information
 * `Title`: titling a section or view
-* `Muted`: anodyne, usually grey, foreground for contrast with other colors. Normally equivalent to the base color, but allows themes to change the base color, with less risk of breaking intentional color contrasts (for example, stacked bar charts)
+* `Muted`: anodyne, usually grey, foreground for contrast with other colors. Normally equivalent to the base color, but themes can change the base color, with less risk of breaking intentional color contrasts (for example, stacked bar charts)
 * `SyntaxCommand`: the command word when syntax highlighting shell commands (`git` in `git status`)
 * `SyntaxFlag`: a `-f`/`--flag` argument
 * `SyntaxString`: a quoted string

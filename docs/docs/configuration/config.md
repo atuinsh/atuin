@@ -59,7 +59,7 @@ dialect = "us"
 
 Default: `true`
 
-Configures whether or not to automatically sync, when logged in.
+Configures whether to automatically sync, when logged in.
 
 ```toml
 auto_sync = true/false
@@ -69,7 +69,7 @@ auto_sync = true/false
 
 Default: `true`
 
-Configures whether or not to automatically check for updates.
+Configures whether to automatically check for updates.
 
 ```toml
 update_check = true/false
@@ -279,7 +279,7 @@ inline_height = 40
 
 Default: `true`
 
-Configure whether or not to show a preview of the selected command.
+Configure whether to show a preview of the selected command.
 
 Useful when the command is longer than the terminal width and is cut off.
 
@@ -307,7 +307,7 @@ Atuin version: >= 17.0
 
 Default: `true`
 
-Configure whether or not to show the help row, which includes the current Atuin version (and whether an update is available), a keymap hint, and the total amount of commands in your history.
+Configure whether to show the help row, which includes the current Atuin version (and whether an update is available), a keymap hint, and the total amount of commands in your history.
 
 ```toml
 show_help = true
@@ -319,7 +319,7 @@ Atuin version: >= 18.0
 
 Default: `true`
 
-Configure whether or not to show tabs for search and inspect.
+Configure whether to show tabs for search and inspect.
 
 ```toml
 show_tabs = true
@@ -533,7 +533,7 @@ Atuin version: >= 18.8
 
 Default: `false`
 
-Allows building a command chain with the `&&` or `||` operator. When enabled, opening Atuin will search for the next command in the chain, and append to the current buffer.
+Use this to build a command chain with the `&&` or `||` operator. When enabled, opening Atuin will search for the next command in the chain, and append to the current buffer.
 
 ```toml
 command_chaining = false
@@ -1066,7 +1066,7 @@ retention = 4
 
 Default: `true`
 
-Whether or not to enable file-based logging.
+Whether to enable file-based logging.
 
 ```toml
 enabled = true

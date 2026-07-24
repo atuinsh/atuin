@@ -62,7 +62,7 @@ Look for the `shell.preexec` field in the output. If it shows `none`, Atuin's ho
 
 ### Enabling Atuin in Embedded Terminals
 
-If you want Atuin to record commands from an embedded terminal, you'll need to ensure it starts an interactive shell that sources your configuration.
+If you want Atuin to record commands from an embedded terminal, you'll need to make sure it starts an interactive shell that sources your configuration.
 
 #### IDE Terminal Settings
 

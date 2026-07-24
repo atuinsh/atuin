@@ -43,6 +43,6 @@ The server caches `TERMINAL.md` files after they're first loaded, so if you make
 
 ## Why not `AGENTS.md`?
 
-Most agent files are optimized for _coding_ agents: patterns, tools, coding style, and so on. This is great for coding agents, but not as useful for general-purpose agents. By using `TERMINAL.md` instead, Atuin AI provides a more flexible way to send additional context that's not tied to coding-specific patterns. This allows users to provide any kind of context they want, without being constrained by the structure of an agent file.
+Most agent files are optimized for _coding_ agents: patterns, tools, coding style, and so on. This is great for coding agents, but not as useful for general-purpose agents. By using `TERMINAL.md` instead, Atuin AI provides a more flexible way to send additional context that's not tied to coding-specific patterns. Users can then provide any kind of context they want, without being constrained by the structure of an agent file.
 
 If your agent file has relevant information, you can instruct the LLM in `TERMINAL.md` to read from it.

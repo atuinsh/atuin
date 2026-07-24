@@ -1,6 +1,6 @@
 # sync
 
-Atuin can back up your history to a server, and use this to ensure multiple
+Atuin can back up your history to a server, and use this to make sure multiple
 machines have the same shell history. This is all encrypted end-to-end, so the
 server operator can _never_ see your data!
 
@@ -27,7 +27,7 @@ atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
 ```
 
 If you don't want to have your password be included in shell history, you can omit
-the password flag and you will be prompted to provide it through `stdin`.
+the password flag and Atuin asks for it through `stdin`.
 
 Usernames must be unique and only contain alphanumerics or hyphens,
 and emails will only be used for important notifications (security breaches, changes to service, etc).
@@ -68,7 +68,7 @@ atuin login -u <USERNAME> -p <PASSWORD> -k <KEY>
 ```
 
 If you don't want to have your password or encryption key be included in shell history, you can omit
-the corresponding flag and you will be prompted to provide it through `stdin`.
+the corresponding flag and Atuin asks for it through `stdin`.
 
 ## Logout
 

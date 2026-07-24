@@ -6,7 +6,7 @@ All the settings that control the behavior of [Atuin AI](./introduction.md) are 
 
 Default: `false`
 
-Whether or not the AI features are enabled. When set to `false`, the question mark keybinding will output a message with instructions to run `atuin setup` to enable the feature.
+Whether the AI features are enabled. When set to `false`, the question mark keybinding will output a message with instructions to run `atuin setup` to enable the feature.
 
 ### model
 
@@ -66,25 +66,25 @@ Settings that control what capabilities are sent to the LLM, which the LLM uses 
 
 Default: `true`
 
-Whether or not to include the "history search" capability in the context sent to the LLM. This allows the AI to request to search your Atuin history for relevant commands when generating suggestions or answering questions.
+Whether to include the "history search" capability in the context sent to the LLM. The AI can then request to search your Atuin history for relevant commands when generating suggestions or answering questions.
 
 ### `enable_history_output`
 
 Default: `true`
 
-Whether or not to include the "history output" capability in the context sent to the LLM. This allows the AI to request to view the output of previous commands. This requires the [pty-proxy](../reference/pty-proxy.md) and [daemon](../reference/daemon.md) to be enabled and running in order for Atuin to capture commands' outputs—see [Reading Command Output](./command-output.md) for setup.
+Whether to include the "history output" capability in the context sent to the LLM. The AI can then request to view the output of previous commands. This requires the [pty-proxy](../reference/pty-proxy.md) and [daemon](../reference/daemon.md) to be enabled and running in order for Atuin to capture commands' outputs—see [Reading Command Output](./command-output.md) for setup.
 
 ### `enable_file_tools`
 
 Default: `true`
 
-Whether or not to include the "file tools" capability in the context sent to the LLM. This allows the AI to request to read and update files on your system.
+Whether to include the "file tools" capability in the context sent to the LLM. The AI can then request to read and update files on your system.
 
 ### `enable_command_execution`
 
 Default: `true`
 
-Whether or not to include the "command execution" capability in the context sent to the LLM. This allows the AI to request to execute commands on your system.
+Whether to include the "command execution" capability in the context sent to the LLM. The AI can then request to execute commands on your system.
 
 **Example config**
 
@@ -101,7 +101,7 @@ Settings that control what context is sent in the opening AI request. These are 
 
 Default: `false`
 
-Whether or not to include your current working directory in the context sent to the LLM. By default, only your OS and current shell are sent.
+Whether to include your current working directory in the context sent to the LLM. By default, only your OS and current shell are sent.
 
 **Example config**
 
@@ -114,7 +114,7 @@ send_cwd = true
 
 Default: `false`
 
-Whether or not to send your previous command as context in the initial request, allowing the AI to provide more relevant suggestions.
+Whether to send your previous command as context in the initial request, so the AI can provide more relevant suggestions.
 
 **Example config**
 

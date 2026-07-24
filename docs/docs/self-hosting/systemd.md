@@ -51,7 +51,7 @@ Next, create [`atuin-server.conf`](https://github.com/atuinsh/atuin/raw/main/sys
 ```
 u atuin - "Atuin synchronized shell history"
 ```
-This file will ensure a system user is created in the proper manner.
+This file will make sure a system user is created in the proper manner.
 
 Afterward, run
 ```sh

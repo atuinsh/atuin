@@ -22,7 +22,7 @@ atuin account register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
 |------|-------------|
 | `--username`/`-u` | Your desired username. Must be unique, alphanumerics and hyphens only |
 | `--email`/`-e` | Used only for important notifications, such as security issues |
-| `--password`/`-p` | Omit this to be prompted instead, keeping it out of your shell history |
+| `--password`/`-p` | Omit this and Atuin asks for it instead, keeping it out of your shell history |
 
 Registering logs you in and generates your encryption key. Save the key—see
 [`atuin key`](sync.md#key).
@@ -38,11 +38,11 @@ atuin account login -u <USERNAME>
 | Flag | Description |
 |------|-------------|
 | `--username`/`-u` | Your username |
-| `--password`/`-p` | Omit to be prompted |
-| `--key`/`-k` | Your encryption key. Omit to be prompted |
+| `--password`/`-p` | Omit and Atuin asks for it |
+| `--key`/`-k` | Your encryption key. Omit and Atuin asks for it |
 | `--totp-code`/`-t` | Your two-factor authentication code, if your account has 2FA |
 
-Omitting `--password` and `--key` is recommended: you'll be prompted for both,
+Omitting `--password` and `--key` is recommended: Atuin asks for both,
 so neither ends up in your shell history.
 
 ### `atuin account logout`
@@ -61,8 +61,8 @@ atuin account change-password
 
 | Flag | Description |
 |------|-------------|
-| `--current-password`/`-c` | Omit to be prompted |
-| `--new-password`/`-n` | Omit to be prompted |
+| `--current-password`/`-c` | Omit and Atuin asks for it |
+| `--new-password`/`-n` | Omit and Atuin asks for it |
 | `--totp-code`/`-t` | Your two-factor authentication code, if your account has 2FA |
 
 This changes your account password only. Your encryption key is unaffected, and
@@ -78,7 +78,7 @@ Deletes your account and all synchronized history from the server.
 
 | Flag | Description |
 |------|-------------|
-| `--password`/`-p` | Your password. Omit to be prompted |
+| `--password`/`-p` | Your password. Omit and Atuin asks for it |
 | `--totp-code`/`-t` | Your two-factor authentication code, if your account has 2FA |
 
 !!! warning
