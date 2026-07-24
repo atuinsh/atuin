@@ -342,6 +342,10 @@ version = "18.18.0-beta.2"
 dependencies = [
  "async-trait",
  "atuin-common",
+ "atuin-server",
+ "atuin-server-database",
+ "atuin-server-sqlite",
+ "axum",
  "base64",
  "clap",
  "config",
@@ -590,6 +594,7 @@ dependencies = [
  "rand 0.8.7",
  "reqwest",
  "serde",
+ "tempfile",
  "tokio",
  "tower",
  "tower-http",
