@@ -584,6 +584,7 @@
 
 .md-typeset .support-matrix table td:first-child,
 .md-typeset .support-matrix table th:first-child {
+  min-width: 0;
   width: 1%;
   white-space: nowrap;
   text-align: center;
