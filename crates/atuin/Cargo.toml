@@ -16,6 +16,11 @@ pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.tar.gz"
 bin-dir = "{ name }-{ target }/{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
 
+[package.metadata.binstall.overrides.'cfg(target_os = "windows")']
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.zip"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "zip"
+
 [package.metadata.deb]
 maintainer = "Ellie Huxtable <ellie@elliehuxtable.com>"
 copyright = "2021, Ellie Huxtable <ellie@elliehuxtable.com>"
