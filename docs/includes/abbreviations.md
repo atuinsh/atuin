@@ -1,54 +1,42 @@
 <!--
-  Glossary source — auto-appended to every docs page by pymdownx.snippets
-  (see mkdocs.yml). Each `*[Term]: definition` line turns matching prose text
-  into an <abbr> tooltip. Matches are case-sensitive and skip code spans.
+  Glossary source — auto-appended to every docs page by pymdownx.snippets (see
+  mkdocs.yml). Each `*[Term]: definition` line turns matching prose into an
+  <abbr> tooltip. Written for newcomers: never define a term with another term a
+  beginner would also need looked up.
 
-  This file lives OUTSIDE docs/docs/ so Vale never lints its *[...] syntax and
-  MkDocs never builds it as a page. Keep it in sync with docs/docs/glossary.md.
+  GOTCHAS:
+  - Keep every definition on ONE line. A wrapped line silently truncates the
+    tooltip and renders the overflow as a stray code block on every page.
+  - This file lives OUTSIDE docs/docs/ so Vale never lints it and MkDocs never
+    builds it as a page. Keep it in sync with docs/docs/glossary.md.
 -->
 
-<!-- Core concepts -->
-*[TUI]: Atuin's full-screen terminal search interface
-*[filter mode]: The scope of a search — global, host, session, directory, or workspace
-*[filter modes]: The scope of a search — global, host, session, directory, or workspace
-*[search mode]: How queries are matched — fuzzy, full-text, prefix, or skim
-*[search modes]: How queries are matched — fuzzy, full-text, prefix, or skim
-*[fuzzy search]: Matching that tolerates gaps and typos between the letters you type
-*[frecency]: Ranking that blends how often and how recently a command was run
-*[workspace]: A filter mode scoped to the current Git project directory tree
-*[dotfiles]: Shell aliases, functions, and environment variables Atuin can sync across machines
-*[Hub]: Atuin Hub — the hosted service for accounts, runbooks, and collaboration
-
-<!-- Storage & sync -->
-*[record store]: Atuin's encrypted, append-only log that all synced data is built on
-*[KV store]: Atuin's key-value store, layered on top of the record store
-*[end-to-end encryption]: Data is encrypted on your machine before it syncs; the server never sees plaintext
-*[E2E encryption]: End-to-end encryption — data is encrypted on your machine before it syncs
-*[daemon]: A background Atuin process that batches writes and syncs on a timer
-*[SQLite]: The embedded database engine Atuin stores your history in
-
-<!-- Shell integration -->
-<!-- "shell" is intentionally NOT tooltipped: it recurs ~20x on some pages and
-     the underline noise outweighs the value. It is defined on glossary.md. -->
-*[preexec]: The shell hook Atuin uses to record a command just before it runs
-*[precmd]: The shell hook Atuin uses to capture a command's result after it finishes
-*[PTY]: Pseudo-terminal — the virtual terminal device a program reads from and writes to
-*[pty-proxy]: An Atuin wrapper that sits on the PTY to capture command output
-
-<!-- AI -->
-*[MCP]: Model Context Protocol — a standard interface that exposes Atuin to AI tools
-*[LLM]: Large Language Model — the AI that powers Atuin's command generation
-*[agent]: An AI coding tool such as Claude Code, Codex, or pi
-
-<!-- General computing -->
-*[CLI]: Command-line interface — a tool you drive by typing commands
-*[SSH]: Secure Shell — an encrypted protocol for logging into remote machines
-*[TLS]: Transport Layer Security — the encryption behind HTTPS connections
-*[regex]: Regular expression — a pattern language for matching text
-*[UUID]: A 128-bit identifier that is unique without any central coordinator
-*[systemd]: The Linux service manager used to run the Atuin daemon or server
-*[PostgreSQL]: The production database backend for a self-hosted Atuin server
-*[Postgres]: PostgreSQL — the production database backend for a self-hosted Atuin server
-*[Docker]: A tool that packages and runs software in isolated containers
-*[Kubernetes]: A system for running and scaling containers across a cluster
-*[API]: Application programming interface — how programs talk to each other
+*[CLI]: Command-line interface — a program you use by typing commands in a terminal instead of clicking around a window
+*[Docker]: A tool that bundles a program with everything it needs so it runs the same way on any computer; each bundle is called a container
+*[E2E encryption]: End-to-end encryption — your data is scrambled on your own device before it leaves it, so nobody in between (not even the server) can read it
+*[Hub]: Atuin Hub — Atuin's hosted service that stores your account and syncs your history for you
+*[Kubernetes]: A system for running and scaling lots of containers across many machines; one way to self-host Atuin at larger scale
+*[LLM]: Large language model — the kind of AI (like Claude or GPT) that powers Atuin's command generation
+*[MCP]: Model Context Protocol — a shared standard that lets AI assistants plug into tools like Atuin, for example to search your history
+*[PTY]: Pseudo-terminal — the behind-the-scenes channel a program uses to send text to and read text from your terminal
+*[PostgreSQL]: A popular, powerful open-source database; the recommended storage for a self-hosted Atuin server
+*[Postgres]: Short for PostgreSQL — a popular open-source database; the recommended storage for a self-hosted Atuin server
+*[SQLite]: A lightweight database that lives in a single file on your computer; where Atuin keeps your shell history locally
+*[SSH]: Secure Shell — a secure way to log in to and run commands on another computer over a network
+*[TLS]: The standard encryption that protects data as it travels the internet — the same technology behind the padlock in your browser
+*[UUID]: A long, randomly generated ID that is effectively unique, so different machines can create them without ever clashing
+*[daemon]: A program that runs quietly in the background; Atuin's makes history writes instant and syncs on a schedule
+*[dotfiles]: Your shell's personal settings — aliases, functions, and environment variables — which Atuin can sync across your machines
+*[filter mode]: Which slice of your history a search looks through — everything, just this machine, this shell session, this directory, or this project
+*[filter modes]: Which slice of your history a search looks through — everything, just this machine, this shell session, this directory, or this project
+*[frecency]: A ranking that blends how often and how recently you have run a command, so your go-to commands show up first
+*[fuzzy search]: Search that finds a command even when you type only a few of its letters, in order, typos and all
+*[precmd]: A hook your shell runs right after each command; Atuin uses it to record how the command turned out
+*[preexec]: A hook your shell runs right before each command; Atuin uses it to record the command as you run it
+*[pty-proxy]: An Atuin feature that quietly watches a terminal session so it can capture the output of the commands you run
+*[record store]: The secure, tamper-evident log at the core of Atuin's sync; your history, dotfiles, and other synced data are all kept here
+*[regex]: Regular expression — a compact pattern for matching text, for example finding every command that starts with "git"
+*[search mode]: How Atuin matches what you type against your history — fuzzy, full-text, prefix, or skim
+*[search modes]: How Atuin matches what you type against your history — fuzzy, full-text, prefix, or skim
+*[systemd]: The service manager on most Linux systems; it starts and supervises background programs like the Atuin daemon or server
+*[workspace]: A filter mode that narrows search to the Git project you are currently working inside
