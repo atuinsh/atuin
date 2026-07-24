@@ -15,7 +15,7 @@ use std::{
 use atuin_client::history::{History, is_known_agent};
 use atuin_client::settings::{self, Search};
 use atuin_common::path::DisplayRichExt;
-use atuin_common::utils::iter_equals_sorted_deduped_slice;
+use atuin_common::utils::SortedDedupedSliceComparer;
 use atuin_nucleo::{Injector, Nucleo, pattern};
 use dashmap::DashMap;
 use lasso::{Spur, ThreadedRodeo};
@@ -281,7 +281,7 @@ impl ShellFilter {
     where
         I: IntoIterator<Item = &'a str>,
     {
-        iter_equals_sorted_deduped_slice(shells, &self.sorted, &mut [false; 16])
+        SortedDedupedSliceComparer::new(&self.sorted, shells).eq::<16>()
     }
 
     pub fn update(&self, shells: Vec<String>) -> Option<Self> {

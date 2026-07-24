@@ -38,7 +38,7 @@ const FRECENCY_REFRESH_INTERVAL_SECS: u64 = 60;
 ///
 /// In the shared case, this ensures that the lock isn't held while this function does expensive
 /// computation.
-#[instrument(level = Level::TRACE)]
+#[instrument(skip_all, level = Level::TRACE)]
 async fn build_index_only<F, R>(index: F, handle: &DaemonHandle) -> Result<(), ()>
 where
     F: Fn() -> R,
@@ -83,7 +83,7 @@ where
 ///
 /// In the shared case, this ensures that the lock isn't held while this function does expensive
 /// computation.
-#[instrument(level = Level::TRACE)]
+#[instrument(skip_all, level = Level::TRACE)]
 async fn build_frecency<F, R>(index: F, handle: &DaemonHandle)
 where
     F: Fn() -> R,
