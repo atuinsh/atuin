@@ -98,7 +98,7 @@ atuin hook install pi
 
 This writes Atuin's extension to `~/.pi/agent/extensions/atuin.ts`.
 
-Then restart pi or run `/reload`. The extension listens to pi's tool events and records every `bash` tool command with author `pi` by calling `atuin history start` before execution and `atuin history end` afterwards. Because it observes events rather than registering its own `bash` tool, it works alongside other extensions that replace pi's bash tool (such as sandboxes or RTK implementations).
+Then restart pi or run `/reload`. The extension listens to pi's tool events and records every `bash` tool command with author `pi` by calling `atuin history start` before execution and `atuin history end` afterward. Because it observes events rather than registering its own `bash` tool, it works alongside other extensions that replace pi's bash tool (such as sandboxes or RTK implementations).
 
 ## Verifying Installation
 

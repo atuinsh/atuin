@@ -1,3 +1,4 @@
+[Aa]gents?
 [Aa]lphanumerics
 [Bb]oolean
 [Cc]onfig
@@ -10,11 +11,13 @@
 [Ff]recency
 [Ff]rontmatter
 [Hh]ostname
+[Ii]nvalid
 [Kk]eymaps?
 [Mm]ultiline
 [Nn]ushell
 [Pp]recmd
 [Pp]reexec
+[Ss]pecial
 [Ss]ubcommands?
 [Uu]ndecryptable
 [Xx]onsh

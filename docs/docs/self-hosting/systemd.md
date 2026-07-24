@@ -53,7 +53,7 @@ u atuin - "Atuin synchronized shell history"
 ```
 This file will ensure a system user is created in the proper manner.
 
-Afterwards, run
+Afterward, run
 ```sh
 systemctl restart systemd-sysusers
 ```
