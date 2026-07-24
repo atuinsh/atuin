@@ -17,4 +17,4 @@ Possible values for the `--shell` argument are the following:
 - `powershell`
 - `elvish`
 
-Also, see the [supported shells](https://github.com/atuinsh/atuin#supported-shells).
+Also, see [Supported platforms](https://docs.atuin.sh/support/index.md).

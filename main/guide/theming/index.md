@@ -1,7 +1,5 @@
 # Theming
 
-Available in Atuin >= 18.4
-
 For terminal interface customization, Atuin supports user and built-in color themes.
 
 Atuin ships with only a couple of built-in alternative themes, but more can be added via TOML files.

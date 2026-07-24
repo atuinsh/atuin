@@ -27,9 +27,9 @@ atuin sync
 
 If you'd rather take it one step at a time, [Getting Started](https://docs.atuin.sh/guide/getting-started/index.md) walks through the same thing with more explanation. From there, [Basic usage](https://docs.atuin.sh/guide/basic-usage/index.md) covers driving the TUI, and [Config](https://docs.atuin.sh/configuration/config/index.md) documents every setting.
 
-## Supported shells
+## Supported platforms
 
-zsh, bash, fish, nushell, xonsh, and PowerShell (tier 2 support).
+Atuin supports zsh, bash, fish, nushell, xonsh, and PowerShell. See [Supported platforms](https://docs.atuin.sh/support/index.md) for the full matrix and what each tier means.
 
 ## Getting help
 

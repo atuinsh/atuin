@@ -9,6 +9,7 @@ usage, self-hosting, and AI features.
 ## Overview
 
 - [Home](https://docs.atuin.sh/index.md): Getting started with Atuin - quickstart, supported shells, and links.
+- [Supported platforms](https://docs.atuin.sh/support/index.md): Support tiers and the platform/shell/feature matrix - which shells, OSes, terminals, and AI agents are supported and how well.
 
 ## Guide
 
