@@ -111,18 +111,17 @@ You can add another service to your `docker-compose.yml` file to have it run dai
     env_file:
       - .env
     environment:
-      POSTGRES_HOST: postgresql
+      POSTGRES_HOST: db
       POSTGRES_DB: ${ATUIN_DB_NAME}
       POSTGRES_USER: ${ATUIN_DB_USERNAME}
       POSTGRES_PASSWORD: ${ATUIN_DB_PASSWORD}
       SCHEDULE: "@daily"
       BACKUP_DIR: /db_dumps
       TZ: Europe/London
-      HEALTHCHECK_PORT: 5432
     volumes:
       - ./db_dumps:/db_dumps
     depends_on:
-      - postgresql
+      - db
 ```
 
 This will create daily backups of your database for that additional layer of comfort.
