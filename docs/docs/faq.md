@@ -45,6 +45,31 @@ Add `--disable-ai`, e.g.:
 eval "$(atuin init zsh --disable-ai)"
 ```
 
+## How do I search history from another host?
+
+After [sync](guide/sync.md), the interactive **host** filter mode only includes history recorded on the machine you are currently using. Commands from other machines are still available under the default **global** filter.
+
+To label rows by machine, show the `host` column:
+
+```toml
+[ui]
+columns = ["duration", "time", "host", "command"]
+```
+
+To focus one other host inside the TUI:
+
+1. Stay in **global** filter mode and find any command that ran on that host (the host column helps).
+2. Press **ctrl-a** then **c** to [switch context](guide/advanced-usage.md#context-switch) onto that command (Atuin adopts its host, session, and directory).
+3. Press **ctrl-r** until the filter mode is **host** — search is then limited to that host.
+
+There is no `atuin search --host` flag. From a script you can print the host with `--format` and filter afterward, for example:
+
+```shell
+atuin search --filter-mode global --format '{host}|{command}' | grep '^bucket|'
+```
+
+See [filter modes](guide/advanced-usage.md#filter-mode) and [UI columns](configuration/config.md#columns).
+
 ## How do I edit a command instead of running it immediately?
 
 Press tab! By default, enter will execute a command, and tab will insert it ready for editing.
