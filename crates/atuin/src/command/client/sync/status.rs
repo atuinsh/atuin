@@ -13,6 +13,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
         settings.sync_auth_token().await?,
         settings.network_connect_timeout,
         settings.network_timeout,
+        &settings.extra_headers,
     )?;
 
     let me = client.me().await?;

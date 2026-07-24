@@ -1013,6 +1013,14 @@ pub struct Settings {
     pub network_connect_timeout: u64,
     pub network_timeout: u64,
     pub local_timeout: f64,
+
+    /// Extra HTTP headers to send on every request to the sync server, e.g.
+    /// for services like Cloudflare Access that sit in front of a self-hosted
+    /// server. Headers that Atuin sets itself (e.g. Authorization) win over
+    /// values configured here.
+    #[serde(default)]
+    pub extra_headers: HashMap<String, String>,
+
     pub enter_accept: bool,
     pub smart_sort: bool,
     pub command_chaining: bool,
@@ -1407,6 +1415,7 @@ impl Settings {
             .set_default("strip_trailing_whitespace", true)?
             .set_default("network_connect_timeout", 5)?
             .set_default("network_timeout", 30)?
+            .set_default("extra_headers", HashMap::<String, String>::new())?
             .set_default("local_timeout", 2.0)?
             // enter_accept defaults to false here, but true in the default config file. The dissonance is
             // intentional!

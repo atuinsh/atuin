@@ -16,7 +16,7 @@ export ATUIN_CONFIG_DIR = /home/ellie/.atuin
 
 客户端运行在用户的机器上，除非你运行的是服务器，否则这就是你所关心的。
 
-见 [config.toml](../../atuin-client/config.toml) 中的例子
+见 [config.toml](../../crates/atuin-client/config.toml) 中的例子
 
 ### `dialect`
 

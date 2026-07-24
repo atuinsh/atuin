@@ -1,42 +1,46 @@
 # Advanced Usage
 
-Atuin offers you several options to help navigate through the results.
+Two settings shape every search you run: the **filter mode** decides *which*
+commands Atuin searches, and the **search mode** decides *how* Atuin matches
+your query against them. Both can be changed on the fly from inside the TUI.
 
 ## Filter mode
 
-The command history can be filtered in different ways, letting you narrow the search scope.
+The filter mode narrows the set of history Atuin searches. Cycle through the
+modes by pressing **ctrl-r** inside the TUI.
 
-You can cycle through the different modes by pressing **ctrl-r**.
-
-The available modes are:
-
-| Mode             | Description                                                                          |
+| Mode             | Searches                                                                             |
 |------------------|--------------------------------------------------------------------------------------|
-| global (default) | Search from the full history                                                         |
-| host             | Search history from this host                                                        |
-| session          | Search history from the current session                                              |
-| directory        | Search history from the current directory                                            |
-| workspace        | Search history from the current git repository                                       |
-| session-preload  | Search from the current session and the global history from before the session start |
+| global (default) | Your full history, from every machine                                                |
+| host             | Only history from this machine                                                       |
+| session          | Only history from the current shell session                                          |
+| directory        | Only history from the current directory                                              |
+| workspace        | Only history from anywhere in the current git repository                             |
+| session-preload  | The current session, plus all global history from before the session started         |
 
-See the [`filter_mode` config reference](../configuration/config.md#filter_mode) for more details.
+`workspace` mode requires [`workspaces = true`](../configuration/config.md#workspaces).
+Atuin skips it when you aren't inside a git repository.
+
+To change which mode searches start in, set
+[`filter_mode`](../configuration/config.md#filter_mode). To remove modes from the
+ctrl-r rotation entirely, set [`search.filters`](../configuration/config.md#filters).
+The up arrow can start in a different mode than ctrl-r — see
+[`filter_mode_shell_up_key_binding`](../configuration/config.md#filter_mode_shell_up_key_binding).
 
 ## Search mode
 
-Atuin offers different modes to interpret your search query.
+The search mode decides how Atuin interprets your query text. Cycle through the
+modes by pressing **ctrl-s** inside the TUI.
 
-You can cycle through the different modes by pressing **ctrl-s**.
-
-The available modes are:
-
-| Mode            | Description                                                                                                    |
+| Mode            | Matches                                                                                                        |
 |-----------------|----------------------------------------------------------------------------------------------------------------|
-| fuzzy (default) | Search for commands in a fuzzy way, similar to the [fzf syntax](https://github.com/junegunn/fzf#search-syntax) |
+| fuzzy (default) | Fuzzily, using the [fzf syntax](https://github.com/junegunn/fzf#search-syntax) — see [fuzzy search syntax](../configuration/config.md#fuzzy-search-syntax) |
 | prefix          | Commands that start with your query                                                                            |
-| fulltext        | Commands that contain your query as a substring                                                                |
-| skim            | Search for commands using the [skim syntax](https://github.com/lotabout/skim#search-syntax)                    |
+| fulltext        | Commands that contain your query anywhere                                                                      |
+| skim            | Using the [skim syntax](https://github.com/lotabout/skim#search-syntax)                                         |
+| daemon-fuzzy    | Like `fuzzy`, but served from the [daemon's](../reference/daemon.md) in-memory index, with tunable scoring      |
 
-See the [`search_mode` config reference](../configuration/config.md#search_mode) for more details.
+To change the default, set [`search_mode`](../configuration/config.md#search_mode).
 
 ## Context switch
 

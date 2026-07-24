@@ -141,8 +141,9 @@ plugins:
           - guide/import.md: Import existing shell history from bash, zsh, fish, and others.
           - guide/basic-usage.md: What Atuin records, how to use the TUI, and common config tweaks.
           - guide/advanced-usage.md: Filter modes (global, host, session, directory, workspace) and search modes (fuzzy, full-text, skim).
-          - guide/shell-integration.md: How shell hooks work, environment variables, embedded terminals, and excluding commands.
+          - guide/shell-integration.md: How shell hooks work, environment variables, and embedded terminals.
           - guide/agent-hooks.md: Capture commands from AI coding agents (Claude Code, Codex, pi) and filter by author.
+          - guide/excluding-commands.md: Keep commands out of history with ignorespace, history_filter, and cwd_filter.
           - guide/delete-history.md: Delete single entries, bulk delete by query, remove duplicates, or wipe everything.
           - guide/dotfiles.md: Sync shell aliases and environment variables across machines.
           - guide/theming.md: Customize the TUI with color themes.
@@ -151,10 +152,12 @@ plugins:
           - configuration/key-binding.md: Custom up-arrow filter mode, disable up-arrow or ctrl-r, vim mode.
           - configuration/advanced-key-binding.md: Full keymap customization with emacs, vim-normal, vim-insert, and inspector modes.
         Reference:
+          - reference/account.md: The `atuin account` command - register, login, change password, delete, and link to Hub.
           - reference/config.md: The `atuin config` command - get, set, list, and resolve configuration values.
           - reference/daemon.md: Background daemon for faster writes, auto-sync, and in-memory fuzzy search.
           - reference/doctor.md: Diagnose common problems and dump system info for bug reports.
           - reference/gen-completions.md: Generate shell completions for bash, fish, zsh, nushell, powershell, elvish.
+          - reference/init.md: The `atuin init` command - shell plugin setup, key binding flags, and env vars.
           - reference/hex.md: The old name for `atuin pty-proxy`
           - reference/pty-proxy.md: Experimental PTY proxy with popup rendering over existing terminal output.
           - reference/import.md: Import history from bash, fish, zsh, replxx, mcfly, resh, and xonsh.
@@ -163,6 +166,7 @@ plugins:
           - reference/prune.md: Delete entries matching history_filter config (useful after updating filters).
           - reference/search.md: Search history with wildcards, filters (cwd, exit code, before/after), and delete mode.
           - reference/stats.md: Compute stats for a time period - most used command, command count, unique commands.
+          - reference/store.md: The `atuin store` command - inspect, verify, rekey, rebuild, and repair the record store.
           - reference/sync.md: Sync commands - register, login, manual sync, and account management.
         Self Hosting:
           - self-hosting/server-setup.md: Run your own Atuin sync server with PostgreSQL or SQLite.
@@ -253,6 +257,7 @@ nav:
       - Advanced usage: guide/advanced-usage.md
       - Shell Integration: guide/shell-integration.md
       - AI Agent Hooks: guide/agent-hooks.md
+      - Excluding commands: guide/excluding-commands.md
       - Deleting history: guide/delete-history.md
       - Syncing dotfiles: guide/dotfiles.md
       - Theming: guide/theming.md
@@ -261,10 +266,12 @@ nav:
       - Key Binding: configuration/key-binding.md
       - Advanced Key Binding: configuration/advanced-key-binding.md
   - Reference:
+      - account: reference/account.md
       - config: reference/config.md
       - daemon: reference/daemon.md
       - doctor: reference/doctor.md
       - gen-completions: reference/gen-completions.md
+      - init: reference/init.md
       - pty-proxy: reference/pty-proxy.md
       - import: reference/import.md
       - info: reference/info.md
@@ -272,6 +279,7 @@ nav:
       - history prune: reference/prune.md
       - search: reference/search.md
       - stats: reference/stats.md
+      - store: reference/store.md
       - sync: reference/sync.md
   - Self Hosting:
       - Server Setup: self-hosting/server-setup.md

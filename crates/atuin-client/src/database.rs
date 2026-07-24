@@ -11,7 +11,6 @@ use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils;
 use fs_err as fs;
 use itertools::Itertools;
-use rand::{Rng, distributions::Alphanumeric};
 use sql_builder::{SqlBuilder, SqlName, bind::Bind, esc, quote};
 use sqlx::{
     Result, Row,
@@ -810,20 +809,13 @@ impl Database for Sqlite {
         Paged::new(Box::new(self.clone()), page_size, include_deleted, unique)
     }
 
-    // deleted_at doesn't mean the actual time that the user deleted it,
-    // but the time that the system marks it as deleted
-    async fn delete(&self, mut h: History) -> Result<()> {
-        let now = OffsetDateTime::now_utc();
-        h.command = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(32)
-            .map(char::from)
-            .collect(); // overwrite with random string
-        h.deleted_at = Some(now); // delete it
-
-        self.update(&h).await?; // save it
-
-        Ok(())
+    // This used to scramble the command and set deleted_at, so that sync v1 could
+    // propagate the deletion. Sync v2 propagates deletions through the record store
+    // instead (HistoryRecord::Delete), and the only remaining caller deletes entries
+    // that were never pushed to the store - so just delete the row.
+    // deleted_at is still read to keep tombstones from older versions working.
+    async fn delete(&self, h: History) -> Result<()> {
+        self.delete_rows(&[h.id]).await
     }
 
     async fn delete_rows(&self, ids: &[HistoryId]) -> Result<()> {
@@ -1759,15 +1751,27 @@ mod test {
             .clone();
         db.delete(to_delete).await.unwrap();
 
-        // Without include_deleted - should get 2
+        // Deletes remove the row outright, so both views should get 2
         let mut paged = db.all_paged(10, false, false);
         let page = paged.next().await.unwrap().unwrap();
         assert_eq!(page.len(), 2);
 
-        // With include_deleted - should get 3
         let mut paged_deleted = db.all_paged(10, true, false);
         let page_deleted = paged_deleted.next().await.unwrap().unwrap();
-        assert_eq!(page_deleted.len(), 3);
+        assert_eq!(page_deleted.len(), 2);
+
+        // Tombstones written by older versions are still filtered by include_deleted
+        let mut legacy = all.iter().find(|h| h.command == "keep1").unwrap().clone();
+        legacy.deleted_at = Some(OffsetDateTime::now_utc());
+        db.update(&legacy).await.unwrap();
+
+        let mut paged = db.all_paged(10, false, false);
+        let page = paged.next().await.unwrap().unwrap();
+        assert_eq!(page.len(), 1);
+
+        let mut paged_deleted = db.all_paged(10, true, false);
+        let page_deleted = paged_deleted.next().await.unwrap().unwrap();
+        assert_eq!(page_deleted.len(), 2);
     }
 
     #[tokio::test(flavor = "multi_thread")]

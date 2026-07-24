@@ -169,7 +169,7 @@
 ## whereas tab will put the command in the prompt for editing.
 ## If set to false, both enter and tab will place the command in the prompt for editing.
 ## This applies for new installs. Old installs will keep the old behaviour unless configured otherwise.
-# enter_accept = true
+enter_accept = true
 
 ## Defaults to false. If enabled, when triggered after &&, || or |, Atuin will complete commands to chain rather than replace the current line.
 # command_chaining = false
@@ -188,6 +188,13 @@
 
 # network_connect_timeout = 5
 # network_timeout = 30
+
+## Extra HTTP headers to send on every request to the sync server. Useful when
+## a self-hosted server sits behind a proxy that requires its own auth header,
+## e.g. Cloudflare Access. Headers that Atuin sets itself (e.g. Authorization)
+## cannot be overridden. When set, cross-origin redirects are refused so these
+## headers are never sent to a different origin.
+# extra_headers = { "CF-Access-Client-Id" = "...", "CF-Access-Client-Secret" = "..." }
 
 ## Timeout (in seconds) for acquiring a local database connection (sqlite)
 # local_timeout = 5

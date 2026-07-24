@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyEventKind};
 use eye_declare::{
     App, Ctx, Element, ElementExt, Fluent, Focus, FocusHandle, InputEvent, Keymap, Task, col, key,
     keymap, text,
@@ -14,6 +14,7 @@ use ratatui_core::style::{Color, Modifier, Style};
 use tokio::sync::mpsc::UnboundedSender;
 use tui_textarea::TextArea;
 
+use crate::fsm::StreamPhase;
 use crate::fsm::effects::{Effect, ExitAction, PermissionTarget, TimeoutKind};
 use crate::fsm::events::{Event, PermissionChoice, PermissionResponse};
 use crate::fsm::tools::ToolPreviewData;
@@ -21,6 +22,7 @@ use crate::fsm::{AgentFsm, AgentState};
 use crate::tools::ClientToolCall;
 use crate::tui::events::PermissionResult;
 use crate::tui::persist::PersistJob;
+use crate::tui::recall::RecallState;
 use crate::tui::select::{SelectMsg, SelectState};
 use crate::tui::slash::{SlashCommandRegistry, SlashCommandSearchResult};
 use crate::tui::state::ConversationEvent;
@@ -79,7 +81,7 @@ pub(crate) enum Msg {
     /// Retry after an error (Enter / r).
     Retry,
     /// Leave the TUI without a command.
-    Quit,
+    Quit(ExitOutcome),
     /// Move the model-picker cursor (Up/Down while picking).
     ModelSelect(SelectMsg),
     /// Choose the highlighted model (Enter while picking).
@@ -121,6 +123,8 @@ pub(crate) struct AiApp {
     resume_notice: Option<String>,
     /// The editor as a plain model value; see `view::input` for why RefCell.
     input: RefCell<TextArea<'static>>,
+    /// Up/Down recall of this session's submitted messages.
+    recall: RecallState,
     /// The editor's focus handle (keymap fallthrough is focus-scoped).
     /// Handles share their `Focus`'s cell via Arc, so the factory itself
     /// isn't retained; re-add one when a second focusable appears.
@@ -133,6 +137,7 @@ pub(crate) struct AiApp {
     /// Turns already committed — 0 means the next turn is the first (no
     /// leading blank row).
     pushed_turns: usize,
+    exiting: bool,
 }
 
 impl AiApp {
@@ -182,12 +187,14 @@ impl AiApp {
             usage: None,
             resume_notice,
             input: RefCell::new(view::input::new_textarea()),
+            recall: RecallState::default(),
             input_focus,
             slash_registry,
             skill_names,
             slash_results: Vec::new(),
             pushed_events: 0,
             pushed_turns: 0,
+            exiting: false,
         }
     }
 
@@ -313,11 +320,19 @@ impl AiApp {
         }
         for effect in effects {
             match effect {
-                Effect::ExitApp(action) => ctx.exit(match action {
-                    ExitAction::Execute(cmd) => ExitOutcome::Execute(cmd),
-                    ExitAction::Insert(cmd) => ExitOutcome::Insert(cmd),
-                    ExitAction::Cancel => ExitOutcome::Cancel,
-                }),
+                Effect::ExitApp(action) => {
+                    let exit = match action {
+                        ExitAction::Execute(cmd) => ExitOutcome::Execute(cmd),
+                        ExitAction::Insert(cmd) => ExitOutcome::Insert(cmd),
+                        ExitAction::Cancel => ExitOutcome::Cancel,
+                    };
+                    // The runtime presents once more after an exit-requesting
+                    // update, and finalize reclaims the rows the tail vacated —
+                    // so hiding the input and exiting in the same update leaves
+                    // the screen without it. No deferred render needed.
+                    self.exiting = true;
+                    ctx.exit(exit);
+                }
                 Effect::StartStream {
                     messages,
                     session_id,
@@ -353,6 +368,29 @@ impl AiApp {
                 }
                 Effect::CheckPermission { tool_id, tool } => {
                     self.check_permission(tool_id, tool, ctx)
+                }
+                Effect::ResolveOutputCommand {
+                    tool_id,
+                    history_id,
+                } => {
+                    let Some(io) = &self.io else { continue };
+                    let db = io.app_ctx.history_db.clone();
+                    ctx.perform(async move {
+                        use atuin_client::database::Database as _;
+                        // Ids are stored in simple (no-hyphen) form today,
+                        // but older or imported rows may be hyphenated.
+                        let command = match db.load(&history_id.as_simple().to_string()).await {
+                            Ok(Some(h)) => Some(h.command),
+                            _ => db
+                                .load(&history_id.as_hyphenated().to_string())
+                                .await
+                                .ok()
+                                .flatten()
+                                .map(|h| h.command),
+                        };
+                        Msg::Fsm(Event::OutputCommandResolved { tool_id, command })
+                    })
+                    .detach();
                 }
                 Effect::ExecuteTool { tool_id, tool } => self.execute_tool(tool_id, tool, ctx),
                 Effect::AbortTool { tool_id } => {
@@ -781,6 +819,7 @@ impl AiApp {
                 self.pushed_turns == 0 && i == 0,
                 false,
                 false,
+                None,
             ));
             self.pushed_turns += 1;
         }
@@ -843,9 +882,48 @@ impl AiApp {
                     .map(|cmd| format!("- `/{}` — {}", cmd.name, cmd.description))
                     .collect::<Vec<_>>()
                     .join("\n");
-                include_str!("content/help.md").replace("{commands}", &commands)
+                include_str!("content/help.md")
+                    .replace("{commands}", &commands)
+                    .replace("{docs_url}", &atuin_common::docs::url("ai/introduction/"))
             }
             other => format!("Unknown command: {other}"),
+        }
+    }
+
+    /// Load an older (`back`) or newer submission from this session into
+    /// the editor, shell-history style. Slash commands are recorded
+    /// out-of-band with the typed invocation in `command`; skills carry
+    /// their name and arguments, from which the invocation is rebuilt.
+    fn recall_message(&mut self, back: bool) {
+        let messages: Vec<String> = self
+            .fsm
+            .ctx
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                ConversationEvent::UserMessage { content } => Some(content.clone()),
+                ConversationEvent::OutOfBandOutput {
+                    command: Some(cmd), ..
+                } if cmd.starts_with('/') => Some(cmd.clone()),
+                ConversationEvent::SkillInvocation {
+                    name, arguments, ..
+                } => Some(match arguments {
+                    Some(args) => format!("/{name} {args}"),
+                    None => format!("/{name}"),
+                }),
+                _ => None,
+            })
+            .collect();
+        let text = if back {
+            let current = self.input.get_mut().lines().join("\n");
+            self.recall.back(&messages, &current)
+        } else {
+            self.recall.forward(&messages)
+        };
+        if let Some(text) = text {
+            let editor = self.input.get_mut();
+            editor.clear();
+            editor.insert_str(text);
         }
     }
 
@@ -859,6 +937,7 @@ impl AiApp {
             editor.clear();
             text
         };
+        self.recall.reset();
         self.slash_results.clear();
         let event = self.dispatch_submit(input);
         self.handle_fsm(event, ctx);
@@ -898,7 +977,21 @@ impl App for AiApp {
                 }
                 match event {
                     InputEvent::Key(k) => {
-                        self.input.get_mut().input(k);
+                        let editor = self.input.get_mut();
+                        let cursor = editor.cursor();
+                        editor.input(k);
+                        // A plain Up/Down whose cursor had nowhere to go
+                        // (top/bottom visual row) recalls session messages
+                        // instead. The kind guard keeps kitty-protocol
+                        // release events — no-ops in the editor — from
+                        // double-stepping.
+                        if editor.cursor() == cursor
+                            && matches!(k.code, KeyCode::Up | KeyCode::Down)
+                            && k.modifiers.is_empty()
+                            && k.kind != KeyEventKind::Release
+                        {
+                            self.recall_message(k.code == KeyCode::Up);
+                        }
                     }
                     InputEvent::Paste(s) => {
                         self.input.get_mut().insert_str(s);
@@ -954,7 +1047,10 @@ impl App for AiApp {
             Msg::Cancel => self.handle_fsm(Event::Cancel, ctx),
             Msg::Interrupt => self.handle_fsm(Event::InterruptTools, ctx),
             Msg::Retry => self.handle_fsm(Event::Retry, ctx),
-            Msg::Quit => ctx.exit(ExitOutcome::Cancel),
+            Msg::Quit(outcome) => {
+                self.exiting = true;
+                ctx.exit(outcome);
+            }
             Msg::ModelSelect(sel) => {
                 let len = match &self.fsm.ctx.model_picker {
                     Some(crate::fsm::ModelPicker::Ready(list)) => list.models.len(),
@@ -999,12 +1095,23 @@ impl App for AiApp {
             self.fsm.ctx.model_picker,
             Some(crate::fsm::ModelPicker::Loading)
         );
-        let show_input = asking.is_none() && ready_picker.is_none();
+        let show_input = asking.is_none() && ready_picker.is_none() && !self.exiting;
         let needs_pending_banner = busy
             && !matches!(
                 turns.last().map(|t| &t.kind),
                 Some(UiTurnKind::Agent { .. })
             );
+
+        let status_text = if let AgentState::Turn {
+            stream: StreamPhase::Streaming {
+                status: Some(status),
+            },
+        } = &self.fsm.state
+        {
+            Some(capitalize(status.to_str()))
+        } else {
+            None
+        };
 
         col()
             .when_some(
@@ -1022,15 +1129,23 @@ impl App for AiApp {
                 },
             )
             .children(turns.iter().enumerate().map(|(i, turn)| {
+                let status_text = ((i == last).then_some(status_text.as_deref())).flatten();
+
                 view::turn_view(
                     turn,
                     self.pushed_turns == 0 && i == 0,
                     busy && i == last,
                     asking.is_some(),
+                    status_text,
                 )
             }))
             .when(needs_pending_banner, |c| {
-                c.child(view::agent_turn_view(&[], true, asking.is_some()))
+                c.child(view::agent_turn_view(
+                    &[],
+                    true,
+                    asking.is_some(),
+                    status_text.as_deref(),
+                ))
             })
             .when_some(
                 match &self.fsm.state {
@@ -1092,7 +1207,7 @@ impl App for AiApp {
             if self.shell_executing() {
                 Msg::Interrupt
             } else {
-                Msg::Quit
+                Msg::Quit(ExitOutcome::Cancel)
             },
         );
 
@@ -1150,6 +1265,14 @@ impl App for AiApp {
         }
 
         km
+    }
+}
+
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
     }
 }
 
@@ -1274,6 +1397,24 @@ mod tests {
     }
 
     #[test]
+    fn exit_erases_the_input_box() {
+        let mut h = Harness::new(fixture_app());
+        assert!(
+            h.screen().contains("Generate a command or ask a question"),
+            "input box missing before exit:\n{}",
+            h.screen()
+        );
+
+        h.press(KeyCode::Esc);
+        assert!(
+            !h.all_lines()
+                .contains("Generate a command or ask a question"),
+            "input box still on screen after exit:\n{}",
+            h.all_lines()
+        );
+    }
+
+    #[test]
     fn typing_renders_in_the_editor() {
         let mut h = Harness::new(fixture_app());
         h.type_str("hi there");
@@ -1374,6 +1515,109 @@ mod tests {
         h.press_mod(KeyCode::Enter, KeyModifiers::SHIFT);
         h.type_str("b");
         assert_eq!(h.app().input.borrow().lines().len(), 2);
+    }
+
+    fn two_message_fsm() -> AgentFsm {
+        let mut fsm = AgentFsm::new(vec![], "test-invocation".into());
+        for (q, a) in [("first question", "one"), ("second question", "two")] {
+            fsm.ctx
+                .events
+                .push(ConversationEvent::UserMessage { content: q.into() });
+            fsm.ctx
+                .events
+                .push(ConversationEvent::Text { content: a.into() });
+        }
+        fsm
+    }
+
+    #[test]
+    fn up_recalls_previous_messages_and_down_restores_the_draft() {
+        let mut h = Harness::new(app_with(two_message_fsm()));
+        h.type_str("draft");
+
+        h.press(KeyCode::Up);
+        assert_eq!(h.app().input.borrow().lines(), ["second question"]);
+        h.press(KeyCode::Up);
+        assert_eq!(h.app().input.borrow().lines(), ["first question"]);
+        // Nothing older: stays put.
+        h.press(KeyCode::Up);
+        assert_eq!(h.app().input.borrow().lines(), ["first question"]);
+
+        h.press(KeyCode::Down);
+        assert_eq!(h.app().input.borrow().lines(), ["second question"]);
+        h.press(KeyCode::Down);
+        assert_eq!(h.app().input.borrow().lines(), ["draft"]);
+        // Out of recall: Down is a no-op again.
+        h.press(KeyCode::Down);
+        assert_eq!(h.app().input.borrow().lines(), ["draft"]);
+    }
+
+    #[test]
+    fn up_moves_the_cursor_before_it_recalls() {
+        let mut h = Harness::new(app_with(two_message_fsm()));
+        h.type_str("a");
+        h.press_mod(KeyCode::Char('j'), KeyModifiers::CONTROL);
+        h.type_str("b");
+
+        // Cursor on the second line: Up moves it, no recall.
+        h.press(KeyCode::Up);
+        assert_eq!(h.app().input.borrow().lines(), ["a", "b"]);
+        // At the top row: Up recalls.
+        h.press(KeyCode::Up);
+        assert_eq!(h.app().input.borrow().lines(), ["second question"]);
+        // The multi-line draft survives the round trip.
+        h.press(KeyCode::Down);
+        assert_eq!(h.app().input.borrow().lines(), ["a", "b"]);
+    }
+
+    #[test]
+    fn recall_includes_slash_commands_and_skills() {
+        let mut h = Harness::new(app_with(two_message_fsm()));
+        h.type_str("/help");
+        h.press(KeyCode::Enter);
+        // Loading a skill starts a turn; finish it to return to Idle.
+        h.process(Msg::Fsm(Event::SkillLoaded {
+            name: "review".into(),
+            arguments: Some("main".into()),
+            content: "skill content".into(),
+        }));
+        h.stream(Event::StreamStarted);
+        h.stream(Event::StreamDone {
+            session_id: "s1".into(),
+        });
+
+        h.press(KeyCode::Up);
+        assert_eq!(h.app().input.borrow().lines(), ["/review main"]);
+        h.press(KeyCode::Up);
+        assert_eq!(h.app().input.borrow().lines(), ["/help"]);
+        h.press(KeyCode::Up);
+        assert_eq!(h.app().input.borrow().lines(), ["second question"]);
+    }
+
+    #[test]
+    fn recall_does_nothing_without_user_messages() {
+        let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
+        h.type_str("draft");
+        h.press(KeyCode::Up);
+        assert_eq!(h.app().input.borrow().lines(), ["draft"]);
+    }
+
+    #[test]
+    fn submit_resets_recall_to_the_newest_message() {
+        let mut h = Harness::new(app_with(two_message_fsm()));
+        h.press(KeyCode::Up);
+        h.press(KeyCode::Up); // recalled "first question"
+        h.press(KeyCode::Enter); // submit it
+        h.stream(Event::StreamStarted);
+        h.stream(Event::StreamDone {
+            session_id: "s1".into(),
+        });
+
+        // Recall starts over from the newest message — the one just sent.
+        h.press(KeyCode::Up);
+        assert_eq!(h.app().input.borrow().lines(), ["first question"]);
+        h.press(KeyCode::Up);
+        assert_eq!(h.app().input.borrow().lines(), ["second question"]);
     }
 
     #[test]

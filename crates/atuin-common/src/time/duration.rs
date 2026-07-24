@@ -85,7 +85,7 @@ impl DurationDisplay {
         }
 
         // impl taken and modified from
-        // https://github.com/tailhook/humantime/blob/master/src/duration.rs#L295-L331
+        // https://github.com/chronotope/humantime/blob/76c8929b4cc286f675322475a8e1841f35bafc57/src/duration.rs#L427-L465
         // Copyright (c) 2016 The humantime Developers
         fn segments(d: std::time::Duration) -> ControlFlow<(&'static str, u64), ()> {
             let secs = d.as_secs();

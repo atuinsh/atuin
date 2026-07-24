@@ -7,14 +7,14 @@ If you used the Atuin installer, you can totally delete it by removing the follo
 1. Delete the `~/.atuin` directory
 2. Delete the `~/.config/atuin` directory
 3. Delete the `~/.local/share/atuin` directory
-4. Remove the line referencing "atuin init" from your shell config
+4. Remove the line referencing `atuin init` from your shell config
 5. Fish users: delete `~/.config/fish/conf.d/atuin.env.fish` if it exists
 
 Otherwise, uninstalling Atuin depends on your system, and how you installed it.
 
-EG, on macOS, you'd want to run
+For example, on macOS, you'd want to run
 
-```
+```shell
 brew uninstall atuin
 ```
 

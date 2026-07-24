@@ -22,9 +22,9 @@ rustPlatform.buildRustPackage {
     allowBuiltinFetchGit = true;
   };
 
-  nativeBuildInputs = [installShellFiles];
+  nativeBuildInputs = [ installShellFiles ];
 
-  buildInputs = lib.optionals stdenv.isDarwin [libiconv];
+  buildInputs = lib.optionals stdenv.isDarwin [ libiconv ];
 
   postInstall = ''
     installShellCompletion --cmd atuin \

@@ -1,6 +1,8 @@
 # Shell Integration and Interoperability
 
-Atuin uses shell hooks to capture your command history. This page explains how the integration works, why Atuin might not record commands in certain environments, and how to control what gets recorded.
+Atuin uses shell hooks to capture your command history. This page explains how the integration works, and why Atuin might not record commands in certain environments.
+
+To keep specific commands *out* of your history on purpose, see [Excluding Commands from History](excluding-commands.md).
 
 ## How Atuin's Shell Integration Works
 
@@ -15,7 +17,7 @@ These hooks only activate under specific conditions:
 - Your shell configuration file must be **sourced** (`.bashrc`, `.zshrc`, etc.)
 - The `atuin init` command must run during shell startup
 
-If any of these conditions aren't met, Atuin's hooks won't be installed, and commands won't be recorded.
+If any of these conditions aren't met, Atuin won't install its hooks, and it won't record commands.
 
 ### Environment Variables
 
@@ -29,8 +31,8 @@ When Atuin initializes, it sets several environment variables:
 | `ATUIN_HISTORY_AUTHOR` | Optional command author identity (for example `ellie`, `claude`, `copilot`) |
 | `ATUIN_HISTORY_INTENT` | Optional command intent/rationale text |
 
-These variables are used internally to track command execution and associate commands with sessions.
-If `ATUIN_HISTORY_AUTHOR` is not set, Atuin defaults to the local shell username.
+Atuin uses these variables internally to track command execution and associate commands with sessions.
+If `ATUIN_HISTORY_AUTHOR` isn't set, Atuin defaults to the local shell username.
 
 ## Embedded Terminals and IDE Integrations
 
@@ -56,11 +58,11 @@ You can verify whether Atuin is active by running:
 atuin doctor
 ```
 
-Look for the `shell.preexec` field in the output. If it shows `none`, Atuin's hooks aren't installed in that shell session.
+Look for the `shell.preexec` field in the output. If it shows `none`, Atuin's hooks aren't installed in that shell session. To confirm the shell is interactive at all, check that `echo $-` includes an `i`.
 
 ### Enabling Atuin in Embedded Terminals
 
-If you want Atuin to record commands from an embedded terminal, you'll need to ensure it starts an interactive shell that sources your configuration.
+If you want Atuin to record commands from an embedded terminal, you'll need to make sure it starts an interactive shell that sources your configuration.
 
 #### IDE Terminal Settings
 
@@ -96,7 +98,7 @@ Add to your `settings.json` (substitute the shells for whatever you use):
 
 #### Wrapper Script Approach
 
-For tools that don't easily support shell arguments, create a wrapper script:
+For tools that don't support shell arguments, create a wrapper script:
 
 ```shell
 #!/bin/bash
@@ -114,101 +116,7 @@ After configuring, open a new terminal in your IDE and run:
 atuin doctor | grep preexec
 ```
 
-You should see `built-in`, `bash-preexec`, `blesh`, or similar—not `none`.
-
-## Excluding Commands from History
-
-Sometimes you *don't* want certain commands in your history. This is common when:
-
-- AI coding tools run many automated commands (git status, file listings, etc.)
-- You're running sensitive commands you don't want synced
-- Build tools or scripts generate repetitive command noise
-
-### Using history_filter
-
-The `history_filter` option in `~/.config/atuin/config.toml` lets you exclude commands matching specific patterns:
-
-```toml
-history_filter = [
-    "^ls$",           # Exclude bare 'ls' commands
-    "^cd ",           # Exclude cd commands
-    "^cat ",          # Exclude cat commands
-]
-```
-
-Patterns are regular expressions. They're unanchored by default, so `secret` matches anywhere in a command. Use `^` and `$` for exact matching.
-
-### Using cwd_filter
-
-To exclude all commands run from specific directories:
-
-```toml
-cwd_filter = [
-    "^/tmp",                    # Exclude commands run from /tmp
-    "/node_modules/",           # Exclude commands from any node_modules
-    "^/home/user/scratch",      # Exclude a scratch directory
-]
-```
-
-### Prefix with Space (ignorespace)
-
-Most shells support "ignorespace"—commands prefixed with a space aren't saved to history. Atuin honors this convention:
-
-```shell
- echo "this won't be saved"  # Note the leading space
-```
-
-!!! warning "Bash with bash-preexec"
-    When using bash-preexec (not ble.sh), there's a known issue where ignorespace isn't fully honored. The command won't appear in Atuin, but may still appear in your bash history. See [installation](installation.md) for details.
-
-### Disabling Atuin for Specific Tools
-
-If a tool spawns interactive shells but you don't want its commands recorded, you have several options:
-
-#### Option 1: Environment Variable Check
-
-Modify your shell configuration to skip Atuin initialization based on an environment variable:
-
-```shell
-# In .bashrc or .zshrc
-if [[ -z "${MY_TOOL_SESSION}" ]]; then
-    eval "$(atuin init bash)"
-fi
-```
-
-Then configure your tool to set `MY_TOOL_SESSION=1` when spawning shells.
-
-#### Option 2: Use history_filter for Tool-Specific Patterns
-
-If the tool runs predictable commands, filter them:
-
-```toml
-history_filter = [
-    "^git status$",
-    "^git diff",
-    "^ls -la$",
-]
-```
-
-#### Option 3: Filter by Directory
-
-If the tool operates in specific directories:
-
-```toml
-cwd_filter = [
-    "^/path/to/tool/workspace",
-]
-```
-
-### Cleaning Up Existing History
-
-After adding filters, you can remove matching entries from your existing history:
-
-```shell
-atuin history prune
-```
-
-This removes entries that match your current `history_filter` or `cwd_filter` patterns.
+You should see `built-in`, `bash-preexec`, `blesh`, or similar — not `none`.
 
 ## Shell-Specific Notes
 
@@ -234,30 +142,8 @@ Zsh has native hook support via `add-zsh-hook`. The integration is straightforwa
 
 ### Fish
 
-Fish uses its event system (`fish_preexec` and `fish_postexec` events). It also respects Fish's private mode—commands run with `fish --private` aren't recorded.
+Fish uses its event system (`fish_preexec` and `fish_postexec` events). It also respects Fish's private mode — commands run with `fish --private` aren't recorded.
 
-## Troubleshooting
+### Nushell, xonsh, and PowerShell
 
-### Commands aren't being recorded
-
-1. Run `atuin doctor` and check the output
-2. Verify `shell.preexec` is not `none`
-3. Ensure your shell is interactive (`echo $-` should contain `i`)
-4. Check that `atuin init` is in your shell config and being sourced
-
-### Commands from a specific tool aren't recorded
-
-1. Check if the tool starts an interactive shell
-2. Try configuring the tool to use `bash -i` or `zsh -i`
-3. Use a wrapper script if the tool doesn't support shell arguments
-
-### Too many commands are being recorded
-
-1. Add patterns to `history_filter` in your config
-2. Use `cwd_filter` for directory-based exclusion
-3. Prefix sensitive commands with a space
-4. Run `atuin history prune` to clean existing entries
-
-### Atuin works in terminal but not in IDE
-
-This is the most common issue. The IDE's embedded terminal likely isn't starting an interactive shell. See [Enabling Atuin in Embedded Terminals](#enabling-atuin-in-embedded-terminals) above.
+These shells are supported too. For how to load the plugin in each, see [installation](installation.md#installing-the-shell-plugin).

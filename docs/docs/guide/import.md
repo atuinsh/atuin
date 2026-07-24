@@ -1,16 +1,16 @@
 # Import existing history
 
-Atuin uses a shell plugin to ensure that we capture new shell history. But for
-older history, you will need to import it
+Atuin uses a shell plugin to capture new shell history. But for
+older history, you will need to import it.
 
 This will import the history for your current shell:
-```
+```shell
 atuin import auto
 ```
 
 Alternatively, you can specify the shell like so:
 
-```
+```shell
 atuin import bash
 atuin import zsh # etc
 ```

@@ -17,7 +17,7 @@ curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 ```
 
 The install script will walk you through importing your shell history and setting
-up a sync account. To skip these interactive prompts (e.g. in CI or
+up a sync account. To skip these interactive prompts (for example, in CI or
 Dockerfiles), pass `--non-interactive`:
 
 ```shell
@@ -155,7 +155,7 @@ If you don't wish to use the installer, the manual installation steps are as fol
 !!! warning "Please be advised"
 
     If you choose to manually install Atuin rather than using the recommended installation script,
-    merely installing the binary is not sufficient, you should also set up the shell plugin.
+    merely installing the binary isn't sufficient, you should also set up the shell plugin.
 
 ---
 
@@ -212,13 +212,13 @@ After installing, remember to restart your shell.
             bash-preexec currently has [an issue][bp-ignorespace] where it will stop
             honoring `ignorespace`. While Atuin will ignore commands prefixed with
             whitespace, they may still end up in your bash history. Please check your
-            configuration! All other shells do not have this issue.
+            configuration! All other shells don't have this issue.
 
             To use `atuin < 18.10.0` in `bash < 4` with bash-preexec, the option
             `enter_accept` needs to be turned on (which is so by default).  There is no
             restriction in the latest version of Atuin (>= 18.10.0).
 
-            bash-preexec cannot properly invoke the `preexec` hook for subshell commands
+            bash-preexec can't properly invoke the `preexec` hook for subshell commands
             `(...)`, function definitions `func() { ...; }`, empty for-in-statements `for
             i in; do ...; done`, etc., so those commands and duration may not be recorded
             in the Atuin's history correctly.
@@ -308,7 +308,7 @@ After installing, remember to restart your shell.
 
 ## Upgrade
 
-Run `atuin update`, and if that command is not available, run the install script again.
+Run `atuin update`, and if that command isn't available, run the install script again.
 
 If you used a package manager to install Atuin, then you should also use your package manager to update Atuin.
 

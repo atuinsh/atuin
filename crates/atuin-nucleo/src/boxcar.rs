@@ -1,4 +1,4 @@
-//! Adapted from the `boxcar` crate at <https://github.com/ibraheemdev/boxcar/blob/master/src/raw.rs>
+//! Adapted from the `boxcar` crate at <https://github.com/ibraheemdev/boxcar/blob/master/src/vec/raw.rs>
 //! under MIT licenes:
 //!
 //! Copyright (c) 2022 Ibraheem Ahmed

@@ -5,26 +5,26 @@ Atuin includes a powerful keybinding system that can be used to fully customize 
 The `[keymap]` section in your config replaces the older `[keys]` section. If any `[keymap]` settings are present, the `[keys]` section is ignored entirely.
 
 !!! warning
-    Modifier keys, F1-F24 keys, and some special characters work best - or _only_ work - with a terminal that implements the kitty keyboard protocol. Notably, the default macOS Terminal app does _not_ include this feature. For more information and a list of terminals that are known to support this protocol, see [https://sw.kovidgoyal.net/kitty/keyboard-protocol/](https://sw.kovidgoyal.net/kitty/keyboard-protocol/).
+    Modifier keys, F1-F24 keys, and some special characters work best - or _only_ work - with a terminal that implements the kitty keyboard protocol. Notably, the default macOS Terminal app _doesn't_ include this feature. For more information and a list of terminals that are known to support this protocol, see [https://sw.kovidgoyal.net/kitty/keyboard-protocol/](https://sw.kovidgoyal.net/kitty/keyboard-protocol/).
 
 ## Keymaps
 
 The Atuin TUI has multiple modes, each with its own keymap. You configure each one under a separate TOML table:
 
-| Config section       | When it is active |
+| Config section       | When it's active |
 |----------------------|-------------------|
 | `[keymap.emacs]`     | Search tab, `keymap_mode = "emacs"` |
-| `[keymap.vim-normal]`| Search tab, `keymap_mode = "vim"`, normal mode |
-| `[keymap.vim-insert]`| Search tab, `keymap_mode = "vim"`, insert mode |
+| `[keymap.vim-normal]`| Search tab, vim normal mode (see [`keymap_mode`](config.md#keymap_mode)) |
+| `[keymap.vim-insert]`| Search tab, vim insert mode (see [`keymap_mode`](config.md#keymap_mode)) |
 | `[keymap.inspector]` | Inspector tab (opened with `ctrl-o`) |
 | `[keymap.prefix]`    | After pressing the prefix key (`ctrl-a` by default) |
 
-Vim-insert mode inherits all emacs bindings by default, then overrides `esc` and `ctrl-[` to enter normal mode instead of exiting.
+Vim-insert mode inherits all Emacs bindings by default, then overrides `esc` and `ctrl-[` to enter normal mode instead of exiting.
 
 You only need to specify the keys you want to change. Unmentioned keys keep their default bindings.
 
 !!! warning
-    If you specify a key in your keymap that would normally be changed by an option, like the `enter` key with the `enter_accept` setting, the setting will not take any affect. Those options modify the default keymap based on their setting, but if you override the key in the keymap, you're responsible for managing correct behavior.
+    If you specify a key in your keymap that would normally be changed by an option, like the `enter` key with the `enter_accept` setting, the setting won't take effect. Those options modify the default keymap based on their setting, but if you override the key in the keymap, you're responsible for managing correct behavior.
 
 ## Key format
 
@@ -58,7 +58,7 @@ Modifiers are prefixed with a dash separator. Multiple modifiers can be combined
 Available modifiers: `ctrl`, `alt`, `shift`, `super` (also accepted as `cmd` or `win`).
 
 !!! warning
-    The `super` modifier (Cmd on macOS, Win on Windows) **requires** the kitty keyboard protocol. Only terminals that implement this protocol will report the Super modifier to applications. Even in supported terminals, some Super+key combinations may be intercepted by the terminal or OS (e.g. Cmd+C for copy, Cmd+V for paste, or Cmd+T for opening a new tab).
+    The `super` modifier (`Cmd` on macOS, Win on Windows) **requires** the kitty keyboard protocol. Only terminals that implement this protocol will report the Super modifier to applications. Even in supported terminals, some Super+key combinations may be intercepted by the terminal or OS (for example, Cmd+C for copy, Cmd+V for paste, or Cmd+T for opening a new tab).
 
 ### Uppercase letters
 
@@ -74,7 +74,7 @@ Some special characters are written out directly:
 
 ### Shifted and punctuation keys
 
-When you press a key like `Shift+1`, your terminal sends the resulting character (`!`) rather than "shift-1". To bind shifted punctuation keys, use the character directly:
+When you press a key like `Shift+1`, your terminal sends the resulting character (`!`) rather than `shift-1`. To bind shifted punctuation keys, use the character directly:
 
 ```toml
 [keymap.emacs]
@@ -107,13 +107,13 @@ Separate keys with a space to define a sequence. The first key is buffered until
 "g g"
 ```
 
-If the second key does not complete a known sequence, both keys are handled individually.
+If the second key doesn't complete a known sequence, both keys are handled individually.
 
 ## Keymap format
 
-Each entry in a keymap section maps a key to either a simple action or a conditional rule list.
+Each entry in a keymap section maps a key to either a direct action or a conditional rule list.
 
-### Simple binding
+### Direct binding
 
 Maps a key directly to a single action, with no conditions:
 
@@ -125,7 +125,7 @@ Maps a key directly to a single action, with no conditions:
 
 ### Conditional binding
 
-Maps a key to an ordered list of rules. Each rule has an `action` and an optional `when` condition. Rules are evaluated top-to-bottom; the first rule whose condition matches (or that has no condition) wins.
+Maps a key to an ordered list of rules. Each rule has an `action` and an optional `when` condition. Rules are evaluated top-to-bottom, and the first rule whose condition matches (or that has no condition) wins.
 
 ```toml
 [keymap.emacs]
@@ -137,7 +137,7 @@ Maps a key to an ordered list of rules. Each rule has an `action` and an optiona
 
 In this example, pressing left when the cursor is at position 0 exits the TUI. Otherwise, it moves the cursor left.
 
-A rule without a `when` field is unconditional and always matches. It is typically placed last as a fallback.
+A rule without a `when` field is unconditional and always matches. It's typically placed last as a fallback.
 
 !!! warning "Override semantics"
     When you specify a key in `[keymap]`, it **replaces** the **entire** default binding for that key. Other keys you don't mention keep their defaults.
@@ -194,9 +194,9 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | Action | Description |
 |--------|-------------|
 | `accept` | Accept the selected entry and **execute it immediately** |
-| `accept-N` | Accept the Nth entry below the selection and execute it (e.g. `accept-1` through `accept-9`) |
+| `accept-N` | Accept the Nth entry below the selection and execute it (for example, `accept-1` through `accept-9`) |
 | `return-selection` | Return the selected entry to the command line **without executing** |
-| `return-selection-N` | Return the Nth entry below the selection without executing (e.g. `return-selection-1` through `return-selection-9`) |
+| `return-selection-N` | Return the Nth entry below the selection without executing (for example, `return-selection-1` through `return-selection-9`) |
 | `return-original` | Close the TUI and return the original command line text |
 | `return-query` | Close the TUI and return the current search query |
 | `copy` | Copy the selected entry to the clipboard |
@@ -204,8 +204,8 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `delete-all` | Delete **all** history entries matching the selected command text |
 | `exit` | Exit the TUI (behavior depends on the `exit_mode` setting) |
 | `redraw` | Redraw the screen |
-| `cycle-filter-mode` | Cycle through filter modes (global, host, session, directory) |
-| `cycle-search-mode` | Cycle through search modes (fuzzy, prefix, fulltext, skim) |
+| `cycle-filter-mode` | Cycle through the enabled [filter modes](config.md#filter_mode) |
+| `cycle-search-mode` | Cycle through [search modes](config.md#search_mode) (fuzzy, prefix, fulltext, skim) |
 | `toggle-tab` | Toggle between the search tab and inspector tab |
 | `switch-context` | Switch to the [context](../guide/advanced-usage.md#context-switch) of the currently selected command |
 | `clear-context` | Return to the initial [context](../guide/advanced-usage.md#context-switch) |
@@ -223,7 +223,7 @@ The difference between `accept` and `return-selection`: `accept` runs the comman
 | `vim-enter-insert-at-end` | Move to end of line and enter vim insert mode (like vim `A`) |
 | `vim-search-insert` | Clear the search input and enter vim insert mode (like vim `?` or `/`) |
 | `vim-change-to-end` | Delete to end of line and enter vim insert mode (like vim `C`) |
-| `enter-prefix-mode` | Enter prefix mode (waits for one more key, e.g. `d` for delete) |
+| `enter-prefix-mode` | Enter prefix mode (waits for one more key, for example `d` for delete) |
 
 ### Inspector
 
@@ -240,7 +240,7 @@ The difference between `accept` and `return-selection`: `accept` runs the comman
 
 ## Conditions
 
-Conditions let a single key do different things depending on the current state. They are specified as strings in the `when` field of a rule.
+Conditions let a single key do different things depending on the current state. They're specified as strings in the `when` field of a rule.
 
 ### Condition atoms
 
@@ -433,7 +433,7 @@ The `[keymap]` section is a more powerful replacement for the `[keys]` section. 
 - If you have any `[keymap]` settings, the entire `[keys]` section is ignored. Defaults are built from the standard `[keys]` values, and then your `[keymap]` overrides are applied on top.
 - If you have no `[keymap]` settings, the `[keys]` section works as before for backward compatibility.
 
-If you are migrating from `[keys]` to `[keymap]`, here is how the old flags map:
+If you're migrating from `[keys]` to `[keymap]`, here is how the old flags map:
 
 | `[keys]` setting | Equivalent `[keymap]` |
 |------------------|-----------------------|

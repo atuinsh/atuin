@@ -1195,6 +1195,10 @@ impl AtuinHistoryToolCall {
 pub(crate) struct AtuinOutputToolCall {
     pub history_id: Uuid,
     pub ranges: Vec<(i64, i64)>,
+    /// The command the history entry ran, resolved from the local history
+    /// db after parsing (`Effect::ResolveOutputCommand`). Display-only:
+    /// `None` until the lookup lands, or when the id isn't known locally.
+    pub command: Option<String>,
 }
 
 impl TryFrom<&serde_json::Value> for AtuinOutputToolCall {
@@ -1232,7 +1236,11 @@ impl TryFrom<&serde_json::Value> for AtuinOutputToolCall {
             })
             .collect::<Result<Vec<(i64, i64)>, eyre::Error>>()?;
 
-        Ok(Self { history_id, ranges })
+        Ok(Self {
+            history_id,
+            ranges,
+            command: None,
+        })
     }
 }
 

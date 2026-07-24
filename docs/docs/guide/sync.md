@@ -12,14 +12,14 @@ proceed to [login](#login).
 
 ## Register
 
-```
+```shell
 atuin register -u <YOUR_USERNAME> -e <YOUR EMAIL>
 ```
 
 After registration, Atuin will generate an encryption key for you and store it
 locally. This is needed for logging in to other machines, and can be seen with
 
-```
+```shell
 atuin key
 ```
 
@@ -35,14 +35,14 @@ By default, Atuin will sync your history once per hour. This can be
 
 To run a sync manually, please run
 
-```
+```shell
 atuin sync
 ```
 
 Atuin tries to be smart with a sync, and not waste data transfer. However, if
-you are seeing some missing data, please try running
+you're seeing some missing data, please try running
 
-```
+```shell
 atuin sync -f
 ```
 
@@ -54,25 +54,25 @@ When only signed in on one machine, Atuin sync operates as a backup. This is
 pretty useful by itself, but syncing multiple machines is where the magic
 happens.
 
-First, ensure you are [registered with the sync server](#register) and make a
+First, make sure you're [registered with the sync server](#register) and make a
 note of your key. You can see this with `atuin key`.
 
 Then, install Atuin on a new machine. Once installed, login with
 
-```
+```shell
 atuin login -u <USERNAME>
 ```
 
-You will be prompted for your password, and for your key.
+Atuin asks for your password, and for your key.
 
 Syncing will happen automatically in the background, but you may wish to run it manually with
 
-```
+```shell
 atuin sync
 ```
 
 Or, if you see missing data, force a full sync with:
 
-```
+```shell
 atuin sync -f
 ```

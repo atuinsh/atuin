@@ -80,6 +80,65 @@ While iterating on the server, I find it helpful to run a new user on my system,
 
 Our test coverage is currently not the best, but we are working on it! Generally tests live in the file next to the functionality they are testing, and are executed just with `cargo test`.
 
+## Documentation
+
+Docs live in `docs/docs/` and are built with mkdocs. To preview them:
+
+```shell
+cd docs && uv run mkdocs serve
+```
+
+Prose is linted with [Vale](https://vale.sh) against the Microsoft, proselint,
+alex, and write-good style guides. CI fails on errors; warnings and suggestions
+aren't annotated on the PR, but are visible when you run Vale locally.
+
+Vale is not vendored — install it with your package manager
+([docs](https://vale.sh/docs/install)), then fetch the pinned style packages
+once:
+
+```shell
+brew install vale   # or your platform's equivalent
+vale sync
+```
+
+Then, from the repo root:
+
+```shell
+vale docs/docs                              # everything, all severities
+vale --minAlertLevel=error docs/docs        # only what CI gates on
+vale docs/docs/guide/sync.md                # one file
+```
+
+Add `--no-global` if you keep a personal `~/.vale.ini`, so your local config
+cannot change the result.
+
+If Vale flags a technical term as a misspelling, first check whether it belongs
+in backticks — config keys, flags, and command names usually do, which fixes
+both the alert and the rendering. If it is genuinely prose, add it to
+`.vale/styles/config/vocabularies/Atuin/accept.txt`, which is sorted
+case-insensitively. Entries are regular expressions: `[Zz]sh` accepts both
+casings, while a bare `Atuin` makes that casing canonical and flags every other
+one.
+
+Rule severities and the rules we have turned off live in `.vale.ini`, each with
+a comment explaining why.
+
+### One thing Vale cannot see
+
+Vale parses Markdown as CommonMark, where any 4-space-indented block is a code
+block. mkdocs admonition bodies are indented 4 spaces, so **Vale never lints
+them**:
+
+```markdown
+!!! note
+
+    This paragraph is invisible to Vale. Write it carefully.
+```
+
+Roughly 80 lines across 17 pages sit inside admonitions. They were cleaned by
+hand once, but CI will not catch a regression there — so proof-read admonition
+bodies yourself.
+
 ## Logging and Debugging
 
 ### Log Files

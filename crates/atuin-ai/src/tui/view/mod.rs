@@ -18,7 +18,10 @@ use crate::tui::events::PermissionResult;
 use crate::tui::select;
 
 pub(crate) mod input;
+mod trunc;
 pub(crate) mod turn;
+
+use trunc::{command_spinner, truncated_line};
 
 use turn::{
     ConfidenceLevel, DangerLevel, OutOfBandOutputDetails, SuggestedCommandDetails, ToolCallDetails,
@@ -74,10 +77,11 @@ pub(crate) fn turn_view(
     first: bool,
     busy: bool,
     showing_ui: bool,
+    status_text: Option<&str>,
 ) -> AnyElement<'static> {
     match &turn.kind {
         UiTurnKind::User { events } => user_turn_view(events, first),
-        UiTurnKind::Agent { events } => agent_turn_view(events, busy, showing_ui),
+        UiTurnKind::Agent { events } => agent_turn_view(events, busy, showing_ui, status_text),
         UiTurnKind::OutOfBand { events } => out_of_band_turn_view(events),
     }
 }
@@ -102,6 +106,7 @@ pub(crate) fn agent_turn_view(
     events: &[UiEvent],
     busy: bool,
     showing_ui: bool,
+    status_text: Option<&str>,
 ) -> AnyElement<'static> {
     let label_style = Style::default()
         .fg(Color::Yellow)
@@ -117,10 +122,15 @@ pub(crate) fn agent_turn_view(
         }))
         .when(busy && !showing_ui, |c| {
             c.child(
-                spinner("")
+                spinner(status_text.unwrap_or(""))
                     .spinner_style(
                         Style::default()
                             .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .label_style(
+                        Style::default()
+                            .fg(Color::DarkGray)
                             .add_modifier(Modifier::BOLD),
                     )
                     .pad_left(2)
@@ -208,17 +218,11 @@ fn shell_tool_view(command: &str, preview: Option<&ToolPreview>) -> AnyElement<'
 
     match preview {
         Some(preview) => col()
-            .child(
-                tool_spinner(
-                    if done {
-                        format!("Ran: {command}")
-                    } else {
-                        format!("Running: {command}")
-                    },
-                    done,
-                )
-                .hide_checkmark(),
-            )
+            .child(command_spinner(
+                if done { "Ran: " } else { "Running: " },
+                command,
+                done,
+            ))
             .child(
                 row()
                     .fixed(2, text("└ ").style(Style::default().fg(Color::DarkGray)))
@@ -231,7 +235,7 @@ fn shell_tool_view(command: &str, preview: Option<&ToolPreview>) -> AnyElement<'
             )
             .child(shell_tool_footer(preview, done))
             .any(),
-        None => tool_spinner(format!("Running: {command}"), false).any(),
+        None => command_spinner("Running: ", command, false).any(),
     }
 }
 
@@ -689,22 +693,33 @@ pub(crate) fn permission_prompt_view(
     cursor: usize,
 ) -> AnyElement<'static> {
     let verb = tool_call.tool.descriptor().display_verb;
-    let tool_desc = match &tool_call.tool {
-        ClientToolCall::Read(tool) => tool.path.display().to_string(),
-        ClientToolCall::Edit(tool) => tool.path.display().to_string(),
-        ClientToolCall::Write(tool) => tool.path.display().to_string(),
-        ClientToolCall::Shell(tool) => tool.command.clone(),
-        ClientToolCall::AtuinHistory(tool) => tool.query.clone(),
-        ClientToolCall::AtuinOutput(tool) => tool.history_id.to_string(),
-        ClientToolCall::LoadSkill(tool) => format!("skill: {}", tool.name),
+    let prefix = format!("Atuin AI would like to {verb}: ");
+    let desc_style = Style::default().fg(Color::Yellow);
+    // Wraps, so the user reviews the full text of what they're approving.
+    let wrapped = |desc: String| text(prefix.clone()).span(desc, desc_style).any();
+    let header: AnyElement<'static> = match &tool_call.tool {
+        ClientToolCall::Read(tool) => wrapped(tool.path.display().to_string()),
+        ClientToolCall::Edit(tool) => wrapped(tool.path.display().to_string()),
+        ClientToolCall::Write(tool) => wrapped(tool.path.display().to_string()),
+        ClientToolCall::Shell(tool) => wrapped(tool.command.clone()),
+        ClientToolCall::AtuinHistory(tool) => wrapped(tool.query.clone()),
+        // The model passes a history UUID, which means nothing to the user —
+        // show the command it refers to once the local lookup resolves. The
+        // command is context here, not the thing being approved, so one
+        // middle-elided line beats wrapping.
+        ClientToolCall::AtuinOutput(tool) => {
+            let desc = tool
+                .command
+                .clone()
+                .unwrap_or_else(|| tool.history_id.to_string());
+            truncated_line(prefix.clone(), Style::default(), desc, desc_style).any()
+        }
+        ClientToolCall::LoadSkill(tool) => wrapped(format!("skill: {}", tool.name)),
     };
     let options = permission_options(&tool_call.tool, in_git_project);
 
     col()
-        .child(
-            text(format!("Atuin AI would like to {verb}: "))
-                .span(tool_desc, Style::default().fg(Color::Yellow)),
-        )
+        .child(header)
         .child(select::select_view(options.iter().map(|(label, _)| *label), cursor).pad_left(2))
         .pad_left(2)
         .pad_top(1)

@@ -1,9 +1,9 @@
 # Docker
 
-Atuin 提供了一个 docker 镜像（image），可以更轻松地将服务器部署为容器（container）。
+Atuin 提供了一个 docker 镜像（image），可以更轻松地将服务器部署为容器（container）。镜像没有发布 `latest` 标签，请在[发布页面](https://github.com/atuinsh/atuin/releases)查找最新的发布版本号，替换下面的 `<LATEST TAGGED RELEASE>`。
 
 ```sh
-docker run -d -v "$USER/.config/atuin:/config" ghcr.io/ellie/atuin:latest server start
+docker run -d -v "$USER/.config/atuin:/config" ghcr.io/atuinsh/atuin:<LATEST TAGGED RELEASE> start
 ```
 
 # Docker Compose
@@ -25,8 +25,8 @@ version: '3.5'
 services:
   atuin:
     restart: always
-    image: ghcr.io/ellie/atuin:main
-    command: server start
+    image: ghcr.io/atuinsh/atuin:<LATEST TAGGED RELEASE>
+    command: start
     volumes:
       - "./config:/config"
     links:

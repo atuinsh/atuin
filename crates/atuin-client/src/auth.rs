@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use eyre::{Context, Result, bail};
 use reqwest::{StatusCode, Url, header::USER_AGENT};
@@ -87,6 +89,7 @@ pub async fn auth_client(settings: &Settings) -> Box<dyn AuthClient> {
             settings.session_token().await.ok(),
             settings.network_connect_timeout,
             settings.network_timeout,
+            settings.extra_headers.clone(),
         )) as Box<dyn AuthClient>
     }
 }
@@ -100,6 +103,7 @@ pub struct LegacyAuthClient {
     session_token: Option<String>,
     connect_timeout: u64,
     timeout: u64,
+    extra_headers: HashMap<String, String>,
 }
 
 impl LegacyAuthClient {
@@ -108,12 +112,14 @@ impl LegacyAuthClient {
         session_token: Option<String>,
         connect_timeout: u64,
         timeout: u64,
+        extra_headers: HashMap<String, String>,
     ) -> Self {
         Self {
             address: address.clone(),
             session_token,
             connect_timeout,
             timeout,
+            extra_headers,
         }
     }
 
@@ -124,7 +130,7 @@ impl LegacyAuthClient {
             .ok_or_else(|| eyre::eyre!("Not logged in"))?;
 
         ensure_crypto_provider();
-        let mut headers = reqwest::header::HeaderMap::new();
+        let mut headers = crate::api_client::extra_headers_map(&self.extra_headers)?;
         headers.insert(
             reqwest::header::AUTHORIZATION,
             format!("Token {token}").parse()?,
@@ -132,7 +138,7 @@ impl LegacyAuthClient {
         headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
         headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
 
-        Ok(reqwest::Client::builder()
+        Ok(crate::api_client::client_builder(&self.extra_headers)
             .default_headers(headers)
             .connect_timeout(std::time::Duration::from_secs(self.connect_timeout))
             .timeout(std::time::Duration::from_secs(self.timeout))
@@ -155,6 +161,7 @@ impl AuthClient for LegacyAuthClient {
                 username: username.to_string(),
                 password: password.to_string(),
             },
+            &self.extra_headers,
         )
         .await?;
 
@@ -165,7 +172,14 @@ impl AuthClient for LegacyAuthClient {
     }
 
     async fn register(&self, username: &str, email: &str, password: &str) -> Result<AuthResponse> {
-        let resp = crate::api_client::register(&self.address, username, email, password).await?;
+        let resp = crate::api_client::register(
+            &self.address,
+            username,
+            email,
+            password,
+            &self.extra_headers,
+        )
+        .await?;
         Ok(AuthResponse::Success {
             session: resp.session,
             auth_type: resp.auth.or(Some("cli".into())),

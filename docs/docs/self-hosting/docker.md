@@ -1,13 +1,13 @@
 # Docker
 
 !!! warning
-    If you are self hosting, we strongly suggest you stick to [tagged releases](https://github.com/atuinsh/atuin/releases), and do not follow `main` or `latest`
+    If you're self hosting, we strongly suggest you stick to [tagged releases](https://github.com/atuinsh/atuin/releases), and don't follow `main` or `latest`
 
     Follow the GitHub releases, and please read the notes for each release. Most of the time, upgrades can occur without any manual intervention.
 
-    We cannot guarantee that all updates will apply cleanly, and some may require some extra steps.
+    We can't guarantee that all updates will apply cleanly, and some may require some extra steps.
 
-There is a supplied docker image to make deploying a server as a container easier. The "LATEST TAGGED RELEASE" can be found on the [releases page](https://github.com/atuinsh/atuin/releases).
+A supplied docker image lets you deploy a server as a container. The "LATEST TAGGED RELEASE" can be found on the [releases page](https://github.com/atuinsh/atuin/releases).
 
 ```sh
 CONFIG="$HOME/.config/atuin"
@@ -18,7 +18,7 @@ docker run -d -v "$CONFIG:/config" ghcr.io/atuinsh/atuin:<LATEST TAGGED RELEASE>
 
 ## Docker Compose
 
-Using the already build docker image hosting your own Atuin can be done using the supplied docker-compose file.
+You can also host your own Atuin server with the prebuilt docker image using the supplied docker-compose file.
 
 Create a `docker-compose.yml`:
 
@@ -68,9 +68,9 @@ chown 1000:1000 config
 docker compose up -d
 ```
 
-## Using systemd to manage your atuin server
+## Using systemd to manage your Atuin server
 
-The following `systemd` unit file to manage your `docker-compose` managed service:
+The following `systemd` unit file can be used to manage your `docker-compose` managed service:
 
 ```ini
 [Unit]
@@ -97,7 +97,7 @@ Start and enable the service with:
 systemctl enable --now atuin
 ```
 
-Check if its running with:
+Check if it's running with:
 
 ```sh
 systemctl status atuin
@@ -114,7 +114,7 @@ You can add another service to your `docker-compose.yml` file to have it run dai
     env_file:
       - .env
     environment:
-      POSTGRES_HOST: postgresql
+      POSTGRES_HOST: db
       POSTGRES_DB: ${ATUIN_DB_NAME}
       POSTGRES_USER: ${ATUIN_DB_USERNAME}
       POSTGRES_PASSWORD: ${ATUIN_DB_PASSWORD}
@@ -123,9 +123,15 @@ You can add another service to your `docker-compose.yml` file to have it run dai
     volumes:
       - ./db_dumps:/db_dumps
     depends_on:
-      - postgresql
+      - db
 ```
 
 This will create daily backups of your database for that additional layer of comfort.
 
-PLEASE NOTE: The `./db_dumps` mount MUST be a POSIX-compliant filesystem to store the backups (mainly with support for hardlinks and softlinks). So filesystems like VFAT, EXFAT, SMB/CIFS, ... can't be used with this docker image. See https://github.com/prodrigestivill/docker-postgres-backup-local for more details on how this works. There are additional settings for the number of backups retained, etc., all explained on the linked page.
+!!! warning
+
+    The `./db_dumps` mount must use a POSIX-compliant filesystem that supports
+    hard links and symlinks. Filesystems such as VFAT, exFAT, and SMB/CIFS
+    won't work with this image. See
+    [`docker-postgres-backup-local`](https://github.com/prodrigestivill/docker-postgres-backup-local)
+    for the retention settings and how backups work.
