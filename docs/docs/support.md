@@ -13,14 +13,28 @@ tiers and records what works where.
 
 Feature coverage varies by shell:
 
-| Tier | Shell | History search | Inline popup | Dotfiles | Atuin AI | pty-proxy |
-| :--: | ----- | :---: | :---: | :---: | :---: | :---: |
-| 1 | zsh | ✓ | ✓ | ✓ | ✓ | ✓ |
-| 1 | bash | ✓ | ✓ | ✓ | ✓ | ✓ |
-| 1 | fish | ✓ | ✓ | ✓ | ✓ | ✓ |
-| 2 | nushell | ✓ | ✗ | ✗ | ✗ | ✓ |
-| 2 | xonsh | ✓ | ✗ | ✓ | ✗ | ✗ |
-| 2 | PowerShell | ✓ | ✗ | ✓ | ✗ | ✗ |
+<table>
+  <thead>
+    <tr>
+      <th>Tier</th><th>Shell</th><th>History search</th><th>Inline popup</th>
+      <th>Dotfiles</th><th>Atuin AI</th><th>pty-proxy</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td rowspan="3"><strong>1</strong></td>
+      <td>zsh</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td>
+    </tr>
+    <tr><td>bash</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+    <tr><td>fish</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+    <tr>
+      <td rowspan="3"><strong>2</strong></td>
+      <td>nushell</td><td>✓</td><td>✗</td><td>✗</td><td>✗</td><td>✓</td>
+    </tr>
+    <tr><td>xonsh</td><td>✓</td><td>✗</td><td>✓</td><td>✗</td><td>✗</td></tr>
+    <tr><td>PowerShell</td><td>✓</td><td>✗</td><td>✓</td><td>✗</td><td>✗</td></tr>
+  </tbody>
+</table>
 
 ## Operating systems and architectures
 
@@ -28,16 +42,41 @@ Atuin runs on a range of operating systems and CPU architectures. The matrix
 below shows, for each platform, whether an official prebuilt binary is published
 and how far continuous integration (CI) exercises it.
 
-| Tier | Platform | Prebuilt binary | CI | Notes |
-| :--: | --- | :--: | :--: | --- |
-| 1 | `linux-x86_64` | ✓ | tested | |
-| 1 | `linux-arm64` | ✓ | build-only | |
-| 1 | `macos-arm64` | ✓ | tested | Replaying a result with ++alt+"&num;"++ isn't available. |
-| 1 | `macos-x86_64` | ✓ | build-only | Replaying a result with ++alt+"&num;"++ isn't available. |
-| 1 | `windows-x86_64` | ✓ | tested | No syntax highlighting or pty-proxy. |
-| 1 | `wsl2-x86_64` | ✓ | tested | |
-| 2 | `illumos-x86_64` | ✗ | build-only | Build from source. |
-| 2 | Other | ✗ | ✗ | Build from source; untested. Needs a C toolchain. |
+<table>
+  <thead>
+    <tr>
+      <th>Tier</th><th>OS</th><th>Arch</th><th>Prebuilt binary</th><th>CI</th><th>Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td rowspan="6"><strong>1</strong></td>
+      <td rowspan="2"><code>linux</code></td>
+      <td><code>x86_64</code></td><td>✓</td><td>tested</td><td></td>
+    </tr>
+    <tr><td><code>arm64</code></td><td>✓</td><td>build-only</td><td></td></tr>
+    <tr>
+      <td rowspan="2"><code>macos</code></td>
+      <td><code>arm64</code></td><td>✓</td><td>tested</td>
+      <td rowspan="2">Replaying a result with <kbd>alt</kbd>+<kbd>#</kbd> isn't available.</td>
+    </tr>
+    <tr><td><code>x86_64</code></td><td>✓</td><td>build-only</td></tr>
+    <tr>
+      <td><code>windows</code></td><td><code>x86_64</code></td><td>✓</td><td>tested</td>
+      <td>No syntax highlighting or pty-proxy.</td>
+    </tr>
+    <tr><td><code>wsl2</code></td><td><code>x86_64</code></td><td>✓</td><td>tested</td><td></td></tr>
+    <tr>
+      <td rowspan="2"><strong>2</strong></td>
+      <td><code>illumos</code></td><td><code>x86_64</code></td><td>✗</td><td>build-only</td>
+      <td>Build from source.</td>
+    </tr>
+    <tr>
+      <td><em>other</em></td><td>—</td><td>✗</td><td>✗</td>
+      <td>Build from source; untested. Needs a C toolchain.</td>
+    </tr>
+  </tbody>
+</table>
 
 - **Prebuilt binary** — an official binary is published through the install
   script and GitHub releases. Linux binaries are provided for both glibc and
