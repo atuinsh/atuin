@@ -29,7 +29,6 @@ struct HistDbEntry {
 impl HistDbEntry {
     fn into_hist_with_hostname(self, hostname: String) -> History {
         let ts_nanos = (self.tsb * 1_000_000_000_f64) as i128;
-        // a corrupt row must not take down the whole import
         let timestamp =
             OffsetDateTime::from_unix_nanos(ts_nanos).unwrap_or(OffsetDateTime::UNIX_EPOCH);
 
