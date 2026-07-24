@@ -72,7 +72,7 @@ impl Cmd {
 
     pub async fn status(&self, store: SqliteStore) -> Result<()> {
         let host_id = Settings::host_id().await?;
-        let offset = atuin_common::time::local_offset_or_utc();
+        let offset = time::UtcOffset::current_local_offset()?;
 
         let status = store.status().await?;
 

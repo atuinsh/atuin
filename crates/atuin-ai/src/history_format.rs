@@ -2,10 +2,6 @@ use atuin_client::history::{History, is_known_agent};
 use atuin_common::time::DATETIME_FMT;
 use time::UtcOffset;
 
-pub(crate) fn current_local_offset() -> UtcOffset {
-    atuin_common::time::local_offset_or_utc()
-}
-
 pub(crate) fn format_last_command(history: &History, local_offset: UtcOffset) -> String {
     format!(
         "History ID: {} - `{}`\n{}",

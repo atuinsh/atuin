@@ -1176,7 +1176,7 @@ impl AtuinHistoryToolCall {
             return ToolOutcome::Success("No matching history entries found.".to_string());
         }
 
-        let local_offset = crate::history_format::current_local_offset();
+        let local_offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
 
         let formatted: Vec<String> = results
             .iter()

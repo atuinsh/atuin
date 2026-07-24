@@ -109,7 +109,7 @@ impl ClientContext {
         if let Some(history) = last_command {
             ctx["last_command"] = serde_json::json!(crate::history_format::format_last_command(
                 history,
-                crate::history_format::current_local_offset(),
+                time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC),
             ));
         }
 

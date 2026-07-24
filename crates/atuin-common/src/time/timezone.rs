@@ -6,19 +6,18 @@ use serde::Serialize;
 use serde_with::DeserializeFromStr;
 use time::{UtcOffset, format_description::FormatItem, macros::format_description};
 
-/// The system's current UTC offset, falling back to UTC if it cannot be determined.
-///
-/// Safe to call from anywhere, including async code. `time` used to refuse this on a
-/// multithreaded process, but since 0.3.37 only [`time::util::refresh_tz`] -- which
-/// re-reads `$TZ` -- carries that restriction. We never re-read `$TZ`, so a changed
-/// timezone is simply picked up on the next run.
-pub fn local_offset_or_utc() -> UtcOffset {
-    UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC)
-}
-
 /// Wrapper around [`UtcOffset`] supporting a wider variety of timezone formats.
 #[derive(
-    Clone, Copy, Debug, Eq, PartialEq, DeserializeFromStr, Serialize, derive_more::Display,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    DeserializeFromStr,
+    Serialize,
+    derive_more::Display,
+    derive_more::From,
+    derive_more::Into,
 )]
 #[display("{_0}")]
 pub struct Timezone(pub UtcOffset);
@@ -28,35 +27,31 @@ static OFFSET_FMT: &[FormatItem<'_>] = format_description!(
     "[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional [:[offset_second padding:none]]]]]"
 );
 
-impl FromStr for Timezone {
-    type Err = eyre::Report;
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+pub enum TimezoneDecodingError {
+    #[error("failed to query local timezone {_0} ")]
+    IndeterminateOffset(#[from] time::error::IndeterminateOffset),
+    #[error("invalid timezone format: {_0}")]
+    InvalidTimezone(#[from] time::error::Parse),
+}
 
-    fn from_str(s: &str) -> eyre::Result<Self> {
-        // local timezone
+impl FromStr for Timezone {
+    type Err = TimezoneDecodingError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         if matches!(s.to_lowercase().as_str(), "l" | "local") {
-            // There have been some timezone issues, related to errors fetching it on some
-            // platforms
-            // Rather than fail to start, fallback to UTC. The user should still be able to specify
-            // their timezone manually in the config file.
-            return Ok(Self(local_offset_or_utc()));
+            return Ok(UtcOffset::current_local_offset()?.into());
         }
 
         if matches!(s.to_lowercase().as_str(), "0" | "utc") {
-            let offset = UtcOffset::UTC;
-            return Ok(Self(offset));
+            return Ok(UtcOffset::UTC.into());
         }
 
-        // offset from UTC
-        if let Ok(offset) = UtcOffset::parse(s, OFFSET_FMT) {
-            return Ok(Self(offset));
-        }
-
-        // IDEA: Currently named timezones are not supported, because the well-known crate
-        // for this is `chrono_tz`, which is not really interoperable with the datetime crate
-        // that we currently use - `time`. If ever we migrate to using `chrono`, this would
-        // be a good feature to add.
-
-        eyre::bail!(r#""{s}" is not a valid timezone spec"#);
+        // IDEA: Currently named timezones are not supported, because the well-known crate for this
+        // is `chrono_tz`, which is not really interoperable with the datetime crate that we
+        // currently use - `time`. If ever we migrate to using `chrono`, this would be a good
+        // feature to add.
+        Ok(UtcOffset::parse(s, OFFSET_FMT)?.into())
     }
 }
 

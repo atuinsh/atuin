@@ -8,4 +8,4 @@ pub use duration::{DurationExt, DurationOverflow, format_duration, format_durati
 pub use offset_date_time::{
     DATETIME_FMT, DATETIME_MINUTE_FMT, OffsetDateTimeExt, TimespecOutOfRange, TimestampOutOfRange,
 };
-pub use timezone::{Timezone, local_offset_or_utc};
+pub use timezone::{Timezone, TimezoneDecodingError};
