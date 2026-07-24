@@ -1,13 +1,13 @@
 # sync
 
-Atuin can back up your history to a server, and use this to ensure multiple
+Atuin can back up your history to a server, and use this to make sure multiple
 machines have the same shell history. This is all encrypted end-to-end, so the
 server operator can _never_ see your data!
 
 Anyone can host a server (see the [self-hosting docs](../self-hosting/server-setup.md)),
 and we host one at <https://api.atuin.sh>. This is the default server address,
 which can be changed in the [config](../configuration/config.md#sync_address).
-Again, we _cannot_ see your data, and do not want to.
+Again, we _can't_ see your data, and don't want to.
 
 ## Sync frequency
 
@@ -27,12 +27,12 @@ atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
 ```
 
 If you don't want to have your password be included in shell history, you can omit
-the password flag and you will be prompted to provide it through stdin.
+the password flag and Atuin asks for it through `stdin`.
 
 Usernames must be unique and only contain alphanumerics or hyphens,
-and emails shall only be used for important notifications (security breaches, changes to service, etc).
+and emails will only be used for important notifications (security breaches, changes to service, etc).
 
-Upon success, you are also logged in :) Syncing should happen automatically from
+Upon success, you're also logged in :) Syncing should happen automatically from
 here!
 
 ## Delete
@@ -43,7 +43,7 @@ You can delete your sync account with
 atuin account delete
 ```
 
-This will remove your account and all synchronized history from the server. Local data will not be touched!
+This will remove your account and all synchronized history from the server. Local data won't be touched!
 
 ## Key
 
@@ -68,7 +68,7 @@ atuin login -u <USERNAME> -p <PASSWORD> -k <KEY>
 ```
 
 If you don't want to have your password or encryption key be included in shell history, you can omit
-the corresponding flag and you will be prompted to provide it through stdin.
+the corresponding flag and Atuin asks for it through `stdin`.
 
 ## Logout
 

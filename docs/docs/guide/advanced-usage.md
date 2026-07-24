@@ -1,8 +1,8 @@
 # Advanced Usage
 
 Two settings shape every search you run: the **filter mode** decides *which*
-commands are searched, and the **search mode** decides *how* your query is
-matched against them. Both can be changed on the fly from inside the TUI.
+commands Atuin searches, and the **search mode** decides *how* Atuin matches
+your query against them. Both can be changed on the fly from inside the TUI.
 
 ## Filter mode
 
@@ -18,8 +18,8 @@ modes by pressing **ctrl-r** inside the TUI.
 | workspace        | Only history from anywhere in the current git repository                             |
 | session-preload  | The current session, plus all global history from before the session started         |
 
-`workspace` mode requires [`workspaces = true`](../configuration/config.md#workspaces),
-and is skipped when you are not inside a git repository.
+`workspace` mode requires [`workspaces = true`](../configuration/config.md#workspaces).
+Atuin skips it when you aren't inside a git repository.
 
 To change which mode searches start in, set
 [`filter_mode`](../configuration/config.md#filter_mode). To remove modes from the
@@ -29,7 +29,7 @@ The up arrow can start in a different mode than ctrl-r — see
 
 ## Search mode
 
-The search mode decides how your query text is interpreted. Cycle through the
+The search mode decides how Atuin interprets your query text. Cycle through the
 modes by pressing **ctrl-s** inside the TUI.
 
 | Mode            | Matches                                                                                                        |

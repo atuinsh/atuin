@@ -43,7 +43,7 @@ eval "$(atuin init zsh --disable-up-arrow)"
 | Variable | Effect |
 |----------|--------|
 | `ATUIN_NOBIND` | If set to any value, binds no keys at all. Equivalent to passing every `--disable-*` flag. |
-| `ATUIN_NO_BUILTIN_PREEXEC` | Bash only. Stops `atuin init bash` from auto-loading its bundled bash-preexec (Atuin >= 18.18.0). |
+| `ATUIN_NO_BUILTIN_PREEXEC` | Bash only. Stops `atuin init bash` from automatically loading its bundled bash-preexec (Atuin >= 18.18.0). |
 
 Binding no keys is useful when you want to choose the bindings yourself:
 
