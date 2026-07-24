@@ -2,10 +2,11 @@
 
 mod duration;
 mod offset_date_time;
-mod timezone;
+mod utc_offset;
 
-pub use duration::{DurationExt, DurationOverflow, format_duration, format_duration_into};
+pub use duration::{DurationDisplay, DurationExt, DurationOverflow, DurationStyle};
 pub use offset_date_time::{
-    OffsetDateTimeExt, TimespecOutOfRange, TimestampOutOfRange, YMD_HM, YMD_HMS,
+    DATETIME_FMT_ERROR, OffsetDateTimeDisplay, OffsetDateTimeExt, OffsetDateTimeStyle,
+    TimespecOutOfRange, TimestampOutOfRange, YMD_HM, YMD_HMS,
 };
-pub use timezone::{Timezone, TimezoneDecodingError, UtcOffsetExt};
+pub use utc_offset::{Timezone, TimezoneDecodingError, UtcOffsetExt};

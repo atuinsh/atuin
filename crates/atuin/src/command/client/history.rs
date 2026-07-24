@@ -5,7 +5,7 @@ use std::{
 };
 
 use atuin_common::logs::LogConfig;
-use atuin_common::time::{DurationExt, OffsetDateTimeExt, Timezone, YMD_HMS, format_duration};
+use atuin_common::time::{DurationExt, OffsetDateTimeExt, Timezone};
 use atuin_common::{
     string::{EscapeNonPrintablePosixExt as _, NonNulStr},
     utils,
@@ -45,7 +45,6 @@ use tracing::{debug, warn};
 
 #[cfg(feature = "daemon")]
 use super::daemon;
-use super::search::format_duration_into;
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
@@ -335,19 +334,19 @@ impl FormatKey for FmtHistory<'_> {
             "exit" => f.write_str(&self.history.exit.to_string())?,
             "duration" => {
                 let dur = Duration::saturating_from_nanos_i64(self.history.duration);
-                format_duration_into(dur, f)?;
+                write!(f, "{}", dur.display().compact())?;
             }
             "time" => {
                 self.history
                     .timestamp
                     .to_offset(self.tz.0)
-                    .format(YMD_HMS)
-                    .map_err(|_| fmt::Error)?
+                    .display()
+                    .ymd_hms()
                     .fmt(f)?;
             }
             "relativetime" => {
                 let d = OffsetDateTime::now_utc().saturating_duration_since(self.history.timestamp);
-                format_duration_into(d, f)?;
+                write!(f, "{}", d.display().compact())?;
             }
             "host" => f.write_str(
                 self.history
@@ -716,7 +715,13 @@ impl TailEvent {
             event: self.kind.as_str(),
             history: TailJsonHistory {
                 id: &self.history.id.0,
-                timestamp: format_history_time(self.history.timestamp, tz)?,
+                timestamp: self
+                    .history
+                    .timestamp
+                    .to_offset(tz.0)
+                    .display()
+                    .ymd_hms()
+                    .to_string(),
                 timestamp_unix_ns: u64::try_from(self.history.timestamp.unix_timestamp_nanos())
                     .context("history timestamp predates unix epoch")?,
                 command: &self.history.command,
@@ -729,14 +734,16 @@ impl TailEvent {
                 intent: self.history.intent.as_deref(),
                 exit: self.exit_value(),
                 duration_ns: self.duration_value(),
-                duration: self
-                    .duration_value()
-                    .map(|d| format_duration(Duration::saturating_from_nanos_i64(d))),
+                duration: self.duration_value().map(|d| {
+                    Duration::saturating_from_nanos_i64(d)
+                        .display()
+                        .compact()
+                        .to_string()
+                }),
                 success: self.success_value(),
                 finished_at: self
                     .finished_at()
-                    .map(|time| format_history_time(time, tz))
-                    .transpose()?,
+                    .map(|time| time.to_offset(tz.0).display().ymd_hms().to_string()),
             },
         };
 
@@ -774,8 +781,13 @@ impl TailEvent {
         push_pretty_field(
             &mut out,
             "start",
-            &format_history_time(self.history.timestamp, tz)
-                .unwrap_or_else(|_| "invalid".to_owned()),
+            &self
+                .history
+                .timestamp
+                .to_offset(tz.0)
+                .display()
+                .ymd_hms()
+                .to_string(),
         );
         push_pretty_field(&mut out, "history", &self.history.id.0);
         push_pretty_field(&mut out, "session", &self.history.session);
@@ -795,8 +807,7 @@ impl TailEvent {
         }
 
         if let Some(finished) = self.finished_at() {
-            let finished =
-                format_history_time(finished, tz).unwrap_or_else(|_| "invalid".to_owned());
+            let finished = finished.to_offset(tz.0).display().ymd_hms().to_string();
             push_pretty_field(&mut out, "finished", &finished);
         }
 
@@ -848,9 +859,10 @@ impl TailEvent {
 
     fn duration_display(&self) -> String {
         match self.duration_value() {
-            Some(duration) if duration >= 0 => {
-                format_duration(Duration::saturating_from_nanos_i64(duration))
-            }
+            Some(duration) if duration >= 0 => Duration::saturating_from_nanos_i64(duration)
+                .display()
+                .compact()
+                .to_string(),
             Some(_) => "unknown".bright_yellow().to_string(),
             None => "running".bright_yellow().to_string(),
         }
@@ -873,11 +885,6 @@ impl TailKind {
             Self::Ended => "ENDED".bold().bright_red(),
         }
     }
-}
-
-#[cfg(feature = "daemon")]
-fn format_history_time(timestamp: OffsetDateTime, tz: Timezone) -> Result<String> {
-    Ok(timestamp.to_offset(tz.0).format(YMD_HMS)?)
 }
 
 #[cfg(feature = "daemon")]

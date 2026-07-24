@@ -12,7 +12,7 @@ use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use atuin_common::string::Measure;
 use atuin_common::string::align::Alignment;
 use atuin_common::string::ellipsis::{Indicator, Pos};
-use atuin_common::time::{DurationExt, OffsetDateTimeExt, YMD_HM, format_duration};
+use atuin_common::time::{DurationExt, OffsetDateTimeExt};
 use itertools::Itertools;
 use ratatui::{
     backend::FromCrossterm,
@@ -269,7 +269,7 @@ impl DrawState<'_> {
             Meaning::AlertError
         });
         let duration = Duration::saturating_from_nanos_i64(h.duration);
-        let formatted = format_duration(duration);
+        let formatted = duration.display().compact().to_string();
         let w = width as usize;
         // Right-align within the column, ellipsizing if it somehow overflows.
         let display = formatted.pad_ellipsize(
@@ -284,7 +284,10 @@ impl DrawState<'_> {
     fn time(&mut self, h: &History, width: u16) {
         let style = self.theme.as_style(Meaning::Guidance);
 
-        let time = format_duration((self.now)().saturating_duration_since(h.timestamp));
+        let time = (self.now)()
+            .saturating_duration_since(h.timestamp)
+            .display()
+            .compact();
 
         // Format as "Xs ago" right-aligned within column width
         let w = width as usize;
@@ -364,10 +367,7 @@ impl DrawState<'_> {
         // FIXME: this renders UTC, not the configured timezone -- unlike every other
         // display site, which calls `.to_offset(...)` first. Fixing it means threading a
         // `Timezone` into `HistoryList`.
-        let formatted = h
-            .timestamp
-            .format(YMD_HM)
-            .unwrap_or_else(|_| "????-??-?? ??:??".to_string());
+        let formatted = h.timestamp.display().ymd_hm().to_string();
         let w = width as usize;
         let display = formatted.pad_ellipsize(
             Measure::Columns(w),

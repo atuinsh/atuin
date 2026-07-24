@@ -16,7 +16,7 @@ use ratatui::{
     widgets::{Bar, BarChart, BarGroup, Block, Borders, Padding, Paragraph, Row, Table},
 };
 
-use atuin_common::time::{DurationExt, Timezone, format_duration};
+use atuin_common::time::{DurationExt, Timezone};
 
 use super::super::theme::{Meaning, Theme};
 use super::interactive::{Compactness, to_compactness};
@@ -129,10 +129,13 @@ pub fn draw_stats_table(
             "Time".to_string(),
             history.timestamp.to_offset(tz.0).to_string(),
         ]),
-        Row::new(vec!["Duration".to_string(), format_duration(duration)]),
+        Row::new(vec![
+            "Duration".to_string(),
+            duration.display().compact().to_string(),
+        ]),
         Row::new(vec![
             "Avg duration".to_string(),
-            format_duration(avg_duration),
+            avg_duration.display().compact().to_string(),
         ]),
         Row::new(vec!["Exit".to_string(), history.exit.to_string()]),
         Row::new(vec!["Directory".to_string(), history.cwd.clone()]),
@@ -250,7 +253,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, them
             Bar::default()
                 .label(date.clone())
                 .value(u64_or_zero(*duration))
-                .text_value(format_duration(d))
+                .text_value(d.display().compact().to_string())
         })
         .collect();
 

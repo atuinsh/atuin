@@ -1,5 +1,7 @@
 //! Conversions to and from [`OffsetDateTime`], and the formats we render them with.
 
+use core::fmt;
+
 use time::{OffsetDateTime, format_description::FormatItem, macros::format_description};
 
 /// Lowest `time::OffsetDateTime` can represent (unix) `-9999-01-01 00:00:00 UTC`.
@@ -47,6 +49,74 @@ pub trait OffsetDateTimeExt {
 
     /// How much time has passed since `earlier`, clamped to zero if it is in the future.
     fn saturating_duration_since(self, earlier: OffsetDateTime) -> std::time::Duration;
+
+    /// Begin rendering this instant.
+    ///
+    /// Pick a style with [`OffsetDateTimeDisplay::ymd_hms`] or
+    /// [`OffsetDateTimeDisplay::ymd_hm`]; the result implements
+    /// [`Display`](fmt::Display).
+    ///
+    /// ```ignore
+    /// datetime.display().ymd_hms()  // 2024-01-22 14:35:07
+    /// datetime.display().ymd_hm()   // 2024-01-22 14:35
+    /// ```
+    fn display(self) -> OffsetDateTimeDisplay;
+}
+
+/// How an [`OffsetDateTimeDisplay`] renders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OffsetDateTimeStyle {
+    /// `2024-01-22 14:35:07` -- the default rendering for a history timestamp.
+    #[default]
+    YmdHms,
+    /// `2024-01-22 14:35` -- the same, without seconds, for width-constrained columns.
+    YmdHm,
+}
+
+/// [`Display`](fmt::Display) adapter produced by [`OffsetDateTimeExt::display`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OffsetDateTimeDisplay {
+    datetime: OffsetDateTime,
+    style: OffsetDateTimeStyle,
+}
+
+impl OffsetDateTimeDisplay {
+    /// Render as [`OffsetDateTimeStyle::YmdHms`].
+    #[must_use]
+    pub const fn ymd_hms(mut self) -> Self {
+        self.style = OffsetDateTimeStyle::YmdHms;
+        self
+    }
+
+    /// Render as [`OffsetDateTimeStyle::YmdHm`].
+    #[must_use]
+    pub const fn ymd_hm(mut self) -> Self {
+        self.style = OffsetDateTimeStyle::YmdHm;
+        self
+    }
+
+    /// Render with a style chosen at runtime.
+    #[must_use]
+    pub const fn with_style(mut self, style: OffsetDateTimeStyle) -> Self {
+        self.style = style;
+        self
+    }
+}
+
+/// `format` fails only when the type lacks a component the description asks for, or on
+/// an IO error writing the output -- neither of which can happen for an `OffsetDateTime`
+/// and a description built from date and time components.
+pub const DATETIME_FMT_ERROR: &str = "an OffsetDateTime has every component YMD_HM(S) asks for";
+
+impl fmt::Display for OffsetDateTimeDisplay {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let description = match self.style {
+            OffsetDateTimeStyle::YmdHms => YMD_HMS,
+            OffsetDateTimeStyle::YmdHm => YMD_HM,
+        };
+
+        f.write_str(&self.datetime.format(description).expect(DATETIME_FMT_ERROR))
+    }
 }
 
 const _: () = assert!(
@@ -99,6 +169,13 @@ impl OffsetDateTimeExt for OffsetDateTime {
 
     fn saturating_duration_since(self, earlier: OffsetDateTime) -> std::time::Duration {
         std::time::Duration::try_from(self - earlier).unwrap_or_default()
+    }
+
+    fn display(self) -> OffsetDateTimeDisplay {
+        OffsetDateTimeDisplay {
+            datetime: self,
+            style: OffsetDateTimeStyle::default(),
+        }
     }
 }
 

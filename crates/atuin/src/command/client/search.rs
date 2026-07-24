@@ -26,7 +26,6 @@ pub mod keybindings;
 mod syntax;
 
 use atuin_common::time::Timezone;
-pub use atuin_common::time::format_duration_into;
 
 #[allow(clippy::struct_excessive_bools, clippy::struct_field_names)]
 #[derive(Parser, Debug)]

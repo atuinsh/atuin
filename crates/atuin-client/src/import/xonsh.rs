@@ -121,7 +121,6 @@ impl Importer for Xonsh {
             for cmd in session.cmds {
                 let (start, end) = cmd.ts;
                 let ts_nanos = (start * 1_000_000_000_f64) as i128;
-                // a corrupt entry must not abort the whole import
                 let timestamp =
                     OffsetDateTime::from_unix_nanos(ts_nanos).unwrap_or(OffsetDateTime::UNIX_EPOCH);
 

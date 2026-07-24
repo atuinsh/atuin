@@ -11,11 +11,15 @@ use tracing::warn;
 pub trait UtcOffsetExt {
     /// The system's current local UTC offset, falling back to UTC if it cannot be
     /// determined.
-    ///
-    /// Warns on the fallback, so rendering everything in UTC is at least traceable
-    /// rather than silent. Prefer [`UtcOffset::current_local_offset`] where the caller
-    /// can propagate the failure instead.
     fn local_or_utc() -> UtcOffset;
+
+    /// Resolve a user-supplied timezone spec.
+    ///
+    /// Accepts `local`/`l`, queried from the system; `utc`/`0`; or an offset from UTC
+    /// such as `+09:30` or `-2:30`.
+    ///
+    /// Named zones are deliberately not accepted -- see the note in the implementation.
+    fn resolve_spec(spec: impl AsRef<str>) -> Result<UtcOffset, TimezoneDecodingError>;
 }
 
 impl UtcOffsetExt for UtcOffset {
@@ -24,6 +28,24 @@ impl UtcOffsetExt for UtcOffset {
             warn!("could not determine local UTC offset, falling back to UTC: {e}");
             UtcOffset::UTC
         })
+    }
+
+    fn resolve_spec(spec: impl AsRef<str>) -> Result<UtcOffset, TimezoneDecodingError> {
+        let spec = spec.as_ref().to_lowercase();
+
+        if matches!(spec.as_str(), "l" | "local") {
+            return Ok(UtcOffset::current_local_offset()?);
+        }
+
+        if matches!(spec.as_str(), "0" | "utc") {
+            return Ok(UtcOffset::UTC);
+        }
+
+        // IDEA: Currently named timezones are not supported, because the well-known crate for this
+        // is `chrono_tz`, which is not really interoperable with the datetime crate that we
+        // currently use - `time`. If ever we migrate to using `chrono`, this would be a good
+        // feature to add.
+        Ok(UtcOffset::parse(&spec, OFFSET_FMT)?)
     }
 }
 
@@ -60,19 +82,7 @@ impl FromStr for Timezone {
     type Err = TimezoneDecodingError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if matches!(s.to_lowercase().as_str(), "l" | "local") {
-            return Ok(UtcOffset::current_local_offset()?.into());
-        }
-
-        if matches!(s.to_lowercase().as_str(), "0" | "utc") {
-            return Ok(UtcOffset::UTC.into());
-        }
-
-        // IDEA: Currently named timezones are not supported, because the well-known crate for this
-        // is `chrono_tz`, which is not really interoperable with the datetime crate that we
-        // currently use - `time`. If ever we migrate to using `chrono`, this would be a good
-        // feature to add.
-        Ok(UtcOffset::parse(s, OFFSET_FMT)?.into())
+        Ok(UtcOffset::resolve_spec(s)?.into())
     }
 }
 
@@ -97,5 +107,35 @@ mod tests {
     #[case::garbage("not-a-timezone")]
     fn timezone_rejects_invalid(#[case] spec: &str) {
         assert!(Timezone::from_str(spec).is_err());
+    }
+
+    #[rstest]
+    #[case::utc("utc", 0, 0, 0)]
+    #[case::zero("0", 0, 0, 0)]
+    #[case::plus("+09:30", 9, 30, 0)]
+    #[case::minus("-2:30", -2, -30, 0)]
+    #[case::with_seconds("+01:23:45", 1, 23, 45)]
+    // specs are case-insensitive
+    #[case::uppercase("UTC", 0, 0, 0)]
+    fn resolve_spec_returns_the_offset(
+        #[case] spec: &str,
+        #[case] h: i8,
+        #[case] m: i8,
+        #[case] s: i8,
+    ) {
+        assert_eq!(UtcOffset::resolve_spec(spec).unwrap().as_hms(), (h, m, s));
+    }
+
+    #[test]
+    fn resolve_spec_accepts_anything_stringlike() {
+        // the point of `impl AsRef<str>`: borrowed or owned, no dance at the call site
+        assert!(UtcOffset::resolve_spec("utc").is_ok());
+        assert!(UtcOffset::resolve_spec(String::from("utc")).is_ok());
+    }
+
+    #[test]
+    fn resolve_spec_local_queries_the_system() {
+        // cannot assert the value -- it depends on the machine -- but it must resolve
+        assert!(UtcOffset::resolve_spec("local").is_ok());
     }
 }

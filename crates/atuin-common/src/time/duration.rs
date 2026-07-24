@@ -26,6 +26,148 @@ pub trait DurationExt<D> {
     /// A negative duration is not representable, and in practice means the clock moved
     /// backwards between the two measurements. Zero is the honest answer.
     fn saturating_from_nanos_i64(nanos: i64) -> D;
+
+    /// Begin rendering this duration.
+    ///
+    /// Pick a style with [`DurationDisplay::compact`] or [`DurationDisplay::stopwatch`];
+    /// the result implements [`Display`](fmt::Display).
+    ///
+    /// ```ignore
+    /// duration.display().stopwatch()  // 1h2m3s
+    /// duration.display().compact()    // 1h
+    /// ```
+    fn display(self) -> DurationDisplay;
+}
+
+/// How a [`DurationDisplay`] renders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DurationStyle {
+    /// The most significant unit only: `1s`, `3d`, `814ms`, `0s`.
+    ///
+    /// Deliberately lossy -- sized for narrow, right-aligned terminal columns where a
+    /// full breakdown would not fit. Scales all the way up to years.
+    #[default]
+    Compact,
+    /// A stopwatch readout: `1h2m3s`, `1m30s`, `1.234s`, `5ms`.
+    ///
+    /// Keeps everything down to seconds, and sub-second resolution when that is all
+    /// there is. Like a real stopwatch it never rolls past hours, so a three-day
+    /// duration reads `72h0m0s` -- use [`Compact`](Self::Compact) if that matters.
+    Stopwatch,
+}
+
+/// [`Display`](fmt::Display) adapter produced by [`DurationExt::display`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DurationDisplay {
+    duration: std::time::Duration,
+    style: DurationStyle,
+}
+
+impl DurationDisplay {
+    /// Render as [`DurationStyle::Compact`].
+    #[must_use]
+    pub const fn compact(mut self) -> Self {
+        self.style = DurationStyle::Compact;
+        self
+    }
+
+    /// Render as [`DurationStyle::Stopwatch`].
+    #[must_use]
+    pub const fn stopwatch(mut self) -> Self {
+        self.style = DurationStyle::Stopwatch;
+        self
+    }
+
+    /// Render with a style chosen at runtime.
+    #[must_use]
+    pub const fn with_style(mut self, style: DurationStyle) -> Self {
+        self.style = style;
+        self
+    }
+
+    fn fmt_compact(self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fn item(unit: &'static str, value: u64) -> ControlFlow<(&'static str, u64)> {
+            if value > 0 {
+                ControlFlow::Break((unit, value))
+            } else {
+                ControlFlow::Continue(())
+            }
+        }
+
+        // impl taken and modified from
+        // https://github.com/tailhook/humantime/blob/master/src/duration.rs#L295-L331
+        // Copyright (c) 2016 The humantime Developers
+        fn segments(d: std::time::Duration) -> ControlFlow<(&'static str, u64), ()> {
+            let secs = d.as_secs();
+            let nanos = d.subsec_nanos();
+
+            let years = secs / 31_557_600; // 365.25d
+            let year_days = secs % 31_557_600;
+            let months = year_days / 2_630_016; // 30.44d
+            let month_days = year_days % 2_630_016;
+            let days = month_days / 86400;
+            let day_secs = month_days % 86400;
+            let hours = day_secs / 3600;
+            let minutes = day_secs % 3600 / 60;
+            let seconds = day_secs % 60;
+
+            let millis = nanos / 1_000_000;
+            let micros = nanos / 1_000;
+
+            // a difference from our impl than the original is that
+            // we only care about the most-significant segment of the duration.
+            // If the item call returns `Break`, then the `?` will early-return.
+            // This allows for a very consise impl
+            item("y", years)?;
+            item("mo", months)?;
+            item("d", days)?;
+            item("h", hours)?;
+            item("m", minutes)?;
+            item("s", seconds)?;
+            item("ms", u64::from(millis))?;
+            item("us", u64::from(micros))?;
+            item("ns", u64::from(nanos))?;
+            ControlFlow::Continue(())
+        }
+
+        match segments(self.duration) {
+            ControlFlow::Break((unit, value)) => write!(f, "{value}{unit}"),
+            ControlFlow::Continue(()) => write!(f, "0s"),
+        }
+    }
+
+    fn fmt_stopwatch(self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let total_secs = self.duration.as_secs();
+        let millis = self.duration.subsec_millis();
+
+        if total_secs >= 3600 {
+            let hours = total_secs / 3600;
+            let mins = (total_secs % 3600) / 60;
+            let secs = total_secs % 60;
+            write!(f, "{hours}h{mins}m{secs}s")
+        } else if total_secs >= 60 {
+            let mins = total_secs / 60;
+            let secs = total_secs % 60;
+            write!(f, "{mins}m{secs}s")
+        } else if total_secs > 0 {
+            if millis > 0 {
+                write!(f, "{total_secs}.{millis:03}s")
+            } else {
+                write!(f, "{total_secs}s")
+            }
+        } else {
+            write!(f, "{millis}ms")
+        }
+    }
+}
+
+impl fmt::Display for DurationDisplay {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.style {
+            DurationStyle::Compact => self.fmt_compact(f),
+            DurationStyle::Stopwatch => self.fmt_stopwatch(f),
+        }
+    }
 }
 
 impl DurationExt<std::time::Duration> for std::time::Duration {
@@ -42,6 +184,13 @@ impl DurationExt<std::time::Duration> for std::time::Duration {
     fn saturating_from_nanos_i64(nanos: i64) -> std::time::Duration {
         std::time::Duration::from_nanos(nanos.max(0).cast_unsigned())
     }
+
+    fn display(self) -> DurationDisplay {
+        DurationDisplay {
+            duration: self,
+            style: DurationStyle::default(),
+        }
+    }
 }
 
 impl DurationExt<time::Duration> for time::Duration {
@@ -53,74 +202,13 @@ impl DurationExt<time::Duration> for time::Duration {
     fn saturating_from_nanos_i64(nanos: i64) -> time::Duration {
         time::Duration::nanoseconds(nanos.max(0))
     }
-}
 
-/// Write `dur` as its most significant unit only, e.g. `1s`, `3d`, `814ms`, `0s`.
-///
-/// Deliberately lossy: this is sized for narrow, right-aligned terminal columns where a
-/// full breakdown would not fit.
-#[allow(clippy::module_name_repetitions)]
-pub fn format_duration_into(dur: std::time::Duration, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    fn item(unit: &'static str, value: u64) -> ControlFlow<(&'static str, u64)> {
-        if value > 0 {
-            ControlFlow::Break((unit, value))
-        } else {
-            ControlFlow::Continue(())
-        }
+    fn display(self) -> DurationDisplay {
+        // negative durations are not renderable; clamp rather than invent a sign
+        std::time::Duration::try_from(self)
+            .unwrap_or_default()
+            .display()
     }
-
-    // impl taken and modified from
-    // https://github.com/tailhook/humantime/blob/master/src/duration.rs#L295-L331
-    // Copyright (c) 2016 The humantime Developers
-    fn fmt(f: std::time::Duration) -> ControlFlow<(&'static str, u64), ()> {
-        let secs = f.as_secs();
-        let nanos = f.subsec_nanos();
-
-        let years = secs / 31_557_600; // 365.25d
-        let year_days = secs % 31_557_600;
-        let months = year_days / 2_630_016; // 30.44d
-        let month_days = year_days % 2_630_016;
-        let days = month_days / 86400;
-        let day_secs = month_days % 86400;
-        let hours = day_secs / 3600;
-        let minutes = day_secs % 3600 / 60;
-        let seconds = day_secs % 60;
-
-        let millis = nanos / 1_000_000;
-        let micros = nanos / 1_000;
-
-        // a difference from our impl than the original is that
-        // we only care about the most-significant segment of the duration.
-        // If the item call returns `Break`, then the `?` will early-return.
-        // This allows for a very consise impl
-        item("y", years)?;
-        item("mo", months)?;
-        item("d", days)?;
-        item("h", hours)?;
-        item("m", minutes)?;
-        item("s", seconds)?;
-        item("ms", u64::from(millis))?;
-        item("us", u64::from(micros))?;
-        item("ns", u64::from(nanos))?;
-        ControlFlow::Continue(())
-    }
-
-    match fmt(dur) {
-        ControlFlow::Break((unit, value)) => write!(f, "{value}{unit}"),
-        ControlFlow::Continue(()) => write!(f, "0s"),
-    }
-}
-
-/// [`format_duration_into`], as an owned `String`.
-#[allow(clippy::module_name_repetitions)]
-pub fn format_duration(f: std::time::Duration) -> String {
-    struct F(std::time::Duration);
-    impl fmt::Display for F {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            format_duration_into(self.0, f)
-        }
-    }
-    F(f).to_string()
 }
 
 #[cfg(test)]
@@ -197,9 +285,39 @@ mod tests {
     #[case::minutes(90_000_000_000, "1m")]
     fn format_duration_shows_most_significant_unit(#[case] nanos: u64, #[case] expected: &str) {
         assert_eq!(
-            format_duration(std::time::Duration::from_nanos(nanos)),
+            std::time::Duration::from_nanos(nanos)
+                .display()
+                .compact()
+                .to_string(),
             expected
         );
+    }
+
+    #[rstest]
+    #[case::zero(0, "0ms")]
+    #[case::millis(5_000_000, "5ms")]
+    #[case::sub_second_only(814_000_000, "814ms")]
+    #[case::whole_second(1_000_000_000, "1s")]
+    // sub-second precision is kept, unlike the compact style
+    #[case::fractional_second(1_234_000_000, "1.234s")]
+    #[case::minutes(90_000_000_000, "1m30s")]
+    #[case::hours(3_723_000_000_000, "1h2m3s")]
+    // never rolls past hours, unlike the compact style
+    #[case::days_stay_in_hours(259_200_000_000_000, "72h0m0s")]
+    fn stopwatch_keeps_subsecond_resolution(#[case] nanos: i64, #[case] expected: &str) {
+        assert_eq!(
+            std::time::Duration::saturating_from_nanos_i64(nanos)
+                .display()
+                .stopwatch()
+                .to_string(),
+            expected
+        );
+    }
+
+    #[test]
+    fn stopwatch_clamps_a_negative_time_duration() {
+        let negative = time::Duration::nanoseconds(-5_000_000_000);
+        assert_eq!(negative.display().stopwatch().to_string(), "0ms");
     }
 
     proptest! {

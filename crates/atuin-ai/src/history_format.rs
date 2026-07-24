@@ -1,5 +1,5 @@
 use atuin_client::history::{History, is_known_agent};
-use atuin_common::time::YMD_HMS;
+use atuin_common::time::{DurationExt, OffsetDateTimeExt};
 use time::UtcOffset;
 
 pub(crate) fn format_last_command(history: &History, local_offset: UtcOffset) -> String {
@@ -56,36 +56,24 @@ fn format_timestamp(history: &History, local_offset: UtcOffset) -> String {
     history
         .timestamp
         .to_offset(local_offset)
-        .format(YMD_HMS)
-        .unwrap_or_else(|_| "????-??-?? ??:??:??".to_string())
+        .display()
+        .ymd_hms()
+        .to_string()
 }
 
+/// The leading comma is presentation: this slots into `format_history_metadata`'s
+/// sentence, and a non-positive duration is omitted from it entirely.
 fn format_duration(nanos: i64) -> String {
     if nanos <= 0 {
         return String::new();
     }
 
-    let total_secs = nanos / 1_000_000_000;
-    let millis = (nanos % 1_000_000_000) / 1_000_000;
-
-    if total_secs >= 3600 {
-        let hours = total_secs / 3600;
-        let mins = (total_secs % 3600) / 60;
-        let secs = total_secs % 60;
-        format!(", {hours}h{mins}m{secs}s")
-    } else if total_secs >= 60 {
-        let mins = total_secs / 60;
-        let secs = total_secs % 60;
-        format!(", {mins}m{secs}s")
-    } else if total_secs > 0 {
-        if millis > 0 {
-            format!(", {total_secs}.{millis:03}s")
-        } else {
-            format!(", {total_secs}s")
-        }
-    } else {
-        format!(", {millis}ms")
-    }
+    format!(
+        ", {}",
+        std::time::Duration::saturating_from_nanos_i64(nanos)
+            .display()
+            .stopwatch()
+    )
 }
 
 #[cfg(test)]
