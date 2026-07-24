@@ -150,9 +150,7 @@ impl From<Dialect> for interim::Dialect {
     }
 }
 
-// `Timezone` now lives in `atuin_common::time`; re-exported so the many
-// `settings::Timezone` references across the workspace keep working.
-pub use atuin_common::time::Timezone;
+use atuin_common::time::Timezone;
 
 #[derive(Clone, Debug, Deserialize, Copy, Serialize)]
 pub enum Style {

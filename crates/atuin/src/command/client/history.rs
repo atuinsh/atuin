@@ -5,7 +5,7 @@ use std::{
 };
 
 use atuin_common::logs::LogConfig;
-use atuin_common::time::{DurationExt, OffsetDateTimeExt, YMD_HMS, format_duration};
+use atuin_common::time::{DurationExt, OffsetDateTimeExt, Timezone, YMD_HMS, format_duration};
 use atuin_common::{
     string::{EscapeNonPrintablePosixExt as _, NonNulStr},
     utils,
@@ -33,7 +33,7 @@ use atuin_client::{
     record::sqlite_store::SqliteStore,
     settings::{
         FilterMode::{Directory, Global, Session},
-        Settings, Timezone,
+        Settings,
     },
 };
 

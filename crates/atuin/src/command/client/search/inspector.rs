@@ -3,7 +3,7 @@ use time::macros::format_description;
 
 use atuin_client::{
     history::{History, HistoryStats},
-    settings::{Settings, Timezone},
+    settings::Settings,
 };
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use ratatui::{
@@ -16,7 +16,7 @@ use ratatui::{
     widgets::{Bar, BarChart, BarGroup, Block, Borders, Padding, Paragraph, Row, Table},
 };
 
-use atuin_common::time::{DurationExt, format_duration};
+use atuin_common::time::{DurationExt, Timezone, format_duration};
 
 use super::super::theme::{Meaning, Theme};
 use super::interactive::{Compactness, to_compactness};

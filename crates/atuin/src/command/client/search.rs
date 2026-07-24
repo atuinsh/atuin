@@ -11,7 +11,7 @@ use atuin_client::{
     encryption,
     history::{History, store::HistoryStore},
     record::sqlite_store::SqliteStore,
-    settings::{FilterMode, KeymapMode, SearchMode, Settings, Timezone},
+    settings::{FilterMode, KeymapMode, SearchMode, Settings},
     theme::Theme,
 };
 
@@ -25,6 +25,7 @@ mod interactive;
 pub mod keybindings;
 mod syntax;
 
+use atuin_common::time::Timezone;
 pub use atuin_common::time::format_duration_into;
 
 #[allow(clippy::struct_excessive_bools, clippy::struct_field_names)]
