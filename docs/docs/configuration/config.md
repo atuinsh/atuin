@@ -297,7 +297,9 @@ max_preview_height = 4
 
 Default: `true`
 
-Configure whether to show the help row, which includes the current ```toml
+Configure whether to show the help row, which includes the current Atuin version (and whether an update is available), a keymap hint, and the total amount of commands in your history.
+
+```toml
 show_help = true
 ```
 
