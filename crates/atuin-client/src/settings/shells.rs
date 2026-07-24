@@ -94,8 +94,6 @@ impl<'a> Deserialize<'a> for Shells {
             Auto,
         }
  
-        /// Untagged unit variants only ever match `null`, so the keywords have to live one
-        /// level down in [`Keyword`] rather than sitting alongside `List` here.
         #[derive(Deserialize)]
         #[serde(untagged, expecting = r#""all", "auto", or an array of strings"#)]
         enum Repr {
