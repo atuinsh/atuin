@@ -17,7 +17,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [depot-ubuntu-24.04, macos-14, depot-windows-2025-16]
+        os: [depot-ubuntu-24.04, depot-macos-26, depot-windows-2025-16]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -54,7 +54,7 @@ jobs:
         # There was an attempt to make cross-compiles also work on FreeBSD, but that failed with:
         #
         # warning: libelf.so.2, needed by <...>/libkvm.so, not found (try using -rpath or -rpath-link)
-        target: [x86_64-unknown-illumos]
+        target: [x86_64-unknown-illumos, riscv64gc-unknown-linux-gnu]
     runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -88,7 +88,7 @@ jobs:
   unit-test:
     strategy:
       matrix:
-        os: [depot-ubuntu-24.04, macos-14, depot-windows-2025-16]
+        os: [depot-ubuntu-24.04, depot-macos-26, depot-windows-2025-16]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -118,7 +118,7 @@ jobs:
   check:
     strategy:
       matrix:
-        os: [depot-ubuntu-24.04, macos-14, depot-windows-2025-16]
+        os: [depot-ubuntu-24.04, depot-macos-26, depot-windows-2025-16]
     runs-on: ${{ matrix.os }}
 
     steps:

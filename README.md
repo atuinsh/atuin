@@ -68,14 +68,11 @@ I wanted to. And I **really** don't want to.
 - [Import history](https://docs.atuin.sh/latest/guide/import/)
 - [Basic usage](https://docs.atuin.sh/latest/guide/basic-usage/)
 
-## Supported Shells
+## Supported platforms
 
-- zsh
-- bash
-- fish
-- nushell
-- xonsh
-- powershell (tier 2 support)
+Atuin supports zsh, bash, fish, nushell, xonsh, and PowerShell. See
+[Supported platforms](https://docs.atuin.sh/latest/support/) for the full matrix
+and what each tier means.
 
 ## Community
 

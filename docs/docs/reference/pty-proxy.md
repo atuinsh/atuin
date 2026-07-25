@@ -1,6 +1,7 @@
 # pty-proxy
 
-Atuin pty-proxy is an experimental lightweight PTY proxy, providing new features without needing to replace your existing terminal or shell. It currently supports bash, zsh, fish, and nu.
+Atuin pty-proxy is an experimental lightweight PTY proxy, providing new features without needing to replace your existing terminal or shell. It currently supports bash, zsh, fish, and nu. See
+[Supported platforms](../support.md) for support tiers.
 
 !!! Note "Previously `atuin hex`"
 

@@ -8,9 +8,14 @@ All notable changes to this project will be documented in this file.
 
 - *(daemon)* Index synced history directly instead of malformed SQL ([#3627](https://github.com/atuinsh/atuin/issues/3627)) ([#3641](https://github.com/atuinsh/atuin/issues/3641))
 - *(deps)* Update unsound/vulnerable dependencies in Cargo.lock ([#3632](https://github.com/atuinsh/atuin/issues/3632))
+- *(docs)* Repair every stale link in the repo ([#3727](https://github.com/atuinsh/atuin/issues/3727))
+- *(docs)* Make the incorrect-decrypt-key error actionable ([#3609](https://github.com/atuinsh/atuin/issues/3609))
 - *(hook)* Drop agent commands containing NUL bytes via NonNulStr ([#3589](https://github.com/atuinsh/atuin/issues/3589)) ([#3660](https://github.com/atuinsh/atuin/issues/3660))
+- *(import)* Survive corrupt entries instead of aborting the import ([#3721](https://github.com/atuinsh/atuin/issues/3721))
 - *(init)* Fix include guard in Bash init script; chore(init): improve inclusion of shell init scripts in Rust ([#3645](https://github.com/atuinsh/atuin/issues/3645))
 - *(install)* Make /dev/tty authoritative for interactivity detection ([#3691](https://github.com/atuinsh/atuin/issues/3691))
+- *(ui)* Calculate preview height based on command display width instead of byte count ([#3678](https://github.com/atuinsh/atuin/issues/3678))
+- *(win32)* Cargo-binstall package metadata ([#3673](https://github.com/atuinsh/atuin/issues/3673))
 - Search functionality to respect character offsets and non-ASCII ([#3659](https://github.com/atuinsh/atuin/issues/3659))
 - Quote argument-hint YAML values so Copilot CLI ≥1.0.65 loads all skills ([#3613](https://github.com/atuinsh/atuin/issues/3613)) ([#3614](https://github.com/atuinsh/atuin/issues/3614))
 - Correct grammar in 'history last' help text ([#3430](https://github.com/atuinsh/atuin/issues/3430))
@@ -18,6 +23,9 @@ All notable changes to this project will be documented in this file.
 - Improve non-interactive TTY detection in install.sh ([#3315](https://github.com/atuinsh/atuin/issues/3315))
 - Add /model hint to status bar ([#3687](https://github.com/atuinsh/atuin/issues/3687))
 - Set correct umask for pty-proxy ([#3700](https://github.com/atuinsh/atuin/issues/3700))
+- Atuin AI not erasing the input box before closing ([#3715](https://github.com/atuinsh/atuin/issues/3715))
+- Show server status next to AI progress indicator ([#3723](https://github.com/atuinsh/atuin/issues/3723))
+- Show full command when using AtuinOutput tool ([#3725](https://github.com/atuinsh/atuin/issues/3725))
 
 ### Documentation
 
@@ -29,12 +37,22 @@ All notable changes to this project will be documented in this file.
 - Version docs.atuin.sh with mike (per-release + main) ([#3688](https://github.com/atuinsh/atuin/issues/3688))
 - Hotfix bad path ([#3690](https://github.com/atuinsh/atuin/issues/3690))
 - Document built-in bash-preexec ([#3651](https://github.com/atuinsh/atuin/issues/3651))
+- Retheme docs.atuin.sh to the Atuin brand ([#3701](https://github.com/atuinsh/atuin/issues/3701))
+- Bundle of improvements ([#3716](https://github.com/atuinsh/atuin/issues/3716))
+- Remove ugly cards on landing page ([#3724](https://github.com/atuinsh/atuin/issues/3724))
+- Fix broken README links ([#3696](https://github.com/atuinsh/atuin/issues/3696))
+- Lint prose with Vale and gate it in CI ([#3726](https://github.com/atuinsh/atuin/issues/3726))
+- Slightly nicer default config.toml order ([#2485](https://github.com/atuinsh/atuin/issues/2485))
+- Kubernetes self-hosting documentation ([#3238](https://github.com/atuinsh/atuin/issues/3238))
+- Add canonical Supported platforms page ([#3736](https://github.com/atuinsh/atuin/issues/3736))
 
 ### Features
 
+- *(ai)* Up/down to scroll through previously sent messages ([#3720](https://github.com/atuinsh/atuin/issues/3720))
 - *(bash)* Bundle bash-preexec with Atuin; automatically load if no other preexec backend is loaded ([#3650](https://github.com/atuinsh/atuin/issues/3650))
 - *(search)* Add `--shell` option to `atuin search` to filter results by shell ([#3658](https://github.com/atuinsh/atuin/issues/3658))
 - *(search)* Syntax highlight commands in interactive search ([#3704](https://github.com/atuinsh/atuin/issues/3704))
+- *(search)* Filter by shell in interactive search ([#3692](https://github.com/atuinsh/atuin/issues/3692))
 - *(string)* EllipsizeExt -- General-purpose utility for adding ellipses to strings ([#3639](https://github.com/atuinsh/atuin/issues/3639))
 - Add 'yolo' setting to Atuin AI options ([#3637](https://github.com/atuinsh/atuin/issues/3637))
 - Add `shell` field to history entries ([#3636](https://github.com/atuinsh/atuin/issues/3636))
@@ -42,6 +60,7 @@ All notable changes to this project will be documented in this file.
 - Add atuin stats --filter-mode ([#1737](https://github.com/atuinsh/atuin/issues/1737))
 - More aggressive optimizations for dist release ([#3683](https://github.com/atuinsh/atuin/issues/3683))
 - Capture zsh comments as history ([#3699](https://github.com/atuinsh/atuin/issues/3699))
+- Allow injecting extra HTTP headers on sync server requests  ([#3718](https://github.com/atuinsh/atuin/issues/3718))
 
 ### Miscellaneous Tasks
 
@@ -62,6 +81,16 @@ All notable changes to this project will be documented in this file.
 - Update Atuin AI to eye-declare v0.6.1 ([#3686](https://github.com/atuinsh/atuin/issues/3686))
 - Remove docs-dispatch ([#3694](https://github.com/atuinsh/atuin/issues/3694))
 - Docker healtcheck ([#2451](https://github.com/atuinsh/atuin/issues/2451))
+- Run windows jobs on depot-windows-2025-16 ([#3711](https://github.com/atuinsh/atuin/issues/3711))
+- Hotfix script ([#3714](https://github.com/atuinsh/atuin/issues/3714))
+- Update flake.nix ([#3509](https://github.com/atuinsh/atuin/issues/3509))
+- Add Timezone and restart policy for postgres backup docker ([#3083](https://github.com/atuinsh/atuin/issues/3083))
+
+### Performance
+
+- Do not block counting history ([#3729](https://github.com/atuinsh/atuin/issues/3729))
+- Actually delete history rows, and index active history ([#3730](https://github.com/atuinsh/atuin/issues/3730))
+- Index filtered history search, record store tags, and cache inspector stats ([#3731](https://github.com/atuinsh/atuin/issues/3731))
 
 ### Refactor
 
@@ -71,9 +100,18 @@ All notable changes to this project will be documented in this file.
 - Use typed Url instead of hand-built string URLs ([#3644](https://github.com/atuinsh/atuin/issues/3644))
 - Extract shared vt100 logic into atuin-common ([#3664](https://github.com/atuinsh/atuin/issues/3664))
 
+### Styling
+
+- Improve Atuin AI TUI styles ([#3710](https://github.com/atuinsh/atuin/issues/3710))
+
 ### Testing
 
 - Parametrize tests with rstest across 8 crates ([#3653](https://github.com/atuinsh/atuin/issues/3653))
+
+### Bug
+
+- Fix enter_accept default ([#3717](https://github.com/atuinsh/atuin/issues/3717))
+- Abort install.sh on cURL fails ([#2911](https://github.com/atuinsh/atuin/issues/2911))
 
 ## 18.17.1
 
