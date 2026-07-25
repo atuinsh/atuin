@@ -12,9 +12,10 @@ ci = "github"
 # The installers to generate for each app
 installers = ["shell", "powershell"]
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "riscv64gc-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
 # Which actions to run on pull requests
-pr-run-mode = "plan"
+# TEMP: "upload" to test the riscv extra-artifacts build on this PR; revert to "plan" before merge
+pr-run-mode = "upload"
 # Whether to install an updater program
 install-updater = true
 # The archive format to use for non-windows builds (defaults .tar.xz)
@@ -22,10 +23,24 @@ unix-archive = ".tar.gz"
 # Whether to enable GitHub Attestations
 github-attestations = true
 
+# riscv64 tarballs, cross-compiled with zigbuild in the global-artifacts job.
+# Not a regular target: install-updater = true requires a prebuilt axoupdater
+# for every target, and axoupdater ships none for riscv64. See the script.
+[[dist.extra-artifacts]]
+artifacts = [
+    "atuin-riscv64gc-unknown-linux-gnu.tar.gz",
+    "atuin-riscv64gc-unknown-linux-gnu.tar.gz.sha256",
+    "atuin-server-riscv64gc-unknown-linux-gnu.tar.gz",
+    "atuin-server-riscv64gc-unknown-linux-gnu.tar.gz.sha256",
+]
+build = ["./scripts/build-riscv64-artifacts.sh"]
+
 [dist.github-custom-runners]
+# the global job cross-compiles the riscv64 extra artifacts, so give it a
+# real runner instead of the 2-core default
+global = "depot-ubuntu-24.04-8"
 aarch64-unknown-linux-gnu = "depot-ubuntu-24.04-arm-8"
 aarch64-unknown-linux-musl = "depot-ubuntu-24.04-arm-8"
-riscv64gc-unknown-linux-gnu = "ubuntu-24.04-riscv"
 x86_64-unknown-linux-gnu = "depot-ubuntu-24.04-8"
 x86_64-unknown-linux-musl = "depot-ubuntu-24.04-8"
 
