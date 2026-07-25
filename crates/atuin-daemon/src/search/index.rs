@@ -567,7 +567,9 @@ impl SearchIndex {
         Some(Arc::new(move |cmd: &String, fuzzy_score: u32| {
             // HashMap<Arc<str>, _>::get accepts &str via Borrow trait
             let frecency = map.get(cmd.as_str()).copied().unwrap_or(0);
-            fuzzy_score + frecency
+            fuzzy_score
+                .saturating_mul(1000)
+                .saturating_add(frecency.min(999))
         }))
     }
 }
