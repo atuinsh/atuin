@@ -1,0 +1,54 @@
+{
+  "skill_name": "docs-translator-zh",
+  "evals": [
+    {
+      "id": 0,
+      "name": "guide-sync",
+      "prompt": "Please translate docs/docs/guide/sync.md into Simplified Chinese for our zh-CN docs.",
+      "expected_output": "A zh-CN translation written to docs-i18n/zh-CN/guide/sync.md: complete, natural Chinese, glossary terms consistent, all Markdown/code/links/admonitions preserved.",
+      "files": ["docs/docs/guide/sync.md"],
+      "assertions": [
+        "Output exists and is non-empty",
+        "Substantial Chinese content",
+        "Code fence count matches source",
+        "Heading count matches source",
+        "Commands preserved verbatim (atuin register/key/sync/login)",
+        "Relative links preserved",
+        "Glossary terms applied (同步 / 端到端加密 / 密钥)"
+      ]
+    },
+    {
+      "id": 1,
+      "name": "reference-stats",
+      "prompt": "we need the atuin stats reference page in mandarin — it's under docs/docs/reference/stats.md",
+      "expected_output": "A zh-CN translation at docs-i18n/zh-CN/reference/stats.md that preserves the CLI example output / table verbatim and translates only the surrounding prose and code comments.",
+      "files": ["docs/docs/reference/stats.md"],
+      "assertions": [
+        "Output exists and is non-empty",
+        "Substantial Chinese content",
+        "Code fence count matches source",
+        "Heading count matches source",
+        "ASCII output tables preserved verbatim",
+        "Example commands preserved",
+        "Links preserved (config.md#dialect, docs.rs/interim)",
+        "Glossary term 统计 applied"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "faq",
+      "prompt": "translate the FAQ (docs/docs/faq.md) to Chinese",
+      "expected_output": "A zh-CN translation at docs-i18n/zh-CN/faq.md: prose reads idiomatically, questions/headings all translated, nothing dropped or invented.",
+      "files": ["docs/docs/faq.md"],
+      "assertions": [
+        "Output exists and is non-empty",
+        "Substantial Chinese content",
+        "Code fence count matches source",
+        "Heading count matches source",
+        "Config identifiers preserved (history_filter, cwd_filter, --disable-*)",
+        "Commands preserved (atuin account delete, atuin init zsh)",
+        "Alternative-project URLs preserved (hishtory, mcfly)"
+      ]
+    }
+  ]
+}
