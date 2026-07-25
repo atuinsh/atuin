@@ -7,7 +7,7 @@ use std::{
 
 use crate::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNOWN_AGENTS};
 use async_trait::async_trait;
-use atuin_common::time::OffsetDateTimeExt;
+use atuin_common::time::{OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::utils;
 use fs_err as fs;
 use itertools::Itertools;
@@ -58,6 +58,7 @@ pub struct OptFilters<'a> {
     pub offset: Option<i64>,
     pub reverse: bool,
     pub include_duplicates: bool,
+    pub timezone: UtcOffsetSpec,
     /// Author filter. Supports special values `$all-user` and `$all-agent`.
     pub authors: &'a [String],
     /// Shell filter. If empty, show commands from all shells. Empty string includes commands that
@@ -734,22 +735,26 @@ impl Database for Sqlite {
             .map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
 
         if let Some(before) = filter_options.before {
-            let parsed =
-                interim::parse_date_string(before, OffsetDateTime::now_utc(), interim::Dialect::Uk)
-                    .map_err(|e| {
-                        sqlx::Error::Decode(
-                            format!("invalid `before` filter {before:?}: {e}").into(),
-                        )
-                    })?;
+            let parsed = interim::parse_date_string(
+                before,
+                OffsetDateTime::now_utc().to_offset(filter_options.timezone.0),
+                interim::Dialect::Uk,
+            )
+            .map_err(|e| {
+                sqlx::Error::Decode(format!("invalid `before` filter {before:?}: {e}").into())
+            })?;
             sql.and_where_lt("timestamp", quote(parsed.unix_timestamp_nanos() as i64));
         }
 
         if let Some(after) = filter_options.after {
-            let parsed =
-                interim::parse_date_string(after, OffsetDateTime::now_utc(), interim::Dialect::Uk)
-                    .map_err(|e| {
-                        sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
-                    })?;
+            let parsed = interim::parse_date_string(
+                after,
+                OffsetDateTime::now_utc().to_offset(filter_options.timezone.0),
+                interim::Dialect::Uk,
+            )
+            .map_err(|e| {
+                sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
+            })?;
             sql.and_where_gt("timestamp", quote(parsed.unix_timestamp_nanos() as i64));
         }
 
