@@ -279,6 +279,7 @@ impl Cmd {
                 include_duplicates: self.include_duplicates,
                 authors: authors.as_slice_filter(),
                 shells: shells.as_slice_filter(),
+                timezone: settings.timezone,
             };
 
             let mut entries = run_non_interactive(settings, opt_filter, &query, &db).await?;
