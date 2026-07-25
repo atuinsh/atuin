@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use atuin_client::{
-    database::{Database, OptFilters},
+    database::{Database, DbSearchMode, OptFilters},
     history::{AUTHOR_FILTER_ALL_USER, History},
-    settings::{SearchMode, Settings},
+    settings::Settings,
 };
 use atuin_daemon::client::{DaemonClientErrorKind, SearchClient, SearchParams, classify_error};
 use atuin_nucleo_matcher::{
@@ -86,7 +86,7 @@ impl Search {
     ) -> Result<Vec<History>> {
         let results = db
             .search(
-                SearchMode::FullText,
+                DbSearchMode::FullText,
                 state.filter_mode,
                 &state.context,
                 state.input.as_str(),

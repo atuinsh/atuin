@@ -1123,8 +1123,7 @@ impl PermissibleToolCall for AtuinHistoryToolCall {
 
 impl AtuinHistoryToolCall {
     pub(crate) async fn execute(&self, db: &atuin_client::database::Sqlite) -> ToolOutcome {
-        use atuin_client::database::{self, Database as _, OptFilters};
-        use atuin_client::settings::SearchMode;
+        use atuin_client::database::{self, Database as _, DbSearchMode, OptFilters};
 
         // query_context rather than current_context: when running outside an
         // atuin-hooked shell (e.g. as an MCP server) there is no ATUIN_SESSION.
@@ -1161,7 +1160,7 @@ impl AtuinHistoryToolCall {
 
         let results = match db
             .search(
-                SearchMode::Fuzzy,
+                DbSearchMode::Fuzzy,
                 filter_mode,
                 &context,
                 &self.query,

@@ -71,6 +71,8 @@ pub struct Cmd {
     filter_mode: Option<FilterMode>,
 
     /// Allow overriding search mode over config
+    ///
+    /// Note: for non-interactive searches, the "daemon-fuzzy" and "skim" modes behave like "fuzzy".
     #[arg(long)]
     search_mode: Option<SearchMode>,
 
@@ -341,7 +343,7 @@ async fn run_non_interactive(
 
     let results = db
         .search(
-            settings.search_mode,
+            settings.search_mode.closest_db_mode(),
             filter_mode,
             &context,
             query.join(" ").as_str(),

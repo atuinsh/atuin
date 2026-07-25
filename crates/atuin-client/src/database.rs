@@ -185,6 +185,43 @@ fn get_session_start_time(session_id: &str) -> Option<i64> {
     None
 }
 
+/// Controls the type of search [`Database::search`] performs.
+///
+/// This is a narrower set of modes than [`SearchMode`], which also contains modes that apply only
+/// to interactive searches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DbSearchMode {
+    Prefix,
+    FullText,
+    Fuzzy,
+}
+
+impl From<DbSearchMode> for SearchMode {
+    fn from(mode: DbSearchMode) -> Self {
+        match mode {
+            DbSearchMode::Prefix => Self::Prefix,
+            DbSearchMode::FullText => Self::FullText,
+            DbSearchMode::Fuzzy => Self::Fuzzy,
+        }
+    }
+}
+
+// This impl is here rather than in settings.rs where `SearchMode` is defined to avoid having
+// modules that cyclicly import each other, which isn't strictly disallowed but could be confusing.
+impl SearchMode {
+    /// Get the [`DbSearchMode`] that most closely matches this [`SearchMode`].
+    ///
+    /// This maps [`SearchMode::Skim`] and [`SearchMode::DaemonFuzzy`], which are interactive-only,
+    /// to [`DbSearchMode::Fuzzy`].
+    pub fn closest_db_mode(self) -> DbSearchMode {
+        match self {
+            SearchMode::Prefix => DbSearchMode::Prefix,
+            SearchMode::FullText => DbSearchMode::FullText,
+            SearchMode::Fuzzy | SearchMode::Skim | SearchMode::DaemonFuzzy => DbSearchMode::Fuzzy,
+        }
+    }
+}
+
 #[async_trait]
 pub trait Database: Send + Sync + 'static {
     async fn save(&self, h: &History) -> Result<()>;
@@ -225,7 +262,7 @@ pub trait Database: Send + Sync + 'static {
     #[allow(clippy::too_many_arguments)]
     async fn search(
         &self,
-        search_mode: SearchMode,
+        search_mode: DbSearchMode,
         filter: FilterMode,
         context: &Context,
         query: &str,
@@ -582,7 +619,7 @@ impl Database for Sqlite {
 
     async fn search(
         &self,
-        search_mode: SearchMode,
+        search_mode: DbSearchMode,
         filter: FilterMode,
         context: &Context,
         query: &str,
@@ -623,8 +660,8 @@ impl Database for Sqlite {
 
         let mut regexes = Vec::new();
         match search_mode {
-            SearchMode::Prefix => sql.and_where_like_left("command", query.replace('*', "%")),
-            _ => {
+            DbSearchMode::Prefix => sql.and_where_like_left("command", query.replace('*', "%")),
+            DbSearchMode::FullText | DbSearchMode::Fuzzy => {
                 let mut is_or = false;
                 for token in QueryTokenizer::new(query) {
                     // TODO smart case mode could be made configurable like in fzf
@@ -656,7 +693,7 @@ impl Database for Sqlite {
                             format!("{glob}{term}{glob}")
                         }
                         QueryToken::Match(term, _) => {
-                            if search_mode == SearchMode::FullText {
+                            if search_mode == DbSearchMode::FullText {
                                 format!("{glob}{term}{glob}")
                             } else {
                                 term.split("").join(glob)
@@ -1196,7 +1233,7 @@ mod test {
 
     async fn assert_search_eq(
         db: &impl Database,
-        mode: SearchMode,
+        mode: DbSearchMode,
         filter_mode: FilterMode,
         query: &str,
         expected: usize,
@@ -1227,7 +1264,7 @@ mod test {
 
     async fn assert_search_commands(
         db: &impl Database,
-        mode: SearchMode,
+        mode: DbSearchMode,
         filter_mode: FilterMode,
         query: &str,
         expected_commands: Vec<&str>,
@@ -1465,7 +1502,7 @@ mod test {
 
         let results = db
             .search(
-                SearchMode::FullText,
+                DbSearchMode::FullText,
                 FilterMode::Global,
                 &context,
                 "",
@@ -1499,7 +1536,7 @@ mod test {
 
         let hits = db
             .search(
-                SearchMode::FullText,
+                DbSearchMode::FullText,
                 FilterMode::Global,
                 &context,
                 "",
@@ -1531,7 +1568,7 @@ mod test {
 
         let result = db
             .search(
-                SearchMode::FullText,
+                DbSearchMode::FullText,
                 FilterMode::Global,
                 &context,
                 "",
@@ -1550,9 +1587,15 @@ mod test {
     async fn test_search_prefix(#[case] query: &str, #[case] expected: usize) {
         let db = db_with(&["ls /home/ellie"]).await;
 
-        assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, query, expected)
-            .await
-            .unwrap();
+        assert_search_eq(
+            &db,
+            DbSearchMode::Prefix,
+            FilterMode::Global,
+            query,
+            expected,
+        )
+        .await
+        .unwrap();
     }
 
     #[rstest]
@@ -1576,7 +1619,7 @@ mod test {
 
         assert_search_eq(
             &db,
-            SearchMode::FullText,
+            DbSearchMode::FullText,
             FilterMode::Global,
             query,
             expected,
@@ -1619,9 +1662,15 @@ mod test {
         ])
         .await;
 
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, query, expected)
-            .await
-            .unwrap();
+        assert_search_eq(
+            &db,
+            DbSearchMode::Fuzzy,
+            FilterMode::Global,
+            query,
+            expected,
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1637,19 +1686,79 @@ mod test {
         // if fuzzy reordering is on, it should come back in a more sensible order
         assert_search_commands(
             &db,
-            SearchMode::Fuzzy,
+            DbSearchMode::Fuzzy,
             FilterMode::Global,
             "curl",
             vec!["curl", "corburl"],
         )
         .await;
 
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "xxxx", 0)
+        assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, "xxxx", 0)
             .await
             .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "", 2)
+        assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, "", 2)
             .await
             .unwrap();
+    }
+
+    #[rstest]
+    // The three modes the database implements map exactly.
+    #[case::prefix(SearchMode::Prefix, DbSearchMode::Prefix)]
+    #[case::full_text(SearchMode::FullText, DbSearchMode::FullText)]
+    #[case::fuzzy(SearchMode::Fuzzy, DbSearchMode::Fuzzy)]
+    // `Skim` and `DaemonFuzzy` never reach the database in the interactive path:
+    // `engines::engine` routes them to the skim matcher and the daemon index. When they do
+    // arrive via `atuin search --search-mode ...`, the closest database behaviour is a plain
+    // fuzzy query. See issue #3670.
+    #[case::skim_degrades_to_fuzzy(SearchMode::Skim, DbSearchMode::Fuzzy)]
+    #[case::daemon_fuzzy_degrades_to_fuzzy(SearchMode::DaemonFuzzy, DbSearchMode::Fuzzy)]
+    fn closest_db_mode_maps_every_search_mode(
+        #[case] mode: SearchMode,
+        #[case] expected: DbSearchMode,
+    ) {
+        assert_eq!(mode.closest_db_mode(), expected);
+    }
+
+    #[rstest]
+    #[case::prefix(DbSearchMode::Prefix)]
+    #[case::full_text(DbSearchMode::FullText)]
+    #[case::fuzzy(DbSearchMode::Fuzzy)]
+    fn db_search_mode_round_trips_through_search_mode(#[case] mode: DbSearchMode) {
+        assert_eq!(SearchMode::from(mode).closest_db_mode(), mode);
+    }
+
+    /// Issue #3670: `atuin search --search-mode daemon-fuzzy` reached the database as
+    /// an unrecognised mode. It took the fuzzy SQL path but skipped the fuzzy relevance
+    /// reordering, so results came back in raw timestamp order while plain `--search-mode
+    /// fuzzy` ranked them by minimum matching span. Both interactive-only modes must now
+    /// behave exactly like `fuzzy` once they reach the database.
+    #[rstest]
+    #[case::daemon_fuzzy(SearchMode::DaemonFuzzy)]
+    #[case::skim(SearchMode::Skim)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_interactive_only_modes_rank_like_fuzzy(#[case] mode: SearchMode) {
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        // "corburl" is strictly newer, so an unranked query would return it first and the assertion
+        // below would fail.
+        let now = OffsetDateTime::now_utc();
+        new_history_item_at(&mut db, "curl", Some(now - time::Duration::seconds(10)))
+            .await
+            .unwrap();
+        new_history_item_at(&mut db, "corburl", Some(now))
+            .await
+            .unwrap();
+
+        assert_search_commands(
+            &db,
+            mode.closest_db_mode(),
+            FilterMode::Global,
+            "curl",
+            vec!["curl", "corburl"],
+        )
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1806,7 +1915,7 @@ mod test {
         let start = Instant::now();
         let _results = db
             .search(
-                SearchMode::Fuzzy,
+                DbSearchMode::Fuzzy,
                 FilterMode::Global,
                 &context,
                 "",
@@ -1872,7 +1981,7 @@ mod test {
 
         let results = db
             .search(
-                SearchMode::FullText,
+                DbSearchMode::FullText,
                 FilterMode::Global,
                 &context,
                 "echo",

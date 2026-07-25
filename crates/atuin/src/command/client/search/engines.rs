@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use atuin_client::{
-    database::{Context, Database, OptFilters},
+    database::{Context, Database, DbSearchMode, OptFilters},
     history::{AUTHOR_FILTER_ALL_USER, History, HistoryId},
     settings::{FilterMode, SearchMode, Settings, Shells},
 };
@@ -16,15 +16,17 @@ pub mod skim;
 #[allow(unused)] // settings is only used if daemon feature is enabled
 pub fn engine(search_mode: SearchMode, settings: &Settings) -> Box<dyn SearchEngine> {
     match search_mode {
-        SearchMode::Skim => Box::new(skim::Search::new()) as Box<_>,
+        SearchMode::Skim => Box::new(skim::Search::new()),
         #[cfg(feature = "daemon")]
-        SearchMode::DaemonFuzzy => Box::new(daemon::Search::new(settings)) as Box<_>,
+        SearchMode::DaemonFuzzy => Box::new(daemon::Search::new(settings)),
         #[cfg(not(feature = "daemon"))]
         SearchMode::DaemonFuzzy => {
             // Fall back to fuzzy mode if daemon feature is not enabled
-            Box::new(db::Search(SearchMode::Fuzzy)) as Box<_>
+            Box::new(db::Search(DbSearchMode::Fuzzy))
         }
-        mode => Box::new(db::Search(mode)) as Box<_>,
+        SearchMode::Prefix => Box::new(db::Search(DbSearchMode::Prefix)),
+        SearchMode::FullText => Box::new(db::Search(DbSearchMode::FullText)),
+        SearchMode::Fuzzy => Box::new(db::Search(DbSearchMode::Fuzzy)),
     }
 }
 
@@ -75,7 +77,7 @@ pub trait SearchEngine: Send + Sync + 'static {
         if state.input.as_str().is_empty() {
             Ok(db
                 .search(
-                    SearchMode::FullText,
+                    DbSearchMode::FullText,
                     state.filter_mode,
                     &state.context,
                     "",

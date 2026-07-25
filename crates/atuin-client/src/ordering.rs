@@ -1,11 +1,11 @@
 use minspan::minspan;
 
-use super::{history::History, settings::SearchMode};
+use super::{database::DbSearchMode, history::History};
 
-pub fn reorder_fuzzy(mode: SearchMode, query: &str, res: Vec<History>) -> Vec<History> {
+pub fn reorder_fuzzy(mode: DbSearchMode, query: &str, res: Vec<History>) -> Vec<History> {
     match mode {
-        SearchMode::Fuzzy => reorder(query, |x| &x.command, res),
-        _ => res,
+        DbSearchMode::Fuzzy => reorder(query, |x| &x.command, res),
+        DbSearchMode::Prefix | DbSearchMode::FullText => res,
     }
 }
 
