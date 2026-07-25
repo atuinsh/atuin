@@ -46,7 +46,8 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - Derive boilerplate: `derive_more` (workspace dep) for `Display`, `From`, `Into`, `AsRef`, `Deref`, `Debug` on newtypes and simple enums. Prefer `derive_more` over manual `impl` when the formatting/conversion is a straight delegation. Use `thiserror` (not `derive_more`) for error types. Use `#[as_ref(str)]` on string newtypes for `AsRef<str>`.
 - Async: tokio. Client uses `current_thread`; server uses `multi_thread`.
 - `#![deny(unsafe_code)]` on client/common, `#![forbid(unsafe_code)]` on server.
-- Clippy: `pedantic` + `nursery` on main crate. CI enforces `-D warnings -D clippy::redundant_clone`.
+- Clippy: `pedantic` + `nursery` on main crate. CI enforces `-D warnings -D clippy::redundant_clone`, on both the default targets and `--tests`.
+- Rustdoc: CI runs `cargo doc --document-private-items --no-deps --workspace` with `RUSTDOCFLAGS=-D warnings`. Broken intra-doc links fail the build.
 - Format: `cargo fmt`. Only non-default: `reorder_imports = true`.
 - IDs: UUIDv7 (time-ordered), newtype wrappers (`HistoryId`, `RecordId`, `HostId`).
 - Serialization: MessagePack for encrypted payloads, JSON for API, TOML for config.
@@ -67,6 +68,8 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 ```sh
 cargo build
 cargo test
-cargo clippy -- -D warnings
+cargo clippy -- -D warnings -D clippy::redundant_clone
+cargo clippy --tests -- -D warnings -D clippy::redundant_clone
 cargo fmt --check
+RUSTDOCFLAGS="-D warnings" cargo doc --document-private-items --no-deps --workspace
 ```

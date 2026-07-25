@@ -214,6 +214,33 @@ jobs:
       - name: Run clippy
         run: cargo clippy -- -D warnings -D clippy::redundant_clone
 
+      - name: Run clippy (tests)
+        run: cargo clippy --tests -- -D warnings -D clippy::redundant_clone
+
+  docs:
+    runs-on: depot-ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-doc-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run cargo doc
+        run: cargo doc --document-private-items --no-deps --workspace
+        env:
+          RUSTDOCFLAGS: -D warnings
+
   format:
     runs-on: depot-ubuntu-24.04
 
