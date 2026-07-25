@@ -71,17 +71,16 @@ Feature coverage varies by shell:
 
 Atuin runs on a range of operating systems and CPU architectures. The matrix below shows, for each platform, whether an official prebuilt binary is published and how far continuous integration (CI) exercises it.
 
-| Tier      | OS       | Arch       | Prebuilt   | CI                                                 | Notes                                                      |
-| --------- | -------- | ---------- | ---------- | -------------------------------------------------- | ---------------------------------------------------------- |
-| **1**     | `Linux`  | `x86_64`   | ✓          | tested                                             |                                                            |
-| `arm64`   | ✓        | build-only |            |                                                    |                                                            |
-| `macOS`   | `arm64`  | ✓          | tested     | Replaying a result with `alt`+`#` isn't available. |                                                            |
-| `x86_64`  | ✓        | build-only |            |                                                    |                                                            |
-| `Windows` | `x86_64` | ✓          | tested     | No syntax highlighting or `pty-proxy`.             |                                                            |
-| `WSL-2`   | `x86_64` | ✓          | tested     |                                                    |                                                            |
-| **2**     | `Linux`  | `riscv64`  | ✓          | build-only                                         | Built on [RISE Project](https://riseproject.dev/) runners. |
-| `Illumos` | `x86_64` | ✗          | build-only |                                                    |                                                            |
-| *Other*   | —        | ✗          | ✗          | Build from source.                                 |                                                            |
+| Tier      | OS        | Arch       | Prebuilt | CI                                                 | Notes |
+| --------- | --------- | ---------- | -------- | -------------------------------------------------- | ----- |
+| **1**     | `Linux`   | `x86_64`   | ✓        | tested                                             |       |
+| `arm64`   | ✓         | build-only |          |                                                    |       |
+| `macOS`   | `arm64`   | ✓          | tested   | Replaying a result with `alt`+`#` isn't available. |       |
+| `x86_64`  | ✓         | build-only |          |                                                    |       |
+| `Windows` | `x86_64`  | ✓          | tested   | No syntax highlighting or `pty-proxy`.             |       |
+| `WSL-2`   | `x86_64`  | ✓          | tested   |                                                    |       |
+| **2**     | `Illumos` | `x86_64`   | ✗        | build-only                                         |       |
+| *Other*   | —         | ✗          | ✗        | Build from source.                                 |       |
 
 ## Terminals
 
