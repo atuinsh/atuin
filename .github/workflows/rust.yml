@@ -54,7 +54,7 @@ jobs:
         # There was an attempt to make cross-compiles also work on FreeBSD, but that failed with:
         #
         # warning: libelf.so.2, needed by <...>/libkvm.so, not found (try using -rpath or -rpath-link)
-        target: [x86_64-unknown-illumos, riscv64gc-unknown-linux-gnu]
+        target: [x86_64-unknown-illumos]
     runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
