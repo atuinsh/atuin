@@ -13,7 +13,7 @@ jobs:
   install:
     strategy:
       matrix:
-        os: [depot-ubuntu-24.04, macos-14]
+        os: [depot-ubuntu-24.04, depot-macos-26]
     runs-on: ${{ matrix.os }}
 
     steps:
