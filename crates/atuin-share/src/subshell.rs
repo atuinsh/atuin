@@ -8,6 +8,7 @@
 //! dimensions (the host's terminal minus the row reserved for the warning bar).
 
 use std::io::{Read, Write};
+use std::sync::{Arc, Mutex};
 
 use eyre::eyre;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -19,14 +20,24 @@ use crate::Size;
 ///
 /// Dropping a `Subshell` drops the PTY master, which sends the child `SIGHUP` —
 /// relied upon during teardown.
+///
+/// `portable-pty` 0.9 declares `pub trait MasterPty: Downcast + Send` — it is
+/// `Send` but **not** `Sync`, and offers no general `clone`. The master is
+/// therefore held in an `Arc<Mutex<..>>`, which *is* `Send + Sync` (because
+/// `Mutex<T>: Sync` when `T: Send`) and can be shared with the SIGWINCH and
+/// inbound-event threads.
 pub struct Subshell {
-    master: Box<dyn MasterPty + Send>,
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
 // `portable-pty` 0.9's `SlavePty::spawn_command` returns
 // `Box<dyn Child + Send + Sync>`, so this bound matches exactly and no
 // `Mutex` wrapper is needed around the child itself.
+
+/// Resizes the child PTY. Cloneable and thread-safe, so the SIGWINCH handler and
+/// the inbound-event thread can both resize without owning the `Subshell`.
+pub type ResizeHandle = Arc<dyn Fn(Size) + Send + Sync>;
 
 impl Subshell {
     /// Open a PTY sized to `size` and spawn the user's default shell in it.
@@ -54,7 +65,7 @@ impl Subshell {
         drop(pair.slave);
 
         Ok(Self {
-            master: pair.master,
+            master: Arc::new(Mutex::new(pair.master)),
             child,
         })
     }
@@ -65,10 +76,14 @@ impl Subshell {
     /// # Panics
     ///
     /// Panics if the descriptor cannot be cloned, which would mean the process
-    /// is out of file descriptors.
+    /// is out of file descriptors, or if the master lock is poisoned.
     #[must_use]
     pub fn reader(&self) -> Box<dyn Read + Send> {
-        self.master.try_clone_reader().expect("clone pty reader")
+        self.master
+            .lock()
+            .expect("master lock")
+            .try_clone_reader()
+            .expect("clone pty reader")
     }
 
     /// The PTY master writer. **May only be called once** — the session takes
@@ -78,21 +93,50 @@ impl Subshell {
     ///
     /// # Panics
     ///
-    /// Panics if the writer has already been taken.
+    /// Panics if the writer has already been taken, or if the master lock is
+    /// poisoned.
     #[must_use]
     pub fn writer(&self) -> Box<dyn Write + Send> {
-        self.master.take_writer().expect("take pty writer")
+        self.master
+            .lock()
+            .expect("master lock")
+            .take_writer()
+            .expect("take pty writer")
     }
 
     /// Resize the child PTY. Best-effort: a failed `TIOCSWINSZ` (e.g. the child
     /// already exited) is not worth tearing the session down for.
     pub fn resize(&self, size: Size) {
-        let _ = self.master.resize(PtySize {
-            rows: size.rows,
-            cols: size.cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        });
+        (self.resize_handle())(size);
+    }
+
+    /// A cloneable resize closure, so threads can resize without owning the PTY.
+    #[must_use]
+    pub fn resize_handle(&self) -> ResizeHandle {
+        let master = Arc::clone(&self.master);
+        Arc::new(move |size: Size| {
+            if let Ok(m) = master.lock() {
+                let _ = m.resize(PtySize {
+                    rows: size.rows,
+                    cols: size.cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                });
+            }
+        })
+    }
+
+    /// Non-blocking exit check, so the run loop can also watch the kill switch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying `waitpid` fails.
+    pub fn try_wait(&mut self) -> eyre::Result<Option<i32>> {
+        match self.child.try_wait() {
+            Ok(Some(status)) => Ok(Some(i32::try_from(status.exit_code()).unwrap_or(1))),
+            Ok(None) => Ok(None),
+            Err(e) => Err(eyre!("try_wait: {e:#}")),
+        }
     }
 
     /// Terminate the child (kill switch / teardown). Best-effort: the child may

@@ -26,6 +26,8 @@ mod query;
 #[cfg(unix)]
 mod render;
 #[cfg(unix)]
+mod session;
+#[cfg(unix)]
 mod subshell;
 
 /// Child-shell terminal dimensions, in cells.

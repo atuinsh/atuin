@@ -1,0 +1,798 @@
+// The session loop is a complete, self-contained unit exercised by its own
+// tests, but its only in-crate consumer is `run_share`, which lands in a later
+// task of this plan. Until then these are technically dead code and
+// `cargo clippy -- -D warnings` (what CI runs) would reject the crate.
+#![allow(dead_code)]
+
+//! The share session: the threads that glue the child PTY, the local
+//! compositor and the hub transport together.
+
+use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use crate::Size;
+use crate::keyframe::keyframe_bytes;
+use crate::query;
+use crate::render::{composite, render_bar};
+use crate::subshell::Subshell;
+
+/// Bytes of child output after which a fresh keyframe is emitted.
+const KEYFRAME_BYTES: u64 = 256 * 1024;
+/// Maximum interval between keyframes.
+const KEYFRAME_INTERVAL: Duration = Duration::from_secs(5);
+/// Render coalescing interval (~60 fps).
+const FRAME_INTERVAL: Duration = Duration::from_millis(16);
+
+/// Session → hub events.
+pub enum Outbound {
+    Output {
+        seq: u64,
+        data: Vec<u8>,
+    },
+    Keyframe {
+        seq: u64,
+        data: Vec<u8>,
+    },
+    HostSize {
+        cols: u16,
+        rows: u16,
+    },
+    /// Kill switch / clean exit: end the session and invalidate the link now.
+    End,
+}
+
+/// Hub → session events.
+pub enum Inbound {
+    Input(Vec<u8>),
+    SetSize {
+        cols: u16,
+        rows: u16,
+    },
+    Participants(u32),
+    /// The hub dropped its replay buffer; send a fresh keyframe.
+    RequestKeyframe,
+    /// Joined (or re-joined) successfully. `fresh_session` is true when the hub
+    /// issued a *different* public token than we last advertised — i.e. our
+    /// resume was rejected or expired and the hub created a brand-new session.
+    /// The old link is dead in that case and the new one must be re-printed.
+    Connected {
+        token: String,
+        join_url: String,
+        fresh_session: bool,
+    },
+    Disconnected,
+}
+
+/// State shared across the session's threads.
+struct Shared {
+    /// The child's screen model. **The parser lock is also the `seq` lock** —
+    /// see `emit_output_locked`.
+    parser: Mutex<vt100::Parser>,
+    /// Monotonic sequence counter for `output`/`keyframe`, starting at 1.
+    seq: AtomicU64,
+    /// Set by any thread that wants a keyframe; serviced only by the reader.
+    want_keyframe: AtomicBool,
+    /// Screen needs repainting.
+    dirty: AtomicBool,
+    /// Session is shutting down.
+    shutdown: AtomicBool,
+    /// Current viewer count, for the bar.
+    viewers: AtomicU64,
+    /// Host's physical terminal size, minus the bar row. Updated on SIGWINCH.
+    phys_cols: AtomicU16,
+    phys_rows: AtomicU16,
+    /// Negotiated child PTY size (what `set_size` last asked for, clamped).
+    child_cols: AtomicU16,
+    child_rows: AtomicU16,
+}
+
+impl Shared {
+    fn physical(&self) -> Size {
+        Size {
+            cols: self.phys_cols.load(Ordering::Relaxed),
+            rows: self.phys_rows.load(Ordering::Relaxed),
+        }
+    }
+
+    fn child(&self) -> Size {
+        Size {
+            cols: self.child_cols.load(Ordering::Relaxed),
+            rows: self.child_rows.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Clamp a requested child size to what physically fits below the bar.
+    fn clamp_child(&self, want: Size) -> Size {
+        let phys = self.physical();
+        Size {
+            cols: want.cols.min(phys.cols).max(1),
+            rows: want.rows.min(phys.rows).max(1),
+        }
+    }
+
+    fn store_child(&self, size: Size) {
+        self.child_cols.store(size.cols, Ordering::Relaxed);
+        self.child_rows.store(size.rows, Ordering::Relaxed);
+    }
+
+    fn request_keyframe(&self) {
+        self.want_keyframe.store(true, Ordering::SeqCst);
+    }
+
+    fn mark_dirty(&self) {
+        self.dirty.store(true, Ordering::Relaxed);
+    }
+
+    fn is_shutdown(&self) -> bool {
+        self.shutdown.load(Ordering::SeqCst)
+    }
+}
+
+/// Emit `Output` (and a `Keyframe` if one was requested) for a chunk of child
+/// output. Must be called with `parser` already locked by the caller so that the
+/// screen state, the sequence numbers, and the sends stay consistent.
+fn emit_output_locked(
+    parser: &mut vt100::Parser,
+    shared: &Shared,
+    out_tx: &Sender<Outbound>,
+    chunk: &[u8],
+) -> Result<(), std::sync::mpsc::SendError<Outbound>> {
+    parser.process(chunk);
+
+    let seq = shared.seq.fetch_add(1, Ordering::SeqCst);
+    out_tx.send(Outbound::Output {
+        seq,
+        data: chunk.to_vec(),
+    })?;
+
+    if shared.want_keyframe.swap(false, Ordering::SeqCst) {
+        let seq = shared.seq.fetch_add(1, Ordering::SeqCst);
+        let data = keyframe_bytes(parser.screen());
+        out_tx.send(Outbound::Keyframe { seq, data })?;
+    }
+    Ok(())
+}
+
+/// Emit a keyframe with no accompanying output (startup, resize, idle timer).
+///
+/// The caller must already hold the parser lock: that lock guards the screen
+/// state *and* the `seq` counter together, which is what keeps the spec's
+/// invariant — a keyframe stamped `seq = K` reflects exactly the output bytes
+/// stamped `<= K` — true no matter which thread produces the keyframe.
+fn emit_keyframe_locked(
+    parser: &vt100::Parser,
+    shared: &Shared,
+    out_tx: &Sender<Outbound>,
+) -> Result<(), std::sync::mpsc::SendError<Outbound>> {
+    shared.want_keyframe.store(false, Ordering::SeqCst);
+    let seq = shared.seq.fetch_add(1, Ordering::SeqCst);
+    let data = keyframe_bytes(parser.screen());
+    out_tx.send(Outbound::Keyframe { seq, data })
+}
+
+fn spawn_reader(
+    shared: Arc<Shared>,
+    mut reader: Box<dyn Read + Send>,
+    child_writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    out_tx: Sender<Outbound>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        let mut since_keyframe: u64 = 0;
+        let mut last_keyframe = Instant::now();
+
+        loop {
+            let n = match reader.read(&mut buf) {
+                Ok(0) | Err(_) => return, // child exited or PTY closed
+                Ok(n) => n,
+            };
+            // **Keep draining the PTY even while shutting down.** On BSD/macOS a
+            // session leader blocks inside `exit()` until its controlling tty's
+            // output queue has drained, so a reader that stops reading while the
+            // child is still alive wedges the child in the "exiting" state and
+            // `Subshell::wait()` — which teardown calls right after `kill()` —
+            // never returns. Only the *emitting* stops once the session is over.
+            if shared.is_shutdown() {
+                continue;
+            }
+            let chunk = &buf[..n];
+
+            // Cadence: ask for a keyframe before emitting, so it is produced in
+            // the same critical section and lands right after this output.
+            since_keyframe += n as u64;
+            if since_keyframe >= KEYFRAME_BYTES || last_keyframe.elapsed() >= KEYFRAME_INTERVAL {
+                shared.request_keyframe();
+                since_keyframe = 0;
+                last_keyframe = Instant::now();
+            }
+
+            let replies = {
+                let mut parser = shared.parser.lock().expect("parser lock");
+                if emit_output_locked(&mut parser, &shared, &out_tx, chunk).is_err() {
+                    return; // transport gone; the shell keeps running
+                }
+                // Answer device queries using the post-update cursor position.
+                query::replies(chunk, parser.screen().cursor_position())
+            };
+            if !replies.is_empty()
+                && let Ok(mut w) = child_writer.lock()
+            {
+                let _ = w.write_all(&replies);
+                let _ = w.flush();
+            }
+            shared.mark_dirty();
+        }
+    })
+}
+
+fn spawn_renderer(
+    shared: Arc<Shared>,
+    mut stdout: Box<dyn Write + Send>,
+    write_enabled: bool,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        loop {
+            if shared.is_shutdown() {
+                return;
+            }
+            std::thread::sleep(FRAME_INTERVAL);
+            if !shared.dirty.swap(false, Ordering::Relaxed) {
+                continue;
+            }
+            let physical = shared.physical();
+            let child = shared.child();
+            let viewers = u32::try_from(shared.viewers.load(Ordering::Relaxed)).unwrap_or(u32::MAX);
+            let bar = render_bar(physical.cols, viewers, write_enabled);
+
+            let frame = {
+                let parser = shared.parser.lock().expect("parser lock");
+                composite(parser.screen(), child, physical, &bar)
+            };
+            if stdout.write_all(&frame).is_err() || stdout.flush().is_err() {
+                return;
+            }
+        }
+    })
+}
+
+fn spawn_stdin(
+    shared: Arc<Shared>,
+    mut stdin: Box<dyn Read + Send>,
+    child_writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    out_tx: Sender<Outbound>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 1024];
+        loop {
+            if shared.is_shutdown() {
+                return;
+            }
+            let n = match stdin.read(&mut buf) {
+                Ok(0) | Err(_) => return,
+                Ok(n) => n,
+            };
+            // Kill switch: Ctrl-\ (0x1c). Raw mode disables ISIG, so it arrives
+            // as a plain byte rather than raising SIGQUIT. Everything before it
+            // in the same chunk is still delivered to the child.
+            if let Some(pos) = buf[..n].iter().position(|&b| b == 0x1c) {
+                if pos > 0
+                    && let Ok(mut w) = child_writer.lock()
+                {
+                    let _ = w.write_all(&buf[..pos]);
+                    let _ = w.flush();
+                }
+                // Tell the hub explicitly — never rely on socket closure, which
+                // would leave the link alive for the hub's 30 s grace period.
+                let _ = out_tx.send(Outbound::End);
+                shared.shutdown.store(true, Ordering::SeqCst);
+                return;
+            }
+            // The host's own keystrokes are always forwarded, regardless of
+            // `--write` (that flag governs *viewer* input only).
+            if let Ok(mut w) = child_writer.lock()
+                && (w.write_all(&buf[..n]).is_err() || w.flush().is_err())
+            {
+                return;
+            }
+        }
+    })
+}
+
+/// Watch for terminal resizes.
+///
+/// The clamp is applied **locally and immediately**, without waiting for the
+/// hub: if the host shrinks their window, a child still sized to the old
+/// (taller) geometry would be painted past the last visible row, scrolling the
+/// status bar off the screen. It also keeps resize working while the transport
+/// is down.
+#[cfg(unix)]
+fn spawn_winch(
+    shared: Arc<Shared>,
+    subshell_resize: impl Fn(Size) + Send + 'static,
+    out_tx: Sender<Outbound>,
+) -> eyre::Result<std::thread::JoinHandle<()>> {
+    use signal_hook::consts::SIGWINCH;
+    use signal_hook::iterator::Signals;
+
+    let mut signals = Signals::new([SIGWINCH])?;
+    Ok(std::thread::spawn(move || {
+        for _ in signals.forever() {
+            if shared.is_shutdown() {
+                return;
+            }
+            let Ok((cols, rows)) = crossterm::terminal::size() else {
+                continue;
+            };
+            // Reserve the bar row.
+            let phys = Size {
+                cols,
+                rows: rows.saturating_sub(1).max(1),
+            };
+            shared.phys_cols.store(phys.cols, Ordering::Relaxed);
+            shared.phys_rows.store(phys.rows, Ordering::Relaxed);
+
+            // Clamp the child immediately — do not wait for the hub's set_size.
+            let clamped = shared.clamp_child(shared.child());
+            shared.store_child(clamped);
+            subshell_resize(clamped);
+            {
+                // NB: `set_size` lives on `Screen`, not `Parser` — reach it via
+                // `screen_mut()`. (`vt100` 0.16.2 has no `Parser::set_size`.)
+                let mut parser = shared.parser.lock().expect("parser lock");
+                parser.screen_mut().set_size(clamped.rows, clamped.cols);
+            }
+            shared.request_keyframe();
+            shared.mark_dirty();
+
+            // Then let the hub renegotiate against the new maximum.
+            if out_tx
+                .send(Outbound::HostSize {
+                    cols: phys.cols,
+                    rows: phys.rows,
+                })
+                .is_err()
+            {
+                // Transport gone; the local resize above already took effect.
+            }
+        }
+    }))
+}
+
+fn spawn_inbound(
+    shared: Arc<Shared>,
+    in_rx: Receiver<Inbound>,
+    child_writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    out_tx: Sender<Outbound>,
+    subshell_resize: impl Fn(Size) + Send + 'static,
+    write_enabled: bool,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        while let Ok(msg) = in_rx.recv() {
+            if shared.is_shutdown() {
+                return;
+            }
+            match msg {
+                Inbound::Input(bytes) => {
+                    // Defence in depth (spec §8): a read-only session must never
+                    // execute viewer keystrokes, even if the hub sends them.
+                    // The hub enforces this too; we do not depend on it.
+                    if !write_enabled {
+                        continue;
+                    }
+                    if let Ok(mut w) = child_writer.lock() {
+                        let _ = w.write_all(&bytes);
+                        let _ = w.flush();
+                    }
+                }
+                Inbound::SetSize { cols, rows } => {
+                    let clamped = shared.clamp_child(Size { cols, rows });
+                    shared.store_child(clamped);
+                    subshell_resize(clamped);
+                    {
+                        // `set_size` is on `Screen`, reached via `screen_mut()`.
+                        let mut parser = shared.parser.lock().expect("parser lock");
+                        parser.screen_mut().set_size(clamped.rows, clamped.cols);
+                    }
+                    shared.request_keyframe();
+                    shared.mark_dirty();
+                    // Explain the resize to the host (spec §6).
+                    eprintln!(
+                        "\r\n[atuin lab share] resized to {}×{} — a viewer's screen is smaller\r",
+                        clamped.cols, clamped.rows
+                    );
+                }
+                Inbound::Participants(n) => {
+                    shared.viewers.store(u64::from(n), Ordering::Relaxed);
+                    shared.mark_dirty();
+                }
+                Inbound::RequestKeyframe => {
+                    // The hub lost its replay buffer. Producing the keyframe
+                    // under the parser lock keeps the seq invariant intact even
+                    // though this is not the reader thread.
+                    let parser = shared.parser.lock().expect("parser lock");
+                    let _ = emit_keyframe_locked(&parser, &shared, &out_tx);
+                }
+                Inbound::Connected {
+                    token: _,
+                    join_url,
+                    fresh_session,
+                } => {
+                    // A rejected/expired resume makes the hub mint a NEW session
+                    // with a NEW public token, silently. If we kept advertising
+                    // the old URL, viewers could never rejoin — so re-print it
+                    // prominently whenever the token changed.
+                    if fresh_session {
+                        println!(
+                            "\r\n  Reconnected as a NEW session — the previous link is dead.\r\n  New link: {join_url}\r"
+                        );
+                    } else {
+                        println!("\r\n  Share this link: {join_url}\r");
+                    }
+                    let parser = shared.parser.lock().expect("parser lock");
+                    let _ = emit_keyframe_locked(&parser, &shared, &out_tx);
+                    shared.mark_dirty();
+                }
+                Inbound::Disconnected => {
+                    // Keep running: the subshell must survive transport blips.
+                    shared.mark_dirty();
+                }
+            }
+        }
+    })
+}
+
+pub struct Session;
+
+impl Session {
+    /// Run the share session until the child exits or the host presses Ctrl-\.
+    /// Returns the child's exit code. Does **not** touch terminal modes — see
+    /// `run_share`, which owns raw mode via an RAII guard.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the SIGWINCH handler cannot be installed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run(
+        mut subshell: Subshell,
+        physical: Size,
+        write: bool,
+        out_tx: Sender<Outbound>,
+        in_rx: Receiver<Inbound>,
+        stdin: Box<dyn Read + Send>,
+        stdout: Box<dyn Write + Send>,
+    ) -> eyre::Result<i32> {
+        let shared = Arc::new(Shared {
+            parser: Mutex::new(vt100::Parser::new(physical.rows, physical.cols, 0)),
+            seq: AtomicU64::new(1),
+            want_keyframe: AtomicBool::new(true), // initial keyframe
+            dirty: AtomicBool::new(true),
+            shutdown: AtomicBool::new(false),
+            viewers: AtomicU64::new(0),
+            phys_cols: AtomicU16::new(physical.cols),
+            phys_rows: AtomicU16::new(physical.rows),
+            child_cols: AtomicU16::new(physical.cols),
+            child_rows: AtomicU16::new(physical.rows),
+        });
+
+        let child_writer: Arc<Mutex<Box<dyn Write + Send>>> =
+            Arc::new(Mutex::new(subshell.writer()));
+        let reader = subshell.reader();
+
+        // `Subshell::resize` needs the master PTY; hand the threads a closure.
+        let resize_handle = subshell.resize_handle();
+        let resize_for_winch = Arc::clone(&resize_handle);
+        let resize_for_inbound = resize_handle;
+
+        // Tell the hub our starting geometry immediately, so its very first
+        // negotiation has a host dimension to work with.
+        let _ = out_tx.send(Outbound::HostSize {
+            cols: physical.cols,
+            rows: physical.rows,
+        });
+
+        let t_reader = spawn_reader(
+            Arc::clone(&shared),
+            reader,
+            Arc::clone(&child_writer),
+            out_tx.clone(),
+        );
+        let t_render = spawn_renderer(Arc::clone(&shared), stdout, write);
+        let t_stdin = spawn_stdin(
+            Arc::clone(&shared),
+            stdin,
+            Arc::clone(&child_writer),
+            out_tx.clone(),
+        );
+        let t_inbound = spawn_inbound(
+            Arc::clone(&shared),
+            in_rx,
+            Arc::clone(&child_writer),
+            out_tx.clone(),
+            move |s| resize_for_inbound(s),
+            write,
+        );
+        #[cfg(unix)]
+        let t_winch = spawn_winch(
+            Arc::clone(&shared),
+            move |s| resize_for_winch(s),
+            out_tx.clone(),
+        )?;
+
+        // Wait for either the child to exit or the kill switch to fire.
+        let exit_code = loop {
+            if shared.is_shutdown() {
+                // Kill switch: terminate the child and reap it.
+                subshell.kill();
+                break subshell.wait().unwrap_or(0);
+            }
+            match subshell.try_wait() {
+                Ok(Some(code)) => break code,
+                Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+                Err(_) => break 0,
+            }
+        };
+
+        // Clean exit also ends the session on the hub (link invalidated now,
+        // not after the grace period).
+        let _ = out_tx.send(Outbound::End);
+        shared.shutdown.store(true, Ordering::SeqCst);
+
+        // Dropping the subshell drops the PTY master, which SIGHUPs the child
+        // and unblocks the reader thread.
+        drop(subshell);
+        let _ = t_reader.join();
+        let _ = t_render.join();
+        // stdin/inbound/winch threads block on their sources; they are detached
+        // and exit when the process does. Do not join them or teardown hangs.
+        drop(t_stdin);
+        drop(t_inbound);
+        #[cfg(unix)]
+        drop(t_winch);
+
+        Ok(exit_code)
+    }
+}
+
+#[cfg(all(test, unix))]
+// `std::env::set_var` is `unsafe` in edition 2024, and the crate denies
+// `unsafe_code`; the tests below set `$SHELL` before spawning any threads that
+// read the environment, so the calls are sound.
+#[allow(unsafe_code)]
+mod tests {
+    use std::io::Read;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::Size;
+    use crate::subshell::Subshell;
+
+    /// A `Read` standing in for the host's terminal: it yields `prologue` on the
+    /// first read, then blocks until `finish` is set and yields the kill switch
+    /// (`Ctrl-\`, `0x1c`).
+    ///
+    /// Blocking on an explicit flag rather than handing the session a
+    /// pre-filled `Cursor` is what makes these tests deterministic: a `Cursor`
+    /// is drained the instant the stdin thread starts, so the kill switch would
+    /// routinely beat the child shell's very first byte to the channel and the
+    /// assertions about startup traffic would be a coin flip.
+    struct ScriptedStdin {
+        prologue: Option<Vec<u8>>,
+        finish: Arc<AtomicBool>,
+        sent_kill: bool,
+    }
+
+    impl ScriptedStdin {
+        fn new(prologue: Vec<u8>, finish: Arc<AtomicBool>) -> Self {
+            Self {
+                prologue: (!prologue.is_empty()).then_some(prologue),
+                finish,
+                sent_kill: false,
+            }
+        }
+    }
+
+    impl Read for ScriptedStdin {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if let Some(prologue) = self.prologue.take() {
+                let n = prologue.len().min(buf.len());
+                buf[..n].copy_from_slice(&prologue[..n]);
+                return Ok(n);
+            }
+            if self.sent_kill || buf.is_empty() {
+                return Ok(0);
+            }
+            while !self.finish.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            self.sent_kill = true;
+            buf[0] = 0x1c;
+            Ok(1)
+        }
+    }
+
+    #[test]
+    fn forwards_output_with_monotonic_seq_and_emits_initial_keyframe() {
+        unsafe { std::env::set_var("SHELL", "/bin/sh") };
+        let sh = Subshell::spawn(Size { cols: 40, rows: 9 }).unwrap();
+        let (out_tx, out_rx) = mpsc::channel::<Outbound>();
+        let (in_tx, in_rx) = mpsc::channel::<Inbound>();
+
+        // Kill switch once the startup traffic has been observed.
+        let finish = Arc::new(AtomicBool::new(false));
+        let stdin = ScriptedStdin::new(b"printf HELLO\n".to_vec(), Arc::clone(&finish));
+        let stdout = Vec::new();
+
+        let handle = std::thread::spawn(move || {
+            Session::run(
+                sh,
+                Size { cols: 40, rows: 9 },
+                false,
+                out_tx,
+                in_rx,
+                Box::new(stdin),
+                Box::new(stdout),
+            )
+        });
+        let _ = in_tx.send(Inbound::Connected {
+            token: "t".into(),
+            join_url: "u".into(),
+            fresh_session: false,
+        });
+
+        let mut seqs = Vec::new();
+        let mut saw_keyframe = false;
+        let mut saw_host_size = false;
+        let mut saw_end = false;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            match out_rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(Outbound::Keyframe { seq, .. }) => {
+                    saw_keyframe = true;
+                    seqs.push(seq);
+                }
+                Ok(Outbound::Output { seq, .. }) => seqs.push(seq),
+                Ok(Outbound::HostSize { .. }) => saw_host_size = true,
+                Ok(Outbound::End) => {
+                    saw_end = true;
+                    break;
+                }
+                Err(_) => break,
+            }
+            if seqs.len() >= 2 && saw_keyframe && saw_host_size {
+                finish.store(true, Ordering::SeqCst);
+            }
+        }
+        finish.store(true, Ordering::SeqCst);
+        let _ = handle.join();
+
+        assert!(saw_keyframe, "expected an initial keyframe");
+        assert!(saw_host_size, "expected host_size to be sent at startup");
+        assert!(
+            saw_end,
+            "expected an explicit end event from the kill switch"
+        );
+        // strictly increasing
+        assert!(
+            seqs.windows(2).all(|w| w[1] > w[0]),
+            "seqs not monotonic: {seqs:?}"
+        );
+    }
+
+    #[test]
+    fn read_only_session_discards_viewer_input() {
+        // Defence in depth (spec §8): even if the hub forwards `input` for a
+        // read-only session, the CLI must never write it to the child.
+        unsafe { std::env::set_var("SHELL", "/bin/sh") };
+        let sh = Subshell::spawn(Size { cols: 40, rows: 9 }).unwrap();
+        let (out_tx, out_rx) = mpsc::channel::<Outbound>();
+        let (in_tx, in_rx) = mpsc::channel::<Inbound>();
+
+        let finish = Arc::new(AtomicBool::new(false));
+        let stdin = ScriptedStdin::new(Vec::new(), Arc::clone(&finish));
+
+        let handle = std::thread::spawn(move || {
+            Session::run(
+                sh,
+                Size { cols: 40, rows: 9 },
+                false, // read-only
+                out_tx,
+                in_rx,
+                Box::new(stdin),
+                Box::new(Vec::new()),
+            )
+        });
+
+        // A command that would print a distinctive marker if it were executed.
+        let _ = in_tx.send(Inbound::Input(b"printf VIEWERWROTE\n".to_vec()));
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut seen = String::new();
+        while Instant::now() < deadline {
+            if let Ok(Outbound::Output { data, .. }) =
+                out_rx.recv_timeout(Duration::from_millis(200))
+            {
+                seen.push_str(&String::from_utf8_lossy(&data));
+            }
+        }
+        // The viewer cannot close this shell — its keystrokes are dropped — so
+        // the host's own kill switch is what ends the session.
+        finish.store(true, Ordering::SeqCst);
+        let _ = handle.join();
+
+        assert!(
+            !seen.contains("VIEWERWROTE"),
+            "read-only session executed viewer input: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn set_size_resizes_the_child_and_forces_a_keyframe() {
+        unsafe { std::env::set_var("SHELL", "/bin/sh") };
+        let sh = Subshell::spawn(Size { cols: 40, rows: 9 }).unwrap();
+        let (out_tx, out_rx) = mpsc::channel::<Outbound>();
+        let (in_tx, in_rx) = mpsc::channel::<Inbound>();
+
+        let finish = Arc::new(AtomicBool::new(false));
+        let stdin = ScriptedStdin::new(Vec::new(), Arc::clone(&finish));
+
+        let handle = std::thread::spawn(move || {
+            Session::run(
+                sh,
+                Size { cols: 40, rows: 9 },
+                true,
+                out_tx,
+                in_rx,
+                Box::new(stdin),
+                Box::new(Vec::new()),
+            )
+        });
+
+        // Drain the startup keyframe first. `want_keyframe` is a single flag, so
+        // a resize requested before the initial keyframe has been serviced would
+        // simply be absorbed by it and prove nothing.
+        let _ = in_tx.send(Inbound::Input(b"printf READY\n".to_vec()));
+        let mut startup_keyframes = 0usize;
+        let startup_deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < startup_deadline && startup_keyframes == 0 {
+            if let Ok(Outbound::Keyframe { .. }) = out_rx.recv_timeout(Duration::from_millis(200)) {
+                startup_keyframes += 1;
+            }
+        }
+        assert_eq!(startup_keyframes, 1, "expected an initial keyframe");
+
+        let _ = in_tx.send(Inbound::SetSize { cols: 30, rows: 6 });
+        // The child observes the new size; `stty size` prints "rows cols".
+        let _ = in_tx.send(Inbound::Input(b"stty size\n".to_vec()));
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut seen = String::new();
+        let mut keyframes = 0usize;
+        while Instant::now() < deadline && !seen.contains("6 30") {
+            match out_rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(Outbound::Output { data, .. }) => {
+                    seen.push_str(&String::from_utf8_lossy(&data));
+                }
+                Ok(Outbound::Keyframe { .. }) => keyframes += 1,
+                Ok(_) | Err(_) => {}
+            }
+        }
+        let _ = in_tx.send(Inbound::Input(vec![0x04]));
+        finish.store(true, Ordering::SeqCst);
+        let _ = handle.join();
+
+        assert!(
+            seen.contains("6 30"),
+            "child did not see the new size: {seen:?}"
+        );
+        assert!(
+            keyframes >= 1,
+            "expected a keyframe after resize, saw {keyframes}"
+        );
+    }
+}
