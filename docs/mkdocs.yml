@@ -40,9 +40,6 @@ theme:
         icon: octicons/moon-16
         name: Switch to dark mode
   features:
-    - navigation.instant           # SPA-style page loads
-    - navigation.instant.prefetch  # start fetching on link hover
-    - navigation.instant.progress  # progress bar if a load is slow
     - navigation.tracking          # URL follows the anchor you are reading
     - navigation.path              # breadcrumbs above the page title
     - navigation.sections
@@ -211,6 +208,9 @@ plugins:
       minify_css: true
       htmlmin_opts:
         remove_comments: true
+
+hooks:
+  - hooks/llmstxt_i18n.py
 
 not_in_nav: |
   reference/hex.md
