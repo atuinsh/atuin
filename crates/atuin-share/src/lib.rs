@@ -17,6 +17,9 @@
 //! * Intercepting `Ctrl-\` costs the host the ability to send `SIGQUIT` to the
 //!   child (raw mode disables `ISIG`, so `0x1c` arrives as a plain byte).
 
+#[cfg(unix)]
+mod protocol;
+
 /// Child-shell terminal dimensions, in cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Size {
