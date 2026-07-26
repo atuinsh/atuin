@@ -22,6 +22,8 @@ mod keyframe;
 #[cfg(unix)]
 mod protocol;
 #[cfg(unix)]
+mod query;
+#[cfg(unix)]
 mod render;
 #[cfg(unix)]
 mod subshell;
