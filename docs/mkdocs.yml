@@ -249,6 +249,13 @@ extra:
     provider: mike
     default: latest
     alias: true
+  i18n_notice:
+    community:
+      en: "Community-translated. This page may lag behind the English version."
+    untranslated:
+      en: "This page is not translated yet — you are reading the English version."
+    read_in_english:
+      en: "Read in English"
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/atuinsh/atuin
