@@ -31,6 +31,8 @@ mod render;
 mod session;
 #[cfg(unix)]
 mod subshell;
+#[cfg(unix)]
+mod transport;
 
 /// Child-shell terminal dimensions, in cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
