@@ -666,6 +666,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
+ "unicode-width 0.2.2",
  "vt100",
 ]
 

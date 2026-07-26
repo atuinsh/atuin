@@ -23,6 +23,7 @@ portable-pty = "0.9"
 vt100 = { workspace = true }
 crossterm = { workspace = true }
 signal-hook = "0.3"
+unicode-width = "0.2"
 tokio = { workspace = true }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
