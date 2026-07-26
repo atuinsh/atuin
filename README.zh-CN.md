@@ -59,14 +59,14 @@ atuin search --exit 0 --after "yesterday 3pm" make
 
 - [快速开始](#快速开始)
 - [安装](#安装)
-- [导入](./import.md)
-- [配置](./config.md)
-- [历史记录搜索](./search.md)
-- [历史记录云端同步](./sync.md)
-- [历史记录统计](./stats.md)
-- [运行你自己的服务器](./server.md)
-- [键绑定](./key-binding.md)
-- [shell 补全](./shell-completions.md)
+- [导入](https://docs.atuin.sh/latest/zh/reference/import/)
+- [配置](https://docs.atuin.sh/latest/zh/configuration/config/)
+- [历史记录搜索](https://docs.atuin.sh/latest/zh/reference/search/)
+- [历史记录云端同步](https://docs.atuin.sh/latest/zh/reference/sync/)
+- [历史记录统计](https://docs.atuin.sh/latest/zh/reference/stats/)
+- [运行你自己的服务器](https://docs.atuin.sh/latest/zh/self-hosting/server-setup/)
+- [键绑定](https://docs.atuin.sh/latest/zh/configuration/key-binding/)
+- [shell 补全](https://docs.atuin.sh/latest/zh/reference/gen-completions/)
 
 ## 支持的 Shells
 

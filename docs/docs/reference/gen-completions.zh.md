@@ -16,4 +16,4 @@ Shell completion for BASH is generated in "/home/user"
 - `powershell`
 - `elvish`
 
-此外, 请参阅 [支持的 Shells](./README.md#支持的-Shells).
+此外, 请参阅 [支持的 Shells](../support.md).

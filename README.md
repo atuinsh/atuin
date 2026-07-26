@@ -131,4 +131,4 @@ Please open a PR for any others!
 Made with [contrib.rocks](https://contrib.rocks).
 
 [English]: ./README.md
-[简体中文]: ./docs-i18n/zh-CN/README.md
+[简体中文]: ./README.zh-CN.md

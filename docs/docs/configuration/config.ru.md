@@ -18,11 +18,11 @@ export ATUIN_CONFIG_DIR = /home/ellie/.atuin
 
 Этот файл используется когда клиент работает на локальной машине (не сервере).
 
-Пример можно увидеть в [config.toml](../../crates/atuin-client/config.toml)
+Пример можно увидеть в [config.toml](https://github.com/atuinsh/atuin/blob/main/crates/atuin-client/config.toml)
 
 ### `dialect`
 
-Этот параметр контролирует как [stats](stats_ru.md) команда обрабатывает данные.
+Этот параметр контролирует как [stats](../reference/stats.md) команда обрабатывает данные.
 Может принимать одно из двух допустимых значений:
 
 ```

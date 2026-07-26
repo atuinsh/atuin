@@ -2,7 +2,7 @@
 
 你可以使用 Kubernetes 来托管你的 Atuin 服务器。
 
-为数据库凭证创建 [`secrets.yaml`](../../k8s/secrets.yaml) 文件：
+为数据库凭证创建 [`secrets.yaml`](https://github.com/atuinsh/atuin/blob/main/k8s/secrets.yaml) 文件：
 
 ```yaml
 apiVersion: v1
@@ -20,7 +20,7 @@ stringData:
 immutable: true
 ```
 
-为 Atuin 服务器创建 [`atuin.yaml`](../../k8s/atuin.yaml) 文件。与 Docker 镜像一样，没有发布 `latest` 标签，请在[发布页面](https://github.com/atuinsh/atuin/releases)查找最新的发布版本号，替换下面的 `<LATEST TAGGED RELEASE>`：
+为 Atuin 服务器创建 [`atuin.yaml`](https://github.com/atuinsh/atuin/blob/main/k8s/atuin.yaml) 文件。与 Docker 镜像一样，没有发布 `latest` 标签，请在[发布页面](https://github.com/atuinsh/atuin/releases)查找最新的发布版本号，替换下面的 `<LATEST TAGGED RELEASE>`：
 
 
 ```yaml
@@ -166,7 +166,7 @@ spec:
       storage: 10Mi
 ```
 
-最后，你可能想让 atuin 使用单独的命名空间（namespace），创建 [`namespace.yaml`](../../k8s/namespaces.yaml) 文件：
+最后，你可能想让 atuin 使用单独的命名空间（namespace），创建 [`namespace.yaml`](https://github.com/atuinsh/atuin/blob/main/k8s/namespaces.yaml) 文件：
 
 ```yaml
 apiVersion: v1
@@ -192,4 +192,4 @@ Atuin 运行在主机系统的 `30530` 端口上。这是通过 `nodePort` 属�
                 -f ./atuin.yaml
 ```
 
-上面示例同时也位于 atuin 仓库（repository）的 [k8s](../../k8s) 目录下。
+上面示例同时也位于 atuin 仓库（repository）的 [k8s](https://github.com/atuinsh/atuin/tree/main/k8s) 目录下。

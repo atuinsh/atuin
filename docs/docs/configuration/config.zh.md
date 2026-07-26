@@ -16,11 +16,11 @@ export ATUIN_CONFIG_DIR = /home/ellie/.atuin
 
 客户端运行在用户的机器上，除非你运行的是服务器，否则这就是你所关心的。
 
-见 [config.toml](../../crates/atuin-client/config.toml) 中的例子
+见 [config.toml](https://github.com/atuinsh/atuin/blob/main/crates/atuin-client/config.toml) 中的例子
 
 ### `dialect`
 
-这配置了 [stats](stats.md) 命令解析日期的方式。 它有两个可能的值
+这配置了 [stats](../reference/stats.md) 命令解析日期的方式。 它有两个可能的值
 
 ```
 dialect = "uk"
@@ -89,7 +89,7 @@ key = "~/.atuin-session"
 
 ### `search_mode`
 
-使用哪种搜索模式。Atuin 支持 "prefix"（前缀）、"fulltext"（全文） 和 "fuzzy"（模糊）搜索模式。前缀(prefix)搜索语法为 "query\*"，全文(fulltext)搜索语法为 "\*query\*"，而模糊搜索适用的搜索语法 [如下所述](#fuzzy-search-syntax) 。
+使用哪种搜索模式。Atuin 支持 "prefix"（前缀）、"fulltext"（全文） 和 "fuzzy"（模糊）搜索模式。前缀(prefix)搜索语法为 "query\*"，全文(fulltext)搜索语法为 "\*query\*"，而模糊搜索适用的搜索语法 [如下所述](#fuzzy) 。
 
 默认配置为 "fuzzy"
 

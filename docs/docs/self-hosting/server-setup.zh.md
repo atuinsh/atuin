@@ -72,4 +72,4 @@ path 指的是给 server 添加的路由前缀。值为空字符串将不会添�
 你可以在容器中部署自己的 atuin 服务器：
 
 * 有关 docker 配置的示例，请参考 [docker](docker.md)。
-* 有关 kubernetes 配置的示例，请参考 [k8s](k8s.md)。
+* 有关 kubernetes 配置的示例，请参考 [k8s](kubernetes.md)。
