@@ -18,6 +18,8 @@
 //!   child (raw mode disables `ISIG`, so `0x1c` arrives as a plain byte).
 
 #[cfg(unix)]
+mod keyframe;
+#[cfg(unix)]
 mod protocol;
 
 /// Child-shell terminal dimensions, in cells.
