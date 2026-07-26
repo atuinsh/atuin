@@ -12,6 +12,7 @@ dependencies = [
   "mkdocs-minify-plugin>=0.8",
   "mkdocs-git-committers-plugin-2>=2.5",
   "mike>=2.1",
+  "mkdocs-static-i18n>=1.3.1",
 ]
 
 [tool.uv]
