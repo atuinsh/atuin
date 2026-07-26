@@ -23,6 +23,8 @@ mod keyframe;
 mod protocol;
 #[cfg(unix)]
 mod render;
+#[cfg(unix)]
+mod subshell;
 
 /// Child-shell terminal dimensions, in cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
