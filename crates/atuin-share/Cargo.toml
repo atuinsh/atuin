@@ -1,0 +1,31 @@
+[package]
+name = "atuin-share"
+edition = "2024"
+description = "Experimental terminal sharing for atuin (atuin lab share)"
+
+version = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+[dependencies]
+eyre = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+atuin-common = { workspace = true, features = ["unicode"] }
+portable-pty = "0.9"
+vt100 = { workspace = true }
+crossterm = { workspace = true }
+signal-hook = "0.3"
+tokio = { workspace = true }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+
+[dev-dependencies]
+rstest = { workspace = true }

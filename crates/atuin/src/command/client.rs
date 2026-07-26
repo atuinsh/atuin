@@ -26,6 +26,8 @@ mod import;
 mod info;
 mod init;
 mod kv;
+#[cfg(feature = "lab")]
+mod lab;
 mod scripts;
 mod search;
 mod setup;
@@ -117,6 +119,11 @@ pub enum Cmd {
     #[cfg(feature = "ai")]
     #[command()]
     Mcp,
+
+    /// Experimental laboratory features
+    #[cfg(feature = "lab")]
+    #[command(subcommand, hide = true)]
+    Lab(lab::Cmd),
 }
 
 impl Cmd {
@@ -172,6 +179,8 @@ impl Cmd {
             Self::Init(init) => return init.run(&settings).await,
             Self::Doctor => return doctor::run(&settings).await,
             Self::Config(config) => return config.run(&settings).await,
+            #[cfg(feature = "lab")]
+            Self::Lab(cmd) => return cmd.run(&settings).await,
             _ => {}
         }
 
@@ -222,6 +231,13 @@ impl Cmd {
             Self::History(_) | Self::Hook(_) | Self::Init(_) | Self::Doctor | Self::Config(_) => {
                 unreachable!()
             }
+
+            // Handled by the early-return match above, alongside Doctor/Config.
+            // A separate arm rather than another alternative in the pattern
+            // above because `cfg` attributes cannot be applied to individual
+            // or-pattern alternatives.
+            #[cfg(feature = "lab")]
+            Self::Lab(_) => unreachable!(),
 
             #[cfg(feature = "ai")]
             Self::Ai(cli) => atuin_ai::commands::run(cli, &settings).await,
