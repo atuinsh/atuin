@@ -1588,7 +1588,7 @@ mod test {
 
         let results = db
             .search(
-                SearchMode::FullText,
+                DbSearchMode::FullText,
                 FilterMode::Global,
                 &context,
                 "",
