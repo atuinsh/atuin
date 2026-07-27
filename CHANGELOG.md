@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [unreleased]
+## 18.18.0
 
 ### Bug Fixes
 
@@ -14,6 +14,7 @@ All notable changes to this project will be documented in this file.
 - *(import)* Survive corrupt entries instead of aborting the import ([#3721](https://github.com/atuinsh/atuin/issues/3721))
 - *(init)* Fix include guard in Bash init script; chore(init): improve inclusion of shell init scripts in Rust ([#3645](https://github.com/atuinsh/atuin/issues/3645))
 - *(install)* Make /dev/tty authoritative for interactivity detection ([#3691](https://github.com/atuinsh/atuin/issues/3691))
+- *(search)* Add `DbSearchMode`; correctly fall back to "fuzzy" in non-interactive searches ([#3744](https://github.com/atuinsh/atuin/issues/3744))
 - *(ui)* Calculate preview height based on command display width instead of byte count ([#3678](https://github.com/atuinsh/atuin/issues/3678))
 - *(win32)* Cargo-binstall package metadata ([#3673](https://github.com/atuinsh/atuin/issues/3673))
 - Search functionality to respect character offsets and non-ASCII ([#3659](https://github.com/atuinsh/atuin/issues/3659))
@@ -45,6 +46,8 @@ All notable changes to this project will be documented in this file.
 - Slightly nicer default config.toml order ([#2485](https://github.com/atuinsh/atuin/issues/2485))
 - Kubernetes self-hosting documentation ([#3238](https://github.com/atuinsh/atuin/issues/3238))
 - Add canonical Supported platforms page ([#3736](https://github.com/atuinsh/atuin/issues/3736))
+- Add friendly hover tips for new terms ([#3740](https://github.com/atuinsh/atuin/issues/3740))
+- Clarify how to uninstall shell integration ([#3741](https://github.com/atuinsh/atuin/issues/3741))
 
 ### Features
 
@@ -66,6 +69,7 @@ All notable changes to this project will be documented in this file.
 
 - *(atuin-common)* Add ellipsize_or_pad for unicode pad ([#3663](https://github.com/atuinsh/atuin/issues/3663))
 - *(ci)* Bump GitHub Actions to latest versions ([#3689](https://github.com/atuinsh/atuin/issues/3689))
+- *(ci)* Lint tests & docs in CI ([#3746](https://github.com/atuinsh/atuin/issues/3746))
 - *(clap)* Simplify clap field types and fix help message formatting ([#3640](https://github.com/atuinsh/atuin/issues/3640))
 - *(logging)* Refactor logging ([#3622](https://github.com/atuinsh/atuin/issues/3622))
 - *(release-skill)* Time label-gated PR merges around the release ([#3654](https://github.com/atuinsh/atuin/issues/3654))
@@ -85,6 +89,8 @@ All notable changes to this project will be documented in this file.
 - Hotfix script ([#3714](https://github.com/atuinsh/atuin/issues/3714))
 - Update flake.nix ([#3509](https://github.com/atuinsh/atuin/issues/3509))
 - Add Timezone and restart policy for postgres backup docker ([#3083](https://github.com/atuinsh/atuin/issues/3083))
+- Add riscv64 to release targets ([#3339](https://github.com/atuinsh/atuin/issues/3339))
+- Build x86_64-apple-darwin on Depot M4 macs; move all macOS CI to Depot ([#3742](https://github.com/atuinsh/atuin/issues/3742))
 
 ### Performance
 
