@@ -88,7 +88,7 @@ atuin config set update_check false
 
 Package-managed installs should usually leave updates to the package manager and
 disable this. The install script also turns it off when you decline a sync
-account so a local-only setup does not surprise network monitors.
+account so a local-only setup doesn't surprise network monitors.
 
 ### `sync_address`
 

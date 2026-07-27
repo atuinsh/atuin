@@ -74,12 +74,12 @@ If you have a backup of `~/.local/share/atuin`, you can import it by:
 3. reenabling Atuin
 4. setting up sync!
 
-## Why does Atuin contact api.atuin.sh when I am not using sync?
+## Why does Atuin contact `api.atuin.sh` when I am not using sync?
 
 Skipping registration or login keeps your history local, but by default Atuin
 still checks for new releases (`update_check = true`). Interactive search
 (Ctrl-R) may open a brief connection to `https://api.atuin.sh` about once an
-hour. That is separate from history sync.
+hour. That's separate from history sync.
 
 To run fully offline:
 
