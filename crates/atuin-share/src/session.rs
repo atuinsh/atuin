@@ -451,6 +451,27 @@ fn spawn_winch(
     }))
 }
 
+/// The host-facing explanation for a `set_size`, or `None` when there is
+/// nothing to report.
+///
+/// Two things it deliberately avoids saying. A `set_size` that matches the size
+/// already applied is announced not at all — the hub's first negotiation
+/// normally just echoes the host's own geometry, and reporting that as a resize
+/// at startup is simply false. And a genuine resize is only blamed on a viewer
+/// when one is actually connected; with nobody watching, the change came from
+/// the hub's own negotiation (spec §6).
+fn resize_notice(previous: Size, applied: Size, viewers: u32) -> Option<String> {
+    if applied == previous {
+        return None;
+    }
+    let dims = format!("{}×{}", applied.cols, applied.rows);
+    Some(if viewers == 0 {
+        format!("resized to {dims}")
+    } else {
+        format!("resized to {dims} — a viewer's screen is smaller")
+    })
+}
+
 fn spawn_inbound(
     shared: Arc<Shared>,
     in_rx: Receiver<Inbound>,
@@ -479,6 +500,7 @@ fn spawn_inbound(
                 }
                 Inbound::SetSize { cols, rows } => {
                     let clamped = shared.clamp_child(Size { cols, rows });
+                    let previous = shared.child();
                     shared.store_child(clamped);
                     subshell_resize(clamped);
                     {
@@ -491,11 +513,13 @@ fn spawn_inbound(
                         let _ = emit_keyframe_locked(&parser, &shared, &out_tx);
                     }
                     shared.mark_dirty();
-                    // Explain the resize to the host (spec §6).
-                    eprintln!(
-                        "\r\n[atuin lab share] resized to {}×{} — a viewer's screen is smaller\r",
-                        clamped.cols, clamped.rows
-                    );
+                    // Explain the resize to the host (spec §6) — but only when
+                    // something actually changed.
+                    let viewers =
+                        u32::try_from(shared.viewers.load(Ordering::Relaxed)).unwrap_or(u32::MAX);
+                    if let Some(notice) = resize_notice(previous, clamped, viewers) {
+                        eprintln!("\r\n[atuin lab share] {notice}\r");
+                    }
                 }
                 Inbound::Participants(n) => {
                     shared.viewers.store(u64::from(n), Ordering::Relaxed);
@@ -877,6 +901,46 @@ mod tests {
         assert!(
             keyframes >= 1,
             "expected a keyframe after resize, saw {keyframes}"
+        );
+    }
+
+    #[test]
+    fn resize_notice_is_silent_on_a_no_op_and_honest_about_the_cause() {
+        // The hub's first `set_size` normally just echoes the host's own size,
+        // which used to print
+        //   "resized to 100×29 — a viewer's screen is smaller"
+        // at startup with nobody watching. Both halves were false: nothing
+        // resized, and no viewer caused it.
+        let current = Size {
+            cols: 100,
+            rows: 29,
+        };
+        assert_eq!(
+            resize_notice(current, current, 0),
+            None,
+            "a no-op set_size must not announce a resize"
+        );
+        assert_eq!(
+            resize_notice(current, current, 3),
+            None,
+            "a no-op set_size must stay silent even with viewers attached"
+        );
+
+        // A real change with viewers attached: they are the reason.
+        let smaller = Size { cols: 80, rows: 24 };
+        let with_viewers = resize_notice(current, smaller, 2).expect("a real resize must announce");
+        assert!(with_viewers.contains("80×24"), "got {with_viewers:?}");
+        assert!(
+            with_viewers.contains("viewer"),
+            "should attribute to a viewer: {with_viewers:?}"
+        );
+
+        // A real change with nobody watching cannot be blamed on a viewer.
+        let no_viewers = resize_notice(current, smaller, 0).expect("a real resize must announce");
+        assert!(no_viewers.contains("80×24"), "got {no_viewers:?}");
+        assert!(
+            !no_viewers.contains("viewer"),
+            "must not invent a viewer when none are connected: {no_viewers:?}"
         );
     }
 
