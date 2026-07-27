@@ -12,7 +12,7 @@ modes by pressing **ctrl-r** inside the TUI.
 | Mode             | Searches                                                                             |
 |------------------|--------------------------------------------------------------------------------------|
 | global (default) | Your full history, from every machine                                                |
-| host             | Only history from this machine                                                       |
+| host             | Only history from the current machine (or the host of a [switched context](#context-switch)) |
 | session          | Only history from the current shell session                                          |
 | directory        | Only history from the current directory                                              |
 | workspace        | Only history from anywhere in the current git repository                             |
@@ -48,6 +48,10 @@ Atuin uses the current context (host, session, directory) to filter the history 
 
 You can switch this context to the one of the currently selected command by pressing **ctrl-a** then **c**.
 
-This will set the filter mode to *session* and clear the search query, which will show you all the commands executed in the same shell session.
+That adopts the selected command's host, session, and directory into the search context, sets the filter mode to *session*, and clears the search query — so you immediately see the other commands from that shell session.
 
-Pressing this key combination again will return to the initial context. You can customize this behavior by setting [custom key bindings](../configuration/advanced-key-binding.md) to the `switch-context` and `clear-context` commands. `switch-context` can be called several times to navigate through multiple command contexts, while `clear-context` will always return to the initial context.
+Because host and directory came along with the session, you can then press **ctrl-r** to move to the *host* or *directory* filter mode and keep searching that remote machine (or path) instead of the one you are typed into right now. This is the interactive way to answer "show me history from host X while I am on host Y" after sync.
+
+Pressing the key combination again (or `clear-context`) returns to the initial context. You can customize this behavior by setting [custom key bindings](../configuration/advanced-key-binding.md) to the `switch-context` and `clear-context` commands. `switch-context` can be called several times to navigate through multiple command contexts, while `clear-context` will always return to the initial context.
+
+To label each row with its machine, add the `host` column under [`[ui]`](../configuration/config.md#columns).
