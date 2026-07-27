@@ -93,6 +93,11 @@ pub fn generate_bash_integration() -> &'static str {
     r#"
 # Question mark at start of line - natural language mode
 _atuin_ai_question_mark() {
+    # Default the trailing macro keyseq to a no-op; the execute branch below
+    # rebinds it to accept-line.  See the binding setup at the bottom of this
+    # script for how the macro works.
+    [[ ${__atuin_ai_macro_bound-} ]] && bind '"\C-x\C-_Ae\a": ""'
+
     # If buffer is empty or just contains '?', trigger natural language mode
     if [[ -z "$READLINE_LINE" || "$READLINE_LINE" == "?" ]]; then
         READLINE_LINE=""
@@ -110,12 +115,21 @@ _atuin_ai_question_mark() {
             READLINE_POINT=0
         elif [[ $output == __atuin_ai_execute__:* ]]; then
             # Execute the command immediately
-            READLINE_LINE=${output#__atuin_ai_execute__:}
-            READLINE_POINT=${#READLINE_LINE}
-            # Note: We can't directly execute in bash bind -x, but we can
-            # use a workaround by binding to a macro that accepts the line
-            bind '"\C-x\C-a": accept-line'
-            bind -x '"\C-x\C-e": _atuin_ai_question_mark'
+            output=${output#__atuin_ai_execute__:}
+            if [[ ${BLE_ATTACHED-} ]]; then
+                ble-edit/content/reset-and-check-dirty "$output"
+                ble/widget/accept-line
+                READLINE_LINE=""
+                READLINE_POINT=0
+            else
+                READLINE_LINE=$output
+                READLINE_POINT=${#READLINE_LINE}
+                # Rebind the trailing macro keyseq so readline accepts the
+                # line after this function returns.  Without the macro binding
+                # (Bash <= 4.2) there is no way to invoke accept-line, so the
+                # command is left in the buffer for the user to run.
+                [[ ${__atuin_ai_macro_bound-} ]] && bind '"\C-x\C-_Ae\a": accept-line'
+            fi
         elif [[ $output == __atuin_ai_insert__:* ]]; then
             # Insert the command for editing
             READLINE_LINE=${output#__atuin_ai_insert__:}
@@ -133,18 +147,27 @@ _atuin_ai_question_mark() {
 }
 
 # Set up keybindings
-# Bash requires special handling: we use bind -x for the function,
-# but need a two-step approach for execute mode
-__atuin_ai_accept_line=""
-
-_atuin_ai_question_mark_wrapper() {
-    _atuin_ai_question_mark
-    if [[ -n "$__atuin_ai_accept_line" ]]; then
-        __atuin_ai_accept_line=""
-    fi
-}
-
-bind -x '"?": _atuin_ai_question_mark'
+#
+# Readline offers no way to call `accept-line' from a shell function, so we
+# use the same trick as atuin.bash's enter_accept support: "?" is bound to a
+# two-part string macro.  The first part (\C-x\C-_Aq\a) runs the shell
+# function via `bind -x'; the second part (\C-x\C-_Ae\a) is dynamically
+# rebound by the function to `accept-line' (execute) or "" (everything else),
+# and readline processes it after the function returns.  The \C-x\C-_A...\a
+# namespace matches atuin.bash's intermediate key sequences; the letter
+# payloads (q, e) avoid colliding with its numeric ones.
+#
+# `bind -x' cannot bind key sequences longer than two bytes in Bash <= 4.2,
+# so there we keep the direct binding and "execute" degrades to inserting
+# the command for the user to run.
+if ((BASH_VERSINFO[0] >= 5 || BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3)); then
+    __atuin_ai_macro_bound=1
+    bind '"\C-x\C-_Ae\a": ""'
+    bind -x '"\C-x\C-_Aq\a": _atuin_ai_question_mark'
+    bind '"?": "\C-x\C-_Aq\a\C-x\C-_Ae\a"'
+else
+    bind -x '"?": _atuin_ai_question_mark'
+fi
 "#
     .trim()
 }
@@ -226,6 +249,11 @@ mod tests {
         assert!(result.contains("__atuin_ai_cancel__"));
         assert!(result.contains("__atuin_ai_execute__"));
         assert!(result.contains("__atuin_ai_insert__"));
+        // Execute mode works by rebinding the trailing macro keyseq to
+        // accept-line, with a direct widget call under ble.sh.
+        assert!(result.contains(r#"bind '"\C-x\C-_Ae\a": accept-line'"#));
+        assert!(result.contains(r#"bind '"?": "\C-x\C-_Aq\a\C-x\C-_Ae\a"'"#));
+        assert!(result.contains("ble/widget/accept-line"));
     }
 
     #[test]
