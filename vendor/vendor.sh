@@ -55,6 +55,14 @@ validate_name() {
     esac
 }
 
+temp=
+
+cleanup() {
+    if [ -n "$temp" ]; then
+        rm -rf -- "$temp"
+    fi
+}
+
 # args: <name> <url> <ref>
 sync_repo() {
     local name="$1"
@@ -72,9 +80,12 @@ sync_repo() {
         error "could not resolve '$ref' in '$url'"
     fi
 
+    temp=$(mktemp -d)
+    mkdir -p -- "$temp/$name"
+
+    git archive "$commit" | tar -C "$temp/$name" -x
     rm -rf -- "${root_dir:?}/$dir"
-    mkdir -p -- "$root_dir/$dir"
-    git archive "$commit" | tar -C "$root_dir/$dir" -x
+    mv -- "$temp/$name" "$root_dir/$vendor_dir/"
 
     local json
     json=$(jq_db -S --arg name "$name" --arg url "$url" \
@@ -157,4 +168,5 @@ if ! command -v jq > /dev/null; then
     printf >&2 '%s\n' "error: missing jq"
     exit 1
 fi
+trap cleanup HUP INT QUIT TERM EXIT
 "cmd_$cmd" "$@"
