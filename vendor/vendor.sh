@@ -70,7 +70,10 @@ sync_repo() {
     local ref="$3"
 
     local dir="$vendor_dir/$name"
-    if [ -n "$(git status --porcelain -- "$dir")" ]; then
+    local status
+    status=$(git status --porcelain -- "$dir")
+    if [ -n "$status" ]; then
+        printf '%s\n' "$status"
         error "'$dir' has uncommitted changes"
     fi
 
