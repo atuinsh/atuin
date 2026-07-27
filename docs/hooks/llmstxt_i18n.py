@@ -42,7 +42,6 @@ def _guarded(original, i18n_plugin, skip):
             return skip(*args, **kwargs)
         return original(*args, **kwargs)
 
-    wrapper.__i18n_guarded__ = True
     return wrapper
 
 
@@ -59,10 +58,11 @@ def on_config(config):
         event_name = hook_name.removeprefix("on_")
         registered = config.plugins.events[event_name]
         for index, method in enumerate(registered):
+            # Match llmstxt's own bound methods. This also makes the wrap
+            # idempotent: mkdocs re-runs on_config for every nested locale
+            # build, but a method we already replaced is the plain `wrapper`
+            # closure, which has no `__self__` and so fails this check.
             if getattr(method, "__self__", None) is not llmstxt_plugin:
-                continue
-            # mkdocs re-runs on_config for every nested locale build; wrap once.
-            if getattr(method, "__i18n_guarded__", False):
                 continue
             registered[index] = _guarded(method, i18n_plugin, skip)
 
