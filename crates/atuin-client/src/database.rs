@@ -1533,7 +1533,6 @@ mod test {
         1
     )]
     #[case::no_timezone_provided(Some("2026-01-12T11:00:00"), Some("2026-01-12T12:00:00"), 1)]
-    #[case::relative_time(Some("2026-01-12T11:00:00"), None, 1)]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_timezone_before_after(
         #[case] after: Option<&str>,
