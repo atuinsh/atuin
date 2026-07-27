@@ -76,7 +76,6 @@ clap = { workspace = true }
 clap_complete = "4.5.8"
 clap_complete_nushell = "4.5.4"
 fs-err = { workspace = true }
-fs4 = "1.1.0"
 rpassword = "7.0"
 semver = { workspace = true }
 rustix = { workspace = true }
