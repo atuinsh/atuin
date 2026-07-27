@@ -272,11 +272,19 @@ impl Client {
         // could otherwise hijack the host role.
         self.host_resume_token = response["host_resume_token"].as_str().map(str::to_string);
 
-        // True on the first join, and again whenever the hub hands back a
-        // *different* public token — which is what happens when a resume is
-        // rejected or has expired and the hub silently made a new session. The
-        // old link is dead, so the session layer re-prints the new one.
-        let fresh_session = self.last_public_token.as_deref() != Some(token.as_str());
+        // "The session we were using was replaced." True only when we had
+        // already advertised a public token and the hub handed back a different
+        // one — i.e. a resume was rejected or expired and the hub silently made
+        // a new session, leaving the old link dead.
+        //
+        // Deliberately FALSE on the first join. The hub always mints a session
+        // there, so a plain "did the token change?" test is true and the first
+        // thing a new user sees would be "Reconnected as a NEW session — the
+        // previous link is dead", which is both wrong and alarming.
+        let fresh_session = self
+            .last_public_token
+            .as_deref()
+            .is_some_and(|previous| previous != token);
         self.last_public_token = Some(token.clone());
 
         // A completed join is what "connected" means, so a later outage starts
@@ -412,6 +420,8 @@ pub fn spawn_transport(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+
     use super::*;
 
     #[test]
@@ -434,6 +444,86 @@ mod tests {
         let resume = join_payload(true, Some("secret-host-token"));
         assert_eq!(resume["resume_token"], "secret-host-token");
         assert_eq!(resume["write"], true);
+    }
+
+    /// A `Client` with no socket, for exercising the join-reply bookkeeping.
+    fn test_client() -> Client {
+        Client {
+            hub_url: "ws://localhost:4000".into(),
+            api_token: "atapi_test".into(),
+            write: false,
+            host_resume_token: None,
+            last_public_token: None,
+            backoff: Backoff::new(),
+        }
+    }
+
+    #[test]
+    fn first_connect_is_not_reported_as_a_replaced_session() {
+        // The hub always mints a session on a first (non-resume) join, so a
+        // naive "token changed?" check is true here and the very first thing a
+        // new user sees is "Reconnected as a NEW session — the previous link is
+        // dead". There was no previous link; the warning is both wrong and
+        // alarming. It must only fire when a resume was actually rejected.
+        let (tx, rx) = mpsc::channel::<Inbound>();
+        let mut client = test_client();
+
+        client.on_joined(
+            &json!({ "token": "pub1", "join_url": "u/pub1", "host_resume_token": "secret1" }),
+            &tx,
+        );
+
+        match rx.try_recv() {
+            Ok(Inbound::Connected { fresh_session, .. }) => assert!(
+                !fresh_session,
+                "a first connect must not be announced as a replaced session"
+            ),
+            other => panic!("expected Connected, got {:?}", other.is_ok()),
+        }
+    }
+
+    #[test]
+    fn reconnect_with_a_changed_token_is_reported_as_a_replaced_session() {
+        // A rejected/expired resume makes the hub silently mint a new session
+        // with a new public token. The old link is dead, so this one *must*
+        // warn — otherwise the host keeps advertising a URL nobody can join.
+        let (tx, rx) = mpsc::channel::<Inbound>();
+        let mut client = test_client();
+
+        client.on_joined(
+            &json!({ "token": "pub1", "join_url": "u/pub1", "host_resume_token": "secret1" }),
+            &tx,
+        );
+        let _ = rx.try_recv();
+
+        // Same session resumed: same public token, no warning.
+        client.on_joined(
+            &json!({ "token": "pub1", "join_url": "u/pub1", "host_resume_token": "secret1" }),
+            &tx,
+        );
+        match rx.try_recv() {
+            Ok(Inbound::Connected { fresh_session, .. }) => {
+                assert!(!fresh_session, "resuming the same session must not warn");
+            }
+            other => panic!("expected Connected, got {:?}", other.is_ok()),
+        }
+
+        // Resume rejected: the hub hands back a different public token.
+        client.on_joined(
+            &json!({ "token": "pub2", "join_url": "u/pub2", "host_resume_token": "secret2" }),
+            &tx,
+        );
+        match rx.try_recv() {
+            Ok(Inbound::Connected {
+                fresh_session,
+                join_url,
+                ..
+            }) => {
+                assert!(fresh_session, "a replaced session must warn");
+                assert_eq!(join_url, "u/pub2", "the new link must be the one printed");
+            }
+            other => panic!("expected Connected, got {:?}", other.is_ok()),
+        }
     }
 
     #[test]
