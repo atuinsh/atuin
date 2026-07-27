@@ -19,6 +19,9 @@ const KEYFRAME_BYTES: u64 = 256 * 1024;
 const KEYFRAME_INTERVAL: Duration = Duration::from_secs(5);
 /// Render coalescing interval (~60 fps).
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
+/// How often the keyframe ticker checks the cadence. Small enough that a
+/// keyframe requested while the child is silent goes out promptly.
+const KEYFRAME_TICK: Duration = Duration::from_millis(100);
 
 /// Session → hub events.
 pub enum Outbound {
@@ -74,8 +77,16 @@ struct Shared {
     parser: Mutex<vt100::Parser>,
     /// Monotonic sequence counter for `output`/`keyframe`, starting at 1.
     seq: AtomicU64,
-    /// Set by any thread that wants a keyframe; serviced only by the reader.
+    /// Set by any thread that wants a keyframe. Serviced by the reader when the
+    /// child is producing output, and otherwise by the keyframe ticker — the
+    /// child may be silent for minutes and the repaint must not wait for it.
     want_keyframe: AtomicBool,
+    /// When the last keyframe went out, driving the periodic cadence. Shared
+    /// (rather than local to the reader) so the ticker and the reader agree on
+    /// the interval no matter which of them last emitted.
+    last_keyframe: Mutex<Instant>,
+    /// Child bytes emitted since the last keyframe, for the byte-based cadence.
+    bytes_since_keyframe: AtomicU64,
     /// Screen needs repainting.
     dirty: AtomicBool,
     /// Session is shutting down.
@@ -99,6 +110,8 @@ impl Shared {
             parser: Mutex::new(vt100::Parser::new(physical.rows, physical.cols, 0)),
             seq: AtomicU64::new(1),
             want_keyframe: AtomicBool::new(true), // initial keyframe
+            last_keyframe: Mutex::new(Instant::now()),
+            bytes_since_keyframe: AtomicU64::new(0),
             dirty: AtomicBool::new(true),
             shutdown: AtomicBool::new(false),
             viewers: AtomicU64::new(0),
@@ -144,6 +157,23 @@ impl Shared {
         self.want_keyframe.store(true, Ordering::SeqCst);
     }
 
+    /// Restart the periodic and byte-based cadences. Called from both emit
+    /// paths so whichever thread produced the keyframe, the next one is due a
+    /// full interval later.
+    fn note_keyframe_sent(&self) {
+        self.bytes_since_keyframe.store(0, Ordering::Relaxed);
+        if let Ok(mut last) = self.last_keyframe.lock() {
+            *last = Instant::now();
+        }
+    }
+
+    /// Whether the periodic cadence has come due.
+    fn keyframe_overdue(&self) -> bool {
+        self.last_keyframe
+            .lock()
+            .is_ok_and(|last| last.elapsed() >= KEYFRAME_INTERVAL)
+    }
+
     fn mark_dirty(&self) {
         self.dirty.store(true, Ordering::Relaxed);
     }
@@ -174,6 +204,7 @@ fn emit_output_locked(
         let seq = shared.seq.fetch_add(1, Ordering::SeqCst);
         let data = keyframe_bytes(parser.screen());
         out_tx.send(Outbound::Keyframe { seq, data })?;
+        shared.note_keyframe_sent();
     }
     Ok(())
 }
@@ -192,7 +223,37 @@ fn emit_keyframe_locked(
     shared.want_keyframe.store(false, Ordering::SeqCst);
     let seq = shared.seq.fetch_add(1, Ordering::SeqCst);
     let data = keyframe_bytes(parser.screen());
-    out_tx.send(Outbound::Keyframe { seq, data })
+    let sent = out_tx.send(Outbound::Keyframe { seq, data });
+    shared.note_keyframe_sent();
+    sent
+}
+
+/// Service keyframe requests the reader cannot: while the child is silent the
+/// read loop is parked in `read()`, so a request raised by a resize, a hub
+/// `request_keyframe`, or the periodic cadence would otherwise sit unserviced
+/// until the child next writes — which may be never (spec §5.3).
+fn spawn_keyframe_ticker(
+    shared: Arc<Shared>,
+    out_tx: Sender<Outbound>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        loop {
+            if shared.is_shutdown() {
+                return;
+            }
+            std::thread::sleep(KEYFRAME_TICK);
+            if shared.is_shutdown() {
+                return;
+            }
+            if !shared.want_keyframe.load(Ordering::SeqCst) && !shared.keyframe_overdue() {
+                continue;
+            }
+            let parser = shared.parser.lock().expect("parser lock");
+            if emit_keyframe_locked(&parser, &shared, &out_tx).is_err() {
+                return; // transport gone; the shell keeps running
+            }
+        }
+    })
 }
 
 fn spawn_reader(
@@ -203,8 +264,6 @@ fn spawn_reader(
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
-        let mut since_keyframe: u64 = 0;
-        let mut last_keyframe = Instant::now();
 
         loop {
             let n = match reader.read(&mut buf) {
@@ -223,12 +282,15 @@ fn spawn_reader(
             let chunk = &buf[..n];
 
             // Cadence: ask for a keyframe before emitting, so it is produced in
-            // the same critical section and lands right after this output.
-            since_keyframe += n as u64;
-            if since_keyframe >= KEYFRAME_BYTES || last_keyframe.elapsed() >= KEYFRAME_INTERVAL {
+            // the same critical section and lands right after this output. The
+            // counters live in `Shared` because the ticker services the same
+            // cadence when the child goes quiet.
+            let total = shared
+                .bytes_since_keyframe
+                .fetch_add(n as u64, Ordering::Relaxed)
+                + n as u64;
+            if total >= KEYFRAME_BYTES || shared.keyframe_overdue() {
                 shared.request_keyframe();
-                since_keyframe = 0;
-                last_keyframe = Instant::now();
             }
 
             let replies = {
@@ -366,10 +428,13 @@ fn spawn_winch(
             {
                 // NB: `set_size` lives on `Screen`, not `Parser` — reach it via
                 // `screen_mut()`. (`vt100` 0.16.2 has no `Parser::set_size`.)
+                // Emit the repaint in the same critical section: the child may
+                // never write again, and a viewer that resized without one would
+                // be left painting into a stale grid (spec §5.3).
                 let mut parser = shared.parser.lock().expect("parser lock");
                 parser.screen_mut().set_size(clamped.rows, clamped.cols);
+                let _ = emit_keyframe_locked(&parser, &shared, &out_tx);
             }
-            shared.request_keyframe();
             shared.mark_dirty();
 
             // Then let the hub renegotiate against the new maximum.
@@ -418,10 +483,13 @@ fn spawn_inbound(
                     subshell_resize(clamped);
                     {
                         // `set_size` is on `Screen`, reached via `screen_mut()`.
+                        // The keyframe goes out in the same critical section —
+                        // an idle child would otherwise leave every viewer
+                        // resized but never repainted (spec §5.3).
                         let mut parser = shared.parser.lock().expect("parser lock");
                         parser.screen_mut().set_size(clamped.rows, clamped.cols);
+                        let _ = emit_keyframe_locked(&parser, &shared, &out_tx);
                     }
-                    shared.request_keyframe();
                     shared.mark_dirty();
                     // Explain the resize to the host (spec §6).
                     eprintln!(
@@ -514,6 +582,7 @@ impl Session {
             out_tx.clone(),
         );
         let t_render = spawn_renderer(Arc::clone(&shared), stdout, write);
+        let t_keyframe = spawn_keyframe_ticker(Arc::clone(&shared), out_tx.clone());
         let t_stdin = spawn_stdin(
             Arc::clone(&shared),
             stdin,
@@ -559,6 +628,7 @@ impl Session {
         drop(subshell);
         let _ = t_reader.join();
         let _ = t_render.join();
+        let _ = t_keyframe.join();
         // stdin/inbound/winch threads block on their sources; they are detached
         // and exit when the process does. Do not join them or teardown hangs.
         drop(t_stdin);
@@ -808,6 +878,72 @@ mod tests {
             keyframes >= 1,
             "expected a keyframe after resize, saw {keyframes}"
         );
+    }
+
+    #[test]
+    fn emits_keyframe_on_set_size_even_when_the_child_is_idle() {
+        // Spec §5.3 requires a keyframe after EVERY `set_size`. If the request
+        // is only serviced by the PTY read loop, an idle child never produces
+        // one: viewers are told the new `size`, resize their grid, and then wait
+        // forever for the matching repaint.
+        //
+        // The child is `cat`, not a shell, and that is load-bearing: resizing the
+        // PTY raises SIGWINCH in the child, and an interactive shell answers it
+        // by redrawing its prompt — output that would service the keyframe
+        // request by accident and hide the bug. `cat` ignores SIGWINCH and never
+        // writes unless written to, so the resize is the only possible cause.
+        unsafe { std::env::set_var("SHELL", "/bin/cat") };
+        let sh = Subshell::spawn(Size { cols: 40, rows: 9 }).unwrap();
+        let (out_tx, out_rx) = mpsc::channel::<Outbound>();
+        let (in_tx, in_rx) = mpsc::channel::<Inbound>();
+
+        let finish = Arc::new(AtomicBool::new(false));
+        let stdin = ScriptedStdin::new(Vec::new(), Arc::clone(&finish));
+
+        let handle = std::thread::spawn(move || {
+            Session::run(
+                sh,
+                Size { cols: 40, rows: 9 },
+                true,
+                out_tx,
+                in_rx,
+                Box::new(stdin),
+                Box::new(Vec::new()),
+            )
+        });
+
+        // Drain startup traffic (host_size, any prompt, the initial keyframe)
+        // and wait for the channel to fall quiet, so what follows can only have
+        // been caused by the resize.
+        let settle = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < settle {
+            if out_rx.recv_timeout(Duration::from_millis(400)).is_err() {
+                break; // quiet — the child is idle
+            }
+        }
+
+        let _ = in_tx.send(Inbound::SetSize { cols: 30, rows: 6 });
+
+        // Well under the 5 s periodic cadence, so only an immediate emit passes.
+        let mut keyframe = None;
+        let deadline = Instant::now() + Duration::from_millis(1500);
+        while Instant::now() < deadline {
+            match out_rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(Outbound::Keyframe { data, .. }) => {
+                    keyframe = Some(data);
+                    break;
+                }
+                Ok(_) | Err(_) => {}
+            }
+        }
+        finish.store(true, Ordering::SeqCst);
+        let _ = handle.join();
+
+        let data = keyframe.expect("no keyframe followed set_size on an idle child");
+        // The repaint must apply cleanly to the newly negotiated geometry.
+        let mut term = vt100::Parser::new(6, 30, 0);
+        term.process(&data);
+        assert_eq!(term.screen().size(), (6, 30));
     }
 
     /// A `Write` the test can read back while the renderer thread owns it.
