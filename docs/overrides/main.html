@@ -15,8 +15,7 @@
 {%- if i18n_page_locale is defined and i18n_page_locale != 'en' -%}
   {%- set notice = config.extra.i18n_notice -%}
   {%- if i18n_file_locale != i18n_page_locale -%}
-    {%- set en_link = (config.extra.alternate | selectattr('lang', 'equalto', 'en') | map(attribute='link') | first) -%}
-    <span class="atuin-i18n-untranslated">{{ notice.untranslated[i18n_page_locale] | default(notice.untranslated.en) }}{% if en_link %} <a href="{{ en_link | url }}">{{ notice.read_in_english[i18n_page_locale] | default(notice.read_in_english.en) }}</a>{% endif %}</span>
+    <span class="atuin-i18n-untranslated">{{ notice.untranslated[i18n_page_locale] | default(notice.untranslated.en) }}</span>
   {%- else -%}
     <span class="atuin-i18n-community">{{ notice.community[i18n_page_locale] | default(notice.community.en) }}</span>
   {%- endif -%}

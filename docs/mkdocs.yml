@@ -249,13 +249,17 @@ extra:
     provider: mike
     default: latest
     alias: true
+  # Shown in the top banner on localized pages, in the reader's language.
+  # `en` is the fallback for any locale that has not translated the string.
   i18n_notice:
     community:
       en: "Community-translated. This page may lag behind the English version."
+      zh: "本页面由社区翻译，可能落后于英文版本。"
+      ru: "Переведено сообществом. Эта страница может отставать от английской версии."
     untranslated:
       en: "This page is not translated yet — you are reading the English version."
-    read_in_english:
-      en: "Read in English"
+      zh: "本页面尚未翻译，您正在阅读英文版本。"
+      ru: "Эта страница ещё не переведена — вы читаете английскую версию."
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/atuinsh/atuin
