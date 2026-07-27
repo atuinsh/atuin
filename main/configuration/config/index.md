@@ -125,6 +125,10 @@ autostart = true
 
 You can customize the priority given to frequency, recency, and frecency scores in this mode. See [the score multipliers section](#score-multipliers) for more information.
 
+Interactive-only modes
+
+The `daemon-fuzzy` and `skim` modes take effect only for interactive TUI searches. Non-interactive `atuin search` commands will treat these modes as `fuzzy` instead.
+
 #### `fuzzy` search syntax
 
 The `fuzzy` and `daemon-fuzzy` search syntax is based on the [fzf search syntax](https://github.com/junegunn/fzf#search-syntax).
