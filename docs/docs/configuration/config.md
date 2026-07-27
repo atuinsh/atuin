@@ -69,11 +69,26 @@ auto_sync = true/false
 
 Default: `true`
 
-Configures whether to automatically check for updates.
+Configures whether to automatically check for updates. When enabled, interactive
+search may contact `https://api.atuin.sh` about once per hour to learn the
+latest release version. This is independent of sync: it still runs when you are
+not logged in.
+
+If you want Atuin fully offline (no outbound network), set:
 
 ```toml
-update_check = true/false
+update_check = false
 ```
+
+Or:
+
+```shell
+atuin config set update_check false
+```
+
+Package-managed installs should usually leave updates to the package manager and
+disable this. The install script also turns it off when you decline a sync
+account so a local-only setup does not surprise network monitors.
 
 ### `sync_address`
 

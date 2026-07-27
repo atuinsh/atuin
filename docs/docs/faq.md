@@ -74,6 +74,28 @@ If you have a backup of `~/.local/share/atuin`, you can import it by:
 3. reenabling Atuin
 4. setting up sync!
 
+## Why does Atuin contact api.atuin.sh when I am not using sync?
+
+Skipping registration or login keeps your history local, but by default Atuin
+still checks for new releases (`update_check = true`). Interactive search
+(Ctrl-R) may open a brief connection to `https://api.atuin.sh` about once an
+hour. That is separate from history sync.
+
+To run fully offline:
+
+```toml
+# ~/.config/atuin/config.toml
+update_check = false
+```
+
+```shell
+atuin config set update_check false
+```
+
+If you used the install script and declined a sync account, recent installers
+set this for you. Re-enable updates with `atuin config set update_check true` if
+you want the reminder again.
+
 ## Alternative projects
 
 If you don't like Atuin, perhaps one of these works better for you:

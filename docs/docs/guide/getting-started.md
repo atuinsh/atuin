@@ -52,7 +52,10 @@ need it to log in on any other machine, and it can't be recovered. See
 [Setting up sync](sync.md) for the details, including logging in elsewhere.
 
 Skipping this step is fine. Your history stays on this machine, not backed up
-and not synchronized.
+and not synchronized. Note that Atuin can still check for application updates
+over the network unless you set
+[`update_check = false`](../configuration/config.md#update_check) (local-only /
+firewall-friendly installs).
 
 ## 4. Make it yours
 

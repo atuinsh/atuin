@@ -159,6 +159,17 @@ EOF
       echo ""
       printf "Already have an account? Log in with 'atuin login'.\n"
       echo "You can also run 'atuin register' any time to create one."
+      # Declining sync is not the same as fully offline: update checks still
+      # hit api.atuin.sh from interactive search. Disable them for local-only installs.
+      # Default update_check remains true for other install paths (#959).
+      if "$ATUIN_BIN" config set update_check false --type boolean >/dev/null 2>&1; then
+        echo ""
+        echo "Local-only install: disabled automatic update checks (no api.atuin.sh)."
+        echo "Re-enable later with: atuin config set update_check true"
+      else
+        echo ""
+        echo "Tip: for fully offline use, set update_check = false in ~/.config/atuin/config.toml"
+      fi
       ;;
   esac
 
