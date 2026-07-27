@@ -1224,7 +1224,7 @@ mod test {
     use crate::settings::test_local_timeout;
     use rstest::rstest;
     use std::time::{Duration, Instant};
-    use time::format_description::well_known::Rfc3339;
+    use time::{Date, Month, Time, UtcOffset, format_description::well_known::Rfc3339};
 
     fn new_context() -> Context {
         Context {
@@ -1526,7 +1526,63 @@ mod test {
             assert_eq!(results[0].command, "ls /home/ellie");
         }
     }
+    #[rstest]
+    #[case::explicit_timezone_given(
+        Some("2026-01-12T11:35:00-04:00"),
+        Some("2026-01-12T11:30:00-04:00"),
+        1
+    )]
+    #[case::no_timezone_given(Some("2026-01-12T11:35:00"), Some("2026-01-12T11:30:00"), 1)]
+    #[case::relative_time(Some("5 min"), None, 1)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_timezone_before_after(
+        #[case] before: Option<&str>,
+        #[case] after: Option<&str>,
+        #[case] expected: usize,
+    ) {
+        //within the before/after window, but not at current time, so it should be returned.
+        let t = OffsetDateTime::new_in_offset(
+            Date::from_calendar_date(2026, Month::January, 12).unwrap(),
+            Time::from_hms(11, 31, 5).unwrap(),
+            UtcOffset::from_hms(-4, 0, 0).unwrap(),
+        );
 
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+        new_history_item_at(&mut db, "ls /home/ellie", Some(t))
+            .await
+            .unwrap();
+        // This one is added at current time, so it will be outside the before/after window.
+        new_history_item_at(
+            &mut db,
+            "ls /home/frank",
+            Some(t + time::Duration::minutes(10)),
+        )
+        .await
+        .unwrap();
+
+        let context = new_context();
+        let results = db
+            .search(
+                SearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "",
+                OptFilters {
+                    before,
+                    after,
+                    timezone: UtcOffsetSpec(UtcOffset::from_hms(-4, 0, 0).unwrap()),
+                    include_duplicates: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), expected);
+        assert_eq!(results[0].command, "ls /home/ellie");
+    }
     #[rstest]
     #[case::with_duplicates_counts_every_execution(true, 2)]
     #[case::without_duplicates_collapses_to_newest_row(false, 1)]
