@@ -292,7 +292,14 @@ impl Client {
 }
 
 /// Send everything the queue holds, in `seq` order.
+///
+/// A no-op while a resync keyframe is outstanding: after an overflow the hub's
+/// replay buffer has a gap, and nothing may precede the keyframe that closes it
+/// — including the flushes done by the `host_size` and `end` paths.
 async fn flush_queue(queue: &mut OutboundQueue, wire: &mut Wire) -> Result<(), TransportError> {
+    if queue.awaiting_keyframe() {
+        return Ok(());
+    }
     for (seq, data) in queue.drain_output() {
         wire.push("output", json!({ "seq": seq, "data": b64_encode(&data) }))
             .await?;
@@ -313,10 +320,14 @@ async fn handle_outbound(
             if queue.needs_keyframe() {
                 // The backlog was collapsed. Replaying it would desync every
                 // viewer, and synthesising a keyframe *here* would break the
-                // seq invariant (only the reader thread may mint
-                // `Output`/`Keyframe`, under the parser lock). So ask the
-                // session for one; it answers immediately rather than leaving
-                // viewers stale until the next 5 s periodic keyframe.
+                // seq invariant (a keyframe's payload and `seq` must be minted
+                // together under the parser lock). So ask the session for one;
+                // it answers immediately, even if the child never writes again.
+                //
+                // `clear_keyframe_flag` only stops us re-asking: the queue stays
+                // in `awaiting_keyframe`, discarding output, until that keyframe
+                // is actually written — otherwise we would send frames sitting
+                // on the far side of the gap we just created.
                 queue.drain_output();
                 queue.clear_keyframe_flag();
                 let _ = in_tx.send(Inbound::RequestKeyframe);
@@ -326,6 +337,10 @@ async fn handle_outbound(
             flush_queue(queue, wire).await?;
             wire.push("keyframe", json!({ "seq": seq, "data": b64_encode(&data) }))
                 .await?;
+            // Ends any resync window opened by an overflow: output queued after
+            // this keyframe carries a greater `seq`, so the hub's buffer is
+            // contiguous again.
+            queue.on_keyframe_sent();
         }
         Outbound::HostSize { cols, rows } => {
             flush_queue(queue, wire).await?;
