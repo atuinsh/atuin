@@ -11,6 +11,8 @@ license = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 
+exclude = ["vendor/bash-preexec/.github", "vendor/bash-preexec/test"]
+
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.tar.gz"
 bin-dir = "{ name }-{ target }/{ bin }{ binary-ext }"
