@@ -53,7 +53,7 @@ tokio = { workspace = true }
 semver = { workspace = true }
 thiserror = { workspace = true }
 futures = "0.3"
-notify = "7"
+notify = "8"
 crypto_secretbox = "0.1.1"
 serde_with = "3.8.1"
 
