@@ -124,16 +124,26 @@ pub fn render_bar(cols: u16, viewers: u32, write: bool) -> Vec<u8> {
 /// terminal (the child's output goes into the vt100 model, never straight to
 /// stdout) the child cannot clobber these modes.
 ///
-/// `child.rows` is clamped to the rows physically available below the bar: the
-/// host can shrink their window between negotiations, and painting past the
-/// last visible row would scroll the whole screen and push the bar off it.
+/// `avail` is the host's terminal **minus the bar row** — the rows the child may
+/// occupy. That subtraction happens exactly once, in `run_share` (spec §6), and
+/// `Session` tracks the already-subtracted value; passing the real terminal
+/// height here would subtract the bar row a second time, leaving the scroll
+/// region one row short of the child. That is not cosmetic: the child's top line
+/// would scroll away on every repaint and the last physical row would never be
+/// painted.
+///
+/// `child.rows` is clamped to `avail.rows`: the host can shrink their window
+/// between negotiations, and painting past the last visible row would scroll the
+/// whole screen and push the bar off it.
 #[must_use]
-pub fn composite(screen: &vt100::Screen, child: Size, physical: Size, bar: &[u8]) -> Vec<u8> {
+pub fn composite(screen: &vt100::Screen, child: Size, avail: Size, bar: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(bar); // positions itself absolutely at row 1
 
-    // Bottom margin: last row the child may occupy, never past the screen.
-    let bottom = (1 + child.rows).min(physical.rows).max(2);
+    // Bottom margin: the last row the child may occupy. Row 1 is the bar, so the
+    // child's `n` rows end on physical row `1 + n`, never past the last row
+    // available to it.
+    let bottom = child.rows.min(avail.rows).saturating_add(1).max(2);
 
     // Scroll region rows 2..=bottom, origin mode ON.
     let _ = write!(&mut Utf8(&mut out), "\x1b[2;{bottom}r\x1b[?6h");
@@ -196,9 +206,10 @@ mod tests {
         let mut p = vt100::Parser::new(4, 20, 0); // child area: 4 rows
         p.process(b"\x1b[HABC");
         let child = crate::Size { cols: 20, rows: 4 };
-        let physical = crate::Size { cols: 20, rows: 5 }; // 1 bar row + 4 child rows
+        // Rows available below the bar; the real terminal is 5 rows (1 + 4).
+        let avail = crate::Size { cols: 20, rows: 4 };
         let bar = render_bar(20, 1, false);
-        let frame = composite(p.screen(), child, physical, &bar);
+        let frame = composite(p.screen(), child, avail, &bar);
         let s = String::from_utf8_lossy(&frame);
 
         // The bar is written first, anchored absolutely at row 1.
@@ -217,16 +228,36 @@ mod tests {
     }
 
     #[test]
+    fn composite_keeps_the_last_row_when_the_child_fills_the_area() {
+        // The default state: nothing has shrunk the session, so the child is
+        // exactly as tall as the area below the bar (`avail`). The bottom margin
+        // must then be `1 + child.rows` — the last physical row. Clamping to
+        // `avail.rows` instead would subtract the bar row a second time (spec
+        // §6), leaving the region one row short: every repaint would scroll the
+        // child's top line off and the last physical row would stay blank.
+        let mut p = vt100::Parser::new(9, 20, 0);
+        p.process(b"\x1b[Hx");
+        let child = crate::Size { cols: 20, rows: 9 };
+        let avail = crate::Size { cols: 20, rows: 9 }; // real terminal: 1 bar + 9
+        let bar = render_bar(20, 0, false);
+        let s = String::from_utf8_lossy(&composite(p.screen(), child, avail, &bar)).into_owned();
+        assert!(
+            s.contains("\x1b[2;10r"),
+            "expected region 2..=10 (the child's 9 rows below the bar), got {s:?}"
+        );
+    }
+
+    #[test]
     fn composite_clamps_child_taller_than_the_visible_area() {
-        // If the host shrinks their window, `physical` can be smaller than the
-        // last negotiated `child`. Painting `child.rows` regardless would run
-        // past the last visible row, scroll the screen, and destroy the bar.
+        // If the host shrinks their window, `avail` can be smaller than the last
+        // negotiated `child`. Painting `child.rows` regardless would run past
+        // the last visible row, scroll the screen, and destroy the bar.
         let mut p = vt100::Parser::new(20, 20, 0);
         p.process(b"\x1b[Hx");
         let child = crate::Size { cols: 20, rows: 20 };
-        let physical = crate::Size { cols: 20, rows: 6 }; // only 5 rows for the child
+        let avail = crate::Size { cols: 20, rows: 5 }; // real terminal: 1 bar + 5
         let bar = render_bar(20, 0, false);
-        let s = String::from_utf8_lossy(&composite(p.screen(), child, physical, &bar)).into_owned();
+        let s = String::from_utf8_lossy(&composite(p.screen(), child, avail, &bar)).into_owned();
         // Bottom margin is clamped to the physical last row, never beyond it.
         assert!(
             s.contains("\x1b[2;6r"),

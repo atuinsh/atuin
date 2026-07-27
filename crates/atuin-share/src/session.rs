@@ -90,6 +90,27 @@ struct Shared {
 }
 
 impl Shared {
+    /// Build the shared state for a session whose host terminal has `physical`
+    /// rows *available to the child* — i.e. the real terminal height minus the
+    /// bar row, already subtracted once by `run_share` (spec §6).
+    fn new(physical: Size) -> Self {
+        Self {
+            parser: Mutex::new(vt100::Parser::new(physical.rows, physical.cols, 0)),
+            seq: AtomicU64::new(1),
+            want_keyframe: AtomicBool::new(true), // initial keyframe
+            dirty: AtomicBool::new(true),
+            shutdown: AtomicBool::new(false),
+            viewers: AtomicU64::new(0),
+            phys_cols: AtomicU16::new(physical.cols),
+            phys_rows: AtomicU16::new(physical.rows),
+            child_cols: AtomicU16::new(physical.cols),
+            child_rows: AtomicU16::new(physical.rows),
+        }
+    }
+
+    /// The rows available to the child: the host's real terminal height **minus
+    /// the bar row**, which `run_share` subtracts exactly once at the source.
+    /// Never the real terminal height — see `render::composite`.
     fn physical(&self) -> Size {
         Size {
             cols: self.phys_cols.load(Ordering::Relaxed),
@@ -242,14 +263,17 @@ fn spawn_renderer(
             if !shared.dirty.swap(false, Ordering::Relaxed) {
                 continue;
             }
-            let physical = shared.physical();
+            // Rows available to the child: the bar row was already subtracted
+            // once, by `run_share`. `composite` clamps against this and adds the
+            // bar row back itself, so it must not be subtracted again here.
+            let avail = shared.physical();
             let child = shared.child();
             let viewers = u32::try_from(shared.viewers.load(Ordering::Relaxed)).unwrap_or(u32::MAX);
-            let bar = render_bar(physical.cols, viewers, write_enabled);
+            let bar = render_bar(avail.cols, viewers, write_enabled);
 
             let frame = {
                 let parser = shared.parser.lock().expect("parser lock");
-                composite(parser.screen(), child, physical, &bar)
+                composite(parser.screen(), child, avail, &bar)
             };
             if stdout.write_all(&frame).is_err() || stdout.flush().is_err() {
                 return;
@@ -464,18 +488,7 @@ impl Session {
         stdin: Box<dyn Read + Send>,
         stdout: Box<dyn Write + Send>,
     ) -> eyre::Result<i32> {
-        let shared = Arc::new(Shared {
-            parser: Mutex::new(vt100::Parser::new(physical.rows, physical.cols, 0)),
-            seq: AtomicU64::new(1),
-            want_keyframe: AtomicBool::new(true), // initial keyframe
-            dirty: AtomicBool::new(true),
-            shutdown: AtomicBool::new(false),
-            viewers: AtomicU64::new(0),
-            phys_cols: AtomicU16::new(physical.cols),
-            phys_rows: AtomicU16::new(physical.rows),
-            child_cols: AtomicU16::new(physical.cols),
-            child_rows: AtomicU16::new(physical.rows),
-        });
+        let shared = Arc::new(Shared::new(physical));
 
         let child_writer: Arc<Mutex<Box<dyn Write + Send>>> =
             Arc::new(Mutex::new(subshell.writer()));
@@ -794,5 +807,86 @@ mod tests {
             keyframes >= 1,
             "expected a keyframe after resize, saw {keyframes}"
         );
+    }
+
+    /// A `Write` the test can read back while the renderer thread owns it.
+    #[derive(Clone, Default)]
+    struct SharedSink(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedSink {
+        fn snapshot(&self) -> Vec<u8> {
+            self.0.lock().expect("sink lock").clone()
+        }
+    }
+
+    impl Write for SharedSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("sink lock").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn renderer_paints_every_child_row_below_the_bar() {
+        // Regression: the bar row is subtracted exactly once, by `run_share`,
+        // so `Session::run` is handed `rows = real_rows - 1` and `Shared`
+        // stores that already-subtracted value. If the compositor then clamps
+        // the scroll region to it a second time, the region is one row short of
+        // the child, every frame scrolls the child's top line away, and the last
+        // physical row is never painted (spec §6, §7).
+        //
+        // This is the *default* state — no viewer has shrunk the session — so it
+        // is what the host sees on a plain `atuin lab share`.
+        let real_rows: u16 = 10;
+        let physical = Size {
+            cols: 20,
+            rows: real_rows - 1, // exactly what `run_share` passes in
+        };
+        let shared = Arc::new(Shared::new(physical));
+        {
+            let mut parser = shared.parser.lock().expect("parser lock");
+            for r in 0..physical.rows {
+                parser.process(format!("\x1b[{};1HL{r}", r + 1).as_bytes());
+            }
+        }
+
+        let sink = SharedSink::default();
+        let renderer = spawn_renderer(Arc::clone(&shared), Box::new(sink.clone()), false);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut frame = Vec::new();
+        while Instant::now() < deadline {
+            frame = sink.snapshot();
+            if !frame.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        shared.shutdown.store(true, Ordering::SeqCst);
+        let _ = renderer.join();
+        assert!(!frame.is_empty(), "renderer never painted a frame");
+
+        // Replay the exact bytes through a terminal the size of the host's REAL
+        // screen — bar row included.
+        let mut term = vt100::Parser::new(real_rows, physical.cols, 0);
+        term.process(&frame);
+        let rows: Vec<String> = term.screen().rows(0, physical.cols).collect();
+
+        assert!(
+            rows[0].contains("SHARED SESSION"),
+            "row 0 must hold the bar, got {:?}",
+            rows[0]
+        );
+        for r in 0..physical.rows {
+            assert_eq!(
+                rows[usize::from(r) + 1].trim_end(),
+                format!("L{r}"),
+                "child row {r} must land on physical row {}; full frame: {rows:?}",
+                r + 1
+            );
+        }
     }
 }
