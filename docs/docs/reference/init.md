@@ -13,7 +13,8 @@ atuin init zsh
 See [installation](../guide/installation.md#installing-the-shell-plugin) for the
 exact line to add for your shell — the syntax differs between shells.
 
-Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`.
+Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See
+[Supported platforms](../support.md) for what each tier means.
 
 ## What it sets up
 

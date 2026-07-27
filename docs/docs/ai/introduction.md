@@ -8,7 +8,8 @@ Usage of Atuin AI is currently free.
 
 ## Getting Started
 
-Atuin AI currently supports zsh, bash, and fish shells. Your shell's usual `atuin init` call will automatically bind the question mark key to the Atuin AI UI (only when the prompt is empty).
+Atuin AI currently supports zsh, bash, and fish shells. See
+[Supported platforms](../support.md) for the full support matrix. Your shell's usual `atuin init` call will automatically bind the question mark key to the Atuin AI UI (only when the prompt is empty).
 
 !!! note "Disabling Atuin AI"
 

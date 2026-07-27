@@ -173,8 +173,6 @@ filter_mode = "host"
 
 ### `search_mode_shell_up_key_binding`
 
-Atuin version: >= 17.0
-
 Default: `fuzzy`
 
 The default search mode to use when searching and being invoked from a shell up-key binding.
@@ -215,8 +213,6 @@ inline_height_shell_up_key_binding = 10
 
 ### `workspaces`
 
-Atuin version: >= 17.0
-
 Default: `false`
 
 This flag enables a pseudo filter-mode named "workspace": the filter is automatically
@@ -253,8 +249,6 @@ style = "compact"
 
 ### `invert`
 
-Atuin version: >= 17.0
-
 Default: `false`
 
 Invert the UI - put the search bar at the top.
@@ -289,8 +283,6 @@ show_preview = true
 
 ### `max_preview_height`
 
-Atuin version: >= 17.0
-
 Default: `4`
 
 Configure the maximum height of the preview to show.
@@ -303,8 +295,6 @@ max_preview_height = 4
 
 ### `show_help`
 
-Atuin version: >= 17.0
-
 Default: `true`
 
 Configure whether to show the help row, which includes the current Atuin version (and whether an update is available), a keymap hint, and the total amount of commands in your history.
@@ -315,8 +305,6 @@ show_help = true
 
 ### `show_tabs`
 
-Atuin version: >= 18.0
-
 Default: `true`
 
 Configure whether to show tabs for search and inspect.
@@ -326,8 +314,6 @@ show_tabs = true
 ```
 
 ### `auto_hide_height`
-
-Atuin version: >= 18.4
 
 Default: `8`
 
@@ -399,8 +385,6 @@ After updating that parameter, you can run [the prune command](../reference/prun
 
 ### `store_failed`
 
-Atuin version: >= 18.3.0
-
 Default: `true`
 
 ```toml
@@ -410,8 +394,6 @@ store_failed = true
 Configures whether to store commands that failed (those with non-zero exit status) or not.
 
 ### `secrets_filter`
-
-Atuin version: >= 17.0
 
 Default: `true`
 
@@ -459,8 +441,6 @@ ctrl_n_shortcuts = true
 
 ### `show_numeric_shortcuts`
 
-Atuin version: >= 18.9
-
 Default: `true`
 
 Whether to show numeric shortcuts (1..9) beside list items in the TUI. Set this to `false` to hide the moving numbers if you find them distracting.
@@ -470,8 +450,6 @@ show_numeric_shortcuts = true
 ```
 
 ### `network_timeout`
-
-Atuin version: >= 18.0
 
 Default: `30`
 
@@ -484,8 +462,6 @@ network_timeout = 30
 ```
 
 ### `network_connect_timeout`
-
-Atuin version: >= 18.0
 
 Default: `5`
 
@@ -517,8 +493,6 @@ extra_headers = { "CF-Access-Client-Id" = "...", "CF-Access-Client-Secret" = "..
 
 ### `local_timeout`
 
-Atuin version: >= 18.0
-
 Default: `5`
 
 Timeout (in seconds) for acquiring a local database connection (SQLite).
@@ -529,8 +503,6 @@ local_timeout = 5
 
 ### `command_chaining`
 
-Atuin version: >= 18.8
-
 Default: `false`
 
 Use this to build a command chain with the `&&` or `||` operator. When enabled, opening Atuin will search for the next command in the chain, and append to the current buffer.
@@ -540,8 +512,6 @@ command_chaining = false
 ```
 
 ### `enter_accept`
-
-Atuin version: >= 17.0
 
 Default: `false`
 
@@ -558,8 +528,6 @@ enter_accept = false
 ```
 
 ### `keymap_mode`
-
-Atuin version: >= 18.0
 
 Default: `emacs`
 
@@ -582,8 +550,6 @@ keymap_mode = "emacs"
 
 ### `keymap_cursor`
 
-Atuin version: >= 18.0
-
 Default: `(empty dictionary)`
 
 The terminal's cursor style associated with each keymap mode in the Atuin
@@ -605,8 +571,6 @@ termination of the Atuin search.
 
 ### `prefers_reduced_motion`
 
-Atuin version: >= 18.0
-
 Default: `false`
 
 Enable this, and Atuin will reduce motion in the TUI as much as possible. Users
@@ -621,8 +585,6 @@ prefers_reduced_motion = false
 ## search
 
 ### `filters`
-
-Atuin version: >= 18.4
 
 The list of filter modes available in interactive search, in the order they cycle through when you press ctrl-r. By default, all modes are enabled. Removing a mode from this list disables it entirely. The `workspace` mode is skipped when not in a git repository or when `workspaces = false`. See [Filter mode](../guide/advanced-usage.md#filter-mode) for a description of each mode.
 
@@ -779,8 +741,6 @@ Configures commands where Atuin should consider the subcommand as part of the st
 
 ### `common_prefix`
 
-Atuin version: >= 17.1
-
 Default:
 
 ```toml
@@ -792,8 +752,6 @@ common_prefix = [
 Configures commands that should be totally stripped from stats calculations. For example, 'sudo' should be ignored.
 
 ## `dotfiles`
-
-Atuin version: >= 18.1
 
 Default: `false`
 
@@ -833,8 +791,6 @@ prefix = 'a'
 
 ### `scroll_exits`
 
-Atuin version: >= 18.1
-
 Default: `true`
 
 Configures whether the TUI exits, when scrolled past the last or first entry.
@@ -844,8 +800,6 @@ scroll_exits = true
 ```
 
 ### `prefix`
-
-Atuin version: > 18.3
 
 Default: `a`
 
@@ -859,8 +813,6 @@ prefix = "a"
 
 ### `exit_past_line_start`
 
-Atuin version: >= 18.5
-
 Default: `true`
 
 Exits the TUI when scrolling left while the cursor is at the start of the line.
@@ -870,8 +822,6 @@ exit_past_line_start = true
 ```
 
 ### `accept_past_line_end`
-
-Atuin version: >= 18.5
 
 Default: `true`
 
@@ -884,8 +834,6 @@ accept_past_line_end = true
 
 ### `accept_past_line_start`
 
-Atuin version: >= 18.9
-
 Default: `false`
 
 The left arrow key performs the same functionality as Tab and copies the selected line to the command line to be
@@ -896,8 +844,6 @@ accept_past_line_start = false
 ```
 
 ### `accept_with_backspace`
-
-Atuin version: >= 18.9
 
 Default: `false`
 
@@ -919,8 +865,6 @@ strategy = [...]
 ```
 
 ### `strategy`
-
-Atuin version: >= 18.3
 
 Default: `auto`
 
@@ -1000,8 +944,6 @@ height = "60%"
 
 ## Daemon
 
-Atuin version: >= 18.3
-
 ### enabled
 
 Default: `false`
@@ -1080,8 +1022,6 @@ tcp_port = 8889
 ```
 
 ## logs
-
-Atuin version: >= 18.13
 
 Behavior of log files.
 
@@ -1186,8 +1126,6 @@ retention = 4
 
 ## theme
 
-Atuin version: >= 18.4
-
 The theme to use for showing the terminal interface.
 
 ```toml
@@ -1234,8 +1172,6 @@ max_depth = 10
 ```
 
 ## `ui`
-
-Atuin version: >= 18.5
 
 Configure the interactive search UI appearance.
 

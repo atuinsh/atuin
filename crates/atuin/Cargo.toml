@@ -16,6 +16,11 @@ pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.tar.gz"
 bin-dir = "{ name }-{ target }/{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
 
+[package.metadata.binstall.overrides.'cfg(target_os = "windows")']
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.zip"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "zip"
+
 [package.metadata.deb]
 maintainer = "Ellie Huxtable <ellie@elliehuxtable.com>"
 copyright = "2021, Ellie Huxtable <ellie@elliehuxtable.com>"
@@ -44,13 +49,13 @@ clipboard = ["arboard"]
 check-update = ["atuin-client/check-update"]
 
 [dependencies]
-atuin-ai = { path = "../atuin-ai", version = "18.18.0-beta.2", optional = true, default-features = false }
-atuin-client = { path = "../atuin-client", version = "18.18.0-beta.2", optional = true, default-features = false }
+atuin-ai = { path = "../atuin-ai", version = "18.18.0-beta.3", optional = true, default-features = false }
+atuin-client = { path = "../atuin-client", version = "18.18.0-beta.3", optional = true, default-features = false }
 atuin-common = { workspace = true, features = ["unicode"] }
 atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }
-atuin-daemon = { path = "../atuin-daemon", version = "18.18.0-beta.2", optional = true, default-features = false }
-atuin-pty-proxy = { path = "../atuin-pty-proxy", version = "18.18.0-beta.2", optional = true, default-features = false }
+atuin-daemon = { path = "../atuin-daemon", version = "18.18.0-beta.3", optional = true, default-features = false }
+atuin-pty-proxy = { path = "../atuin-pty-proxy", version = "18.18.0-beta.3", optional = true, default-features = false }
 atuin-scripts = { workspace = true }
 atuin-kv = { workspace = true }
 derive_more = { workspace = true }
@@ -112,7 +117,7 @@ daemonize = "0.5.0"
 # compiles cleanly. tree-sitter 0.26's portable/endian.h fails on illumos,
 # Windows cross-compiles, and potentially other exotic targets.
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
-atuin-ai = { path = "../atuin-ai", version = "18.18.0-beta.2", optional = true, default-features = false, features = ["tree-sitter"] }
+atuin-ai = { path = "../atuin-ai", version = "18.18.0-beta.3", optional = true, default-features = false, features = ["tree-sitter"] }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
 tree-sitter-fish = { workspace = true }

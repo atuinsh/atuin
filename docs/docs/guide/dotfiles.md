@@ -7,13 +7,8 @@ to work with.
 At the moment, Atuin supports managing and syncing of shell aliases and environment variables - with more
 coming soon.
 
-The following shells are supported:
-
-- zsh
-- bash
-- fish
-- xonsh
-- PowerShell
+Dotfiles syncing is available on zsh, bash, fish, xonsh, and PowerShell. See
+[Supported platforms](../support.md) for the full support matrix.
 
 Note: Atuin handles your configuration internally, so once it's installed you
 no longer need to edit your config files manually.

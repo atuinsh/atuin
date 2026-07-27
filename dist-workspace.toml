@@ -12,7 +12,7 @@ ci = "github"
 # The installers to generate for each app
 installers = ["shell", "powershell"]
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
 # Which actions to run on pull requests
 pr-run-mode = "plan"
 # Whether to install an updater program
@@ -27,6 +27,17 @@ aarch64-unknown-linux-gnu = "depot-ubuntu-24.04-arm-8"
 aarch64-unknown-linux-musl = "depot-ubuntu-24.04-arm-8"
 x86_64-unknown-linux-gnu = "depot-ubuntu-24.04-8"
 x86_64-unknown-linux-musl = "depot-ubuntu-24.04-8"
+
+# Build both mac targets in one job on a Depot M4 runner: aarch64 natively,
+# x86_64 cross-compiled. Depot runner names don't encode the host arch, so
+# dist needs `host` spelled out to know these are arm64 machines.
+[dist.github-custom-runners.aarch64-apple-darwin]
+runner = "depot-macos-26"
+host = "aarch64-apple-darwin"
+
+[dist.github-custom-runners.x86_64-apple-darwin]
+runner = "depot-macos-26"
+host = "aarch64-apple-darwin"
 
 # Pin the actions dist generates into release.yml. Without these, `dist generate`
 # emits the versions baked into dist 0.31.0 (checkout@v6, upload-artifact@v6,
