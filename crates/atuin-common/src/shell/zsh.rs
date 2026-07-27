@@ -16,9 +16,9 @@ use winnow::{
     token::{any, literal, take_while},
 };
 
-use super::{AliasesError, IsShell, RunError};
+use super::{AliasesError, CmdAliasValue, IsShell, RunError};
 
-type Aliases = HashMap<Vec<u8>, Vec<u8>>;
+type Aliases = HashMap<Vec<u8>, CmdAliasValue>;
 
 type Probe<T, E> = Shared<BoxFuture<'static, Result<T, E>>>;
 
@@ -284,7 +284,7 @@ impl Zsh {
         let mut records = repeat(0.., terminated(alias_line, opt(literal(b"\n".as_slice())))).fold(
             HashMap::new,
             |mut acc: Aliases, (name, value)| {
-                acc.insert(name, value);
+                acc.insert(name, CmdAliasValue(value));
                 acc
             },
         );
@@ -302,6 +302,9 @@ impl Zsh {
 }
 
 impl IsShell for Zsh {
+    type AliasKey = Vec<u8>;
+    type AliasValue = CmdAliasValue;
+
     fn canonical_name(&self) -> &'static str {
         "zsh"
     }
@@ -334,8 +337,12 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    fn parse(input: &[u8]) -> Aliases {
-        Zsh::parse_aliases(input).unwrap()
+    fn parse(input: &[u8]) -> HashMap<Vec<u8>, Vec<u8>> {
+        Zsh::parse_aliases(input)
+            .unwrap()
+            .into_iter()
+            .map(|(k, v)| (k, v.0))
+            .collect()
     }
 
     #[test]

@@ -12,9 +12,9 @@ use futures::{
 use serde::Deserialize;
 use tracing::instrument;
 
-use super::{AliasesError, IsShell, RunError};
+use super::{AliasesError, ExecveAliasValue, IsShell, RunError};
 
-type Aliases = HashMap<Vec<u8>, Vec<u8>>;
+type Aliases = HashMap<Vec<u8>, ExecveAliasValue>;
 
 type Probe<T, E> = Shared<BoxFuture<'static, Result<T, E>>>;
 
@@ -176,18 +176,21 @@ impl Xonsh {
         Ok(records
             .into_iter()
             .map(|(name, value)| {
-                let value = match value {
-                    AliasValue::Command(command) => command,
-                    AliasValue::Argv(argv) => argv.join(" "),
+                let argv = match value {
+                    AliasValue::Command(command) => vec![command.into_bytes()],
+                    AliasValue::Argv(argv) => argv.into_iter().map(String::into_bytes).collect(),
                 };
 
-                (name.into_bytes(), value.into_bytes())
+                (name.into_bytes(), ExecveAliasValue(argv))
             })
             .collect())
     }
 }
 
 impl IsShell for Xonsh {
+    type AliasKey = Vec<u8>;
+    type AliasValue = ExecveAliasValue;
+
     fn canonical_name(&self) -> &'static str {
         "xonsh"
     }
@@ -227,8 +230,38 @@ mod tests {
     #[test]
     fn parses_string_and_list_values() {
         let m = parse(br#"{"a": "ls -l", "b": ["git", "status"]}"#);
-        assert_eq!(m[b"a".as_slice()], b"ls -l".to_vec());
-        assert_eq!(m[b"b".as_slice()], b"git status".to_vec());
+        assert_eq!(m[b"a".as_slice()], ExecveAliasValue(vec![b"ls -l".to_vec()]));
+        assert_eq!(
+            m[b"b".as_slice()],
+            ExecveAliasValue(vec![b"git".to_vec(), b"status".to_vec()])
+        );
+    }
+
+    #[test]
+    fn shcmd_quotes_each_argument() {
+        use crate::shell::IsAliasValue;
+
+        let m = parse(br#"{"commit": ["git", "commit", "-m", "hello world"]}"#);
+        assert_eq!(
+            m[b"commit".as_slice()].shcmd(),
+            br"'git' 'commit' '-m' 'hello world'".to_vec()
+        );
+    }
+
+    #[test]
+    fn shcmd_preserves_empty_arguments() {
+        use crate::shell::IsAliasValue;
+
+        let m = parse(br#"{"e": ["echo", "", "x"]}"#);
+        assert_eq!(m[b"e".as_slice()].shcmd(), br"'echo' '' 'x'".to_vec());
+    }
+
+    #[test]
+    fn shcmd_escapes_embedded_quote() {
+        use crate::shell::IsAliasValue;
+
+        let m = parse(br#"{"q": ["echo", "it's"]}"#);
+        assert_eq!(m[b"q".as_slice()].shcmd(), br"'echo' 'it'\''s'".to_vec());
     }
 
     #[test]

@@ -11,7 +11,7 @@ use futures::{
 use tracing::instrument;
 
 use super::{
-    AliasesError, IsShell, RunError,
+    AliasesError, CmdAliasValue, IsShell, RunError,
     posix::{self, Aliases},
 };
 
@@ -105,6 +105,9 @@ impl Bash {
 }
 
 impl IsShell for Bash {
+    type AliasKey = Vec<u8>;
+    type AliasValue = CmdAliasValue;
+
     fn canonical_name(&self) -> &'static str {
         "bash"
     }

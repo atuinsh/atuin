@@ -50,7 +50,62 @@ pub enum AliasesError {
     Probe,
 }
 
+/// How a shell's alias body can be rendered as a command for a POSIX shell.
+///
+/// Shells disagree about what an alias body *is*. Most store a command string that the shell
+/// re-parses on use; xonsh stores an argv vector that it execs directly. Rendering the latter as
+/// a string requires quoting, so the conversion cannot be a plain `Vec<u8>`.
+pub trait IsAliasValue {
+    fn shcmd(&self) -> Vec<u8>;
+}
+
+/// An alias body that is already a shell command string: bash, zsh, sh, fish.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CmdAliasValue(pub Vec<u8>);
+
+impl IsAliasValue for CmdAliasValue {
+    fn shcmd(&self) -> Vec<u8> {
+        self.0.clone()
+    }
+}
+
+/// An alias body that is an argv vector, exec'd without a shell parsing pass: xonsh.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecveAliasValue(pub Vec<Vec<u8>>);
+
+impl IsAliasValue for ExecveAliasValue {
+    /// Single-quote each argument so that re-parsing the result by a POSIX shell reproduces the
+    /// original argv. A plain space-join would lose the boundaries of any argument containing a
+    /// space, and drop empty arguments entirely.
+    fn shcmd(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+
+        for (index, arg) in self.0.iter().enumerate() {
+            if index > 0 {
+                out.push(b' ');
+            }
+            out.push(b'\'');
+            for &byte in arg {
+                if byte == b'\'' {
+                    out.extend_from_slice(br"'\''");
+                } else {
+                    out.push(byte);
+                }
+            }
+            out.push(b'\'');
+        }
+
+        out
+    }
+}
+
 pub trait IsShell {
+    /// The name an alias is bound to.
+    type AliasKey: Eq + std::hash::Hash;
+
+    /// The body an alias expands to.
+    type AliasValue: IsAliasValue;
+
     /// Get the name of this shell that we use internal to atuin.
     fn canonical_name(&self) -> &'static str;
 
@@ -58,7 +113,7 @@ pub trait IsShell {
     fn is_posix(&self) -> bool;
 
     /// Query the aliases defined in the current shell.
-    async fn aliases(&self) -> Result<HashMap<Vec<u8>, Vec<u8>>, AliasesError>;
+    async fn aliases(&self) -> Result<HashMap<Self::AliasKey, Self::AliasValue>, AliasesError>;
 
     /// Invoke the given shell command, interactively, in this shell.
     ///
