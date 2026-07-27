@@ -71,11 +71,7 @@ and how far continuous integration (CI) exercises it.
     </tr>
     <tr><td><code>WSL-2</code></td><td><code>x86_64</code></td><td class="support-yes">✓</td><td>tested</td><td></td></tr>
     <tr>
-      <td rowspan="3" class="tier"><strong>2</strong></td>
-      <td><code>Linux</code></td><td><code>riscv64</code></td><td class="support-yes">✓</td><td>build-only</td>
-      <td>Built on <a href="https://riseproject.dev/">RISE Project</a> runners.</td>
-    </tr>
-    <tr>
+      <td rowspan="2" class="tier"><strong>2</strong></td>
       <td><code>Illumos</code></td><td><code>x86_64</code></td><td class="support-no">✗</td><td>build-only</td>
       <td></td>
     </tr>
