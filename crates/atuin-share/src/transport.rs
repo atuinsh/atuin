@@ -138,6 +138,11 @@ struct Client {
     /// The last public token the hub gave us, used to notice that a resume was
     /// refused and a brand-new session was created behind our back.
     last_public_token: Option<String>,
+    /// Reports the join URL to `run_share` on the FIRST successful join, so the
+    /// URL can go into the subshell's `ATUIN_SHARE_URL` before the shell spawns.
+    /// Taken (set to `None`) after firing once; reconnects leave the already
+    /// spawned shell's environment untouched.
+    first_url_tx: Option<Sender<String>>,
     backoff: Backoff,
 }
 
@@ -272,6 +277,14 @@ impl Client {
         // could otherwise hijack the host role.
         self.host_resume_token = response["host_resume_token"].as_str().map(str::to_string);
 
+        // Hand the join URL to `run_share` once, on the first join, so it lands
+        // in the subshell's environment (`ATUIN_SHARE_URL`) before the shell
+        // starts. A later reconnect can't retroactively change a running
+        // shell's environment, so we deliberately only fire here.
+        if let Some(tx) = self.first_url_tx.take() {
+            let _ = tx.send(join_url.clone());
+        }
+
         // "The session we were using was replaced." True only when we had
         // already advertised a public token and the hub handed back a different
         // one — i.e. a resume was rejected or expired and the hub silently made
@@ -377,6 +390,7 @@ pub fn spawn_transport(
     write: bool,
     out_rx: Receiver<Outbound>,
     in_tx: Sender<Inbound>,
+    url_tx: Sender<String>,
 ) {
     std::thread::spawn(move || {
         // The session speaks blocking `std::sync::mpsc`; bridge it onto an
@@ -412,6 +426,7 @@ pub fn spawn_transport(
             write,
             host_resume_token: None,
             last_public_token: None,
+            first_url_tx: Some(url_tx),
             backoff: Backoff::new(),
         };
         runtime.block_on(client.run(&mut bridge_rx, &in_tx));
@@ -454,8 +469,46 @@ mod tests {
             write: false,
             host_resume_token: None,
             last_public_token: None,
+            first_url_tx: None,
             backoff: Backoff::new(),
         }
+    }
+
+    #[test]
+    fn first_join_reports_the_url_exactly_once() {
+        use std::time::Duration;
+
+        let (url_tx, url_rx) = mpsc::channel::<String>();
+        let mut client = Client {
+            first_url_tx: Some(url_tx),
+            ..test_client()
+        };
+        let (in_tx, _in_rx) = mpsc::channel::<Inbound>();
+
+        let reply = json!({
+            "token": "pub1",
+            "join_url": "http://h/lab/share/pub1",
+            "host_resume_token": "secret1"
+        });
+        client.on_joined(&reply, &in_tx);
+
+        // A reconnect (second join) must NOT push another URL: the shell's
+        // environment was fixed at spawn and can't be changed now.
+        let reply2 = json!({
+            "token": "pub2",
+            "join_url": "http://h/lab/share/pub2",
+            "host_resume_token": "secret2"
+        });
+        client.on_joined(&reply2, &in_tx);
+
+        assert_eq!(
+            url_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "http://h/lab/share/pub1"
+        );
+        assert!(
+            url_rx.try_recv().is_err(),
+            "the join URL must be reported exactly once"
+        );
     }
 
     #[test]

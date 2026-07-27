@@ -108,18 +108,51 @@ pub fn run_share(opts: ShareOptions) -> eyre::Result<()> {
     // The bar row is subtracted exactly ONCE, here at the source. `host_size` is
     // what the hub negotiates against, and the `set_size` it returns is applied
     // to the child PTY directly — never subtract the bar row a second time.
+    // How long to wait for the first hub connection before giving up. The
+    // transport keeps retrying with backoff during this window.
+    const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
     let (cols, rows) = crossterm::terminal::size()?;
     let host_size = Size {
         cols,
         rows: rows.saturating_sub(1).max(1),
     };
 
-    let sh = subshell::Subshell::spawn(host_size)?;
-
     let (out_tx, out_rx) = std::sync::mpsc::channel::<session::Outbound>();
     let (in_tx, in_rx) = std::sync::mpsc::channel::<session::Inbound>();
+    let (url_tx, url_rx) = std::sync::mpsc::channel::<String>();
 
-    transport::spawn_transport(opts.hub_url, opts.api_token, opts.write, out_rx, in_tx);
+    // Connect to the hub BEFORE spawning the shell. The hub mints the session
+    // and its join URL, and we want that URL in the child's environment
+    // (`ATUIN_SHARE_URL`) from the very first prompt — so it can be retrieved
+    // after the printed link scrolls away. It also means an unreachable hub
+    // fails with a clear message instead of a shared shell that has no link.
+    eprintln!("Connecting to {} …", opts.hub_url);
+    transport::spawn_transport(
+        opts.hub_url.clone(),
+        opts.api_token,
+        opts.write,
+        out_rx,
+        in_tx,
+        url_tx,
+    );
+
+    let join_url = url_rx.recv_timeout(CONNECT_TIMEOUT).map_err(|_| {
+        eyre::eyre!(
+            "couldn't reach the hub at {} within {}s — is it running, and is \
+             ATUIN_LAB_HUB_URL correct?",
+            opts.hub_url,
+            CONNECT_TIMEOUT.as_secs()
+        )
+    })?;
+
+    let sh = subshell::Subshell::spawn(
+        host_size,
+        &[
+            ("ATUIN_SHARE_URL", join_url.as_str()),
+            ("ATUIN_SHARE_WRITE", if opts.write { "1" } else { "0" }),
+        ],
+    )?;
 
     // Raw mode is enabled here (not in `Session::run`) so the session stays
     // unit-testable without touching the test runner's terminal. The guard

@@ -40,7 +40,13 @@ impl Subshell {
     ///
     /// Returns an error if the PTY cannot be opened or the shell cannot be
     /// spawned.
-    pub fn spawn(size: Size) -> eyre::Result<Self> {
+    ///
+    /// `env` entries are set in the child's environment. `portable-pty` seeds
+    /// the builder from the parent environment, so these are layered on top —
+    /// `PATH`, `HOME`, etc. are preserved. Used to expose `ATUIN_SHARE_URL` (the
+    /// join link) inside the shared shell so it can be retrieved after the
+    /// printed link has scrolled away.
+    pub fn spawn(size: Size, env: &[(&str, &str)]) -> eyre::Result<Self> {
         let pty = native_pty_system();
         let pair = pty
             .openpty(PtySize {
@@ -51,7 +57,10 @@ impl Subshell {
             })
             .map_err(|e| eyre!("openpty: {e:#}"))?;
 
-        let cmd = CommandBuilder::new_default_prog();
+        let mut cmd = CommandBuilder::new_default_prog();
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
         let child = pair
             .slave
             .spawn_command(cmd)
@@ -173,7 +182,7 @@ mod tests {
         // Force a known program via $SHELL so the test is deterministic.
         // SAFETY: single-threaded test; std::env::set_var is fine here.
         unsafe { std::env::set_var("SHELL", "/bin/sh") };
-        let sh = Subshell::spawn(Size { cols: 40, rows: 10 }).unwrap();
+        let sh = Subshell::spawn(Size { cols: 40, rows: 10 }, &[]).unwrap();
         {
             use std::io::Write;
             sh.writer().write_all(b"printf ATUINOK\n").unwrap();
@@ -195,6 +204,60 @@ mod tests {
         assert!(
             seen.contains("ATUINOK"),
             "did not observe command output: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn spawn_sets_env_and_preserves_inherited_env() {
+        // `new_default_prog` spawns the login shell from the passwd database
+        // (not $SHELL), so we can't force a specific shell here. Instead we run
+        // the probe then `exit` and read to EOF, which is deterministic for any
+        // POSIX shell regardless of prompt/line-editing noise. The expanded
+        // `U=...` output is emitted by `printf` on its own line, so it is not
+        // corrupted by input-echo line wrapping.
+        //
+        // SAFETY: single-threaded test; std::env::set_var is fine here.
+        // A var set in the PARENT the child must still inherit.
+        unsafe { std::env::set_var("ATUIN_SHARE_TEST_INHERIT", "yes") };
+
+        let sh = Subshell::spawn(
+            Size { cols: 80, rows: 24 },
+            &[("ATUIN_SHARE_URL", "http://h/lab/share/tok")],
+        )
+        .unwrap();
+        {
+            use std::io::Write;
+            sh.writer()
+                .write_all(
+                    b"printf '\\nU=%s I=%s\\n' \"$ATUIN_SHARE_URL\" \"$ATUIN_SHARE_TEST_INHERIT\"; exit\n",
+                )
+                .unwrap();
+        }
+        let mut reader = sh.reader();
+        let mut buf = [0u8; 4096];
+        let mut seen = String::new();
+        // Bounded so a misbehaving shell fails the test instead of hanging;
+        // normally the loop ends at EOF/EIO once the child has exited.
+        for _ in 0..1000 {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    seen.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    if seen.contains("U=http://h/lab/share/tok") && seen.contains("I=yes") {
+                        break;
+                    }
+                }
+                // EIO is the normal way a PTY master reports the child exiting.
+                Err(_) => break,
+            }
+        }
+        assert!(
+            seen.contains("U=http://h/lab/share/tok"),
+            "ATUIN_SHARE_URL was not set in the child: {seen:?}"
+        );
+        assert!(
+            seen.contains("I=yes"),
+            "child did not inherit the parent environment: {seen:?}"
         );
     }
 }

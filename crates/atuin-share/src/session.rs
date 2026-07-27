@@ -727,7 +727,7 @@ mod tests {
     #[test]
     fn forwards_output_with_monotonic_seq_and_emits_initial_keyframe() {
         unsafe { std::env::set_var("SHELL", "/bin/sh") };
-        let sh = Subshell::spawn(Size { cols: 40, rows: 9 }).unwrap();
+        let sh = Subshell::spawn(Size { cols: 40, rows: 9 }, &[]).unwrap();
         let (out_tx, out_rx) = mpsc::channel::<Outbound>();
         let (in_tx, in_rx) = mpsc::channel::<Inbound>();
 
@@ -797,7 +797,7 @@ mod tests {
         // Defence in depth (spec §8): even if the hub forwards `input` for a
         // read-only session, the CLI must never write it to the child.
         unsafe { std::env::set_var("SHELL", "/bin/sh") };
-        let sh = Subshell::spawn(Size { cols: 40, rows: 9 }).unwrap();
+        let sh = Subshell::spawn(Size { cols: 40, rows: 9 }, &[]).unwrap();
         let (out_tx, out_rx) = mpsc::channel::<Outbound>();
         let (in_tx, in_rx) = mpsc::channel::<Inbound>();
 
@@ -842,7 +842,7 @@ mod tests {
     #[test]
     fn set_size_resizes_the_child_and_forces_a_keyframe() {
         unsafe { std::env::set_var("SHELL", "/bin/sh") };
-        let sh = Subshell::spawn(Size { cols: 40, rows: 9 }).unwrap();
+        let sh = Subshell::spawn(Size { cols: 40, rows: 9 }, &[]).unwrap();
         let (out_tx, out_rx) = mpsc::channel::<Outbound>();
         let (in_tx, in_rx) = mpsc::channel::<Inbound>();
 
@@ -957,7 +957,7 @@ mod tests {
         // request by accident and hide the bug. `cat` ignores SIGWINCH and never
         // writes unless written to, so the resize is the only possible cause.
         unsafe { std::env::set_var("SHELL", "/bin/cat") };
-        let sh = Subshell::spawn(Size { cols: 40, rows: 9 }).unwrap();
+        let sh = Subshell::spawn(Size { cols: 40, rows: 9 }, &[]).unwrap();
         let (out_tx, out_rx) = mpsc::channel::<Outbound>();
         let (in_tx, in_rx) = mpsc::channel::<Inbound>();
 
