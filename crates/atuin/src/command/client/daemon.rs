@@ -119,9 +119,8 @@ impl PidfileGuard {
                 path.display()
             ),
             Err(TryLockError::Error(err)) => {
-                return Err(err).wrap_err_with(|| {
-                    format!("could not lock daemon pidfile {}", path.display())
-                });
+                return Err(err)
+                    .wrap_err_with(|| format!("could not lock daemon pidfile {}", path.display()));
             }
         }
 
