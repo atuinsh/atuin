@@ -86,6 +86,10 @@ sync_repo() {
     temp=$(mktemp -d)
     mkdir -p -- "$temp/$name"
 
+    # NOTE: `git archive` honors export-ignore and will not fetch submodules.
+    # For mose use cases, this is fine, but we will have to change the strategy
+    # if we need a vendored repository that isn't compatible with these
+    # limitations.
     git archive "$commit" | tar -C "$temp/$name" -x
     rm -rf -- "${root_dir:?}/$dir"
     mv -- "$temp/$name" "$root_dir/$vendor_dir/"
