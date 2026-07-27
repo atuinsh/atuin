@@ -69,10 +69,13 @@
 
     main { position: relative; z-index: 1; max-width: 520px; }
 
-    .logo { width: 132px; height: auto; margin-bottom: 40px; }
+    .logo { display: block; width: 132px; height: auto; margin: 0 auto 40px; }
 
     .eyebrow {
-      display: inline-flex;
+      display: flex;
+      width: fit-content;
+      margin-left: auto;
+      margin-right: auto;
       align-items: center;
       gap: 10px;
       margin-bottom: 16px;
