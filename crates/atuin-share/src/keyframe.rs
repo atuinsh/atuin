@@ -1,9 +1,3 @@
-// Keyframe generation is a complete, self-contained unit exercised by its own
-// test, but its only in-crate consumer is the `session` module, which lands in a
-// later task of this plan. Until then this function is technically dead code and
-// `cargo clippy -- -D warnings` (what CI runs) would reject the crate.
-#![allow(dead_code)]
-
 //! Late-join / resync keyframes derived from the child's `vt100` screen.
 //!
 //! A keyframe is a self-contained byte sequence that repaints the child's

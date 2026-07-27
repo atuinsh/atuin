@@ -1,9 +1,3 @@
-// The bar and compositor are a complete, self-contained unit exercised by their
-// own tests, but their only in-crate consumer is the `session` module, which
-// lands in a later task of this plan. Until then these are technically dead code
-// and `cargo clippy -- -D warnings` (what CI runs) would reject the crate.
-#![allow(dead_code)]
-
 //! The host-side compositor: a persistent warning bar on row 1 and the child
 //! shell repainted from our `vt100` model on the rows below it.
 
@@ -21,6 +15,10 @@ use crate::Size;
 /// Display width of the printable columns, ignoring ANSI escape sequences.
 /// Test + assertion helper. Measured in *columns*, not chars: the bar text
 /// contains wide glyphs (`⚠`) and a char count would under-measure them.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "assertion helper, only called from tests")
+)]
 pub(crate) fn visible_width(s: &str) -> usize {
     let mut visible = String::with_capacity(s.len());
     let mut in_esc = false;

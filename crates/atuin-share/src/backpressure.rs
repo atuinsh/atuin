@@ -1,10 +1,3 @@
-// The outbound queue and backoff are complete, self-contained units exercised
-// by their own tests, but their only in-crate consumer is the `transport`
-// module, which lands in a later task of this plan. Until then this code is
-// technically dead and `cargo clippy -- -D warnings` (what CI runs) would
-// reject the crate.
-#![allow(dead_code)]
-
 //! Outbound backpressure and reconnect backoff.
 //!
 //! Both types are pure state machines with no I/O, so the transport's trickier

@@ -1,10 +1,3 @@
-// The transport is a complete, self-contained unit whose pure helpers are
-// exercised by their own tests, but its only in-crate consumer is `run_share`,
-// which lands in a later task of this plan. Until then these are technically
-// dead code and `cargo clippy -- -D warnings` (what CI runs) would reject the
-// crate.
-#![allow(dead_code)]
-
 //! Phoenix channel client over a WebSocket (JSON serializer, `vsn=2.0.0`).
 //!
 //! The session loop lives on plain OS threads talking over `std::sync::mpsc`,

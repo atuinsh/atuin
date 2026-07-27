@@ -1,9 +1,3 @@
-// The codec is a complete, self-contained unit exercised by its own tests, but
-// its only in-crate consumer is the `transport` module, which lands in a later
-// task of this plan. Until then every item here is technically dead code and
-// `cargo clippy -- -D warnings` (what CI runs) would reject the crate.
-#![allow(dead_code)]
-
 //! Minimal Phoenix channel codec, JSON serializer only (`vsn=2.0.0`).
 //!
 //! Frames are JSON arrays `[join_ref, ref, topic, event, payload]`. Terminal
@@ -56,6 +50,12 @@ pub enum Incoming {
         payload: Value,
     },
     Error {
+        // `decode` fills this in from the `phx_error` payload so the variant
+        // carries the hub's explanation, but the transport only reacts to the
+        // *fact* of a channel error (`Incoming::Error { .. }` → rejoin), so
+        // nothing in-crate reads it. Kept because it is part of the decoded
+        // Phoenix frame and is what `Debug` prints when a rejoin is logged.
+        #[allow(dead_code, reason = "decoded protocol detail, no in-crate reader")]
         reason: Value,
     },
     Close,

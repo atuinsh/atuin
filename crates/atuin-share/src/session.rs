@@ -1,9 +1,3 @@
-// The session loop is a complete, self-contained unit exercised by its own
-// tests, but its only in-crate consumer is `run_share`, which lands in a later
-// task of this plan. Until then these are technically dead code and
-// `cargo clippy -- -D warnings` (what CI runs) would reject the crate.
-#![allow(dead_code)]
-
 //! The share session: the threads that glue the child PTY, the local
 //! compositor and the hub transport together.
 
@@ -59,6 +53,13 @@ pub enum Inbound {
     /// resume was rejected or expired and the hub created a brand-new session.
     /// The old link is dead in that case and the new one must be re-printed.
     Connected {
+        // The public view token. Part of the plan's declared `Inbound`
+        // contract, but the session only ever prints `join_url` (which already
+        // embeds it), so the loop destructures this as `token: _`.
+        #[allow(
+            dead_code,
+            reason = "part of the declared Inbound contract, no in-crate reader"
+        )]
         token: String,
         join_url: String,
         fresh_session: bool,

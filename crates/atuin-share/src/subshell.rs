@@ -1,9 +1,3 @@
-// The subshell is a complete, self-contained unit exercised by its own test,
-// but its only in-crate consumer is the `session` module, which lands in a
-// later task of this plan. Until then these are technically dead code and
-// `cargo clippy -- -D warnings` (what CI runs) would reject the crate.
-#![allow(dead_code)]
-
 //! The child shell: a process attached to a PTY sized to the negotiated child
 //! dimensions (the host's terminal minus the row reserved for the warning bar).
 
@@ -106,6 +100,14 @@ impl Subshell {
 
     /// Resize the child PTY. Best-effort: a failed `TIOCSWINSZ` (e.g. the child
     /// already exited) is not worth tearing the session down for.
+    ///
+    /// Part of the crate's declared `Subshell` surface. The session's threads
+    /// do not own the `Subshell`, so they resize through [`Self::resize_handle`]
+    /// instead — leaving this owned-receiver convenience with no in-crate caller.
+    #[allow(
+        dead_code,
+        reason = "declared Subshell surface; threads use resize_handle() instead"
+    )]
     pub fn resize(&self, size: Size) {
         (self.resize_handle())(size);
     }

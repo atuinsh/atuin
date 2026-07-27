@@ -1,9 +1,3 @@
-// The query scanner is a complete, self-contained unit exercised by its own
-// tests, but its only in-crate consumer is the `session` module, which lands in
-// a later task of this plan. Until then this function is technically dead code
-// and `cargo clippy -- -D warnings` (what CI runs) would reject the crate.
-#![allow(dead_code)]
-
 //! Synthetic answers to the terminal queries the compositor would swallow.
 
 /// Scan a chunk of child output for terminal queries that the compositor would
