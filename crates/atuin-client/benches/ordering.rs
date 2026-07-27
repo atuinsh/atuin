@@ -1,7 +1,7 @@
 use crate::_util::context::BenchCtx;
 use crate::history::BenchHistory;
+use atuin_client::database::DbSearchMode;
 use atuin_client::ordering::reorder_fuzzy;
-use atuin_client::settings::SearchMode;
 
 /// reorder_fuzzy is invoked on every keystroke during interactive fuzzy search, so keeping the
 /// performance in check is important.
@@ -14,5 +14,5 @@ fn reorder_fuzzy_bench(bencher: divan::Bencher, n: usize) {
             let mut ctx = BenchCtx::new();
             BenchHistory::count(&mut ctx, n)
         })
-        .bench_values(|histories| reorder_fuzzy(SearchMode::Fuzzy, "curl", histories));
+        .bench_values(|histories| reorder_fuzzy(DbSearchMode::Fuzzy, "curl", histories));
 }

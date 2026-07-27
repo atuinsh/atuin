@@ -3,9 +3,8 @@ use async_trait::async_trait;
 use atuin_client::{
     database::Database,
     database::OptFilters,
-    database::{QueryToken, QueryTokenizer},
+    database::{DbSearchMode, QueryToken, QueryTokenizer},
     history::{AUTHOR_FILTER_ALL_USER, History},
-    settings::SearchMode,
 };
 use eyre::Result;
 use norm::Metric;
@@ -13,7 +12,7 @@ use norm::fzf::{FzfParser, FzfV2};
 use std::ops::Range;
 use tracing::{Level, instrument};
 
-pub struct Search(pub SearchMode);
+pub struct Search(pub DbSearchMode);
 
 #[async_trait]
 impl SearchEngine for Search {
@@ -44,9 +43,9 @@ impl SearchEngine for Search {
 
     #[instrument(skip_all, level = Level::TRACE, name = "db_highlight")]
     fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
-        if self.0 == SearchMode::Prefix {
+        if self.0 == DbSearchMode::Prefix {
             return vec![];
-        } else if self.0 == SearchMode::FullText {
+        } else if self.0 == DbSearchMode::FullText {
             return get_highlight_indices_fulltext(command, search_input);
         }
         let mut fzf = FzfV2::new();
