@@ -18,6 +18,9 @@
 //!   child (raw mode disables `ISIG`, so `0x1c` arrives as a plain byte).
 
 #[cfg(unix)]
+use std::io::{IsTerminal as _, Write as _};
+
+#[cfg(unix)]
 mod backpressure;
 #[cfg(unix)]
 mod keyframe;
@@ -51,13 +54,89 @@ pub struct ShareOptions {
     pub api_token: String,
 }
 
-/// Entry point for `atuin lab share`.
+/// Restores terminal state on every exit path, including panics.
 ///
-/// Placeholder: the subshell, session loop and hub transport are wired up in
-/// later tasks of this plan. The command surface exists and is buildable now.
+/// A composited frame leaves the scroll region set (`\x1b[2;Nr`), may leave
+/// origin mode on, and `contents_formatted()` can emit `\x1b[?25l` (cursor
+/// hidden). Restoring only raw mode would hand the user a broken terminal, so
+/// reset DECSTBM, origin mode, cursor visibility and SGR too. Precedent:
+/// `atuin-pty-proxy`'s `runtime.rs` does the same on teardown.
 #[cfg(unix)]
-pub fn run_share(_opts: ShareOptions) -> eyre::Result<()> {
-    Err(eyre::eyre!("atuin lab share is not implemented yet"))
+struct TermGuard;
+
+#[cfg(unix)]
+impl Drop for TermGuard {
+    fn drop(&mut self) {
+        let _ = crossterm::terminal::disable_raw_mode();
+        let mut out = std::io::stdout();
+        let _ = out.write_all(b"\x1b[r\x1b[?6l\x1b[?25h\x1b[0m\r\n");
+        let _ = out.flush();
+    }
+}
+
+/// Entry point for `atuin lab share`. Spawns the subshell, connects to the
+/// hub, and runs the session until the shell exits or the host presses Ctrl-\.
+///
+/// Sync and runtime-free by design: the caller (`lab::Cmd::run`) has already
+/// awaited the async settings accessors, because this runs inside an existing
+/// tokio runtime and creating a nested one would panic.
+///
+/// # Errors
+///
+/// Returns an error if stdin/stdout are not a terminal, if the host terminal
+/// size cannot be read, if the subshell cannot be spawned, or if the session
+/// loop fails to start.
+#[cfg(unix)]
+pub fn run_share(opts: ShareOptions) -> eyre::Result<()> {
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return Err(eyre::eyre!(
+            "atuin lab share must run in an interactive terminal"
+        ));
+    }
+
+    // One-time warning (spec §8): output and typed secrets are visible.
+    eprintln!(
+        "⚠  Terminal sharing is experimental. Everything shown here — including \
+         secrets you type — is visible to anyone with the link.{}",
+        if opts.write {
+            " WRITE MODE: they can run commands on your machine."
+        } else {
+            ""
+        }
+    );
+
+    // The bar row is subtracted exactly ONCE, here at the source. `host_size` is
+    // what the hub negotiates against, and the `set_size` it returns is applied
+    // to the child PTY directly — never subtract the bar row a second time.
+    let (cols, rows) = crossterm::terminal::size()?;
+    let host_size = Size {
+        cols,
+        rows: rows.saturating_sub(1).max(1),
+    };
+
+    let sh = subshell::Subshell::spawn(host_size)?;
+
+    let (out_tx, out_rx) = std::sync::mpsc::channel::<session::Outbound>();
+    let (in_tx, in_rx) = std::sync::mpsc::channel::<session::Inbound>();
+
+    transport::spawn_transport(opts.hub_url, opts.api_token, opts.write, out_rx, in_tx);
+
+    // Raw mode is enabled here (not in `Session::run`) so the session stays
+    // unit-testable without touching the test runner's terminal. The guard
+    // restores everything when it drops, on any exit path.
+    crossterm::terminal::enable_raw_mode()?;
+    let guard = TermGuard;
+
+    let stdin: Box<dyn std::io::Read + Send> = Box::new(std::io::stdin());
+    let stdout: Box<dyn std::io::Write + Send> = Box::new(std::io::stdout());
+    let code = session::Session::run(sh, host_size, opts.write, out_tx, in_rx, stdin, stdout)?;
+
+    // Explicit: `std::process::exit` below does not run destructors.
+    drop(guard);
+    if code != 0 {
+        std::process::exit(code);
+    }
+    Ok(())
 }
 
 /// `atuin lab share` is unix-only for now (it needs a PTY).
@@ -66,6 +145,25 @@ pub fn run_share(_opts: ShareOptions) -> eyre::Result<()> {
     Err(eyre::eyre!(
         "atuin lab share currently supports unix platforms only"
     ))
+}
+
+#[cfg(all(test, unix))]
+mod run_tests {
+    use super::*;
+
+    #[test]
+    fn refuses_when_not_a_tty() {
+        // In `cargo nextest`, stdin is not a terminal. This guard is also what
+        // keeps the test suite from ever enabling raw mode on the developer's
+        // real terminal.
+        let err = run_share(ShareOptions {
+            write: false,
+            hub_url: "wss://x".into(),
+            api_token: "t".into(),
+        })
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("terminal"));
+    }
 }
 
 #[cfg(test)]
