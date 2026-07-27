@@ -45,10 +45,6 @@ git() {
 
 # Runs `jq` on the database; forwards all args
 jq_db() {
-    if ! command -v jq > /dev/null; then
-        printf >&2 '%s\n' "error: missing jq"
-        exit 1
-    fi
     jq "$@" -- "$root_dir/$db_path"
 }
 
@@ -157,4 +153,8 @@ case "$cmd" in
         usage_error "unknown command"
         ;;
 esac
+if ! command -v jq > /dev/null; then
+    printf >&2 '%s\n' "error: missing jq"
+    exit 1
+fi
 "cmd_$cmd" "$@"
