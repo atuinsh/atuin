@@ -1,23 +1,26 @@
 {% extends "base.html" %}
 
-{% block content %}
-  {% if i18n_page_locale is defined and i18n_page_locale != 'en' %}
-    {% set notice = config.extra.i18n_notice %}
-    {% if i18n_file_locale != i18n_page_locale %}
-      {% set en_link = (config.extra.alternate | selectattr('lang', 'equalto', 'en') | map(attribute='link') | first) %}
-      <div class="admonition warning atuin-i18n-untranslated">
-        <p class="admonition-title">
-          {{ notice.untranslated[i18n_page_locale] | default(notice.untranslated.en) }}
-          {% if en_link %}<a href="{{ en_link | url }}">{{ notice.read_in_english[i18n_page_locale] | default(notice.read_in_english.en) }}</a>{% endif %}
-        </p>
-      </div>
-    {% else %}
-      <div class="admonition info atuin-i18n-community">
-        <p class="admonition-title">{{ notice.community[i18n_page_locale] | default(notice.community.en) }}</p>
-      </div>
-    {% endif %}
-  {% endif %}
-  {{ super() }}
+{#
+  i18n notice. Rendered in Material's `announce` block so it sits in the
+  top banner slot -- the same full-width bar the version "outdated" warning
+  uses -- above the header rather than inside the page content. Styled to
+  match that warning banner in stylesheets/atuin.css.
+
+  The block must produce an empty string on English pages: Material only
+  renders the surrounding <aside class="md-banner"> when `self.announce()`
+  is truthy, and a stray newline counts as non-empty. Hence the tight
+  whitespace control.
+#}
+{% block announce %}
+{%- if i18n_page_locale is defined and i18n_page_locale != 'en' -%}
+  {%- set notice = config.extra.i18n_notice -%}
+  {%- if i18n_file_locale != i18n_page_locale -%}
+    {%- set en_link = (config.extra.alternate | selectattr('lang', 'equalto', 'en') | map(attribute='link') | first) -%}
+    <span class="atuin-i18n-untranslated">{{ notice.untranslated[i18n_page_locale] | default(notice.untranslated.en) }}{% if en_link %} <a href="{{ en_link | url }}">{{ notice.read_in_english[i18n_page_locale] | default(notice.read_in_english.en) }}</a>{% endif %}</span>
+  {%- else -%}
+    <span class="atuin-i18n-community">{{ notice.community[i18n_page_locale] | default(notice.community.en) }}</span>
+  {%- endif -%}
+{%- endif -%}
 {% endblock %}
 
 {% block extrahead %}

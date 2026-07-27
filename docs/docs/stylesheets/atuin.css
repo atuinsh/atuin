@@ -589,3 +589,17 @@
   white-space: nowrap;
   text-align: center;
 }
+
+/* i18n notice. It lives in Material's top announcement bar (see
+   overrides/main.html); paint that bar to match the version "outdated"
+   warning banner, which Material renders with .md-banner--warning. */
+[data-md-component="announce"] .md-banner {
+  background-color: var(--md-warning-bg-color);
+  color: var(--md-warning-fg-color);
+}
+
+[data-md-component="announce"] .md-banner a {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+}
