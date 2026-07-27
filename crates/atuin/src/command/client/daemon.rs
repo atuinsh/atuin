@@ -1,4 +1,4 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Write};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as StdUnixStream;
@@ -15,7 +15,6 @@ use clap::Subcommand;
 #[cfg(unix)]
 use daemonize::Daemonize;
 use eyre::{Result, WrapErr, bail, eyre};
-use fs4::fs_std::FileExt;
 use tokio::time::sleep;
 
 #[derive(clap::Args, Debug)]
@@ -113,11 +112,16 @@ impl PidfileGuard {
     fn acquire(path: &Path) -> Result<Self> {
         let mut file = open_lock_file(path)?;
 
-        if !file.try_lock_exclusive()? {
-            bail!(
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => bail!(
                 "daemon already running (pidfile lock busy at {})",
                 path.display()
-            );
+            ),
+            Err(TryLockError::Error(err)) => {
+                return Err(err)
+                    .wrap_err_with(|| format!("could not lock daemon pidfile {}", path.display()));
+            }
         }
 
         file.set_len(0)
@@ -193,16 +197,16 @@ async fn wait_for_lock(path: &Path, timeout: Duration) -> Result<File> {
     let start = Instant::now();
 
     loop {
-        match file.try_lock_exclusive() {
-            Ok(true) => return Ok(file),
-            Ok(false) => {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(TryLockError::WouldBlock) => {
                 if start.elapsed() >= timeout {
                     bail!("timed out waiting for lock at {}", path.display());
                 }
 
                 sleep(LOCK_POLL).await;
             }
-            Err(err) => {
+            Err(TryLockError::Error(err)) => {
                 return Err(eyre!("could not lock {}: {err}", path.display()));
             }
         }
