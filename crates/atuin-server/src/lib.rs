@@ -88,7 +88,12 @@ pub async fn launch_metrics_server(host: String, port: u16) -> Result<()> {
     Ok(())
 }
 
-async fn make_router<Db: Database>(settings: Settings) -> Result<Router, eyre::Error> {
+/// Build the server's `Router` without serving it.
+///
+/// Exposed so that tests and benchmarks can compose additional middleware onto the router — for
+/// example a latency injector — before handing it to [`axum::serve`]. Most callers want
+/// [`launch`] or [`launch_with_tcp_listener`] instead.
+pub async fn make_router<Db: Database>(settings: Settings) -> Result<Router, eyre::Error> {
     let db = Db::new(&settings.db_settings)
         .await
         .wrap_err_with(|| format!("failed to connect to db: {:?}", settings.db_settings))?;

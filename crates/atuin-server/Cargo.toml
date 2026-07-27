@@ -41,3 +41,8 @@ metrics-exporter-prometheus = { version = "0.18", default-features = false }
 metrics = "0.24"
 clap = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+# `util` enables `tower::ServiceExt::oneshot`, which drives the router without a socket.
+tower = { workspace = true, features = ["util"] }
