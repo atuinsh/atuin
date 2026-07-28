@@ -4,7 +4,7 @@ use atuin_client::{
     database::Database,
     database::OptFilters,
     database::{DbSearchMode, QueryToken, QueryTokenizer},
-    history::{AUTHOR_FILTER_ALL_USER, History},
+    history::{History, all_user_author_filter},
 };
 use eyre::Result;
 use norm::Metric;
@@ -22,6 +22,7 @@ impl SearchEngine for Search {
         state: &SearchState,
         db: &mut dyn Database,
     ) -> Result<Vec<History>> {
+        let shells = state.shells.to_filter();
         let results = db
             .search(
                 self.0,
@@ -30,8 +31,8 @@ impl SearchEngine for Search {
                 state.input.as_str(),
                 OptFilters {
                     limit: Some(200),
-                    authors: &[AUTHOR_FILTER_ALL_USER.to_owned()],
-                    shells: state.shells.to_list().as_slice(),
+                    authors: all_user_author_filter(),
+                    shells: shells.as_filter(),
                     ..Default::default()
                 },
             )

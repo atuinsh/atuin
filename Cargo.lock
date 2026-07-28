@@ -400,6 +400,7 @@ dependencies = [
  "directories",
  "eyre",
  "getrandom 0.4.3",
+ "itertools",
  "pretty_assertions",
  "proptest",
  "rstest",

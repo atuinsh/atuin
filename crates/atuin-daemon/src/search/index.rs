@@ -13,9 +13,9 @@ use std::{
 };
 
 use atuin_client::history::{History, is_known_agent};
-use atuin_client::settings::{self, Search};
+use atuin_client::settings::Search;
+use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
-use atuin_common::utils::SortedDedupedSliceComparer;
 use atuin_nucleo::{Injector, Nucleo, pattern};
 use dashmap::DashMap;
 use lasso::{Spur, ThreadedRodeo};
@@ -223,121 +223,6 @@ pub enum IndexFilterMode {
     Session(String),
 }
 
-/// Controls which shells' commands are included in the index.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct ShellFilter {
-    /// The list of shells to include. This list must be sorted and contain no duplicates. If empty,
-    /// all shells will be included.
-    sorted: Vec<String>,
-}
-
-impl ShellFilter {
-    pub const ALL: Self = Self { sorted: Vec::new() };
-
-    /// Create a [`ShellFilter`] from a sorted list of shells with no duplicates.
-    ///
-    /// If the list is empty, all shells will be included.
-    fn from_vec_unchecked(shells: Vec<String>) -> Self {
-        debug_assert_eq!(
-            {
-                let mut copy = shells.clone();
-                copy.sort_unstable();
-                copy.dedup();
-                copy
-            },
-            shells,
-            "`shells` is not sorted and deduped",
-        );
-        Self { sorted: shells }
-    }
-
-    /// Create a [`ShellFilter`] suitable for when `search.shells` in `config.toml` is "auto".
-    fn auto(current_shell: Option<String>) -> Self {
-        let Some(shell) = current_shell else {
-            return Self::ALL;
-        };
-        Self::from_vec_unchecked(vec!["".into(), shell])
-    }
-
-    /// Create a [`ShellFilter`] from the `search.shells` setting.
-    ///
-    /// This should only be done once on startup; after that, we abide by the `shells` field on each
-    /// search request instead.
-    pub fn from_initial_settings(shells: &settings::Shells) -> Self {
-        // The current shell might be in `ATUIN_SHELL` if the daemon was autostarted by the shell
-        // hooks. If it isn't or we're wrong, the index will be rebuilt if necessary when a search
-        // request is received. This is only necessary if `search.shells` is "auto" in config.toml.
-        Self::from_initial_settings_with(shells, || std::env::var("ATUIN_SHELL").ok())
-    }
-
-    fn from_initial_settings_with<F>(shells: &settings::Shells, current_shell: F) -> Self
-    where
-        F: FnOnce() -> Option<String>,
-    {
-        use settings::Shells;
-        match shells {
-            Shells::All => Self::ALL,
-            // The current shell might be in `ATUIN_SHELL` if the daemon was autostarted by the
-            // shell hooks. If it isn't or we're wrong, the index will be rebuilt if necessary when
-            // a search request is received. This is only necessary if `search.shells` is "auto" in
-            // config.toml.
-            Shells::Auto => Self::auto(current_shell()),
-            Shells::List(list) => Self::from_iter(list),
-        }
-    }
-
-    /// Check whether this filter contains exactly the same shells as an iterator.
-    pub fn matches<'a, I>(&'a self, shells: I) -> bool
-    where
-        I: IntoIterator<Item = &'a str>,
-    {
-        SortedDedupedSliceComparer::new(&self.sorted, shells).eq::<16>()
-    }
-
-    /// Check whether this filter contains exactly the same shells as a vector, and if not, return a
-    /// new [`ShellFilter`] with the new set of shells.
-    pub fn update(&self, shells: Vec<String>) -> Option<Self> {
-        if self.matches(shells.iter().map(|s| s.as_str())) {
-            None
-        } else {
-            Some(shells.into())
-        }
-    }
-
-    /// Check whether a given shell should be permitted according to this filter.
-    fn contains(&self, shell: Option<&str>) -> bool {
-        if self.sorted.is_empty() {
-            return true;
-        }
-        self.sorted
-            .binary_search_by_key(&shell.unwrap_or_default(), |s| s.as_str())
-            .is_ok()
-    }
-}
-
-impl From<Vec<String>> for ShellFilter {
-    fn from(mut shells: Vec<String>) -> Self {
-        shells.sort_unstable();
-        shells.dedup();
-        Self { sorted: shells }
-    }
-}
-
-impl<T> FromIterator<T> for ShellFilter
-where
-    T: Into<String>,
-{
-    fn from_iter<I>(iter: I) -> Self
-    where
-        I: IntoIterator<Item = T>,
-    {
-        iter.into_iter()
-            .map(Into::into)
-            .collect::<Vec<String>>()
-            .into()
-    }
-}
-
 /// Shareable frecency map: command -> frecency score.
 /// Wrapped in Arc for zero-copy sharing with scorer callbacks.
 type FrecencyMap = Arc<HashMap<Arc<str>, u32>>;
@@ -365,12 +250,12 @@ pub struct SearchIndex {
     /// String interner for deduplicating cwd, hostname, and directory paths.
     interner: Arc<ThreadedRodeo>,
     /// Controls which shells' commands are included.
-    pub shells: ShellFilter,
+    pub shells: OrFilter<Vec<String>>,
 }
 
 impl SearchIndex {
     /// Create a new empty search index.
-    pub fn new(shells: ShellFilter) -> Self {
+    pub fn new(shells: OrFilter<Vec<String>>) -> Self {
         let nucleo_config = atuin_nucleo::Config::DEFAULT;
         // Single column for command text
         let nucleo = Nucleo::<String>::new(nucleo_config, Arc::new(|| {}), None, 1);
@@ -391,7 +276,13 @@ impl SearchIndex {
     /// If the command already exists, updates its invocation data.
     /// If it's a new command, adds it to both the map and Nucleo.
     pub fn add_history(&self, history: &History) {
-        if is_known_agent(&history.author) || !self.shells.contains(history.shell.as_deref()) {
+        if is_known_agent(&history.author) {
+            return;
+        }
+        if !self
+            .shells
+            .contains(history.shell.as_deref().unwrap_or_default())
+        {
             return;
         }
 
@@ -574,7 +465,7 @@ impl SearchIndex {
 
 impl Default for SearchIndex {
     fn default() -> Self {
-        Self::new(ShellFilter::ALL)
+        Self::new(OrFilter::all())
     }
 }
 
@@ -582,7 +473,6 @@ impl Default for SearchIndex {
 mod tests {
     use super::*;
     use rstest::rstest;
-    use settings::Shells;
     use time::macros::datetime;
 
     fn make_history(command: &str, cwd: &str, timestamp: OffsetDateTime) -> History {
@@ -812,30 +702,6 @@ mod tests {
         assert_eq!(results.len(), 2); // git status and git commit
     }
 
-    #[rstest]
-    #[case::all_bash(Shells::All, Some("bash"), &[])]
-    #[case::all_none(Shells::All, None, &[])]
-    #[case::auto_bash(Shells::Auto, Some("bash"), &["", "bash"])]
-    #[case::auto_none(Shells::Auto, None, &[])]
-    #[case::list_empty_bash(Shells::List(vec![]), Some("bash"), &[])]
-    #[case::list_empty_none(Shells::List(vec![]), None, &[])]
-    #[case::list_zsh_bash_none(
-        Shells::List(["zsh", "bash"].map(str::to_owned).into()),
-        None,
-        &["bash", "zsh"],
-    )]
-    #[case::list_zsh_fish(Shells::List(vec!["zsh".into()]), Some("fish"), &["zsh"])]
-    fn settings_to_shell_filter(
-        #[case] settings: Shells,
-        #[case] current_shell: Option<&str>,
-        #[case] expected: &[&str],
-    ) {
-        assert_eq!(
-            ShellFilter::from_initial_settings_with(&settings, || current_shell.map(Into::into)),
-            expected.iter().copied().collect::<ShellFilter>()
-        );
-    }
-
     #[tokio::test]
     #[rstest]
     #[case::all(&[], 7)]
@@ -846,7 +712,10 @@ mod tests {
     #[case::fish(&["fish"], 0)]
     #[case::fish_unknown(&["fish", ""], 4)]
     async fn search_with_shell_filter(#[case] shells: &[&str], #[case] expected_count: usize) {
-        let index = SearchIndex::new(shells.iter().copied().collect());
+        let filter =
+            OrFilter::from_list(shells.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
+                .unwrap_or_default();
+        let index = SearchIndex::new(filter);
 
         for (command, shell) in [
             ("echo unknown1", None),

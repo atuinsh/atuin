@@ -2,9 +2,11 @@ use rmp::decode::{self, Bytes};
 use rmp::encode;
 use std::env;
 
+use atuin_common::filter::OrFilter;
 use atuin_common::record::DecryptedData;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::{normalize_optional_string, uuid_v7};
+use std::sync::LazyLock;
 
 use eyre::{Result, bail};
 
@@ -17,22 +19,62 @@ use time::OffsetDateTime;
 pub(crate) mod builder;
 pub mod store;
 
-/// Known AI agent author values. Used to expand `$all-agent` and `$all-user` filters.
+/// Known AI agent author values. Used when matching against [`AuthorPattern::AllAgent`] and
+/// [`AuthorPattern::AllUser`].
 pub const KNOWN_AGENTS: &[&str] = &["claude-code", "codex", "copilot", "opencode", "pi"];
+
+/// The spelling of [`AuthorPattern::AllUser`] on the command line and in the MCP tool schema.
 pub const AUTHOR_FILTER_ALL_USER: &str = "$all-user";
+
+/// The spelling of [`AuthorPattern::AllAgent`] on the command line and in the MCP tool schema.
 pub const AUTHOR_FILTER_ALL_AGENT: &str = "$all-agent";
 
 pub fn is_known_agent(author: &str) -> bool {
     KNOWN_AGENTS.contains(&author)
 }
 
-pub fn author_matches_filters(author: &str, filters: &[String]) -> bool {
-    filters.is_empty()
-        || filters.iter().any(|filter| match filter.as_str() {
-            AUTHOR_FILTER_ALL_USER => !is_known_agent(author),
-            AUTHOR_FILTER_ALL_AGENT => is_known_agent(author),
-            literal => author == literal,
-        })
+/// An element of an author filter.
+///
+/// In addition to a plain string, this type can also be the special pattern `AllUser` or
+/// `AllAgent`, which matches known agents or all authors than are not a known agent.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum AuthorPattern {
+    /// Matches every author that is not a known agent.
+    AllUser,
+    /// Matches every author that is a known agent (see [`KNOWN_AGENTS`]).
+    AllAgent,
+    /// Matches exactly one author name.
+    Name(String),
+}
+
+impl From<String> for AuthorPattern {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            AUTHOR_FILTER_ALL_USER => Self::AllUser,
+            AUTHOR_FILTER_ALL_AGENT => Self::AllAgent,
+            _ => Self::Name(value),
+        }
+    }
+}
+
+impl From<&str> for AuthorPattern {
+    fn from(value: &str) -> Self {
+        match value {
+            AUTHOR_FILTER_ALL_USER => Self::AllUser,
+            AUTHOR_FILTER_ALL_AGENT => Self::AllAgent,
+            _ => Self::Name(value.to_owned()),
+        }
+    }
+}
+
+/// An author filter that only allows non-agent commands (i.e., [`AuthorPattern::AllUser`]).
+///
+/// This function uses a [`LazyLock`] to avoid building the filter every time.
+pub fn all_user_author_filter() -> OrFilter<&'static [AuthorPattern]> {
+    static FILTER: LazyLock<OrFilter<Vec<AuthorPattern>>> = LazyLock::new(|| {
+        OrFilter::from_list(vec![AuthorPattern::AllUser]).expect("the vector is not empty")
+    });
+    FILTER.as_slice_filter()
 }
 
 pub const HISTORY_TAG: &str = "history";
@@ -479,12 +521,24 @@ mod tests {
     use regex::RegexSet;
     use time::macros::datetime;
 
-    use crate::{
-        history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, Version},
-        settings::Settings,
-    };
+    use crate::{history::Version, settings::Settings};
 
-    use super::{History, author_matches_filters, is_known_agent};
+    use super::{AuthorPattern, History, all_user_author_filter, is_known_agent};
+    use atuin_common::filter::OrFilter;
+
+    /// Whether an author filter permits `author`, mirroring the SQL that
+    /// [`apply_author_filter`](crate::database::OptFilters::authors) builds.
+    ///
+    /// There are only three ways a filter can admit an author, so each is one binary search rather
+    /// than a scan that reinterprets every element in turn. No guard against an author *named*
+    /// `$all-agent` is needed: such an author is an [`AuthorPattern::Name`], a different value from
+    /// [`AuthorPattern::AllAgent`].
+    fn author_matches_filters(author: &str, filters: OrFilter<&[AuthorPattern]>) -> bool {
+        // `contains` is true for an "all" filter, so that case needs no separate check.
+        filters.contains(&AuthorPattern::Name(author.to_owned()))
+            || (filters.contains(&AuthorPattern::AllUser) && !is_known_agent(author))
+            || (filters.contains(&AuthorPattern::AllAgent) && is_known_agent(author))
+    }
 
     // Test that we don't save history where necessary
     #[test]
@@ -547,15 +601,27 @@ mod tests {
 
     #[test]
     fn known_agents_include_pi() {
+        let agents = OrFilter::from_list(vec![AuthorPattern::AllAgent]).unwrap();
+        let users = OrFilter::from_list(vec![AuthorPattern::AllUser]).unwrap();
+
         assert!(is_known_agent("pi"));
-        assert!(author_matches_filters(
-            "pi",
-            &[AUTHOR_FILTER_ALL_AGENT.to_string()]
-        ));
-        assert!(!author_matches_filters(
-            "pi",
-            &[AUTHOR_FILTER_ALL_USER.to_string()]
-        ));
+        assert!(author_matches_filters("pi", agents.as_slice_filter()));
+        assert!(!author_matches_filters("pi", users.as_slice_filter()));
+        assert!(!author_matches_filters("ellie", agents.as_slice_filter()));
+        assert!(author_matches_filters("ellie", users.as_slice_filter()));
+    }
+
+    #[test]
+    fn an_all_author_filter_matches_everyone() {
+        let all = OrFilter::all();
+        assert!(author_matches_filters("pi", all));
+        assert!(author_matches_filters("ellie", all));
+    }
+
+    #[test]
+    fn the_all_user_filter_excludes_agents() {
+        assert!(!author_matches_filters("pi", all_user_author_filter()));
+        assert!(author_matches_filters("ellie", all_user_author_filter()));
     }
 
     #[test]

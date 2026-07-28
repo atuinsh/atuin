@@ -7,6 +7,7 @@ use std::ops::Deref;
 use std::{pin::Pin, sync::Arc};
 
 use atuin_client::database::Database;
+use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use eyre::Result;
 use tokio::sync::RwLock;
@@ -19,7 +20,7 @@ use crate::{
     daemon::{Component, DaemonHandle},
     events::DaemonEvent,
     search::{
-        FilterMode, IndexFilterMode, SearchIndex, SearchRequest, SearchResponse, ShellFilter,
+        FilterMode, IndexFilterMode, SearchIndex, SearchRequest, SearchResponse,
         search_server::{Search as SearchSvc, SearchServer},
     },
 };
@@ -187,9 +188,18 @@ impl Component for SearchComponent {
         let handle_for_loader = handle.clone();
 
         self.loader_handle = Some(tokio::spawn(async move {
-            index.write().await.shells = ShellFilter::from_initial_settings(
-                &handle_for_loader.settings().await.search.shells,
-            );
+            // Build the initial shell filter from the settings. If `search.shells` is "auto", this
+            // will use the value of the `ATUIN_SHELL` environment variable. This variable might be
+            // correct if the daemon was autostarted by the shell hooks, but if it's unset or
+            // incorrect, we'll simply rebuild the index upon receipt of the first request.
+            let shells = handle_for_loader
+                .settings()
+                .await
+                .search
+                .shells
+                .to_filter()
+                .to_vec_filter();
+            index.write().await.shells = shells;
             let _ = build_index(|| index.read(), &handle_for_loader).await;
         }));
 
@@ -293,14 +303,17 @@ pub struct SearchGrpcService {
 }
 
 impl SearchGrpcService {
-    async fn maybe_rebuild_index(&self, shells: Vec<String>) -> Result<Option<SearchIndex>, ()> {
-        let Some(new_filter) = self.index.read().await.shells.update(shells) else {
+    async fn maybe_rebuild_index(
+        &self,
+        shells: OrFilter<Vec<String>>,
+    ) -> Result<Option<SearchIndex>, ()> {
+        if self.index.read().await.shells == shells {
             return Ok(None);
-        };
+        }
 
         info!("Rebuilding search index from database after shell filter change");
 
-        let new_index = SearchIndex::new(new_filter);
+        let new_index = SearchIndex::new(shells);
         build_index(async || &new_index, &self.handle).await?;
 
         info!(
@@ -356,7 +369,9 @@ impl SearchSvc for SearchGrpcService {
                 // Convert proto FilterMode + context to IndexFilterMode
                 let index_filter = convert_filter_mode(filter_mode, &proto_context);
 
-                let index = match this.maybe_rebuild_index(search_req.shells).await {
+                // An empty list in `SearchRequest::shells` means "all".
+                let shells = OrFilter::from_list(search_req.shells).unwrap_or_default();
+                let index = match this.maybe_rebuild_index(shells).await {
                     Ok(Some(new_index)) => {
                         let mut guard = this.index.write().await;
                         *guard = new_index;
