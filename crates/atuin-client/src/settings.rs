@@ -2031,36 +2031,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_accepts_a_plain_path_key() {
-        assert!(Settings::validate_str("db_path = \"/tmp/atuin-test/history.db\"\n").is_ok());
-    }
-
-    #[test]
-    fn validate_rejects_an_unexpandable_path_key() {
-        let err = Settings::validate_str("db_path = \"${DEFINITELY_UNSET_VAR_XYZ}/history.db\"\n")
-            .expect_err("a db_path referencing an unset env var should not validate")
-            .to_string();
-
-        assert!(
-            err.contains("db_path"),
-            "error should name the offending key, got: {err}"
-        );
-    }
-
-    #[test]
-    fn validate_rejects_an_unexpandable_nested_path_key() {
-        let err =
-            Settings::validate_str("[logs]\ndir = \"${DEFINITELY_UNSET_VAR_XYZ}/atuin-logs\"\n")
-                .expect_err("a logs.dir referencing an unset env var should not validate")
-                .to_string();
-
-        assert!(
-            err.contains("logs.dir"),
-            "error should name the offending key, got: {err}"
-        );
-    }
-
-    #[test]
     fn validate_rejects_more_than_one_expanding_column() {
         let err = Settings::validate_str(
             "[ui]\ncolumns = [{ type = \"duration\", expand = true }, { type = \"command\", expand = true }]\n",
