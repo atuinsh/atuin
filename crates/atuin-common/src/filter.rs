@@ -150,12 +150,14 @@ impl<L: FilterStorage> OrFilter<L> {
         B: Ord + ?Sized + 'a,
         L::Item: Borrow<B>,
     {
-        Comparer(match iter {
-            Some(iter) => ComparerInner::SliceComparer(SortedDedupedSliceComparer::new(
+        Comparer(match (iter, self.is_all()) {
+            (Some(iter), false) => ComparerInner::SliceComparer(SortedDedupedSliceComparer::new(
                 self.inner.as_ref(),
                 iter,
             )),
-            None => ComparerInner::Immediate(self.is_all()),
+            // A concrete list of items can never compare equal to an "all" filter.
+            (Some(_), true) => ComparerInner::Immediate(false),
+            (None, is_all) => ComparerInner::Immediate(is_all),
         })
     }
 }
