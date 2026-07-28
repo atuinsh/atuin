@@ -275,7 +275,11 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-package-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build packaged tarballs
-        run: |
-          rm -rf target/package ~/.cargo/registry/src/*/atuin* ~/.cargo/registry/cache/*/atuin*
-          cargo package --workspace
+      - name: Diagnose
+      run: |
+        cargo package --workspace --no-verify
+        tar -xzOf target/package/atuin-client-18.18.1.crate \
+          atuin-client-18.18.1/src/settings.rs | grep -c 'fn validate_str'
+        grep -A 3 'name = "atuin-client"' target/package/atuin-18.18.1/Cargo.lock
+        cat ~/.cargo/config.toml 2>/dev/null || echo "no user cargo config"
+        cargo --version -v
