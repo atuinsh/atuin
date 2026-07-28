@@ -203,6 +203,10 @@ enter_accept = true
 ## Alternatively, set env NO_MOTION=true
 # prefers_reduced_motion = false
 
+## Enable terminal keyboard enhancements for advanced keybindings.
+## Disable this to use legacy terminal key reporting if enhanced reporting causes input issues.
+# keyboard_enhancement = true
+
 ## Defaults to true. Configures whether to store commands that failed (those with non-zero exit status) or not.
 # store_failed = true
 

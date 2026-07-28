@@ -57,6 +57,39 @@ use windows_sys::Win32::System::Console::{GetConsoleOutputCP, SetConsoleOutputCP
 
 const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
 
+#[cfg(not(target_os = "windows"))]
+#[derive(Clone, Copy)]
+struct KeyboardEnhancementState {
+    enabled: bool,
+    pushed: bool,
+}
+
+#[cfg(not(target_os = "windows"))]
+impl KeyboardEnhancementState {
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            pushed: false,
+        }
+    }
+
+    fn flags_to_push(self) -> Option<KeyboardEnhancementFlags> {
+        self.enabled.then_some(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS,
+        )
+    }
+
+    fn mark_pushed(&mut self) {
+        self.pushed = true;
+    }
+
+    fn should_pop(self) -> bool {
+        self.pushed
+    }
+}
+
 pub enum InputAction {
     Accept(usize),
     AcceptInspecting,
@@ -1505,10 +1538,16 @@ struct Stdout {
     writer: TerminalWriter,
     inline_mode: bool,
     no_mouse: bool,
+    #[cfg(not(target_os = "windows"))]
+    keyboard_enhancement: KeyboardEnhancementState,
 }
 
 impl Stdout {
-    pub fn new(inline_mode: bool, no_mouse: bool) -> std::io::Result<Self> {
+    pub fn new(
+        inline_mode: bool,
+        no_mouse: bool,
+        keyboard_enhancement: bool,
+    ) -> std::io::Result<Self> {
         terminal::enable_raw_mode()?;
 
         let mut writer = TerminalWriter::new()?;
@@ -1523,28 +1562,36 @@ impl Stdout {
 
         execute!(writer, event::EnableBracketedPaste)?;
 
-        #[cfg(not(target_os = "windows"))]
-        execute!(
-            writer,
-            PushKeyboardEnhancementFlags(
-                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
-                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-            ),
-        )?;
-
-        Ok(Self {
+        let stdout = Self {
             writer,
             inline_mode,
             no_mouse,
-        })
+            #[cfg(not(target_os = "windows"))]
+            keyboard_enhancement: KeyboardEnhancementState::new(keyboard_enhancement),
+        };
+
+        #[cfg(not(target_os = "windows"))]
+        let mut stdout = stdout;
+
+        #[cfg(not(target_os = "windows"))]
+        if let Some(flags) = stdout.keyboard_enhancement.flags_to_push() {
+            execute!(stdout.writer, PushKeyboardEnhancementFlags(flags))?;
+            stdout.keyboard_enhancement.mark_pushed();
+        }
+
+        #[cfg(target_os = "windows")]
+        let _ = keyboard_enhancement;
+
+        Ok(stdout)
     }
 }
 
 impl Drop for Stdout {
     fn drop(&mut self) {
         #[cfg(not(target_os = "windows"))]
-        if let Err(e) = execute!(self.writer, PopKeyboardEnhancementFlags) {
+        if self.keyboard_enhancement.should_pop()
+            && let Err(e) = execute!(self.writer, PopKeyboardEnhancementFlags)
+        {
             tracing::error!(?e, "Failed to pop keyboard enhancement flags");
         }
 
@@ -1695,7 +1742,11 @@ pub async fn history(
 
     let popup_mode = saved_screen.is_some();
 
-    let stdout = Stdout::new(inline_height > 0, settings.no_mouse)?;
+    let stdout = Stdout::new(
+        inline_height > 0,
+        settings.no_mouse,
+        settings.keyboard_enhancement,
+    )?;
 
     // In popup mode, clear the popup region on the physical terminal before
     // ratatui takes over. Ratatui's diff-based rendering compares against an
@@ -2132,6 +2183,35 @@ mod tests {
     use crate::command::client::search::history_list::ListState;
 
     use super::{Compactness, InspectingState, KeymapSet, State};
+
+    #[cfg(not(target_os = "windows"))]
+    use super::KeyboardEnhancementState;
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn keyboard_enhancement_push_and_pop_are_paired() {
+        let mut enabled = KeyboardEnhancementState::new(true);
+        let flags = enabled.flags_to_push().unwrap();
+        assert!(flags.contains(
+            ratatui::crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        ));
+        assert!(flags.contains(
+            ratatui::crossterm::event::KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+        ));
+        assert!(
+            flags.contains(
+                ratatui::crossterm::event::KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+            )
+        );
+        assert!(!enabled.should_pop());
+
+        enabled.mark_pushed();
+        assert!(enabled.should_pop());
+
+        let disabled = KeyboardEnhancementState::new(false);
+        assert!(disabled.flags_to_push().is_none());
+        assert!(!disabled.should_pop());
+    }
 
     #[test]
     #[allow(clippy::too_many_lines)]

@@ -593,6 +593,22 @@ Alternatively, set env var NO_MOTION
 prefers_reduced_motion = false
 ```
 
+### `keyboard_enhancement`
+
+Default: `true`
+
+Enable the kitty keyboard protocol enhancements used by Atuin's interactive
+search. These enhancements let terminals report otherwise ambiguous keys and
+modifiers.
+
+Set this to `false` to retain legacy terminal key reporting when a terminal or
+keyboard-forwarding tool does not handle enhanced reporting correctly. Advanced
+bindings that require the kitty keyboard protocol will not work in legacy mode.
+
+```toml
+keyboard_enhancement = false
+```
+
 ## search
 
 ### `filters`
