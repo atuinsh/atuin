@@ -276,10 +276,12 @@ impl SearchIndex {
     /// If the command already exists, updates its invocation data.
     /// If it's a new command, adds it to both the map and Nucleo.
     pub fn add_history(&self, history: &History) {
-        if is_known_agent(&history.author)
-            || !self
-                .shells
-                .contains(history.shell.as_deref().unwrap_or_default())
+        if is_known_agent(&history.author) {
+            return;
+        }
+        if !self
+            .shells
+            .contains(history.shell.as_deref().unwrap_or_default())
         {
             return;
         }

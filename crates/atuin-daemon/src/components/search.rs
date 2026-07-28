@@ -307,7 +307,6 @@ impl SearchGrpcService {
         &self,
         shells: DisjunctiveFilter<Vec<String>>,
     ) -> Result<Option<SearchIndex>, ()> {
-        // Both filters are sorted and deduplicated, so `==` is set equality.
         if self.index.read().await.shells == shells {
             return Ok(None);
         }
