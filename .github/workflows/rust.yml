@@ -282,4 +282,4 @@ jobs:
           rm -rf target/{debug,release}/libatuin*.rlib
           rm -rf target/{debug,release}/deps/libatuin*
           rm -rf target/{debug,release}/.fingerprint/atuin*
-          cargo package --workspace
+          cargo package -p atuin -p atuin-server
