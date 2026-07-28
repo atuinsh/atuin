@@ -55,7 +55,7 @@ eval "$(atuin init zsh --disable-up-arrow)"
 eval "$(atuin init zsh --disable-ctrl-r)"
 ```
 
-CLI flags and config combine with **disable wins**: if either the flag is set or the config is `false`, the key is not bound.
+CLI flags and config combine with **disable wins**: if either the flag is set or the config is `false`, the key isn't bound.
 
 If you don't want either key to be bound, either pass both `--disable` arguments, set both config keys to `false`, or set the
 environment variable `ATUIN_NOBIND` to any value before the call to `atuin init`:

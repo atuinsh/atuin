@@ -73,7 +73,7 @@ Configures whether to automatically check for updates. When enabled, Atuin
 checks `https://api.atuin.sh` for the latest release at most once per hour,
 and prints a notice if you're out of date.
 
-Set to `false` to disable. With the update check disabled and sync not set
+Set to `false` to turn it off. With the update check turned off and sync not set
 up, Atuin makes no network requests of its own.
 
 ```toml
@@ -816,7 +816,7 @@ scroll_exits = true
 
 Default: `true`
 
-When `true`, `atuin init` binds the shell up-arrow key to open Atuin search. Set to `false` to keep the shell's native history navigation for ↑ (and still use Atuin via Ctrl-R unless that is also disabled).
+When `true`, `atuin init` binds the shell up-arrow key to open Atuin search. Set to `false` to keep the shell's native history navigation for ↑ (and still use Atuin via Ctrl-R unless that's also turned off).
 
 Same effect as `atuin init <shell> --disable-up-arrow` when set to `false`.
 
