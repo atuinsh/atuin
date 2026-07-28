@@ -1,4 +1,3 @@
-#![allow(unsafe_code)]
 use crate::utils::SortedDedupedSliceComparer;
 use itertools::Itertools;
 use std::borrow::Borrow;
