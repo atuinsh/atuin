@@ -277,5 +277,5 @@ jobs:
 
       - name: Build packaged tarballs
         run: |
-          rm -rf target/package ~/.cargo/registry/src/-*
+          rm -rf target/package ~/.cargo/registry/src/*/atuin* ~/.cargo/registry/cache/*/atuin*
           cargo package --workspace
