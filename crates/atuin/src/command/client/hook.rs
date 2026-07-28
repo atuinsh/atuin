@@ -20,7 +20,6 @@ const PI_EXTENSION_SOURCE: &str = include_str!("../../../contrib/pi/atuin.ts");
 enum InstallKind {
     JsonHooks {
         config_path: &'static [&'static str],
-        hook_command: &'static str,
         matcher: &'static str,
     },
     PiExtension {
@@ -39,7 +38,6 @@ const CLAUDE_CODE: AgentSpec = AgentSpec {
     actor_name: "claude-code",
     install_kind: InstallKind::JsonHooks {
         config_path: &[".claude", "settings.json"],
-        hook_command: "atuin hook claude-code",
         matcher: "Bash",
     },
 };
@@ -49,7 +47,6 @@ const CODEX: AgentSpec = AgentSpec {
     actor_name: "codex",
     install_kind: InstallKind::JsonHooks {
         config_path: &[".codex", "hooks.json"],
-        hook_command: "atuin hook codex",
         matcher: "^Bash$",
     },
 };
@@ -183,11 +180,15 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
 fn install(agent_name: &str) -> Result<()> {
     let agent = Agent::from_name(agent_name)?;
 
+    // Resolve the absolute path to the atuin binary so hooks work even
+    // when the default shell (bash) doesn't have atuin in its PATH.
+    let exe_path = std::env::current_exe()?;
+    let hook_command = format!("{} hook {}", exe_path.display(), agent.actor_name());
+
     match agent.install_kind() {
         InstallKind::JsonHooks {
             config_path,
-            hook_command: _,
-            matcher: _,
+            matcher,
         } => {
             let config_path = Agent::path(config_path);
 
@@ -208,7 +209,7 @@ fn install(agent_name: &str) -> Result<()> {
                 .entry("hooks")
                 .or_insert_with(|| Value::Object(serde_json::Map::new()));
 
-            add_hook_entries(hooks, &agent)?;
+            add_hook_entries(hooks, &hook_command, matcher)?;
 
             let content = serde_json::to_string_pretty(&root)?;
             std::fs::write(&config_path, content)?;
@@ -247,15 +248,7 @@ fn install(agent_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
-    let InstallKind::JsonHooks {
-        config_path: _,
-        hook_command,
-        matcher,
-    } = agent.install_kind()
-    else {
-        bail!("agent does not use JSON hooks");
-    };
+fn add_hook_entries(hooks: &mut Value, hook_command: &str, matcher: &str) -> Result<()> {
 
     for event_type in HOOK_EVENT_TYPES {
         let event_hooks = hooks
