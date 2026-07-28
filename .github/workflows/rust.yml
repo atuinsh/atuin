@@ -276,4 +276,10 @@ jobs:
           key: ${{ runner.os }}-cargo-package-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build packaged tarballs
-        run: cargo package --workspace
+        run: |
+          rm -rf ~/.cargo/registry/{cache,src}/*/atuin*
+          rm -rf target/package
+          rm -rf target/{debug,release}/libatuin*.rlib
+          rm -rf target/{debug,release}/deps/libatuin*
+          rm -rf target/{debug,release}/.fingerprint/atuin*
+          cargo package --workspace
