@@ -9,7 +9,6 @@ use atuin_common::record::{DecryptedData, Host, HostId};
 use eyre::{Result, bail, ensure, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;
-use atuin_client::record::store::Store;
 
 use crate::shell::Var;
 

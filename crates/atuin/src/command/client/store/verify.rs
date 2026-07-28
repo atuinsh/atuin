@@ -1,11 +1,7 @@
 use clap::Args;
 use eyre::Result;
 
-use atuin_client::{
-    encryption::load_key,
-    record::{sqlite_store::SqliteStore, store::Store},
-    settings::Settings,
-};
+use atuin_client::{encryption::load_key, record::sqlite_store::SqliteStore, settings::Settings};
 
 #[derive(Args, Debug)]
 pub struct Verify {}

@@ -5,7 +5,7 @@ use atuin_client::{
     database::Database,
     encryption,
     history::store::HistoryStore,
-    record::{sqlite_store::SqliteStore, store::Store, sync},
+    record::{sqlite_store::SqliteStore, sync},
     settings::Settings,
 };
 

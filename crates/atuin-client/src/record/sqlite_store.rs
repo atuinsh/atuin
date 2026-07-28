@@ -5,7 +5,6 @@
 use std::str::FromStr;
 use std::{path::Path, time::Duration};
 
-use async_trait::async_trait;
 use eyre::{Result, eyre};
 use fs_err as fs;
 
@@ -24,7 +23,6 @@ use atuin_common::utils;
 use uuid::Uuid;
 
 use super::encryption::PASETO_V4;
-use super::store::Store;
 
 #[derive(Debug, Clone)]
 pub struct SqliteStore {
@@ -128,11 +126,12 @@ impl SqliteStore {
 
         Ok(res)
     }
-}
 
-#[async_trait]
-impl Store for SqliteStore {
-    async fn push_batch(
+    pub async fn push(&self, record: &Record<EncryptedData>) -> Result<()> {
+        self.push_batch(std::iter::once(record)).await
+    }
+
+    pub async fn push_batch(
         &self,
         records: impl Iterator<Item = &Record<EncryptedData>> + Send + Sync,
     ) -> Result<()> {
@@ -147,7 +146,7 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    async fn get(&self, id: RecordId) -> Result<Record<EncryptedData>> {
+    pub async fn get(&self, id: RecordId) -> Result<Record<EncryptedData>> {
         let res = sqlx::query("select * from store where store.id = ?1")
             .bind(id.0.as_hyphenated().to_string())
             .map(Self::query_row)
@@ -157,7 +156,7 @@ impl Store for SqliteStore {
         Ok(res)
     }
 
-    async fn delete(&self, id: RecordId) -> Result<()> {
+    pub async fn delete(&self, id: RecordId) -> Result<()> {
         sqlx::query("delete from store where id = ?1")
             .bind(id.0.as_hyphenated().to_string())
             .execute(&self.pool)
@@ -166,13 +165,13 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    async fn delete_all(&self) -> Result<()> {
+    pub async fn delete_all(&self) -> Result<()> {
         sqlx::query("delete from store").execute(&self.pool).await?;
 
         Ok(())
     }
 
-    async fn last(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>> {
+    pub async fn last(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>> {
         let res =
             sqlx::query("select * from store where host=?1 and tag=?2 order by idx desc limit 1")
                 .bind(host.0.as_hyphenated().to_string())
@@ -188,11 +187,11 @@ impl Store for SqliteStore {
         }
     }
 
-    async fn first(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>> {
+    pub async fn first(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>> {
         self.idx(host, tag, 0).await
     }
 
-    async fn len_all(&self) -> Result<u64> {
+    pub async fn len_all(&self) -> Result<u64> {
         let res: Result<(i64,), sqlx::Error> = sqlx::query_as("select count(*) from store")
             .fetch_one(&self.pool)
             .await;
@@ -202,7 +201,7 @@ impl Store for SqliteStore {
         }
     }
 
-    async fn len_tag(&self, tag: &str) -> Result<u64> {
+    pub async fn len_tag(&self, tag: &str) -> Result<u64> {
         let res: Result<(i64,), sqlx::Error> =
             sqlx::query_as("select count(*) from store where tag=?1")
                 .bind(tag)
@@ -214,17 +213,17 @@ impl Store for SqliteStore {
         }
     }
 
-    async fn len(&self, host: HostId, tag: &str) -> Result<u64> {
+    pub async fn len(&self, host: HostId, tag: &str) -> Result<u64> {
         let last = self.last(host, tag).await?;
 
         if let Some(last) = last {
             return Ok(last.idx + 1);
         }
 
-        return Ok(0);
+        Ok(0)
     }
 
-    async fn next(
+    pub async fn next(
         &self,
         host: HostId,
         tag: &str,
@@ -245,7 +244,7 @@ impl Store for SqliteStore {
         Ok(res)
     }
 
-    async fn idx(
+    pub async fn idx(
         &self,
         host: HostId,
         tag: &str,
@@ -266,7 +265,7 @@ impl Store for SqliteStore {
         }
     }
 
-    async fn status(&self) -> Result<RecordStatus> {
+    pub async fn status(&self) -> Result<RecordStatus> {
         let mut status = RecordStatus::new();
 
         let res: Result<Vec<(String, String, i64)>, sqlx::Error> =
@@ -290,7 +289,7 @@ impl Store for SqliteStore {
         Ok(status)
     }
 
-    async fn all_tagged(&self, tag: &str) -> Result<Vec<Record<EncryptedData>>> {
+    pub async fn all_tagged(&self, tag: &str) -> Result<Vec<Record<EncryptedData>>> {
         let res = sqlx::query("select * from store where tag = ?1 order by timestamp asc")
             .bind(tag)
             .map(Self::query_row)
@@ -302,7 +301,7 @@ impl Store for SqliteStore {
 
     /// Reencrypt every single item in this store with a new key
     /// Be careful - this may mess with sync.
-    async fn re_encrypt(&self, old_key: &[u8; 32], new_key: &[u8; 32]) -> Result<()> {
+    pub async fn re_encrypt(&self, old_key: &[u8; 32], new_key: &[u8; 32]) -> Result<()> {
         // Load all the records
         // In memory like some of the other code here
         // This will never be called in a hot loop, and only under the following circumstances
@@ -341,7 +340,7 @@ impl Store for SqliteStore {
 
     /// Verify that every record in this store can be decrypted with the current key
     /// Someday maybe also check each tag/record can be deserialized, but not for now.
-    async fn verify(&self, key: &[u8; 32]) -> Result<()> {
+    pub async fn verify(&self, key: &[u8; 32]) -> Result<()> {
         let all = self.load_all().await?;
 
         all.into_iter()
@@ -353,7 +352,7 @@ impl Store for SqliteStore {
 
     /// Verify that every record in this store can be decrypted with the current key
     /// Someday maybe also check each tag/record can be deserialized, but not for now.
-    async fn purge(&self, key: &[u8; 32]) -> Result<()> {
+    pub async fn purge(&self, key: &[u8; 32]) -> Result<()> {
         let all = self.load_all().await?;
 
         for record in all.iter() {
@@ -382,8 +381,7 @@ mod tests {
     };
 
     use crate::{
-        encryption::generate_encoded_key,
-        record::{encryption::PASETO_V4, store::Store},
+        encryption::generate_encoded_key, record::encryption::PASETO_V4,
         settings::test_local_timeout,
     };
 

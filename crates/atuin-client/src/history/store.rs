@@ -7,7 +7,7 @@ use rmp::decode::Bytes;
 
 use crate::{
     database::{Database, current_context},
-    record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store},
+    record::{encryption::PASETO_V4, sqlite_store::SqliteStore},
 };
 use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
 
@@ -418,7 +418,7 @@ mod tests {
     use crate::{
         database::Sqlite,
         history::{HISTORY_TAG, Version, store::HistoryRecord, store::HistoryStore},
-        record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store},
+        record::{encryption::PASETO_V4, sqlite_store::SqliteStore},
         settings::test_local_timeout,
     };
 

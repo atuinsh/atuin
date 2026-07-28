@@ -6,7 +6,7 @@ use tokio::io::AsyncWriteExt;
 use crate::{
     api_client,
     encryption::{Key, decode_key, encode_key, load_key},
-    record::{sqlite_store::SqliteStore, store::Store},
+    record::sqlite_store::SqliteStore,
     settings::Settings,
 };
 
