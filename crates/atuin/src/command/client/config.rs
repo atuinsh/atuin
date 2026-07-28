@@ -144,13 +144,20 @@ pub enum ValueType {
 
 impl SetCmd {
     pub async fn run(self, _settings: &Settings) -> Result<()> {
+        let config_file = Settings::get_config_path()?;
+        let config_str = tokio::fs::read_to_string(&config_file).await?;
+
+        let updated = self.get_updated_config(&config_str)?;
+        tokio::fs::write(&config_file, &updated).await?;
+        Ok(())
+    }
+
+    fn get_updated_config(&self, config_str: &str) -> Result<String> {
         let key = self.key.trim();
         if key.is_empty() || key.contains(char::is_whitespace) {
             eyre::bail!("Config key must be non-empty and must not contain whitespace");
         }
 
-        let config_file = Settings::get_config_path()?;
-        let config_str = tokio::fs::read_to_string(&config_file).await?;
         let mut doc: DocumentMut = config_str.parse()?;
 
         // When using auto type detection, try to match the existing value's type
@@ -159,9 +166,15 @@ impl SetCmd {
         let value = self.parse_value(existing_type.as_ref())?;
         set_deep_key(&mut doc, key, value)?;
 
-        tokio::fs::write(&config_file, doc.to_string()).await?;
-
-        Ok(())
+        let updated = doc.to_string();
+        Settings::validate_str(&updated).map_err(|e| {
+            eyre::eyre!(
+                "cannot update config: setting '{key}' to '{}' would make your configuration \
+                invalid\n\n{e}",
+                self.value,
+            )
+        })?;
+        Ok(updated)
     }
 
     fn parse_value(&self, existing_type: Option<&ValueType>) -> Result<Value> {
@@ -470,5 +483,82 @@ mod tests {
             twice,
             "[sync]\n# how often to sync\nfrequency = \"30m\" # unit is flexible\n"
         );
+    }
+
+    /// Helper for building a [`SetCmd`].
+    fn set_cmd(key: &str, value: &str) -> SetCmd {
+        SetCmd {
+            key: key.to_string(),
+            value: value.to_string(),
+            the_type: ValueType::Auto,
+        }
+    }
+
+    #[rstest]
+    #[case::a_valid_value(
+        "search_mode = \"fuzzy\"\n",
+        "search_mode",
+        "skim",
+        "search_mode = \"skim\"\n"
+    )]
+    #[case::replacing_an_invalid_value_with_a_valid_one(
+        "search_mode = \"invalid\"\n",
+        "search_mode",
+        "fuzzy",
+        "search_mode = \"fuzzy\"\n"
+    )]
+    #[case::preserving_comments_and_unrelated_keys(
+        "# my config\nauto_sync = true\n\n[daemon]\nenabled = false\n",
+        "daemon.enabled",
+        "true",
+        "# my config\nauto_sync = true\n\n[daemon]\nenabled = true\n"
+    )]
+    fn set_writes(
+        #[case] input: &str,
+        #[case] key: &str,
+        #[case] value: &str,
+        #[case] expected: &str,
+    ) {
+        let updated = set_cmd(key, value)
+            .get_updated_config(input)
+            .expect("the update should be accepted");
+
+        assert_eq!(updated, expected);
+    }
+
+    /// The error should always mention every listed fragment.
+    #[rstest]
+    #[case::an_invalid_value(
+        "search_mode = \"fuzzy\"\n",
+        "search_mode",
+        "invalid",
+        &["search_mode", "invalid"]
+    )]
+    // auto_sync is absent, so type detection falls back to string
+    #[case::a_value_of_the_wrong_type_for_a_new_key("", "auto_sync", "banana", &["auto_sync"])]
+    #[case::another_key_in_the_file_being_invalid(
+        "style = \"nope\"\n",
+        "auto_sync",
+        "false",
+        &["style"]
+    )]
+    #[case::an_empty_key("", "  ", "fuzzy", &["non-empty"])]
+    fn set_rejects(
+        #[case] input: &str,
+        #[case] key: &str,
+        #[case] value: &str,
+        #[case] expected_err: &[&str],
+    ) {
+        let err = set_cmd(key, value)
+            .get_updated_config(input)
+            .expect_err("the update should be rejected")
+            .to_string();
+
+        for fragment in expected_err {
+            assert!(
+                err.contains(fragment),
+                "error should mention `{fragment}`, got: {err}"
+            );
+        }
     }
 }

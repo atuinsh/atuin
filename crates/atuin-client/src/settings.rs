@@ -5,7 +5,7 @@ use clap::ValueEnum;
 use config::{
     Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat, builder::DefaultState,
 };
-use eyre::{Context, Result, bail, eyre};
+use eyre::{Context, Result, eyre};
 use fs_err::{File, create_dir_all};
 use humantime::parse_duration;
 use regex::RegexSet;
@@ -17,6 +17,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{LazyLock, OnceLock},
 };
+use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::sync::OnceCell;
 use url::Url;
@@ -939,16 +940,20 @@ impl Ui {
 
     /// Validate the UI configuration.
     /// Returns an error if more than one column has expand = true.
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), UiValidationError> {
         let expand_count = self.columns.iter().filter(|c| c.expand).count();
         if expand_count > 1 {
-            bail!(
-                "Only one column can have expand = true, but {} columns are set to expand",
-                expand_count
-            );
+            return Err(UiValidationError::MultipleExpandingColumns(expand_count));
         }
         Ok(())
     }
+}
+
+/// A [`Ui`] configuration that cannot be used as written.
+#[derive(Debug, Error)]
+pub enum UiValidationError {
+    #[error("Only one column can have expand = true, but {0} columns are set to expand")]
+    MultipleExpandingColumns(usize),
 }
 
 impl Default for Ui {
@@ -1371,10 +1376,14 @@ impl Settings {
     }
 
     pub fn builder() -> Result<ConfigBuilder<DefaultState>> {
-        Self::builder_with_data_dir(&atuin_common::utils::data_dir())
+        Ok(Self::builder_with_data_dir(
+            &atuin_common::utils::data_dir(),
+        )?)
     }
 
-    fn builder_with_data_dir(data_dir: &std::path::Path) -> Result<ConfigBuilder<DefaultState>> {
+    fn builder_with_data_dir(
+        data_dir: &std::path::Path,
+    ) -> Result<ConfigBuilder<DefaultState>, config::ConfigError> {
         let db_path = data_dir.join("history.db");
         let record_store_path = data_dir.join("records.db");
         let kv_path = data_dir.join("kv.db");
@@ -1587,6 +1596,7 @@ impl Settings {
 
         // all paths should be expanded
         let built = config_builder.build_cloned()?;
+
         config_builder = [
             "db_path",
             "record_store_path",
@@ -1715,6 +1725,21 @@ impl Settings {
         ];
         paths.iter().all(|p| !utils::broken_symlink(*p))
     }
+
+    /// Check that a TOML string can be successfully deserialized into a [`Settings`] object.
+    pub fn validate_str(toml: &str) -> Result<(), ValidationError> {
+        let config = Self::builder_with_data_dir(&atuin_common::utils::data_dir())?
+            .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+            .build()?;
+
+        let settings: Settings = config.try_deserialize()?;
+        if let Some(dir) = &settings.data_dir {
+            shellexpand::full(dir).map_err(ValidationError::DataDir)?;
+        }
+
+        settings.ui.validate()?;
+        Ok(())
+    }
 }
 
 impl Default for Settings {
@@ -1728,6 +1753,19 @@ impl Default for Settings {
             .try_deserialize()
             .expect("Could not deserialize config")
     }
+}
+
+/// Error returned by [`Settings::validate_str`] when validation fails.
+#[derive(Debug, Error)]
+pub enum ValidationError {
+    #[error(transparent)]
+    Config(#[from] config::ConfigError),
+
+    #[error(transparent)]
+    Ui(#[from] UiValidationError),
+
+    #[error("failed to expand `data_dir`: {0}")]
+    DataDir(shellexpand::LookupError<std::env::VarError>),
 }
 
 /// Initialize the meta store configuration for testing.
@@ -1927,6 +1965,38 @@ mod tests {
         assert!(!daemon_autostart);
 
         Ok(())
+    }
+
+    #[rstest]
+    #[case::valid_config("search_mode = \"fuzzy\"\n")]
+    #[case::empty_config("")]
+    #[case::plain_data_dir("data_dir = \"/tmp/atuin-test\"\n")]
+    fn validate_accepts(#[case] toml: &str) {
+        assert!(Settings::validate_str(toml).is_ok());
+    }
+
+    /// The error should always name the offending key.
+    #[rstest]
+    #[case::invalid_enum_variant("search_mode = \"invalid\"\n", "search_mode")]
+    #[case::value_of_the_wrong_type("auto_sync = \"banana\"\n", "auto_sync")]
+    #[case::invalid_nested_value("[search]\nfilters = [\"nope\"]\n", "search.filters")]
+    #[case::data_dir_with_an_unexpandable_variable(
+        "data_dir = \"${DEFINITELY_UNSET_VAR_XYZ}/atuin\"\n",
+        "data_dir"
+    )]
+    #[case::more_than_one_expanding_column(
+        "[ui]\ncolumns = [{ type = \"duration\", expand = true }, { type = \"command\", expand = true }]\n",
+        "expand"
+    )]
+    fn validate_rejects(#[case] toml: &str, #[case] expected_err: &str) {
+        let err = Settings::validate_str(toml)
+            .expect_err("config should not validate")
+            .to_string();
+
+        assert!(
+            err.contains(expected_err),
+            "error should mention `{expected_err}`, got: {err}"
+        );
     }
 
     #[test]
