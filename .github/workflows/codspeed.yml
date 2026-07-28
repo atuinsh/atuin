@@ -1,0 +1,44 @@
+name: CodSpeed
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # `workflow_dispatch` allows CodSpeed to trigger backtest
+  # performance analysis in order to generate initial data.
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  benchmarks:
+    name: Run benchmarks
+    runs-on: depot-ubuntu-24.04
+
+    permissions:
+      contents: read # required for actions/checkout
+      id-token: write # required for OIDC authentication with CodSpeed
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup rust toolchain, cache and cargo-codspeed binary
+        uses: moonrepo/setup-rust@v1
+        with:
+          channel: 1.97.0
+          cache-target: release
+          bins: cargo-codspeed
+
+      - name: Build the benchmark targets
+        run: >
+          cargo codspeed build -m simulation
+          -p atuin-client
+          -p atuin-history
+          -p atuin-nucleo-matcher
+
+      - name: Run the benchmarks
+        uses: CodSpeedHQ/action@v4
+        with:
+          mode: simulation
+          run: cargo codspeed run

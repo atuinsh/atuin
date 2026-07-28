@@ -22,7 +22,7 @@ crossterm = { workspace = true, features = ["use-dev-tty"] }
 unicode-segmentation = "1.11.0"
 
 [dev-dependencies]
-divan = "0.1.14"
+divan = { version = "5.0.1", package = "codspeed-divan-compat" }
 rand = { workspace = true }
 rstest = { workspace = true }
 

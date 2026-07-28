@@ -61,7 +61,9 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - Integration tests in `crates/atuin/tests/` need Postgres (`ATUIN_DB_URI` env var).
 - Use `":memory:"` SQLite for unit tests needing a database.
 - Runner: `cargo nextest`.
-- Benchmarks: `divan` in `atuin-history`.
+- Benchmarks: `divan` in `atuin-client`, `atuin-history` and `atuin-nucleo-matcher`, tracked in CI
+  by CodSpeed. Run them locally with `cargo codspeed build && cargo codspeed run`, or with plain
+  `cargo bench`.
 
 ## Build and check
 
