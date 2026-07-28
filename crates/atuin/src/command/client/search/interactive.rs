@@ -37,7 +37,7 @@ use ratatui::{
     backend::{CrosstermBackend, FromCrossterm},
     crossterm::{
         cursor::SetCursorStyle,
-        event::{self, Event, KeyEvent, MouseEvent},
+        event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEvent, MouseEvent},
         execute, queue, terminal,
     },
     layout::{Alignment, Constraint, Direction, Layout},
@@ -179,13 +179,21 @@ impl State {
         }
     }
 
-    fn handle_input(&mut self, settings: &Settings, input: &Event) -> InputAction {
-        match input {
+    fn handle_input<W: Write>(
+        &mut self,
+        settings: &Settings,
+        input: &Event,
+        w: &mut W,
+    ) -> Result<InputAction> {
+        execute!(w, EnableMouseCapture)?;
+        let r = match input {
             Event::Key(k) => self.handle_key_input(settings, k),
             Event::Mouse(m) => self.handle_mouse_input(*m, settings.invert),
             Event::Paste(d) => self.handle_paste_input(d),
             _ => InputAction::Continue,
-        }
+        };
+        execute!(w, DisableMouseCapture)?;
+        Ok(r)
     }
 
     fn handle_mouse_input(&mut self, input: MouseEvent, inverted: bool) -> InputAction {
@@ -1865,7 +1873,7 @@ pub async fn history(
             event_ready = event_ready => {
                 if event_ready?? {
                     loop {
-                        match app.handle_input(settings, &event::read()?) {
+                        match app.handle_input(settings, &event::read()?, &mut stdout)? {
                             InputAction::Continue => {},
                             InputAction::Delete(index) => {
                                 if results.is_empty() {
