@@ -346,7 +346,129 @@ fn set_deep_key(doc: &mut DocumentMut, key: &str, value: Value) -> Result<()> {
         );
     }
 
-    current.insert(last, Item::Value(value));
+    if let Some(item) = current.get_mut(last) {
+        let mut value = value;
+        if let Some(old_value) = item.as_value_mut() {
+            // Preserve any commands attached to the old value.
+            std::mem::swap(value.decor_mut(), old_value.decor_mut());
+        }
+        *item = Item::Value(value);
+    } else {
+        current.insert(last, Item::Value(value));
+    }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    /// Call [`set_deep_key`] and reserialize.
+    fn set(input: &str, key: &str, value: Value) -> String {
+        let mut doc: DocumentMut = input.parse().expect("test input should parse as TOML");
+        set_deep_key(&mut doc, key, value).expect("set_deep_key should succeed");
+        doc.to_string()
+    }
+
+    #[rstest]
+    #[case::comment_above_the_key(
+        "[sync]\n# how often to sync\nfrequency = \"5m\"\nrecords = true\n",
+        "sync.frequency",
+        Value::from("10m"),
+        "[sync]\n# how often to sync\nfrequency = \"10m\"\nrecords = true\n"
+    )]
+    #[case::multiline_comment_and_blank_lines_above_the_key(
+        "# top of file\n\n[sync]\n\n# line one\n# line two\nfrequency = \"5m\"\nrecords = true\n",
+        "sync.frequency",
+        Value::from("10m"),
+        "# top of file\n\n[sync]\n\n# line one\n# line two\nfrequency = \"10m\"\nrecords = true\n"
+    )]
+    #[case::comment_above_a_root_level_key(
+        "# why we sync\nauto_sync = true\n\n[sync]\nrecords = true\n",
+        "auto_sync",
+        Value::from(false),
+        "# why we sync\nauto_sync = false\n\n[sync]\nrecords = true\n"
+    )]
+    #[case::trailing_comment_on_the_value(
+        "[sync]\nfrequency = \"5m\" # sync interval\n",
+        "sync.frequency",
+        Value::from("10m"),
+        "[sync]\nfrequency = \"10m\" # sync interval\n"
+    )]
+    #[case::compact_spacing_around_equals(
+        "[sync]\nfrequency=\"5m\"\n",
+        "sync.frequency",
+        Value::from("10m"),
+        "[sync]\nfrequency=\"10m\"\n"
+    )]
+    #[case::comments_on_a_dotted_key(
+        "# note about records\nsync.records = true # enabled\n",
+        "sync.records",
+        Value::from(false),
+        "# note about records\nsync.records = false # enabled\n"
+    )]
+    #[case::comments_around_an_inline_table(
+        "# above\nkeys = { scroll_exits = true } # after\n",
+        "keys.scroll_exits",
+        Value::from(false),
+        "# above\nkeys = { scroll_exits = false } # after\n"
+    )]
+    fn set_preserves_formatting_when_overwriting(
+        #[case] input: &str,
+        #[case] key: &str,
+        #[case] value: Value,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(set(input, key, value), expected);
+    }
+
+    #[rstest]
+    #[case::appends_without_disturbing_an_existing_comment(
+        "[sync]\n# existing note\nrecords = true\n",
+        "sync.frequency",
+        Value::from("10m"),
+        "[sync]\n# existing note\nrecords = true\nfrequency = \"10m\"\n"
+    )]
+    #[case::creates_a_missing_table(
+        "[sync]\nrecords = true\n",
+        "keys.scroll_exits",
+        Value::from(true),
+        "[sync]\nrecords = true\n\n[keys]\nscroll_exits = true\n"
+    )]
+    #[case::lands_above_a_commented_out_block_in_a_table(
+        "[sync]\n## how often\n# frequency = \"5m\"\n",
+        "sync.frequency",
+        Value::from("10m"),
+        "[sync]\nfrequency = \"10m\"\n## how often\n# frequency = \"5m\"\n"
+    )]
+    #[case::root_key_leaves_commented_out_settings_alone(
+        "# atuin config\n\n## enable sync\n# auto_sync = true\n\nenter_accept = true\n",
+        "auto_sync",
+        Value::from(false),
+        "# atuin config\n\n## enable sync\n# auto_sync = true\n\nenter_accept = true\nauto_sync = false\n"
+    )]
+    fn set_adds_a_missing_key_without_touching_existing_content(
+        #[case] input: &str,
+        #[case] key: &str,
+        #[case] value: Value,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(set(input, key, value), expected);
+    }
+
+    #[test]
+    fn setting_the_same_key_twice_keeps_its_comment() {
+        let once = set(
+            "[sync]\n# how often to sync\nfrequency = \"5m\" # unit is flexible\n",
+            "sync.frequency",
+            Value::from("10m"),
+        );
+        let twice = set(&once, "sync.frequency", Value::from("30m"));
+        assert_eq!(
+            twice,
+            "[sync]\n# how often to sync\nfrequency = \"30m\" # unit is flexible\n"
+        );
+    }
 }
