@@ -1967,80 +1967,35 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn validate_accepts_a_valid_config() {
-        assert!(Settings::validate_str("search_mode = \"fuzzy\"\n").is_ok());
+    #[rstest]
+    #[case::valid_config("search_mode = \"fuzzy\"\n")]
+    #[case::empty_config("")]
+    #[case::plain_data_dir("data_dir = \"/tmp/atuin-test\"\n")]
+    fn validate_accepts(#[case] toml: &str) {
+        assert!(Settings::validate_str(toml).is_ok());
     }
 
-    #[test]
-    fn validate_accepts_an_empty_config() {
-        assert!(Settings::validate_str("").is_ok());
-    }
-
-    #[test]
-    fn validate_rejects_an_invalid_enum_variant() {
-        let err = Settings::validate_str("search_mode = \"invalid\"\n")
-            .expect_err("an unknown search_mode variant should not validate")
+    /// The error should always name the offending key.
+    #[rstest]
+    #[case::invalid_enum_variant("search_mode = \"invalid\"\n", "search_mode")]
+    #[case::value_of_the_wrong_type("auto_sync = \"banana\"\n", "auto_sync")]
+    #[case::invalid_nested_value("[search]\nfilters = [\"nope\"]\n", "search.filters")]
+    #[case::data_dir_with_an_unexpandable_variable(
+        "data_dir = \"${DEFINITELY_UNSET_VAR_XYZ}/atuin\"\n",
+        "data_dir"
+    )]
+    #[case::more_than_one_expanding_column(
+        "[ui]\ncolumns = [{ type = \"duration\", expand = true }, { type = \"command\", expand = true }]\n",
+        "expand"
+    )]
+    fn validate_rejects(#[case] toml: &str, #[case] expected_err: &str) {
+        let err = Settings::validate_str(toml)
+            .expect_err("config should not validate")
             .to_string();
 
         assert!(
-            err.contains("search_mode"),
-            "error should name the offending key, got: {err}"
-        );
-    }
-
-    #[test]
-    fn validate_rejects_a_value_of_the_wrong_type() {
-        let err = Settings::validate_str("auto_sync = \"banana\"\n")
-            .expect_err("a string is not a valid bool")
-            .to_string();
-
-        assert!(
-            err.contains("auto_sync"),
-            "error should name the offending key, got: {err}"
-        );
-    }
-
-    #[test]
-    fn validate_rejects_an_invalid_nested_value() {
-        let err = Settings::validate_str("[search]\nfilters = [\"nope\"]\n")
-            .expect_err("an unknown filter mode should not validate")
-            .to_string();
-
-        assert!(
-            err.contains("search.filters"),
-            "error should name the offending key, got: {err}"
-        );
-    }
-
-    #[test]
-    fn validate_accepts_a_plain_data_dir() {
-        assert!(Settings::validate_str("data_dir = \"/tmp/atuin-test\"\n").is_ok());
-    }
-
-    #[test]
-    fn validate_rejects_a_data_dir_with_an_unexpandable_variable() {
-        let err = Settings::validate_str("data_dir = \"${DEFINITELY_UNSET_VAR_XYZ}/atuin\"\n")
-            .expect_err("a data_dir referencing an unset env var should not validate")
-            .to_string();
-
-        assert!(
-            err.contains("data_dir"),
-            "error should name data_dir, got: {err}"
-        );
-    }
-
-    #[test]
-    fn validate_rejects_more_than_one_expanding_column() {
-        let err = Settings::validate_str(
-            "[ui]\ncolumns = [{ type = \"duration\", expand = true }, { type = \"command\", expand = true }]\n",
-        )
-        .expect_err("two expanding columns should not validate")
-        .to_string();
-
-        assert!(
-            err.contains("expand"),
-            "error should explain the expand conflict, got: {err}"
+            err.contains(expected_err),
+            "error should mention `{expected_err}`, got: {err}"
         );
     }
 

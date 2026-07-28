@@ -494,82 +494,71 @@ mod tests {
         }
     }
 
-    #[test]
-    fn writes_a_valid_value() {
-        let updated = set_cmd("search_mode", "skim")
-            .get_updated_config("search_mode = \"fuzzy\"\n")
-            .expect("skim is a valid search mode");
+    #[rstest]
+    #[case::a_valid_value(
+        "search_mode = \"fuzzy\"\n",
+        "search_mode",
+        "skim",
+        "search_mode = \"skim\"\n"
+    )]
+    #[case::replacing_an_invalid_value_with_a_valid_one(
+        "search_mode = \"invalid\"\n",
+        "search_mode",
+        "fuzzy",
+        "search_mode = \"fuzzy\"\n"
+    )]
+    #[case::preserving_comments_and_unrelated_keys(
+        "# my config\nauto_sync = true\n\n[daemon]\nenabled = false\n",
+        "daemon.enabled",
+        "true",
+        "# my config\nauto_sync = true\n\n[daemon]\nenabled = true\n"
+    )]
+    fn set_writes(
+        #[case] input: &str,
+        #[case] key: &str,
+        #[case] value: &str,
+        #[case] expected: &str,
+    ) {
+        let updated = set_cmd(key, value)
+            .get_updated_config(input)
+            .expect("the update should be accepted");
 
-        assert_eq!(updated, "search_mode = \"skim\"\n");
+        assert_eq!(updated, expected);
     }
 
-    #[test]
-    fn rejects_an_invalid_value() {
-        let err = set_cmd("search_mode", "invalid")
-            .get_updated_config("search_mode = \"fuzzy\"\n")
-            .expect_err("invalid is not a valid search mode")
+    /// The error should always mention every listed fragment.
+    #[rstest]
+    #[case::an_invalid_value(
+        "search_mode = \"fuzzy\"\n",
+        "search_mode",
+        "invalid",
+        &["search_mode", "invalid"]
+    )]
+    // auto_sync is absent, so type detection falls back to string
+    #[case::a_value_of_the_wrong_type_for_a_new_key("", "auto_sync", "banana", &["auto_sync"])]
+    #[case::another_key_in_the_file_being_invalid(
+        "style = \"nope\"\n",
+        "auto_sync",
+        "false",
+        &["style"]
+    )]
+    #[case::an_empty_key("", "  ", "fuzzy", &["non-empty"])]
+    fn set_rejects(
+        #[case] input: &str,
+        #[case] key: &str,
+        #[case] value: &str,
+        #[case] expected_err: &[&str],
+    ) {
+        let err = set_cmd(key, value)
+            .get_updated_config(input)
+            .expect_err("the update should be rejected")
             .to_string();
 
-        assert!(
-            err.contains("search_mode") && err.contains("invalid"),
-            "error should name the key and value, got: {err}"
-        );
-    }
-
-    #[test]
-    fn rejects_a_value_of_the_wrong_type_for_a_new_key() {
-        // auto_sync is absent, so type detection falls back to string
-        let err = set_cmd("auto_sync", "banana")
-            .get_updated_config("")
-            .expect_err("banana is not a bool")
-            .to_string();
-
-        assert!(
-            err.contains("auto_sync"),
-            "error should name the key, got: {err}"
-        );
-    }
-
-    #[test]
-    fn rejects_when_another_key_in_the_file_is_invalid() {
-        let err = set_cmd("auto_sync", "false")
-            .get_updated_config("style = \"nope\"\n")
-            .expect_err("style = nope is not loadable")
-            .to_string();
-
-        assert!(err.contains("style"), "error should name style, got: {err}");
-    }
-
-    #[test]
-    fn allows_replacing_an_invalid_value_with_a_valid_one() {
-        let updated = set_cmd("search_mode", "fuzzy")
-            .get_updated_config("search_mode = \"invalid\"\n")
-            .expect("fixing a broken value should be allowed");
-
-        assert_eq!(updated, "search_mode = \"fuzzy\"\n");
-    }
-
-    #[test]
-    fn preserves_comments_and_unrelated_keys() {
-        let original = "# my config\nauto_sync = true\n\n[daemon]\nenabled = false\n";
-
-        let updated = set_cmd("daemon.enabled", "true")
-            .get_updated_config(original)
-            .expect("daemon.enabled = true is valid");
-
-        assert_eq!(
-            updated,
-            "# my config\nauto_sync = true\n\n[daemon]\nenabled = true\n"
-        );
-    }
-
-    #[test]
-    fn rejects_an_empty_key() {
-        let err = set_cmd("  ", "fuzzy")
-            .get_updated_config("")
-            .expect_err("an empty key is not settable")
-            .to_string();
-
-        assert!(err.contains("non-empty"), "unexpected error: {err}");
+        for fragment in expected_err {
+            assert!(
+                err.contains(fragment),
+                "error should mention `{fragment}`, got: {err}"
+            );
+        }
     }
 }
