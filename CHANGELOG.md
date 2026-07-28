@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.18.1
+
+### Bug Fixes
+
+- *(crates.io)* Fix installation from crates.io ([#3764](https://github.com/atuinsh/atuin/issues/3764))
+
+
+### Refactor
+
+- *(daemon)* Drop fs4, use std::fs file locking ([#3753](https://github.com/atuinsh/atuin/issues/3753))
+
 ## 18.18.0
 
 ### Bug Fixes

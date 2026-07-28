@@ -77,7 +77,7 @@ strum = { version = "0.27", features = ["strum_macros"] }
 
 [dependencies.atuin-common]
 path = "../atuin-common"
-version = "18.18.0"
+version = "18.18.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -90,7 +90,7 @@ toml = "1.1"
 # This crate's tests require the `test-utils` feature in atuin-common.
 [dev-dependencies.atuin-common]
 path = "../atuin-common"
-version = "18.18.0"
+version = "18.18.1"
 features = ["test-utils"]
 
 [[bench]]
