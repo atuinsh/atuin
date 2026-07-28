@@ -14,7 +14,7 @@ use std::{
 
 use atuin_client::history::{History, is_known_agent};
 use atuin_client::settings::Search;
-use atuin_common::filter::DisjunctiveFilter;
+use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use atuin_nucleo::{Injector, Nucleo, pattern};
 use dashmap::DashMap;
@@ -250,12 +250,12 @@ pub struct SearchIndex {
     /// String interner for deduplicating cwd, hostname, and directory paths.
     interner: Arc<ThreadedRodeo>,
     /// Controls which shells' commands are included.
-    pub shells: DisjunctiveFilter<Vec<String>>,
+    pub shells: OrFilter<Vec<String>>,
 }
 
 impl SearchIndex {
     /// Create a new empty search index.
-    pub fn new(shells: DisjunctiveFilter<Vec<String>>) -> Self {
+    pub fn new(shells: OrFilter<Vec<String>>) -> Self {
         let nucleo_config = atuin_nucleo::Config::DEFAULT;
         // Single column for command text
         let nucleo = Nucleo::<String>::new(nucleo_config, Arc::new(|| {}), None, 1);
@@ -465,7 +465,7 @@ impl SearchIndex {
 
 impl Default for SearchIndex {
     fn default() -> Self {
-        Self::new(DisjunctiveFilter::all())
+        Self::new(OrFilter::all())
     }
 }
 
@@ -712,10 +712,9 @@ mod tests {
     #[case::fish(&["fish"], 0)]
     #[case::fish_unknown(&["fish", ""], 4)]
     async fn search_with_shell_filter(#[case] shells: &[&str], #[case] expected_count: usize) {
-        let filter = DisjunctiveFilter::from_list(
-            shells.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>(),
-        )
-        .unwrap_or_default();
+        let filter =
+            OrFilter::from_list(shells.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
+                .unwrap_or_default();
         let index = SearchIndex::new(filter);
 
         for (command, shell) in [

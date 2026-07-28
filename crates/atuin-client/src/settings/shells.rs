@@ -1,4 +1,4 @@
-use atuin_common::filter::DisjunctiveFilter;
+use atuin_common::filter::{self, OrFilter};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Controls which shells' commands are included in interactive search.
@@ -12,18 +12,18 @@ pub enum Shells {
 
     /// Include commands run by any shell in the filter. The empty string will include commands
     /// that have no recorded shell.
-    Fixed(DisjunctiveFilter<Vec<String>>),
+    Fixed(OrFilter<Vec<String>>),
 }
 
 impl Shells {
     /// Include commands from every shell.
     pub const fn all() -> Self {
-        Self::Fixed(DisjunctiveFilter::all())
+        Self::Fixed(OrFilter::all())
     }
 
     /// Turn this setting into a concrete shell filter.
     ///
-    /// This method returns a helper type that allows you to obtain a [`DisjunctiveFilter`] without
+    /// This method returns a helper type that allows you to obtain a [`OrFilter`] without
     /// allocating; see [`ShellFilter::as_filter`].
     pub fn to_filter(&self) -> ShellFilter<'_> {
         self.to_filter_with(|| std::env::var("ATUIN_SHELL").ok())
@@ -41,7 +41,7 @@ impl Shells {
                     // and an empty string always compares earlier.
                     ShellFilterInner::Inline([String::new(), shell])
                 }
-                _ => ShellFilterInner::Borrowed(DisjunctiveFilter::all()),
+                _ => ShellFilterInner::Borrowed(OrFilter::all()),
             },
             Self::Fixed(filter) => ShellFilterInner::Borrowed(filter.as_slice_filter()),
         })
@@ -50,28 +50,28 @@ impl Shells {
 
 /// A concrete shell filter, returned by [`Shells::to_filter`].
 ///
-/// This is a helper type to allow you to obtain a [`DisjunctiveFilter`] from a [`Shells`] object
+/// This is a helper type to allow you to obtain a [`OrFilter`] from a [`Shells`] object
 /// without allocating. See [`ShellFilter::as_filter`].
 pub struct ShellFilter<'a>(ShellFilterInner<'a>);
 
 /// Helper type to hide enum variants from the public API.
 enum ShellFilterInner<'a> {
-    Borrowed(DisjunctiveFilter<&'a [String]>),
+    Borrowed(OrFilter<&'a [String]>),
     /// Always sorted and deduped.
     Inline([String; 2]),
 }
 
 impl ShellFilter<'_> {
-    /// View this filter as a [`DisjunctiveFilter`].
-    pub fn as_filter(&self) -> DisjunctiveFilter<&[String]> {
+    /// View this filter as a [`OrFilter`].
+    pub fn as_filter(&self) -> OrFilter<&[String]> {
         match &self.0 {
             ShellFilterInner::Borrowed(filter) => *filter,
-            ShellFilterInner::Inline(items) => DisjunctiveFilter::new_unchecked(items),
+            ShellFilterInner::Inline(items) => OrFilter::new_unchecked(items),
         }
     }
 
-    /// Convert this filter into an owned [`DisjunctiveFilter<Vec<String>>`].
-    pub fn to_vec_filter(&self) -> DisjunctiveFilter<Vec<String>> {
+    /// Convert this filter into an owned [`OrFilter<Vec<String>>`].
+    pub fn to_vec_filter(&self) -> OrFilter<Vec<String>> {
         self.as_filter().to_vec_filter()
     }
 }
@@ -99,9 +99,7 @@ impl<'a> Deserialize<'a> for Shells {
             Repr::Keyword(Keyword::All) => Self::all(),
             Repr::Keyword(Keyword::Auto) => Self::Auto,
             // Empty array is the same as "all", but "all" is preferred.
-            Repr::List(shells) => {
-                Self::Fixed(DisjunctiveFilter::from_list(shells).unwrap_or_default())
-            }
+            Repr::List(shells) => Self::Fixed(OrFilter::from_list(shells).unwrap_or_default()),
         })
     }
 }
@@ -114,8 +112,8 @@ impl Serialize for Shells {
         match self {
             Shells::Auto => serializer.serialize_str("auto"),
             Shells::Fixed(filter) => match filter.items() {
-                None => serializer.serialize_str("all"),
-                Some(items) => items.serialize(serializer),
+                filter::Items::All => serializer.serialize_str("all"),
+                filter::Items::Some(items) => items.serialize(serializer),
             },
         }
     }
@@ -124,7 +122,7 @@ impl Serialize for Shells {
 #[cfg(test)]
 mod tests {
     use super::Shells;
-    use atuin_common::filter::DisjunctiveFilter;
+    use atuin_common::filter::{self, OrFilter};
     use rstest::rstest;
     use serde::Deserialize;
 
@@ -178,7 +176,10 @@ mod tests {
     ) {
         let shell_filter = settings.to_filter_with(|| current_shell.map(Into::into));
         let filter = shell_filter.as_filter();
-        let items = filter.items().unwrap_or_default();
+        let items = match filter.items() {
+            filter::Items::All => &[],
+            filter::Items::Some(items) => items,
+        };
         assert!(items.iter().eq(expected), "{items:?} != {expected:?}");
         assert_eq!(filter.is_all(), expected.is_empty());
         assert_eq!(shell_filter.to_vec_filter(), filter);
@@ -187,10 +188,8 @@ mod tests {
     /// Helper for creating a [`Shells::Fixed`].
     fn fixed(items: &[&str]) -> Shells {
         Shells::Fixed(
-            DisjunctiveFilter::from_list(
-                items.iter().copied().map(str::to_owned).collect::<Vec<_>>(),
-            )
-            .unwrap_or_default(),
+            OrFilter::from_list(items.iter().copied().map(str::to_owned).collect::<Vec<_>>())
+                .unwrap_or_default(),
         )
     }
 }

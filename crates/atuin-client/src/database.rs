@@ -7,7 +7,7 @@ use std::{
 
 use crate::history::{AuthorPattern, KNOWN_AGENTS};
 use async_trait::async_trait;
-use atuin_common::filter::DisjunctiveFilter;
+use atuin_common::filter::{self, OrFilter};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils;
 use fs_err as fs;
@@ -60,9 +60,9 @@ pub struct OptFilters<'a> {
     pub reverse: bool,
     pub include_duplicates: bool,
     /// Author filter.
-    pub authors: DisjunctiveFilter<&'a [AuthorPattern]>,
+    pub authors: OrFilter<&'a [AuthorPattern]>,
     /// Shell filter. The empty string matches commands that have no recorded shell.
-    pub shells: DisjunctiveFilter<&'a [String]>,
+    pub shells: OrFilter<&'a [String]>,
 }
 
 /// Build a query [`Context`] without requiring a live shell session.
@@ -110,10 +110,10 @@ impl Context {
 
 /// Each entry is OR'd: [`AuthorPattern::AllUser`] → NOT IN agents, [`AuthorPattern::AllAgent`] →
 /// IN agents, [`AuthorPattern::Name`] → exact match.
-fn apply_author_filter(sql: &mut SqlBuilder, authors: DisjunctiveFilter<&[AuthorPattern]>) {
-    let Some(authors) = authors.items() else {
-        // "All" filter: allow all items.
-        return;
+fn apply_author_filter(sql: &mut SqlBuilder, authors: OrFilter<&[AuthorPattern]>) {
+    let authors = match authors.items() {
+        filter::Items::All => return,
+        filter::Items::Some(a) => a,
     };
 
     let author_expr = "CASE \
@@ -146,14 +146,14 @@ fn apply_author_filter(sql: &mut SqlBuilder, authors: DisjunctiveFilter<&[Author
         }
     });
 
-    // Note: `conditions` cannot be empty; `DisjunctiveFilter::items` is always non-empty.
+    // Note: `conditions` cannot be empty; `OrFilter::items` is always non-empty.
     sql.and_where(format!("({})", conditions.join(" OR ")));
 }
 
-fn apply_shell_filter(sql: &mut SqlBuilder, shells: DisjunctiveFilter<&[String]>) {
-    let Some(shells) = shells.items() else {
-        // "All" filter: allow all items.
-        return;
+fn apply_shell_filter(sql: &mut SqlBuilder, shells: OrFilter<&[String]>) {
+    let shells = match shells.items() {
+        filter::Items::All => return,
+        filter::Items::Some(s) => s,
     };
 
     let mut include_null = false;
@@ -174,7 +174,7 @@ fn apply_shell_filter(sql: &mut SqlBuilder, shells: DisjunctiveFilter<&[String]>
         cond = Some(cond.map_or_else(String::new, |s| s + " OR ") + "shell IS NULL");
     }
 
-    // `DisjunctiveFilter::items` is always non-empty.
+    // `OrFilter::items` is always non-empty.
     sql.and_where(cond.expect("nonempty list of shells must result in at least one condition"));
 }
 
@@ -1977,8 +1977,7 @@ mod test {
             git_root: None,
         };
 
-        let shells =
-            DisjunctiveFilter::from_list(shells.map(str::to_owned).to_vec()).unwrap_or_default();
+        let shells = OrFilter::from_list(shells.map(str::to_owned).to_vec()).unwrap_or_default();
         let filters = OptFilters {
             shells: shells.as_slice_filter(),
             ..Default::default()
@@ -2038,8 +2037,8 @@ mod test {
             git_root: None,
         };
 
-        let authors = DisjunctiveFilter::from_list(authors.map(AuthorPattern::from).to_vec())
-            .unwrap_or_default();
+        let authors =
+            OrFilter::from_list(authors.map(AuthorPattern::from).to_vec()).unwrap_or_default();
         let filters = OptFilters {
             authors: authors.as_slice_filter(),
             ..Default::default()

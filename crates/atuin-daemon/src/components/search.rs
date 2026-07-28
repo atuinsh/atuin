@@ -7,7 +7,7 @@ use std::ops::Deref;
 use std::{pin::Pin, sync::Arc};
 
 use atuin_client::database::Database;
-use atuin_common::filter::DisjunctiveFilter;
+use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use eyre::Result;
 use tokio::sync::RwLock;
@@ -305,7 +305,7 @@ pub struct SearchGrpcService {
 impl SearchGrpcService {
     async fn maybe_rebuild_index(
         &self,
-        shells: DisjunctiveFilter<Vec<String>>,
+        shells: OrFilter<Vec<String>>,
     ) -> Result<Option<SearchIndex>, ()> {
         if self.index.read().await.shells == shells {
             return Ok(None);
@@ -370,7 +370,7 @@ impl SearchSvc for SearchGrpcService {
                 let index_filter = convert_filter_mode(filter_mode, &proto_context);
 
                 // An empty list in `SearchRequest::shells` means "all".
-                let shells = DisjunctiveFilter::from_list(search_req.shells).unwrap_or_default();
+                let shells = OrFilter::from_list(search_req.shells).unwrap_or_default();
                 let index = match this.maybe_rebuild_index(shells).await {
                     Ok(Some(new_index)) => {
                         let mut guard = this.index.write().await;

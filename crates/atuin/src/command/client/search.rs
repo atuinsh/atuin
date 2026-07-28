@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{IsTerminal as _, Write, stderr, stdout};
 
-use atuin_common::filter::DisjunctiveFilter;
+use atuin_common::filter::OrFilter;
 use atuin_common::{string::EscapeNonPrintablePosixExt as _, utils};
 use clap::Parser;
 use eyre::Result;
@@ -260,8 +260,8 @@ impl Cmd {
             }
         } else {
             // An empty `--author` / `--shell` list means no filtering on that field.
-            let authors = DisjunctiveFilter::from_list(self.author).unwrap_or_default();
-            let shells = DisjunctiveFilter::from_list(self.shell).unwrap_or_default();
+            let authors = OrFilter::from_list(self.author).unwrap_or_default();
+            let shells = OrFilter::from_list(self.shell).unwrap_or_default();
 
             let opt_filter = OptFilters {
                 exit: self.exit,

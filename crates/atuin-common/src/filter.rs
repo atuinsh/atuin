@@ -1,8 +1,8 @@
-use crate::utils::SortedDedupedSliceComparer;
+use crate::slice::{SortedDedupedSliceComparer, partition_dedup};
 use itertools::Itertools;
 use std::borrow::Borrow;
 
-/// Represents a filter with disjunctive semantics.
+/// Represents a filter with "or" semantics.
 ///
 /// The filter contains one or more items. An item is allowed through the filter if and only if it
 /// matches one of the items in the filter. In essence, the filter behaves like a giant "or"
@@ -16,8 +16,8 @@ use std::borrow::Borrow;
 /// * [`Vec<T>`]
 /// * [`&[T]`](slice)
 /// * [`&mut [T]`](slice)
-#[derive(Clone, Copy, Debug, Default)]
-pub struct DisjunctiveFilter<L> {
+#[derive(Clone, Copy, Debug)]
+pub struct OrFilter<L> {
     /// The inner list of filters.
     ///
     /// This list must be sorted and contain no duplicates.
@@ -27,13 +27,13 @@ pub struct DisjunctiveFilter<L> {
     inner: L,
 }
 
-impl<L: FilterStorage> DisjunctiveFilter<L> {
+impl<L: FilterStorage> OrFilter<L> {
     /// Create an "all" filter (i.e., allow all items).
     pub const fn all() -> Self {
-        Self { inner: L::DEFAULT }
+        Self { inner: L::EMPTY }
     }
 
-    /// Create a [`DisjunctiveFilter`] from a sorted, deduped, non-empty list.
+    /// Create a [`OrFilter`] from a sorted, deduped, non-empty list.
     pub fn new_unchecked(sorted_deduped: L) -> Self {
         debug_assert!(
             !sorted_deduped.as_ref().is_empty(),
@@ -64,9 +64,9 @@ impl<L: FilterStorage> DisjunctiveFilter<L> {
     /// # Time complexity
     ///
     /// O(1).
-    pub fn as_slice_filter(&self) -> DisjunctiveFilter<&[L::Item]> {
+    pub fn as_slice_filter(&self) -> OrFilter<&[L::Item]> {
         // The invariants carry over unchanged: the same items in the same order.
-        DisjunctiveFilter {
+        OrFilter {
             inner: self.inner.as_ref(),
         }
     }
@@ -76,12 +76,12 @@ impl<L: FilterStorage> DisjunctiveFilter<L> {
     /// # Time complexity
     ///
     /// O(n).
-    pub fn to_vec_filter(&self) -> DisjunctiveFilter<Vec<L::Item>>
+    pub fn to_vec_filter(&self) -> OrFilter<Vec<L::Item>>
     where
         L::Item: Clone,
     {
         // As in `as_slice_filter`, the invariants carry over unchanged.
-        DisjunctiveFilter {
+        OrFilter {
             inner: self.inner.as_ref().to_vec(),
         }
     }
@@ -94,13 +94,11 @@ impl<L: FilterStorage> DisjunctiveFilter<L> {
     /// Get the set of items this filter permits.
     ///
     /// The items are sorted and contain no duplicates.
-    ///
-    /// Returns [`None`] if the filter allows all items.
-    pub fn items(&self) -> Option<&[L::Item]> {
+    pub fn items(&self) -> Items<&'_ [L::Item]> {
         if self.is_all() {
-            None
+            Items::All
         } else {
-            Some(self.inner.as_ref())
+            Items::Some(self.inner.as_ref())
         }
     }
 
@@ -127,42 +125,43 @@ impl<L: FilterStorage> DisjunctiveFilter<L> {
 
     /// Turn this filter into a list of the items in the filter.
     ///
-    /// Returns [`None`] if this filter is an ["all" filter](Self::is_all).
-    ///
     /// # Time complexity
     ///
     /// O(1).
-    pub fn into_list(self) -> Option<L> {
+    pub fn into_list(self) -> Items<L> {
         if self.inner.as_ref().is_empty() {
-            None
+            Items::All
         } else {
-            Some(self.inner)
+            Items::Some(self.inner)
         }
     }
 
     /// Compare this filter with an iterator.
     ///
-    /// Returns a comparer whose [`eq`](DisjunctiveFilterComparer::eq) method returns true if and
-    /// only if either of the following is true:
+    /// Returns a comparer whose [`eq`](Comparer::eq) method returns true if and only if either of
+    /// the following is true:
     ///
     /// * `iter` is [`None`] and this filter is an ["all" filter](Self::is_all).
     /// * The elements of `iter` exactly equal the items in the filter, disregarding order and
     ///   duplicates.
-    pub fn compare<'a, I, B>(&'a self, iter: Option<I>) -> DisjunctiveFilterComparer<'a, L::Item, I>
+    pub fn compare<'a, I, B>(&'a self, iter: Option<I>) -> Comparer<'a, L::Item, I>
     where
         I: IntoIterator<Item = &'a B>,
         B: Ord + ?Sized + 'a,
         L::Item: Borrow<B>,
     {
-        DisjunctiveFilterComparer {
-            comparer: iter.map(|iter| SortedDedupedSliceComparer::new(self.inner.as_ref(), iter)),
-            is_all: self.is_all(),
-        }
+        Comparer(match iter {
+            Some(iter) => ComparerInner::SliceComparer(SortedDedupedSliceComparer::new(
+                self.inner.as_ref(),
+                iter,
+            )),
+            None => ComparerInner::Immediate(self.is_all()),
+        })
     }
 }
 
-impl<L: FilterStorageMut> DisjunctiveFilter<L> {
-    /// Create a [`DisjunctiveFilter`] from a list of items to be included in the filter.
+impl<L: FilterStorageMut> OrFilter<L> {
+    /// Create a [`OrFilter`] from a list of items to be included in the filter.
     ///
     /// `list` can be an `Option<L>` or `L`. In the case of [`Option`], [`None`] means no filtering
     /// (i.e., an "all" filter), in which case [`Self::all()`] will be returned.
@@ -188,29 +187,54 @@ impl<L: FilterStorageMut> DisjunctiveFilter<L> {
     }
 }
 
-impl<L, M> PartialEq<DisjunctiveFilter<M>> for DisjunctiveFilter<L>
+impl<L: FilterStorage> Default for OrFilter<L> {
+    /// The default value of a [`OrFilter`] is an "all" filter.
+    fn default() -> Self {
+        Self::all()
+    }
+}
+
+impl<L, M> PartialEq<OrFilter<M>> for OrFilter<L>
 where
     L: FilterStorage,
     M: FilterStorage,
     L::Item: PartialEq<M::Item>,
 {
-    fn eq(&self, other: &DisjunctiveFilter<M>) -> bool {
+    fn eq(&self, other: &OrFilter<M>) -> bool {
         self.inner.as_ref() == other.inner.as_ref()
     }
 }
 
-/// A list-like type that can be used with [`DisjunctiveFilter`].
+impl<L> Eq for OrFilter<L>
+where
+    L: FilterStorage,
+    L::Item: Eq,
+{
+}
+
+/// A borrowed view of the items in a [`OrFilter`].
+///
+/// `L` can be a slice or [`Vec`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Items<L> {
+    /// The filter allows all items.
+    All,
+    /// The filter allows any item in this slice.
+    Some(L),
+}
+
+/// A list-like type that can be used with [`OrFilter`].
 ///
 /// This trait is implemented for [`Vec`] and references to slices.
-pub trait FilterStorage: Ord + Default + AsRef<[Self::Item]> {
-    /// We need to be able to obtain a default value in const contexts, so we can't just rely on the
-    /// [`Default`] trait; we need an associated const too.
-    const DEFAULT: Self;
+pub trait FilterStorage: Ord + AsRef<[Self::Item]> + sealed::Sealed {
+    /// An empty instance of this type. Its `AsRef<[Self::Item]>` implementation must yield an empty
+    /// slice.
+    const EMPTY: Self;
 
     type Item: Ord;
 }
 
-/// A list-like type that can be used with [`DisjunctiveFilter`] and mutated.
+/// A list-like type that can be used with [`OrFilter`] and mutated.
 ///
 /// This trait is implemented for [`Vec`] and mutable references to slices.
 pub trait FilterStorageMut: FilterStorage + AsMut<[Self::Item]> {
@@ -218,7 +242,7 @@ pub trait FilterStorageMut: FilterStorage + AsMut<[Self::Item]> {
 }
 
 impl<T: Ord> FilterStorage for Vec<T> {
-    const DEFAULT: Self = Self::new();
+    const EMPTY: Self = Self::new();
     type Item = T;
 }
 
@@ -230,53 +254,39 @@ impl<T: Ord> FilterStorageMut for Vec<T> {
 }
 
 impl<T: Ord> FilterStorage for &'_ [T] {
-    const DEFAULT: Self = &[];
+    const EMPTY: Self = &[];
     type Item = T;
 }
 
 impl<T: Ord> FilterStorage for &'_ mut [T] {
     // Using a separate function is necessary here -- if `empty_mut_slice()` is replaced with
     // `&mut []`, it won't compile.
-    const DEFAULT: Self = empty_mut_slice();
+    const EMPTY: Self = empty_mut_slice();
     type Item = T;
 }
 
-// See comment on `<&mut [T] as FilterStorage>::DEFAULT`.
+// See comment on `<&mut [T] as FilterStorage>::EMPTY`.
 const fn empty_mut_slice<'a, T>() -> &'a mut [T] {
     &mut []
 }
 
 impl<T: Ord> FilterStorageMut for &'_ mut [T] {
     fn dedup(self) -> Self {
-        // TODO: this is the same algorithm as `slice::partition_dedup`, which is currently
-        // unstable. Use that method instead once it's stabilized.
-        if self.len() <= 1 {
-            return self;
-        }
-
-        let mut next_read: usize = 1;
-        let mut next_write: usize = 1;
-
-        while next_read < self.len() {
-            if self[next_read] != self[next_write - 1] {
-                self.swap(next_read, next_write);
-                next_write += 1;
-            }
-            next_read += 1;
-        }
-        &mut self[..next_write]
+        partition_dedup(self).0
     }
 }
 
-/// Helper type for comparing a [`DisjunctiveFilter`] with an iterator.
-pub struct DisjunctiveFilterComparer<'a, T, I> {
-    /// [`None`] if no iterator was provided.
-    comparer: Option<SortedDedupedSliceComparer<'a, T, I>>,
-    /// Whether the filter is an ["all" filter](DisjunctiveFilter::is_all).
-    is_all: bool,
+/// Helper type for comparing a [`OrFilter`] with an iterator.
+pub struct Comparer<'a, T, I>(ComparerInner<'a, T, I>);
+
+enum ComparerInner<'a, T, I> {
+    /// The comparison result is known immediately.
+    Immediate(bool),
+    /// A [`SortedDedupedSliceComparer`] must be run to obtain the comparison result.
+    SliceComparer(SortedDedupedSliceComparer<'a, T, I>),
 }
 
-impl<'a, T, I, B> DisjunctiveFilterComparer<'a, T, I>
+impl<'a, T, I, B> Comparer<'a, T, I>
 where
     I: IntoIterator<Item = &'a B>,
     B: Ord + ?Sized + 'a,
@@ -288,35 +298,42 @@ where
     /// If the number of items in the filter is less than or equal to `STACK_SIZE`, this method will
     /// not allocate memory.
     pub fn eq<const STACK_SIZE: usize>(self) -> bool {
-        match self.comparer {
-            Some(comparer) => comparer.eq::<STACK_SIZE>(),
-            None => self.is_all,
+        match self.0 {
+            ComparerInner::Immediate(b) => b,
+            ComparerInner::SliceComparer(cmp) => cmp.eq::<STACK_SIZE>(),
         }
     }
 }
 
+mod sealed {
+    pub trait Sealed {}
+    impl<T> Sealed for Vec<T> {}
+    impl<T> Sealed for &[T] {}
+    impl<T> Sealed for &mut [T] {}
+}
+
 #[cfg(test)]
 mod tests {
-    use super::DisjunctiveFilter;
+    use super::*;
     use rstest::rstest;
 
     /// Build a filter from a nonempty list of items.
-    fn filter(items: &[&str]) -> DisjunctiveFilter<Vec<String>> {
-        DisjunctiveFilter::from_list(items.iter().copied().map(str::to_owned).collect::<Vec<_>>())
+    fn filter(items: &[&str]) -> OrFilter<Vec<String>> {
+        OrFilter::from_list(items.iter().copied().map(str::to_owned).collect::<Vec<_>>())
             .expect("`items` must not be empty")
     }
 
     #[test]
     fn all_filter_has_no_items() {
-        let all = DisjunctiveFilter::<Vec<String>>::all();
+        let all = OrFilter::<Vec<String>>::all();
         assert!(all.is_all());
-        assert_eq!(all.items(), None);
-        assert_eq!(all.into_list(), None);
+        assert_eq!(all.items(), Items::All);
+        assert_eq!(all.into_list(), Items::All);
     }
 
     #[test]
     fn all_filter_contains_everything() {
-        let all = DisjunctiveFilter::<Vec<String>>::all();
+        let all = OrFilter::<Vec<String>>::all();
         assert!(all.contains("bash"));
         assert!(all.contains(""));
         assert!(all.contains("anything at all"));
@@ -342,7 +359,7 @@ mod tests {
         let expected = ["", "bash", "zsh"].map(str::to_owned);
         assert_eq!(
             filter(&["zsh", "bash", "zsh", ""]).items(),
-            Some(expected.as_slice())
+            Items::Some(expected.as_slice())
         );
     }
 
@@ -357,22 +374,18 @@ mod tests {
         #[case] expected: &[&str],
     ) {
         let mut items = items.to_vec();
-        let filter =
-            DisjunctiveFilter::from_list(items.as_mut_slice()).expect("`items` must not be empty");
-        assert_eq!(filter.items(), Some(expected));
+        let filter = OrFilter::from_list(items.as_mut_slice()).expect("`items` must not be empty");
+        assert_eq!(filter.items(), Items::Some(expected));
     }
 
     #[test]
     fn from_list_rejects_an_empty_list() {
-        assert_eq!(
-            DisjunctiveFilter::<Vec<String>>::from_list(Vec::new()),
-            None
-        );
+        assert_eq!(OrFilter::<Vec<String>>::from_list(Vec::new()), None);
     }
 
     #[test]
     fn from_list_of_none_is_an_all_filter() {
-        let filter = DisjunctiveFilter::<Vec<String>>::from_list(None::<Vec<String>>)
+        let filter = OrFilter::<Vec<String>>::from_list(None::<Vec<String>>)
             .expect("`None` yields an \"all\" filter");
         assert!(filter.is_all());
     }
@@ -381,7 +394,7 @@ mod tests {
     fn into_list_returns_the_sorted_items() {
         assert_eq!(
             filter(&["zsh", "bash"]).into_list(),
-            Some(vec!["bash".to_owned(), "zsh".to_owned()]),
+            Items::Some(vec!["bash".to_owned(), "zsh".to_owned()]),
         );
     }
 
@@ -409,7 +422,7 @@ mod tests {
     #[case(Some(&[][..]), true)]
     #[case(Some(&["bash"][..]), false)]
     fn compare_with_an_all_filter(#[case] other: Option<&[&str]>, #[case] expected: bool) {
-        let all = DisjunctiveFilter::<Vec<String>>::all();
+        let all = OrFilter::<Vec<String>>::all();
         let comparer = all.compare(other.map(|o| o.iter().copied()));
         assert_eq!(comparer.eq::<4>(), expected);
     }

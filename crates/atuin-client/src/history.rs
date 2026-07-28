@@ -2,7 +2,7 @@ use rmp::decode::{self, Bytes};
 use rmp::encode;
 use std::env;
 
-use atuin_common::filter::DisjunctiveFilter;
+use atuin_common::filter::OrFilter;
 use atuin_common::record::DecryptedData;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::{normalize_optional_string, uuid_v7};
@@ -70,9 +70,9 @@ impl From<&str> for AuthorPattern {
 /// An author filter that only allows non-agent commands (i.e., [`AuthorPattern::AllUser`]).
 ///
 /// This function uses a [`LazyLock`] to avoid building the filter every time.
-pub fn all_user_author_filter() -> DisjunctiveFilter<&'static [AuthorPattern]> {
-    static FILTER: LazyLock<DisjunctiveFilter<Vec<AuthorPattern>>> = LazyLock::new(|| {
-        DisjunctiveFilter::from_list(vec![AuthorPattern::AllUser]).expect("the vector is not empty")
+pub fn all_user_author_filter() -> OrFilter<&'static [AuthorPattern]> {
+    static FILTER: LazyLock<OrFilter<Vec<AuthorPattern>>> = LazyLock::new(|| {
+        OrFilter::from_list(vec![AuthorPattern::AllUser]).expect("the vector is not empty")
     });
     FILTER.as_slice_filter()
 }
@@ -524,7 +524,7 @@ mod tests {
     use crate::{history::Version, settings::Settings};
 
     use super::{AuthorPattern, History, all_user_author_filter, is_known_agent};
-    use atuin_common::filter::DisjunctiveFilter;
+    use atuin_common::filter::OrFilter;
 
     /// Whether an author filter permits `author`, mirroring the SQL that
     /// [`apply_author_filter`](crate::database::OptFilters::authors) builds.
@@ -533,7 +533,7 @@ mod tests {
     /// than a scan that reinterprets every element in turn. No guard against an author *named*
     /// `$all-agent` is needed: such an author is an [`AuthorPattern::Name`], a different value from
     /// [`AuthorPattern::AllAgent`].
-    fn author_matches_filters(author: &str, filters: DisjunctiveFilter<&[AuthorPattern]>) -> bool {
+    fn author_matches_filters(author: &str, filters: OrFilter<&[AuthorPattern]>) -> bool {
         // `contains` is true for an "all" filter, so that case needs no separate check.
         filters.contains(&AuthorPattern::Name(author.to_owned()))
             || (filters.contains(&AuthorPattern::AllUser) && !is_known_agent(author))
@@ -601,8 +601,8 @@ mod tests {
 
     #[test]
     fn known_agents_include_pi() {
-        let agents = DisjunctiveFilter::from_list(vec![AuthorPattern::AllAgent]).unwrap();
-        let users = DisjunctiveFilter::from_list(vec![AuthorPattern::AllUser]).unwrap();
+        let agents = OrFilter::from_list(vec![AuthorPattern::AllAgent]).unwrap();
+        let users = OrFilter::from_list(vec![AuthorPattern::AllUser]).unwrap();
 
         assert!(is_known_agent("pi"));
         assert!(author_matches_filters("pi", agents.as_slice_filter()));
@@ -613,7 +613,7 @@ mod tests {
 
     #[test]
     fn an_all_author_filter_matches_everyone() {
-        let all = DisjunctiveFilter::all();
+        let all = OrFilter::all();
         assert!(author_matches_filters("pi", all));
         assert!(author_matches_filters("ellie", all));
     }

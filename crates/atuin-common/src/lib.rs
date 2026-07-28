@@ -66,6 +66,7 @@ pub mod logs;
 pub mod path;
 pub mod record;
 pub mod shell;
+pub mod slice;
 pub mod string;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;

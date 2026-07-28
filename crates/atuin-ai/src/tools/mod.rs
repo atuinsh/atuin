@@ -7,7 +7,7 @@ use std::{
 
 use atuin_client::history::AuthorPattern;
 use atuin_common::ansi;
-use atuin_common::filter::DisjunctiveFilter;
+use atuin_common::filter::OrFilter;
 use atuin_common::time::UtcOffsetExt;
 use eyre::Result;
 use uuid::Uuid;
@@ -1025,7 +1025,7 @@ pub(crate) struct AtuinHistoryToolCall {
     pub query: String,
     pub limit: i64,
     pub only_failed: bool,
-    pub authors: DisjunctiveFilter<Vec<AuthorPattern>>,
+    pub authors: OrFilter<Vec<AuthorPattern>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1103,7 +1103,7 @@ impl TryFrom<&serde_json::Value> for AtuinHistoryToolCall {
             None => Vec::new(),
         };
         // An omitted or empty `authors` array means no author filtering.
-        let authors = DisjunctiveFilter::from_list(authors).unwrap_or_default();
+        let authors = OrFilter::from_list(authors).unwrap_or_default();
 
         Ok(AtuinHistoryToolCall {
             filter_modes,
@@ -1375,6 +1375,7 @@ impl PermissibleToolCall for LoadSkillToolCall {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atuin_common::filter;
 
     fn read_rule(scope: Option<&str>) -> Rule {
         Rule {
@@ -1430,7 +1431,7 @@ mod tests {
         assert!(call.only_failed);
         assert_eq!(
             call.authors.items(),
-            Some([AuthorPattern::AllAgent].as_slice())
+            filter::Items::Some([AuthorPattern::AllAgent].as_slice())
         );
     }
 
