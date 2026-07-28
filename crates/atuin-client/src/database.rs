@@ -7,7 +7,7 @@ use std::{
 
 use crate::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNOWN_AGENTS};
 use async_trait::async_trait;
-use atuin_common::time::OffsetDateTimeExt;
+use atuin_common::time::{OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::utils;
 use fs_err as fs;
 use itertools::Itertools;
@@ -58,6 +58,7 @@ pub struct OptFilters<'a> {
     pub offset: Option<i64>,
     pub reverse: bool,
     pub include_duplicates: bool,
+    pub timezone: UtcOffsetSpec,
     /// Author filter. Supports special values `$all-user` and `$all-agent`.
     pub authors: &'a [String],
     /// Shell filter. If empty, show commands from all shells. Empty string includes commands that
@@ -734,22 +735,26 @@ impl Database for Sqlite {
             .map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
 
         if let Some(before) = filter_options.before {
-            let parsed =
-                interim::parse_date_string(before, OffsetDateTime::now_utc(), interim::Dialect::Uk)
-                    .map_err(|e| {
-                        sqlx::Error::Decode(
-                            format!("invalid `before` filter {before:?}: {e}").into(),
-                        )
-                    })?;
+            let parsed = interim::parse_date_string(
+                before,
+                OffsetDateTime::now_utc().to_offset(filter_options.timezone.0),
+                interim::Dialect::Uk,
+            )
+            .map_err(|e| {
+                sqlx::Error::Decode(format!("invalid `before` filter {before:?}: {e}").into())
+            })?;
             sql.and_where_lt("timestamp", quote(parsed.unix_timestamp_nanos() as i64));
         }
 
         if let Some(after) = filter_options.after {
-            let parsed =
-                interim::parse_date_string(after, OffsetDateTime::now_utc(), interim::Dialect::Uk)
-                    .map_err(|e| {
-                        sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
-                    })?;
+            let parsed = interim::parse_date_string(
+                after,
+                OffsetDateTime::now_utc().to_offset(filter_options.timezone.0),
+                interim::Dialect::Uk,
+            )
+            .map_err(|e| {
+                sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
+            })?;
             sql.and_where_gt("timestamp", quote(parsed.unix_timestamp_nanos() as i64));
         }
 
@@ -1219,7 +1224,7 @@ mod test {
     use crate::settings::test_local_timeout;
     use rstest::rstest;
     use std::time::{Duration, Instant};
-    use time::format_description::well_known::Rfc3339;
+    use time::{Date, Month, Time, UtcOffset, format_description::well_known::Rfc3339};
 
     fn new_context() -> Context {
         Context {
@@ -1521,7 +1526,53 @@ mod test {
             assert_eq!(results[0].command, "ls /home/ellie");
         }
     }
+    #[rstest]
+    #[case::explicit_timezone(
+        Some("2026-01-12T11:00:00-04:00"),
+        Some("2026-01-12T12:00:00-04:00"),
+        1
+    )]
+    #[case::no_timezone_provided(Some("2026-01-12T11:00:00"), Some("2026-01-12T12:00:00"), 1)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_timezone_before_after(
+        #[case] after: Option<&str>,
+        #[case] before: Option<&str>,
+        #[case] expected: usize,
+    ) {
+        let item_time = OffsetDateTime::new_in_offset(
+            Date::from_calendar_date(2026, Month::January, 12).unwrap(),
+            Time::from_hms(11, 30, 5).unwrap(),
+            UtcOffset::from_hms(-4, 0, 0).unwrap(),
+        );
 
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+        new_history_item_at(&mut db, "ls /home/ellie", Some(item_time))
+            .await
+            .unwrap();
+
+        let context = new_context();
+
+        let results = db
+            .search(
+                DbSearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "",
+                OptFilters {
+                    after,
+                    before,
+                    timezone: UtcOffsetSpec(UtcOffset::from_hms(-4, 0, 0).unwrap()),
+                    include_duplicates: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), expected);
+    }
     #[rstest]
     #[case::with_duplicates_counts_every_execution(true, 2)]
     #[case::without_duplicates_collapses_to_newest_row(false, 1)]
