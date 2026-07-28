@@ -14,7 +14,7 @@ env:
 jobs:
   benchmarks:
     name: Run benchmarks
-    runs-on: depot-ubuntu-24.04
+    runs-on: codspeed-macro
 
     permissions:
       contents: read # required for actions/checkout
@@ -32,7 +32,7 @@ jobs:
 
       - name: Build the benchmark targets
         run: >
-          cargo codspeed build -m simulation
+          cargo codspeed build -m walltime
           -p atuin-client
           -p atuin-history
           -p atuin-nucleo-matcher
@@ -40,10 +40,6 @@ jobs:
 
       - name: Run the benchmarks
         uses: CodSpeedHQ/action@v4
-        env:
-          # daemon search bench: instrumented execution is much slower than
-          # native, so index build time at 1M+ history lines would dominate
-          BENCH_SCALES: "10000,100000"
         with:
-          mode: simulation
+          mode: walltime
           run: cargo codspeed run
