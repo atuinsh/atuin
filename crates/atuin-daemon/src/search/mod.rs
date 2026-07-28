@@ -8,4 +8,4 @@ mod index;
 tonic::include_proto!("search");
 
 // Re-export the index and related types
-pub use index::{IndexFilterMode, SearchIndex, ShellFilter};
+pub use index::{IndexFilterMode, SearchIndex};

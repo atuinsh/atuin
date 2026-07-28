@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{IsTerminal as _, Write, stderr, stdout};
 
+use atuin_common::filter::DisjunctiveFilter;
 use atuin_common::{string::EscapeNonPrintablePosixExt as _, utils};
 use clap::Parser;
 use eyre::Result;
@@ -9,7 +10,7 @@ use atuin_client::{
     database::Database,
     database::{OptFilters, current_context},
     encryption,
-    history::{History, store::HistoryStore},
+    history::{AuthorPattern, History, store::HistoryStore},
     record::sqlite_store::SqliteStore,
     settings::{FilterMode, KeymapMode, SearchMode, Settings},
     theme::Theme,
@@ -140,7 +141,7 @@ pub struct Cmd {
     ///
     /// Can be specified multiple times.
     #[arg(long)]
-    author: Vec<String>,
+    author: Vec<AuthorPattern>,
 
     /// Include duplicate commands in the output (non-interactive only)
     #[arg(long)]
@@ -258,6 +259,10 @@ impl Cmd {
                 eprintln!("{item}");
             }
         } else {
+            // An empty `--author` / `--shell` list means no filtering on that field.
+            let authors = DisjunctiveFilter::from_list(self.author).unwrap_or_default();
+            let shells = DisjunctiveFilter::from_list(self.shell).unwrap_or_default();
+
             let opt_filter = OptFilters {
                 exit: self.exit,
                 exclude_exit: self.exclude_exit,
@@ -270,8 +275,8 @@ impl Cmd {
                 offset: self.offset,
                 reverse: self.reverse,
                 include_duplicates: self.include_duplicates,
-                authors: &self.author,
-                shells: &self.shell,
+                authors: authors.as_slice_filter(),
+                shells: shells.as_slice_filter(),
             };
 
             let mut entries = run_non_interactive(settings, opt_filter, &query, &db).await?;
@@ -356,7 +361,7 @@ async fn run_non_interactive(
 
 #[cfg(test)]
 mod tests {
-    use super::Cmd;
+    use super::{AuthorPattern, Cmd};
     use clap::Parser;
 
     #[test]
@@ -381,6 +386,35 @@ mod tests {
     fn search_author_cli_flag() {
         let cmd =
             Cmd::try_parse_from(["search", "--author", "codex", "--author", "ellie"]).unwrap();
-        assert_eq!(cmd.author, vec!["codex".to_string(), "ellie".to_string()]);
+        assert_eq!(
+            cmd.author,
+            vec![
+                AuthorPattern::Name("codex".to_owned()),
+                AuthorPattern::Name("ellie".to_owned()),
+            ],
+        );
+    }
+
+    #[test]
+    fn search_author_cli_flag_parses_the_special_values() {
+        let cmd = Cmd::try_parse_from([
+            "search",
+            "--author",
+            "$all-user",
+            "--author",
+            "$all-agent",
+            "--author",
+            "$all-users",
+        ])
+        .unwrap();
+        assert_eq!(
+            cmd.author,
+            vec![
+                AuthorPattern::AllUser,
+                AuthorPattern::AllAgent,
+                // Not a special value; a typo'd one is an author name, as it was before.
+                AuthorPattern::Name("$all-users".to_owned()),
+            ],
+        );
     }
 }

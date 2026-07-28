@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use atuin_client::{
     database::{Database, DbSearchMode, OptFilters},
-    history::{AUTHOR_FILTER_ALL_USER, History},
+    history::{History, all_user_author_filter},
     settings::Settings,
 };
 use atuin_daemon::client::{DaemonClientErrorKind, SearchClient, SearchParams, classify_error};
@@ -84,6 +84,7 @@ impl Search {
         state: &SearchState,
         db: &dyn Database,
     ) -> Result<Vec<History>> {
+        let shells = state.shells.to_filter();
         let results = db
             .search(
                 DbSearchMode::FullText,
@@ -92,8 +93,8 @@ impl Search {
                 state.input.as_str(),
                 OptFilters {
                     limit: Some(200),
-                    authors: &[AUTHOR_FILTER_ALL_USER.to_owned()],
-                    shells: state.shells.to_list().as_slice(),
+                    authors: all_user_author_filter(),
+                    shells: shells.as_filter(),
                     ..Default::default()
                 },
             )
@@ -139,7 +140,7 @@ impl SearchEngine for Search {
             query_id,
             filter_mode: state.filter_mode,
             context: Some(state.context.clone()),
-            shells: state.shells.to_list().to_vec(),
+            shells: state.shells.to_filter().to_vec_filter(),
         };
 
         // Try to connect and search; if it fails with a retriable error,

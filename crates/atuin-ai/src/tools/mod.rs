@@ -5,7 +5,9 @@ use std::{
     time::Duration,
 };
 
+use atuin_client::history::AuthorPattern;
 use atuin_common::ansi;
+use atuin_common::filter::DisjunctiveFilter;
 use atuin_common::time::UtcOffsetExt;
 use eyre::Result;
 use uuid::Uuid;
@@ -1023,7 +1025,7 @@ pub(crate) struct AtuinHistoryToolCall {
     pub query: String,
     pub limit: i64,
     pub only_failed: bool,
-    pub authors: Vec<String>,
+    pub authors: DisjunctiveFilter<Vec<AuthorPattern>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1094,12 +1096,14 @@ impl TryFrom<&serde_json::Value> for AtuinHistoryToolCall {
                 .iter()
                 .map(|v| {
                     v.as_str()
-                        .map(String::from)
+                        .map(AuthorPattern::from)
                         .ok_or(eyre::eyre!("authors entries must be strings"))
                 })
-                .collect::<Result<Vec<String>>>()?,
+                .collect::<Result<Vec<AuthorPattern>>>()?,
             None => Vec::new(),
         };
+        // An omitted or empty `authors` array means no author filtering.
+        let authors = DisjunctiveFilter::from_list(authors).unwrap_or_default();
 
         Ok(AtuinHistoryToolCall {
             filter_modes,
@@ -1154,7 +1158,7 @@ impl AtuinHistoryToolCall {
         let filter_options = OptFilters {
             limit: Some(self.limit),
             only_failed: self.only_failed,
-            authors: &self.authors,
+            authors: self.authors.as_slice_filter(),
             ..Default::default()
         };
 
@@ -1413,7 +1417,7 @@ mod tests {
 
         let call = AtuinHistoryToolCall::try_from(&input).unwrap();
         assert!(!call.only_failed);
-        assert!(call.authors.is_empty());
+        assert!(call.authors.is_all());
 
         let input = serde_json::json!({
             "query": "cargo",
@@ -1424,7 +1428,10 @@ mod tests {
 
         let call = AtuinHistoryToolCall::try_from(&input).unwrap();
         assert!(call.only_failed);
-        assert_eq!(call.authors, ["$all-agent"]);
+        assert_eq!(
+            call.authors.items(),
+            Some([AuthorPattern::AllAgent].as_slice())
+        );
     }
 
     #[test]
