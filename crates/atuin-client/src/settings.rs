@@ -28,18 +28,6 @@ static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 static META_CONFIG: OnceLock<(String, f64)> = OnceLock::new();
 static META_STORE: OnceCell<crate::meta::MetaStore> = OnceCell::const_new();
 
-/// Keys that need to be shell-expanded before use.
-const EXPANDED_PATH_KEYS: &[&str] = &[
-    "db_path",
-    "record_store_path",
-    "key_path",
-    "daemon.socket_path",
-    "daemon.pidfile_path",
-    "logs.dir",
-    "logs.search.file",
-    "logs.daemon.file",
-];
-
 mod dotfiles;
 mod kv;
 pub(crate) mod meta;
@@ -1608,19 +1596,31 @@ impl Settings {
 
         // all paths should be expanded
         let built = config_builder.build_cloned()?;
-        config_builder = Self::expanded_path_keys(&built)
-            .filter_map(|(key, expanded)| match expanded {
-                Ok(expanded) => Some((key, expanded)),
-                Err(e) => {
-                    tracing::warn!("failed to expand path for {key}: {e}");
-                    None
-                }
-            })
-            .fold(config_builder, |builder, (key, value)| {
-                builder
-                    .set_override(key, value)
-                    .unwrap_or_else(|_| panic!("failed to set absolute path override for {key}"))
-            });
+
+        config_builder = [
+            "db_path",
+            "record_store_path",
+            "key_path",
+            "daemon.socket_path",
+            "daemon.pidfile_path",
+            "logs.dir",
+            "logs.search.file",
+            "logs.daemon.file",
+        ]
+        .iter()
+        .map(|key| (key, built.get_string(key).unwrap_or_default()))
+        .filter_map(|(key, value)| match Self::expand_path(value) {
+            Ok(expanded) => Some((key, expanded)),
+            Err(e) => {
+                tracing::warn!("failed to expand path for {key}: {e}");
+                None
+            }
+        })
+        .fold(config_builder, |builder, (key, value)| {
+            builder
+                .set_override(key, value)
+                .unwrap_or_else(|_| panic!("failed to set absolute path override for {key}"))
+        });
 
         config_builder.build().map_err(Into::into)
     }
@@ -1706,6 +1706,12 @@ impl Settings {
         Ok(settings)
     }
 
+    fn expand_path(path: String) -> Result<String> {
+        shellexpand::full(&path)
+            .map(|p| p.to_string())
+            .map_err(|e| eyre!("failed to expand path: {}", e))
+    }
+
     pub fn example_config() -> &'static str {
         EXAMPLE_CONFIG
     }
@@ -1726,37 +1732,13 @@ impl Settings {
             .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
             .build()?;
 
-        for (key, expanded) in Self::expanded_path_keys(&config) {
-            expanded.map_err(|source| ValidationError::Path { key, source })?;
-        }
-
         let settings: Settings = config.try_deserialize()?;
         if let Some(dir) = &settings.data_dir {
-            shellexpand::full(dir).map_err(|source| ValidationError::Path {
-                key: "data_dir",
-                source,
-            })?;
+            shellexpand::full(dir).map_err(ValidationError::DataDir)?;
         }
 
         settings.ui.validate()?;
         Ok(())
-    }
-
-    /// Shell-expand every path in [`EXPANDED_PATH_KEYS`].
-    ///
-    /// Returns an iterator that yields `(key, expanded_path)` tuples.
-    fn expanded_path_keys(
-        config: &Config,
-    ) -> impl Iterator<
-        Item = (
-            &'static str,
-            Result<String, shellexpand::LookupError<std::env::VarError>>,
-        ),
-    > + use<'_> {
-        EXPANDED_PATH_KEYS.iter().map(|key| {
-            let raw = config.get_string(key).unwrap_or_default();
-            (*key, shellexpand::full(&raw).map(|p| p.to_string()))
-        })
     }
 }
 
@@ -1782,12 +1764,8 @@ pub enum ValidationError {
     #[error(transparent)]
     Ui(#[from] UiValidationError),
 
-    #[error("failed to expand path for {key}: {source}")]
-    Path {
-        key: &'static str,
-        #[source]
-        source: shellexpand::LookupError<std::env::VarError>,
-    },
+    #[error("failed to expand `data_dir`: {0}")]
+    DataDir(shellexpand::LookupError<std::env::VarError>),
 }
 
 /// Initialize the meta store configuration for testing.
