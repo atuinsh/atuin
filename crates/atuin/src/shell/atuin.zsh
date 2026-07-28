@@ -52,7 +52,7 @@ __atuin_osc133_prompt_end=$'%{\033]133;B\a%}'
 
 __atuin_osc133_wrap_prompt() {
     local __atuin_prompt="${PROMPT-}"
-    local __atuin_rprompt="${RPROMPT-}"
+    local __atuin_rprompt="${RPROMPT:-${RPS1-}}"
 
     __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_start/}"
     __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_end/}"
@@ -62,9 +62,11 @@ __atuin_osc133_wrap_prompt() {
     if [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]]; then
         PROMPT="${__atuin_osc133_prompt_start}${__atuin_prompt}"
         RPROMPT="${__atuin_rprompt}${__atuin_osc133_prompt_end}"
+        RPS1="${__atuin_rprompt}${__atuin_osc133_prompt_end}"
     else
         PROMPT="$__atuin_prompt"
         RPROMPT="$__atuin_rprompt"
+        RPS1="$__atuin_rprompt"
     fi
 }
 
