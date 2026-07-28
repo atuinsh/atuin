@@ -276,10 +276,10 @@ jobs:
           key: ${{ runner.os }}-cargo-package-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Diagnose
-      run: |
-        cargo package --workspace --no-verify
-        tar -xzOf target/package/atuin-client-18.18.1.crate \
-          atuin-client-18.18.1/src/settings.rs | grep -c 'fn validate_str'
-        grep -A 3 'name = "atuin-client"' target/package/atuin-18.18.1/Cargo.lock
-        cat ~/.cargo/config.toml 2>/dev/null || echo "no user cargo config"
-        cargo --version -v
+        run: |
+          cargo package --workspace --no-verify
+          tar -xzOf target/package/atuin-client-18.18.1.crate \
+            atuin-client-18.18.1/src/settings.rs | grep -c 'fn validate_str'
+          grep -A 3 'name = "atuin-client"' target/package/atuin-18.18.1/Cargo.lock
+          cat ~/.cargo/config.toml 2>/dev/null || echo "no user cargo config"
+          cargo --version -v
