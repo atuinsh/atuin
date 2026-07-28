@@ -343,8 +343,10 @@ mod tests {
         theme::ThemeManager,
     };
     use ratatui::{backend::TestBackend, prelude::*};
+    use rstest::*;
     use time::OffsetDateTime;
 
+    #[fixture]
     fn mock_history_stats() -> (History, HistoryStats) {
         let history = History {
             id: HistoryId::from("test1".to_string()),
@@ -400,17 +402,32 @@ mod tests {
         (history, stats)
     }
 
-    #[test]
-    fn test_output_looks_correct_for_ultracompact() {
-        let backend = TestBackend::new(22, 5);
-        let mut terminal = Terminal::new(backend).expect("Could not create terminal");
-        let chunk = Rect::new(0, 0, 22, 5);
-        let (history, stats) = mock_history_stats();
+    #[fixture]
+    fn theme_manager() -> ThemeManager {
+        ThemeManager::new(Some(true), Some(String::new()))
+    }
+
+    #[fixture]
+    fn terminal(
+        #[default(22u16)] w: u16,
+        #[default(5u16)] h: u16,
+    ) -> (Terminal<TestBackend>, Rect) {
+        let t = Terminal::new(TestBackend::new(w, h)).expect("Could not create terminal");
+        let r = Rect::new(0, 0, w, h);
+        (t, r)
+    }
+
+    #[rstest]
+    fn test_output_looks_correct_for_ultracompact(
+        mock_history_stats: (History, HistoryStats),
+        mut theme_manager: ThemeManager,
+        #[from(terminal)] (mut terminal, chunk): (Terminal<TestBackend>, Rect),
+    ) {
+        let (history, stats) = mock_history_stats;
         let prev = stats.previous.clone().unwrap();
         let next = stats.next.clone().unwrap();
 
-        let mut manager = ThemeManager::new(Some(true), Some(String::new()));
-        let theme = manager.load_theme("(none)", None);
+        let theme = theme_manager.load_theme("(none)", None);
         let _ = terminal.draw(|f| draw_ultracompact(f, chunk, &history, &stats, theme));
         let mut lines = ["                      "; 5].map(Line::from);
         for (n, entry) in [prev, history, next].iter().enumerate() {
@@ -422,20 +439,22 @@ mod tests {
         terminal.backend().assert_buffer_lines(lines);
     }
 
-    #[test]
-    fn control_chars_are_escaped_in_commands() {
-        let backend = TestBackend::new(40, 8);
-        let mut terminal = Terminal::new(backend).expect("Could not create terminal");
-        let chunk = Rect::new(0, 0, 40, 8);
-        let (mut history, mut stats) = mock_history_stats();
+    #[rstest]
+    fn control_chars_are_escaped_in_commands(
+        mock_history_stats: (History, HistoryStats),
+        mut theme_manager: ThemeManager,
+        #[from(terminal)]
+        #[with(40u16, 8u16)]
+        (mut terminal, chunk): (Terminal<TestBackend>, Rect),
+    ) {
+        let (mut history, mut stats) = mock_history_stats;
 
         // Inject a NUL byte into the current and neighbouring commands
         history.command = "echo\0hi".to_string();
         stats.previous.as_mut().unwrap().command = "prev\0cmd".to_string();
         stats.next.as_mut().unwrap().command = "next\0cmd".to_string();
 
-        let mut manager = ThemeManager::new(Some(true), Some(String::new()));
-        let theme = manager.load_theme("(none)", None);
+        let theme = theme_manager.load_theme("(none)", None);
         let _ = terminal.draw(|f| draw_ultracompact(f, chunk, &history, &stats, theme));
 
         let rendered: String = terminal

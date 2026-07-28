@@ -367,17 +367,21 @@ impl SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::*;
 
-    async fn test_service() -> Box<dyn SessionService> {
-        let svc = LocalSessionService::open("sqlite::memory:", 2.0)
-            .await
-            .unwrap();
-        Box::new(svc)
+    #[fixture]
+    async fn service() -> Box<dyn SessionService> {
+        Box::new(
+            LocalSessionService::open("sqlite::memory:", 2.0)
+                .await
+                .unwrap(),
+        )
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_create_new_and_persist() {
-        let service = test_service().await;
+    async fn test_create_new_and_persist(#[future] service: Box<dyn SessionService>) {
+        let service = service.await;
         let mut mgr = SessionManager::create_new(service, Some("/tmp"), None);
 
         let events = vec![
@@ -395,12 +399,11 @@ mod tests {
         mgr.persist_events(&events).await.unwrap();
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_create_and_resume() {
+    async fn test_create_and_resume(#[future] service: Box<dyn SessionService>) {
         // Create a session and persist some events
-        let svc = LocalSessionService::open("sqlite::memory:", 2.0)
-            .await
-            .unwrap();
+        let svc = service.await;
 
         let session_id = atuin_common::utils::uuid_v7().to_string();
         svc.create_session(&session_id, Some("/project"), Some("/project"))
@@ -445,9 +448,7 @@ mod tests {
             .expect("should find session");
 
         let (mut mgr, loaded_events, server_sid, last_ts, _invocation_id) =
-            SessionManager::resume(Box::new(svc), &stored)
-                .await
-                .unwrap();
+            SessionManager::resume(svc, &stored).await.unwrap();
 
         assert_eq!(loaded_events.len(), 3);
         assert_eq!(server_sid.as_deref(), Some("srv-abc"));
@@ -458,9 +459,10 @@ mod tests {
         mgr.persist_events(&loaded_events).await.unwrap();
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_incremental_persist() {
-        let service = test_service().await;
+    async fn test_incremental_persist(#[future] service: Box<dyn SessionService>) {
+        let service = service.await;
         let mut mgr = SessionManager::create_new(service, Some("/tmp"), None);
 
         let mut events = vec![ConversationEvent::UserMessage {
@@ -481,34 +483,33 @@ mod tests {
         // the service is moved, but the lack of errors confirms correctness)
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_archive() {
-        let svc = LocalSessionService::open("sqlite::memory:", 2.0)
-            .await
-            .unwrap();
+    async fn test_archive(#[future] service: Box<dyn SessionService>) {
+        let svc = service.await;
 
-        let mgr = SessionManager::create_new(Box::new(svc), Some("/tmp"), None);
+        let mgr = SessionManager::create_new(svc, Some("/tmp"), None);
 
         mgr.archive().await.unwrap();
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_persist_server_session_id() {
-        let service = test_service().await;
+    async fn test_persist_server_session_id(#[future] service: Box<dyn SessionService>) {
+        let service = service.await;
         let mut mgr = SessionManager::create_new(service, Some("/tmp"), None);
 
         mgr.persist_server_session_id("srv-123").await.unwrap();
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_parent_chain_integrity() {
+    async fn test_parent_chain_integrity(#[future] service: Box<dyn SessionService>) {
         // Verify that persisted events form a proper parent chain
-        let svc = LocalSessionService::open("sqlite::memory:", 2.0)
-            .await
-            .unwrap();
+        let svc = service.await;
 
         let session_id = {
-            let mut mgr = SessionManager::create_new(Box::new(svc), Some("/tmp"), None);
+            let mut mgr = SessionManager::create_new(svc, Some("/tmp"), None);
 
             let events = vec![
                 ConversationEvent::UserMessage {

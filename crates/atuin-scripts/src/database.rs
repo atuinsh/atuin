@@ -285,19 +285,35 @@ impl Database {
 #[cfg(test)]
 mod test {
     use super::*;
+    use rstest::*;
 
+    #[fixture]
+    async fn db() -> Database {
+        Database::new("sqlite::memory:", 1.0).await.unwrap()
+    }
+
+    #[fixture]
+    fn script(
+        #[default("test")] name: impl Into<String>,
+        #[default("test")] description: impl Into<String>,
+        #[default("test")] shebang: impl Into<String>,
+        #[default("test")] script_body: impl Into<String>,
+    ) -> Script {
+        Script::builder()
+            .name(name.into())
+            .description(description.into())
+            .shebang(shebang.into())
+            .script(script_body.into())
+            .build()
+    }
+
+    #[rstest]
     #[tokio::test]
-    async fn test_list() {
-        let db = Database::new("sqlite::memory:", 1.0).await.unwrap();
+    async fn test_list(#[future] db: Database, script: Script) {
+        let db = db.await;
+
         let scripts = db.list().await.unwrap();
         assert_eq!(scripts.len(), 0);
-
-        let script = Script::builder()
-            .name("test".to_string())
-            .description("test".to_string())
-            .shebang("test".to_string())
-            .script("test".to_string())
-            .build();
 
         db.save(&script).await.unwrap();
 
@@ -306,16 +322,13 @@ mod test {
         assert_eq!(scripts[0].name, "test");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_save_load() {
-        let db = Database::new("sqlite::memory:", 1.0).await.unwrap();
-
-        let script = Script::builder()
-            .name("test name".to_string())
-            .description("test description".to_string())
-            .shebang("test shebang".to_string())
-            .script("test script".to_string())
-            .build();
+    async fn test_save_load(
+        #[future] db: Database,
+        #[with("test name", "test description", "test shebang", "test script")] script: Script,
+    ) {
+        let db = db.await;
 
         db.save(&script).await.unwrap();
 
@@ -324,9 +337,10 @@ mod test {
         assert_eq!(loaded, script);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_save_bulk() {
-        let db = Database::new("sqlite::memory:", 1.0).await.unwrap();
+    async fn test_save_bulk(#[future] db: Database) {
+        let db = db.await;
 
         let scripts = vec![
             Script::builder()
@@ -351,16 +365,10 @@ mod test {
         assert_eq!(loaded[1].name, "test name 2");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_delete() {
-        let db = Database::new("sqlite::memory:", 1.0).await.unwrap();
-
-        let script = Script::builder()
-            .name("test name".to_string())
-            .description("test description".to_string())
-            .shebang("test shebang".to_string())
-            .script("test script".to_string())
-            .build();
+    async fn test_delete(#[future] db: Database, script: Script) {
+        let db = db.await;
 
         db.save(&script).await.unwrap();
 

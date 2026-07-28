@@ -117,6 +117,7 @@ fn walk(node: tree_sitter::Node, src: &[u8], meanings: &mut [Meaning]) {
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
     use super::{Meaning, classify};
+    use rstest::rstest;
 
     /// Render the classification as one char per byte for compact assertions.
     fn render_shell(cmd: &str, shell: Option<&str>) -> String {
@@ -134,74 +135,31 @@ mod tests {
             .collect()
     }
 
-    fn render(cmd: &str) -> String {
-        render_shell(cmd, None)
+    #[rstest]
+    #[case::simple_command("git commit -m 'hi'", None, "cccaaaaaaaaffassss")]
+    #[case::pipe("cat foo | grep bar", None, "cccaaaaaoaccccaaaa")]
+    #[case::and_list("true && false", None, "ccccaooaccccc")]
+    #[case::env_assignment("FOO=bar make", None, "vvvvvvvacccc")]
+    #[case::variables("echo $HOME ${USER}x", None, "ccccavvvvvavvvvvvva")]
+    #[case::variable_in_string(r#"echo "hi $USER""#, None, "ccccassssvvvvvs")]
+    #[case::comment("ls # list", None, "cca######")]
+    #[case::comment_no_space("echo foo#bar", None, "ccccaaaaaaaa")]
+    #[case::fish_set("set -x PATH $PATH", Some("fish"), "cccaffaaaaaavvvvv")]
+    #[case::fish_subshell("echo (date) | grep foo", Some("fish"), "ccccaoccccoaoaccccaaaa")]
+    #[case::fish_string(r#"echo "hi $name""#, Some("fish"), "ccccassssvvvvvs")]
+    #[case::zsh_uses_bash("ls -la", Some("zsh"), "ccafff")]
+    #[case::nu_plain("ls -la", Some("nu"), "aaaaaa")]
+    #[case::powershell_plain("ls -la", Some("powershell"), "aaaaaa")]
+    fn classify_renders(#[case] cmd: &str, #[case] shell: Option<&str>, #[case] expected: &str) {
+        assert_eq!(render_shell(cmd, shell), expected);
     }
 
-    fn render_fish(cmd: &str) -> String {
-        render_shell(cmd, Some("fish"))
-    }
-
-    #[test]
-    fn simple_command() {
-        assert_eq!(render("git commit -m 'hi'"), "cccaaaaaaaaffassss");
-    }
-
-    #[test]
-    fn pipes_and_lists_start_new_commands() {
-        assert_eq!(render("cat foo | grep bar"), "cccaaaaaoaccccaaaa");
-        assert_eq!(render("true && false"), "ccccaooaccccc");
-    }
-
-    #[test]
-    fn env_assignment_prefix() {
-        assert_eq!(render("FOO=bar make"), "vvvvvvvacccc");
-    }
-
-    #[test]
-    fn variables() {
-        assert_eq!(render("echo $HOME ${USER}x"), "ccccavvvvvavvvvvvva");
-    }
-
-    #[test]
-    fn variable_inside_string_refines_string() {
-        assert_eq!(render(r#"echo "hi $USER""#), "ccccassssvvvvvs");
-    }
-
-    #[test]
-    fn comment() {
-        assert_eq!(render("ls # list"), "cca######");
-        assert_eq!(render("echo foo#bar"), "ccccaaaaaaaa");
-    }
-
-    #[test]
-    fn fish_uses_the_fish_grammar() {
-        assert_eq!(render_fish("set -x PATH $PATH"), "cccaffaaaaaavvvvv");
-        assert_eq!(
-            render_fish("echo (date) | grep foo"),
-            "ccccaoccccoaoaccccaaaa"
-        );
-        assert_eq!(render_fish(r#"echo "hi $name""#), "ccccassssvvvvvs");
-    }
-
-    #[test]
-    fn zsh_uses_the_bash_grammar() {
-        assert_eq!(render_shell("ls -la", Some("zsh")), "ccafff");
-    }
-
-    #[test]
-    fn shells_without_a_grammar_stay_plain() {
-        assert_eq!(render_shell("ls -la", Some("nu")), "aaaaaa");
-        assert_eq!(render_shell("ls -la", Some("powershell")), "aaaaaa");
-    }
-
-    #[test]
-    fn odd_inputs_do_not_panic() {
+    #[rstest]
+    fn odd_inputs_do_not_panic(
         // unterminated string, non-bash syntax, empty, multibyte
-        for cmd in ["echo 'oops", "if (= 1 2) { }", "", "echo héllo"] {
-            for shell in [None, Some("fish"), Some("nu")] {
-                assert_eq!(classify(cmd, shell).len(), cmd.len());
-            }
-        }
+        #[values("echo 'oops", "if (= 1 2) { }", "", "echo héllo")] cmd: &str,
+        #[values(None, Some("fish"), Some("nu"))] shell: Option<&str>,
+    ) {
+        assert_eq!(classify(cmd, shell).len(), cmd.len());
     }
 }

@@ -186,16 +186,14 @@ fn process_exit_code(code: u32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::process_exit_code;
+    use rstest::rstest;
 
-    #[test]
-    fn process_exit_code_preserves_valid_values() {
-        assert_eq!(process_exit_code(0), 0);
-        assert_eq!(process_exit_code(127), 127);
-        assert_eq!(process_exit_code(i32::MAX as u32), i32::MAX);
-    }
-
-    #[test]
-    fn process_exit_code_defaults_when_out_of_range() {
-        assert_eq!(process_exit_code(i32::MAX as u32 + 1), 1);
+    #[rstest]
+    #[case::zero(0, 0)]
+    #[case::mid_range(127, 127)]
+    #[case::max_i32(i32::MAX as u32, i32::MAX)]
+    #[case::overflow_defaults_to_one(i32::MAX as u32 + 1, 1)]
+    fn maps_exit_code(#[case] input: u32, #[case] expected: i32) {
+        assert_eq!(process_exit_code(input), expected);
     }
 }

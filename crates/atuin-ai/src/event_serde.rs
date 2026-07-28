@@ -147,6 +147,7 @@ fn json_string(data: &Value, field: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     fn round_trip(event: &ConversationEvent) -> ConversationEvent {
         let (event_type, event_data) = serialize_event(event);
@@ -164,14 +165,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_text() {
+    #[rstest]
+    #[case::plain("response text")]
+    #[case::special_chars("line1\nline2\ttab \"quotes\" \\backslash 🎉")]
+    fn text_round_trips(#[case] content: &str) {
         let event = ConversationEvent::Text {
-            content: "response text".to_string(),
+            content: content.to_string(),
         };
-        let result = round_trip(&event);
         assert!(
-            matches!(result, ConversationEvent::Text { content } if content == "response text")
+            matches!(round_trip(&event), ConversationEvent::Text { content: c } if c == content)
         );
     }
 
@@ -325,40 +327,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_unknown_event_type() {
-        let result = deserialize_event("banana", "{}");
+    #[rstest]
+    #[case::unknown_type("banana", "{}", Some("unknown event type"))]
+    #[case::invalid_json("text", "not json", None)]
+    #[case::missing_field("text", "{}", Some("content"))]
+    fn deserialize_errors(
+        #[case] event_type: &str,
+        #[case] event_data: &str,
+        #[case] expected_substr: Option<&str>,
+    ) {
+        let result = deserialize_event(event_type, event_data);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("unknown event type")
-        );
-    }
-
-    #[test]
-    fn test_invalid_json() {
-        let result = deserialize_event("text", "not json");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_missing_field() {
-        let result = deserialize_event("text", "{}");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("content"));
-    }
-
-    #[test]
-    fn test_text_with_special_characters() {
-        let event = ConversationEvent::Text {
-            content: "line1\nline2\ttab \"quotes\" \\backslash 🎉".to_string(),
-        };
-        let result = round_trip(&event);
-        assert!(
-            matches!(result, ConversationEvent::Text { content } if content == "line1\nline2\ttab \"quotes\" \\backslash 🎉")
-        );
+        if let Some(s) = expected_substr {
+            assert!(result.unwrap_err().to_string().contains(s));
+        }
     }
 
     #[test]

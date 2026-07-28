@@ -108,54 +108,41 @@ fn secure_command(command: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn aliases() {
+    #[rstest]
+    #[case::simple("gp", "git push", "function gp {\n    git push @args\n}")]
+    #[case::quoted_path(
+        "spc",
+        "\"path with spaces\" arg",
+        "function spc {\n    & \"path with spaces\" arg @args\n}"
+    )]
+    fn aliases(#[case] name: &str, #[case] value: &str, #[case] expected_inner: &str) {
         assert_eq!(
             format_alias(&Alias {
-                name: "gp".to_string(),
-                value: "git push".to_string(),
+                name: name.to_string(),
+                value: value.to_string(),
             }),
-            "\n".to_string()
-                + &secure_command(
-                    "function gp {
-    git push @args
-}"
-                )
-        );
-
-        assert_eq!(
-            format_alias(&Alias {
-                name: "spc".to_string(),
-                value: "\"path with spaces\" arg".to_string(),
-            }),
-            "\n".to_string()
-                + &secure_command(
-                    "function spc {
-    & \"path with spaces\" arg @args
-}"
-                )
+            "\n".to_string() + &secure_command(expected_inner)
         );
     }
 
-    #[test]
-    fn vars() {
+    #[rstest]
+    #[case::exported("FOO", "bar 'baz'", true, "$env:FOO = 'bar ''baz'''")]
+    #[case::local("TEST", "1", false, "$TEST = '1'")]
+    fn vars(
+        #[case] name: &str,
+        #[case] value: &str,
+        #[case] export: bool,
+        #[case] expected_inner: &str,
+    ) {
         assert_eq!(
             format_var(&Var {
-                name: "FOO".to_owned(),
-                value: "bar 'baz'".to_owned(),
-                export: true,
+                name: name.to_owned(),
+                value: value.to_owned(),
+                export,
             }),
-            secure_command("$env:FOO = 'bar ''baz'''")
-        );
-
-        assert_eq!(
-            format_var(&Var {
-                name: "TEST".to_owned(),
-                value: "1".to_owned(),
-                export: false,
-            }),
-            secure_command("$TEST = '1'")
+            secure_command(expected_inner)
         );
     }
 

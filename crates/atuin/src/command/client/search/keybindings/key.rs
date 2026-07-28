@@ -313,65 +313,217 @@ impl<'de> Deserialize<'de> for KeyInput {
 mod tests {
     use super::*;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use rstest::rstest;
 
-    #[test]
-    fn parse_simple_keys() {
-        let k = SingleKey::parse("a").unwrap();
-        assert_eq!(k.code, KeyCodeValue::Char('a'));
-        assert!(!k.ctrl && !k.alt && !k.shift);
-
-        let k = SingleKey::parse("enter").unwrap();
-        assert_eq!(k.code, KeyCodeValue::Enter);
-
-        let k = SingleKey::parse("esc").unwrap();
-        assert_eq!(k.code, KeyCodeValue::Esc);
-
-        let k = SingleKey::parse("tab").unwrap();
-        assert_eq!(k.code, KeyCodeValue::Tab);
-
-        let k = SingleKey::parse("space").unwrap();
-        assert_eq!(k.code, KeyCodeValue::Space);
+    // (A) parse -> (code, flags). Asserting ALL flags is a strengthening,
+    // verified consistent with the parse logic.
+    #[rstest]
+    #[case::char_a("a", KeyCodeValue::Char('a'), false, false, false, false)]
+    #[case::enter("enter", KeyCodeValue::Enter, false, false, false, false)]
+    #[case::esc("esc", KeyCodeValue::Esc, false, false, false, false)]
+    #[case::tab("tab", KeyCodeValue::Tab, false, false, false, false)]
+    #[case::space("space", KeyCodeValue::Space, false, false, false, false)]
+    #[case::ctrl_c("ctrl-c", KeyCodeValue::Char('c'), true, false, false, false)]
+    #[case::alt_f("alt-f", KeyCodeValue::Char('f'), false, true, false, false)]
+    #[case::ctrl_alt_x("ctrl-alt-x", KeyCodeValue::Char('x'), true, true, false, false)]
+    #[case::upper_g("G", KeyCodeValue::Char('G'), false, false, false, false)]
+    #[case::ctrl_lbracket("ctrl-[", KeyCodeValue::Char('['), true, false, false, false)]
+    #[case::question("?", KeyCodeValue::Char('?'), false, false, false, false)]
+    #[case::slash("/", KeyCodeValue::Char('/'), false, false, false, false)]
+    #[case::super_a("super-a", KeyCodeValue::Char('a'), false, false, false, true)]
+    #[case::super_ctrl_c("super-ctrl-c", KeyCodeValue::Char('c'), true, false, false, true)]
+    #[case::super_g("super-G", KeyCodeValue::Char('G'), false, false, false, true)]
+    #[case::f1("f1", KeyCodeValue::F(1), false, false, false, false)]
+    #[case::f12_upper("F12", KeyCodeValue::F(12), false, false, false, false)]
+    #[case::ctrl_f5("ctrl-f5", KeyCodeValue::F(5), true, false, false, false)]
+    #[case::f24("f24", KeyCodeValue::F(24), false, false, false, false)]
+    #[case::insert("insert", KeyCodeValue::Insert, false, false, false, false)]
+    #[case::ins("ins", KeyCodeValue::Insert, false, false, false, false)]
+    #[case::ctrl_insert("ctrl-insert", KeyCodeValue::Insert, true, false, false, false)]
+    fn parse_single_key(
+        #[case] input: &str,
+        #[case] code: KeyCodeValue,
+        #[case] ctrl: bool,
+        #[case] alt: bool,
+        #[case] shift: bool,
+        #[case] super_key: bool,
+    ) {
+        let k = SingleKey::parse(input).unwrap();
+        assert_eq!(k.code, code);
+        assert_eq!(k.ctrl, ctrl);
+        assert_eq!(k.alt, alt);
+        assert_eq!(k.shift, shift);
+        assert_eq!(k.super_key, super_key);
     }
 
-    #[test]
-    fn parse_modifiers() {
-        let k = SingleKey::parse("ctrl-c").unwrap();
-        assert_eq!(k.code, KeyCodeValue::Char('c'));
-        assert!(k.ctrl);
-        assert!(!k.alt);
-
-        let k = SingleKey::parse("alt-f").unwrap();
-        assert_eq!(k.code, KeyCodeValue::Char('f'));
-        assert!(k.alt);
-        assert!(!k.ctrl);
-
-        let k = SingleKey::parse("ctrl-alt-x").unwrap();
-        assert_eq!(k.code, KeyCodeValue::Char('x'));
-        assert!(k.ctrl && k.alt);
+    // (B) super aliases parse equal.
+    #[rstest]
+    fn super_aliases_parse_equal(#[values("super-a", "cmd-a", "win-a")] input: &str) {
+        assert_eq!(
+            SingleKey::parse(input).unwrap(),
+            SingleKey::parse("super-a").unwrap()
+        );
     }
 
-    #[test]
-    fn parse_uppercase_implies_no_shift_flag() {
-        let k = SingleKey::parse("G").unwrap();
-        assert_eq!(k.code, KeyCodeValue::Char('G'));
-        assert!(!k.shift);
-        assert!(!k.ctrl);
+    // (C) parse errors.
+    #[rstest]
+    #[case("ctrl-alt-shift-xxx")]
+    #[case("foobar-a")]
+    #[case("f0")]
+    #[case("f25")]
+    fn parse_errors(#[case] input: &str) {
+        assert!(SingleKey::parse(input).is_err());
     }
 
-    #[test]
-    fn parse_special_chars() {
-        let k = SingleKey::parse("ctrl-[").unwrap();
-        assert_eq!(k.code, KeyCodeValue::Char('['));
-        assert!(k.ctrl);
-
-        let k = SingleKey::parse("?").unwrap();
-        assert_eq!(k.code, KeyCodeValue::Char('?'));
-
-        let k = SingleKey::parse("/").unwrap();
-        assert_eq!(k.code, KeyCodeValue::Char('/'));
+    // (D) from_event -> (code, flags).
+    #[rstest]
+    #[case::ctrl_c(
+        KeyCode::Char('c'),
+        KeyModifiers::CONTROL,
+        KeyCodeValue::Char('c'),
+        true,
+        false,
+        false,
+        false
+    )]
+    #[case::enter(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        KeyCodeValue::Enter,
+        false,
+        false,
+        false,
+        false
+    )]
+    #[case::upper_g(
+        KeyCode::Char('G'),
+        KeyModifiers::SHIFT,
+        KeyCodeValue::Char('G'),
+        false,
+        false,
+        false,
+        false
+    )]
+    #[case::super_a(
+        KeyCode::Char('a'),
+        KeyModifiers::SUPER,
+        KeyCodeValue::Char('a'),
+        false,
+        false,
+        false,
+        true
+    )]
+    #[case::f1(
+        KeyCode::F(1),
+        KeyModifiers::NONE,
+        KeyCodeValue::F(1),
+        false,
+        false,
+        false,
+        false
+    )]
+    #[case::f12_ctrl(
+        KeyCode::F(12),
+        KeyModifiers::CONTROL,
+        KeyCodeValue::F(12),
+        true,
+        false,
+        false,
+        false
+    )]
+    #[case::insert(
+        KeyCode::Insert,
+        KeyModifiers::NONE,
+        KeyCodeValue::Insert,
+        false,
+        false,
+        false,
+        false
+    )]
+    #[case::backtab(
+        KeyCode::BackTab,
+        KeyModifiers::NONE,
+        KeyCodeValue::Tab,
+        false,
+        false,
+        true,
+        false
+    )]
+    #[case::backtab_ctrl(
+        KeyCode::BackTab,
+        KeyModifiers::CONTROL,
+        KeyCodeValue::Tab,
+        true,
+        false,
+        true,
+        false
+    )]
+    fn from_event_cases(
+        #[case] code: KeyCode,
+        #[case] mods: KeyModifiers,
+        #[case] expected: KeyCodeValue,
+        #[case] ctrl: bool,
+        #[case] alt: bool,
+        #[case] shift: bool,
+        #[case] super_key: bool,
+    ) {
+        let event = KeyEvent::new(code, mods);
+        let k = SingleKey::from_event(&event).unwrap();
+        assert_eq!(k.code, expected);
+        assert_eq!(k.ctrl, ctrl);
+        assert_eq!(k.alt, alt);
+        assert_eq!(k.shift, shift);
+        assert_eq!(k.super_key, super_key);
     }
 
-    #[test]
+    // (E) from_event matches parsed.
+    #[rstest]
+    #[case(KeyCode::Char('c'), KeyModifiers::CONTROL, "ctrl-c")]
+    #[case(KeyCode::Char('G'), KeyModifiers::SHIFT, "G")]
+    #[case(KeyCode::Char('a'), KeyModifiers::SUPER, "super-a")]
+    #[case(KeyCode::F(12), KeyModifiers::NONE, "f12")]
+    #[case(KeyCode::BackTab, KeyModifiers::NONE, "shift-tab")]
+    fn from_event_matches_parsed(
+        #[case] code: KeyCode,
+        #[case] mods: KeyModifiers,
+        #[case] parsed: &str,
+    ) {
+        assert_eq!(
+            SingleKey::from_event(&KeyEvent::new(code, mods)).unwrap(),
+            SingleKey::parse(parsed).unwrap()
+        );
+    }
+
+    // (F) display round-trip.
+    #[rstest]
+    fn display_round_trip(
+        #[values(
+            "ctrl-c", "alt-f", "enter", "G", "tab", "pageup", "f1", "f12", "ctrl-f5", "alt-f10",
+            "insert", "super-a", "g g"
+        )]
+        s: &str,
+    ) {
+        let k = KeyInput::parse(s).unwrap();
+        assert_eq!(
+            k,
+            KeyInput::parse(&k.to_string()).unwrap(),
+            "round-trip failed for {s}"
+        );
+    }
+
+    // (G) exact display.
+    #[rstest]
+    #[case("g g", "g g")]
+    #[case("super-a", "super-a")]
+    #[case("super-ctrl-x", "super-ctrl-x")]
+    #[case("f1", "f1")]
+    #[case("ctrl-f12", "ctrl-f12")]
+    #[case("insert", "insert")]
+    fn display_exact(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(KeyInput::parse(input).unwrap().to_string(), expected);
+    }
+
+    #[rstest]
     fn parse_multi_key_sequence() {
         let ki = KeyInput::parse("g g").unwrap();
         match ki {
@@ -382,248 +534,5 @@ mod tests {
             }
             KeyInput::Single(_) => panic!("expected sequence"),
         }
-    }
-
-    #[test]
-    fn display_round_trip() {
-        let cases = ["ctrl-c", "alt-f", "enter", "G", "tab", "pageup"];
-        for s in cases {
-            let k = KeyInput::parse(s).unwrap();
-            let display = k.to_string();
-            let k2 = KeyInput::parse(&display).unwrap();
-            assert_eq!(k, k2, "round-trip failed for {s}");
-        }
-
-        let ki = KeyInput::parse("g g").unwrap();
-        assert_eq!(ki.to_string(), "g g");
-    }
-
-    #[test]
-    fn from_event_basic() {
-        let event = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        let k = SingleKey::from_event(&event).unwrap();
-        assert_eq!(k.code, KeyCodeValue::Char('c'));
-        assert!(k.ctrl);
-        assert!(!k.alt);
-
-        let event = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        let k = SingleKey::from_event(&event).unwrap();
-        assert_eq!(k.code, KeyCodeValue::Enter);
-    }
-
-    #[test]
-    fn from_event_uppercase() {
-        // Crossterm sends uppercase chars with SHIFT modifier
-        let event = KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT);
-        let k = SingleKey::from_event(&event).unwrap();
-        assert_eq!(k.code, KeyCodeValue::Char('G'));
-        // shift flag should be cleared since the case encodes it
-        assert!(!k.shift);
-    }
-
-    #[test]
-    fn from_event_matches_parsed() {
-        // Verify that from_event and parse produce the same SingleKey
-        let event = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        let from_event = SingleKey::from_event(&event).unwrap();
-        let parsed = SingleKey::parse("ctrl-c").unwrap();
-        assert_eq!(from_event, parsed);
-
-        let event = KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT);
-        let from_event = SingleKey::from_event(&event).unwrap();
-        let parsed = SingleKey::parse("G").unwrap();
-        assert_eq!(from_event, parsed);
-    }
-
-    #[test]
-    fn parse_super_modifier() {
-        let k = SingleKey::parse("super-a").unwrap();
-        assert_eq!(k.code, KeyCodeValue::Char('a'));
-        assert!(k.super_key);
-        assert!(!k.ctrl && !k.alt && !k.shift);
-
-        // "cmd" is an alias for "super"
-        let k2 = SingleKey::parse("cmd-a").unwrap();
-        assert_eq!(k, k2);
-
-        // "win" is an alias for "super"
-        let k3 = SingleKey::parse("win-a").unwrap();
-        assert_eq!(k, k3);
-    }
-
-    #[test]
-    fn parse_super_with_other_modifiers() {
-        let k = SingleKey::parse("super-ctrl-c").unwrap();
-        assert_eq!(k.code, KeyCodeValue::Char('c'));
-        assert!(k.super_key && k.ctrl);
-        assert!(!k.alt && !k.shift);
-    }
-
-    #[test]
-    fn display_super_modifier() {
-        let k = SingleKey::parse("super-a").unwrap();
-        assert_eq!(k.to_string(), "super-a");
-
-        let k = SingleKey::parse("super-ctrl-x").unwrap();
-        assert_eq!(k.to_string(), "super-ctrl-x");
-    }
-
-    #[test]
-    fn display_round_trip_super() {
-        let k = KeyInput::parse("super-a").unwrap();
-        let display = k.to_string();
-        let k2 = KeyInput::parse(&display).unwrap();
-        assert_eq!(k, k2, "round-trip failed for super-a");
-    }
-
-    #[test]
-    fn from_event_super() {
-        let event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SUPER);
-        let k = SingleKey::from_event(&event).unwrap();
-        assert_eq!(k.code, KeyCodeValue::Char('a'));
-        assert!(k.super_key);
-        assert!(!k.ctrl && !k.alt && !k.shift);
-    }
-
-    #[test]
-    fn from_event_super_matches_parsed() {
-        let event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SUPER);
-        let from_event = SingleKey::from_event(&event).unwrap();
-        let parsed = SingleKey::parse("super-a").unwrap();
-        assert_eq!(from_event, parsed);
-    }
-
-    #[test]
-    fn super_uppercase_preserves_super() {
-        // super-G should keep the super flag (unlike bare "G" which clears shift)
-        let k = SingleKey::parse("super-G").unwrap();
-        assert_eq!(k.code, KeyCodeValue::Char('G'));
-        assert!(k.super_key);
-    }
-
-    #[test]
-    fn parse_errors() {
-        assert!(SingleKey::parse("ctrl-alt-shift-xxx").is_err());
-        assert!(SingleKey::parse("foobar-a").is_err());
-    }
-
-    #[test]
-    fn parse_function_keys() {
-        let k = SingleKey::parse("f1").unwrap();
-        assert_eq!(k.code, KeyCodeValue::F(1));
-        assert!(!k.ctrl && !k.alt && !k.shift);
-
-        let k = SingleKey::parse("F12").unwrap();
-        assert_eq!(k.code, KeyCodeValue::F(12));
-
-        let k = SingleKey::parse("ctrl-f5").unwrap();
-        assert_eq!(k.code, KeyCodeValue::F(5));
-        assert!(k.ctrl);
-
-        // F24 is valid (some keyboards have extended function keys)
-        let k = SingleKey::parse("f24").unwrap();
-        assert_eq!(k.code, KeyCodeValue::F(24));
-
-        // F0 and F25+ are invalid
-        assert!(SingleKey::parse("f0").is_err());
-        assert!(SingleKey::parse("f25").is_err());
-    }
-
-    #[test]
-    fn from_event_function_keys() {
-        let event = KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE);
-        let k = SingleKey::from_event(&event).unwrap();
-        assert_eq!(k.code, KeyCodeValue::F(1));
-
-        let event = KeyEvent::new(KeyCode::F(12), KeyModifiers::CONTROL);
-        let k = SingleKey::from_event(&event).unwrap();
-        assert_eq!(k.code, KeyCodeValue::F(12));
-        assert!(k.ctrl);
-    }
-
-    #[test]
-    fn display_function_keys() {
-        let k = SingleKey::parse("f1").unwrap();
-        assert_eq!(k.to_string(), "f1");
-
-        let k = SingleKey::parse("ctrl-f12").unwrap();
-        assert_eq!(k.to_string(), "ctrl-f12");
-    }
-
-    #[test]
-    fn function_key_round_trip() {
-        let cases = ["f1", "f12", "ctrl-f5", "alt-f10"];
-        for s in cases {
-            let k = KeyInput::parse(s).unwrap();
-            let display = k.to_string();
-            let k2 = KeyInput::parse(&display).unwrap();
-            assert_eq!(k, k2, "round-trip failed for {s}");
-        }
-    }
-
-    #[test]
-    fn from_event_function_key_matches_parsed() {
-        let event = KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE);
-        let from_event = SingleKey::from_event(&event).unwrap();
-        let parsed = SingleKey::parse("f12").unwrap();
-        assert_eq!(from_event, parsed);
-    }
-
-    #[test]
-    fn from_event_backtab_becomes_shift_tab() {
-        // Many terminals send BackTab for Shift+Tab
-        let event = KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE);
-        let k = SingleKey::from_event(&event).unwrap();
-        assert_eq!(k.code, KeyCodeValue::Tab);
-        assert!(k.shift);
-        assert!(!k.ctrl && !k.alt);
-    }
-
-    #[test]
-    fn from_event_backtab_matches_parsed_shift_tab() {
-        let event = KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE);
-        let from_event = SingleKey::from_event(&event).unwrap();
-        let parsed = SingleKey::parse("shift-tab").unwrap();
-        assert_eq!(from_event, parsed);
-    }
-
-    #[test]
-    fn from_event_backtab_with_ctrl() {
-        // BackTab with ctrl modifier
-        let event = KeyEvent::new(KeyCode::BackTab, KeyModifiers::CONTROL);
-        let k = SingleKey::from_event(&event).unwrap();
-        assert_eq!(k.code, KeyCodeValue::Tab);
-        assert!(k.shift);
-        assert!(k.ctrl);
-    }
-
-    #[test]
-    fn parse_insert_key() {
-        let k = SingleKey::parse("insert").unwrap();
-        assert_eq!(k.code, KeyCodeValue::Insert);
-        assert!(!k.ctrl && !k.alt && !k.shift);
-
-        let k = SingleKey::parse("ins").unwrap();
-        assert_eq!(k.code, KeyCodeValue::Insert);
-
-        let k = SingleKey::parse("ctrl-insert").unwrap();
-        assert_eq!(k.code, KeyCodeValue::Insert);
-        assert!(k.ctrl);
-    }
-
-    #[test]
-    fn from_event_insert_key() {
-        let event = KeyEvent::new(KeyCode::Insert, KeyModifiers::NONE);
-        let k = SingleKey::from_event(&event).unwrap();
-        assert_eq!(k.code, KeyCodeValue::Insert);
-    }
-
-    #[test]
-    fn insert_key_round_trip() {
-        let k = KeyInput::parse("insert").unwrap();
-        let display = k.to_string();
-        assert_eq!(display, "insert");
-        let k2 = KeyInput::parse(&display).unwrap();
-        assert_eq!(k, k2);
     }
 }

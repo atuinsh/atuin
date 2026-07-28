@@ -395,16 +395,22 @@ impl<'a> Client<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::*;
 
-    #[test]
-    fn extra_headers_map_parses_headers() {
+    #[fixture]
+    fn extra_headers() -> HashMap<String, String> {
         let mut extra = HashMap::new();
         extra.insert("X-Auth-Token".to_string(), "secret".to_string());
-        let headers = extra_headers_map(&extra).unwrap();
+        extra
+    }
+
+    #[rstest]
+    fn extra_headers_map_parses_headers(extra_headers: HashMap<String, String>) {
+        let headers = extra_headers_map(&extra_headers).unwrap();
         assert_eq!(headers.get("x-auth-token").unwrap(), "secret");
     }
 
-    #[test]
+    #[rstest]
     fn atuin_headers_override_extra_headers() {
         let mut extra = HashMap::new();
         extra.insert("Authorization".to_string(), "Token user-value".to_string());
@@ -416,7 +422,7 @@ mod tests {
         assert_eq!(headers.get_all(AUTHORIZATION).iter().count(), 1);
     }
 
-    #[test]
+    #[rstest]
     fn extra_headers_map_rejects_invalid_names() {
         let mut extra = HashMap::new();
         extra.insert("bad header".to_string(), "value".to_string());
@@ -433,8 +439,11 @@ mod tests {
         sock.write_all(response.as_bytes()).await.unwrap();
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn cross_origin_redirects_refused_with_extra_headers() {
+    async fn cross_origin_redirects_refused_with_extra_headers(
+        extra_headers: HashMap<String, String>,
+    ) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
 
@@ -450,11 +459,8 @@ mod tests {
             .await;
         });
 
-        let mut extra = HashMap::new();
-        extra.insert("X-Auth-Token".to_string(), "secret".to_string());
-
         ensure_crypto_provider();
-        let client = client_builder(&extra).build().unwrap();
+        let client = client_builder(&extra_headers).build().unwrap();
         let err = client
             .get(format!("http://127.0.0.1:{port}/"))
             .send()
@@ -467,8 +473,11 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn same_origin_redirects_followed_with_extra_headers() {
+    async fn same_origin_redirects_followed_with_extra_headers(
+        extra_headers: HashMap<String, String>,
+    ) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
 
@@ -487,11 +496,8 @@ mod tests {
             .await;
         });
 
-        let mut extra = HashMap::new();
-        extra.insert("X-Auth-Token".to_string(), "secret".to_string());
-
         ensure_crypto_provider();
-        let client = client_builder(&extra).build().unwrap();
+        let client = client_builder(&extra_headers).build().unwrap();
         let resp = client
             .get(format!("http://127.0.0.1:{port}/"))
             .send()

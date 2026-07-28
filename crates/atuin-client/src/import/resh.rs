@@ -159,6 +159,7 @@ impl Importer for Resh {
 mod test {
     use super::*;
     use crate::import::tests::TestLoader;
+    use rstest::rstest;
 
     /// resh writes one JSON object per line. Every field on `ReshEntry` is
     /// required, so spell them all out once here.
@@ -229,6 +230,7 @@ mod test {
         serde_json::Value::Object(m).to_string()
     }
 
+    #[rstest]
     #[tokio::test]
     async fn out_of_range_timestamp_falls_back_to_epoch() {
         // one good entry, one whose realtime is far outside the representable range
@@ -252,76 +254,58 @@ mod test {
         assert_eq!(loader.buf[1].duration, HistoryImported::DEFAULT_DURATION);
     }
 
+    // realtime_after == realtime_before (zero_duration) is a legitimate
+    // zero-length command, not an unrepresentable/corrupt one - it must not be
+    // swallowed into DEFAULT_DURATION. corrupt_before asserts the timestamp
+    // falls back to UNIX_EPOCH (unix_timestamp() == 0). clock_skew:
+    // realtime_after earlier than realtime_before (clock skew, NTP step, or
+    // suspend/resume) must not produce a negative duration.
+    #[rstest]
+    #[case::zero_duration("echo instant", 1_639_162_832.5, 1_639_162_832.5, 1_639_162_832, 0)]
+    #[case::corrupt_before(
+        "echo corrupt",
+        1e30,
+        1_639_162_833.5,
+        0,
+        HistoryImported::DEFAULT_DURATION
+    )]
+    #[case::corrupt_after(
+        "echo corrupt",
+        1_639_162_832.5,
+        1e30,
+        1_639_162_832,
+        HistoryImported::DEFAULT_DURATION
+    )]
+    #[case::clock_skew(
+        "echo skewed",
+        1_639_162_833.5,
+        1_639_162_832.5,
+        1_639_162_833,
+        HistoryImported::DEFAULT_DURATION
+    )]
     #[tokio::test]
-    async fn zero_duration_command_is_not_default_duration() {
-        // realtime_after == realtime_before is a legitimate zero-length command,
-        // not an unrepresentable/corrupt one - it must not be swallowed into
-        // DEFAULT_DURATION
-        let bytes = format!(
-            "{}\n",
-            resh_line("echo instant", 1_639_162_832.5, 1_639_162_832.5)
-        )
-        .into_bytes();
+    async fn single_entry_timestamp_and_duration(
+        #[case] cmd: &str,
+        #[case] before: f64,
+        #[case] after: f64,
+        #[case] expected_unix_ts: i64,
+        #[case] expected_duration: i64,
+    ) {
+        let bytes = format!("{}\n", resh_line(cmd, before, after)).into_bytes();
 
         let resh = Resh { bytes };
         let mut loader = TestLoader::default();
         resh.load(&mut loader).await.expect("import must not fail");
 
-        let commands: Vec<&str> = loader.buf.iter().map(|h| h.command.as_str()).collect();
-        assert_eq!(commands, ["echo instant"]);
-
-        assert_eq!(loader.buf[0].duration, 0);
-        assert_ne!(loader.buf[0].duration, HistoryImported::DEFAULT_DURATION);
-    }
-
-    #[tokio::test]
-    async fn corrupt_realtime_before_falls_back_to_epoch_and_default_duration() {
-        let bytes = format!("{}\n", resh_line("echo corrupt", 1e30, 1_639_162_833.5)).into_bytes();
-
-        let resh = Resh { bytes };
-        let mut loader = TestLoader::default();
-        resh.load(&mut loader).await.expect("import must not fail");
-
-        let commands: Vec<&str> = loader.buf.iter().map(|h| h.command.as_str()).collect();
-        assert_eq!(commands, ["echo corrupt"]);
-
-        assert_eq!(loader.buf[0].timestamp, OffsetDateTime::UNIX_EPOCH);
-        assert_eq!(loader.buf[0].duration, HistoryImported::DEFAULT_DURATION);
-    }
-
-    #[tokio::test]
-    async fn corrupt_realtime_after_keeps_real_timestamp_but_falls_back_to_default_duration() {
-        let bytes = format!("{}\n", resh_line("echo corrupt", 1_639_162_832.5, 1e30)).into_bytes();
-
-        let resh = Resh { bytes };
-        let mut loader = TestLoader::default();
-        resh.load(&mut loader).await.expect("import must not fail");
-
-        let commands: Vec<&str> = loader.buf.iter().map(|h| h.command.as_str()).collect();
-        assert_eq!(commands, ["echo corrupt"]);
-
-        assert_eq!(loader.buf[0].timestamp.unix_timestamp(), 1_639_162_832);
-        assert_eq!(loader.buf[0].duration, HistoryImported::DEFAULT_DURATION);
-    }
-
-    #[tokio::test]
-    async fn clock_skew_negative_duration_falls_back_to_default_duration() {
-        // realtime_after earlier than realtime_before (clock skew, NTP step, or
-        // suspend/resume) must not produce a negative duration
-        let bytes = format!(
-            "{}\n",
-            resh_line("echo skewed", 1_639_162_833.5, 1_639_162_832.5)
-        )
-        .into_bytes();
-
-        let resh = Resh { bytes };
-        let mut loader = TestLoader::default();
-        resh.load(&mut loader).await.expect("import must not fail");
-
-        let commands: Vec<&str> = loader.buf.iter().map(|h| h.command.as_str()).collect();
-        assert_eq!(commands, ["echo skewed"]);
-
-        assert_eq!(loader.buf[0].timestamp.unix_timestamp(), 1_639_162_833);
-        assert_eq!(loader.buf[0].duration, HistoryImported::DEFAULT_DURATION);
+        assert_eq!(
+            loader
+                .buf
+                .iter()
+                .map(|h| h.command.as_str())
+                .collect::<Vec<_>>(),
+            [cmd]
+        );
+        assert_eq!(loader.buf[0].timestamp.unix_timestamp(), expected_unix_ts);
+        assert_eq!(loader.buf[0].duration, expected_duration);
     }
 }

@@ -296,15 +296,16 @@ impl MetaStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::*;
 
-    async fn new_test_store() -> MetaStore {
+    #[fixture]
+    async fn store() -> MetaStore {
         MetaStore::new("sqlite::memory:", 2.0).await.unwrap()
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_get_set_delete() {
-        let store = new_test_store().await;
-
+    async fn test_get_set_delete(#[future(awt)] store: MetaStore) {
         assert_eq!(store.get("foo").await.unwrap(), None);
 
         store.set("foo", "bar").await.unwrap();
@@ -317,20 +318,18 @@ mod tests {
         assert_eq!(store.get("foo").await.unwrap(), None);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_host_id_generation_and_stability() {
-        let store = new_test_store().await;
-
+    async fn test_host_id_generation_and_stability(#[future(awt)] store: MetaStore) {
         let id1 = store.host_id().await.unwrap();
         let id2 = store.host_id().await.unwrap();
 
         assert_eq!(id1, id2, "host_id should be stable across calls");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_sync_time() {
-        let store = new_test_store().await;
-
+    async fn test_sync_time(#[future(awt)] store: MetaStore) {
         let t = store.last_sync().await.unwrap();
         assert_eq!(t, OffsetDateTime::UNIX_EPOCH);
 
@@ -339,10 +338,9 @@ mod tests {
         assert!(t > OffsetDateTime::UNIX_EPOCH);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_version_check_time() {
-        let store = new_test_store().await;
-
+    async fn test_version_check_time(#[future(awt)] store: MetaStore) {
         let t = store.last_version_check().await.unwrap();
         assert_eq!(t, OffsetDateTime::UNIX_EPOCH);
 
@@ -351,10 +349,9 @@ mod tests {
         assert!(t > OffsetDateTime::UNIX_EPOCH);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_session_crud() {
-        let store = new_test_store().await;
-
+    async fn test_session_crud(#[future(awt)] store: MetaStore) {
         assert!(!store.logged_in().await.unwrap());
         assert_eq!(store.session_token().await.unwrap(), None);
 
@@ -369,10 +366,9 @@ mod tests {
         assert!(!store.logged_in().await.unwrap());
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_latest_version() {
-        let store = new_test_store().await;
-
+    async fn test_latest_version(#[future(awt)] store: MetaStore) {
         assert_eq!(store.latest_version().await.unwrap(), None);
 
         store.save_latest_version("1.2.3").await.unwrap();

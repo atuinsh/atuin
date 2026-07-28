@@ -90,55 +90,59 @@ pub(crate) fn global_permissions_path() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::*;
 
-    #[tokio::test]
-    async fn creates_new_file_with_allow_rule() {
+    #[fixture]
+    fn perm_file() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("permissions.ai.toml");
-        let rule = Rule {
-            tool: "AtuinHistory".to_string(),
-            scope: None,
-        };
-
-        write_rule(&file, &rule, RuleDisposition::Allow)
-            .await
-            .unwrap();
-
-        let content = tokio::fs::read_to_string(&file).await.unwrap();
-        assert!(content.contains("[permissions]"));
-        assert!(content.contains(r#""AtuinHistory""#));
+        (dir, file)
     }
 
+    #[rstest]
+    #[case::create_allow(None, "AtuinHistory", RuleDisposition::Allow, &["[permissions]", r#""AtuinHistory""#])]
+    #[case::append_existing(
+        Some("# My permissions\n[permissions]\nallow = [\"Read\"]\n"),
+        "AtuinHistory",
+        RuleDisposition::Allow,
+        &["# My permissions", r#""Read""#, r#""AtuinHistory""#]
+    )]
+    #[case::inline_table(
+        Some("permissions = { allow = [\"Read\"] }\n"),
+        "AtuinHistory",
+        RuleDisposition::Allow,
+        &[r#""Read""#, r#""AtuinHistory""#]
+    )]
+    #[case::deny(None, "Shell", RuleDisposition::Deny, &["deny", r#""Shell""#])]
     #[tokio::test]
-    async fn appends_to_existing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("permissions.ai.toml");
-        let existing = r#"# My permissions
-[permissions]
-allow = ["Read"]
-"#;
-        tokio::fs::write(&file, existing).await.unwrap();
+    async fn writes_expected_content(
+        #[from(perm_file)] (_dir, file): (tempfile::TempDir, std::path::PathBuf),
+        #[case] initial: Option<&str>,
+        #[case] tool: &str,
+        #[case] disposition: RuleDisposition,
+        #[case] expected: &[&str],
+    ) {
+        if let Some(c) = initial {
+            tokio::fs::write(&file, c).await.unwrap();
+        }
 
         let rule = Rule {
-            tool: "AtuinHistory".to_string(),
+            tool: tool.to_string(),
             scope: None,
         };
-        write_rule(&file, &rule, RuleDisposition::Allow)
-            .await
-            .unwrap();
+        write_rule(&file, &rule, disposition).await.unwrap();
 
         let content = tokio::fs::read_to_string(&file).await.unwrap();
-        // Comment preserved
-        assert!(content.contains("# My permissions"));
-        // Both rules present
-        assert!(content.contains(r#""Read""#));
-        assert!(content.contains(r#""AtuinHistory""#));
+        for s in expected {
+            assert!(content.contains(s), "missing {s} in:\n{content}");
+        }
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn does_not_duplicate_existing_rule() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("permissions.ai.toml");
+    async fn does_not_duplicate_existing_rule(
+        #[from(perm_file)] (_dir, file): (tempfile::TempDir, std::path::PathBuf),
+    ) {
         let existing = r#"[permissions]
 allow = ["AtuinHistory"]
 "#;
@@ -155,45 +159,5 @@ allow = ["AtuinHistory"]
         let content = tokio::fs::read_to_string(&file).await.unwrap();
         // Should appear exactly once
         assert_eq!(content.matches("AtuinHistory").count(), 1);
-    }
-
-    #[tokio::test]
-    async fn handles_inline_table_permissions() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("permissions.ai.toml");
-        // Inline table style — as_table_mut() would return None for this
-        let existing = r#"permissions = { allow = ["Read"] }
-"#;
-        tokio::fs::write(&file, existing).await.unwrap();
-
-        let rule = Rule {
-            tool: "AtuinHistory".to_string(),
-            scope: None,
-        };
-        write_rule(&file, &rule, RuleDisposition::Allow)
-            .await
-            .unwrap();
-
-        let content = tokio::fs::read_to_string(&file).await.unwrap();
-        assert!(content.contains(r#""Read""#));
-        assert!(content.contains(r#""AtuinHistory""#));
-    }
-
-    #[tokio::test]
-    async fn writes_deny_rule() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("permissions.ai.toml");
-        let rule = Rule {
-            tool: "Shell".to_string(),
-            scope: None,
-        };
-
-        write_rule(&file, &rule, RuleDisposition::Deny)
-            .await
-            .unwrap();
-
-        let content = tokio::fs::read_to_string(&file).await.unwrap();
-        assert!(content.contains("deny"));
-        assert!(content.contains(r#""Shell""#));
     }
 }

@@ -1283,6 +1283,7 @@ mod tests {
     use crossterm::event::{KeyEvent, KeyModifiers};
     use eye_declare::Runtime;
     use eye_declare_engine::test_terminal::TestTerminal;
+    use rstest::{fixture, rstest};
 
     fn fixture_app() -> AiApp {
         let mut fsm = AgentFsm::new(vec![], "test-invocation".into());
@@ -1360,6 +1361,11 @@ mod tests {
         }
     }
 
+    #[fixture]
+    fn harness() -> Harness {
+        Harness::new(fixture_app())
+    }
+
     fn suggest_command_fsm(cmd: &str) -> AgentFsm {
         let mut fsm = AgentFsm::new(vec![], "test-invocation".into());
         fsm.ctx.events.push(ConversationEvent::ToolCall {
@@ -1370,10 +1376,8 @@ mod tests {
         fsm
     }
 
-    #[test]
-    fn tail_renders_conversation_turns() {
-        let h = Harness::new(fixture_app());
-
+    #[rstest]
+    fn tail_renders_conversation_turns(#[from(harness)] h: Harness) {
         let screen = h.screen();
         assert!(screen.contains(" You"), "user label missing:\n{screen}");
         assert!(
@@ -1390,15 +1394,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn esc_exits_with_cancel() {
-        let mut h = Harness::new(fixture_app());
+    #[rstest]
+    fn esc_exits_with_cancel(#[from(harness)] mut h: Harness) {
         assert_eq!(h.press(KeyCode::Esc), Some(ExitOutcome::Cancel));
     }
 
-    #[test]
-    fn exit_erases_the_input_box() {
-        let mut h = Harness::new(fixture_app());
+    #[rstest]
+    fn exit_erases_the_input_box(#[from(harness)] mut h: Harness) {
         assert!(
             h.screen().contains("Generate a command or ask a question"),
             "input box missing before exit:\n{}",
@@ -1414,9 +1416,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn typing_renders_in_the_editor() {
-        let mut h = Harness::new(fixture_app());
+    #[rstest]
+    fn typing_renders_in_the_editor(#[from(harness)] mut h: Harness) {
         h.type_str("hi there");
 
         let screen = h.screen();
@@ -1427,10 +1428,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn enter_submits_and_pushes_the_user_turn() {
-        let mut h = Harness::new(fixture_app());
-
+    #[rstest]
+    fn enter_submits_and_pushes_the_user_turn(#[from(harness)] mut h: Harness) {
         h.type_str("hello agent");
         let exit = h.press(KeyCode::Enter);
         assert_eq!(exit, None);
@@ -1451,25 +1450,15 @@ mod tests {
         assert!(all.contains(" Atuin AI"), "pending banner missing:\n{all}");
     }
 
-    #[test]
-    fn blank_enter_executes_suggested_command() {
+    #[rstest]
+    #[case::blank_enter_executes(KeyCode::Enter, ExitOutcome::Execute("ls -la".into()))]
+    #[case::tab_inserts(KeyCode::Tab, ExitOutcome::Insert("ls -la".into()))]
+    fn suggested_command_key(#[case] key: KeyCode, #[case] expected: ExitOutcome) {
         let mut h = Harness::new(app_with(suggest_command_fsm("ls -la")));
-        assert_eq!(
-            h.press(KeyCode::Enter),
-            Some(ExitOutcome::Execute("ls -la".into()))
-        );
+        assert_eq!(h.press(key), Some(expected));
     }
 
-    #[test]
-    fn tab_inserts_suggested_command() {
-        let mut h = Harness::new(app_with(suggest_command_fsm("ls -la")));
-        assert_eq!(
-            h.press(KeyCode::Tab),
-            Some(ExitOutcome::Insert("ls -la".into()))
-        );
-    }
-
-    #[test]
+    #[rstest]
     fn typing_disarms_command_execution() {
         let mut h = Harness::new(app_with(suggest_command_fsm("rm -rf /")));
         h.type_str("actually, explain first");
@@ -1481,9 +1470,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn slash_suggestions_and_tab_accept() {
-        let mut h = Harness::new(fixture_app());
+    #[rstest]
+    fn slash_suggestions_and_tab_accept(#[from(harness)] mut h: Harness) {
         h.type_str("/he");
 
         let screen = h.screen();
@@ -1496,9 +1484,8 @@ mod tests {
         assert_eq!(h.app().input.borrow().lines(), ["/help".to_string()]);
     }
 
-    #[test]
-    fn ctrl_j_inserts_newline() {
-        let mut h = Harness::new(fixture_app());
+    #[rstest]
+    fn ctrl_j_inserts_newline(#[from(harness)] mut h: Harness) {
         h.type_str("a");
         h.press_mod(KeyCode::Char('j'), KeyModifiers::CONTROL);
         h.type_str("b");
@@ -1508,9 +1495,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn shift_enter_inserts_newline() {
-        let mut h = Harness::new(fixture_app());
+    #[rstest]
+    fn shift_enter_inserts_newline(#[from(harness)] mut h: Harness) {
         h.type_str("a");
         h.press_mod(KeyCode::Enter, KeyModifiers::SHIFT);
         h.type_str("b");
@@ -1530,7 +1516,7 @@ mod tests {
         fsm
     }
 
-    #[test]
+    #[rstest]
     fn up_recalls_previous_messages_and_down_restores_the_draft() {
         let mut h = Harness::new(app_with(two_message_fsm()));
         h.type_str("draft");
@@ -1552,7 +1538,7 @@ mod tests {
         assert_eq!(h.app().input.borrow().lines(), ["draft"]);
     }
 
-    #[test]
+    #[rstest]
     fn up_moves_the_cursor_before_it_recalls() {
         let mut h = Harness::new(app_with(two_message_fsm()));
         h.type_str("a");
@@ -1570,7 +1556,7 @@ mod tests {
         assert_eq!(h.app().input.borrow().lines(), ["a", "b"]);
     }
 
-    #[test]
+    #[rstest]
     fn recall_includes_slash_commands_and_skills() {
         let mut h = Harness::new(app_with(two_message_fsm()));
         h.type_str("/help");
@@ -1594,7 +1580,7 @@ mod tests {
         assert_eq!(h.app().input.borrow().lines(), ["second question"]);
     }
 
-    #[test]
+    #[rstest]
     fn recall_does_nothing_without_user_messages() {
         let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
         h.type_str("draft");
@@ -1602,7 +1588,7 @@ mod tests {
         assert_eq!(h.app().input.borrow().lines(), ["draft"]);
     }
 
-    #[test]
+    #[rstest]
     fn submit_resets_recall_to_the_newest_message() {
         let mut h = Harness::new(app_with(two_message_fsm()));
         h.press(KeyCode::Up);
@@ -1620,7 +1606,7 @@ mod tests {
         assert_eq!(h.app().input.borrow().lines(), ["second question"]);
     }
 
-    #[test]
+    #[rstest]
     fn streaming_text_renders_live_and_seals_on_done() {
         let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
         h.type_str("what is atuin?");
@@ -1661,7 +1647,7 @@ mod tests {
         assert!(!h.app().fsm.ctx.current_response.contains("Atuin"));
     }
 
-    #[test]
+    #[rstest]
     fn esc_mid_stream_cancels_generation() {
         let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
         h.type_str("hello");
@@ -1675,7 +1661,7 @@ mod tests {
         assert_eq!(h.press(KeyCode::Esc), Some(ExitOutcome::Cancel));
     }
 
-    #[test]
+    #[rstest]
     fn stream_error_offers_retry() {
         let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
         h.type_str("hello");
@@ -1704,7 +1690,7 @@ mod tests {
         assert!(h.app().is_busy(), "retry should restart the turn");
     }
 
-    #[test]
+    #[rstest]
     fn usage_snapshot_is_stored() {
         let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
         let bucket = crate::usage::UsageBucket { used: 1, limit: 10 };
@@ -1722,6 +1708,7 @@ mod tests {
     /// Drive a turn to the point where a shell tool awaits permission.
     /// Headless permission checks resolve to Ask (no rules to consult),
     /// which is exactly the prompt path.
+    #[fixture]
     fn harness_awaiting_shell_permission() -> Harness {
         let mut h = Harness::new(app_with(AgentFsm::new(
             vec!["client_v1_execute_shell_command".into()],
@@ -1745,9 +1732,10 @@ mod tests {
         h
     }
 
-    #[test]
-    fn permission_prompt_renders_and_replaces_input() {
-        let h = harness_awaiting_shell_permission();
+    #[rstest]
+    fn permission_prompt_renders_and_replaces_input(
+        #[from(harness_awaiting_shell_permission)] h: Harness,
+    ) {
         let screen = h.screen();
         assert!(
             screen.contains("Atuin AI would like to run: "),
@@ -1761,9 +1749,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn permission_cursor_moves_and_wraps() {
-        let mut h = harness_awaiting_shell_permission();
+    #[rstest]
+    fn permission_cursor_moves_and_wraps(
+        #[from(harness_awaiting_shell_permission)] mut h: Harness,
+    ) {
         assert_eq!(h.app().permission_select.cursor, 0);
         h.press(KeyCode::Down);
         assert_eq!(h.app().permission_select.cursor, 1);
@@ -1773,9 +1762,10 @@ mod tests {
         assert_eq!(h.app().permission_select.cursor, 3);
     }
 
-    #[test]
-    fn allowing_starts_execution_with_an_interrupt_handle() {
-        let mut h = harness_awaiting_shell_permission();
+    #[rstest]
+    fn allowing_starts_execution_with_an_interrupt_handle(
+        #[from(harness_awaiting_shell_permission)] mut h: Harness,
+    ) {
         h.press(KeyCode::Enter); // cursor 0 = Allow
 
         let app = h.app();
@@ -1786,9 +1776,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn denying_resolves_the_tool_without_executing() {
-        let mut h = harness_awaiting_shell_permission();
+    #[rstest]
+    fn denying_resolves_the_tool_without_executing(
+        #[from(harness_awaiting_shell_permission)] mut h: Harness,
+    ) {
         h.press(KeyCode::Up); // wrap to Deny
         assert_eq!(h.app().permission_select.cursor, 3);
         h.press(KeyCode::Enter);
@@ -1809,9 +1800,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn ctrl_c_interrupts_from_the_moment_a_shell_spawns() {
-        let mut h = harness_awaiting_shell_permission();
+    #[rstest]
+    fn ctrl_c_interrupts_from_the_moment_a_shell_spawns(
+        #[from(harness_awaiting_shell_permission)] mut h: Harness,
+    ) {
         h.press(KeyCode::Enter); // Allow → executing
         assert!(h.app().tool_interrupts.contains_key("tool-1"));
 
@@ -1825,9 +1817,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn finished_shell_releases_ctrl_c_back_to_quit() {
-        let mut h = harness_awaiting_shell_permission();
+    #[rstest]
+    fn finished_shell_releases_ctrl_c_back_to_quit(
+        #[from(harness_awaiting_shell_permission)] mut h: Harness,
+    ) {
         h.press(KeyCode::Enter); // Allow → executing
         h.stream(Event::ToolExecutionDone {
             tool_id: "tool-1".into(),
@@ -1845,7 +1838,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn allowed_read_tool_executes_inline() {
         use std::io::Write as _;
         let mut file = tempfile::NamedTempFile::new().unwrap();
@@ -1879,7 +1872,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn init_submits_the_initial_prompt_and_pushes_the_turn() {
         let mut app = app_with(AgentFsm::new(vec![], "t".into()));
         app.initial_prompt = Some("what is atuin?".into());
@@ -1916,7 +1909,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn model_picker_flow_selects_a_model() {
         let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
         h.type_str("/model");
@@ -1956,7 +1949,7 @@ mod tests {
         assert!(screen.contains("Model: fast"), "status bar:\n{screen}");
     }
 
-    #[test]
+    #[rstest]
     fn esc_closes_the_picker_without_exiting() {
         let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
         h.type_str("/model");
@@ -1973,7 +1966,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn typing_does_not_reach_the_editor_while_picking() {
         let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
         h.type_str("/model");
@@ -1987,7 +1980,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn status_bar_shows_usage_over_threshold() {
         let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
         let bucket_hot = crate::usage::UsageBucket {
@@ -2015,6 +2008,7 @@ mod tests {
     }
 
     /// Run one full exchange so the frontier is past zero, then /new.
+    #[fixture]
     fn harness_after_new_session() -> Harness {
         let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
         h.type_str("first question");
@@ -2030,9 +2024,8 @@ mod tests {
         h
     }
 
-    #[test]
-    fn new_session_notice_renders() {
-        let h = harness_after_new_session();
+    #[rstest]
+    fn new_session_notice_renders(#[from(harness_after_new_session)] h: Harness) {
         let all = h.all_lines();
         assert!(
             all.contains("Started a new session."),
@@ -2040,10 +2033,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn response_after_new_session_survives_stream_end() {
-        let mut h = harness_after_new_session();
-
+    #[rstest]
+    fn response_after_new_session_survives_stream_end(
+        #[from(harness_after_new_session)] mut h: Harness,
+    ) {
         h.type_str("second question");
         h.press(KeyCode::Enter);
         // The user's own message must be visible while waiting.
@@ -2071,7 +2064,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn skill_dispatches_even_when_registered_for_autocomplete() {
         let mut registry = SlashCommandRegistry::default();
         let mut skill_names = HashSet::new();
@@ -2094,7 +2087,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[rstest]
     fn builtin_takes_precedence_over_skill_with_same_name() {
         let mut registry = SlashCommandRegistry::default();
         let mut skill_names = HashSet::new();
@@ -2116,7 +2109,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[rstest]
     fn resume_notice_renders_above_turns() {
         let mut fsm = AgentFsm::new(vec![], "test-invocation".into());
         fsm.ctx.events.push(ConversationEvent::UserMessage {

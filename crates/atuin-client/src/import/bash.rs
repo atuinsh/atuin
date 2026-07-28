@@ -139,37 +139,49 @@ mod test {
     use std::cmp::Ordering;
 
     use itertools::{Itertools, assert_equal};
+    use rstest::rstest;
 
     use crate::import::{Importer, tests::TestLoader};
 
     use super::Bash;
 
+    #[rstest]
+    #[case::no_timestamps(
+        "cargo install atuin\ncargo update\ncargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷\n"
+            .as_bytes()
+            .to_owned(),
+        3,
+        vec![
+            "cargo install atuin",
+            "cargo update",
+            "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
+        ]
+    )]
+    #[case::partial_timestamps(
+        b"git reset\n#1672919006\ngit clean -dxf\ncd ../\n".to_vec(),
+        3,
+        vec!["git reset", "git clean -dxf", "cd ../"]
+    )]
     #[tokio::test]
-    async fn parse_no_timestamps() {
-        let bytes = r"cargo install atuin
-cargo update
-cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷
-"
-        .as_bytes()
-        .to_owned();
-
+    async fn parse_strictly_sorted(
+        #[case] bytes: Vec<u8>,
+        #[case] expected_entries: usize,
+        #[case] expected_commands: Vec<&str>,
+    ) {
         let mut bash = Bash { bytes };
-        assert_eq!(bash.entries().await.unwrap(), 3);
+        assert_eq!(bash.entries().await.unwrap(), expected_entries);
 
         let mut loader = TestLoader::default();
         bash.load(&mut loader).await.unwrap();
 
         assert_equal(
             loader.buf.iter().map(|h| h.command.as_str()),
-            [
-                "cargo install atuin",
-                "cargo update",
-                "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
-            ],
+            expected_commands,
         );
-        assert!(is_strictly_sorted(loader.buf.iter().map(|h| h.timestamp)))
+        assert!(is_strictly_sorted(loader.buf.iter().map(|h| h.timestamp)));
     }
 
+    #[rstest]
     #[tokio::test]
     async fn parse_with_timestamps() {
         let bytes = b"#1672918999
@@ -197,28 +209,6 @@ cd ../
         )
     }
 
-    #[tokio::test]
-    async fn parse_with_partial_timestamps() {
-        let bytes = b"git reset
-#1672919006
-git clean -dxf
-cd ../
-"
-        .to_vec();
-
-        let mut bash = Bash { bytes };
-        assert_eq!(bash.entries().await.unwrap(), 3);
-
-        let mut loader = TestLoader::default();
-        bash.load(&mut loader).await.unwrap();
-
-        assert_equal(
-            loader.buf.iter().map(|h| h.command.as_str()),
-            ["git reset", "git clean -dxf", "cd ../"],
-        );
-        assert!(is_strictly_sorted(loader.buf.iter().map(|h| h.timestamp)))
-    }
-
     fn is_strictly_sorted<T>(iter: impl IntoIterator<Item = T>) -> bool
     where
         T: Clone + PartialOrd,
@@ -228,6 +218,7 @@ cd ../
             .all(|(a, b)| matches!(a.partial_cmp(&b), Some(Ordering::Less)))
     }
 
+    #[rstest]
     #[tokio::test]
     async fn timestamp_near_range_start_does_not_panic_on_backfill() {
         // first timestamp is near the minimum representable instant, preceded by an
@@ -250,6 +241,7 @@ cargo update
         );
     }
 
+    #[rstest]
     #[tokio::test]
     async fn timestamp_near_range_end_does_not_panic_on_increment() {
         // first timestamp is the maximum representable instant (253402300799 is the

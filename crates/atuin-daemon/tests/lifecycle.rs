@@ -13,6 +13,7 @@ mod unix {
     use atuin_daemon::client::HistoryClient;
     use atuin_daemon::components::HistoryComponent;
     use atuin_daemon::{Daemon, DaemonHandle};
+    use rstest::*;
     use tempfile::TempDir;
     use tokio::net::UnixListener;
     use tokio_stream::wrappers::UnixListenerStream;
@@ -20,7 +21,8 @@ mod unix {
 
     /// Spins up a daemon server on a temp socket and returns a connected client,
     /// the daemon handle (for shutdown), and the temp dir (must be held to keep paths alive).
-    async fn start_test_daemon() -> (HistoryClient, DaemonHandle, TempDir) {
+    #[fixture]
+    async fn daemon() -> (HistoryClient, DaemonHandle, TempDir) {
         let tmp = tempfile::tempdir().unwrap();
 
         let db_path = tmp.path().join("history.db");
@@ -109,9 +111,10 @@ mod unix {
         (client, handle, tmp)
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_status() {
-        let (mut client, _handle, _tmp) = start_test_daemon().await;
+    async fn test_status(#[future] daemon: (HistoryClient, DaemonHandle, TempDir)) {
+        let (mut client, _handle, _tmp) = daemon.await;
 
         let status = client.status().await.unwrap();
         assert!(status.healthy);
@@ -120,11 +123,12 @@ mod unix {
         assert!(status.pid > 0);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_start_end_history() {
+    async fn test_start_end_history(#[future] daemon: (HistoryClient, DaemonHandle, TempDir)) {
         use atuin_client::history::History;
 
-        let (mut client, _handle, _tmp) = start_test_daemon().await;
+        let (mut client, _handle, _tmp) = daemon.await;
 
         let history = History::daemon()
             .timestamp(time::OffsetDateTime::now_utc())
@@ -145,12 +149,15 @@ mod unix {
         assert!(!end_reply.id.is_empty());
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_tail_history_streams_started_and_ended_events() {
+    async fn test_tail_history_streams_started_and_ended_events(
+        #[future] daemon: (HistoryClient, DaemonHandle, TempDir),
+    ) {
         use atuin_client::history::History;
         use atuin_daemon::history::HistoryEventKind;
 
-        let (mut client, _handle, _tmp) = start_test_daemon().await;
+        let (mut client, _handle, _tmp) = daemon.await;
         let mut stream = client.tail_history().await.unwrap();
 
         let history = History::daemon()
@@ -196,9 +203,12 @@ mod unix {
         assert_eq!(ended_history.duration, 1_000_000);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_end_unknown_history_fails() {
-        let (mut client, _handle, _tmp) = start_test_daemon().await;
+    async fn test_end_unknown_history_fails(
+        #[future] daemon: (HistoryClient, DaemonHandle, TempDir),
+    ) {
+        let (mut client, _handle, _tmp) = daemon.await;
 
         let result = client
             .end_history("nonexistent-id".to_string(), 1000, 0)
@@ -206,9 +216,10 @@ mod unix {
         assert!(result.is_err());
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_shutdown() {
-        let (mut client, _handle, _tmp) = start_test_daemon().await;
+    async fn test_shutdown(#[future] daemon: (HistoryClient, DaemonHandle, TempDir)) {
+        let (mut client, _handle, _tmp) = daemon.await;
 
         let accepted = client.shutdown().await.unwrap();
         assert!(accepted);

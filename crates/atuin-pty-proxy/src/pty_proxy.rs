@@ -231,31 +231,40 @@ end
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::{Shell, render_init, shell_from_name};
 
-    #[test]
-    fn shell_from_name_handles_paths() {
-        assert_eq!(shell_from_name("/bin/zsh"), Some(Shell::Zsh));
-        assert_eq!(shell_from_name("/usr/local/bin/bash"), Some(Shell::Bash));
-        assert_eq!(shell_from_name("fish"), Some(Shell::Fish));
-        assert_eq!(shell_from_name("nu"), Some(Shell::Nu));
+    #[rstest]
+    #[case::zsh_abs_path("/bin/zsh", Shell::Zsh)]
+    #[case::bash_abs_path("/usr/local/bin/bash", Shell::Bash)]
+    #[case::fish_bare("fish", Shell::Fish)]
+    #[case::nu_bare("nu", Shell::Nu)]
+    fn shell_from_name_maps(#[case] input: &str, #[case] expected: Shell) {
+        assert_eq!(shell_from_name(input), Some(expected));
     }
 
-    #[test]
+    #[rstest]
+    fn every_init_execs_pty_proxy(
+        #[values(Shell::Zsh, Shell::Bash, Shell::Fish, Shell::Nu)] shell: Shell,
+    ) {
+        assert!(render_init(shell).contains("exec atuin pty-proxy"));
+    }
+
+    #[rstest]
     fn posix_init_uses_exec_and_tmux_guard() {
         let script = render_init(Shell::Bash);
-        assert!(script.contains("exec atuin pty-proxy"));
         assert!(script.contains("ATUIN_PTY_PROXY_TMUX"));
         assert!(!script.contains("eval \"$(atuin init bash)\""));
     }
 
-    #[test]
+    #[rstest]
     fn posix_init_has_no_double_braces() {
         let script = render_init(Shell::Bash);
         assert!(!script.contains("${{"), "double braces in bash init script");
     }
 
-    #[test]
+    #[rstest]
     fn init_scripts_forward_shell_path() {
         let posix = render_init(Shell::Bash);
         assert!(posix.contains(r#"exec atuin pty-proxy --shell "$BASH""#));
@@ -271,17 +280,15 @@ mod tests {
         assert!(nu.contains("exec atuin pty-proxy --shell $nu.current-exe"));
     }
 
-    #[test]
+    #[rstest]
     fn fish_init_uses_source() {
         let script = render_init(Shell::Fish);
-        assert!(script.contains("exec atuin pty-proxy"));
         assert!(!script.contains("atuin init fish | source"));
     }
 
-    #[test]
+    #[rstest]
     fn nu_init_uses_exec_and_tty_guard() {
         let script = render_init(Shell::Nu);
-        assert!(script.contains("exec atuin pty-proxy"));
         assert!(script.contains("ATUIN_PTY_PROXY_TMUX"));
         assert!(script.contains("is-terminal --stdin"));
         assert!(script.contains("is-terminal --stdout"));

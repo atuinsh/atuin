@@ -174,7 +174,10 @@ impl CommandCaptureTracker {
 mod tests {
     use super::*;
 
-    fn tracker(cols: u16) -> CommandCaptureTracker {
+    use rstest::{fixture, rstest};
+
+    #[fixture]
+    fn tracker(#[default(80)] cols: u16) -> CommandCaptureTracker {
         CommandCaptureTracker::new(Arc::new(AtomicU16::new(cols)))
     }
 
@@ -187,9 +190,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn command_text_replays_backspaces() {
-        let mut tracker = tracker(80);
+    #[rstest]
+    fn command_text_replays_backspaces(mut tracker: CommandCaptureTracker) {
         let mut captures = Vec::new();
 
         let input =
@@ -203,34 +205,45 @@ mod tests {
         assert_no_terminal_controls(&captures[0].output);
     }
 
-    #[test]
-    fn captures_complete_command() {
-        let mut tracker = tracker(80);
+    #[rstest]
+    #[case::complete_command(
+        b"\x1b]133;A\x07$ \x1b]133;B\x07echo hi\r\n\x1b]133;C\x07hi\r\n\x1b]133;D;0;history_id=hist;session_id=sess\x07\x1b]133;A\x07$ ",
+        CommandCapture {
+            prompt: "$".to_string(),
+            command: "echo hi".to_string(),
+            output: "hi".to_string(),
+            exit_code: Some(0),
+            history_id: Some("hist".to_string()),
+            session_id: Some("sess".to_string()),
+            output_truncated: false,
+            output_observed_bytes: 4,
+        }
+    )]
+    #[case::output_only_from_d_marker(
+        b"\x1b]133;C\x07line one\r\n\x1b]133;D;0;history_id=018f;session_id=abcd\x07",
+        CommandCapture {
+            prompt: String::new(),
+            command: String::new(),
+            output: "line one".to_string(),
+            exit_code: Some(0),
+            history_id: Some("018f".to_string()),
+            session_id: Some("abcd".to_string()),
+            output_truncated: false,
+            output_observed_bytes: 10,
+        }
+    )]
+    fn captures_full_command(
+        mut tracker: CommandCaptureTracker,
+        #[case] input: &[u8],
+        #[case] expected: CommandCapture,
+    ) {
         let mut captures = Vec::new();
-
-        tracker.push(
-            b"\x1b]133;A\x07$ \x1b]133;B\x07echo hi\r\n\x1b]133;C\x07hi\r\n\x1b]133;D;0;history_id=hist;session_id=sess\x07\x1b]133;A\x07$ ",
-            |capture| captures.push(capture),
-        );
-
-        assert_eq!(
-            captures,
-            vec![CommandCapture {
-                prompt: "$".to_string(),
-                command: "echo hi".to_string(),
-                output: "hi".to_string(),
-                exit_code: Some(0),
-                history_id: Some("hist".to_string()),
-                session_id: Some("sess".to_string()),
-                output_truncated: false,
-                output_observed_bytes: 4,
-            }]
-        );
+        tracker.push(input, |capture| captures.push(capture));
+        assert_eq!(captures, vec![expected]);
     }
 
-    #[test]
-    fn strips_ansi_and_split_markers() {
-        let mut tracker = tracker(80);
+    #[rstest]
+    fn strips_ansi_and_split_markers(mut tracker: CommandCaptureTracker) {
         let mut captures = Vec::new();
 
         tracker.push(b"\x1b]133;A\x07\x1b[32m%\x1b[0m ", |_| {});
@@ -257,9 +270,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn duplicate_prompt_start_does_not_reset_prompt_capture() {
-        let mut tracker = tracker(80);
+    #[rstest]
+    fn duplicate_prompt_start_does_not_reset_prompt_capture(mut tracker: CommandCaptureTracker) {
         let mut captures = Vec::new();
 
         tracker.push(
@@ -273,9 +285,8 @@ mod tests {
         assert_eq!(captures[0].output, "hi");
     }
 
-    #[test]
-    fn bare_finish_without_metadata_is_ignored() {
-        let mut tracker = tracker(80);
+    #[rstest]
+    fn bare_finish_without_metadata_is_ignored(mut tracker: CommandCaptureTracker) {
         let mut captures = Vec::new();
 
         tracker.push(b"\x1b]133;C\x07line one\r\n\x1b]133;D;0\x07", |capture| {
@@ -287,9 +298,8 @@ mod tests {
         assert!(captures.is_empty());
     }
 
-    #[test]
-    fn bare_finish_before_metadata_in_same_push_ignored() {
-        let mut tracker = tracker(80);
+    #[rstest]
+    fn bare_finish_before_metadata_in_same_push_ignored(mut tracker: CommandCaptureTracker) {
         let mut captures = Vec::new();
 
         tracker.push(
@@ -304,9 +314,8 @@ mod tests {
         assert_eq!(captures[0].session_id.as_deref(), Some("abcd"));
     }
 
-    #[test]
-    fn metadata_arriving_after_bare_finish_across_pushes() {
-        let mut tracker = tracker(80);
+    #[rstest]
+    fn metadata_arriving_after_bare_finish_across_pushes(mut tracker: CommandCaptureTracker) {
         let mut captures = Vec::new();
 
         tracker.push(b"\x1b]133;C\x07line one\r\n\x1b]133;D;0\x07", |capture| {
@@ -327,9 +336,8 @@ mod tests {
         assert_eq!(captures[0].session_id.as_deref(), Some("abcd"));
     }
 
-    #[test]
-    fn split_finish_marker_is_not_counted_as_output() {
-        let mut tracker = tracker(80);
+    #[rstest]
+    fn split_finish_marker_is_not_counted_as_output(mut tracker: CommandCaptureTracker) {
         let mut captures = Vec::new();
 
         tracker.push(
@@ -347,34 +355,8 @@ mod tests {
         assert_eq!(captures[0].output_observed_bytes, 10);
     }
 
-    #[test]
-    fn captures_output_with_history_metadata_from_d_marker() {
-        let mut tracker = tracker(80);
-        let mut captures = Vec::new();
-
-        tracker.push(
-            b"\x1b]133;C\x07line one\r\n\x1b]133;D;0;history_id=018f;session_id=abcd\x07",
-            |capture| captures.push(capture),
-        );
-
-        assert_eq!(
-            captures,
-            vec![CommandCapture {
-                prompt: String::new(),
-                command: String::new(),
-                output: "line one".to_string(),
-                exit_code: Some(0),
-                history_id: Some("018f".to_string()),
-                session_id: Some("abcd".to_string()),
-                output_truncated: false,
-                output_observed_bytes: 10,
-            }]
-        );
-    }
-
-    #[test]
-    fn output_capture_is_capped_and_reports_observed_bytes() {
-        let mut tracker = tracker(80);
+    #[rstest]
+    fn output_capture_is_capped_and_reports_observed_bytes(mut tracker: CommandCaptureTracker) {
         let mut captures = Vec::new();
         let mut input = b"\x1b]133;C\x07".to_vec();
         input.extend(std::iter::repeat_n(b'x', MAX_OUTPUT_CAPTURE_BYTES + 10));
@@ -390,9 +372,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn resets_buffers_between_c_d_only_captures() {
-        let mut tracker = tracker(80);
+    #[rstest]
+    fn resets_buffers_between_c_d_only_captures(mut tracker: CommandCaptureTracker) {
         let mut captures = Vec::new();
 
         tracker.push(

@@ -2,10 +2,14 @@
 
 use serde_json::json;
 
+use rstest::{fixture, rstest};
+
+use super::tools::{InterruptReason, ToolPreviewData};
 use super::*;
 use effects::{Effect, ExitAction};
 use events::{Event, PermissionChoice, PermissionResponse};
 
+#[fixture]
 fn new_fsm() -> AgentFsm {
     AgentFsm::new(
         vec!["client_v1_read_file".to_string()],
@@ -17,10 +21,8 @@ fn new_fsm() -> AgentFsm {
 // Idle → Turn
 // ============================================================================
 
-#[test]
-fn user_submit_starts_turn() {
-    let mut fsm = new_fsm();
-
+#[rstest]
+fn user_submit_starts_turn(#[from(new_fsm)] mut fsm: AgentFsm) {
     let effects = fsm.handle(Event::UserSubmit("hello".into()));
 
     assert!(matches!(
@@ -38,9 +40,8 @@ fn user_submit_starts_turn() {
     )));
 }
 
-#[test]
-fn stream_started_transitions_to_streaming() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn stream_started_transitions_to_streaming(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("hello".into()));
 
     let effects = fsm.handle(Event::StreamStarted);
@@ -54,9 +55,8 @@ fn stream_started_transitions_to_streaming() {
     assert!(effects.is_empty());
 }
 
-#[test]
-fn stream_chunk_accumulates_text() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn stream_chunk_accumulates_text(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("hello".into()));
     fsm.handle(Event::StreamStarted);
 
@@ -66,9 +66,8 @@ fn stream_chunk_accumulates_text() {
     assert_eq!(fsm.ctx.current_response, "Hello world!");
 }
 
-#[test]
-fn stream_done_without_tools_goes_idle() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn stream_done_without_tools_goes_idle(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("hello".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(Event::StreamChunk("Hi there!".into()));
@@ -91,9 +90,8 @@ fn stream_done_without_tools_goes_idle() {
 // Tool lifecycle
 // ============================================================================
 
-#[test]
-fn stream_tool_call_tracks_tool_and_emits_check_permission() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn stream_tool_call_tracks_tool_and_emits_check_permission(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("read a file".into()));
     fsm.handle(Event::StreamStarted);
 
@@ -108,7 +106,7 @@ fn stream_tool_call_tracks_tool_and_emits_check_permission() {
     assert!(matches!(effects[0], Effect::CheckPermission { .. }));
 }
 
-#[test]
+#[rstest]
 fn atuin_output_call_emits_command_lookup_and_stores_result() {
     let mut fsm = AgentFsm::new(
         vec!["client_v1_atuin_output".to_string()],
@@ -143,9 +141,15 @@ fn atuin_output_call_emits_command_lookup_and_stores_result() {
     assert_eq!(call.command.as_deref(), Some("cargo test"));
 }
 
-#[test]
-fn permission_allowed_transitions_to_executing() {
-    let mut fsm = new_fsm();
+#[rstest]
+#[case::allowed(PermissionResponse::Allowed, ToolState::Executing, true)]
+#[case::ask(PermissionResponse::Ask, ToolState::AwaitingPermission, false)]
+fn permission_resolution(
+    #[from(new_fsm)] mut fsm: AgentFsm,
+    #[case] response: PermissionResponse,
+    #[case] expected_state: ToolState,
+    #[case] expect_execute: bool,
+) {
     fsm.handle(Event::UserSubmit("read".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(Event::StreamToolCall {
@@ -156,39 +160,19 @@ fn permission_allowed_transitions_to_executing() {
 
     let effects = fsm.handle(Event::PermissionResolved {
         tool_id: "t1".into(),
-        response: PermissionResponse::Allowed,
+        response,
     });
 
-    assert_eq!(fsm.ctx.tools.get("t1").unwrap().state, ToolState::Executing);
-    assert!(matches!(effects[0], Effect::ExecuteTool { .. }));
+    assert_eq!(fsm.ctx.tools.get("t1").unwrap().state, expected_state);
+    if expect_execute {
+        assert!(matches!(effects[0], Effect::ExecuteTool { .. }));
+    } else {
+        assert!(effects.is_empty());
+    }
 }
 
-#[test]
-fn permission_ask_transitions_to_awaiting() {
-    let mut fsm = new_fsm();
-    fsm.handle(Event::UserSubmit("read".into()));
-    fsm.handle(Event::StreamStarted);
-    fsm.handle(Event::StreamToolCall {
-        id: "t1".into(),
-        name: "read_file".into(),
-        input: json!({"file_path": "/tmp/test.txt"}),
-    });
-
-    let effects = fsm.handle(Event::PermissionResolved {
-        tool_id: "t1".into(),
-        response: PermissionResponse::Ask,
-    });
-
-    assert_eq!(
-        fsm.ctx.tools.get("t1").unwrap().state,
-        ToolState::AwaitingPermission
-    );
-    assert!(effects.is_empty());
-}
-
-#[test]
-fn tool_done_after_stream_done_continues_conversation() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn tool_done_after_stream_done_continues_conversation(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("read".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(Event::StreamToolCall {
@@ -225,9 +209,8 @@ fn tool_done_after_stream_done_continues_conversation() {
     );
 }
 
-#[test]
-fn continuation_turn_without_new_tools_goes_idle() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn continuation_turn_without_new_tools_goes_idle(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("read".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(Event::StreamToolCall {
@@ -272,9 +255,8 @@ fn continuation_turn_without_new_tools_goes_idle() {
     );
 }
 
-#[test]
-fn tool_done_before_stream_done_stays_in_turn() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn tool_done_before_stream_done_stays_in_turn(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("read".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(Event::StreamToolCall {
@@ -308,9 +290,8 @@ fn tool_done_before_stream_done_stays_in_turn() {
 // Cancel
 // ============================================================================
 
-#[test]
-fn cancel_during_streaming_goes_idle() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn cancel_during_streaming_goes_idle(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("hello".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(Event::StreamChunk("partial text".into()));
@@ -327,9 +308,8 @@ fn cancel_during_streaming_goes_idle() {
     )));
 }
 
-#[test]
-fn stale_permission_resolved_after_cancel_is_ignored() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn stale_permission_resolved_after_cancel_is_ignored(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("read".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(Event::StreamToolCall {
@@ -354,9 +334,8 @@ fn stale_permission_resolved_after_cancel_is_ignored() {
     assert!(effects.is_empty());
 }
 
-#[test]
-fn cancel_during_turn_with_pending_tools() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn cancel_during_turn_with_pending_tools(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("hello".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(Event::StreamToolCall {
@@ -393,9 +372,8 @@ fn cancel_during_turn_with_pending_tools() {
     )));
 }
 
-#[test]
-fn stale_tool_result_after_cancel_is_ignored() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn stale_tool_result_after_cancel_is_ignored(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("hello".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(Event::StreamToolCall {
@@ -427,9 +405,8 @@ fn stale_tool_result_after_cancel_is_ignored() {
 // Confirmation
 // ============================================================================
 
-#[test]
-fn dangerous_command_enters_confirmation() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn dangerous_command_enters_confirmation(#[from(new_fsm)] mut fsm: AgentFsm) {
     // Simulate a dangerous command in history
     fsm.ctx.events.push(ConversationEvent::ToolCall {
         id: "sc1".into(),
@@ -452,9 +429,8 @@ fn dangerous_command_enters_confirmation() {
     );
 }
 
-#[test]
-fn second_execute_confirms_and_exits() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn second_execute_confirms_and_exits(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.ctx.events.push(ConversationEvent::ToolCall {
         id: "sc1".into(),
         name: "suggest_command".into(),
@@ -470,9 +446,8 @@ fn second_execute_confirms_and_exits() {
     )));
 }
 
-#[test]
-fn confirmation_timeout_clears_confirmation() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn confirmation_timeout_clears_confirmation(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.ctx.events.push(ConversationEvent::ToolCall {
         id: "sc1".into(),
         name: "suggest_command".into(),
@@ -495,9 +470,8 @@ fn confirmation_timeout_clears_confirmation() {
 // Error / Retry
 // ============================================================================
 
-#[test]
-fn stream_error_goes_to_error_state() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn stream_error_goes_to_error_state(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("hello".into()));
     fsm.handle(Event::StreamStarted);
 
@@ -506,9 +480,8 @@ fn stream_error_goes_to_error_state() {
     assert_eq!(fsm.state, AgentState::Error("network error".to_string()));
 }
 
-#[test]
-fn retry_from_error_starts_new_stream() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn retry_from_error_starts_new_stream(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("hello".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(Event::StreamError("fail".into()));
@@ -532,9 +505,8 @@ fn retry_from_error_starts_new_stream() {
 // Permission choices
 // ============================================================================
 
-#[test]
-fn permission_deny_completes_turn_and_continues() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn permission_deny_completes_turn_and_continues(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("read".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(Event::StreamToolCall {
@@ -579,6 +551,7 @@ fn permission_deny_completes_turn_and_continues() {
 // Shell execution timeouts
 // ============================================================================
 
+#[fixture]
 fn fsm_with_shell() -> AgentFsm {
     AgentFsm::new(
         vec![
@@ -602,9 +575,8 @@ fn shell_tool_call_event(id: &str) -> Event {
     }
 }
 
-#[test]
-fn shell_tool_schedules_execution_timeout() {
-    let mut fsm = fsm_with_shell();
+#[rstest]
+fn shell_tool_schedules_execution_timeout(#[from(fsm_with_shell)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("run something".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(shell_tool_call_event("t1"));
@@ -628,9 +600,8 @@ fn shell_tool_schedules_execution_timeout() {
     assert!(!fsm.ctx.tool_timeout_ids.is_empty());
 }
 
-#[test]
-fn read_tool_does_not_schedule_timeout() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn read_tool_does_not_schedule_timeout(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("read".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(Event::StreamToolCall {
@@ -657,9 +628,8 @@ fn read_tool_does_not_schedule_timeout() {
     assert!(fsm.ctx.tool_timeout_ids.is_empty());
 }
 
-#[test]
-fn tool_completion_clears_timeout_mapping() {
-    let mut fsm = fsm_with_shell();
+#[rstest]
+fn tool_completion_clears_timeout_mapping(#[from(fsm_with_shell)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("run".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(shell_tool_call_event("t1"));
@@ -683,9 +653,8 @@ fn tool_completion_clears_timeout_mapping() {
     assert!(fsm.ctx.tool_timeout_ids.is_empty());
 }
 
-#[test]
-fn stale_timeout_after_natural_completion_is_ignored() {
-    let mut fsm = fsm_with_shell();
+#[rstest]
+fn stale_timeout_after_natural_completion_is_ignored(#[from(fsm_with_shell)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("run".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(shell_tool_call_event("t1"));
@@ -713,9 +682,8 @@ fn stale_timeout_after_natural_completion_is_ignored() {
     assert!(effects.is_empty());
 }
 
-#[test]
-fn timeout_fires_before_completion_emits_abort() {
-    let mut fsm = fsm_with_shell();
+#[rstest]
+fn timeout_fires_before_completion_emits_abort(#[from(fsm_with_shell)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("run".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(shell_tool_call_event("t1"));
@@ -742,9 +710,8 @@ fn timeout_fires_before_completion_emits_abort() {
     assert!(fsm.ctx.tool_timeout_ids.is_empty());
 }
 
-#[test]
-fn timeout_respects_llm_specified_duration() {
-    let mut fsm = fsm_with_shell();
+#[rstest]
+fn timeout_respects_llm_specified_duration(#[from(fsm_with_shell)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("run".into()));
     fsm.handle(Event::StreamStarted);
 
@@ -774,9 +741,8 @@ fn timeout_respects_llm_specified_duration() {
     ));
 }
 
-#[test]
-fn cancel_clears_timeout_mappings() {
-    let mut fsm = fsm_with_shell();
+#[rstest]
+fn cancel_clears_timeout_mappings(#[from(fsm_with_shell)] mut fsm: AgentFsm) {
     fsm.handle(Event::UserSubmit("run".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(shell_tool_call_event("t1"));
@@ -792,11 +758,26 @@ fn cancel_clears_timeout_mappings() {
     assert!(fsm.ctx.tool_timeout_ids.is_empty());
 }
 
-#[test]
-fn timeout_abort_propagates_timeout_reason_to_preview_and_llm() {
-    use super::tools::InterruptReason;
-
-    let mut fsm = fsm_with_shell();
+#[rstest]
+#[case::timeout(
+    Event::ToolExecutionTimeout { timeout_id: 0, tool_id: "t1".into() },
+    InterruptReason::Timeout(60),
+    "[Timed out after 60s]",
+    Some("[Interrupted by user]")
+)]
+#[case::user_interrupt(
+    Event::InterruptTools,
+    InterruptReason::User,
+    "[Interrupted by user]",
+    None
+)]
+fn interrupt_propagates_reason_to_preview_and_llm(
+    #[from(fsm_with_shell)] mut fsm: AgentFsm,
+    #[case] trigger: Event,
+    #[case] expected_reason: InterruptReason,
+    #[case] expected_msg: &str,
+    #[case] absent_msg: Option<&str>,
+) {
     fsm.handle(Event::UserSubmit("run".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(shell_tool_call_event("t1"));
@@ -808,11 +789,8 @@ fn timeout_abort_propagates_timeout_reason_to_preview_and_llm() {
         session_id: "s1".into(),
     });
 
-    // Timeout fires
-    fsm.handle(Event::ToolExecutionTimeout {
-        timeout_id: 0,
-        tool_id: "t1".into(),
-    });
+    // Trigger the interrupt (timeout fires, or the user interrupts).
+    fsm.handle(trigger);
 
     // Tool completes after abort (interrupted: true from execute_shell_command_streaming)
     fsm.handle(Event::ToolExecutionDone {
@@ -824,91 +802,39 @@ fn timeout_abort_propagates_timeout_reason_to_preview_and_llm() {
             duration_ms: 60000,
             interrupted: true,
         },
-        preview: Some(super::tools::ToolPreviewData::Shell {
+        preview: Some(ToolPreviewData::Shell {
             lines: vec!["partial output".into()],
             exit_code: None,
             interrupted: None, // FSM overrides this with the reason
         }),
     });
 
-    // Preview should carry Timeout reason
+    // Preview should carry the expected reason
     let tracked = fsm.ctx.tools.get("t1").unwrap();
     let preview = tracked.shell_preview().unwrap();
-    assert_eq!(preview.interrupted, Some(InterruptReason::Timeout(60)));
+    assert_eq!(preview.interrupted, Some(expected_reason));
 
-    // LLM content should say "Timed out" not "Interrupted by user"
+    // LLM content should carry the expected message
     let tool_result = fsm.ctx.events.iter().find(
         |e| matches!(e, ConversationEvent::ToolResult { tool_use_id, .. } if tool_use_id == "t1"),
     );
     if let Some(ConversationEvent::ToolResult { content, .. }) = tool_result {
         assert!(
-            content.contains("[Timed out after 60s]"),
-            "Expected timeout message, got: {content}"
+            content.contains(expected_msg),
+            "Expected message {expected_msg:?}, got: {content}"
         );
-        assert!(!content.contains("[Interrupted by user]"));
+        if let Some(absent) = absent_msg {
+            assert!(!content.contains(absent));
+        }
     } else {
         panic!("No ToolResult found for t1");
     }
 }
 
-#[test]
-fn user_interrupt_propagates_user_reason_to_preview_and_llm() {
-    use super::tools::InterruptReason;
-
-    let mut fsm = fsm_with_shell();
-    fsm.handle(Event::UserSubmit("run".into()));
-    fsm.handle(Event::StreamStarted);
-    fsm.handle(shell_tool_call_event("t1"));
-    fsm.handle(Event::PermissionResolved {
-        tool_id: "t1".into(),
-        response: PermissionResponse::Allowed,
-    });
-    fsm.handle(Event::StreamDone {
-        session_id: "s1".into(),
-    });
-
-    // User interrupts
-    fsm.handle(Event::InterruptTools);
-
-    // Tool completes after abort
-    fsm.handle(Event::ToolExecutionDone {
-        tool_id: "t1".into(),
-        outcome: crate::tools::ToolOutcome::Structured {
-            stdout: "partial".into(),
-            stderr: String::new(),
-            exit_code: None,
-            duration_ms: 5000,
-            interrupted: true,
-        },
-        preview: Some(super::tools::ToolPreviewData::Shell {
-            lines: vec!["partial".into()],
-            exit_code: None,
-            interrupted: None, // FSM overrides this with the reason
-        }),
-    });
-
-    // Preview should carry User reason
-    let tracked = fsm.ctx.tools.get("t1").unwrap();
-    let preview = tracked.shell_preview().unwrap();
-    assert_eq!(preview.interrupted, Some(InterruptReason::User));
-
-    // LLM content should say "Interrupted by user"
-    let tool_result = fsm.ctx.events.iter().find(
-        |e| matches!(e, ConversationEvent::ToolResult { tool_use_id, .. } if tool_use_id == "t1"),
-    );
-    if let Some(ConversationEvent::ToolResult { content, .. }) = tool_result {
-        assert!(
-            content.contains("[Interrupted by user]"),
-            "Expected user interrupt message, got: {content}"
-        );
-    } else {
-        panic!("No ToolResult found for t1");
-    }
-}
-
-#[test]
-fn user_interrupt_clears_timeout_mappings_for_aborted_tools() {
-    let mut fsm = fsm_with_shell();
+#[rstest]
+fn user_interrupt_clears_timeout_mappings_for_aborted_tools(
+    #[from(fsm_with_shell)] mut fsm: AgentFsm,
+) {
     fsm.handle(Event::UserSubmit("run".into()));
     fsm.handle(Event::StreamStarted);
     fsm.handle(shell_tool_call_event("t1"));
@@ -946,19 +872,16 @@ fn model_list() -> crate::models::ModelList {
     }
 }
 
-#[test]
-fn open_model_picker_fetches_when_uncached() {
-    let mut fsm = new_fsm();
-
+#[rstest]
+fn open_model_picker_fetches_when_uncached(#[from(new_fsm)] mut fsm: AgentFsm) {
     let effects = fsm.handle(Event::OpenModelPicker);
 
     assert_eq!(fsm.ctx.model_picker, Some(ModelPicker::Loading));
     assert!(matches!(effects[..], [Effect::FetchModels]));
 }
 
-#[test]
-fn open_model_picker_reuses_cache_without_fetching() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn open_model_picker_reuses_cache_without_fetching(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.ctx.models_cache = Some(model_list());
 
     let effects = fsm.handle(Event::OpenModelPicker);
@@ -967,9 +890,8 @@ fn open_model_picker_reuses_cache_without_fetching() {
     assert!(effects.is_empty());
 }
 
-#[test]
-fn model_list_loaded_populates_picker_and_cache() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn model_list_loaded_populates_picker_and_cache(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::OpenModelPicker);
 
     let effects = fsm.handle(Event::ModelListLoaded(Ok(model_list())));
@@ -979,9 +901,10 @@ fn model_list_loaded_populates_picker_and_cache() {
     assert!(effects.is_empty());
 }
 
-#[test]
-fn model_list_loaded_after_dismissal_caches_but_keeps_picker_closed() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn model_list_loaded_after_dismissal_caches_but_keeps_picker_closed(
+    #[from(new_fsm)] mut fsm: AgentFsm,
+) {
     fsm.handle(Event::OpenModelPicker);
     fsm.handle(Event::Cancel); // dismiss while loading
 
@@ -991,9 +914,8 @@ fn model_list_loaded_after_dismissal_caches_but_keeps_picker_closed() {
     assert_eq!(fsm.ctx.model_picker, None);
 }
 
-#[test]
-fn model_list_load_failure_closes_picker_with_message() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn model_list_load_failure_closes_picker_with_message(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::OpenModelPicker);
 
     fsm.handle(Event::ModelListLoaded(Err("boom".to_string())));
@@ -1006,9 +928,8 @@ fn model_list_load_failure_closes_picker_with_message() {
     )));
 }
 
-#[test]
-fn model_selected_sets_model_and_persists() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn model_selected_sets_model_and_persists(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::OpenModelPicker);
     fsm.handle(Event::ModelListLoaded(Ok(model_list())));
 
@@ -1027,9 +948,8 @@ fn model_selected_sets_model_and_persists() {
     )));
 }
 
-#[test]
-fn cancel_closes_picker_instead_of_exiting() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn cancel_closes_picker_instead_of_exiting(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::OpenModelPicker);
 
     let effects = fsm.handle(Event::Cancel);
@@ -1042,9 +962,8 @@ fn cancel_closes_picker_instead_of_exiting() {
     assert!(matches!(effects[..], [Effect::ExitApp(ExitAction::Cancel)]));
 }
 
-#[test]
-fn user_submit_dismisses_loading_picker() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn user_submit_dismisses_loading_picker(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.handle(Event::OpenModelPicker);
 
     fsm.handle(Event::UserSubmit("hello".into()));
@@ -1052,9 +971,8 @@ fn user_submit_dismisses_loading_picker() {
     assert_eq!(fsm.ctx.model_picker, None);
 }
 
-#[test]
-fn selected_model_survives_new_session() {
-    let mut fsm = new_fsm();
+#[rstest]
+fn selected_model_survives_new_session(#[from(new_fsm)] mut fsm: AgentFsm) {
     fsm.ctx.models_cache = Some(model_list());
     fsm.handle(Event::OpenModelPicker);
     fsm.handle(Event::ModelSelected("deep".to_string()));

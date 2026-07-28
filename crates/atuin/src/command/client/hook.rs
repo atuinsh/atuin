@@ -302,6 +302,7 @@ mod tests {
         command::{AtuinCmd, client},
     };
     use clap::Parser;
+    use rstest::rstest;
 
     #[test]
     fn parse_hook_agent_command() {
@@ -313,22 +314,14 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn parse_hook_install_command() {
-        let cmd = Cmd::try_parse_from(["hook", "install", "codex"]).unwrap();
+    #[rstest]
+    #[case::codex("codex")]
+    #[case::pi("pi")]
+    fn parse_hook_install_command(#[case] agent_name: &str) {
+        let cmd = Cmd::try_parse_from(["hook", "install", agent_name]).unwrap();
 
         match (cmd.action, cmd.agent) {
-            (Some(Action::Install { agent }), None) => assert_eq!(agent, "codex"),
-            other => panic!("unexpected parsed command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_hook_install_pi_command() {
-        let cmd = Cmd::try_parse_from(["hook", "install", "pi"]).unwrap();
-
-        match (cmd.action, cmd.agent) {
-            (Some(Action::Install { agent }), None) => assert_eq!(agent, "pi"),
+            (Some(Action::Install { agent }), None) => assert_eq!(agent, agent_name),
             other => panic!("unexpected parsed command: {other:?}"),
         }
     }

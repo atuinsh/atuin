@@ -131,6 +131,7 @@ impl Element for TruncatedLine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     fn render_line(el: &impl Element, width: u16) -> String {
         let area = Rect::new(0, 0, width, 1);
@@ -143,38 +144,38 @@ mod tests {
             .to_string()
     }
 
-    #[test]
-    fn fit_middle_keeps_short_commands() {
-        assert_eq!(fit_middle("cargo test", 20), "cargo test");
+    fn assert_middle_elided(rendered: &str, head: &str, tail: &str, max_width: usize) {
+        assert!(rendered.starts_with(head), "head survives: {rendered}");
+        assert!(rendered.ends_with(tail), "tail survives: {rendered}");
+        assert!(rendered.contains('…'), "elision marked: {rendered}");
+        assert!(rendered.width() <= max_width, "within width: {rendered}");
     }
 
-    #[test]
+    #[rstest]
+    #[case::keeps_short_commands("cargo test", 20, "cargo test")]
+    #[case::flattens_multiline(
+        "for f in *.rs\ndo\n  wc -l \"$f\"\ndone",
+        80,
+        "for f in *.rs do wc -l \"$f\" done"
+    )]
+    fn fit_middle_exact(#[case] input: &str, #[case] cols: usize, #[case] expected: &str) {
+        assert_eq!(fit_middle(input, cols), expected);
+    }
+
+    #[rstest]
     fn fit_middle_elides_the_middle() {
         let out = fit_middle("cargo test --workspace -- --nocapture history", 20);
-        assert!(out.starts_with("cargo"), "head survives: {out}");
-        assert!(out.ends_with("history"), "tail survives: {out}");
-        assert!(out.contains('…'), "elision marked: {out}");
-        assert!(out.width() <= 20);
+        assert_middle_elided(&out, "cargo", "history", 20);
     }
 
-    #[test]
-    fn fit_middle_flattens_multiline_commands() {
-        assert_eq!(
-            fit_middle("for f in *.rs\ndo\n  wc -l \"$f\"\ndone", 80),
-            "for f in *.rs do wc -l \"$f\" done"
-        );
-    }
-
-    #[test]
+    #[rstest]
     fn done_command_spinner_shows_both_ends() {
         let el = command_spinner("Ran: ", "git log --oneline --graph --all --decorate", true);
         let line = render_line(&el, 24);
-        assert!(line.starts_with("Ran: git"), "got: {line}");
-        assert!(line.ends_with("decorate"), "got: {line}");
-        assert!(line.contains('…'), "got: {line}");
+        assert_middle_elided(&line, "Ran: git", "decorate", 24);
     }
 
-    #[test]
+    #[rstest]
     fn running_command_spinner_reserves_marker_columns() {
         let el = command_spinner("Running: ", "cargo build --release --locked", false);
         // The label budget accounts for the 2-column marker, so the command's
@@ -186,13 +187,13 @@ mod tests {
         assert_eq!(line.width(), 24, "got: {line}");
     }
 
-    #[test]
+    #[rstest]
     fn command_spinner_fits_untruncated_when_room() {
         let el = command_spinner("Ran: ", "ls -la", true);
         assert_eq!(render_line(&el, 40), "Ran: ls -la");
     }
 
-    #[test]
+    #[rstest]
     fn truncated_line_elides_value_not_prefix() {
         let el = truncated_line(
             "would like to view: ",
@@ -201,15 +202,10 @@ mod tests {
             Style::default(),
         );
         let line = render_line(&el, 40);
-        assert!(
-            line.starts_with("would like to view: docker"),
-            "got: {line}"
-        );
-        assert!(line.ends_with("recreate"), "got: {line}");
-        assert!(line.contains('…'), "got: {line}");
+        assert_middle_elided(&line, "would like to view: docker", "recreate", 40);
     }
 
-    #[test]
+    #[rstest]
     fn truncated_line_fits_untruncated_when_room() {
         let el = truncated_line("view: ", Style::default(), "ls -la", Style::default());
         assert_eq!(render_line(&el, 40), "view: ls -la");

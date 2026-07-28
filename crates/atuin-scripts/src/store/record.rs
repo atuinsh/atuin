@@ -94,6 +94,7 @@ impl ScriptRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn test_serialize_create() {
@@ -165,48 +166,29 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_serialize_deserialize_create() {
-        let script = Script::builder()
+    #[rstest]
+    #[case::create(ScriptRecord::Create(
+        Script::builder()
             .name("test".to_string())
             .description("test".to_string())
             .shebang("test".to_string())
             .tags(vec!["test".to_string()])
             .script("test".to_string())
-            .build();
-
-        let record = ScriptRecord::Create(script);
-
-        let serialized = record.serialize().unwrap();
-        let deserialized = ScriptRecord::deserialize(&serialized, SCRIPT_VERSION).unwrap();
-
-        assert_eq!(record, deserialized);
-    }
-
-    #[test]
-    fn test_serialize_deserialize_delete() {
-        let record = ScriptRecord::Delete(
-            uuid::Uuid::parse_str("0195c825a35f7982bdb016168881cbc6").unwrap(),
-        );
-
-        let serialized = record.serialize().unwrap();
-        let deserialized = ScriptRecord::deserialize(&serialized, SCRIPT_VERSION).unwrap();
-
-        assert_eq!(record, deserialized);
-    }
-
-    #[test]
-    fn test_serialize_deserialize_update() {
-        let script = Script::builder()
+            .build(),
+    ))]
+    #[case::delete(ScriptRecord::Delete(
+        uuid::Uuid::parse_str("0195c825a35f7982bdb016168881cbc6").unwrap(),
+    ))]
+    #[case::update(ScriptRecord::Update(
+        Script::builder()
             .name("test".to_string())
             .description("test".to_string())
             .shebang("test".to_string())
             .tags(vec!["test".to_string()])
             .script("test".to_string())
-            .build();
-
-        let record = ScriptRecord::Update(script);
-
+            .build(),
+    ))]
+    fn serialize_deserialize(#[case] record: ScriptRecord) {
         let serialized = record.serialize().unwrap();
         let deserialized = ScriptRecord::deserialize(&serialized, SCRIPT_VERSION).unwrap();
 
