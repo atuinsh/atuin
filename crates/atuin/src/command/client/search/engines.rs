@@ -11,7 +11,11 @@ use super::cursor::Cursor;
 #[cfg(feature = "daemon")]
 pub mod daemon;
 pub mod db;
+mod layout;
 pub mod skim;
+
+#[cfg(test)]
+mod tests;
 
 #[allow(unused)] // settings is only used if daemon feature is enabled
 pub fn engine(search_mode: SearchMode, settings: &Settings) -> Box<dyn SearchEngine> {
@@ -39,6 +43,16 @@ pub struct SearchState {
 }
 
 impl SearchState {
+    fn with_input(&self, input: String) -> Self {
+        Self {
+            input: input.into(),
+            filter_mode: self.filter_mode,
+            context: self.context.clone(),
+            custom_context: self.custom_context.clone(),
+            shells: self.shells.clone(),
+        }
+    }
+
     pub(crate) fn rotate_filter_mode(&mut self, settings: &Settings, offset: isize) {
         let mut i = settings
             .search
@@ -92,9 +106,34 @@ pub trait SearchEngine: Send + Sync + 'static {
                 .into_iter()
                 .collect::<Vec<_>>())
         } else {
-            self.full_query(state, db).await
+            let results = self.full_query(state, db).await?;
+            if !results.is_empty() || !self.corrects_dubeolsik_layout() {
+                return Ok(results);
+            }
+
+            let Some(corrected_input) = layout::dubeolsik_to_qwerty(state.input.as_str()) else {
+                return Ok(results);
+            };
+
+            self.full_query(&state.with_input(corrected_input), db)
+                .await
         }
     }
 
-    fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize>;
+    fn corrects_dubeolsik_layout(&self) -> bool {
+        false
+    }
+
+    fn get_highlight_indices_for_query(&self, command: &str, search_input: &str) -> Vec<usize>;
+
+    fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
+        let indices = self.get_highlight_indices_for_query(command, search_input);
+        if !indices.is_empty() || !self.corrects_dubeolsik_layout() {
+            return indices;
+        }
+
+        layout::dubeolsik_to_qwerty(search_input).map_or(indices, |corrected_input| {
+            self.get_highlight_indices_for_query(command, &corrected_input)
+        })
+    }
 }

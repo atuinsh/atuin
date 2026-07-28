@@ -41,8 +41,12 @@ impl SearchEngine for Search {
         Ok(results)
     }
 
+    fn corrects_dubeolsik_layout(&self) -> bool {
+        self.0 == DbSearchMode::Fuzzy
+    }
+
     #[instrument(skip_all, level = Level::TRACE, name = "db_highlight")]
-    fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
+    fn get_highlight_indices_for_query(&self, command: &str, search_input: &str) -> Vec<usize> {
         if self.0 == DbSearchMode::Prefix {
             return vec![];
         } else if self.0 == DbSearchMode::FullText {

@@ -222,8 +222,12 @@ impl SearchEngine for Search {
         Ok(ordered_results)
     }
 
+    fn corrects_dubeolsik_layout(&self) -> bool {
+        true
+    }
+
     #[instrument(skip_all, level = Level::TRACE, name = "daemon_highlight")]
-    fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
+    fn get_highlight_indices_for_query(&self, command: &str, search_input: &str) -> Vec<usize> {
         // Use fulltext highlighting for regex queries
         if Self::contains_regex_pattern(search_input) {
             return super::db::get_highlight_indices_fulltext(command, search_input);
