@@ -65,6 +65,26 @@ This will delete your account, and all history from the remote server. It won't 
 
 We don't currently have a password reset system. As long as you're still logged in on at least one machine, it's safe to delete and re-create your account.
 
+## I'm not using sync — why is Atuin connecting to api.atuin.sh?
+
+That's the update checker. At most once per hour, Atuin checks `https://api.atuin.sh` for the latest release, and lets you know if you're out of date. It's a version lookup — no history or personal data is involved.
+
+To turn it off, add this to `~/.config/atuin/config.toml`:
+
+```
+update_check = false
+```
+
+With the [update check](https://docs.atuin.sh/configuration/config/#update_check) disabled and sync not set up, Atuin makes no network requests of its own.
+
+If you'd rather the code wasn't in the binary at all, build from source without the default features:
+
+```
+cargo build --release --no-default-features --features client,daemon,clipboard
+```
+
+This compiles out the update checker, the sync commands, and AI.
+
 ## I didn't set up sync, and now I have to reinstall my system!
 
 If you have a backup of `~/.local/share/atuin`, you can import it by:
