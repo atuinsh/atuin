@@ -798,6 +798,8 @@ This section of the client config is specifically for configuring key-related se
 [keys]
 scroll_exits = [...]
 prefix = 'a'
+bind_up_arrow = true
+bind_ctrl_r = true
 ```
 
 ### `scroll_exits`
@@ -808,6 +810,32 @@ Configures whether the TUI exits, when scrolled past the last or first entry.
 
 ```toml
 scroll_exits = true
+```
+
+### `bind_up_arrow`
+
+Default: `true`
+
+When `true`, `atuin init` binds the shell up-arrow key to open Atuin search. Set to `false` to keep the shell's native history navigation for ↑ (and still use Atuin via Ctrl-R unless that is also disabled).
+
+Same effect as `atuin init <shell> --disable-up-arrow` when set to `false`.
+
+```toml
+[keys]
+bind_up_arrow = false
+```
+
+### `bind_ctrl_r`
+
+Default: `true`
+
+When `true`, `atuin init` binds Ctrl-R to Atuin search. Set to `false` to leave the shell's default reverse-search (or nothing) alone.
+
+Same effect as `atuin init <shell> --disable-ctrl-r` when set to `false`.
+
+```toml
+[keys]
+bind_ctrl_r = false
 ```
 
 ### `prefix`

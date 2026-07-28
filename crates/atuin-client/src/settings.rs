@@ -372,6 +372,10 @@ pub struct Keys {
     pub accept_past_line_start: bool,
     pub accept_with_backspace: bool,
     pub prefix: String,
+    /// CLI `atuin init <shell> --disable-up-arrow` still disables the bind.
+    pub bind_up_arrow: bool,
+    /// CLI `atuin init <shell> --disable-ctrl-r` still disables the bind.
+    pub bind_ctrl_r: bool,
 }
 
 impl Keys {
@@ -385,6 +389,8 @@ impl Keys {
             accept_past_line_start: false,
             accept_with_backspace: false,
             prefix: "a".to_string(),
+            bind_up_arrow: true,
+            bind_ctrl_r: true,
         }
     }
 
@@ -397,6 +403,8 @@ impl Keys {
             || self.accept_past_line_start != d.accept_past_line_start
             || self.accept_with_backspace != d.accept_with_backspace
             || self.prefix != d.prefix
+            || self.bind_up_arrow != d.bind_up_arrow
+            || self.bind_ctrl_r != d.bind_ctrl_r
     }
 }
 
@@ -1438,6 +1446,8 @@ impl Settings {
             .set_default("keys.accept_past_line_start", false)?
             .set_default("keys.accept_with_backspace", false)?
             .set_default("keys.prefix", "a")?
+            .set_default("keys.bind_up_arrow", true)?
+            .set_default("keys.bind_ctrl_r", true)?
             .set_default("keymap_mode", "emacs")?
             .set_default("keymap_mode_shell", "auto")?
             .set_default("keymap_cursor", HashMap::<String, String>::new())?
