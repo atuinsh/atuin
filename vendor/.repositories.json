@@ -1,0 +1,7 @@
+{
+  "/* COMMENT */": "Do not modify this file directly -- use vendor.sh",
+  "bash-preexec": {
+    "commit": "66e913cd9dec25b1399262c8301fb6d637c68e7e",
+    "url": "https://github.com/rcaloras/bash-preexec"
+  }
+}

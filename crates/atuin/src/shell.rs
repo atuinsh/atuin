@@ -19,7 +19,7 @@ pub struct Bash<'a> {
 pub const BASH: Bash<'_> = Bash {
     include_guard: include_shell!("atuin.bash.d/include-guard.bash"),
     main: include_shell!("atuin.bash"),
-    preexec: include_trimmed!("../../../vendor/bash-preexec/bash-preexec.sh"),
+    preexec: include_trimmed!("../vendor/bash-preexec/bash-preexec.sh"),
 };
 
 pub const FISH: &str = include_shell!("atuin.fish");
