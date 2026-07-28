@@ -602,8 +602,8 @@ search. These enhancements let terminals report otherwise ambiguous keys and
 modifiers.
 
 Set this to `false` to retain legacy terminal key reporting when a terminal or
-keyboard-forwarding tool does not handle enhanced reporting correctly. Advanced
-bindings that require the kitty keyboard protocol will not work in legacy mode.
+keyboard-forwarding tool doesn't handle enhanced reporting correctly. Advanced
+bindings that require the kitty keyboard protocol won't work in legacy mode.
 
 ```toml
 keyboard_enhancement = false
