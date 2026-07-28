@@ -31,7 +31,7 @@ mod dotfiles;
 mod kv;
 pub(crate) mod meta;
 mod scripts;
-mod shells;
+pub mod shells;
 pub mod watcher;
 
 pub use shells::Shells;
