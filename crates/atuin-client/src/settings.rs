@@ -1936,6 +1936,11 @@ mod tests {
         );
         assert!(!daemon_autostart);
 
+        let bind_up_arrow: bool = config.get("keys.bind_up_arrow")?;
+        let bind_ctrl_r: bool = config.get("keys.bind_ctrl_r")?;
+        assert!(bind_up_arrow);
+        assert!(bind_ctrl_r);
+
         Ok(())
     }
 
