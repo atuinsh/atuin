@@ -8,7 +8,6 @@ use atuin_client::{
     auth::{self, AuthResponse},
     encryption::{Key, decode_key, encode_key, load_key},
     record::sqlite_store::SqliteStore,
-    record::store::Store,
     record::sync::{self, SyncError},
     settings::{Settings, SyncAuth},
 };

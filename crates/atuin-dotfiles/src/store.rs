@@ -10,7 +10,6 @@ use atuin_common::utils::unquote;
 use eyre::{Result, bail, ensure, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;
-use atuin_client::record::store::Store;
 
 use crate::shell::Alias;
 
@@ -441,7 +440,7 @@ alias kgap='kubectl get pods --all-namespaces'
 
     #[tokio::test]
     async fn build_aliases_skips_corrupt_records() {
-        use atuin_client::record::{encryption::PASETO_V4, store::Store};
+        use atuin_client::record::encryption::PASETO_V4;
         use atuin_common::record::{DecryptedData, Host};
 
         use super::CONFIG_SHELL_ALIAS_TAG;

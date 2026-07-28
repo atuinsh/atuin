@@ -5,7 +5,6 @@
 use std::str::FromStr;
 use std::{path::Path, time::Duration};
 
-use async_trait::async_trait;
 use eyre::{Result, eyre};
 use fs_err as fs;
 
@@ -24,7 +23,6 @@ use atuin_common::utils;
 use uuid::Uuid;
 
 use super::encryption::PASETO_V4;
-use super::store::Store;
 
 #[derive(Debug, Clone)]
 pub struct SqliteStore {
@@ -128,11 +126,12 @@ impl SqliteStore {
 
         Ok(res)
     }
-}
 
-#[async_trait]
-impl Store for SqliteStore {
-    async fn push_batch(
+    pub async fn push(&self, record: &Record<EncryptedData>) -> Result<()> {
+        self.push_batch(std::iter::once(record)).await
+    }
+
+    pub async fn push_batch(
         &self,
         records: impl Iterator<Item = &Record<EncryptedData>> + Send + Sync,
     ) -> Result<()> {
@@ -147,7 +146,7 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    async fn get(&self, id: RecordId) -> Result<Record<EncryptedData>> {
+    pub async fn get(&self, id: RecordId) -> Result<Record<EncryptedData>> {
         let res = sqlx::query("select * from store where store.id = ?1")
             .bind(id.0.as_hyphenated().to_string())
             .map(Self::query_row)
@@ -157,7 +156,7 @@ impl Store for SqliteStore {
         Ok(res)
     }
 
-    async fn delete(&self, id: RecordId) -> Result<()> {
+    pub async fn delete(&self, id: RecordId) -> Result<()> {
         sqlx::query("delete from store where id = ?1")
             .bind(id.0.as_hyphenated().to_string())
             .execute(&self.pool)
@@ -166,13 +165,13 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    async fn delete_all(&self) -> Result<()> {
+    pub async fn delete_all(&self) -> Result<()> {
         sqlx::query("delete from store").execute(&self.pool).await?;
 
         Ok(())
     }
 
-    async fn last(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>> {
+    pub async fn last(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>> {
         let res =
             sqlx::query("select * from store where host=?1 and tag=?2 order by idx desc limit 1")
                 .bind(host.0.as_hyphenated().to_string())
@@ -188,11 +187,11 @@ impl Store for SqliteStore {
         }
     }
 
-    async fn first(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>> {
+    pub async fn first(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>> {
         self.idx(host, tag, 0).await
     }
 
-    async fn len_all(&self) -> Result<u64> {
+    pub async fn len_all(&self) -> Result<u64> {
         let res: Result<(i64,), sqlx::Error> = sqlx::query_as("select count(*) from store")
             .fetch_one(&self.pool)
             .await;
@@ -202,7 +201,7 @@ impl Store for SqliteStore {
         }
     }
 
-    async fn len_tag(&self, tag: &str) -> Result<u64> {
+    pub async fn len_tag(&self, tag: &str) -> Result<u64> {
         let res: Result<(i64,), sqlx::Error> =
             sqlx::query_as("select count(*) from store where tag=?1")
                 .bind(tag)
@@ -214,17 +213,17 @@ impl Store for SqliteStore {
         }
     }
 
-    async fn len(&self, host: HostId, tag: &str) -> Result<u64> {
+    pub async fn len(&self, host: HostId, tag: &str) -> Result<u64> {
         let last = self.last(host, tag).await?;
 
         if let Some(last) = last {
             return Ok(last.idx + 1);
         }
 
-        return Ok(0);
+        Ok(0)
     }
 
-    async fn next(
+    pub async fn next(
         &self,
         host: HostId,
         tag: &str,
@@ -245,7 +244,7 @@ impl Store for SqliteStore {
         Ok(res)
     }
 
-    async fn idx(
+    pub async fn idx(
         &self,
         host: HostId,
         tag: &str,
@@ -266,7 +265,7 @@ impl Store for SqliteStore {
         }
     }
 
-    async fn status(&self) -> Result<RecordStatus> {
+    pub async fn status(&self) -> Result<RecordStatus> {
         let mut status = RecordStatus::new();
 
         let res: Result<Vec<(String, String, i64)>, sqlx::Error> =
@@ -290,7 +289,7 @@ impl Store for SqliteStore {
         Ok(status)
     }
 
-    async fn all_tagged(&self, tag: &str) -> Result<Vec<Record<EncryptedData>>> {
+    pub async fn all_tagged(&self, tag: &str) -> Result<Vec<Record<EncryptedData>>> {
         let res = sqlx::query("select * from store where tag = ?1 order by timestamp asc")
             .bind(tag)
             .map(Self::query_row)
@@ -302,7 +301,7 @@ impl Store for SqliteStore {
 
     /// Reencrypt every single item in this store with a new key
     /// Be careful - this may mess with sync.
-    async fn re_encrypt(&self, old_key: &[u8; 32], new_key: &[u8; 32]) -> Result<()> {
+    pub async fn re_encrypt(&self, old_key: &[u8; 32], new_key: &[u8; 32]) -> Result<()> {
         // Load all the records
         // In memory like some of the other code here
         // This will never be called in a hot loop, and only under the following circumstances
@@ -341,7 +340,7 @@ impl Store for SqliteStore {
 
     /// Verify that every record in this store can be decrypted with the current key
     /// Someday maybe also check each tag/record can be deserialized, but not for now.
-    async fn verify(&self, key: &[u8; 32]) -> Result<()> {
+    pub async fn verify(&self, key: &[u8; 32]) -> Result<()> {
         let all = self.load_all().await?;
 
         all.into_iter()
@@ -353,7 +352,7 @@ impl Store for SqliteStore {
 
     /// Verify that every record in this store can be decrypted with the current key
     /// Someday maybe also check each tag/record can be deserialized, but not for now.
-    async fn purge(&self, key: &[u8; 32]) -> Result<()> {
+    pub async fn purge(&self, key: &[u8; 32]) -> Result<()> {
         let all = self.load_all().await?;
 
         for record in all.iter() {
@@ -380,20 +379,28 @@ mod tests {
         record::{DecryptedData, EncryptedData, Host, HostId, Record},
         utils::uuid_v7,
     };
+    use rstest::{fixture, rstest};
 
     use crate::{
-        encryption::generate_encoded_key,
-        record::{encryption::PASETO_V4, store::Store},
+        encryption::generate_encoded_key, record::encryption::PASETO_V4,
         settings::test_local_timeout,
     };
 
     use super::SqliteStore;
 
-    fn test_record() -> Record<EncryptedData> {
+    #[fixture]
+    async fn store() -> SqliteStore {
+        SqliteStore::new(":memory:", test_local_timeout())
+            .await
+            .unwrap()
+    }
+
+    #[fixture]
+    fn record() -> Record<EncryptedData> {
         Record::builder()
-            .host(Host::new(HostId(atuin_common::utils::uuid_v7())))
+            .host(Host::new(HostId(uuid_v7())))
             .version("v1".into())
-            .tag(atuin_common::utils::uuid_v7().simple().to_string())
+            .tag(uuid_v7().simple().to_string())
             .data(EncryptedData {
                 data: "1234".into(),
                 content_encryption_key: "1234".into(),
@@ -405,188 +412,142 @@ mod tests {
     #[tokio::test]
     async fn create_db() {
         let db = SqliteStore::new(":memory:", test_local_timeout()).await;
-
-        assert!(
-            db.is_ok(),
-            "db could not be created, {:?}",
-            db.err().unwrap()
-        );
+        assert!(db.is_ok(), "db could not be created: {:?}", db.err());
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn push_record() {
-        let db = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let record = test_record();
-
-        db.push(&record).await.expect("failed to insert record");
+    async fn push_record(#[future(awt)] store: SqliteStore, record: Record<EncryptedData>) {
+        store.push(&record).await.expect("failed to insert record");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn get_record() {
-        let db = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let record = test_record();
-        db.push(&record).await.unwrap();
-
-        let new_record = db.get(record.id).await.expect("failed to fetch record");
-
-        assert_eq!(record, new_record, "records are not equal");
+    async fn get_record(#[future(awt)] store: SqliteStore, record: Record<EncryptedData>) {
+        store.push(&record).await.unwrap();
+        let fetched = store.get(record.id).await.expect("failed to fetch record");
+        assert_eq!(fetched, record, "records are not equal");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn last() {
-        let db = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let record = test_record();
-        db.push(&record).await.unwrap();
-
-        let last = db
+    async fn last(#[future(awt)] store: SqliteStore, record: Record<EncryptedData>) {
+        store.push(&record).await.unwrap();
+        let last = store
             .last(record.host.id, record.tag.as_str())
             .await
-            .expect("failed to get store len");
-
+            .unwrap();
         assert_eq!(
             last.unwrap().id,
             record.id,
-            "expected to get back the same record that was inserted"
+            "did not get the inserted record"
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn first() {
-        let db = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let record = test_record();
-        db.push(&record).await.unwrap();
-
-        let first = db
+    async fn first(#[future(awt)] store: SqliteStore, record: Record<EncryptedData>) {
+        store.push(&record).await.unwrap();
+        let first = store
             .first(record.host.id, record.tag.as_str())
             .await
-            .expect("failed to get store len");
-
+            .unwrap();
         assert_eq!(
             first.unwrap().id,
             record.id,
-            "expected to get back the same record that was inserted"
+            "did not get the inserted record"
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn len() {
-        let db = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let record = test_record();
-        db.push(&record).await.unwrap();
-
-        let len = db
+    async fn len(#[future(awt)] store: SqliteStore, record: Record<EncryptedData>) {
+        store.push(&record).await.unwrap();
+        let len = store
             .len(record.host.id, record.tag.as_str())
             .await
-            .expect("failed to get store len");
-
+            .unwrap();
         assert_eq!(len, 1, "expected length of 1 after insert");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn len_tag() {
-        let db = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let record = test_record();
-        db.push(&record).await.unwrap();
-
-        let len = db
-            .len_tag(record.tag.as_str())
-            .await
-            .expect("failed to get store len");
-
+    async fn len_tag(#[future(awt)] store: SqliteStore, record: Record<EncryptedData>) {
+        store.push(&record).await.unwrap();
+        let len = store.len_tag(record.tag.as_str()).await.unwrap();
         assert_eq!(len, 1, "expected length of 1 after insert");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn len_different_tags() {
-        let db = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn len_different_tags(#[future(awt)] store: SqliteStore) {
+        // different tags model independent stores in one database, so each
+        // is length 1 despite sharing a table
+        let first = record();
+        let second = record();
+        store.push(&first).await.unwrap();
+        store.push(&second).await.unwrap();
 
-        // these have different tags, so the len should be the same
-        // we model multiple stores within one database
-        // new store = new tag = independent length
-        let first = test_record();
-        let second = test_record();
-
-        db.push(&first).await.unwrap();
-        db.push(&second).await.unwrap();
-
-        let first_len = db.len(first.host.id, first.tag.as_str()).await.unwrap();
-        let second_len = db.len(second.host.id, second.tag.as_str()).await.unwrap();
-
-        assert_eq!(first_len, 1, "expected length of 1 after insert");
-        assert_eq!(second_len, 1, "expected length of 1 after insert");
+        assert_eq!(
+            store.len(first.host.id, first.tag.as_str()).await.unwrap(),
+            1
+        );
+        assert_eq!(
+            store
+                .len(second.host.id, second.tag.as_str())
+                .await
+                .unwrap(),
+            1
+        );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn append_a_bunch() {
-        let db = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-
-        let mut tail = test_record();
-        db.push(&tail).await.expect("failed to push record");
+    async fn append_a_bunch(#[future(awt)] store: SqliteStore) {
+        let mut tail = record();
+        store.push(&tail).await.expect("failed to push record");
 
         for _ in 1..100 {
             tail = tail.append(vec![1, 2, 3, 4]).encrypt::<PASETO_V4>(&[0; 32]);
-            db.push(&tail).await.unwrap();
+            store.push(&tail).await.unwrap();
         }
 
         assert_eq!(
-            db.len(tail.host.id, tail.tag.as_str()).await.unwrap(),
+            store.len(tail.host.id, tail.tag.as_str()).await.unwrap(),
             100,
             "failed to insert 100 records"
         );
-
         assert_eq!(
-            db.len_tag(tail.tag.as_str()).await.unwrap(),
+            store.len_tag(tail.tag.as_str()).await.unwrap(),
             100,
             "failed to insert 100 records"
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn append_a_big_bunch() {
-        let db = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-
+    async fn append_a_big_bunch(#[future(awt)] store: SqliteStore) {
         let mut records: Vec<Record<EncryptedData>> = Vec::with_capacity(10000);
 
-        let mut tail = test_record();
+        let mut tail = record();
         records.push(tail.clone());
-
         for _ in 1..10000 {
             tail = tail.append(vec![1, 2, 3]).encrypt::<PASETO_V4>(&[0; 32]);
             records.push(tail.clone());
         }
 
-        db.push_batch(records.iter()).await.unwrap();
+        store.push_batch(records.iter()).await.unwrap();
 
         assert_eq!(
-            db.len(tail.host.id, tail.tag.as_str()).await.unwrap(),
+            store.len(tail.host.id, tail.tag.as_str()).await.unwrap(),
             10000,
             "failed to insert 10k records"
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn re_encrypt() {
-        let store = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn re_encrypt(#[future(awt)] store: SqliteStore) {
         let (key, _) = generate_encoded_key().unwrap();
         let data = vec![0u8, 1u8, 2u8, 3u8];
         let host_id = HostId(uuid_v7());
@@ -598,29 +559,23 @@ mod tests {
                 .tag(String::from("test"))
                 .idx(i)
                 .data(DecryptedData(data.clone()))
-                .build();
-
-            let record = record.encrypt::<PASETO_V4>(&key.into());
+                .build()
+                .encrypt::<PASETO_V4>(&key.into());
             store
                 .push(&record)
                 .await
                 .expect("failed to push encrypted record");
         }
 
-        // first, check that we can decrypt the data with the current key
+        // the data decrypts with the current key
         let all = store.all_tagged("test").await.unwrap();
-
         assert_eq!(all.len(), 10, "failed to fetch all records");
-
         for record in all {
             let decrypted = record.decrypt::<PASETO_V4>(&key.into()).unwrap();
             assert_eq!(decrypted.data.0, data);
         }
 
-        // reencrypt the store, then check if
-        // 1) it cannot be decrypted with the old key
-        // 2) it can be decrypted with the new key
-
+        // after re-encrypting: the old key fails, the new key works
         let (new_key, _) = generate_encoded_key().unwrap();
         store
             .re_encrypt(&key.into(), &new_key.into())
@@ -628,15 +583,12 @@ mod tests {
             .expect("failed to re-encrypt store");
 
         let all = store.all_tagged("test").await.unwrap();
-
         for record in all.iter() {
-            let decrypted = record.clone().decrypt::<PASETO_V4>(&key.into());
             assert!(
-                decrypted.is_err(),
-                "did not get error decrypting with old key after re-encrypt"
-            )
+                record.clone().decrypt::<PASETO_V4>(&key.into()).is_err(),
+                "old key still decrypts after re-encrypt"
+            );
         }
-
         for record in all {
             let decrypted = record.decrypt::<PASETO_V4>(&new_key.into()).unwrap();
             assert_eq!(decrypted.data.0, data);

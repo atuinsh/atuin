@@ -1,7 +1,7 @@
 use eyre::{Result, eyre};
 
+use atuin_client::record::encryption::PASETO_V4;
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::record::{encryption::PASETO_V4, store::Store};
 use atuin_common::record::{Host, HostId, Record, RecordId, RecordIdx};
 use record::ScriptRecord;
 use script::{SCRIPT_TAG, SCRIPT_VERSION, Script};
