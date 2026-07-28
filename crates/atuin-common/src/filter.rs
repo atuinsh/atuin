@@ -317,7 +317,9 @@ mod sealed {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use rstest::rstest;
+    use std::collections::BTreeSet;
 
     /// Build a filter from a nonempty list of items.
     fn filter(items: &[&str]) -> OrFilter<Vec<String>> {
@@ -421,11 +423,123 @@ mod tests {
 
     #[rstest]
     #[case(None, true)]
-    #[case(Some(&[][..]), true)]
+    // An "all" filter is not a filter over zero items, so not even an empty list matches it.
+    #[case(Some(&[][..]), false)]
     #[case(Some(&["bash"][..]), false)]
     fn compare_with_an_all_filter(#[case] other: Option<&[&str]>, #[case] expected: bool) {
         let all = OrFilter::<Vec<String>>::all();
         let comparer = all.compare(other.map(|o| o.iter().copied()));
         assert_eq!(comparer.eq::<4>(), expected);
+    }
+
+    fn any_item() -> impl Strategy<Value = String> {
+        // Use a small alphabet to increase chance of repeated items
+        "[a-c]{0,2}"
+    }
+
+    fn any_items() -> impl Strategy<Value = Vec<String>> {
+        prop::collection::vec(any_item(), 0..8)
+    }
+
+    fn any_nonempty_items() -> impl Strategy<Value = Vec<String>> {
+        prop::collection::vec(any_item(), 1..8)
+    }
+
+    fn sort_dedup(items: &[String]) -> Vec<String> {
+        items
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    proptest! {
+        #[test]
+        fn from_list_sorts_dedupes_and_rejects_empty_lists(items in any_items()) {
+            let expected = sort_dedup(&items);
+            match OrFilter::from_list(items.clone()) {
+                None => prop_assert!(items.is_empty()),
+                Some(filter) => {
+                    prop_assert!(!items.is_empty());
+                    prop_assert!(!filter.is_all());
+                    prop_assert_eq!(filter.items(), Items::Some(expected.as_slice()));
+                }
+            }
+        }
+
+        #[test]
+        fn mut_slice_storage_agrees_with_vec_storage(items in any_nonempty_items()) {
+            let mut slice_items = items.clone();
+            let from_slice = OrFilter::from_list(slice_items.as_mut_slice())
+                .expect("`items` is nonempty");
+            let from_vec = OrFilter::from_list(items).expect("`items` is nonempty");
+            prop_assert_eq!(from_slice.items(), from_vec.items());
+        }
+
+        #[test]
+        fn contains_agrees_with_the_item_set(items in any_nonempty_items(), probe in any_item()) {
+            let expected = items.contains(&probe);
+            let filter = OrFilter::from_list(items).expect("`items` is nonempty");
+            prop_assert_eq!(filter.contains(probe.as_str()), expected);
+        }
+
+        #[test]
+        fn an_all_filter_contains_everything(probe in any_item()) {
+            prop_assert!(OrFilter::<Vec<String>>::all().contains(probe.as_str()));
+        }
+
+        #[test]
+        fn slice_and_vec_views_preserve_the_items(items in any_nonempty_items()) {
+            let filter = OrFilter::from_list(items).expect("`items` is nonempty");
+            let vec_filter = filter.to_vec_filter();
+            let slice_filter = filter.as_slice_filter();
+            prop_assert_eq!(slice_filter.items(), filter.items());
+            prop_assert_eq!(vec_filter.items(), filter.items());
+            prop_assert!(vec_filter == filter);
+        }
+
+        #[test]
+        fn into_list_returns_the_items(items in any_nonempty_items()) {
+            let expected = sort_dedup(&items);
+            let filter = OrFilter::from_list(items).expect("`items` is nonempty");
+            prop_assert_eq!(filter.into_list(), Items::Some(expected));
+        }
+
+        #[test]
+        fn equality_is_set_equality(a in any_nonempty_items(), b in any_nonempty_items()) {
+            let expected = sort_dedup(&a) == sort_dedup(&b);
+            let a = OrFilter::from_list(a).expect("`a` is nonempty");
+            let b = OrFilter::from_list(b).expect("`b` is nonempty");
+            prop_assert_eq!(a == b, expected);
+        }
+
+        #[test]
+        fn compare_matches_set_equality(items in any_nonempty_items(), other in any_items()) {
+            let expected = sort_dedup(&items) == sort_dedup(&other);
+            let filter = OrFilter::from_list(items).expect("`items` is nonempty");
+
+            // All values of `STACK_SIZE` must give the same result.
+            prop_assert_eq!(filter.compare(Some(other.iter().map(String::as_str))).eq::<4>(), expected);
+            prop_assert_eq!(filter.compare(Some(other.iter().map(String::as_str))).eq::<0>(), expected);
+            prop_assert_eq!(filter.compare(Some(other.iter().map(String::as_str))).eq::<64>(), expected);
+
+            let reversed = other.iter().rev().map(String::as_str);
+            prop_assert_eq!(filter.compare(Some(reversed)).eq::<4>(), expected);
+            let duplicated = other.iter().chain(other.iter()).map(String::as_str);
+            prop_assert_eq!(filter.compare(Some(duplicated)).eq::<4>(), expected);
+
+            // A non-"all" filter never compares equal to `None`.
+            prop_assert!(!filter.compare(None::<std::iter::Empty<&str>>).eq::<4>());
+        }
+
+        #[test]
+        fn an_all_filter_compares_equal_only_to_none(other in any_items()) {
+            let all = OrFilter::<Vec<String>>::all();
+            prop_assert!(all.compare(None::<std::iter::Empty<&str>>).eq::<4>());
+            prop_assert!(!all.compare(Some(other.iter().map(String::as_str))).eq::<4>());
+            prop_assert!(!all.compare(Some(other.iter().map(String::as_str))).eq::<0>());
+            prop_assert!(!all.compare(Some(other.iter().map(String::as_str))).eq::<64>());
+        }
     }
 }

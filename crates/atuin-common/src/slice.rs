@@ -98,7 +98,36 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use rstest::rstest;
+    use std::collections::BTreeSet;
+
+    #[rstest]
+    #[case(&[], &[], &[])]
+    #[case(&[1], &[1], &[])]
+    #[case(&[1, 2], &[1, 2], &[])]
+    #[case(&[1, 1], &[1], &[1])]
+    #[case(&[1, 1, 1], &[1], &[1, 1])]
+    #[case(&[1, 1, 2], &[1, 2], &[1])]
+    #[case(&[1, 2, 2], &[1, 2], &[2])]
+    #[case(&[1, 1, 2, 2, 3], &[1, 2, 3], &[1, 2])]
+    #[case(&[1, 2, 3, 3, 3, 3], &[1, 2, 3], &[3, 3, 3])]
+    // Only *consecutive* duplicates are removed.
+    #[case(&[1, 2, 1], &[1, 2, 1], &[])]
+    #[case(&[7, 7, 0, 7], &[7, 0, 7], &[7])]
+    fn test_partition_dedup(
+        #[case] input: &[u32],
+        #[case] expected_dedup: &[u32],
+        #[case] expected_rest: &[u32],
+    ) {
+        let mut input = input.to_vec();
+        let (dedup, rest) = partition_dedup(&mut input);
+        assert_eq!(dedup, expected_dedup);
+        // The order of the duplicates is unspecified, so compare them as a multiset.
+        let mut rest = rest.to_vec();
+        rest.sort_unstable();
+        assert_eq!(rest, expected_rest);
+    }
 
     #[rstest]
     #[case(&[], &[], true)]
@@ -132,5 +161,95 @@ mod tests {
             SortedDedupedSliceComparer::new(sorted, iter).eq::<STACK_SIZE>(),
             expected,
         );
+    }
+
+    fn sorted_deduped_slice() -> impl Strategy<Value = Vec<u8>> {
+        prop::collection::vec(0u8..16, 0..16).prop_map(|mut items| {
+            items.sort_unstable();
+            items.dedup();
+            items
+        })
+    }
+
+    proptest! {
+        #[test]
+        fn partition_dedup_matches_vec_dedup(input in prop::collection::vec(0u8..4, 0..32)) {
+            let mut actual = input.clone();
+            let (dedup, _) = partition_dedup(&mut actual);
+            let mut expected = input;
+            expected.dedup();
+            prop_assert_eq!(dedup.to_vec(), expected);
+        }
+
+        #[test]
+        fn partition_dedup_leaves_no_consecutive_duplicates(
+            input in prop::collection::vec(0u8..4, 0..32),
+        ) {
+            let mut input = input;
+            let (dedup, _) = partition_dedup(&mut input);
+            prop_assert!(dedup.windows(2).all(|w| w[0] != w[1]));
+        }
+
+        /// Nothing is added or removed: the two partitions together are a permutation of the input.
+        #[test]
+        fn partition_dedup_permutes_the_input(input in prop::collection::vec(0u8..4, 0..32)) {
+            let mut actual = input.clone();
+            {
+                let (dedup, rest) = partition_dedup(&mut actual);
+                prop_assert_eq!(dedup.len() + rest.len(), input.len());
+            }
+            actual.sort_unstable();
+            let mut expected = input;
+            expected.sort_unstable();
+            prop_assert_eq!(actual, expected);
+        }
+
+        #[test]
+        fn comparer_matches_set_equality(
+            slice in sorted_deduped_slice(),
+            iter in prop::collection::vec(0u8..16, 0..16),
+        ) {
+            let expected = iter.iter().copied().collect::<BTreeSet<_>>()
+                == slice.iter().copied().collect::<BTreeSet<_>>();
+            prop_assert_eq!(
+                SortedDedupedSliceComparer::new(&slice, &iter).eq::<8>(),
+                expected,
+            );
+        }
+
+        #[test]
+        fn comparer_ignores_the_stack_size(
+            slice in sorted_deduped_slice(),
+            iter in prop::collection::vec(0u8..16, 0..16),
+        ) {
+            let expected = SortedDedupedSliceComparer::new(&slice, &iter).eq::<8>();
+            prop_assert_eq!(SortedDedupedSliceComparer::new(&slice, &iter).eq::<0>(), expected);
+            prop_assert_eq!(SortedDedupedSliceComparer::new(&slice, &iter).eq::<1>(), expected);
+            prop_assert_eq!(SortedDedupedSliceComparer::new(&slice, &iter).eq::<64>(), expected);
+        }
+
+        #[test]
+        fn comparer_ignores_order_and_duplicates(
+            slice in sorted_deduped_slice(),
+            iter in prop::collection::vec(0u8..16, 0..16),
+        ) {
+            let expected = SortedDedupedSliceComparer::new(&slice, &iter).eq::<8>();
+            let mut shuffled = iter.clone();
+            shuffled.reverse();
+            shuffled.extend(iter);
+            prop_assert_eq!(
+                SortedDedupedSliceComparer::new(&slice, &shuffled).eq::<8>(),
+                expected,
+            );
+        }
+
+        #[test]
+        fn comparer_is_reflexive(slice in sorted_deduped_slice()) {
+            prop_assert!(SortedDedupedSliceComparer::new(&slice, &slice).eq::<8>());
+
+            let mut extra = slice.clone();
+            extra.push(u8::MAX);
+            prop_assert!(!SortedDedupedSliceComparer::new(&slice, &extra).eq::<8>());
+        }
     }
 }
