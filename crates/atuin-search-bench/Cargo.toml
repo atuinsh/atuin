@@ -1,0 +1,25 @@
+[package]
+name = "atuin-search-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Not a distributable app; without this dist treats the bench binary as a
+# releasable package and refuses to plan (incoherent versions vs atuin).
+[package.metadata.dist]
+dist = false
+
+[lib]
+bench = false
+
+[dev-dependencies]
+atuin-client = { workspace = true }
+atuin-common = { workspace = true }
+atuin-daemon = { workspace = true }
+divan = { version = "5.0.1", package = "codspeed-divan-compat" }
+time = { workspace = true }
+tokio = { workspace = true }
+
+[[bench]]
+name = "search"
+harness = false

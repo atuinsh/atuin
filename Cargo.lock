@@ -516,16 +516,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "atuin-nucleo-bench"
-version = "0.1.0"
-dependencies = [
- "atuin-nucleo",
- "brunch",
- "fuzzy-matcher",
- "walkdir",
-]
-
-[[package]]
 name = "atuin-nucleo-matcher"
 version = "0.3.1"
 dependencies = [
@@ -569,6 +559,18 @@ dependencies = [
  "tracing-subscriber",
  "typed-builder",
  "uuid",
+]
+
+[[package]]
+name = "atuin-search-bench"
+version = "0.1.0"
+dependencies = [
+ "atuin-client",
+ "atuin-common",
+ "atuin-daemon",
+ "codspeed-divan-compat",
+ "time",
+ "tokio",
 ]
 
 [[package]]
@@ -794,16 +796,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
 dependencies = [
  "hybrid-array",
-]
-
-[[package]]
-name = "brunch"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3932d710d985d35c7b08e7e439a6ac8607aa8f619d373eb1f808578cd3cd56e5"
-dependencies = [
- "dactyl",
- "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -1378,12 +1370,6 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
-
-[[package]]
-name = "dactyl"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ecad1ab94b1336be6cff409436ad9ceedb0afd52a85d54132189c2c3babb049"
 
 [[package]]
 name = "daemonize"
