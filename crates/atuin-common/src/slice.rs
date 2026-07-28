@@ -1,7 +1,7 @@
 /// Reimplementation of the standard library's `slice::partition_dedup`, which is currently
 /// unstable.
 // TODO: Replace this with the standard library implementation when it's stabilized.
-pub fn partition_dedup<'a, T>(slice: &'a mut [T]) -> (&'a mut [T], &'a mut [T])
+pub fn partition_dedup<T>(slice: &mut [T]) -> (&mut [T], &mut [T])
 where
     T: PartialEq,
 {
