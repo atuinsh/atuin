@@ -532,6 +532,7 @@ dependencies = [
  "clap",
  "crossterm",
  "eyre",
+ "libc",
  "portable-pty",
  "rstest",
  "signal-hook",

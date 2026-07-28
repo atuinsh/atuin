@@ -35,7 +35,26 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     let sock_path = screen::socket_path();
     let _ = std::fs::remove_file(&sock_path);
 
-    let mut cmd = match options.shell {
+    let shell_path = if let Some(ref path) = options.shell {
+        if path.is_absolute() {
+            Some(path.clone())
+        } else if let Ok(paths) = std::env::var("PATH") {
+            // Resolve via $PATH
+            std::env::split_paths(&paths)
+                .map(|p| p.join(path))
+                .find(|p| p.is_file())
+                // Fallback if not found in $PATH
+                .or_else(|| Some(path.clone()))
+        } else {
+            // No $PATH variable
+            Some(path.clone())
+        }
+    } else {
+        // No shell specified
+        None
+    };
+
+    let mut cmd = match shell_path {
         Some(ref path) => CommandBuilder::new(path),
         None => CommandBuilder::new_default_prog(),
     };
@@ -44,7 +63,7 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     // anything it execs via `$SHELL -c` (e.g. fzf's `become`) — sees the
     // shell the user asked for instead of a stale value inherited from the
     // parent environment.
-    if let Some(ref path) = options.shell {
+    if let Some(ref path) = shell_path {
         cmd.env("SHELL", path);
     }
     cmd.env("ATUIN_PTY_PROXY_SOCKET", sock_path.as_os_str());
