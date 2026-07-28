@@ -83,7 +83,7 @@ version = "18.18.1"
 tokio = { version = "1", features = ["full"] }
 pretty_assertions = { workspace = true }
 rstest = { workspace = true }
-divan = "0.1.14"
+divan = { version = "5.0.1", package = "codspeed-divan-compat" }
 tempfile = "3"
 toml = "1.1"
 
