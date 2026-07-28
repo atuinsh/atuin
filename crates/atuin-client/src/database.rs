@@ -43,7 +43,7 @@ pub struct Context {
     pub git_root: Option<PathBuf>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct OptFilters<'a> {
     pub exit: Option<i64>,
     pub exclude_exit: Option<i64>,
@@ -63,26 +63,6 @@ pub struct OptFilters<'a> {
     pub authors: DisjunctiveFilter<&'a [AuthorPattern]>,
     /// Shell filter. The empty string matches commands that have no recorded shell.
     pub shells: DisjunctiveFilter<&'a [String]>,
-}
-
-impl Default for OptFilters<'_> {
-    fn default() -> Self {
-        Self {
-            exit: None,
-            exclude_exit: None,
-            only_failed: false,
-            cwd: None,
-            exclude_cwd: None,
-            before: None,
-            after: None,
-            limit: None,
-            offset: None,
-            reverse: false,
-            include_duplicates: false,
-            authors: DisjunctiveFilter::all(),
-            shells: DisjunctiveFilter::all(),
-        }
-    }
 }
 
 /// Build a query [`Context`] without requiring a live shell session.
