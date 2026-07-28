@@ -144,13 +144,20 @@ pub enum ValueType {
 
 impl SetCmd {
     pub async fn run(self, _settings: &Settings) -> Result<()> {
+        let config_file = Settings::get_config_path()?;
+        let config_str = tokio::fs::read_to_string(&config_file).await?;
+
+        let updated = self.get_updated_config(&config_str)?;
+        tokio::fs::write(&config_file, &updated).await?;
+        Ok(())
+    }
+
+    fn get_updated_config(&self, config_str: &str) -> Result<String> {
         let key = self.key.trim();
         if key.is_empty() || key.contains(char::is_whitespace) {
             eyre::bail!("Config key must be non-empty and must not contain whitespace");
         }
 
-        let config_file = Settings::get_config_path()?;
-        let config_str = tokio::fs::read_to_string(&config_file).await?;
         let mut doc: DocumentMut = config_str.parse()?;
 
         // When using auto type detection, try to match the existing value's type
@@ -159,9 +166,15 @@ impl SetCmd {
         let value = self.parse_value(existing_type.as_ref())?;
         set_deep_key(&mut doc, key, value)?;
 
-        tokio::fs::write(&config_file, doc.to_string()).await?;
-
-        Ok(())
+        let updated = doc.to_string();
+        Settings::validate_str(&updated).map_err(|e| {
+            eyre::eyre!(
+                "cannot update config: setting '{key}' to '{}' would make your configuration \
+                invalid\n\n{e}",
+                self.value,
+            )
+        })?;
+        Ok(updated)
     }
 
     fn parse_value(&self, existing_type: Option<&ValueType>) -> Result<Value> {
@@ -470,5 +483,93 @@ mod tests {
             twice,
             "[sync]\n# how often to sync\nfrequency = \"30m\" # unit is flexible\n"
         );
+    }
+
+    /// Helper for building a [`SetCmd`].
+    fn set_cmd(key: &str, value: &str) -> SetCmd {
+        SetCmd {
+            key: key.to_string(),
+            value: value.to_string(),
+            the_type: ValueType::Auto,
+        }
+    }
+
+    #[test]
+    fn writes_a_valid_value() {
+        let updated = set_cmd("search_mode", "skim")
+            .get_updated_config("search_mode = \"fuzzy\"\n")
+            .expect("skim is a valid search mode");
+
+        assert_eq!(updated, "search_mode = \"skim\"\n");
+    }
+
+    #[test]
+    fn rejects_an_invalid_value() {
+        let err = set_cmd("search_mode", "invalid")
+            .get_updated_config("search_mode = \"fuzzy\"\n")
+            .expect_err("invalid is not a valid search mode")
+            .to_string();
+
+        assert!(
+            err.contains("search_mode") && err.contains("invalid"),
+            "error should name the key and value, got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_value_of_the_wrong_type_for_a_new_key() {
+        // auto_sync is absent, so type detection falls back to string
+        let err = set_cmd("auto_sync", "banana")
+            .get_updated_config("")
+            .expect_err("banana is not a bool")
+            .to_string();
+
+        assert!(
+            err.contains("auto_sync"),
+            "error should name the key, got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_when_another_key_in_the_file_is_invalid() {
+        let err = set_cmd("auto_sync", "false")
+            .get_updated_config("style = \"nope\"\n")
+            .expect_err("style = nope is not loadable")
+            .to_string();
+
+        assert!(err.contains("style"), "error should name style, got: {err}");
+    }
+
+    #[test]
+    fn allows_replacing_an_invalid_value_with_a_valid_one() {
+        let updated = set_cmd("search_mode", "fuzzy")
+            .get_updated_config("search_mode = \"invalid\"\n")
+            .expect("fixing a broken value should be allowed");
+
+        assert_eq!(updated, "search_mode = \"fuzzy\"\n");
+    }
+
+    #[test]
+    fn preserves_comments_and_unrelated_keys() {
+        let original = "# my config\nauto_sync = true\n\n[daemon]\nenabled = false\n";
+
+        let updated = set_cmd("daemon.enabled", "true")
+            .get_updated_config(original)
+            .expect("daemon.enabled = true is valid");
+
+        assert_eq!(
+            updated,
+            "# my config\nauto_sync = true\n\n[daemon]\nenabled = true\n"
+        );
+    }
+
+    #[test]
+    fn rejects_an_empty_key() {
+        let err = set_cmd("  ", "fuzzy")
+            .get_updated_config("")
+            .expect_err("an empty key is not settable")
+            .to_string();
+
+        assert!(err.contains("non-empty"), "unexpected error: {err}");
     }
 }

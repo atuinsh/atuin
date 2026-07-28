@@ -5,7 +5,7 @@ use clap::ValueEnum;
 use config::{
     Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat, builder::DefaultState,
 };
-use eyre::{Context, Result, bail, eyre};
+use eyre::{Context, Result, eyre};
 use fs_err::{File, create_dir_all};
 use humantime::parse_duration;
 use regex::RegexSet;
@@ -17,6 +17,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{LazyLock, OnceLock},
 };
+use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::sync::OnceCell;
 use url::Url;
@@ -26,6 +27,18 @@ static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 static META_CONFIG: OnceLock<(String, f64)> = OnceLock::new();
 static META_STORE: OnceCell<crate::meta::MetaStore> = OnceCell::const_new();
+
+/// Keys that need to be shell-expanded before use.
+const EXPANDED_PATH_KEYS: &[&str] = &[
+    "db_path",
+    "record_store_path",
+    "key_path",
+    "daemon.socket_path",
+    "daemon.pidfile_path",
+    "logs.dir",
+    "logs.search.file",
+    "logs.daemon.file",
+];
 
 mod dotfiles;
 mod kv;
@@ -939,16 +952,20 @@ impl Ui {
 
     /// Validate the UI configuration.
     /// Returns an error if more than one column has expand = true.
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), UiValidationError> {
         let expand_count = self.columns.iter().filter(|c| c.expand).count();
         if expand_count > 1 {
-            bail!(
-                "Only one column can have expand = true, but {} columns are set to expand",
-                expand_count
-            );
+            return Err(UiValidationError::MultipleExpandingColumns(expand_count));
         }
         Ok(())
     }
+}
+
+/// A [`Ui`] configuration that cannot be used as written.
+#[derive(Debug, Error)]
+pub enum UiValidationError {
+    #[error("Only one column can have expand = true, but {0} columns are set to expand")]
+    MultipleExpandingColumns(usize),
 }
 
 impl Default for Ui {
@@ -1371,10 +1388,14 @@ impl Settings {
     }
 
     pub fn builder() -> Result<ConfigBuilder<DefaultState>> {
-        Self::builder_with_data_dir(&atuin_common::utils::data_dir())
+        Ok(Self::builder_with_data_dir(
+            &atuin_common::utils::data_dir(),
+        )?)
     }
 
-    fn builder_with_data_dir(data_dir: &std::path::Path) -> Result<ConfigBuilder<DefaultState>> {
+    fn builder_with_data_dir(
+        data_dir: &std::path::Path,
+    ) -> Result<ConfigBuilder<DefaultState>, config::ConfigError> {
         let db_path = data_dir.join("history.db");
         let record_store_path = data_dir.join("records.db");
         let kv_path = data_dir.join("kv.db");
@@ -1587,30 +1608,19 @@ impl Settings {
 
         // all paths should be expanded
         let built = config_builder.build_cloned()?;
-        config_builder = [
-            "db_path",
-            "record_store_path",
-            "key_path",
-            "daemon.socket_path",
-            "daemon.pidfile_path",
-            "logs.dir",
-            "logs.search.file",
-            "logs.daemon.file",
-        ]
-        .iter()
-        .map(|key| (key, built.get_string(key).unwrap_or_default()))
-        .filter_map(|(key, value)| match Self::expand_path(value) {
-            Ok(expanded) => Some((key, expanded)),
-            Err(e) => {
-                tracing::warn!("failed to expand path for {key}: {e}");
-                None
-            }
-        })
-        .fold(config_builder, |builder, (key, value)| {
-            builder
-                .set_override(key, value)
-                .unwrap_or_else(|_| panic!("failed to set absolute path override for {key}"))
-        });
+        config_builder = Self::expanded_path_keys(&built)
+            .filter_map(|(key, expanded)| match expanded {
+                Ok(expanded) => Some((key, expanded)),
+                Err(e) => {
+                    tracing::warn!("failed to expand path for {key}: {e}");
+                    None
+                }
+            })
+            .fold(config_builder, |builder, (key, value)| {
+                builder
+                    .set_override(key, value)
+                    .unwrap_or_else(|_| panic!("failed to set absolute path override for {key}"))
+            });
 
         config_builder.build().map_err(Into::into)
     }
@@ -1696,12 +1706,6 @@ impl Settings {
         Ok(settings)
     }
 
-    fn expand_path(path: String) -> Result<String> {
-        shellexpand::full(&path)
-            .map(|p| p.to_string())
-            .map_err(|e| eyre!("failed to expand path: {}", e))
-    }
-
     pub fn example_config() -> &'static str {
         EXAMPLE_CONFIG
     }
@@ -1714,6 +1718,45 @@ impl Settings {
             Path::new(&self.meta.db_path),
         ];
         paths.iter().all(|p| !utils::broken_symlink(*p))
+    }
+
+    /// Check that a TOML string can be successfully deserialized into a [`Settings`] object.
+    pub fn validate_str(toml: &str) -> Result<(), ValidationError> {
+        let config = Self::builder_with_data_dir(&atuin_common::utils::data_dir())?
+            .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+            .build()?;
+
+        for (key, expanded) in Self::expanded_path_keys(&config) {
+            expanded.map_err(|source| ValidationError::Path { key, source })?;
+        }
+
+        let settings: Settings = config.try_deserialize()?;
+        if let Some(dir) = &settings.data_dir {
+            shellexpand::full(dir).map_err(|source| ValidationError::Path {
+                key: "data_dir",
+                source,
+            })?;
+        }
+
+        settings.ui.validate()?;
+        Ok(())
+    }
+
+    /// Shell-expand every path in [`EXPANDED_PATH_KEYS`].
+    ///
+    /// Returns an iterator that yields `(key, expanded_path)` tuples.
+    fn expanded_path_keys(
+        config: &Config,
+    ) -> impl Iterator<
+        Item = (
+            &'static str,
+            Result<String, shellexpand::LookupError<std::env::VarError>>,
+        ),
+    > + use<'_> {
+        EXPANDED_PATH_KEYS.iter().map(|key| {
+            let raw = config.get_string(key).unwrap_or_default();
+            (*key, shellexpand::full(&raw).map(|p| p.to_string()))
+        })
     }
 }
 
@@ -1728,6 +1771,23 @@ impl Default for Settings {
             .try_deserialize()
             .expect("Could not deserialize config")
     }
+}
+
+/// Error returned by [`Settings::validate_str`] when validation fails.
+#[derive(Debug, Error)]
+pub enum ValidationError {
+    #[error(transparent)]
+    Config(#[from] config::ConfigError),
+
+    #[error(transparent)]
+    Ui(#[from] UiValidationError),
+
+    #[error("failed to expand path for {key}: {source}")]
+    Path {
+        key: &'static str,
+        #[source]
+        source: shellexpand::LookupError<std::env::VarError>,
+    },
 }
 
 /// Initialize the meta store configuration for testing.
@@ -1927,6 +1987,113 @@ mod tests {
         assert!(!daemon_autostart);
 
         Ok(())
+    }
+
+    #[test]
+    fn validate_accepts_a_valid_config() {
+        assert!(Settings::validate_str("search_mode = \"fuzzy\"\n").is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_an_empty_config() {
+        assert!(Settings::validate_str("").is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_an_invalid_enum_variant() {
+        let err = Settings::validate_str("search_mode = \"invalid\"\n")
+            .expect_err("an unknown search_mode variant should not validate")
+            .to_string();
+
+        assert!(
+            err.contains("search_mode"),
+            "error should name the offending key, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_a_value_of_the_wrong_type() {
+        let err = Settings::validate_str("auto_sync = \"banana\"\n")
+            .expect_err("a string is not a valid bool")
+            .to_string();
+
+        assert!(
+            err.contains("auto_sync"),
+            "error should name the offending key, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_an_invalid_nested_value() {
+        let err = Settings::validate_str("[search]\nfilters = [\"nope\"]\n")
+            .expect_err("an unknown filter mode should not validate")
+            .to_string();
+
+        assert!(
+            err.contains("search.filters"),
+            "error should name the offending key, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_a_plain_data_dir() {
+        assert!(Settings::validate_str("data_dir = \"/tmp/atuin-test\"\n").is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_a_data_dir_with_an_unexpandable_variable() {
+        let err = Settings::validate_str("data_dir = \"${DEFINITELY_UNSET_VAR_XYZ}/atuin\"\n")
+            .expect_err("a data_dir referencing an unset env var should not validate")
+            .to_string();
+
+        assert!(
+            err.contains("data_dir"),
+            "error should name data_dir, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_a_plain_path_key() {
+        assert!(Settings::validate_str("db_path = \"/tmp/atuin-test/history.db\"\n").is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_an_unexpandable_path_key() {
+        let err = Settings::validate_str("db_path = \"${DEFINITELY_UNSET_VAR_XYZ}/history.db\"\n")
+            .expect_err("a db_path referencing an unset env var should not validate")
+            .to_string();
+
+        assert!(
+            err.contains("db_path"),
+            "error should name the offending key, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_an_unexpandable_nested_path_key() {
+        let err =
+            Settings::validate_str("[logs]\ndir = \"${DEFINITELY_UNSET_VAR_XYZ}/atuin-logs\"\n")
+                .expect_err("a logs.dir referencing an unset env var should not validate")
+                .to_string();
+
+        assert!(
+            err.contains("logs.dir"),
+            "error should name the offending key, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_more_than_one_expanding_column() {
+        let err = Settings::validate_str(
+            "[ui]\ncolumns = [{ type = \"duration\", expand = true }, { type = \"command\", expand = true }]\n",
+        )
+        .expect_err("two expanding columns should not validate")
+        .to_string();
+
+        assert!(
+            err.contains("expand"),
+            "error should explain the expand conflict, got: {err}"
+        );
     }
 
     #[test]
