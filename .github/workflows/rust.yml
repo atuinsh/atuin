@@ -277,6 +277,5 @@ jobs:
 
       - name: Build packaged tarballs
         run: |
-          # Remove cached local packages (not crates.io)
-          rm -rf ~/.cargo/registry/src/-*
+          rm -rf target/package ~/.cargo/registry/src/-*
           cargo package --workspace
