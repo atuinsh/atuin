@@ -36,9 +36,14 @@ jobs:
           -p atuin-client
           -p atuin-history
           -p atuin-nucleo-matcher
+          -p atuin-search-bench
 
       - name: Run the benchmarks
         uses: CodSpeedHQ/action@v4
+        env:
+          # daemon search bench: instrumented execution is much slower than
+          # native, so index build time at 1M+ history lines would dominate
+          BENCH_SCALES: "10000,100000"
         with:
           mode: simulation
           run: cargo codspeed run

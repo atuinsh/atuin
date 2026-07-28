@@ -2,7 +2,6 @@
 members = [
   "crates/*",
   "crates/atuin-nucleo/matcher",
-  "crates/atuin-nucleo/bench",
 ]
 
 resolver = "2"
