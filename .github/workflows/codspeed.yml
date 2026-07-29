@@ -14,11 +14,11 @@ env:
 jobs:
   benchmarks:
     name: Run benchmarks
-    # Dedicated Depot machine: no queueing for the shared codspeed-macro pool
-    # and no cross-environment comparisons from mixed runner generations.
-    # Walltime mode supports arm64 macOS (the codspeed runner ships
-    # aarch64-apple-darwin builds).
-    runs-on: depot-macos-26
+    # Dedicated Depot machine — no queueing for the shared codspeed-macro
+    # pool. Simulation mode is valgrind-based and Linux-only, so this can't
+    # run on the macOS runners; measurements are simulated CPU instruction
+    # counts, so runner generation and machine load don't add noise.
+    runs-on: depot-ubuntu-24.04
 
     permissions:
       contents: read # required for actions/checkout
@@ -36,7 +36,7 @@ jobs:
 
       - name: Build the benchmark targets
         run: >
-          cargo codspeed build -m walltime
+          cargo codspeed build -m simulation
           -p atuin-client
           -p atuin-history
           -p atuin-nucleo-matcher
@@ -45,5 +45,5 @@ jobs:
       - name: Run the benchmarks
         uses: CodSpeedHQ/action@v4
         with:
-          mode: walltime
+          mode: simulation
           run: cargo codspeed run
