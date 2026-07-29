@@ -417,8 +417,8 @@ impl SearchIndex {
         // mode, remembering each one's haystack index for frecency lookups.
         // Filtered modes walk the command map directly (no string hashing);
         // indices are sorted so ranking ties stay deterministic.
-        let candidates: Vec<(u32, &HaystackEntry)> = tracing::span!(Level::TRACE, "index_search_filter")
-            .in_scope(|| match &filter {
+        let candidates: Vec<(u32, &HaystackEntry)> =
+            tracing::span!(Level::TRACE, "index_search_filter").in_scope(|| match &filter {
                 Filter::All => haystack
                     .iter()
                     .enumerate()
@@ -461,11 +461,24 @@ impl SearchIndex {
             .sort(frizbee::SortStrategy::IndexAsc);
         let mut matcher = frizbee::Matcher::from_query(&query, &config);
 
+        #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+        struct Score {
+            // Fields must be in this order so we rank by fuzzy score first and only use frecency
+            // for ties. See #3702.
+            pub fuzzy_score: u16,
+            pub frecency: u32,
+            pub index: u32,
+        }
+
         // An empty query matches every candidate with fuzzy score 0, so skip
         // the matcher and rank purely by frecency
-        let mut scored: Vec<(u16, u32, u32)> = if matcher.patterns().is_empty() {
+        let mut scored: Vec<Score> = if matcher.patterns().is_empty() {
             (0..candidates.len() as u32)
-                .map(|i| (0, frecency(i), i))
+                .map(|i| Score {
+                    fuzzy_score: 0,
+                    frecency: frecency(i),
+                    index: i,
+                })
                 .collect()
         } else {
             let commands: Vec<&Arc<str>> =
@@ -486,34 +499,29 @@ impl SearchIndex {
             });
             matches
                 .iter()
-                .map(|m| (m.score, frecency(m.index), m.index))
+                .map(|m| Score {
+                    fuzzy_score: m.score,
+                    frecency: frecency(m.index),
+                    index: m.index,
+                })
                 .collect()
         };
 
         tracing::span!(Level::TRACE, "index_search_results").in_scope(|| {
-            // Rank by match quality first; frecency only breaks ties between
-            // equally good matches. Adding frecency to the fuzzy score instead
-            // lets a frequently-run scattered match outrank a contiguous one
-            // (see #3702), while dropping frecency entirely loses any
-            // most-recently-used ordering among equal matches - a tiebreaker
-            // gives both.
-            let rank = |a: &(u16, u32, u32), b: &(u16, u32, u32)| {
-                b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2))
-            };
             // only the top `limit` results are returned, so partition them
             // out before sorting instead of sorting every match
             let limit = limit as usize;
             if scored.len() > limit {
-                scored.select_nth_unstable_by(limit, rank);
+                scored.select_nth_unstable(limit);
                 scored.truncate(limit);
             }
-            scored.sort_unstable_by(rank);
+            scored.sort_unstable();
 
             scored
                 .iter()
-                .filter_map(|&(_, _, i)| {
+                .filter_map(|score| {
                     self.commands
-                        .get(candidates[i as usize].1.original.as_ref())
+                        .get(candidates[score.index as usize].1.original.as_ref())
                         .map(|data| data.most_recent_id())
                 })
                 .collect()
