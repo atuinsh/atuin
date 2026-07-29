@@ -2,10 +2,10 @@
 
 //! Atuin's core domain model.
 //!
-//! Where [`atuin_common`](../atuin_common/index.html) is a grab-bag of utility
-//! helpers, this crate holds the types that make up Atuin's domain: the sync
-//! [`record`] types and the HTTP [`api`] request/response types. These are
-//! shared across the client, the daemon, and the server.
+//! Where `atuin-common` is a grab-bag of utility helpers, this crate holds the
+//! types that make up Atuin's domain: the sync [`record`] types and the HTTP
+//! [`api`] request/response types. These are shared across the client, the
+//! daemon, and the server.
 
 /// Defines a new UUID type wrapper
 macro_rules! new_uuid {
