@@ -905,6 +905,80 @@ mod tests {
         assert_eq!(results, vec![expected]);
     }
 
+    /// A deterministic synthetic corpus large enough to cross the 10k
+    /// parallel-matching threshold, shaped like real history (repeated
+    /// prefixes, multi-word commands, a few accented entries).
+    fn equivalence_corpus() -> Vec<String> {
+        let prefixes = [
+            "git status",
+            "git push origin",
+            "cargo build --release",
+            "docker compose up",
+            "ls -la",
+            "echo déjà",
+            "kubectl get pods -n",
+            "make -j",
+        ];
+        (0..12_000)
+            .map(|i| format!("{} run-{i}", prefixes[i % prefixes.len()]))
+            .collect()
+    }
+
+    /// The parallel-matching switch must be invisible in the results:
+    /// frizbee's match_list_parallel must return exactly the same matches,
+    /// scores, and order as match_list for our config. Guards the 10k
+    /// threshold in search(), which machines cross as history grows.
+    #[test]
+    fn parallel_matching_equals_serial() {
+        let corpus = equivalence_corpus();
+        let haystacks: Vec<&str> = corpus.iter().map(String::as_str).collect();
+        let config = frizbee::Config::default()
+            .casing(frizbee::CaseMatching::Smart)
+            .sort(frizbee::SortStrategy::IndexAsc);
+
+        // multi-atom and negated atoms exercise the progressive-filter path
+        for query in ["git", "git p", "docker compose up", "cargo !release", "g"] {
+            let serial = frizbee::Matcher::from_query(query, &config).match_list(&haystacks);
+            for threads in [2, 8] {
+                let parallel = frizbee::Matcher::from_query(query, &config)
+                    .match_list_parallel(&haystacks, threads);
+                assert_eq!(serial.len(), parallel.len(), "query {query:?}");
+                for (s, p) in serial.iter().zip(&parallel) {
+                    assert_eq!(
+                        (s.index, s.score),
+                        (p.index, p.score),
+                        "query {query:?}, {threads} threads"
+                    );
+                }
+            }
+        }
+    }
+
+    /// End-to-end determinism above the parallel threshold: the same query
+    /// against the same index must return the same ranked IDs every time.
+    #[tokio::test]
+    async fn search_results_stable_above_parallel_threshold() {
+        let index = SearchIndex::default();
+        for (i, command) in equivalence_corpus().iter().enumerate() {
+            // spread timestamps so frecency scores actually differ
+            let ts = datetime!(2024-01-01 00:00 UTC) + time::Duration::minutes((i % 1440) as i64);
+            index.add_history(&make_history(command, "/tmp", ts));
+        }
+        assert!(
+            index.command_count() > 10_000,
+            "corpus must cross threshold"
+        );
+        index.rebuild_frecency(&Search::default()).await;
+
+        for query in ["git", "git p", "docker compose up", "deja", ""] {
+            let first = index.search(query, IndexFilterMode::Global, 200).await;
+            for _ in 0..2 {
+                let again = index.search(query, IndexFilterMode::Global, 200).await;
+                assert_eq!(first, again, "query {query:?} returned unstable results");
+            }
+        }
+    }
+
     /// Queries longer than frizbee can score are truncated instead of
     /// panicking in Matcher::from_query.
     #[tokio::test]
