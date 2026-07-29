@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+use bstr::BString;
 use serde::Serialize;
 use sysinfo::{Process, System, get_current_pid};
 use thiserror::Error;
@@ -33,8 +34,8 @@ pub enum RunError {
     Exec {
         command: String,
         status: ExitStatus,
-        stdout: Vec<u8>,
-        stderr: Vec<u8>,
+        stdout: BString,
+        stderr: BString,
     },
     #[error("the output of '{command}' was not delimited as expected")]
     Delimiter { command: String },
@@ -49,8 +50,6 @@ pub enum AliasesError {
     #[error("the alias probe did not run to completion")]
     Probe,
 }
-
-use bstr::BString;
 
 /// The body an alias expands to.
 ///
@@ -75,7 +74,7 @@ impl AliasValue {
         match self {
             AliasValue::Command(cmd) => cmd.clone(),
             AliasValue::Argv(argv) => {
-                let mut out: Vec<u8> = Vec::new();
+                let mut out = BString::default();
                 for (index, arg) in argv.iter().enumerate() {
                     if index > 0 {
                         out.push(b' ');
@@ -90,7 +89,7 @@ impl AliasValue {
                     }
                     out.push(b'\'');
                 }
-                BString::from(out)
+                out
             }
         }
     }

@@ -53,8 +53,8 @@ impl ShExe {
             Err(RunError::Exec {
                 command: command.to_owned(),
                 status: output.status,
-                stdout: output.stdout,
-                stderr: output.stderr,
+                stdout: output.stdout.into(),
+                stderr: output.stderr.into(),
             })
         }
     }
