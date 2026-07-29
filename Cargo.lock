@@ -430,7 +430,6 @@ dependencies = [
  "atuin-common",
  "atuin-dotfiles",
  "atuin-history",
- "atuin-nucleo-matcher",
  "dashmap",
  "derive_more",
  "eyre",

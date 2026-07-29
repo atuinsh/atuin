@@ -248,7 +248,7 @@ pub fn truncate_query(query: &str) -> &str {
 /// its own. Maps char to char, so char positions are preserved. Borrows the
 /// input when it is already normalized.
 pub fn normalize_diacritics(s: &str) -> Cow<'_, str> {
-    use atuin_nucleo_matcher::chars::normalize;
+    use super::normalize::normalize;
     if s.is_ascii() || !s.chars().any(|c| normalize(c) != c) {
         return Cow::Borrowed(s);
     }

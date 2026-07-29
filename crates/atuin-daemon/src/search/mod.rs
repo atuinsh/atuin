@@ -3,6 +3,7 @@
 //! This module provides fuzzy search over command history using frizbee.
 
 mod index;
+mod normalize;
 
 // Include the generated proto code
 tonic::include_proto!("search");
