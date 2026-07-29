@@ -21,7 +21,7 @@ pub mod sh;
 pub mod xonsh;
 pub mod zsh;
 
-pub use alias::{AliasValue, AliasesError};
+pub use alias::{Alias, AliasValue, AliasesError, Rendered, Skipped};
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum RunError {
@@ -62,6 +62,12 @@ pub trait IsShell: Send + Sync {
 
     /// Return the path to the user configuration path of this shell.
     fn user_config_path(&self) -> &Path;
+
+    /// Render the given aliases into this shell's config syntax.
+    ///
+    /// Best-effort: aliases this shell cannot represent are reported in
+    /// [`Rendered::skipped`] rather than failing the whole render.
+    fn render_aliases(&self, aliases: &[Alias]) -> Rendered;
 }
 
 /// Compile-time proof that `IsShell` is object-safe. If a method signature ever

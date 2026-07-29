@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use bstr::BString;
 use serde::Deserialize;
 
-use crate::shell::{AliasValue, AliasesError};
+use crate::shell::{Alias, AliasValue, AliasesError, Rendered};
 
 use super::Aliases;
 
@@ -40,6 +40,99 @@ pub(super) fn parse_aliases(input: &[u8]) -> Result<Aliases, AliasesError> {
             (BString::from(name), AliasValue::Argv(argv))
         })
         .collect())
+}
+
+/// Render aliases as xonsh assignments: `aliases[name] = value`.
+///
+/// A [`AliasValue::Command`] becomes a Python string; a [`AliasValue::Argv`]
+/// becomes a Python list, so an argv alias is exec'd without a reparse — the
+/// shape xonsh itself stores. xonsh alias keys are arbitrary strings, so
+/// nothing is skipped.
+pub(super) fn render_aliases(aliases: &[Alias]) -> Rendered {
+    let mut script = BString::default();
+
+    for alias in aliases {
+        script.extend_from_slice(b"aliases[");
+        py_str(&alias.name, &mut script);
+        script.extend_from_slice(b"] = ");
+        match &alias.value {
+            AliasValue::Command(cmd) => py_str(cmd, &mut script),
+            AliasValue::Argv(args) => {
+                script.push(b'[');
+                for (index, arg) in args.iter().enumerate() {
+                    if index > 0 {
+                        script.extend_from_slice(b", ");
+                    }
+                    py_str(arg, &mut script);
+                }
+                script.push(b']');
+            }
+        }
+        script.push(b'\n');
+    }
+
+    Rendered {
+        script,
+        skipped: Vec::new(),
+    }
+}
+
+/// Append `bytes` to `out` as a single-quoted Python string literal.
+fn py_str(bytes: &[u8], out: &mut BString) {
+    out.push(b'\'');
+    for &b in bytes {
+        match b {
+            b'\\' => out.extend_from_slice(br"\\"),
+            b'\'' => out.extend_from_slice(br"\'"),
+            b'\n' => out.extend_from_slice(br"\n"),
+            b'\r' => out.extend_from_slice(br"\r"),
+            b'\t' => out.extend_from_slice(br"\t"),
+            0x00..=0x1f | 0x7f => out.extend_from_slice(format!("\\x{b:02x}").as_bytes()),
+            _ => out.push(b),
+        }
+    }
+    out.push(b'\'');
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn alias(name: &str, value: AliasValue) -> Alias {
+        Alias {
+            name: BString::from(name),
+            value,
+        }
+    }
+
+    #[test]
+    fn renders_command_as_python_string() {
+        let r = render_aliases(&[alias("ll", AliasValue::Command(BString::from("ls -l")))]);
+        assert_eq!(r.script, BString::from("aliases['ll'] = 'ls -l'\n"));
+        assert!(r.skipped.is_empty());
+    }
+
+    #[test]
+    fn renders_argv_as_python_list() {
+        let r = render_aliases(&[alias(
+            "g",
+            AliasValue::Argv(vec![BString::from("git"), BString::from("status")]),
+        )]);
+        assert_eq!(
+            r.script,
+            BString::from("aliases['g'] = ['git', 'status']\n")
+        );
+    }
+
+    #[test]
+    fn escapes_quotes_and_backslashes() {
+        let r = render_aliases(&[alias("q", AliasValue::Command(BString::from(r"it's \ x")))]);
+        assert_eq!(
+            r.script,
+            BString::from(concat!(r"aliases['q'] = 'it\'s \\ x'", "\n"))
+        );
+    }
 }
 
 #[cfg(test)]

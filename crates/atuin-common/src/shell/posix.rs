@@ -8,7 +8,7 @@ use winnow::{
 
 use bstr::BString;
 
-use super::{AliasValue, AliasesError, RunError};
+use super::{Alias, AliasValue, AliasesError, Rendered, RunError, Skipped};
 
 pub(super) type Aliases = HashMap<BString, AliasValue>;
 
@@ -110,6 +110,120 @@ pub(super) fn parse_aliases(input: &[u8]) -> Result<Aliases, AliasesError> {
     records
         .parse(input)
         .map_err(|error| parse_error(input, error.offset()))
+}
+
+/// Render aliases as POSIX `alias name='value'` lines.
+///
+/// Shared by bash, sh and zsh, and reused for fish, which accepts this form. An
+/// alias whose name is not a valid POSIX alias name is skipped rather than
+/// emitted, since it would otherwise break the sourced file.
+pub(super) fn render_aliases(aliases: &[Alias]) -> Rendered {
+    let mut script = BString::default();
+    let mut skipped = Vec::new();
+
+    for alias in aliases {
+        if !is_valid_alias_name(&alias.name) {
+            skipped.push(Skipped {
+                name: alias.name.clone(),
+                reason: "not a valid alias name for a POSIX shell".to_owned(),
+            });
+            continue;
+        }
+
+        script.extend_from_slice(b"alias ");
+        script.extend_from_slice(&alias.name);
+        script.push(b'=');
+        single_quote(&alias.value.shcmd(), &mut script);
+        script.push(b'\n');
+    }
+
+    Rendered { script, skipped }
+}
+
+/// A POSIX alias name must be non-empty and free of whitespace, `=`, single
+/// quotes and control characters.
+fn is_valid_alias_name(name: &[u8]) -> bool {
+    !name.is_empty()
+        && !name
+            .iter()
+            .any(|&b| b == b'=' || b == b'\'' || b.is_ascii_whitespace() || b.is_ascii_control())
+}
+
+/// Append `bytes` to `out`, single-quoted, each embedded `'` written `'\''`.
+fn single_quote(bytes: &[u8], out: &mut BString) {
+    out.push(b'\'');
+    for &b in bytes {
+        if b == b'\'' {
+            out.extend_from_slice(br"'\''");
+        } else {
+            out.push(b);
+        }
+    }
+    out.push(b'\'');
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn alias(name: &str, value: AliasValue) -> Alias {
+        Alias {
+            name: BString::from(name),
+            value,
+        }
+    }
+
+    #[test]
+    fn renders_a_plain_command() {
+        let r = render_aliases(&[alias("ll", AliasValue::Command(BString::from("ls -l")))]);
+        assert_eq!(r.script, BString::from("alias ll='ls -l'\n"));
+        assert!(r.skipped.is_empty());
+    }
+
+    #[test]
+    fn escapes_embedded_single_quote_in_the_body() {
+        let r = render_aliases(&[alias("x", AliasValue::Command(BString::from("echo it's")))]);
+        assert_eq!(r.script, BString::from("alias x='echo it'\\''s'\n"));
+    }
+
+    #[test]
+    fn empty_body_renders_empty_quotes() {
+        let r = render_aliases(&[alias("e", AliasValue::Command(BString::default()))]);
+        assert_eq!(r.script, BString::from("alias e=''\n"));
+    }
+
+    #[test]
+    fn argv_body_round_trips_exactly() {
+        let r = render_aliases(&[alias(
+            "g",
+            AliasValue::Argv(vec![BString::from("git"), BString::from("st")]),
+        )]);
+        assert_eq!(
+            r.script,
+            BString::from(concat!(r"alias g=''\''git'\'' '\''st'\'''", "\n"))
+        );
+    }
+
+    #[test]
+    fn skips_invalid_names_but_keeps_the_rest() {
+        let r = render_aliases(&[
+            alias("ok", AliasValue::Command(BString::from("cmd"))),
+            alias("has space", AliasValue::Command(BString::from("cmd"))),
+            alias("has=eq", AliasValue::Command(BString::from("cmd"))),
+        ]);
+        assert_eq!(r.script, BString::from("alias ok='cmd'\n"));
+        assert_eq!(r.skipped.len(), 2);
+        assert_eq!(r.skipped[0].name, BString::from("has space"));
+        assert_eq!(r.skipped[1].name, BString::from("has=eq"));
+    }
+
+    #[test]
+    fn empty_input_renders_nothing() {
+        let r = render_aliases(&[]);
+        assert!(r.script.is_empty());
+        assert!(r.skipped.is_empty());
+    }
 }
 
 #[cfg(test)]

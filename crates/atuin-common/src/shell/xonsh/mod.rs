@@ -13,7 +13,7 @@ use tracing::instrument;
 
 use bstr::BString;
 
-use super::{AliasValue, AliasesError, IsShell, RunError};
+use super::{Alias, AliasValue, AliasesError, IsShell, Rendered, RunError};
 
 mod alias;
 
@@ -183,5 +183,9 @@ impl IsShell for Xonsh {
 
     fn user_config_path(&self) -> &Path {
         &self.inner.config_path
+    }
+
+    fn render_aliases(&self, aliases: &[Alias]) -> Rendered {
+        alias::render_aliases(aliases)
     }
 }
