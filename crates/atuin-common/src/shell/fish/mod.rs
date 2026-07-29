@@ -13,7 +13,7 @@ use tracing::instrument;
 
 use bstr::BString;
 
-use super::{Alias, AliasValue, AliasesError, IsShell, Rendered, RunError, posix};
+use super::{Alias, AliasValue, AliasesError, IsShell, Rendered, RunError};
 
 mod alias;
 
@@ -169,6 +169,6 @@ impl IsShell for Fish {
     }
 
     fn render_aliases(&self, aliases: &[Alias]) -> Rendered {
-        posix::render_aliases(aliases)
+        alias::render_aliases(aliases)
     }
 }
