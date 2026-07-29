@@ -1,0 +1,16 @@
+# ASD-STE100 Issue 9, rule 4.2. Split from STE.Contractions because these
+# forms expand two ways -- "it's" is both "it is" and "it has" -- so Vale
+# cannot fix them automatically. The writer has to choose.
+extends: existence
+message: "Expand '%s' (ASD-STE100 rule 4.2). This contraction has two readings, so choose the one you mean."
+level: error
+ignorecase: true
+tokens:
+  - it's
+  - that's
+  - there's
+  - here's
+  - what's
+  - who's
+  - he's
+  - she's

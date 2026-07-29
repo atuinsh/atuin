@@ -7,11 +7,11 @@ works by exchanging these records, rather than by copying rows between
 databases. `atuin store` inspects and repairs that store.
 
 Most people never need these commands. Reach for them when sync is misbehaving,
-or when a machine ends up holding records encrypted with a key it no longer has.
+or when a machine holds records that are encrypted with a key it no longer has.
 
 !!! danger
     `rekey`, `purge`, and the `--force` forms of `push`/`pull` can destroy data
-    that can't be recovered. Read the description of a command before running
+    that cannot be recovered. Read the description of a command before running
     it, and make sure you know which key Atuin is currently using.
 
 ## Subcommands
@@ -35,8 +35,8 @@ Check that every local record can be decrypted with your current key.
 atuin store verify
 ```
 
-Failures mean some records were written with a different key — usually because
-a machine was logged in with an old key, or a key was regenerated.
+A failure means that some records use a different key. Usually a machine logged in with
+an old key, or someone regenerated a key.
 
 ### `atuin store purge`
 
@@ -47,10 +47,10 @@ atuin store purge
 ```
 
 !!! warning
-    This only touches the local record store on the current machine. It doesn't
+    This only touches the local record store on the current machine. It does not
     wipe your history, delete your sync account, or affect other machines.
 
-Run `atuin store verify` first, so you know you're clearing up a genuine key
+Run `atuin store verify` first, so you know you are clearing up a genuine key
 mismatch rather than deleting data blindly. See
 [Deleting History](../guide/delete-history.md#purging-undecryptable-local-store-records)
 for the full procedure.
@@ -77,7 +77,7 @@ history database from `history` records.
 atuin store rebuild history
 ```
 
-Useful when the record store is intact but the local view of it isn't.
+Useful when the record store is intact but the local view of it is not.
 
 ### `atuin store push`
 

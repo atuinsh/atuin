@@ -1,6 +1,6 @@
 # Self-Hosting the Atuin AI Backend
 
-The core of Atuin AI's backend is open source, available at [`atuinsh/atuin-ai-server`](https://github.com/atuinsh/atuin-ai-server). It's based on [`atuin-ai-core`](https://github.com/atuinsh/atuin-ai-core), the same Gleam library that powers the production Atuin AI backend.
+The core of Atuin AI's backend is open source, available at [`atuinsh/atuin-ai-server`](https://github.com/atuinsh/atuin-ai-server). It is based on [`atuin-ai-core`](https://github.com/atuinsh/atuin-ai-core), the same Gleam library that powers the production Atuin AI backend.
 
 The Atuin AI server currently supports any **OpenAI-compatible, chat completions-style endpoint**. For local models, this includes Ollama, vLLM, LM Studio, llama.cpp, and LiteLLM, among others. You can also use OpenAI-compatible web services, like OpenRouter.
 
@@ -8,7 +8,7 @@ The Atuin AI server currently supports any **OpenAI-compatible, chat completions
 
 After cloning the repository, copy the example config file, `config.example.toml`, to `config.toml`. Follow the configuration section of the README to set up your instance.
 
-Here's a basic example of an Ollama-based setup:
+Here is a basic example of an Ollama-based setup:
 
 ```toml
 port = 8080
@@ -46,7 +46,7 @@ mix deps.get
 mix run --no-halt
 ```
 
-If your `config.toml` specifies API keys via environment variables, remember to set them when you start the server.
+If your `config.toml` specifies API keys with environment variables, remember to set them when you start the server.
 
 ## Running with Docker
 
@@ -59,7 +59,7 @@ docker run \
   ghcr.io/atuinsh/atuin-ai-server:latest
 ```
 
-If you're running via Docker and want the Atuin AI server to connect to a local LLM service on the host (for example, Ollama), use `host.docker.internal` as the endpoint instead of `localhost`. `localhost` would otherwise resolve to the container's own loopback interface, not the host machine.
+If you run the server in Docker and the LLM service is on the host (for example, Ollama), use `host.docker.internal` as the endpoint. Do not use `localhost`: inside the container, `localhost` is the loopback interface of the container, not the host machine.
 
 ## Configuring Atuin AI
 

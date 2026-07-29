@@ -228,8 +228,8 @@ async fn handle_resp_error(resp: reqwest::Response) -> Result<reqwest::Response>
     }
 
     if status == StatusCode::TOO_MANY_REQUESTS {
-        error!("Rate limited; please wait before trying again");
-        bail!("Rate limited; please wait before trying again");
+        error!("rate limited. Wait, then try again");
+        bail!("rate limited. Wait, then try again");
     }
 
     if !status.is_success() {

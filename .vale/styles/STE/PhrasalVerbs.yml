@@ -1,0 +1,29 @@
+# ASD-STE100 Issue 9, rule 9.3: "When you use two words together, do not make
+# phrasal verbs."
+#
+# A phrasal verb means something its two words do not: "check out" is not a
+# kind of checking. A reader who knows both words still cannot derive the
+# meaning, and most other languages have no equivalent construction.
+#
+# Only phrasal verbs that actually occur in these docs are listed, each with
+# the replacement that fits the sense we use it in. "Set up" is deliberately
+# absent as a noun and adjective ("the setup", "a setup script") -- the token
+# boundary below only matches the verb spelling.
+extends: substitution
+message: "Write '%s' instead of the phrasal verb '%s' (ASD-STE100 rule 9.3)."
+level: warning
+ignorecase: true
+swap:
+  figure out: find
+  figures out: finds
+  check out: see
+  end up: become
+  ends up: becomes
+  carry out: do
+  carries out: does
+  look up: find
+  looks up: finds
+  turn on: enable
+  turns on: enables
+  turn off: disable
+  turns off: disables

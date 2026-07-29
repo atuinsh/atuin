@@ -138,7 +138,9 @@ impl Theme {
                     *name,
                     StyleFactory::from_fg_string(color).unwrap_or_else(|err| {
                         if debug {
-                            tracing::warn!("Tried to load string as a color unsuccessfully: ({name}={color}) {err}");
+                            tracing::warn!(
+                                "could not read this string as a color: ({name}={color}) {err}"
+                            );
                         }
                         ContentStyle::default()
                     }),
@@ -793,7 +795,7 @@ mod theme_tests {
                 assert_eq!(captured_logs[0].level, tracing::Level::WARN);
                 assert_eq!(
                     captured_logs[1].message,
-                    "Tried to load string as a color unsuccessfully: (AlertInfo=xinetic) No such color in palette"
+                    "could not read this string as a color: (AlertInfo=xinetic) No such color in palette"
                 );
                 assert_eq!(captured_logs[1].level, tracing::Level::WARN)
             } else {

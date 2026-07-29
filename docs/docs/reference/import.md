@@ -4,10 +4,10 @@
 
 Atuin can import your history from your "old" history file
 
-`atuin import auto` will attempt to figure out your shell (via \$SHELL) and run
+`atuin import auto` tries to identify your shell (from \$SHELL) and run
 the correct importer
 
-Unfortunately these older files don't store as much information as Atuin does,
+Unfortunately these older files do not store as much information as Atuin does,
 so not all features are available with imported data.
 
 Except as noted otherwise, you can set the `HISTFILE` environment variable to
@@ -17,10 +17,10 @@ control which file is read, otherwise each importer will try some default filena
 HISTFILE=/path/to/history/file atuin import zsh
 ```
 
-Note that for shells such as Xonsh that store history in many files rather than a
-single file, `$HISTFILE` should be set to the directory that holds those files.
+Some shells, such as Xonsh, store history in many files instead of one file. For these
+shells, set `$HISTFILE` to the directory that holds the files.
 
-For formats that don't store timestamps, timestamps will be generated starting at
+For formats that do not store timestamps, timestamps will be generated starting at
 the current time plus 1ms for each additional command in the history.
 
 Most importers will discard commands found that have invalid UTF-8.
@@ -29,8 +29,8 @@ Most importers will discard commands found that have invalid UTF-8.
 
 This will read the history from `$HISTFILE` or `$HOME/.bash_history`.
 
-Warnings will be issued if timestamps are found to be out of order, which could also
-happen when a history file starts without timestamps but later entries include them.
+Atuin gives a warning when the timestamps are not in order. This can also occur when a
+history file starts without timestamps, but later entries have them.
 
 ## fish
 
@@ -38,20 +38,20 @@ fish supports multiple history sessions, so the importer will default to the `fi
 session unless the `fish_history` environment variable is set. The file to be read
 will be `{session}_history` in `$XDG_DATA_HOME/fish/` (or `$HOME/.local/share/fish`).
 
-Not all of the data in the fish history is preserved, some data about filenames used
-for each command aren't used by Atuin, so it's discarded.
+Atuin does not keep all of the data in the fish history. It does not use the data about
+the filenames for each command, so it discards that data.
 
 ## nu
 
 This importer reads from Nushell's text history format, which is stored in
 `$XDG_CONFIG_HOME/nushell/history.txt` or `$HOME/.config/nushell/history.txt`.
-The filename can't be set otherwise.
+The filename cannot be set otherwise.
 
 ## nu-hist-db
 
 This importer reads from Nushell's SQLite history database, which is stored in
 `$XDG_CONFIG_HOME/nushell/history.sqlite3` or `$HOME/.config/nushell/history.sqlite3`.
-The filename can't be set otherwise.
+The filename cannot be set otherwise.
 
 ## `powershell`
 
@@ -59,7 +59,7 @@ This importer reads from
 [PowerShell's history file](https://learn.microsoft.com/en-us/powershell/module/psreadline/about/about_psreadline#command-history).
 On Windows, the file is located at
 `$APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt`.
-On other systems, it's located at
+On other systems, it is located at
 `$XDG_DATA_HOME/powershell/PSReadLine/ConsoleHost_history.txt`
 or `$HOME/.local/share/powershell/PSReadLine/ConsoleHost_history.txt`.
 
@@ -94,7 +94,7 @@ The Xonsh SQLite importer will read from the Xonsh SQLite history file. The hist
 file's location is determined by the same process as the regular Xonsh importer,
 but with `history_json` replaced by `xonsh-history.sqlite`.
 
-The Xonsh SQLite backend doesn't store environment variables, but like the JSON
+The Xonsh SQLite backend does not store environment variables, but like the JSON
 backend it can optionally store the output of each command. As with the JSON backend,
 if present this data will be ignored by Atuin.
 

@@ -1,6 +1,6 @@
 # Integrations
 
-This page covers integrations with shell plugins and tools. For information about how Atuin's shell hooks work and troubleshooting embedded terminals (IDEs, AI coding assistants, etc.), see [Shell Integration and Interoperability](guide/shell-integration.md).
+This page covers integrations with shell plugins and tools. For information about how Atuin's shell hooks work and troubleshooting embedded terminals (for example, IDEs and AI coding assistants), see [Shell Integration and Interoperability](guide/shell-integration.md).
 
 ## zsh-autosuggestions
 
@@ -10,7 +10,7 @@ If you'd like to override this, add your own config after `"$(atuin init zsh)"` 
 
 ## zsh-vi-mode
 
-If you're using [Zsh Vi Mode](https://github.com/jeffreytse/zsh-vi-mode), you may want to add the following to your `.zshrc` to prevent overriding the default Atuin binds:
+If you are using [Zsh Vi Mode](https://github.com/jeffreytse/zsh-vi-mode), you may want to add the following to your `.zshrc` to prevent overriding the default Atuin binds:
 
 ```shell
 # Append a command directly (after sourcing zvm)
@@ -21,7 +21,7 @@ zvm_after_init_commands+=(
 
 ## ble.sh autocomplete (Bash)
 
-If ble.sh is available when Atuin's integration is loaded in Bash, Atuin automatically defines and registers an autocomplete source for the autosuggestion feature of ble.sh.
+If ble.sh is available when Bash loads the Atuin integration, Atuin registers an autocomplete source for the autosuggestion feature of ble.sh.
 
 If you'd like to change the behavior, please overwrite the shell function `ble/complete/auto-complete/source:atuin-history` after `eval "$(atuin init bash)"` in your `.bashrc`.
 
@@ -36,6 +36,6 @@ ble/util/import/eval-after-load core-complete '
 
 ## Embedded Terminals and IDEs
 
-Atuin may not work out of the box in embedded terminals found in IDEs (PyCharm, VS Code, etc.) or AI coding assistants (Claude Code, etc.). This is because these tools often start non-interactive shells that don't source your shell configuration.
+Atuin does not always work immediately in embedded terminals. Examples are the terminals in IDEs such as PyCharm and VS Code, and in AI coding assistants such as Claude Code. These tools often start non-interactive shells, which do not source your shell configuration.
 
 For solutions and workarounds, see [Shell Integration and Interoperability](guide/shell-integration.md).

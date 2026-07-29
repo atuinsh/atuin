@@ -1,11 +1,11 @@
 # Docker
 
 !!! warning
-    If you're self hosting, we strongly suggest you stick to [tagged releases](https://github.com/atuinsh/atuin/releases), and don't follow `main` or `latest`
+    If you are self hosting, we strongly suggest you stick to [tagged releases](https://github.com/atuinsh/atuin/releases), and do not follow `main` or `latest`
 
     Follow the GitHub releases, and please read the notes for each release. Most of the time, upgrades can occur without any manual intervention.
 
-    We can't guarantee that all updates will apply cleanly, and some may require some extra steps.
+    We cannot guarantee that all updates will apply cleanly, and some may require some extra steps.
 
 A supplied docker image lets you deploy a server as a container. The "LATEST TAGGED RELEASE" can be found on the [releases page](https://github.com/atuinsh/atuin/releases).
 
@@ -99,7 +99,7 @@ Start and enable the service with:
 systemctl enable --now atuin
 ```
 
-Check if it's running with:
+Check if it is running with:
 
 ```sh
 systemctl status atuin
@@ -136,6 +136,6 @@ This will create daily backups of your database for that additional layer of com
 
     The `./db_dumps` mount must use a POSIX-compliant filesystem that supports
     hard links and symlinks. Filesystems such as VFAT, exFAT, and SMB/CIFS
-    won't work with this image. See
+    will not work with this image. See
     [`docker-postgres-backup-local`](https://github.com/prodrigestivill/docker-postgres-backup-local)
     for the retention settings and how backups work.

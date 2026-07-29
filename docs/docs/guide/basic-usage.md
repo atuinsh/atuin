@@ -1,6 +1,6 @@
 # Basic Usage
 
-Now that you're all set up and running, here's a quick walkthrough of how you can use Atuin best.
+Now that you are all set up and running, here is a quick walkthrough of how you can use Atuin best.
 
 ## What does Atuin record?
 
@@ -19,7 +19,7 @@ At any time, you can open the TUI with the default keybindings of the up arrow, 
 
 Once in the TUI, press enter to immediately execute a command, or press tab to insert it into your shell for editing.
 
-While searching in the TUI, you can narrow the search scope by pressing `ctrl-r` to cycle through [filter modes](advanced-usage.md#filter-mode) — the full history, this machine, the current directory, the current git repository, or the current shell session.
+While you search in the TUI, press `ctrl-r` to change the [filter mode](advanced-usage.md#filter-mode). The filter mode sets the search scope: the full history, this machine, the current directory, the current git repository, or the current shell session.
 
 See the [advanced usage](advanced-usage.md) page for more options.
 
@@ -31,8 +31,8 @@ The default configuration file is located at `~/.config/atuin/config.toml`.
 
 ### Keybindings
 
-We've got a [full page dedicated to keybinding adjustments](../configuration/key-binding.md).
-It covers a whole bunch of options, including disabling the up arrow behavior if you don't like it.
+We have got a [full page dedicated to keybinding adjustments](../configuration/key-binding.md).
+It covers a whole bunch of options, including disabling the up arrow behavior if you do not like it.
 
 ### Enter to run
 

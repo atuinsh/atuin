@@ -374,15 +374,15 @@ fn parse_fmt(format: &str) -> ParsedFmt<'_> {
     match ParsedFmt::new(format) {
         Ok(fmt) => fmt,
         Err(err) => {
-            eprintln!("ERROR: History formatting failed with the following error: {err}");
+            eprintln!("ERROR: could not format the history: {err}");
 
             if format.contains('"') && (format.contains(":{") || format.contains(",{")) {
-                eprintln!("It looks like you're trying to create JSON output.");
-                eprintln!("For JSON, you need to escape literal braces by doubling them:");
+                eprintln!("It looks like you want to create JSON output.");
+                eprintln!("For JSON, write each literal brace two times:");
                 eprintln!("Example: '{{\"command\":\"{{command}}\",\"time\":\"{{time}}\"}}'");
             } else {
                 eprintln!(
-                    "If your formatting string contains literal curly braces, you need to escape them by doubling:"
+                    "To put a literal curly brace in a formatting string, write it two times:"
                 );
                 eprintln!("Use {{{{ for literal {{ and }}}} for literal }}");
             }

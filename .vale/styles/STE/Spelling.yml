@@ -1,0 +1,35 @@
+# ASD-STE100 Issue 9, rule 1.14: "Use American English spelling unless other
+# official directives tell you differently."
+#
+# Vale.Spelling already runs an American dictionary, but it does not flag
+# British forms that are also valid American words in another sense, and its
+# message does not say which form to use. These are the pairs that have
+# actually appeared in the docs or are likely to.
+extends: substitution
+message: "Use American spelling: '%s', not '%s' (ASD-STE100 rule 1.14)."
+level: error
+ignorecase: true
+action:
+  name: replace
+swap:
+  behaviour: behavior
+  behaviours: behaviors
+  colour: color
+  colours: colors
+  coloured: colored
+  initialise: initialize
+  initialised: initialized
+  initialisation: initialization
+  synchronise: synchronize
+  synchronised: synchronized
+  synchronisation: synchronization
+  customise: customize
+  customised: customized
+  organise: organize
+  organised: organized
+  analyse: analyze
+  analysed: analyzed
+  cancelled: canceled
+  cancelling: canceling
+  favour: favor
+  catalogue: catalog

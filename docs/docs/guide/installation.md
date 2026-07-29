@@ -4,7 +4,7 @@
 
 ### On Unix
 
-Let's get started! First up, you will want to install Atuin. The recommended
+Let us get started! First up, you will want to install Atuin. The recommended
 approach is to use the installation script, which automatically handles the
 installation of Atuin including the requirements for your environment.
 
@@ -48,11 +48,11 @@ Note that the `$PROFILE` path may depend on your PowerShell version.
 
 ### Installing the binary
 
-If you don't wish to use the installer, the manual installation steps are as follows.
+If you do not wish to use the installer, the manual installation steps are as follows.
 
 === "Cargo"
 
-    It's best to use [rustup](https://rustup.rs/) to set up a Rust
+    It is best to use [rustup](https://rustup.rs/) to set up a Rust
     toolchain, then you can run:
 
     ```shell
@@ -155,7 +155,7 @@ If you don't wish to use the installer, the manual installation steps are as fol
 !!! warning "Please be advised"
 
     If you choose to manually install Atuin rather than using the recommended installation script,
-    merely installing the binary isn't sufficient, you should also set up the shell plugin.
+    the binary alone is not sufficient. You must also install the shell plugin.
 
 ---
 
@@ -212,13 +212,13 @@ After installing, remember to restart your shell.
             bash-preexec currently has [an issue][bp-ignorespace] where it will stop
             honoring `ignorespace`. While Atuin will ignore commands prefixed with
             whitespace, they may still end up in your bash history. Please check your
-            configuration! All other shells don't have this issue.
+            configuration! All other shells do not have this problem.
 
             To use `atuin < 18.10.0` in `bash < 4` with bash-preexec, the option
             `enter_accept` needs to be turned on (which is so by default).  There is no
             restriction in the latest version of Atuin (>= 18.10.0).
 
-            bash-preexec can't properly invoke the `preexec` hook for subshell commands
+            bash-preexec cannot correctly invoke the `preexec` hook for subshell commands
             `(...)`, function definitions `func() { ...; }`, empty for-in-statements `for
             i in; do ...; done`, etc., so those commands and duration may not be recorded
             in the Atuin's history correctly.
@@ -308,12 +308,12 @@ After installing, remember to restart your shell.
 
 ## Upgrade
 
-Run `atuin update`, and if that command isn't available, run the install script again.
+Run `atuin update`, and if that command is not available, run the install script again.
 
 If you used a package manager to install Atuin, then you should also use your package manager to update Atuin.
 
 ## Uninstall
 
-If you'd like to uninstall Atuin, please check out [the uninstall page](../uninstall.md).
+If you'd like to uninstall Atuin, see [the uninstall page](../uninstall.md).
 
 [bp-ignorespace]: https://github.com/rcaloras/bash-preexec/issues/115

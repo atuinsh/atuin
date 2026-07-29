@@ -1,6 +1,6 @@
 # Atuin AI
 
-Atuin AI is a subcommand that enables shell command generation and other information lookup via an LLM directly from your terminal.
+Atuin AI is a subcommand. It uses an LLM to generate shell commands and to find other information, directly from your terminal.
 
 Atuin AI requires an account on [Atuin Hub](https://hub.atuin.sh/), and Atuin asks you to log in upon first use of the binary. Alternatively, you can [self-host the Atuin AI backend](./self-hosting.md).
 
@@ -41,7 +41,7 @@ You can still use `enter` or `tab` to run or insert the last suggested command, 
 
 ### Conversational and search usage
 
-If you prompt the LLM with a question that doesn't imply you want to generate a command, it can respond in natural language, and use web search if necessary to fetch the data it needs.
+If your question does not ask for a command, the LLM answers in natural language. It can also use web search to get the data that it needs.
 
 [![Ask it a question](./images/question.png)](./images/question.png)
 
@@ -49,6 +49,6 @@ If you prompt the LLM with a question that doesn't imply you want to generate a 
 
 The LLM scores its confidence in the command and how dangerous the command is. This information is shown if a threshold is exceeded, and requires an extra confirmation step before running automatically with `enter`.
 
-The Atuin Hub server also monitors suggested commands for dangerous patterns the LLM didn't catch, and appends its own assessment at the end of the LLM's own assessment.
+The Atuin Hub server also examines the suggested commands for dangerous patterns that the LLM did not find. It adds its own assessment after the assessment of the LLM.
 
 [![Potentially dangerous commands are marked](./images/danger.png)](./images/danger.png)

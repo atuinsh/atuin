@@ -11,4 +11,4 @@ Atuin AI includes several slash commands that help you control various aspects o
 
 ## Slash Commands from Skills
 
-Any [user-defined skills](./skills.md) with a name will register that name as a slash command, with the skill's description as the slash command description (shown in `/help` and in the slash command fuzzy picker). For example, if you have a skill named `my-skill`, you can invoke it by typing `/my-skill` in the Atuin AI prompt. If the skill has any parameters, you can provide them after the skill name, separated by spaces.
+Every [user-defined skill](./skills.md) that has a name registers that name as a slash command. The description of the skill becomes the description of the slash command. You see this description in `/help` and in the fuzzy picker for slash commands. For example, if you have a skill named `my-skill`, you can invoke it by typing `/my-skill` in the Atuin AI prompt. If the skill has any parameters, you can provide them after the skill name, separated by spaces.

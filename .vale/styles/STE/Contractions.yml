@@ -1,0 +1,41 @@
+# ASD-STE100 Issue 9, rule 4.2: "Do not omit words or use contractions to make
+# your sentences shorter."
+#
+# Contractions are the single hardest construction for a second-language
+# reader: the elided word carries the negation ("can't"), and the apostrophe
+# form is not derivable from the words it stands for. This rule is the exact
+# inverse of Microsoft.Contractions, which is disabled in .vale.ini.
+extends: substitution
+message: "Write '%s' instead of '%s' (ASD-STE100 rule 4.2)."
+level: error
+ignorecase: true
+action:
+  name: replace
+swap:
+  aren't: are not
+  can't: cannot
+  couldn't: could not
+  didn't: did not
+  doesn't: does not
+  don't: do not
+  hadn't: had not
+  hasn't: has not
+  haven't: have not
+  isn't: is not
+  mustn't: must not
+  shouldn't: should not
+  wasn't: was not
+  weren't: were not
+  won't: will not
+  wouldn't: would not
+  you'll: you will
+  you've: you have
+  you're: you are
+  we'll: we will
+  we've: we have
+  we're: we are
+  they're: they are
+  they'll: they will
+  they've: they have
+  i'm: I am
+  let's: let us

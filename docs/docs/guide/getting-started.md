@@ -28,7 +28,7 @@ arrow to search them.
 
 ## 2. Import your existing history
 
-Atuin only records commands run after it's installed, so bring the old ones in:
+Atuin only records commands run after it is installed, so bring the old ones in:
 
 ```shell
 atuin import auto
@@ -47,8 +47,8 @@ atuin register -u <USERNAME> -e <EMAIL>
 atuin sync
 ```
 
-Registration generates an encryption key. **Save it somewhere safe** — you'll
-need it to log in on any other machine, and it can't be recovered. See
+Registration generates an encryption key. **Save it somewhere safe** — you will
+need it to log in on any other machine, and it cannot be recovered. See
 [Setting up sync](sync.md) for the details, including logging in elsewhere.
 
 Skipping this step is fine. Your history stays on this machine, not backed up
@@ -56,14 +56,14 @@ and not synchronized.
 
 ## 4. Make it yours
 
-Once you're up and running:
+Once you are up and running:
 
 - [Basic usage](basic-usage.md) — what Atuin records, and how to drive the TUI
 - [Filter and search modes](advanced-usage.md) — narrow searches to this
   directory, this machine, or this session
 - [Key bindings](../configuration/key-binding.md) — including how to
   [disable the up arrow binding](../configuration/key-binding.md#disable-up-arrow)
-  if it isn't for you
+  if it is not for you
 - [Config](../configuration/config.md) — every setting, including an
   [inline window](../configuration/config.md#inline_height) instead of full screen
 
@@ -72,4 +72,4 @@ Once you're up and running:
 Open a topic on the [forum](https://forum.atuin.sh), join our
 [Discord](https://discord.gg/Fq8bJSKPHh), or file an
 [issue](https://github.com/atuinsh/atuin/issues). Running
-[`atuin doctor`](../reference/doctor.md) collects the information we'll ask for.
+[`atuin doctor`](../reference/doctor.md) collects the information we will ask for.

@@ -16,7 +16,7 @@ Our default up-arrow binding can be a bit contentious. Some people love it, some
 
 It becomes much more powerful if you consider binding a different filter mode to the up arrow. For example, on "up" Atuin can default to searching all history for the current directory only, while Ctrl-r searches history globally. See the [config](config.md#filter_mode_shell_up_key_binding) for more.
 
-Otherwise, if you don't like it, you can disable it.
+Otherwise, if you do not like it, you can disable it.
 
 You can also disable either the up-arrow or ++ctrl+r++ bindings individually, by passing
 `--disable-up-arrow` or `--disable-ctrl-r` to the call to `atuin init` in your shell config file:
@@ -30,8 +30,8 @@ eval "$(atuin init zsh --disable-up-arrow)"
 eval "$(atuin init zsh --disable-ctrl-r)"
 ```
 
-If you don't want either key to be bound, either pass both `--disable` arguments, or set the
-environment variable `ATUIN_NOBIND` to any value before the call to `atuin init`:
+To bind neither key, pass both `--disable` arguments. You can also set the environment
+variable `ATUIN_NOBIND` to any value before the call to `atuin init`:
 
 ```shell
 ## Do not bind any keys
@@ -51,7 +51,9 @@ By default, the `enter` key will directly execute the selected command instead o
 
 ## Ctrl-n key shortcuts
 
-macOS doesn't have an ++alt++ key, although terminal emulators can often be configured to map the ++option++ key to be used as ++alt++. *However*, remapping ++option++ this way may prevent typing some characters, such as using ++option+3++ to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace ++alt+0++ to ++alt+9++ shortcuts with ++ctrl+0++ to ++ctrl+9++ instead:
+macOS does not have an ++alt++ key. Most terminal emulators can map the ++option++ key to ++alt++. But this mapping can also prevent you from typing some characters. For example, on the British English layout, ++option+3++ types `#`.
+
+In this case, set the `ctrl_n_shortcuts` option to `true` in your config file. The ++alt+0++ to ++alt+9++ shortcuts then become ++ctrl+0++ to ++ctrl+9++:
 
 ```toml
 # Use Ctrl-0 .. Ctrl-9 instead of Alt-0 .. Alt-9 UI shortcuts
@@ -75,7 +77,7 @@ or use the `ctrl_n_shortcuts` as outlined above.
 
 ## zsh
 
-If you'd like to customize your bindings further, it's possible to do so with custom shell config:
+If you'd like to customize your bindings further, it is possible to do so with custom shell config:
 
 Atuin defines the ZLE widgets `atuin-search` and `atuin-up-search`.  The latter
 can be used for the keybindings to the ++up++ key and similar keys.
@@ -235,7 +237,7 @@ $env.config = (
 
 The shortcuts above that start with ++ctrl+a++ use **prefix mode** — a two-step key combination. Pressing the prefix key (++ctrl+a++ by default) enters prefix mode, then the next key you press triggers the action. Prefix mode exits automatically after the action runs.
 
-This is useful for less-frequent actions that don't need a dedicated shortcut. The prefix key can be changed with the [`prefix`](config.md#prefix) setting, and the bindings themselves can be customized with [`[keymap.prefix]`](advanced-key-binding.md#custom-prefix-bindings).
+This is useful for less-frequent actions that do not need a dedicated shortcut. The prefix key can be changed with the [`prefix`](config.md#prefix) setting, and the bindings themselves can be customized with [`[keymap.prefix]`](advanced-key-binding.md#custom-prefix-bindings).
 
 ### Vim mode
 If vim is enabled in the config (see [`keymap_mode`](config.md#keymap_mode)), the following keybindings are enabled:

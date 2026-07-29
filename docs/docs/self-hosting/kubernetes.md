@@ -1,11 +1,11 @@
 # Kubernetes
 
 !!! warning
-    If you're self hosting, we strongly suggest you stick to tagged releases, and don't follow `main` or `latest`
+    If you are self hosting, we strongly suggest you stick to tagged releases, and do not follow `main` or `latest`
 
     Follow the GitHub releases, and please read the notes for each release. Most of the time, upgrades can occur without any manual intervention.
 
-    We can't guarantee that all updates will apply cleanly, and some may require some extra steps.
+    We cannot guarantee that all updates will apply cleanly, and some may require some extra steps.
 
 You could host your own Atuin server using the Kubernetes platform.
 
@@ -227,7 +227,7 @@ Note that this configuration will store the database folder _outside_ the Kubern
 
 You should also change the password string in `ATUIN_DB_PASSWORD` and `ATUIN_DB_URI` in the`secrets.yaml` file to a more secure one.
 
-The Atuin service is exposed on port `30530` of the host system. That's configured by the `nodePort` property. Kubernetes has a strict rule that you aren't allowed to expose a port numbered lower than 30000. To make the clients work, set the port in your `config.toml` file, for example `sync_address = "http://192.168.1.10:30530"`.
+The Atuin service is exposed on port `30530` of the host system. That is configured by the `nodePort` property. Kubernetes has a strict rule that you are not allowed to expose a port numbered lower than 30000. To make the clients work, set the port in your `config.toml` file, for example `sync_address = "http://192.168.1.10:30530"`.
 
 Deploy the Atuin server using `kubectl`:
 
@@ -242,7 +242,7 @@ The sample files above are also in the [k8s folder](https://github.com/atuinsh/a
 
 ## Creating backups of the Postgres database
 
-Now you're up and running it's a good time to think about backups.
+Now that you are up and running, it is a good time to think about backups.
 
 You can create a [`CronJob`](https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/) which uses [`pg_dump`](https://www.postgresql.org/docs/current/app-pgdump.html) to create a backup of the database. This example runs weekly and dumps to the local disk on the node.
 

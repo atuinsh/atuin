@@ -14,10 +14,10 @@ When you add `eval "$(atuin init <shell>)"` to your shell configuration, Atuin i
 These hooks only activate under specific conditions:
 
 - The shell must be **interactive** (started with `-i` or inherently interactive)
-- Your shell configuration file must be **sourced** (`.bashrc`, `.zshrc`, etc.)
+- Your shell configuration file must be **sourced** (for example, `.bashrc` or `.zshrc`)
 - The `atuin init` command must run during shell startup
 
-If any of these conditions aren't met, Atuin won't install its hooks, and it won't record commands.
+If any of these conditions are not met, Atuin will not install its hooks, and it will not record commands.
 
 ### Environment Variables
 
@@ -32,7 +32,7 @@ When Atuin initializes, it sets several environment variables:
 | `ATUIN_HISTORY_INTENT` | Optional command intent/rationale text |
 
 Atuin uses these variables internally to track command execution and associate commands with sessions.
-If `ATUIN_HISTORY_AUTHOR` isn't set, Atuin defaults to the local shell username.
+If `ATUIN_HISTORY_AUTHOR` is not set, Atuin defaults to the local shell username.
 
 ## Embedded Terminals and IDE Integrations
 
@@ -48,7 +48,7 @@ These tools often spawn shells differently than your regular terminal, which can
 
 Embedded terminals commonly:
 
-1. **Start non-interactive shells**: Many tools run commands via `bash -c "command"` or similar, which doesn't trigger shell configuration
+1. **Start non-interactive shells**: Many tools run commands with `bash -c "command"` or something similar, which does not trigger shell configuration
 2. **Skip shell configuration**: Some tools explicitly avoid sourcing `.bashrc`/`.zshrc` for performance or isolation
 3. **Use different shell paths**: The embedded terminal might use a different shell than your default
 
@@ -58,11 +58,11 @@ You can verify whether Atuin is active by running:
 atuin doctor
 ```
 
-Look for the `shell.preexec` field in the output. If it shows `none`, Atuin's hooks aren't installed in that shell session. To confirm the shell is interactive at all, check that `echo $-` includes an `i`.
+Look for the `shell.preexec` field in the output. If it shows `none`, Atuin's hooks are not installed in that shell session. To confirm the shell is interactive at all, check that `echo $-` includes an `i`.
 
 ### Enabling Atuin in Embedded Terminals
 
-If you want Atuin to record commands from an embedded terminal, you'll need to make sure it starts an interactive shell that sources your configuration.
+To record commands from an embedded terminal, make sure that the terminal starts an interactive shell that sources your configuration.
 
 #### IDE Terminal Settings
 
@@ -98,7 +98,7 @@ Add to your `settings.json` (substitute the shells for whatever you use):
 
 #### Wrapper Script Approach
 
-For tools that don't support shell arguments, create a wrapper script:
+For tools that do not support shell arguments, create a wrapper script:
 
 ```shell
 #!/bin/bash
@@ -138,11 +138,11 @@ fi
 
 ### Zsh
 
-Zsh has native hook support via `add-zsh-hook`. The integration is straightforward and works reliably in interactive sessions.
+Zsh has native hook support through `add-zsh-hook`. The integration is straightforward and works reliably in interactive sessions.
 
 ### Fish
 
-Fish uses its event system (`fish_preexec` and `fish_postexec` events). It also respects Fish's private mode — commands run with `fish --private` aren't recorded.
+Fish uses its event system (`fish_preexec` and `fish_postexec` events). It also respects Fish's private mode — commands run with `fish --private` are not recorded.
 
 ### Nushell, xonsh, and PowerShell
 

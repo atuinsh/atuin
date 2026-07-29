@@ -1,8 +1,11 @@
 # Reading Command Output
 
-Atuin AI can read the output of commands you've run. Ask "why did that fail?" and it can look at the actual error message, rather than guessing from the command alone.
+Atuin AI can read the output of commands you have run. Ask "why did that fail?" and it can look at the actual error message, rather than guessing from the command alone.
 
-Atuin doesn't capture output by default — it needs two pieces set up: the [daemon](../reference/daemon.md), which stores recent output in memory, and [pty-proxy](../reference/pty-proxy.md), which captures it from your terminal.
+Atuin does not capture output by default. It needs two components:
+
+- The [daemon](../reference/daemon.md), which stores recent output in memory
+- [pty-proxy](../reference/pty-proxy.md), which captures the output from your terminal
 
 ## Setup
 
@@ -16,7 +19,7 @@ enabled = true
 autostart = true
 ```
 
-With `autostart = true`, Atuin starts and manages the daemon for you. If you'd rather run it yourself (for example via systemd), see the [daemon documentation](../reference/daemon.md).
+With `autostart = true`, Atuin starts and manages the daemon for you. If you'd rather run it yourself (for example, with systemd), see the [daemon documentation](../reference/daemon.md).
 
 ### 2. Enable pty-proxy
 
@@ -59,7 +62,7 @@ Add the pty-proxy init line to your shell's init script, as high in the file as 
     source ~/.local/share/atuin/pty-proxy-init.nu
     ```
 
-See the [pty-proxy documentation](../reference/pty-proxy.md) for more detail, including what to do if `atuin` isn't on your `PATH` when your shell starts.
+See the [pty-proxy documentation](../reference/pty-proxy.md) for more detail, including what to do if `atuin` is not on your `PATH` when your shell starts.
 
 ### 3. Restart your shell
 
@@ -69,7 +72,7 @@ To try it out, run a command that fails, then press `?` and ask Atuin AI why it 
 
 ## How it works
 
-pty-proxy sits between your terminal and your shell, and uses your shell's prompt markers to work out where each command's output starts and ends. It then sends each captured command to the daemon, which keeps it in memory alongside its Atuin history ID. When Atuin AI wants to see what a command printed, it asks the daemon for the output by history ID.
+pty-proxy sits between your terminal and your shell. It uses the prompt markers of your shell to find where the output of each command starts and ends. It then sends each captured command to the daemon. The daemon keeps the output in memory, together with its Atuin history ID. When Atuin AI wants to see what a command printed, it asks the daemon for the output by history ID.
 
 ## Privacy and retention
 
@@ -94,4 +97,4 @@ To turn the capability off entirely, set `ai.capabilities.enable_history_output`
 
 ## Reading output from other AI tools
 
-Captured output isn't limited to Atuin AI: external tools like Claude Code and Cursor can read it too, via Atuin's [MCP server](./mcp.md).
+Captured output is not limited to Atuin AI: external tools like Claude Code and Cursor can also read it through the Atuin [MCP server](./mcp.md).

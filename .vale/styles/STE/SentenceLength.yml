@@ -1,0 +1,13 @@
+# ASD-STE100 Issue 9, rule 6.3: "Write short sentences. Use a maximum of 25
+# words in each sentence." (Descriptive writing. Rule 5.1 caps procedures at
+# 20 words, but Vale cannot tell the two apart, so we apply the looser limit
+# everywhere.)
+#
+# Microsoft.SentenceLength does the same job at 30 words and is left at
+# suggestion in .vale.ini. This rule is the one that gates.
+extends: occurrence
+message: "This sentence is longer than 25 words (ASD-STE100 rule 6.3). Split it, or use a vertical list."
+scope: sentence
+level: warning
+max: 25
+token: \b(\w+)\b

@@ -1,8 +1,8 @@
 # Advanced Usage
 
-Two settings shape every search you run: the **filter mode** decides *which*
-commands Atuin searches, and the **search mode** decides *how* Atuin matches
-your query against them. Both can be changed on the fly from inside the TUI.
+Two settings shape every search you run. The **filter mode** decides *which*
+commands Atuin searches. The **search mode** decides *how* Atuin matches your
+query against them. Both can be changed on the fly from inside the TUI.
 
 ## Filter mode
 
@@ -19,7 +19,7 @@ modes by pressing **ctrl-r** inside the TUI.
 | session-preload  | The current session, plus all global history from before the session started         |
 
 `workspace` mode requires [`workspaces = true`](../configuration/config.md#workspaces).
-Atuin skips it when you aren't inside a git repository.
+Atuin skips it when you are not inside a git repository.
 
 To change which mode searches start in, set
 [`filter_mode`](../configuration/config.md#filter_mode). To remove modes from the
@@ -48,6 +48,6 @@ Atuin uses the current context (host, session, directory) to filter the history 
 
 You can switch this context to the one of the currently selected command by pressing **ctrl-a** then **c**.
 
-This will set the filter mode to *session* and clear the search query, which will show you all the commands executed in the same shell session.
+This sets the filter mode to *session* and clears the search query. You then see all the commands from the same shell session.
 
 Pressing this key combination again will return to the initial context. You can customize this behavior by setting [custom key bindings](../configuration/advanced-key-binding.md) to the `switch-context` and `clear-context` commands. `switch-context` can be called several times to navigate through multiple command contexts, while `clear-context` will always return to the initial context.

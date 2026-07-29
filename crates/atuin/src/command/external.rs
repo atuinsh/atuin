@@ -70,7 +70,7 @@ fn render_not_found(subcommand: &str, bin: &str) -> StyledStr {
             let _ = write!(output, "{error}error:{error:#} ");
             let _ = write!(
                 output,
-                "'{invalid}{subcommand}{invalid:#}' is an official atuin plugin, but it's not installed"
+                "'{invalid}{subcommand}{invalid:#}' is an official atuin plugin, but it is not installed"
             );
             let _ = write!(output, "\n\n");
             let _ = write!(output, "{install_message}");

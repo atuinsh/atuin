@@ -23,6 +23,7 @@ __pycache__/
 test-behavior.sh
 
 # Vale: downloaded style packages are machine-local build state. The
-# vocabulary under .vale/styles/config/ is source.
+# vocabulary under .vale/styles/config/ and our own STE style are source.
 /.vale/styles/*
 !/.vale/styles/config/
+!/.vale/styles/STE/

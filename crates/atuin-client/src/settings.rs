@@ -1162,14 +1162,14 @@ impl Settings {
     pub async fn session_token(&self) -> Result<String> {
         match Self::meta_store().await?.session_token().await? {
             Some(token) => Ok(token),
-            None => Err(eyre!("Tried to load session; not logged in")),
+            None => Err(eyre!("cannot load the session. You are not logged in")),
         }
     }
 
     pub async fn hub_session_token(&self) -> Result<String> {
         match Self::meta_store().await?.hub_session_token().await? {
             Some(token) => Ok(token),
-            None => Err(eyre!("Tried to load hub session; not logged in")),
+            None => Err(eyre!("cannot load the Hub session. You are not logged in")),
         }
     }
 

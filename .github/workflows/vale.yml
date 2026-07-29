@@ -7,6 +7,7 @@ on:
       - "docs/docs/**"
       - ".vale.ini"
       - ".vale/styles/config/**"
+      - ".vale/styles/STE/**"
       - ".github/workflows/vale.yml"
 
 permissions:

@@ -1,0 +1,20 @@
+# ASD-STE100 Issue 9, GR-6: "STE recommends that you do not use Latin
+# abbreviations because they can confuse your readers if they do not know
+# them. Always use English words to make the text clear."
+#
+# "via" is not a Latin abbreviation, but it is a Latin preposition with the
+# same problem: a reader who does not know it cannot guess it, and English
+# has "with", "through" and "by" for every sense we use it in.
+extends: substitution
+message: "Write '%s' instead of '%s' (ASD-STE100 GR-6)."
+level: error
+ignorecase: true
+nonword: true
+swap:
+  '\be\.g\.,?': for example,
+  '\bi\.e\.,?': that is,
+  '\betc\.': and so on
+  # The period is required, so this does not fire on "VS Code".
+  '\bvs\.': compared to
+  '\bN\.B\.': note
+  '\bvia\b': with

@@ -5,13 +5,13 @@ Atuin includes a powerful keybinding system that can be used to fully customize 
 The `[keymap]` section in your config replaces the older `[keys]` section. If any `[keymap]` settings are present, the `[keys]` section is ignored entirely.
 
 !!! warning
-    Modifier keys, F1-F24 keys, and some special characters work best - or _only_ work - with a terminal that implements the kitty keyboard protocol. Notably, the default macOS Terminal app _doesn't_ include this feature. For more information and a list of terminals that are known to support this protocol, see [https://sw.kovidgoyal.net/kitty/keyboard-protocol/](https://sw.kovidgoyal.net/kitty/keyboard-protocol/).
+    Modifier keys, F1-F24 keys, and some special characters work best - or _only_ work - with a terminal that implements the kitty keyboard protocol. Notably, the default macOS Terminal app _does not_ include this feature. For more information and a list of terminals that are known to support this protocol, see [https://sw.kovidgoyal.net/kitty/keyboard-protocol/](https://sw.kovidgoyal.net/kitty/keyboard-protocol/).
 
 ## Keymaps
 
 The Atuin TUI has multiple modes, each with its own keymap. You configure each one under a separate TOML table:
 
-| Config section       | When it's active |
+| Config section       | When it is active |
 |----------------------|-------------------|
 | `[keymap.emacs]`     | Search tab, `keymap_mode = "emacs"` |
 | `[keymap.vim-normal]`| Search tab, vim normal mode (see [`keymap_mode`](config.md#keymap_mode)) |
@@ -24,7 +24,7 @@ Vim-insert mode inherits all Emacs bindings by default, then overrides `esc` and
 You only need to specify the keys you want to change. Unmentioned keys keep their default bindings.
 
 !!! warning
-    If you specify a key in your keymap that would normally be changed by an option, like the `enter` key with the `enter_accept` setting, the setting won't take effect. Those options modify the default keymap based on their setting, but if you override the key in the keymap, you're responsible for managing correct behavior.
+    Some options change the default keymap. The `enter_accept` setting changes the `enter` key, for example. If your own keymap specifies that same key, the setting has no effect and you control the behavior of the key.
 
 ## Key format
 
@@ -58,7 +58,9 @@ Modifiers are prefixed with a dash separator. Multiple modifiers can be combined
 Available modifiers: `ctrl`, `alt`, `shift`, `super` (also accepted as `cmd` or `win`).
 
 !!! warning
-    The `super` modifier (`Cmd` on macOS, Win on Windows) **requires** the kitty keyboard protocol. Only terminals that implement this protocol will report the Super modifier to applications. Even in supported terminals, some Super+key combinations may be intercepted by the terminal or OS (for example, Cmd+C for copy, Cmd+V for paste, or Cmd+T for opening a new tab).
+    The `super` modifier (`Cmd` on macOS, Win on Windows) **needs** the kitty keyboard protocol. Only terminals that implement this protocol report the Super modifier to applications.
+
+    Also, the terminal or the operating system can intercept some Super+key combinations. For example, Cmd+C copies, Cmd+V pastes, and Cmd+T opens a new tab.
 
 ### Uppercase letters
 
@@ -107,7 +109,7 @@ Separate keys with a space to define a sequence. The first key is buffered until
 "g g"
 ```
 
-If the second key doesn't complete a known sequence, both keys are handled individually.
+If the second key does not complete a known sequence, both keys are handled individually.
 
 ## Keymap format
 
@@ -137,10 +139,10 @@ Maps a key to an ordered list of rules. Each rule has an `action` and an optiona
 
 In this example, pressing left when the cursor is at position 0 exits the TUI. Otherwise, it moves the cursor left.
 
-A rule without a `when` field is unconditional and always matches. It's typically placed last as a fallback.
+A rule without a `when` field is unconditional and always matches. It is typically placed last as a fallback.
 
 !!! warning "Override semantics"
-    When you specify a key in `[keymap]`, it **replaces** the **entire** default binding for that key. Other keys you don't mention keep their defaults.
+    When you specify a key in `[keymap]`, it **replaces** the **entire** default binding for that key. Other keys you do not mention keep their defaults.
 
 ## Actions
 
@@ -210,7 +212,7 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `switch-context` | Switch to the [context](../guide/advanced-usage.md#context-switch) of the currently selected command |
 | `clear-context` | Return to the initial [context](../guide/advanced-usage.md#context-switch) |
 
-The difference between `accept` and `return-selection`: `accept` runs the command immediately when the TUI closes, while `return-selection` places it on your command line for further editing before you press enter. The `enter_accept` setting controls which of these the default `enter` key uses.
+`accept` and `return-selection` are different. `accept` runs the command immediately when the TUI closes. `return-selection` puts the command on your command line, so that you can edit it before you press enter. The `enter_accept` setting controls which of these the default `enter` key uses.
 
 ### Mode changes
 
@@ -240,7 +242,7 @@ The difference between `accept` and `return-selection`: `accept` runs the comman
 
 ## Conditions
 
-Conditions let a single key do different things depending on the current state. They're specified as strings in the `when` field of a rule.
+Conditions let a single key do different things depending on the current state. They are specified as strings in the `when` field of a rule.
 
 ### Condition atoms
 
@@ -391,7 +393,7 @@ This is equivalent to setting `enter_accept = false`, but expressed directly as 
 
 ### Custom prefix bindings
 
-Prefix mode is a two-step shortcut: press the prefix key (++ctrl+a++ by default), then a second key. This is useful for actions you don't need on a single key. The default prefix bindings are:
+Prefix mode is a two-step shortcut: press the prefix key (++ctrl+a++ by default), then a second key. This is useful for actions you do not need on a single key. The default prefix bindings are:
 
 | Key | Action |
 |-----|--------|
@@ -433,7 +435,7 @@ The `[keymap]` section is a more powerful replacement for the `[keys]` section. 
 - If you have any `[keymap]` settings, the entire `[keys]` section is ignored. Defaults are built from the standard `[keys]` values, and then your `[keymap]` overrides are applied on top.
 - If you have no `[keymap]` settings, the `[keys]` section works as before for backward compatibility.
 
-If you're migrating from `[keys]` to `[keymap]`, here is how the old flags map:
+If you are migrating from `[keys]` to `[keymap]`, here is how the old flags map:
 
 | `[keys]` setting | Equivalent `[keymap]` |
 |------------------|-----------------------|

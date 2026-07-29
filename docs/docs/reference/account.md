@@ -43,7 +43,7 @@ atuin account login -u <USERNAME>
 | `--totp-code`/`-t` | Your two-factor authentication code, if your account has 2FA |
 
 Omitting `--password` and `--key` is recommended: Atuin asks for both,
-so neither ends up in your shell history.
+so neither one goes into your shell history.
 
 ### `atuin account logout`
 
@@ -82,8 +82,8 @@ Deletes your account and all synchronized history from the server.
 | `--totp-code`/`-t` | Your two-factor authentication code, if your account has 2FA |
 
 !!! warning
-    This doesn't prompt for confirmation, and it can't be undone. Your local
-    history isn't affected — only the server copy.
+    This does not prompt for confirmation, and it cannot be undone. Your local
+    history is not affected — only the server copy.
 
 ### `atuin account link`
 
@@ -94,4 +94,4 @@ atuin account link
 ```
 
 Opens a browser to authenticate with Hub, then associates the two accounts. If
-you're already signed in to Hub, the accounts are linked immediately.
+you are already signed in to Hub, the accounts are linked immediately.

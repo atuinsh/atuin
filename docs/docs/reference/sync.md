@@ -7,7 +7,7 @@ server operator can _never_ see your data!
 Anyone can host a server (see the [self-hosting docs](../self-hosting/server-setup.md)),
 and we host one at <https://api.atuin.sh>. This is the default server address,
 which can be changed in the [config](../configuration/config.md#sync_address).
-Again, we _can't_ see your data, and don't want to.
+Again, we _cannot_ see your data, and do not want to.
 
 ## Sync frequency
 
@@ -26,13 +26,13 @@ Register for a sync account with
 atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
 ```
 
-If you don't want to have your password be included in shell history, you can omit
-the password flag and Atuin asks for it through `stdin`.
+To keep your password out of your shell history, omit the password flag. Atuin then asks
+for it through `stdin`.
 
 Usernames must be unique and only contain alphanumerics or hyphens,
 and emails will only be used for important notifications (security breaches, changes to service, etc).
 
-Upon success, you're also logged in :) Syncing should happen automatically from
+Upon success, you are also logged in :) Syncing should happen automatically from
 here!
 
 ## Delete
@@ -43,11 +43,11 @@ You can delete your sync account with
 atuin account delete
 ```
 
-This will remove your account and all synchronized history from the server. Local data won't be touched!
+This will remove your account and all synchronized history from the server. Local data will not be touched!
 
 ## Key
 
-As all your data is encrypted, Atuin generates a key for you. It's stored in the
+As all your data is encrypted, Atuin generates a key for you. It is stored in the
 Atuin data directory (`~/.local/share/atuin` on Linux).
 
 You can also get this with
@@ -67,8 +67,8 @@ If you want to log in to a new machine, you will require your encryption key
 atuin login -u <USERNAME> -p <PASSWORD> -k <KEY>
 ```
 
-If you don't want to have your password or encryption key be included in shell history, you can omit
-the corresponding flag and Atuin asks for it through `stdin`.
+To keep your password or encryption key out of your shell history, omit the related
+flag. Atuin then asks for it through `stdin`.
 
 ## Logout
 

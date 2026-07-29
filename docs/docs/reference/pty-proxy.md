@@ -9,9 +9,9 @@ Atuin pty-proxy is an experimental lightweight PTY proxy, providing new features
 
 ## TUI Rendering
 
-The search TUI exposes a tradeoff: the UI is either in fullscreen alt-screen mode that takes over your terminal, or inline mode that clears your previous output. Neither is great.
+The search TUI has a tradeoff. In fullscreen alt-screen mode, the UI takes over your terminal. In inline mode, it clears your previous output. Neither mode is good.
 
-With pty-proxy, the Atuin popup renders over the top of your previous output, but when it's closed, pty-proxy restores the output successfully.
+With pty-proxy, the Atuin popup renders over the top of your previous output, but when it is closed, pty-proxy restores the output successfully.
 
 !!! tip "Already using tmux?"
 
@@ -32,7 +32,7 @@ That capture is what lets AI tools see what actually happened, rather than
 guessing from the command alone:
 
 - [Atuin AI](../ai/introduction.md) can answer "why did that fail?" by reading
-  the real error, via its `AtuinOutput` tool
+  the real error, with its `AtuinOutput` tool
 - External agents such as Claude Code and Cursor can do the same through Atuin's
   [MCP server](../ai/mcp.md)
 
@@ -85,7 +85,7 @@ Atuin pty-proxy needs to be initialized separately from your existing Atuin conf
 
 ---
 
-If the `atuin` binary isn't in your `PATH` by default, you should initialize pty-proxy as soon as it's set. For example, for a bash user with Atuin installed in `~/.atuin/bin/atuin`, a config file might look like this:
+If the `atuin` binary is not in your `PATH` by default, you should initialize pty-proxy as soon as it is set. For example, for a bash user with Atuin installed in `~/.atuin/bin/atuin`, a config file might look like this:
 
 ```bash
 export PATH=$HOME/.atuin/bin:$PATH

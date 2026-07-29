@@ -71,7 +71,7 @@ Default: `true`
 
 Configures whether to automatically check for updates. When enabled, Atuin
 checks `https://api.atuin.sh` for the latest release at most once per hour,
-and prints a notice if you're out of date.
+and prints a notice if you are out of date.
 
 Set to `false` to disable. With the update check disabled and sync not set
 up, Atuin makes no network requests of its own.
@@ -95,10 +95,10 @@ sync_address = "https://api.atuin.sh"
 Default: `1h`
 
 How often to automatically sync with the server. This can be given in a
-"human-readable" format. For example, `10s`, `20m`, `1h`, etc.
+"human-readable" format. For example, `10s`, `20m`, or `1h`.
 
 If set to `0`, Atuin will sync after every command. Some servers may rate limit
-frequent syncs, but this won't cause any issues.
+frequent syncs, but this will not cause any issues.
 
 ```toml
 sync_frequency = "1h"
@@ -153,9 +153,9 @@ The `fuzzy` and `daemon-fuzzy` search syntax is based on the
 | `'wild`   | exact-match (quoted)       | Items that include `wild`            |
 | `^music`  | prefix-exact-match         | Items that start with `music`        |
 | `.mp3$`   | suffix-exact-match         | Items that end with `.mp3`           |
-| `!fire`   | inverse-exact-match        | Items that don't include `fire`      |
-| `!^music` | inverse-prefix-exact-match | Items that don't start with `music`  |
-| `!.mp3$`  | inverse-suffix-exact-match | Items that don't end with `.mp3`     |
+| `!fire`   | inverse-exact-match        | Items that do not include `fire`      |
+| `!^music` | inverse-prefix-exact-match | Items that do not start with `music`  |
+| `!.mp3$`  | inverse-suffix-exact-match | Items that do not end with `.mp3`     |
 
 A single bar character term acts as an OR operator. For example, the following
 query matches entries that start with `core` and end with either `go`, `rb`,
@@ -166,7 +166,7 @@ or `py`.
 ```
 
 !!! warning "Bar not supported in daemon-fuzzy"
-    The "daemon-fuzzy" search mode doesn't currently support the bar character operator.
+    The "daemon-fuzzy" search mode does not currently support the bar character operator.
 
 ### `filter_mode`
 
@@ -227,12 +227,12 @@ inline_height_shell_up_key_binding = 10
 Default: `false`
 
 This flag enables a pseudo filter-mode named "workspace": the filter is automatically
-activated when you're in a git repository.
+activated when you are in a git repository.
 
 With workspace filtering enabled, Atuin will filter for commands executed in any directory
 within a git repository tree.
 
-Filter modes can still be toggled via ctrl-r.
+You can still change the filter mode with ctrl-r.
 
 ```toml
 workspaces = false
@@ -308,7 +308,7 @@ max_preview_height = 4
 
 Default: `true`
 
-Configure whether to show the help row, which includes the current Atuin version (and whether an update is available), a keymap hint, and the total amount of commands in your history.
+Whether to show the help row. The help row gives the current Atuin version, whether an update is available, a keymap hint, and the number of commands in your history.
 
 ```toml
 show_help = true
@@ -342,7 +342,7 @@ Default: `return-original`
 
 What to do when the escape key is pressed when searching
 
-| Value                     | Behaviour                                                        |
+| Value                     | Behavior                                                         |
 | ------------------------- | ---------------------------------------------------------------- |
 | return-original (default) | Set the command-line to the value it had before starting search  |
 | return-query              | Set the command-line to the search query you have entered so far |
@@ -365,13 +365,13 @@ history_format = "{time}\t{command}\t{duration}"
 
 ### `history_filter`
 
-Use the history filter to exclude commands from history tracking - maybe you want to keep ALL of your `curl` commands totally out of your shell history, or maybe just some matching a pattern.
+Use the history filter to keep commands out of your history. For example, you can exclude all of your `curl` commands, or only the ones that match a pattern.
 
 This supports regular expressions, so you can hide pretty much whatever you want!
 
 ```toml
-## Note that these regular expressions are unanchored, i.e. if they don't start
-## with ^ or end with $, they'll match anywhere in the command.
+## Note that these regular expressions are unanchored. If they do not start
+## with ^ or end with $, they match anywhere in the command.
 history_filter = [
    "^secret-cmd",
    "^innocuous-cmd .*--secret=.+"
@@ -385,8 +385,8 @@ Use the `cwd` filter to exclude directories from history tracking.
 This supports regular expressions, so you can hide pretty much whatever you want!
 
 ```toml
-## Note that these regular expressions are unanchored, i.e. if they don't start
-## with ^ or end with $, they'll match anywhere in the path.
+## Note that these regular expressions are unanchored. If they do not start
+## with ^ or end with $, they match anywhere in the path.
 # cwd_filter = [
 #   "^/very/secret/directory",
 # ]
@@ -443,7 +443,9 @@ For the exact expressions, see
 
 Default: `true`
 
-macOS doesn't have an ++alt++ key, although terminal emulators can often be configured to map the ++option++ key to be used as ++alt++. _However_, remapping ++option++ this way may prevent typing some characters, such as using ++option+3++ to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace ++alt+0++ to ++alt+9++ shortcuts with ++ctrl+0++ to ++ctrl+9++ instead:
+macOS does not have an ++alt++ key. Most terminal emulators can map the ++option++ key to ++alt++. But this mapping can also prevent you from typing some characters. For example, on the British English layout, ++option+3++ types `#`.
+
+In this case, set the `ctrl_n_shortcuts` option to `true` in your config file. The ++alt+0++ to ++alt+9++ shortcuts then become ++ctrl+0++ to ++ctrl+9++:
 
 ```toml
 # Use Ctrl-0 .. Ctrl-9 instead of Alt-0 .. Alt-9 UI shortcuts
@@ -491,12 +493,12 @@ Extra HTTP headers to send on every request to the sync server. This is useful
 when a self-hosted server sits behind a proxy or access gateway that requires
 its own authentication header — for example Cloudflare Access.
 
-Headers that Atuin sets itself (such as `Authorization`) can't be overridden,
+Headers that Atuin sets itself (such as `Authorization`) cannot be overridden,
 because Atuin's values always win.
 
-To avoid leaking credentials, Atuin refuses to follow cross-origin redirects
-when extra headers are configured — they're never sent to an origin other
-than the one you configured.
+To prevent leaked credentials, Atuin does not follow cross-origin redirects when you
+configure extra headers. Atuin sends those headers only to the origin that you
+configured.
 
 ```toml
 extra_headers = { "CF-Access-Client-Id" = "...", "CF-Access-Client-Secret" = "..." }
@@ -552,7 +554,7 @@ and ++j++ to navigate the history list as in Vim, whilst pressing
 you can search for a string as in the keymap mode `"emacs"`, while pressing ++esc++
 switches the keymap mode to `"vim-normal"`. When set to `"auto"`, the initial
 keymap mode is automatically determined based on the shell's keymap that triggered
-the Atuin search. `"auto"` isn't supported by Nushell at present, where it will
+the Atuin search. `"auto"` is not supported by Nushell at present, where it will
 always trigger the Atuin search with the keymap mode `"emacs"`.
 
 ```toml
@@ -574,11 +576,9 @@ following is an example.
 keymap_cursor = { emacs = "blink-block", vim_insert = "blink-block", vim_normal = "steady-block" }
 ```
 
-If the cursor style is specified, the terminal's cursor style is changed to the
-specified one when the Atuin search starts with or switches to the
-corresponding keymap mode. Also, the terminal's cursor style is reset to the
-one associated with the keymap mode corresponding to the shell's keymap on the
-termination of the Atuin search.
+If you specify a cursor style, the terminal changes to that style. This occurs when the
+Atuin search starts in the related keymap mode, or changes to it. When the Atuin search stops, the terminal returns to the cursor style for the keymap
+mode of the shell.
 
 ### `prefers_reduced_motion`
 
@@ -618,7 +618,7 @@ The frecency calculation is `Recency Score * Recency Multiplier + Frequency Scor
 
 For each setting, a value of `1.0` (the default) means the score is used as-is. Values less than `1.0` decrease that score's influence, and values greater than `1.0` increase that score's influence.
 
-For example, if you cared a lot about how frequently you run a command but not as much how recently, you could set `frequency_score_multiplier` to `10.0` and `recency_score_multiplier` to `0.1`.
+For example, you care more about how frequently you run a command than about how recently you ran it. Set `frequency_score_multiplier` to `10.0` and `recency_score_multiplier` to `0.1`.
 
 !!! warning "daemon-fuzzy mode only"
     The score multiplier settings shown here only work with the `"daemon-fuzzy"` search mode.
@@ -671,7 +671,7 @@ frecency_score_multiplier = 2.0
 ### Filtering by author
 
 Interactive search shows only commands you ran yourself, hiding those recorded
-by AI coding agents through [agent hooks](../guide/agent-hooks.md). This isn't
+by AI coding agents through [agent hooks](../guide/agent-hooks.md). This is not
 currently configurable in `config.toml`.
 
 To filter by author on the command line, use `atuin search --author`. See
@@ -814,7 +814,7 @@ scroll_exits = true
 
 Default: `a`
 
-Which key to use as the prefix. Prefix mode is a two-step shortcut system: you press ++ctrl++ and the prefix key to enter prefix mode, then press a second key to trigger an action. For example, with the default prefix `a`, pressing ++ctrl+a++ then ++d++ deletes the selected entry.
+Which key to use as the prefix. Prefix mode is a shortcut system with two steps. First, press ++ctrl++ and the prefix key to enter prefix mode. Then press a second key to start an action. For example, with the default prefix `a`, pressing ++ctrl+a++ then ++d++ deletes the selected entry.
 
 See the [key binding page](key-binding.md#prefix-mode) for the full list of default prefix shortcuts, or the [advanced key binding page](advanced-key-binding.md#custom-prefix-bindings) to customize them.
 
@@ -895,7 +895,7 @@ strategy = "auto"
 
 ## tmux
 
-When you're inside tmux, open the search UI in a
+When you are inside tmux, open the search UI in a
 [popup](https://github.com/tmux/tmux/wiki/Getting-Started#popups) floating above
 your current pane, instead of drawing over the pane itself. The popup opens in
 your current working directory, and closes when you accept a command or exit.
@@ -907,14 +907,14 @@ width = "80%"
 height = "60%"
 ```
 
-Atuin falls back to its normal rendering, with no error, whenever the popup
-can't be used — outside tmux, on tmux older than 3.2, or in a shell that doesn't
-support it.
+If Atuin cannot use the popup, it uses its normal rendering and shows no error. This
+occurs outside tmux, on tmux older than 3.2, and in a shell that does not support the
+popup.
 
 !!! note "Requirements"
 
     - tmux >= 3.2, which is where `display-popup` gained the behavior Atuin needs
-    - zsh, bash, or fish — nushell, xonsh, and PowerShell don't support the popup yet
+    - zsh, bash, or fish — nushell, xonsh, and PowerShell do not support the popup yet
 
 These settings are read by `atuin init` and passed to the shell plugin through
 environment variables, so **restart your shell after changing them**. To disable
@@ -973,7 +973,7 @@ enabled = true
 Default: `false`
 
 Automatically start and manage the daemon when needed.
-This isn't compatible with `systemd_socket = true`.
+This is not compatible with `systemd_socket = true`.
 If a legacy experimental daemon is already running, restart it manually once before using autostart.
 
 ```toml
@@ -1016,7 +1016,7 @@ Path to the daemon `pidfile` used for process coordination.
 
 Default `false`
 
-Use a socket passed via systemd socket activation protocol instead of the path
+Use a socket passed by the systemd socket activation protocol instead of the path
 
 ```toml
 systemd_socket = false
@@ -1150,8 +1150,9 @@ max_depth = 10
 
 Default: `"default"`
 
-A theme name that must be present as a built-in (unset or `default` for the default,
-else `autumn` or `marine`), or found in the themes directory, with the suffix `.toml`.
+The name of a theme. The theme must be a built-in one, or a `.toml` file in the themes
+directory. The built-in themes are `default` (also used when this key is unset),
+`autumn`, and `marine`.
 By default this is `~/.config/atuin/themes/` but can be overridden with the
 `ATUIN_THEME_DIR` environment variable.
 
@@ -1163,7 +1164,7 @@ name = "my-theme"
 
 Default: `false`
 
-Output information about why a theme won't load. Independent from other log
+Output information about why a theme will not load. Independent from other log
 levels as it can cause data from the theme file to be printed unfiltered to the
 terminal.
 
@@ -1175,7 +1176,7 @@ debug = false
 
 Default: 10
 
-Number of levels of "parenthood" that will be traversed for a theme. This shouldn't
+Number of levels of "parenthood" that will be traversed for a theme. This should not
 need to be added in or changed in normal usage.
 
 ```toml
@@ -1244,16 +1245,17 @@ columns = ["duration", "time", { type = "directory", expand = true }, { type = "
 
 Default: `true`
 
-Syntax highlight commands in the search results, parsed with the grammar for
-the shell that ran them: bash/zsh/sh use the bash grammar, fish uses the fish
-grammar, and shells without a grammar (nu, xonsh, PowerShell) are shown
-unhighlighted. The selected row keeps its usual single highlight color.
+Syntax highlight the commands in the search results. Atuin uses the grammar of
+the shell that ran each command: bash, zsh, and sh use the bash grammar, and
+fish uses the fish grammar. Atuin does not highlight the shells that have no
+grammar (nu, xonsh, and PowerShell). The selected row keeps its usual single
+highlight color.
 
 The default colors are ANSI palette colors, so they automatically match your
-terminal's color scheme. They can also be customized via the `Syntax*` keys in
+terminal's color scheme. You can also customize them with the `Syntax*` keys in
 a [theme](../guide/theming.md).
 
-Not available on platforms where tree-sitter doesn't build (for example, Windows),
+Not available on platforms where tree-sitter does not build (for example, Windows),
 so commands are shown unhighlighted there.
 
 ```toml

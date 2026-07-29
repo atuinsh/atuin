@@ -59,7 +59,7 @@ pub async fn run_grpc_server(
                 }
                 Err(err) => {
                     tracing::warn!(
-                        "could not detect systemd socket path, ensure that it's at the configured path: {socket_path:?}, error: {err:?}"
+                        "could not detect the systemd socket path. Make sure that it is at the configured path: {socket_path:?}, error: {err:?}"
                     );
                 }
             }

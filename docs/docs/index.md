@@ -1,9 +1,14 @@
 # Atuin
 
-Atuin replaces your shell history with a SQLite database, and records extra
-context for every command: the directory it ran in, how long it took, whether it
-succeeded, and which machine and session it came from. That context is what
-makes search actually useful.
+Atuin replaces your shell history with a SQLite database. For every command, it
+also records:
+
+- The directory it ran in
+- How long it took
+- Whether it succeeded
+- Which machine and session it came from
+
+That context is what makes search actually useful.
 
 It can also sync your history across all of your machines, end-to-end encrypted.
 Use our server, [host your own](self-hosting/server-setup.md), or skip sync
@@ -47,5 +52,5 @@ Atuin supports zsh, bash, fish, nushell, xonsh, and PowerShell. See
 
 Open a topic on the [forum](https://forum.atuin.sh), join our
 [Discord](https://discord.gg/Fq8bJSKPHh), or file an
-[issue](https://github.com/atuinsh/atuin/issues). If something isn't working,
-[`atuin doctor`](reference/doctor.md) collects the details we'll ask for.
+[issue](https://github.com/atuinsh/atuin/issues). If something is not working,
+[`atuin doctor`](reference/doctor.md) collects the details we will ask for.

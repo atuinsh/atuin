@@ -30,13 +30,13 @@ The amount of time after the last interaction with Atuin AI that a session is co
 
 Default: `null`
 
-The address of the Atuin AI endpoint. Used for AI features like command generation. Most users won't need this setting because it's only necessary for custom AI endpoints.
+The address of the Atuin AI endpoint. Used for AI features like command generation. Most users will not need this setting because it is only necessary for custom AI endpoints.
 
 ### `api_token`
 
 Default: `null`
 
-The API token for the Atuin AI endpoint. Used for AI features like command generation. Most users won't need this setting because it's only necessary for custom AI endpoints.
+The API token for the Atuin AI endpoint. Used for AI features like command generation. Most users will not need this setting because it is only necessary for custom AI endpoints.
 
 ### `endpoint_protocol`
 
@@ -45,7 +45,7 @@ Default: `"auto"`
 How the client talks to the configured `endpoint`. One of:
 
 - `"auto"` — infer from `endpoint`: official Atuin addresses use the Hub protocol, anything else is treated as an OSS server.
-- `"hub"` — treat the endpoint as an Atuin Hub instance: log in via the browser-based Hub flow and report credit usage. Mostly useful for developing against a local Hub instance.
+- `"hub"` — treat the endpoint as an Atuin Hub instance: log in with the browser-based Hub flow and report credit usage. Mostly useful for developing against a local Hub instance.
 - `"oss"` — treat the endpoint as a standalone AI server, such as [`atuin-ai-server`](https://github.com/atuinsh/atuin-ai-server). No login flow; requests are authenticated with `api_token` if set.
 
 With the default of `"auto"`, pointing `endpoint` at your own server just works: set `api_token` if your server requires one.
@@ -56,7 +56,7 @@ Default: `false`
 
 Enables YOLO mode, which automatically allows all permission checks. **Use this setting with caution.**
 
-This setting _doesn't_ enable any capabilities. Instead, it only bypasses any permission checks.
+This setting _does not_ enable any capabilities. Instead, it only bypasses any permission checks.
 
 ## Capabilities
 
@@ -72,7 +72,9 @@ Whether to include the "history search" capability in the context sent to the LL
 
 Default: `true`
 
-Whether to include the "history output" capability in the context sent to the LLM. The AI can then request to view the output of previous commands. This requires the [pty-proxy](../reference/pty-proxy.md) and [daemon](../reference/daemon.md) to be enabled and running in order for Atuin to capture commands' outputs — see [Reading Command Output](./command-output.md) for setup.
+Whether to include the "history output" capability in the context that Atuin sends to the LLM. The AI can then ask to see the output of previous commands.
+
+To capture the output of commands, Atuin needs the [pty-proxy](../reference/pty-proxy.md) and the [daemon](../reference/daemon.md). See [Reading Command Output](./command-output.md).
 
 ### `enable_file_tools`
 

@@ -1,12 +1,12 @@
 # MCP Server
 
-Atuin ships with a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server, giving external AI tools like Claude Code and Cursor access to your shell history. Your agent can look up commands you've run before, check whether they succeeded, and — with [output capture](./command-output.md) set up — read what they printed.
+Atuin has a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server. The server gives external AI tools such as Claude Code and Cursor access to your shell history. Your agent can find commands that you ran before and check whether they succeeded. With [output capture](./command-output.md) enabled, it can also read what they printed.
 
 The server exposes the same history tools that [Atuin AI](./introduction.md) uses. Both tools are read-only: nothing can modify or delete your history, and all data stays on your machine.
 
 ## Starting the server
 
-The MCP server runs over stdio, so your MCP client starts it for you — there's nothing to keep running in the background. The command is:
+The MCP server runs over stdio, so your MCP client starts it for you — there is nothing to keep running in the background. The command is:
 
 ```shell
 atuin mcp
@@ -33,13 +33,13 @@ Most MCP clients accept a JSON configuration like this:
 }
 ```
 
-If the `atuin` binary isn't on your client's `PATH`, use the full path to the binary instead (for example, `~/.atuin/bin/atuin`).
+If the `atuin` binary is not on your client's `PATH`, use the full path to the binary instead (for example, `~/.atuin/bin/atuin`).
 
 ## Tools
 
 ### `atuin_history`
 
-Searches your shell history, using the same fuzzy matching as the search TUI. Each result includes the command, when and where it ran, its exit code, and its duration, along with a history ID that can be passed to `atuin_output`.
+Searches your shell history with the same fuzzy matching as the search TUI. Each result gives the command, when and where it ran, its exit code, and its duration. Each result also gives a history ID that you can pass to `atuin_output`.
 
 Searches can be narrowed down in a few ways:
 
@@ -51,7 +51,7 @@ History search reads the Atuin database directly, so it works without any extra 
 
 ### `atuin_output`
 
-Fetches the captured terminal output of a previous command, identified by a history ID from `atuin_history` results. The agent can fetch specific line ranges, so it doesn't need to read a huge log to find the error at the end.
+Fetches the captured terminal output of a previous command, identified by a history ID from `atuin_history` results. The agent can fetch specific line ranges, so it does not need to read a huge log to find the error at the end.
 
 Output capture requires the [daemon](../reference/daemon.md) and [pty-proxy](../reference/pty-proxy.md) to be running — see [Reading Command Output](./command-output.md) for setup. Without them, the tool responds with an error explaining that no output is available.
 

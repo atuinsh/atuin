@@ -1,8 +1,7 @@
 # Syncing dotfiles
 
-While Atuin started as a tool for syncing and searching shell history, we're
-building tooling for syncing dotfiles across machines, and making them easier
-to work with.
+Atuin started as a tool to sync and search shell history. We now also build tools to
+sync dotfiles between machines and to make them easier to use.
 
 At the moment, Atuin supports managing and syncing of shell aliases and environment variables - with more
 coming soon.
@@ -10,7 +9,7 @@ coming soon.
 Dotfiles syncing is available on zsh, bash, fish, xonsh, and PowerShell. See
 [Supported platforms](../support.md) for the full support matrix.
 
-Note: Atuin handles your configuration internally, so once it's installed you
+Note: Atuin handles your configuration internally, so once it is installed you
 no longer need to edit your config files manually.
 
 ## Required config

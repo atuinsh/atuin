@@ -1,6 +1,6 @@
 # Server setup
 
-While we offer a public sync server, and can't view your data (as it's encrypted), you may still wish to self host your own Atuin sync server.
+We offer a public sync server, and we cannot read your data because it is encrypted. But you can also host your own Atuin sync server.
 
 The requirements to do so are pretty minimal! You need to be able to run a binary or docker container, and have a PostgreSQL database set up. Atuin requires PostgreSQL 14 or above.
 
@@ -19,7 +19,7 @@ atuin-server start
 ```
 
 !!! note
-    Before v18.12.0, the server was bundled into the main `atuin` binary and started with `atuin server start`. If you're upgrading from an older release, you will need to install the new `atuin-server` binary and update any service files (systemd, docker, k8s) to invoke `atuin-server` instead of `atuin server`. See the [release notes](https://github.com/atuinsh/atuin/releases) for details.
+    Before v18.12.0, the server was part of the main `atuin` binary, and `atuin server start` started it. If you upgrade from an older release, install the new `atuin-server` binary. Then update your service files (systemd, docker, k8s) to call `atuin-server` instead of `atuin server`. For more information, see the [release notes](https://github.com/atuinsh/atuin/releases).
 
 ## Configuration
 
@@ -58,13 +58,13 @@ For SQLite, use the following in your server.toml:
 db_uri="sqlite:///config/atuin.db"
 ```
 
-Alternatively, provide the Database URI via an environment variable
+Alternatively, provide the Database URI in an environment variable
 
 ```sh
 ATUIN_DB_URI="sqlite:///config/atuin.db"
 ```
 
-These will create the database in the `/config` directory. Be sure to map a persistent volume to the `/config` directory that's writable by the Atuin server.
+These will create the database in the `/config` directory. Be sure to map a persistent volume to the `/config` directory that is writable by the Atuin server.
 
 ### TLS
 

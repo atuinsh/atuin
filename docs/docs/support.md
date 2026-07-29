@@ -8,7 +8,7 @@ tiers and records what works where.
 
 - **Tier 1** — Actively supported by the Atuin team.
 - **Tier 2** — Supported by the community. Complex issues under this support
-               level don't block a release; support is best-effort.
+               level do not block a release; support is best-effort.
 
 ## Shells
 
@@ -62,7 +62,7 @@ and how far continuous integration (CI) exercises it.
     <tr>
       <td rowspan="2"><code>macOS</code></td>
       <td><code>arm64</code></td><td class="support-yes">✓</td><td>tested</td>
-      <td rowspan="2">Replaying a result with <kbd>alt</kbd>+<kbd>#</kbd> isn't available.</td>
+      <td rowspan="2">Replaying a result with <kbd>alt</kbd>+<kbd>#</kbd> is not available.</td>
     </tr>
     <tr><td><code>x86_64</code></td><td class="support-yes">✓</td><td>build-only</td></tr>
     <tr>
@@ -101,8 +101,8 @@ _Claude Code_, _Codex_, _Copilot_, _opencode_ and _pi_.
 
 ## Getting help
 
-If something isn't working, [`atuin doctor`](reference/doctor.md) collects the
-details we'll ask for. Then open a topic on the
+If something is not working, [`atuin doctor`](reference/doctor.md) collects the
+details we will ask for. Then open a topic on the
 [forum](https://forum.atuin.sh), join our
 [Discord](https://discord.gg/Fq8bJSKPHh), or file an
 [issue](https://github.com/atuinsh/atuin/issues).

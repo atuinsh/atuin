@@ -219,7 +219,7 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
     }
 
     if status == StatusCode::TOO_MANY_REQUESTS {
-        bail!("Rate limited; please wait before doing that again");
+        bail!("rate limited. Wait, then try again");
     }
 
     if !status.is_success() {

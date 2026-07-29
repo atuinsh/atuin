@@ -11,9 +11,10 @@ steps:
 4. Remove the shell integration:
 
    - On Bash, remove the lines referencing `atuin init` and `~/.atuin/bin/env`
-     from ~/.profile, ~/.bashrc, and ~/.bash\_login. The installer may have
-     installed bash-preexec; if you wish to remove it too, delete
-     ~/.bash-preexec.sh and remove the line referencing it from ~/.bashrc.
+     from `~/.profile`, `~/.bashrc`, and `~/.bash_login`. The installer may
+     have installed bash-preexec. To remove it too, delete
+     `~/.bash-preexec.sh` and remove the line that refers to it from
+     `~/.bashrc`.
 
    - On Zsh, remove the lines referencing `atuin init` and `~/.atuin/bin/env`
      from ~/.zshrc and ~/.zshenv.

@@ -17,11 +17,11 @@ atuin hook install codex
 atuin hook install pi
 ```
 
-That's it. Commands the agent runs will now appear in your Atuin history, tagged with the agent's name.
+That is all the configuration you need. Commands that the agent runs now appear in your Atuin history, tagged with the name of the agent.
 
 ## How It Works
 
-AI coding agents support hook systems that notify external tools when they're about to run a shell command and when the command finishes. Atuin uses these hooks to record each command as a history entry, just like commands you type yourself.
+AI coding agents support hook systems that notify external tools when they are about to run a shell command and when the command finishes. Atuin uses these hooks to record each command as a history entry, just like commands you type yourself.
 
 When `atuin hook install` runs, it writes the agent's config file or extension to register Atuin as a hook handler:
 
@@ -36,21 +36,21 @@ The hook lifecycle:
 1. **PreToolUse** -- the agent is about to run a Bash command. Atuin records the command, working directory, and timestamp (same as `history start`).
 2. **PostToolUse / PostToolUseFailure** -- the command finished. Atuin records the exit code and duration (same as `history end`).
 
-Atuin only captures `Bash` tool invocations. It ignores other tool types (file writes, web fetches, etc.).
+Atuin only captures `Bash` tool invocations. It ignores all other tool types, such as file writes and web fetches.
 
 ## Filtering by Author
 
-By default, Atuin's interactive search shows only your own commands. Agent-run commands are hidden so they don't clutter your history.
+By default, Atuin's interactive search shows only your own commands. Agent-run commands are hidden so they do not clutter your history.
 
-Today this default is built into the search UI rather than configurable via `config.toml`. Interactive search uses the equivalent of:
+Today this default is built into the search UI rather than configurable in `config.toml`. Interactive search uses the equivalent of:
 
-- `$all-user` — any author that's **not** a known AI agent
+- `$all-user` — any author that is **not** a known AI agent
 
 For explicit author filtering, use the CLI `atuin search --author ...` flag. Special values:
 
 | Value | Meaning |
 |-------|---------|
-| `$all-user` | Any author that's **not** a known AI agent |
+| `$all-user` | Any author that is **not** a known AI agent |
 | `$all-agent` | Any known AI agent author |
 
 You can also use literal author names:
@@ -100,7 +100,9 @@ atuin hook install pi
 
 This writes Atuin's extension to `~/.pi/agent/extensions/atuin.ts`.
 
-Then restart pi or run `/reload`. The extension listens to pi's tool events and records every `bash` tool command with author `pi` by calling `atuin history start` before execution and `atuin history end` afterward. Because it observes events rather than registering its own `bash` tool, it works alongside other extensions that replace pi's bash tool (such as sandboxes or RTK implementations).
+Then restart pi or run `/reload`. The extension listens to the tool events of pi. For every `bash` tool command, it calls `atuin history start` before the command and `atuin history end` after it, with author `pi`.
+
+The extension observes events. It does not register its own `bash` tool. Thus it works together with other extensions that replace the bash tool of pi, such as sandboxes or RTK implementations.
 
 ## Verifying Installation
 

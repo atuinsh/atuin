@@ -46,7 +46,7 @@ All frontmatter fields are optional. YAML frontmatter goes between `---` markers
 | -------------------------- | ----------------------- | -------------------------------------------------------------------------------------------- |
 | `name`                     | directory name          | Display name. Lowercase letters, numbers, hyphens.                                           |
 | `description`              | first paragraph of body | What the skill does. Sent to the server so the LLM knows when to load it.                    |
-| `disable-model-invocation` | `false`                 | If `true`, the LLM can't discover or load the skill. Only reachable via `/name` in the TUI.   |
+| `disable-model-invocation` | `false`                 | If `true`, the LLM cannot discover or load the skill. Reachable only with `/name` in the TUI.   |
 
 Multiline descriptions using the YAML `>` (folded) or `|` (literal) syntax are supported.
 
@@ -64,7 +64,7 @@ The LLM will see the skill content with `[Loaded skill: deploy]` and `[Arguments
 
 ### By the LLM
 
-When the LLM determines a skill is relevant to your request, it calls `load_skill` automatically to fetch the full content. Atuin excludes skills with `disable-model-invocation: true` from this — the LLM won't see them.
+When the LLM determines a skill is relevant to your request, it calls `load_skill` automatically to fetch the full content. Atuin excludes skills with `disable-model-invocation: true` from this — the LLM will not see them.
 
 ## Dynamic Content
 
@@ -90,7 +90,7 @@ Deploy $ARGUMENTS to production.
 Current status: !`kubectl get deployment $ARGUMENTS`
 ```
 
-If the body doesn't contain `$ARGUMENTS` and you provided arguments, Atuin appends them as `ARGUMENTS: <value>`.
+If the body does not contain `$ARGUMENTS` and you provided arguments, Atuin appends them as `ARGUMENTS: <value>`.
 
 ## Description Budget
 

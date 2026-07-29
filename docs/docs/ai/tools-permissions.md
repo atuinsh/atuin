@@ -8,7 +8,11 @@ By default, Atuin AI asks your permission before using any client-side tool. You
 
 ### Permission Files
 
-Permission files live at `.atuin/permissions.ai.toml` in any project. When the AI wants to run a tool, Atuin AI will check its working directory for a `.atuin/permissions.ai.toml` file, and will also check every permission file in parent directories, up to the root of the filesystem. Finally, Atuin AI checks for a `permissions.ai.toml` file in the Atuin config directory (`~/.config/atuin/permissions.ai.toml` by default).
+Permission files live at `.atuin/permissions.ai.toml` in any project. When the AI wants to run a tool, Atuin AI looks for permission files in this order:
+
+1. `.atuin/permissions.ai.toml` in the working directory
+2. The same file in each parent directory, up to the root of the filesystem
+3. `permissions.ai.toml` in the Atuin config directory (`~/.config/atuin/permissions.ai.toml` by default)
 
 A permission file is a TOML file with the following format:
 
@@ -28,11 +32,11 @@ ask = [
 ]
 ```
 
-If Atuin AI doesn't find a matching rule, it defaults to asking for permission before running the tool.
+If Atuin AI does not find a matching rule, it defaults to asking for permission before running the tool.
 
-Permission files found deeper in the filesystem take priority over permission files found higher up. For example, if Atuin AI finds a permission file in the current working directory that allows a tool, it will allow that tool, even if a parent directory has a permission file that denies it.
+A permission file deeper in the filesystem has priority over one higher up. For example, a file in the working directory allows a tool. A file in a parent directory denies the same tool. Atuin AI allows the tool.
 
-Within a permissions file, `ask` rules take priority over `deny` rules, which take priority over `allow` rules. For example, if a permission file has a rule that allows a tool, but also has a rule that asks for permission for that tool, Atuin AI will ask for permission before running the tool.
+In one permission file, `ask` rules have priority over `deny` rules, and `deny` rules have priority over `allow` rules. For example, a file allows a tool and also asks for permission for the same tool. Atuin AI asks for permission before it runs the tool.
 
 ### Permission Scopes
 
@@ -40,7 +44,7 @@ Most rules can be scoped to a particular path or other context. For example, you
 
 ### Example Config
 
-Here's an example of a permission file that allows Atuin AI to read and write any markdown files in the current project (because Write implies Read — see below), but denies it access to any `.env` files. Attempts to read or write any _other_ files will result in Atuin AI requesting permission before proceeding.
+This example permission file lets Atuin AI read and write the markdown files in the current project, because Write implies Read (see below). It denies all access to `.env` files. For any _other_ file, Atuin AI asks for permission first.
 
 ```toml
 [permissions]
@@ -58,7 +62,11 @@ deny = [
 
 ### Atuin History
 
-The `AtuinHistory` tool allows Atuin AI to search your Atuin history for relevant commands. This tool is read-only. Atuin AI might ask to use this tool when you ask it to recall a command or information about a command you ran in the past, or when you ask for help with a failing command (for example, "why did my last command fail?").
+The `AtuinHistory` tool lets Atuin AI search your Atuin history for related commands. This tool is read-only. Atuin AI can ask to use it when you:
+
+- Ask it to recall a command that you ran in the past
+- Ask for information about such a command
+- Ask for help with a failing command (for example, "why did my last command fail?")
 
 ![Example of Atuin History tool](images/tool_atuin_history.png)
 
@@ -76,7 +84,9 @@ allow = ["AtuinHistory"]
 
 ### Atuin Output
 
-The `AtuinOutput` tool allows Atuin AI to read the captured output of commands in your Atuin history. This tool is read-only. Atuin AI might ask to use this tool when you ask about the result of a command you ran, or for help with a failing command. Output capture requires the daemon and pty-proxy to be set up — see [Reading Command Output](./command-output.md).
+The `AtuinOutput` tool lets Atuin AI read the captured output of commands in your Atuin history. This tool is read-only. Atuin AI can ask to use it when you ask about the result of a command that you ran. It can also ask when you need help with a failing command.
+
+Output capture needs the daemon and pty-proxy. See [Reading Command Output](./command-output.md).
 
 **Permission rule and scope:** `AtuinOutput`
 
@@ -92,7 +102,11 @@ allow = ["AtuinOutput"]
 
 ### Read
 
-The `Read` tool allows Atuin AI to read files on your system. Atuin AI might ask to use this tool when you ask it to analyze the contents of a file, when you ask for edits to the contents of a file, or when you ask a question that's best answered by consulting the contents of a file.
+The `Read` tool lets Atuin AI read files on your system. Atuin AI can ask to use it when you:
+
+- Ask it to analyze the contents of a file
+- Ask for edits to the contents of a file
+- Ask a question that the contents of a file can answer
 
 ![Example of Atuin FS Tools](images/tool_fs.png)
 
@@ -110,7 +124,7 @@ deny = ["Read(.secret/**)"]
 
 !!! warning "Write Implies Read"
 
-    To prevent accidental data loss, Atuin AI is required to read the contents of a file before writing to it. This means that any permission rule that allows the `Write` tool for a particular file or set of files will also automatically allow the `Read` tool for those same files. For example, if you have a rule that allows `Write(**/*.md)`, Atuin AI will also be able to read any markdown files in the current directory and subdirectories, even if you don't have an explicit rule allowing `Read(**/*.md)`.
+    To prevent accidental data loss, Atuin AI is required to read the contents of a file before writing to it. This means that any permission rule that allows the `Write` tool for a particular file or set of files will also automatically allow the `Read` tool for those same files. For example, if you have a rule that allows `Write(**/*.md)`, Atuin AI will also be able to read any markdown files in the current directory and subdirectories, even if you do not have an explicit rule that allows `Read(**/*.md)`.
 
 ### Write
 
@@ -132,11 +146,15 @@ deny = ["Write(.secret/**)"]
 
 !!! note "File Backups"
 
-    The first time Atuin AI writes to a file in a session, it creates a backup of the original file and stores it in Atuin's data directory, under `ai/sessions/<session_id>`. A manifest file in that directory maps the original file paths to the backup file paths. In the future, we'll be providing easier ways to recover from accidental data loss.
+    The first time Atuin AI writes to a file in a session, it creates a backup of the original file and stores it in Atuin's data directory, under `ai/sessions/<session_id>`. A manifest file in that directory maps the original file paths to the backup file paths. In the future, we will provide easier ways to recover from accidental data loss.
 
 ### Shell Command Execution
 
-The `Shell` tool allows Atuin AI to execute shell commands on your system. Atuin AI might ask to use this tool when you ask it to perform an action that's best accomplished by running a shell command itself, or when you ask for help debugging a failing command, or during a multi-step workflow.
+The `Shell` tool lets Atuin AI run shell commands on your system. Atuin AI can ask to use it when you:
+
+- Ask for an action that a shell command does best
+- Ask for help to debug a failing command
+- Run a workflow that has more than one step
 
 ![Example of Atuin Shell Tool](images/tool_shell.png)
 
@@ -158,7 +176,7 @@ allow = [
 
     The command pattern in a `Shell` permission rule is matched against the words in the command. The `*` wildcard has different behavior depending on where it appears:
 
-    | Pattern | Matches | Doesn't Match |
+    | Pattern | Matches | Does not match |
     |---------|---------|----------------|
     | `*` | Any command | — |
     | `git commit *` | `git commit`, `git commit -m "msg"` | `git`, `git push` |
@@ -174,4 +192,4 @@ allow = [
 
 !!! warning "Compound Commands"
 
-    When the AI runs a compound command (for example, `git add . && npm test`), Atuin parses it into individual subcommands. For a command to be automatically allowed, all subcommands must be allowed. This means that `git add . && npm test` must be enabled by both `Shell(git add *)` and `Shell(npm test)` for it to be allowed, else it would fall through and ask for permission. However, our parsing isn't perfect, and there may be edge cases where it fails to correctly identify the subcommands, and some shells where command parsing is sub-par. For this reason, we recommend being cautious when allowing compound commands with broad patterns.
+    When the AI runs a compound command (for example, `git add . && npm test`), Atuin parses it into individual subcommands. For a command to be automatically allowed, all subcommands must be allowed. This means that `git add . && npm test` must be enabled by both `Shell(git add *)` and `Shell(npm test)` for it to be allowed, else it would fall through and ask for permission. But our parsing is not perfect. In some cases it does not identify the subcommands correctly, and in some shells the command parsing is worse. For this reason, we recommend being cautious when allowing compound commands with broad patterns.

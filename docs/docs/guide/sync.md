@@ -1,11 +1,11 @@
 # Setting up Sync
 
 At this point, you have Atuin storing and searching your shell history! But it
-isn't syncing it just yet. To do so, you'll need to register with the sync
+is not syncing it just yet. To do so, you will need to register with the sync
 server. All of your history is fully end-to-end encrypted, so there are no
 risks of the server snooping on you.
 
-If you don't have an account, please [register](#register). If you have already registered,
+If you do not have an account, please [register](#register). If you have already registered,
 proceed to [login](#login).
 
 **Note:** You first have to set up your `sync_address` if you want to use a [self hosted server](../self-hosting/server-setup.md).
@@ -40,7 +40,7 @@ atuin sync
 ```
 
 Atuin tries to be smart with a sync, and not waste data transfer. However, if
-you're seeing some missing data, please try running
+you are seeing some missing data, please try running
 
 ```shell
 atuin sync -f
@@ -54,7 +54,7 @@ When only signed in on one machine, Atuin sync operates as a backup. This is
 pretty useful by itself, but syncing multiple machines is where the magic
 happens.
 
-First, make sure you're [registered with the sync server](#register) and make a
+First, make sure you are [registered with the sync server](#register) and make a
 note of your key. You can see this with `atuin key`.
 
 Then, install Atuin on a new machine. Once installed, login with

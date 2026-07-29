@@ -2,9 +2,9 @@
 
 ## `atuin init <shell>`
 
-Prints the shell plugin for the given shell. Evaluating its output is what
-installs Atuin's hooks and key bindings into your session, so this command
-belongs in your shell's startup file rather than being run by hand.
+Prints the shell plugin for the given shell. The output installs the Atuin hooks and key bindings in your session when your shell
+evaluates it. Thus this command belongs in the startup file of your shell, not in a
+manual command.
 
 ```shell
 atuin init zsh
@@ -29,9 +29,9 @@ Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See
 
 | Flag | Description |
 |------|-------------|
-| `--disable-up-arrow` | Don't bind the ++up++ arrow key |
-| `--disable-ctrl-r` | Don't bind ++ctrl+r++ |
-| `--disable-ai` | Don't bind ++question++ to [Atuin AI](../ai/introduction.md) |
+| `--disable-up-arrow` | Do not bind the ++up++ arrow key |
+| `--disable-ctrl-r` | Do not bind ++ctrl+r++ |
+| `--disable-ai` | Do not bind ++question++ to [Atuin AI](../ai/introduction.md) |
 
 For example, to keep ++ctrl+r++ but leave the up arrow alone:
 
