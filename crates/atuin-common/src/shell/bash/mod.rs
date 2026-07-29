@@ -13,7 +13,7 @@ use futures::{
 use tracing::instrument;
 
 use super::{
-    AliasesError, AliasValue, IsShell, RunError,
+    AliasValue, AliasesError, IsShell, RunError,
     posix::{self, Aliases},
 };
 

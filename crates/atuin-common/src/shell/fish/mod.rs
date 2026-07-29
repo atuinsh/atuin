@@ -5,27 +5,35 @@ use std::{
     sync::Arc,
 };
 
-use bstr::BString;
 use futures::{
     FutureExt,
     future::{BoxFuture, Shared},
 };
 use tracing::instrument;
 
-use super::{
-    AliasesError, AliasValue, IsShell, RunError,
-    posix::{self, Aliases},
-};
+use bstr::BString;
+
+use super::{AliasValue, AliasesError, IsShell, RunError};
+
+mod alias;
+
+pub(super) type Aliases = HashMap<BString, AliasValue>;
 
 type Probe<T, E> = Shared<BoxFuture<'static, Result<T, E>>>;
 
-/// The `sh` executable itself, and the ability to invoke it.
+/// The `fish` executable itself, and the ability to invoke it.
 #[derive(Debug)]
-struct ShExe {
+struct FishExe {
     path: PathBuf,
 }
 
-impl ShExe {
+impl FishExe {
+    /// `fish -i` sources the user's config files before running our command, and anything they
+    /// print lands on the same stdout. Bracket the real output with these NUL-delimited markers so
+    /// it can be sliced back out; NUL cannot occur in a command's arguments or output.
+    const OUTPUT_BEGIN: &[u8] = b"\0atuin\0";
+    const OUTPUT_END: &[u8] = b"\0nituA\0";
+
     fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
@@ -34,10 +42,19 @@ impl ShExe {
         &self.path
     }
 
+    /// Wrap `command` so its output is delimited by [`Self::OUTPUT_BEGIN`] and
+    /// [`Self::OUTPUT_END`]. `$status` is captured and re-raised so that framing does not mask the
+    /// command's own exit status.
+    fn frame(command: &str) -> String {
+        format!(
+            r"printf '\000atuin\000'; {command}; set __atuin_status $status; printf '\000nituA\000'; exit $__atuin_status"
+        )
+    }
+
     #[instrument(skip(command))]
     async fn run(&self, command: &str) -> Result<process::Output, RunError> {
         let mut output = tokio::process::Command::new(&self.path)
-            .args(["-ic", &posix::frame(command)])
+            .args(["-ic", &Self::frame(command)])
             .output()
             .await
             .map_err(|error| RunError::Io {
@@ -45,7 +62,22 @@ impl ShExe {
                 error: Arc::new(error),
             })?;
 
-        posix::unframe(&mut output, command)?;
+        let delimiter = || RunError::Delimiter {
+            command: command.to_owned(),
+        };
+        let start = output
+            .stdout
+            .windows(Self::OUTPUT_BEGIN.len())
+            .position(|window| window == Self::OUTPUT_BEGIN)
+            .map(|at| at + Self::OUTPUT_BEGIN.len())
+            .ok_or_else(delimiter)?;
+        let end = output.stdout[start..]
+            .windows(Self::OUTPUT_END.len())
+            .position(|window| window == Self::OUTPUT_END)
+            .map(|at| at + start)
+            .ok_or_else(delimiter)?;
+
+        output.stdout = output.stdout[start..end].to_vec();
 
         if output.status.success() {
             Ok(output)
@@ -67,31 +99,28 @@ struct Inner {
 }
 
 #[derive(Debug, Clone, derive_more::Display)]
-#[display("sh")]
-pub struct Sh {
-    exe: Arc<ShExe>,
+#[display("fish")]
+pub struct Fish {
+    exe: Arc<FishExe>,
     inner: Arc<Inner>,
 }
 
-impl Sh {
-    /// Create a new Sh shell object.
+impl Fish {
+    /// Create a new Fish shell object.
     ///
     /// This will kick off background tokio tasks to eagerly probe information. Resolving the
     /// asynchronous methods will block on said probe tasks.
-    ///
-    /// `/bin/sh` is bash on macOS, dash on Debian and busybox ash elsewhere; their alias listings
-    /// differ, so the shared POSIX parser is deliberately lenient about which dialect it is given.
     pub fn new(path: &Path) -> Self {
         let config_path = directories::BaseDirs::new()
-            .map(|dirs| dirs.home_dir().join(".profile"))
-            .unwrap_or_else(|| PathBuf::from(".profile"));
+            .map(|dirs| dirs.home_dir().join(".config/fish/config.fish"))
+            .unwrap_or_else(|| PathBuf::from(".config/fish/config.fish"));
 
-        let exe = Arc::new(ShExe::new(path));
+        let exe = Arc::new(FishExe::new(path));
 
         let probe_exe = exe.clone();
         let probe = tokio::spawn(async move {
             let output = probe_exe.run("alias").await?;
-            posix::parse_aliases(&output.stdout)
+            alias::parse_aliases(&output.stdout)
         });
 
         let aliases = async move { probe.await.unwrap_or(Err(AliasesError::Probe)) }
@@ -109,13 +138,13 @@ impl Sh {
 }
 
 #[async_trait::async_trait]
-impl IsShell for Sh {
+impl IsShell for Fish {
     fn canonical_name(&self) -> &'static str {
-        "sh"
+        "fish"
     }
 
     fn is_posix(&self) -> bool {
-        true
+        false
     }
 
     #[instrument]
