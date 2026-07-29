@@ -5,10 +5,7 @@ use atuin_client::{
     settings::Settings,
 };
 use atuin_daemon::client::{DaemonClientErrorKind, SearchClient, SearchParams, classify_error};
-use atuin_nucleo_matcher::{
-    Config, Matcher, Utf32Str,
-    pattern::{CaseMatching, Normalization, Pattern},
-};
+use atuin_daemon::search::{normalize_diacritics, truncate_query};
 use eyre::Result;
 use tracing::{Level, debug, instrument, span};
 use uuid::Uuid;
@@ -230,16 +227,62 @@ impl SearchEngine for Search {
             return super::db::get_highlight_indices_fulltext(command, search_input);
         }
 
-        let mut matcher = Matcher::new(Config::DEFAULT);
-        let pattern = Pattern::parse(search_input, CaseMatching::Smart, Normalization::Smart);
+        // Mirror the daemon's query handling: truncate before frizbee sees
+        // the query (a long enough atom panics Matcher::from_query) and
+        // normalize diacritics so highlighting agrees with matching
+        let search_input = normalize_diacritics(truncate_query(search_input));
+        let matchable = normalize_diacritics(command);
 
-        let mut indices: Vec<u32> = Vec::new();
-        let mut haystack_buf = Vec::new();
+        let config = frizbee::Config::default().casing(frizbee::CaseMatching::Smart);
+        let mut matcher = frizbee::Matcher::from_query(&search_input, &config);
+        let Some(result) = matcher.match_one_indices(&matchable, 0) else {
+            return Vec::new();
+        };
 
-        let haystack = Utf32Str::new(command, &mut haystack_buf);
-        pattern.indices(haystack, &mut matcher, &mut indices);
+        // frizbee returns indices in reverse order, as byte offsets into the
+        // haystack; the UI highlights by char position. Normalization maps
+        // char to char, so char positions in `matchable` are valid for
+        // `command` too
+        let mut indices = result.indices;
+        indices.sort_unstable();
+        indices.dedup();
+        if matchable.is_ascii() {
+            indices.into_iter().map(|i| i as usize).collect()
+        } else {
+            let byte_to_char: std::collections::HashMap<usize, usize> = matchable
+                .char_indices()
+                .enumerate()
+                .map(|(char_idx, (byte_idx, _))| (byte_idx, char_idx))
+                .collect();
+            indices
+                .into_iter()
+                .filter_map(|i| byte_to_char.get(&(i as usize)).copied())
+                .collect()
+        }
+    }
+}
 
-        // Convert u32 indices to usize
-        indices.into_iter().map(|i| i as usize).collect()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test: the daemon truncates queries before frizbee sees
+    /// them, but highlighting used the raw input — a pasted query with an
+    /// atom past frizbee's needle limit panicked in `Matcher::from_query`.
+    #[test]
+    fn long_query_does_not_panic_highlighting() {
+        let engine = Search::new(&Settings::default());
+        let long_query = "a".repeat(5000);
+        let indices = engine.get_highlight_indices("echo hello", &long_query);
+        assert!(indices.is_empty());
+    }
+
+    /// Highlighting matches accent-insensitively, like the daemon's index,
+    /// and returns char positions valid for the original command.
+    #[test]
+    fn accented_command_highlights_unaccented_query() {
+        let engine = Search::new(&Settings::default());
+        let indices = engine.get_highlight_indices("echo déjà", "deja");
+        assert_eq!(indices, vec![5, 6, 7, 8]);
     }
 }

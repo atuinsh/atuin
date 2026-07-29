@@ -1,6 +1,6 @@
 //! Search module for the daemon gRPC search service.
 //!
-//! This module provides fuzzy search over command history using Nucleo.
+//! This module provides fuzzy search over command history using frizbee.
 
 mod index;
 
@@ -8,4 +8,4 @@ mod index;
 tonic::include_proto!("search");
 
 // Re-export the index and related types
-pub use index::{IndexFilterMode, SearchIndex};
+pub use index::{IndexFilterMode, SearchIndex, normalize_diacritics, truncate_query};

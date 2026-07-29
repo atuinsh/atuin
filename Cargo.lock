@@ -226,7 +226,6 @@ dependencies = [
  "atuin-dotfiles",
  "atuin-history",
  "atuin-kv",
- "atuin-nucleo-matcher",
  "atuin-pty-proxy",
  "atuin-scripts",
  "atuin-server",
@@ -240,6 +239,7 @@ dependencies = [
  "daemonize",
  "derive_more",
  "eyre",
+ "frizbee",
  "fs-err",
  "futures-util",
  "fuzzy-matcher",
@@ -430,10 +430,11 @@ dependencies = [
  "atuin-common",
  "atuin-dotfiles",
  "atuin-history",
- "atuin-nucleo",
+ "atuin-nucleo-matcher",
  "dashmap",
  "derive_more",
  "eyre",
+ "frizbee",
  "futures",
  "hyper-util",
  "lasso",
@@ -1883,6 +1884,12 @@ checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
 ]
+
+[[package]]
+name = "frizbee"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a151c9ed9ab8cefc76a76b7a15292fc83575f70cf2076d238e0a3251f69738ba"
 
 [[package]]
 name = "fs-err"
