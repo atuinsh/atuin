@@ -49,6 +49,13 @@ self-atuin-ai-question-mark() {
     # If buffer is empty or just contains '?', trigger natural language mode
     if [[ -z "$BUFFER" || "$BUFFER" == "?" ]]; then
         BUFFER=""
+        # Close the semantic prompt zone (OSC 133 C, "command output
+        # starts") before handing the terminal to the TUI. Without it,
+        # terminals with shell integration (Ghostty) believe we are
+        # still at the prompt, and their resize-time prompt reflow
+        # erases everything below the prompt mark — including the
+        # conversation the TUI printed.
+        printf '\033]133;C\007' > /dev/tty
         local output
         output=$(atuin ai inline --hook 3>&1 1>&2 2>&3)
 
@@ -98,6 +105,10 @@ _atuin_ai_question_mark() {
         READLINE_LINE=""
         READLINE_POINT=0
 
+        # Close the semantic prompt zone (OSC 133 C) so terminals with
+        # shell integration don't erase the TUI's output during their
+        # resize-time prompt reflow.
+        printf '\033]133;C\007' > /dev/tty
         local output
         output=$(atuin ai inline --hook 3>&1 1>&2 2>&3)
 
@@ -159,6 +170,11 @@ function _atuin_ai_question_mark
     # If buffer is empty or just contains '?', trigger natural language mode
     if test -z "$buf" -o "$buf" = "?"
         commandline -r ""
+
+        # Close the semantic prompt zone (OSC 133 C) so terminals with
+        # shell integration don't erase the TUI's output during their
+        # resize-time prompt reflow.
+        printf '\033]133;C\007' > /dev/tty
 
         # Run atuin ai inline, swapping stdout and stderr
         set -l output (atuin ai inline --hook 3>&1 1>&2 2>&3 | string collect)
