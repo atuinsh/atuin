@@ -1,11 +1,20 @@
+use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
+#[cfg(feature = "sync")]
+use atuin_client::settings::SyncAuth;
 
 use colored::Colorize;
 use eyre::Result;
 use std::io::{self, Write};
 use toml_edit::{DocumentMut, value};
 
-pub async fn run(_settings: &Settings) -> Result<()> {
+pub async fn run(settings: &Settings, store: &SqliteStore) -> Result<()> {
+    #[cfg(feature = "sync")]
+    setup_sync(settings, store).await?;
+
+    #[cfg(not(feature = "sync"))]
+    let _ = (settings, store);
+
     let enable_ai = prompt(
         "Atuin AI",
         "This will enable command generation and other AI features via the question mark key",
@@ -57,6 +66,87 @@ pub async fn run(_settings: &Settings) -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+#[cfg(feature = "sync")]
+async fn setup_sync(settings: &Settings, store: &SqliteStore) -> Result<()> {
+    if !matches!(
+        settings.resolve_sync_auth().await,
+        SyncAuth::NotLoggedIn { .. }
+    ) {
+        println!(
+            "{check} Sync is already set up on this machine",
+            check = "✓".bold().bright_green()
+        );
+        return Ok(());
+    }
+
+    println!("> Set up {sync}?", sync = "Sync".bold().bright_blue());
+    println!("  Back up your shell history and sync it across all of your machines.");
+    println!("  Everything is end-to-end encrypted - only you can read your history.");
+    println!();
+    println!("  Do you already have an Atuin account?");
+    println!();
+    println!("  {n}) No - create a new account", n = "1".bold());
+    println!("  {n}) Yes - log in", n = "2".bold());
+    println!("  {n}) Skip sync for now", n = "3".bold());
+    println!();
+
+    let choice = loop {
+        print!("  Enter a number {q} ", q = "[1/2/3]".bold());
+        io::stdout().flush().ok();
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+
+        match input.trim() {
+            "1" => break 1,
+            "2" => break 2,
+            "3" | "" => break 3,
+            _ => println!("  Please enter 1, 2, or 3"),
+        }
+    };
+
+    println!();
+
+    match choice {
+        1 => {
+            super::account::register::Cmd {
+                username: None,
+                password: None,
+                email: None,
+            }
+            .run(settings, store)
+            .await?;
+
+            println!(
+                "\nRun {key} to see your encryption key - store it somewhere safe.",
+                key = "'atuin key'".bold()
+            );
+            println!("You will need it to log in on other machines, and it cannot be recovered.");
+        }
+        2 => {
+            super::account::login::Cmd {
+                username: None,
+                password: None,
+                key: None,
+                totp_code: None,
+                from_registration: false,
+            }
+            .run(settings, store)
+            .await?;
+        }
+        _ => {
+            println!(
+                "  Skipping sync - you can run {register} or {login} at any time",
+                register = "'atuin register'".bold(),
+                login = "'atuin login'".bold()
+            );
+        }
+    }
+
+    println!();
     Ok(())
 }
 
