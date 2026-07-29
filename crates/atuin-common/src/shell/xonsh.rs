@@ -12,9 +12,11 @@ use futures::{
 use serde::Deserialize;
 use tracing::instrument;
 
-use super::{AliasesError, ExecveAliasValue, IsShell, RunError};
+use bstr::BString;
 
-type Aliases = HashMap<Vec<u8>, ExecveAliasValue>;
+use super::{AliasValue, AliasesError, IsShell, RunError};
+
+type Aliases = HashMap<BString, AliasValue>;
 
 type Probe<T, E> = Shared<BoxFuture<'static, Result<T, E>>>;
 
@@ -22,7 +24,7 @@ const ALIAS_PROBE: &str = "import json; print(json.dumps({k: v for k, v in alias
 
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum AliasValue {
+enum RawAlias {
     Command(String),
     Argv(Vec<String>),
 }
@@ -163,7 +165,7 @@ impl Xonsh {
     /// They are joined back into a single command string with spaces, which is lossy for arguments
     /// that themselves contain whitespace.
     fn parse_aliases(input: &[u8]) -> Result<Aliases, AliasesError> {
-        let records: HashMap<String, AliasValue> =
+        let records: HashMap<String, RawAlias> =
             serde_json::from_slice(input).map_err(|error| {
                 let near = String::from_utf8_lossy(input).chars().take(48).collect();
 
@@ -176,20 +178,19 @@ impl Xonsh {
         Ok(records
             .into_iter()
             .map(|(name, value)| {
-                let argv = match value {
-                    AliasValue::Command(command) => vec![command.into_bytes()],
-                    AliasValue::Argv(argv) => argv.into_iter().map(String::into_bytes).collect(),
+                let argv: Vec<BString> = match value {
+                    RawAlias::Command(command) => vec![BString::from(command)],
+                    RawAlias::Argv(argv) => argv.into_iter().map(BString::from).collect(),
                 };
-
-                (name.into_bytes(), ExecveAliasValue(argv))
+                (BString::from(name), AliasValue::Argv(argv))
             })
             .collect())
     }
 }
 
 impl IsShell for Xonsh {
-    type AliasKey = Vec<u8>;
-    type AliasValue = ExecveAliasValue;
+    type AliasKey = BString;
+    type AliasValue = AliasValue;
 
     fn canonical_name(&self) -> &'static str {
         "xonsh"
@@ -230,38 +231,44 @@ mod tests {
     #[test]
     fn parses_string_and_list_values() {
         let m = parse(br#"{"a": "ls -l", "b": ["git", "status"]}"#);
-        assert_eq!(m[b"a".as_slice()], ExecveAliasValue(vec![b"ls -l".to_vec()]));
         assert_eq!(
-            m[b"b".as_slice()],
-            ExecveAliasValue(vec![b"git".to_vec(), b"status".to_vec()])
+            m[&BString::from(&b"a"[..])],
+            AliasValue::Argv(vec![BString::from(&b"ls -l"[..])])
+        );
+        assert_eq!(
+            m[&BString::from(&b"b"[..])],
+            AliasValue::Argv(vec![
+                BString::from(&b"git"[..]),
+                BString::from(&b"status"[..])
+            ])
         );
     }
 
     #[test]
     fn shcmd_quotes_each_argument() {
-        use crate::shell::IsAliasValue;
-
         let m = parse(br#"{"commit": ["git", "commit", "-m", "hello world"]}"#);
         assert_eq!(
-            m[b"commit".as_slice()].shcmd(),
-            br"'git' 'commit' '-m' 'hello world'".to_vec()
+            m[&BString::from(&b"commit"[..])].shcmd(),
+            BString::from(&br"'git' 'commit' '-m' 'hello world'"[..])
         );
     }
 
     #[test]
     fn shcmd_preserves_empty_arguments() {
-        use crate::shell::IsAliasValue;
-
         let m = parse(br#"{"e": ["echo", "", "x"]}"#);
-        assert_eq!(m[b"e".as_slice()].shcmd(), br"'echo' '' 'x'".to_vec());
+        assert_eq!(
+            m[&BString::from(&b"e"[..])].shcmd(),
+            BString::from(&br"'echo' '' 'x'"[..])
+        );
     }
 
     #[test]
     fn shcmd_escapes_embedded_quote() {
-        use crate::shell::IsAliasValue;
-
         let m = parse(br#"{"q": ["echo", "it's"]}"#);
-        assert_eq!(m[b"q".as_slice()].shcmd(), br"'echo' 'it'\''s'".to_vec());
+        assert_eq!(
+            m[&BString::from(&b"q"[..])].shcmd(),
+            BString::from(&br"'echo' 'it'\''s'"[..])
+        );
     }
 
     #[test]

@@ -6,9 +6,11 @@ use winnow::{
     token::{literal, take_while},
 };
 
-use super::{AliasesError, CmdAliasValue, RunError};
+use bstr::BString;
 
-pub(super) type Aliases = HashMap<Vec<u8>, CmdAliasValue>;
+use super::{AliasValue, AliasesError, RunError};
+
+pub(super) type Aliases = HashMap<BString, AliasValue>;
 
 /// A POSIX-ish shell sources the user's rc files before running our command, and anything they
 /// print lands on the same stdout. Bracket the real output with these NUL-delimited markers so it
@@ -97,7 +99,10 @@ pub(super) fn parse_aliases(input: &[u8]) -> Result<Aliases, AliasesError> {
     let mut records = repeat(0.., terminated(alias_line, opt(literal(b"\n".as_slice())))).fold(
         HashMap::new,
         |mut acc: Aliases, (name, value)| {
-            acc.insert(name, CmdAliasValue(value));
+            acc.insert(
+                BString::from(name),
+                AliasValue::Command(BString::from(value)),
+            );
             acc
         },
     );
@@ -115,7 +120,7 @@ mod tests {
     fn map(pairs: &[(&[u8], &[u8])]) -> Aliases {
         pairs
             .iter()
-            .map(|(k, v)| (k.to_vec(), CmdAliasValue(v.to_vec())))
+            .map(|(k, v)| (BString::from(*k), AliasValue::Command(BString::from(*v))))
             .collect()
     }
 

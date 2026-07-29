@@ -49,6 +49,7 @@ itertools = { workspace = true }
 tokio.workspace = true
 futures = "0.3"
 winnow = "1.0.4"
+bstr = "1"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

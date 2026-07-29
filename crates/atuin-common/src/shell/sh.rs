@@ -11,7 +11,7 @@ use futures::{
 use tracing::instrument;
 
 use super::{
-    AliasesError, CmdAliasValue, IsShell, RunError,
+    AliasesError, IsShell, RunError,
     posix::{self, Aliases},
 };
 
@@ -107,8 +107,8 @@ impl Sh {
 }
 
 impl IsShell for Sh {
-    type AliasKey = Vec<u8>;
-    type AliasValue = CmdAliasValue;
+    type AliasKey = bstr::BString;
+    type AliasValue = super::AliasValue;
 
     fn canonical_name(&self) -> &'static str {
         "sh"

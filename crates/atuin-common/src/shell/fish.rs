@@ -16,9 +16,11 @@ use winnow::{
     token::{literal, take_while},
 };
 
-use super::{AliasesError, CmdAliasValue, IsShell, RunError};
+use bstr::BString;
 
-type Aliases = HashMap<Vec<u8>, CmdAliasValue>;
+use super::{AliasValue, AliasesError, IsShell, RunError};
+
+type Aliases = HashMap<BString, AliasValue>;
 
 type Probe<T, E> = Shared<BoxFuture<'static, Result<T, E>>>;
 
@@ -183,7 +185,10 @@ impl Fish {
         let mut records = repeat(0.., terminated(alias_line, opt(literal(b"\n".as_slice())))).fold(
             HashMap::new,
             |mut acc: Aliases, (name, value)| {
-                acc.insert(name, CmdAliasValue(value));
+                acc.insert(
+                    BString::from(name),
+                    AliasValue::Command(BString::from(value)),
+                );
                 acc
             },
         );
@@ -201,8 +206,8 @@ impl Fish {
 }
 
 impl IsShell for Fish {
-    type AliasKey = Vec<u8>;
-    type AliasValue = CmdAliasValue;
+    type AliasKey = BString;
+    type AliasValue = AliasValue;
 
     fn canonical_name(&self) -> &'static str {
         "fish"
@@ -236,39 +241,48 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    fn parse(input: &[u8]) -> HashMap<Vec<u8>, Vec<u8>> {
+    fn parse(input: &[u8]) -> HashMap<BString, BString> {
         Fish::parse_aliases(input)
             .unwrap()
             .into_iter()
-            .map(|(k, v)| (k, v.0))
+            .map(|(k, v)| match v {
+                AliasValue::Command(cmd) => (k, cmd),
+                AliasValue::Argv(_) => unreachable!("fish yields command strings"),
+            })
             .collect()
     }
 
     #[test]
     fn parses_bare_and_quoted() {
         assert_eq!(
-            parse(b"alias plain man\n")[b"plain".as_slice()],
-            b"man".to_vec()
+            parse(b"alias plain man\n")[&BString::from(&b"plain"[..])],
+            BString::from(&b"man"[..])
         );
         assert_eq!(
-            parse(b"alias ll 'ls -l'\n")[b"ll".as_slice()],
-            b"ls -l".to_vec()
+            parse(b"alias ll 'ls -l'\n")[&BString::from(&b"ll"[..])],
+            BString::from(&b"ls -l"[..])
         );
     }
 
     #[test]
     fn decodes_backslash_escapes() {
         assert_eq!(
-            parse(br"alias q 'it\'s'")[b"q".as_slice()],
-            b"it's".to_vec()
+            parse(br"alias q 'it\'s'")[&BString::from(&b"q"[..])],
+            BString::from(&b"it's"[..])
         );
-        assert_eq!(parse(br"alias b 'a\\b'")[b"b".as_slice()], br"a\b".to_vec());
+        assert_eq!(
+            parse(br"alias b 'a\\b'")[&BString::from(&b"b"[..])],
+            BString::from(&br"a\b"[..])
+        );
     }
 
     #[test]
     fn does_not_use_equals_as_separator() {
         // fish records are `alias NAME VALUE`; an `=` is just an ordinary byte.
-        assert_eq!(parse(b"alias k 'a=b'\n")[b"k".as_slice()], b"a=b".to_vec());
+        assert_eq!(
+            parse(b"alias k 'a=b'\n")[&BString::from(&b"k"[..])],
+            BString::from(&b"a=b"[..])
+        );
     }
 
     #[test]

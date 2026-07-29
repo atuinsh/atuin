@@ -50,52 +50,49 @@ pub enum AliasesError {
     Probe,
 }
 
-/// How a shell's alias body can be rendered as a command for a POSIX shell.
+use bstr::BString;
+
+/// The body an alias expands to.
 ///
-/// Shells disagree about what an alias body *is*. Most store a command string that the shell
-/// re-parses on use; xonsh stores an argv vector that it execs directly. Rendering the latter as
-/// a string requires quoting, so the conversion cannot be a plain `Vec<u8>`.
-pub trait IsAliasValue {
-    fn shcmd(&self) -> Vec<u8>;
+/// Shells disagree about what an alias body *is*. Most store a command string
+/// the shell re-parses on use; xonsh stores an argv vector it execs directly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AliasValue {
+    /// A command string, re-parsed by the shell: bash, zsh, sh, fish.
+    Command(BString),
+    /// An argv vector, exec'd without a shell parsing pass: xonsh.
+    Argv(Vec<BString>),
 }
 
-/// An alias body that is already a shell command string: bash, zsh, sh, fish.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CmdAliasValue(pub Vec<u8>);
-
-impl IsAliasValue for CmdAliasValue {
-    fn shcmd(&self) -> Vec<u8> {
-        self.0.clone()
-    }
-}
-
-/// An alias body that is an argv vector, exec'd without a shell parsing pass: xonsh.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExecveAliasValue(pub Vec<Vec<u8>>);
-
-impl IsAliasValue for ExecveAliasValue {
-    /// Single-quote each argument so that re-parsing the result by a POSIX shell reproduces the
-    /// original argv. A plain space-join would lose the boundaries of any argument containing a
-    /// space, and drop empty arguments entirely.
-    fn shcmd(&self) -> Vec<u8> {
-        let mut out = Vec::new();
-
-        for (index, arg) in self.0.iter().enumerate() {
-            if index > 0 {
-                out.push(b' ');
-            }
-            out.push(b'\'');
-            for &byte in arg {
-                if byte == b'\'' {
-                    out.extend_from_slice(br"'\''");
-                } else {
-                    out.push(byte);
+impl AliasValue {
+    /// Render the alias body as a command string for a POSIX shell.
+    ///
+    /// `Command` already is one. `Argv` is single-quoted argument by argument so
+    /// a POSIX re-parse reproduces the original argv: a plain space join would
+    /// lose the boundaries of any argument containing a space and drop empty
+    /// arguments entirely.
+    pub fn shcmd(&self) -> BString {
+        match self {
+            AliasValue::Command(cmd) => cmd.clone(),
+            AliasValue::Argv(argv) => {
+                let mut out: Vec<u8> = Vec::new();
+                for (index, arg) in argv.iter().enumerate() {
+                    if index > 0 {
+                        out.push(b' ');
+                    }
+                    out.push(b'\'');
+                    for &byte in arg.iter() {
+                        if byte == b'\'' {
+                            out.extend_from_slice(br"'\''");
+                        } else {
+                            out.push(byte);
+                        }
+                    }
+                    out.push(b'\'');
                 }
+                BString::from(out)
             }
-            out.push(b'\'');
         }
-
-        out
     }
 }
 
@@ -104,7 +101,7 @@ pub trait IsShell {
     type AliasKey: Eq + std::hash::Hash;
 
     /// The body an alias expands to.
-    type AliasValue: IsAliasValue;
+    type AliasValue;
 
     /// Get the name of this shell that we use internal to atuin.
     fn canonical_name(&self) -> &'static str;
@@ -267,6 +264,49 @@ impl Shell {
         };
 
         Ok(String::from_utf8(output.stdout).unwrap())
+    }
+}
+
+#[cfg(test)]
+mod alias_value_tests {
+    use super::AliasValue;
+    use bstr::BString;
+
+    #[test]
+    fn command_shcmd_is_passthrough() {
+        let v = AliasValue::Command(BString::from("ls -l"));
+        assert_eq!(v.shcmd(), BString::from("ls -l"));
+    }
+
+    #[test]
+    fn argv_shcmd_single_quotes_each_argument() {
+        let v = AliasValue::Argv(vec![
+            BString::from("git"),
+            BString::from("commit"),
+            BString::from("-m"),
+            BString::from("hello world"),
+        ]);
+        assert_eq!(
+            v.shcmd(),
+            BString::from(r"'git' 'commit' '-m' 'hello world'")
+        );
+    }
+
+    #[test]
+    fn argv_shcmd_preserves_empty_and_escapes_quote() {
+        assert_eq!(
+            AliasValue::Argv(vec![
+                BString::from("echo"),
+                BString::from(""),
+                BString::from("x")
+            ])
+            .shcmd(),
+            BString::from(r"'echo' '' 'x'"),
+        );
+        assert_eq!(
+            AliasValue::Argv(vec![BString::from("echo"), BString::from("it's")]).shcmd(),
+            BString::from(r"'echo' 'it'\''s'"),
+        );
     }
 }
 
