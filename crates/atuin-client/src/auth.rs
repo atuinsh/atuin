@@ -5,13 +5,10 @@ use eyre::{Context, Result, bail};
 use reqwest::{StatusCode, Url, header::USER_AGENT};
 use serde::Deserialize;
 
-use atuin_common::{
-    api::{
-        ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ChangePasswordRequest, LoginRequest,
-        LoginResponse, RegisterResponse,
-    },
-    tls::ensure_crypto_provider,
-    url::UrlAppendExt,
+use atuin_common::{tls::ensure_crypto_provider, url::UrlAppendExt};
+use atuin_domain::api::{
+    ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ChangePasswordRequest, LoginRequest, LoginResponse,
+    RegisterResponse,
 };
 
 use crate::settings::Settings;

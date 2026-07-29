@@ -4,7 +4,7 @@ use eyre::{Result, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_common::record::{Host, HostId, Record, RecordId, RecordIdx};
+use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx};
 use entry::KvEntry;
 use record::{KV_TAG, KV_VERSION, KvRecord};
 
@@ -190,7 +190,7 @@ mod tests {
     async fn setup() -> Result<KvStore> {
         let record_store = SqliteStore::new("sqlite::memory:", 1.0).await.unwrap();
         let kv_db = Database::new("sqlite::memory:", 1.0).await.unwrap();
-        let host_id = atuin_common::record::HostId(atuin_common::utils::uuid_v7());
+        let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
         let encryption_key = [0; 32];
         Ok(KvStore::new(record_store, kv_db, host_id, encryption_key))
     }

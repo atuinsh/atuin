@@ -2,7 +2,7 @@ use atuin_client::history::HISTORY_TAG;
 use atuin_client::history::Version;
 use atuin_client::history::store::HistoryRecord;
 use atuin_client::record::encryption::PASETO_V4;
-use atuin_common::record::{DecryptedData, EncryptedData, Host, HostId, Record};
+use atuin_domain::record::{DecryptedData, EncryptedData, Host, HostId, Record};
 use atuin_common::utils::uuid_v7;
 
 use crate::_util::context::BenchCtx;

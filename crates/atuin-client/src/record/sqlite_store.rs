@@ -16,7 +16,7 @@ use sqlx::{
     },
 };
 
-use atuin_common::record::{
+use atuin_domain::record::{
     EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordStatus,
 };
 use atuin_common::utils;
@@ -375,10 +375,8 @@ impl SqliteStore {
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::{
-        record::{DecryptedData, EncryptedData, Host, HostId, Record},
-        utils::uuid_v7,
-    };
+    use atuin_common::utils::uuid_v7;
+    use atuin_domain::record::{DecryptedData, EncryptedData, Host, HostId, Record};
     use rstest::{fixture, rstest};
 
     use crate::{

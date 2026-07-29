@@ -21,6 +21,7 @@ async-trait = "0.1.58"
 atuin-client = { path = "crates/atuin-client", version = "18.18.1" }
 atuin-common = { path = "crates/atuin-common", version = "18.18.1" }
 atuin-daemon = { path = "crates/atuin-daemon", version = "18.18.1" }
+atuin-domain = { path = "crates/atuin-domain", version = "18.18.1" }
 atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.18.1" }
 atuin-history = { path = "crates/atuin-history", version = "18.18.1" }
 atuin-kv = { path = "crates/atuin-kv", version = "18.18.1" }

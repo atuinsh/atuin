@@ -6,7 +6,7 @@ use atuin_client::{
     database::Database, history::store::HistoryStore, record::sqlite_store::SqliteStore,
     settings::Settings,
 };
-use atuin_common::record::RecordId;
+use atuin_domain::record::RecordId;
 use atuin_kv::store::KvStore;
 
 // This is the only crate that ties together all other crates.

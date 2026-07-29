@@ -9,7 +9,7 @@ use crate::{
     database::{Database, current_context},
     record::{encryption::PASETO_V4, sqlite_store::SqliteStore},
 };
-use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
+use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
 
 use super::{HISTORY_TAG, History, HistoryId, Version};
 
@@ -411,7 +411,7 @@ impl HistoryStore {
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::record::{DecryptedData, Host, HostId, Record};
+    use atuin_domain::record::{DecryptedData, Host, HostId, Record};
     use futures::TryStreamExt;
     use time::macros::datetime;
 

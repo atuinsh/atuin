@@ -1,0 +1,26 @@
+[package]
+name = "atuin-domain"
+edition = "2024"
+description = "Core domain and API types shared across Atuin's client, daemon, and server"
+
+rust-version = { workspace = true }
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+semver = { workspace = true }
+typed-builder = { workspace = true }
+derive_more = { workspace = true }
+eyre = { workspace = true }
+sqlx = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

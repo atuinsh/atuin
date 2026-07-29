@@ -222,6 +222,7 @@ dependencies = [
  "atuin-client",
  "atuin-common",
  "atuin-daemon",
+ "atuin-domain",
  "atuin-dotfiles",
  "atuin-history",
  "atuin-kv",
@@ -341,6 +342,7 @@ version = "18.18.1"
 dependencies = [
  "async-trait",
  "atuin-common",
+ "atuin-domain",
  "base64",
  "clap",
  "codspeed-divan-compat",
@@ -405,17 +407,14 @@ dependencies = [
  "proptest",
  "rstest",
  "rustls",
- "semver",
  "serde",
  "serde_json",
  "serde_with",
- "sqlx",
  "sysinfo",
  "thiserror 2.0.18",
  "time",
  "tracing",
  "tracing-subscriber",
- "typed-builder",
  "unicode-segmentation",
  "unicode-width 0.2.2",
  "url",
@@ -460,11 +459,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "atuin-domain"
+version = "18.18.1"
+dependencies = [
+ "derive_more",
+ "eyre",
+ "pretty_assertions",
+ "semver",
+ "serde",
+ "sqlx",
+ "time",
+ "typed-builder",
+ "uuid",
+]
+
+[[package]]
 name = "atuin-dotfiles"
 version = "18.18.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
+ "atuin-domain",
  "crypto_secretbox",
  "derive_more",
  "eyre",
@@ -496,6 +511,7 @@ version = "18.18.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
+ "atuin-domain",
  "derive_more",
  "eyre",
  "pretty_assertions",
@@ -545,6 +561,7 @@ version = "18.18.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
+ "atuin-domain",
  "derive_more",
  "eyre",
  "minijinja",
@@ -580,6 +597,7 @@ version = "18.18.1"
 dependencies = [
  "argon2",
  "atuin-common",
+ "atuin-domain",
  "atuin-server-database",
  "atuin-server-postgres",
  "atuin-server-sqlite",
@@ -607,6 +625,7 @@ version = "18.18.1"
 dependencies = [
  "async-trait",
  "atuin-common",
+ "atuin-domain",
  "derive_more",
  "eyre",
  "rstest",
@@ -622,6 +641,7 @@ version = "18.18.1"
 dependencies = [
  "async-trait",
  "atuin-common",
+ "atuin-domain",
  "atuin-server-database",
  "derive_more",
  "eyre",
@@ -640,6 +660,7 @@ version = "18.18.1"
 dependencies = [
  "async-trait",
  "atuin-common",
+ "atuin-domain",
  "atuin-server-database",
  "derive_more",
  "eyre",
@@ -5304,6 +5325,7 @@ version = "18.18.1"
 dependencies = [
  "async-trait",
  "atuin-common",
+ "atuin-domain",
  "atuin-server-database",
  "atuin-server-postgres",
  "atuin-server-sqlite",

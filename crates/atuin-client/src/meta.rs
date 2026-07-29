@@ -2,7 +2,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
-use atuin_common::record::HostId;
+use atuin_domain::record::HostId;
 use eyre::{Result, eyre};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};

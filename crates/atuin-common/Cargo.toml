@@ -29,11 +29,8 @@ time = { workspace = true, features = ["formatting", "parsing"] }
 serde = { workspace = true }
 serde_with = "3.8.1"
 uuid = { workspace = true }
-typed-builder = { workspace = true }
 eyre = { workspace = true }
 url = { workspace = true }
-sqlx = { workspace = true }
-semver = { workspace = true }
 thiserror = { workspace = true }
 directories = { workspace = true }
 sysinfo = "0.30.7"

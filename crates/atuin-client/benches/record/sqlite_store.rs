@@ -1,5 +1,5 @@
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_common::record::{EncryptedData, Host, HostId, Record};
+use atuin_domain::record::{EncryptedData, Host, HostId, Record};
 use atuin_common::utils::uuid_v7;
 use rand::Rng;
 use rand::distributions::Alphanumeric;

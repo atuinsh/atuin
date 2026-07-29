@@ -1,5 +1,5 @@
 use atuin_common::logs::LogLevel;
-use atuin_common::record::HostId;
+use atuin_domain::record::HostId;
 use atuin_common::utils;
 use clap::ValueEnum;
 use config::{
