@@ -110,7 +110,7 @@ pub struct CommandData {
     hosts: HashSet<Spur>,
     /// All sessions where this command has been run (as 16-byte UUIDs).
     sessions: HashSet<[u8; 16]>,
-    /// Position of this command in `SearchIndex::haystacks`, so filtered
+    /// Position of this command in `SearchIndex::haystack`, so filtered
     /// searches can walk the command map without hashing command strings.
     haystack_index: u32,
 }
@@ -222,7 +222,7 @@ pub enum IndexFilterMode {
 }
 
 /// Shareable frecency map: command -> frecency score.
-/// Aligned with `SearchIndex::haystacks` by index, so scoring a match is an
+/// Aligned with `SearchIndex::haystack` by index, so scoring a match is an
 /// array access instead of hashing the command string. Commands added after
 /// the last rebuild sit past the end and score 0 until the next rebuild.
 type FrecencyMap = Arc<Vec<u32>>;
@@ -253,12 +253,13 @@ pub fn normalize_diacritics(s: &str) -> Cow<'_, str> {
     Cow::Owned(s.chars().map(normalize).collect())
 }
 
-/// One entry in the fuzzy matcher's haystack: the command text plus the text
-/// the matcher actually runs against (diacritics normalized to ASCII).
-/// `matchable` shares `command`'s allocation when normalization is a no-op.
-struct Haystack {
-    command: Arc<str>,
-    matchable: Arc<str>,
+/// One entry in the fuzzy matcher's haystack: the original string plus the normalized version
+/// (diacritics removed) we actually match against.
+struct HaystackEntry {
+    /// The original text of the entry.
+    original: Arc<str>,
+    /// The [normalized](normalize_diacritics) version of the text, with diacritics removed.
+    normalized: Arc<str>,
 }
 
 /// A deduplicated search index with frecency-based ranking.
@@ -282,7 +283,7 @@ pub struct SearchIndex {
     /// Lock order: paths that need both this lock and a `commands` shard lock
     /// must take this one first (see `add_history`, `search`,
     /// `rebuild_frecency`); acquiring in the reverse order can deadlock.
-    haystacks: std::sync::RwLock<Vec<Haystack>>,
+    haystack: std::sync::RwLock<Vec<HaystackEntry>>,
     /// Precomputed global frecency map. Updated by background task.
     frecency_map: RwLock<Option<FrecencyMap>>,
     /// String interner for deduplicating cwd, hostname, and directory paths.
@@ -296,7 +297,7 @@ impl SearchIndex {
     pub fn new(shells: OrFilter<Vec<String>>) -> Self {
         Self {
             commands: Arc::new(DashMap::new()),
-            haystacks: std::sync::RwLock::new(Vec::new()),
+            haystack: std::sync::RwLock::new(Vec::new()),
             frecency_map: RwLock::new(None),
             interner: Arc::new(ThreadedRodeo::new()),
             shells,
@@ -325,32 +326,26 @@ impl SearchIndex {
             // Existing command - just update invocations
             entry.add_invocation(history, &self.interner);
         } else {
-            // New command; the entry API holds the shard lock so a concurrent
-            // insert of the same command can't double-push the haystack. The
-            // haystacks lock must be taken before the shard lock: search and
-            // rebuild_frecency read `commands` while holding the haystacks
-            // lock, so waiting on it here while entry() holds a shard lock
-            // would invert the order and deadlock.
             let command_arc: Arc<str> = command.into();
-            let mut haystacks = self.haystacks.write().expect("haystacks lock poisoned");
+            let mut haystack = self.haystack.write().expect("haystack lock poisoned");
             match self.commands.entry(Arc::clone(&command_arc)) {
                 dashmap::Entry::Occupied(mut entry) => {
                     entry.get_mut().add_invocation(history, &self.interner);
                 }
                 dashmap::Entry::Vacant(vacant) => {
                     let Some(data) =
-                        CommandData::new(history, &self.interner, haystacks.len() as u32)
+                        CommandData::new(history, &self.interner, haystack.len() as u32)
                     else {
                         return; // Invalid UUIDs, skip this entry
                     };
                     vacant.insert(data);
-                    let matchable = match normalize_diacritics(&command_arc) {
+                    let normalized = match normalize_diacritics(&command_arc) {
                         Cow::Borrowed(_) => Arc::clone(&command_arc),
                         Cow::Owned(normalized) => normalized.into(),
                     };
-                    haystacks.push(Haystack {
-                        command: command_arc,
-                        matchable,
+                    haystack.push(HaystackEntry {
+                        original: command_arc,
+                        normalized,
                     });
                 }
             }
@@ -390,7 +385,7 @@ impl SearchIndex {
         // add_history, so an accented query must be normalized too
         let query = normalize_diacritics(query);
 
-        let haystacks = self.haystacks.read().expect("haystacks lock poisoned");
+        let haystack = self.haystack.read().expect("haystack lock poisoned");
 
         // Filter target resolved once per search (intern/parse the string
         // here) so the per-command checks below are integer-set lookups
@@ -422,9 +417,9 @@ impl SearchIndex {
         // mode, remembering each one's haystack index for frecency lookups.
         // Filtered modes walk the command map directly (no string hashing);
         // indices are sorted so ranking ties stay deterministic.
-        let candidates: Vec<(u32, &Haystack)> = tracing::span!(Level::TRACE, "index_search_filter")
+        let candidates: Vec<(u32, &HaystackEntry)> = tracing::span!(Level::TRACE, "index_search_filter")
             .in_scope(|| match &filter {
-                Filter::All => haystacks
+                Filter::All => haystack
                     .iter()
                     .enumerate()
                     .map(|(i, hay)| (i as u32, hay))
@@ -448,7 +443,7 @@ impl SearchIndex {
                     indices.sort_unstable();
                     indices
                         .into_iter()
-                        .filter_map(|i| haystacks.get(i as usize).map(|hay| (i, hay)))
+                        .filter_map(|i| haystack.get(i as usize).map(|hay| (i, hay)))
                         .collect()
                 }
             });
@@ -474,7 +469,7 @@ impl SearchIndex {
                 .collect()
         } else {
             let commands: Vec<&Arc<str>> =
-                candidates.iter().map(|&(_, hay)| &hay.matchable).collect();
+                candidates.iter().map(|&(_, hay)| &hay.normalized).collect();
             // Use every core, like nucleo did — mid-sized indexes regress
             // badly on many-core machines if matching stays single-threaded.
             // But below ~10k candidates, stay serial: frizbee hands out
@@ -518,7 +513,7 @@ impl SearchIndex {
                 .iter()
                 .filter_map(|&(_, _, i)| {
                     self.commands
-                        .get(candidates[i as usize].1.command.as_ref())
+                        .get(candidates[i as usize].1.original.as_ref())
                         .map(|data| data.most_recent_id())
                 })
                 .collect()
@@ -544,13 +539,13 @@ impl SearchIndex {
         let frequency_mul = search_settings.frequency_score_multiplier.max(0.0);
         let frecency_mul = search_settings.frecency_score_multiplier.max(0.0);
 
-        // Aligned with `haystacks` by index; see FrecencyMap
+        // Aligned with `haystack` by index; see FrecencyMap
         let frecencies: Vec<u32> = {
-            let haystacks = self.haystacks.read().expect("haystacks lock poisoned");
-            haystacks
+            let haystack = self.haystack.read().expect("haystack lock poisoned");
+            haystack
                 .iter()
                 .map(|hay| {
-                    self.commands.get(hay.command.as_ref()).map_or(0, |data| {
+                    self.commands.get(hay.original.as_ref()).map_or(0, |data| {
                         let frecency =
                             data.global_frecency
                                 .compute(now, recency_mul, frequency_mul);
@@ -929,17 +924,17 @@ mod tests {
     #[test]
     fn parallel_matching_equals_serial() {
         let corpus = equivalence_corpus();
-        let haystacks: Vec<&str> = corpus.iter().map(String::as_str).collect();
+        let haystack: Vec<&str> = corpus.iter().map(String::as_str).collect();
         let config = frizbee::Config::default()
             .casing(frizbee::CaseMatching::Smart)
             .sort(frizbee::SortStrategy::IndexAsc);
 
         // multi-atom and negated atoms exercise the progressive-filter path
         for query in ["git", "git p", "docker compose up", "cargo !release", "g"] {
-            let serial = frizbee::Matcher::from_query(query, &config).match_list(&haystacks);
+            let serial = frizbee::Matcher::from_query(query, &config).match_list(&haystack);
             for threads in [2, 8] {
                 let parallel = frizbee::Matcher::from_query(query, &config)
-                    .match_list_parallel(&haystacks, threads);
+                    .match_list_parallel(&haystack, threads);
                 assert_eq!(serial.len(), parallel.len(), "query {query:?}");
                 for (s, p) in serial.iter().zip(&parallel) {
                     assert_eq!(
