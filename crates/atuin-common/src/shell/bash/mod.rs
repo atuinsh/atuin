@@ -85,15 +85,18 @@ impl Bash {
 
         let exe = Arc::new(BashExe::new(path));
 
-        let probe_exe = exe.clone();
-        let probe = tokio::spawn(async move {
-            let output = probe_exe.run("alias -p").await?;
-            posix::parse_aliases(&output.stdout)
-        });
-
-        let aliases = async move { probe.await.unwrap_or(Err(AliasesError::Probe)) }
+        // Probe lazily: the shared future is not polled until `aliases()` is
+        // first awaited, so merely constructing a shell (e.g. to render config)
+        // spawns no subprocess and needs no runtime.
+        let aliases = {
+            let exe = exe.clone();
+            async move {
+                let output = exe.run("alias -p").await?;
+                posix::parse_aliases(&output.stdout)
+            }
             .boxed()
-            .shared();
+            .shared()
+        };
 
         Self {
             exe,
