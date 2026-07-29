@@ -396,6 +396,7 @@ dependencies = [
 name = "atuin-common"
 version = "18.19.0-beta.3"
 dependencies = [
+ "async-trait",
  "base64",
  "bstr",
  "derive_more",

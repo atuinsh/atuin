@@ -50,6 +50,7 @@ tokio.workspace = true
 futures = "0.3"
 winnow = "1.0.4"
 bstr = "1"
+async-trait = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

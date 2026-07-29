@@ -96,13 +96,8 @@ impl AliasValue {
     }
 }
 
-pub trait IsShell {
-    /// The name an alias is bound to.
-    type AliasKey: Eq + std::hash::Hash;
-
-    /// The body an alias expands to.
-    type AliasValue;
-
+#[async_trait::async_trait]
+pub trait IsShell: Send + Sync {
     /// Get the name of this shell that we use internal to atuin.
     fn canonical_name(&self) -> &'static str;
 
@@ -110,12 +105,12 @@ pub trait IsShell {
     fn is_posix(&self) -> bool;
 
     /// Query the aliases defined in the current shell.
-    async fn aliases(&self) -> Result<HashMap<Self::AliasKey, Self::AliasValue>, AliasesError>;
+    async fn aliases(&self) -> Result<HashMap<BString, AliasValue>, AliasesError>;
 
     /// Invoke the given shell command, interactively, in this shell.
     ///
     /// Returns `Ok` if `exit_code == 0`, otherwise `Err`.
-    async fn run_interactive(&self, s: impl AsRef<str>) -> Result<process::Output, RunError>;
+    async fn run_interactive(&self, command: &str) -> Result<process::Output, RunError>;
 
     /// Get the full path to this shell, if it is installed.
     fn installed_path(&self) -> Option<&Path>;
@@ -123,6 +118,11 @@ pub trait IsShell {
     /// Return the path to the user configuration path of this shell.
     fn user_config_path(&self) -> &Path;
 }
+
+/// Compile-time proof that `IsShell` is object-safe. If a method signature ever
+/// reintroduces a generic, associated type, or `impl Trait` argument, this fails
+/// to compile.
+const _: fn(&dyn IsShell) = |_shell| {};
 
 #[derive(PartialEq, derive_more::Display)]
 pub enum Shell {

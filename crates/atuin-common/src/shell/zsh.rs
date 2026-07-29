@@ -306,10 +306,8 @@ impl Zsh {
     }
 }
 
+#[async_trait::async_trait]
 impl IsShell for Zsh {
-    type AliasKey = BString;
-    type AliasValue = AliasValue;
-
     fn canonical_name(&self) -> &'static str {
         "zsh"
     }
@@ -319,13 +317,13 @@ impl IsShell for Zsh {
     }
 
     #[instrument]
-    async fn aliases(&self) -> Result<Aliases, AliasesError> {
+    async fn aliases(&self) -> Result<HashMap<BString, AliasValue>, AliasesError> {
         self.inner.aliases.clone().await
     }
 
-    #[instrument(skip(s))]
-    async fn run_interactive(&self, s: impl AsRef<str>) -> Result<process::Output, RunError> {
-        self.exe.run(s.as_ref()).await
+    #[instrument(skip(command))]
+    async fn run_interactive(&self, command: &str) -> Result<process::Output, RunError> {
+        self.exe.run(command).await
     }
 
     fn installed_path(&self) -> Option<&Path> {

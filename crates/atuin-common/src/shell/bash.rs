@@ -1,9 +1,11 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     process,
     sync::Arc,
 };
 
+use bstr::BString;
 use futures::{
     FutureExt,
     future::{BoxFuture, Shared},
@@ -11,7 +13,7 @@ use futures::{
 use tracing::instrument;
 
 use super::{
-    AliasesError, IsShell, RunError,
+    AliasesError, AliasValue, IsShell, RunError,
     posix::{self, Aliases},
 };
 
@@ -103,10 +105,8 @@ impl Bash {
     }
 }
 
+#[async_trait::async_trait]
 impl IsShell for Bash {
-    type AliasKey = bstr::BString;
-    type AliasValue = super::AliasValue;
-
     fn canonical_name(&self) -> &'static str {
         "bash"
     }
@@ -116,13 +116,13 @@ impl IsShell for Bash {
     }
 
     #[instrument]
-    async fn aliases(&self) -> Result<Aliases, AliasesError> {
+    async fn aliases(&self) -> Result<HashMap<BString, AliasValue>, AliasesError> {
         self.inner.aliases.clone().await
     }
 
-    #[instrument(skip(s))]
-    async fn run_interactive(&self, s: impl AsRef<str>) -> Result<process::Output, RunError> {
-        self.exe.run(s.as_ref()).await
+    #[instrument(skip(command))]
+    async fn run_interactive(&self, command: &str) -> Result<process::Output, RunError> {
+        self.exe.run(command).await
     }
 
     fn installed_path(&self) -> Option<&Path> {
