@@ -3,6 +3,7 @@
 //! This module provides fuzzy search over command history using frizbee.
 
 mod index;
+#[allow(clippy::manual_range_contains, reason = "this is a vendored file")]
 mod normalize;
 
 // Include the generated proto code

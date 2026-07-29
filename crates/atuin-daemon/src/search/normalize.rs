@@ -1,15 +1,12 @@
 //! Latin-diacritic to ASCII normalization table.
 //!
-//! Vendored from the atuin-nucleo fork of the nucleo fuzzy matcher
-//! (helix-editor/nucleo, `src/chars/normalize.rs`) so dropping the matcher
-//! dependency doesn't lose accent-insensitive search.
+//! Vendored from atuin-nucleo, a fork of helix-editor/nucleo:
+//!
+//!   https://github.com/atuinsh/atuin/blob/v18.18.1/crates/atuin-nucleo/matcher/src/chars/normalize.rs
 //!
 //! nucleo is licensed under the Mozilla Public License 2.0; this file remains
 //! covered by MPL-2.0 (<https://mozilla.org/MPL/2.0/>) independently of the
 //! crate's license.
-
-// Keep the vendored body byte-for-byte comparable with upstream.
-#![allow(clippy::manual_range_contains)]
 
 /// Normalize a Unicode character by converting Latin characters which are variants
 /// of ASCII characters to their latin equivalent.
