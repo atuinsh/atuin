@@ -239,25 +239,34 @@ impl SearchEngine for Search {
             return Vec::new();
         };
 
-        // frizbee returns indices in reverse order, as byte offsets into the
-        // haystack; the UI highlights by char position. Normalization maps
-        // char to char, so char positions in `matchable` are valid for
-        // `command` too
+        // frizbee returns indices in reverse order, as byte offsets into
+        // `matchable` (every byte of a matched multibyte char); the renderer
+        // tests byte offsets into `command`, whose byte layout differs from
+        // `matchable` wherever normalization shrank a char (é → e).
+        // Normalization maps char to char, so hop matchable-byte → char
+        // position → command-byte.
         let mut indices = result.indices;
         indices.sort_unstable();
         indices.dedup();
-        if matchable.is_ascii() {
+        if command.is_ascii() {
             indices.into_iter().map(|i| i as usize).collect()
         } else {
-            let byte_to_char: std::collections::HashMap<usize, usize> = matchable
+            let matchable_byte_to_char: std::collections::HashMap<usize, usize> = matchable
                 .char_indices()
                 .enumerate()
                 .map(|(char_idx, (byte_idx, _))| (byte_idx, char_idx))
                 .collect();
-            indices
+            let command_char_to_byte: Vec<usize> = command
+                .char_indices()
+                .map(|(byte_idx, _)| byte_idx)
+                .collect();
+            let mut bytes: Vec<usize> = indices
                 .into_iter()
-                .filter_map(|i| byte_to_char.get(&(i as usize)).copied())
-                .collect()
+                .filter_map(|i| matchable_byte_to_char.get(&(i as usize)))
+                .filter_map(|&char_idx| command_char_to_byte.get(char_idx).copied())
+                .collect();
+            bytes.dedup();
+            bytes
         }
     }
 }
@@ -278,11 +287,33 @@ mod tests {
     }
 
     /// Highlighting matches accent-insensitively, like the daemon's index,
-    /// and returns char positions valid for the original command.
+    /// and returns byte offsets into the original command — the renderer
+    /// tests each display char's source byte against these ("echo déjà" is
+    /// e0 c1 h2 o3 ␣4 d5 é6 j8 à9; é and à are two bytes each).
     #[test]
     fn accented_command_highlights_unaccented_query() {
         let engine = Search::new(&Settings::default());
         let indices = engine.get_highlight_indices("echo déjà", "deja");
-        assert_eq!(indices, vec![5, 6, 7, 8]);
+        assert_eq!(indices, vec![5, 6, 8, 9]);
+    }
+
+    /// A multibyte char before the match must not shift the highlight:
+    /// frizbee's offsets are into the normalized text ("emacs test"), which
+    /// is one byte shorter than the command wherever é shrank to e.
+    #[test]
+    fn multibyte_char_before_match_does_not_shift_highlight() {
+        let engine = Search::new(&Settings::default());
+        let indices = engine.get_highlight_indices("émacs test", "test");
+        assert_eq!(indices, vec![7, 8, 9, 10]);
+    }
+
+    /// Non-Latin text doesn't normalize, so matchable and command share a
+    /// byte layout; offsets still land on the match ("日本 git" is 日0 本3
+    /// ␣6 g7 i8 t9).
+    #[test]
+    fn cjk_prefix_highlights_at_correct_bytes() {
+        let engine = Search::new(&Settings::default());
+        let indices = engine.get_highlight_indices("日本 git", "git");
+        assert_eq!(indices, vec![7, 8, 9]);
     }
 }
