@@ -5,8 +5,8 @@ use atuin_client::record::sqlite_store::SqliteStore;
 // This will be noticeable similar to the kv store, though I expect the two shall diverge
 // While we will support a range of shell config, I'd rather have a larger number of small records
 // + stores, rather than one mega config store.
-use atuin_domain::record::{DecryptedData, Host, HostId};
 use atuin_common::utils::unquote;
+use atuin_domain::record::{DecryptedData, Host, HostId};
 use eyre::{Result, bail, ensure, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;

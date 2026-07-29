@@ -16,10 +16,10 @@ use sqlx::{
     },
 };
 
+use atuin_common::utils;
 use atuin_domain::record::{
     EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordStatus,
 };
-use atuin_common::utils;
 use uuid::Uuid;
 
 use super::encryption::PASETO_V4;
