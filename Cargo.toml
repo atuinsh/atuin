@@ -102,3 +102,8 @@ inherits = "release"
 lto = "fat"
 strip = "symbols"
 codegen-units = 1
+
+# For local development against a local eye-declare, uncomment below
+#[patch.crates-io]
+#eye_declare = { path = "../eye_declare/crates/eye_declare" }
+#eye_declare_engine = { path = "../eye_declare/crates/eye_declare_engine" }
