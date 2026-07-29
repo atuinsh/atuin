@@ -17,7 +17,6 @@ use atuin_common::path::DisplayRichExt;
 use dashmap::DashMap;
 use lasso::{Spur, ThreadedRodeo};
 use time::OffsetDateTime;
-use tokio::sync::RwLock;
 use tracing::{Level, instrument};
 use uuid::Uuid;
 
@@ -223,9 +222,6 @@ pub enum IndexFilterMode {
 }
 
 /// Shareable frecency map: command -> frecency score.
-/// Aligned with `SearchIndex::haystack` by index, so scoring a match is an
-/// array access instead of hashing the command string. Commands added after
-/// the last rebuild sit past the end and score 0 until the next rebuild.
 type FrecencyMap = Arc<Vec<u32>>;
 
 /// One entry in the fuzzy matcher's haystack: the original string plus the normalized version
@@ -252,17 +248,27 @@ pub struct SearchIndex {
     /// Using `DashMap` for concurrent read/write access, wrapped in `Arc` for sharing with scorer.
     /// Keys are `Arc<str>` to enable zero-copy sharing with frecency_map.
     commands: Arc<DashMap<Arc<str>, CommandData>>,
+
     /// Unique commands in insertion order — the fuzzy matcher's haystack.
     /// Shares the `Arc<str>` allocations with `commands`.
     ///
     /// Lock order: paths that need both this lock and a `commands` shard lock
     /// must take this one first (see `add_history`, `search`,
     /// `rebuild_frecency`); acquiring in the reverse order can deadlock.
+    ///
+    /// This is a synchronous `RwLock`: do not `await` while holding this lock.
     haystack: std::sync::RwLock<Vec<HaystackEntry>>,
+
     /// Precomputed global frecency map. Updated by background task.
-    frecency_map: RwLock<Option<FrecencyMap>>,
+    ///
+    /// Aligned with [`Self::haystack`] by index, so scoring a match is an
+    /// array access instead of hashing the command string. Commands added after
+    /// the last rebuild sit past the end and score 0 until the next rebuild.
+    frecency_map: tokio::sync::RwLock<Option<FrecencyMap>>,
+
     /// String interner for deduplicating cwd, hostname, and directory paths.
     interner: Arc<ThreadedRodeo>,
+
     /// Controls which shells' commands are included.
     pub shells: OrFilter<Vec<String>>,
 }
@@ -273,7 +279,7 @@ impl SearchIndex {
         Self {
             commands: Arc::new(DashMap::new()),
             haystack: std::sync::RwLock::new(Vec::new()),
-            frecency_map: RwLock::new(None),
+            frecency_map: tokio::sync::RwLock::new(None),
             interner: Arc::new(ThreadedRodeo::new()),
             shells,
         }
@@ -391,17 +397,11 @@ impl SearchIndex {
             }
         };
 
-        // Filter pre-pass: collect the candidate commands for this filter
-        // mode, remembering each one's haystack index for frecency lookups.
-        // Filtered modes walk the command map directly (no string hashing);
-        // indices are sorted so ranking ties stay deterministic.
-        let candidates: Vec<(u32, &HaystackEntry)> =
+        // Filter pre-pass: collect the candidate commands for this filter mode. This is sorted
+        // vector of haystack indices.
+        let candidates: Vec<u32> =
             tracing::span!(Level::TRACE, "index_search_filter").in_scope(|| match &filter {
-                Filter::All => haystack
-                    .iter()
-                    .enumerate()
-                    .map(|(i, hay)| (i as u32, hay))
-                    .collect(),
+                Filter::All => haystack.iter().enumerate().map(|(i, _)| i as u32).collect(),
                 Filter::Nothing => Vec::new(),
                 _ => {
                     let mut indices: Vec<u32> = self
@@ -421,13 +421,13 @@ impl SearchIndex {
                     indices.sort_unstable();
                     indices
                         .into_iter()
-                        .filter_map(|i| haystack.get(i as usize).map(|hay| (i, hay)))
+                        .filter(|i| (*i as usize) < haystack.len())
                         .collect()
                 }
             });
 
         let frecency = |candidate: u32| {
-            let hay_idx = candidates[candidate as usize].0 as usize;
+            let hay_idx = candidates[candidate as usize] as usize;
             frecency_map
                 .as_ref()
                 .and_then(|f| f.get(hay_idx).copied())
@@ -459,8 +459,10 @@ impl SearchIndex {
                 })
                 .collect()
         } else {
-            let commands: Vec<&Arc<str>> =
-                candidates.iter().map(|&(_, hay)| &hay.normalized).collect();
+            let commands: Vec<&Arc<str>> = candidates
+                .iter()
+                .map(|i| &haystack[*i as usize].normalized)
+                .collect();
             // Use all cores when the number of commands is sufficiently large.
             let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
             let matches = tracing::span!(Level::TRACE, "index_search_match").in_scope(|| {
@@ -494,7 +496,11 @@ impl SearchIndex {
                 .iter()
                 .filter_map(|score| {
                     self.commands
-                        .get(candidates[score.index as usize].1.original.as_ref())
+                        .get(
+                            haystack[candidates[score.index as usize] as usize]
+                                .original
+                                .as_ref(),
+                        )
                         .map(|data| data.most_recent_id())
                 })
                 .collect()
