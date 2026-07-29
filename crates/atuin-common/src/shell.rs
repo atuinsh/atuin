@@ -240,6 +240,23 @@ impl Shell {
         matches!(self, Shell::Bash | Shell::Fish | Shell::Zsh)
     }
 
+    /// Construct the object-safe [`IsShell`] interface for this shell, if atuin
+    /// has an implementation for it (`None` for nu, powershell and unknown).
+    ///
+    /// The executable is resolved from `$PATH` by its canonical name when a
+    /// command is run.
+    pub fn interface(&self) -> Option<Box<dyn IsShell>> {
+        let shell: Box<dyn IsShell> = match self {
+            Shell::Bash => Box::new(bash::Bash::new(Path::new("bash"))),
+            Shell::Sh => Box::new(sh::Sh::new(Path::new("sh"))),
+            Shell::Zsh => Box::new(zsh::Zsh::new(Path::new("zsh"))),
+            Shell::Fish => Box::new(fish::Fish::new(Path::new("fish"))),
+            Shell::Xonsh => Box::new(xonsh::Xonsh::new(Path::new("xonsh"))),
+            Shell::Nu | Shell::Powershell | Shell::Unknown => return None,
+        };
+        Some(shell)
+    }
+
     pub fn run_interactive<I, S>(&self, args: I) -> Result<String, ShellError>
     where
         I: IntoIterator<Item = S>,
@@ -324,4 +341,25 @@ pub fn shell_name(parent: Option<&Process>) -> String {
     let shell = shell.strip_prefix('-').unwrap_or(&shell);
 
     shell.to_string()
+}
+
+#[cfg(test)]
+mod factory_tests {
+    use super::Shell;
+
+    #[tokio::test]
+    async fn interface_maps_supported_shells_to_the_right_impl() {
+        assert_eq!(Shell::Bash.interface().unwrap().canonical_name(), "bash");
+        assert_eq!(Shell::Sh.interface().unwrap().canonical_name(), "sh");
+        assert_eq!(Shell::Zsh.interface().unwrap().canonical_name(), "zsh");
+        assert_eq!(Shell::Fish.interface().unwrap().canonical_name(), "fish");
+        assert_eq!(Shell::Xonsh.interface().unwrap().canonical_name(), "xonsh");
+    }
+
+    #[test]
+    fn interface_is_none_for_unsupported_shells() {
+        assert!(Shell::Nu.interface().is_none());
+        assert!(Shell::Powershell.interface().is_none());
+        assert!(Shell::Unknown.interface().is_none());
+    }
 }
