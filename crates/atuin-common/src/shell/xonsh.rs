@@ -162,8 +162,9 @@ impl Xonsh {
     /// Parse the JSON emitted by [`ALIAS_PROBE`] into a name → value map.
     ///
     /// xonsh normalises a string alias into a list of arguments, so most values arrive as arrays.
-    /// They are joined back into a single command string with spaces, which is lossy for arguments
-    /// that themselves contain whitespace.
+    /// Each value is preserved as its argv vector in an [`AliasValue::Argv`]; rendering it back to a
+    /// command string is deferred to [`AliasValue::shcmd`], which single-quotes each argument so no
+    /// argument boundary is lost.
     fn parse_aliases(input: &[u8]) -> Result<Aliases, AliasesError> {
         let records: HashMap<String, RawAlias> =
             serde_json::from_slice(input).map_err(|error| {
