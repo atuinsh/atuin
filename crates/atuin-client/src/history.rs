@@ -730,12 +730,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::from_v0(Version::Zero, BYTES_V0.to_vec(), expected_v0())]
-    #[case::from_v1(Version::One, BYTES_V1.to_vec(), expected_v1())]
-    #[case::from_v2(Version::Two, expected_v2().serialize().unwrap().0, expected_v2())]
+    #[case::from_v0(Version::Zero, BYTES_V0, expected_v0())]
+    #[case::from_v1(Version::One, BYTES_V1, expected_v1())]
+    #[case::from_v2(Version::Two, &expected_v2().serialize().unwrap(), expected_v2())]
     fn deserialize_across_versions(
         #[case] source: Version,
-        #[case] bytes: Vec<u8>,
+        #[case] bytes: &[u8],
         #[case] expected: History,
         #[values(Version::Zero, Version::One, Version::Two)] decode_as: Version,
     ) {
