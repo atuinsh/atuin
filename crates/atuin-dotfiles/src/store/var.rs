@@ -398,7 +398,18 @@ mod tests {
 
     use super::{DOTFILES_VAR_VERSION, VarRecord, VarStore};
     use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
-    use rstest::rstest;
+    use rstest::*;
+
+    #[fixture]
+    async fn var_store() -> VarStore {
+        let store = SqliteStore::new(":memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
+        let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
+
+        VarStore::new(store, host_id, key)
+    }
 
     #[test]
     fn encode_decode() {
@@ -464,15 +475,10 @@ mod tests {
         assert_eq!(VarStore::escape_xonsh_value(input), expected);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn build_vars() {
-        let store = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
-        let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
-
-        let env = VarStore::new(store, host_id, key);
+    async fn build_vars(#[future] var_store: VarStore) {
+        let env = var_store.await;
 
         env.set("BEEP", "boop", false).await.unwrap();
         env.set("HOMEBREW_NO_AUTO_UPDATE", "1", true).await.unwrap();
@@ -502,15 +508,10 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_var_generation_with_spaces() {
-        let store = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
-        let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
-
-        let env = VarStore::new(store, host_id, key);
+    async fn test_var_generation_with_spaces(#[future] var_store: VarStore) {
+        let env = var_store.await;
 
         // Test the exact scenario from the bug report
         env.set("FOO", "bar baz", true).await.unwrap();

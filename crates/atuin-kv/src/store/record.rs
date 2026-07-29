@@ -105,38 +105,25 @@ impl KvRecord {
 #[cfg(test)]
 mod tests {
     use super::{DecryptedData, KV_VERSION, KvRecord};
+    use rstest::rstest;
 
-    #[test]
-    fn encode_decode_some() {
+    #[rstest]
+    #[case::some(
+        Some("baz".to_owned()),
+        &[0x94, 0xa3, b'f', b'o', b'o', 0xa3, b'b', b'a', b'r', 0xc3, 0xa3, b'b', b'a', b'z']
+    )]
+    #[case::none(None, &[0x94, 0xa3, b'f', b'o', b'o', 0xa3, b'b', b'a', b'r', 0xc2])]
+    fn encode_decode(#[case] value: Option<String>, #[case] snapshot: &[u8]) {
         let kv = KvRecord {
             namespace: "foo".to_owned(),
             key: "bar".to_owned(),
-            value: Some("baz".to_owned()),
+            value,
         };
-        let snapshot = [
-            0x94, 0xa3, b'f', b'o', b'o', 0xa3, b'b', b'a', b'r', 0xc3, 0xa3, b'b', b'a', b'z',
-        ];
 
         let encoded = kv.serialize().unwrap();
         let decoded = KvRecord::deserialize(&encoded, KV_VERSION).unwrap();
 
-        assert_eq!(encoded.0, &snapshot);
-        assert_eq!(decoded, kv);
-    }
-
-    #[test]
-    fn encode_decode_none() {
-        let kv = KvRecord {
-            namespace: "foo".to_owned(),
-            key: "bar".to_owned(),
-            value: None,
-        };
-        let snapshot = [0x94, 0xa3, b'f', b'o', b'o', 0xa3, b'b', b'a', b'r', 0xc2];
-
-        let encoded = kv.serialize().unwrap();
-        let decoded = KvRecord::deserialize(&encoded, KV_VERSION).unwrap();
-
-        assert_eq!(encoded.0, &snapshot);
+        assert_eq!(encoded.0.as_slice(), snapshot);
         assert_eq!(decoded, kv);
     }
 

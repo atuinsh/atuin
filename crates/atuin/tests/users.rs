@@ -1,11 +1,24 @@
 use atuin_common::utils::uuid_v7;
+use rstest::{fixture, rstest};
 
 mod common;
 
-#[tokio::test]
-async fn registration() {
+type TestServer = (
+    url::Url,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+);
+
+#[fixture]
+async fn server() -> TestServer {
     let path = format!("/{}", uuid_v7().as_simple());
-    let (address, shutdown, server) = common::start_server(&path).await;
+    common::start_server(&path).await
+}
+
+#[rstest]
+#[tokio::test]
+async fn registration(#[future] server: TestServer) {
+    let (address, shutdown, server_task) = server.await;
     dbg!(&address);
 
     // -- REGISTRATION --
@@ -27,13 +40,13 @@ async fn registration() {
     assert_eq!(status.username, username);
 
     shutdown.send(()).unwrap();
-    server.await.unwrap();
+    server_task.await.unwrap();
 }
 
+#[rstest]
 #[tokio::test]
-async fn change_password() {
-    let path = format!("/{}", uuid_v7().as_simple());
-    let (address, shutdown, server) = common::start_server(&path).await;
+async fn change_password(#[future] server: TestServer) {
+    let (address, shutdown, server_task) = server.await;
 
     // -- REGISTRATION --
 
@@ -65,13 +78,13 @@ async fn change_password() {
     assert_eq!(status.username, username);
 
     shutdown.send(()).unwrap();
-    server.await.unwrap();
+    server_task.await.unwrap();
 }
 
+#[rstest]
 #[tokio::test]
-async fn multi_user_test() {
-    let path = format!("/{}", uuid_v7().as_simple());
-    let (address, shutdown, server) = common::start_server(&path).await;
+async fn multi_user_test(#[future] server: TestServer) {
+    let (address, shutdown, server_task) = server.await;
     dbg!(&address);
 
     // -- REGISTRATION --
@@ -117,5 +130,5 @@ async fn multi_user_test() {
     assert_eq!(status.username, user_two);
 
     shutdown.send(()).unwrap();
-    server.await.unwrap();
+    server_task.await.unwrap();
 }

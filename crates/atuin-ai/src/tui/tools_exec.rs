@@ -90,7 +90,10 @@ pub(crate) async fn load_skill_content(
 // present on Windows runners.
 #[cfg(all(test, unix))]
 mod tests {
+    use std::time::Duration;
+
     use futures::StreamExt;
+    use rstest::rstest;
 
     use super::*;
     use crate::tools::ShellToolCall;
@@ -99,6 +102,7 @@ mod tests {
         ShellToolCall::try_from(&serde_json::json!({ "command": command })).unwrap()
     }
 
+    #[rstest]
     #[tokio::test]
     async fn shell_stream_yields_previews_then_outcome() {
         let (_interrupt_tx, interrupt_rx) = oneshot::channel();
@@ -144,6 +148,8 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
     #[tokio::test]
     async fn shell_stream_interrupt_still_delivers_outcome() {
         let (interrupt_tx, interrupt_rx) = oneshot::channel();
@@ -153,16 +159,12 @@ mod tests {
         let _ = interrupt_tx.send(());
 
         // Interrupt is not cancellation: the stream must still end with an
-        // outcome (promptly — not after the sleep).
-        let all = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            let mut v = Vec::new();
-            while let Some(m) = stream.next().await {
-                v.push(m);
-            }
-            v
-        })
-        .await
-        .expect("interrupted stream should finish promptly");
+        // outcome (promptly — not after the sleep). "Promptly" is now
+        // enforced by the rstest #[timeout] above.
+        let mut all = Vec::new();
+        while let Some(m) = stream.next().await {
+            all.push(m);
+        }
 
         assert!(
             matches!(all.last(), Some(Msg::Fsm(Event::ToolExecutionDone { .. }))),

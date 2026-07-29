@@ -355,6 +355,7 @@ pub(crate) fn test_local_timeout() -> f64 {
 #[cfg(test)]
 mod tests {
     use rand::rngs::OsRng;
+    use rstest::*;
 
     use atuin_client::record::sqlite_store::SqliteStore;
 
@@ -362,6 +363,17 @@ mod tests {
 
     use super::{AliasRecord, AliasStore, CONFIG_SHELL_ALIAS_VERSION, test_local_timeout};
     use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
+
+    #[fixture]
+    async fn alias_store() -> (AliasStore, SqliteStore) {
+        let store = SqliteStore::new(":memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
+        let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
+
+        (AliasStore::new(store.clone(), host_id, key), store)
+    }
 
     #[test]
     fn encode_decode() {
@@ -380,15 +392,10 @@ mod tests {
         assert_eq!(decoded, record);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn build_aliases() {
-        let store = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
-        let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
-
-        let alias = AliasStore::new(store, host_id, key);
+    async fn build_aliases(#[future] alias_store: (AliasStore, SqliteStore)) {
+        let (alias, _store) = alias_store.await;
 
         alias.set("k", "kubectl").await.unwrap();
         alias.set("gp", "git push").await.unwrap();
@@ -438,20 +445,15 @@ alias kgap='kubectl get pods --all-namespaces'
         )
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn build_aliases_skips_corrupt_records() {
+    async fn build_aliases_skips_corrupt_records(#[future] alias_store: (AliasStore, SqliteStore)) {
         use atuin_client::record::encryption::PASETO_V4;
         use atuin_domain::record::{DecryptedData, Host};
 
         use super::CONFIG_SHELL_ALIAS_TAG;
 
-        let store = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
-        let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
-
-        let alias = AliasStore::new(store.clone(), host_id, key);
+        let (alias, store) = alias_store.await;
 
         alias.set("k", "kubectl").await.unwrap();
 
@@ -459,7 +461,7 @@ alias kgap='kubectl get pods --all-namespaces'
         // or "mixed". it should be skipped, rather than breaking the build entirely.
         let corrupt_key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
         let corrupt = atuin_domain::record::Record::builder()
-            .host(Host::new(host_id))
+            .host(Host::new(alias.host_id))
             .version(CONFIG_SHELL_ALIAS_VERSION.to_string())
             .tag(CONFIG_SHELL_ALIAS_TAG.to_string())
             .idx(1)

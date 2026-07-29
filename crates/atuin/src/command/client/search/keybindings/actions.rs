@@ -243,80 +243,50 @@ impl<'de> Deserialize<'de> for Action {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn parse_basic_actions() {
-        assert_eq!(Action::from_str("cursor-left").unwrap(), Action::CursorLeft);
-        assert_eq!(Action::from_str("accept").unwrap(), Action::Accept);
-        assert_eq!(Action::from_str("exit").unwrap(), Action::Exit);
-        assert_eq!(Action::from_str("noop").unwrap(), Action::Noop);
-        assert_eq!(
-            Action::from_str("vim-enter-normal").unwrap(),
-            Action::VimEnterNormal
-        );
+    #[rstest]
+    #[case::cursor_left("cursor-left", Action::CursorLeft)]
+    #[case::accept("accept", Action::Accept)]
+    #[case::exit("exit", Action::Exit)]
+    #[case::noop("noop", Action::Noop)]
+    #[case::vim_enter_normal("vim-enter-normal", Action::VimEnterNormal)]
+    #[case::accept_nth_1("accept-1", Action::AcceptNth(1))]
+    #[case::accept_nth_9("accept-9", Action::AcceptNth(9))]
+    #[case::return_selection("return-selection", Action::ReturnSelection)]
+    #[case::return_selection_1("return-selection-1", Action::ReturnSelectionNth(1))]
+    #[case::return_selection_9("return-selection-9", Action::ReturnSelectionNth(9))]
+    fn parse_action(#[case] input: &str, #[case] expected: Action) {
+        assert_eq!(Action::from_str(input).unwrap(), expected);
     }
 
-    #[test]
-    fn parse_accept_nth() {
-        assert_eq!(Action::from_str("accept-1").unwrap(), Action::AcceptNth(1));
-        assert_eq!(Action::from_str("accept-9").unwrap(), Action::AcceptNth(9));
+    #[rstest]
+    #[case::unknown_action("unknown-action")]
+    #[case::accept_0("accept-0")]
+    #[case::accept_10("accept-10")]
+    #[case::return_selection_0("return-selection-0")]
+    #[case::return_selection_10("return-selection-10")]
+    fn parse_unknown_action(#[case] input: &str) {
+        assert!(Action::from_str(input).is_err());
     }
 
-    #[test]
-    fn parse_return_selection() {
-        assert_eq!(
-            Action::from_str("return-selection").unwrap(),
-            Action::ReturnSelection
-        );
-        assert_eq!(
-            Action::from_str("return-selection-1").unwrap(),
-            Action::ReturnSelectionNth(1)
-        );
-        assert_eq!(
-            Action::from_str("return-selection-9").unwrap(),
-            Action::ReturnSelectionNth(9)
-        );
+    #[rstest]
+    #[case(Action::CursorLeft)]
+    #[case(Action::Accept)]
+    #[case(Action::AcceptNth(5))]
+    #[case(Action::ReturnSelection)]
+    #[case(Action::ReturnSelectionNth(3))]
+    #[case(Action::VimSearchInsert)]
+    #[case(Action::ScrollToScreenMiddle)]
+    fn round_trip(#[case] action: Action) {
+        assert_eq!(Action::from_str(&action.as_str()).unwrap(), action);
     }
 
-    #[test]
-    fn parse_unknown_action() {
-        assert!(Action::from_str("unknown-action").is_err());
-        assert!(Action::from_str("accept-0").is_err());
-        assert!(Action::from_str("accept-10").is_err());
-        assert!(Action::from_str("return-selection-0").is_err());
-        assert!(Action::from_str("return-selection-10").is_err());
-    }
-
-    #[test]
-    fn round_trip() {
-        let actions = vec![
-            Action::CursorLeft,
-            Action::Accept,
-            Action::AcceptNth(5),
-            Action::ReturnSelection,
-            Action::ReturnSelectionNth(3),
-            Action::VimSearchInsert,
-            Action::ScrollToScreenMiddle,
-        ];
-        for action in actions {
-            let s = action.as_str();
-            let parsed = Action::from_str(&s).unwrap();
-            assert_eq!(action, parsed);
-        }
-    }
-
-    #[test]
-    fn serde_round_trip() {
-        let action = Action::CursorLeft;
-        let json = serde_json::to_string(&action).unwrap();
-        assert_eq!(json, "\"cursor-left\"");
-        let parsed: Action = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, Action::CursorLeft);
-
-        let action = Action::AcceptNth(3);
-        let json = serde_json::to_string(&action).unwrap();
-        assert_eq!(json, "\"accept-3\"");
-        let parsed: Action = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, Action::AcceptNth(3));
+    #[rstest]
+    #[case(Action::CursorLeft, "\"cursor-left\"")]
+    #[case(Action::AcceptNth(3), "\"accept-3\"")]
+    fn serde_round_trip(#[case] action: Action, #[case] json: &str) {
+        assert_eq!(serde_json::to_string(&action).unwrap(), json);
+        assert_eq!(serde_json::from_str::<Action>(json).unwrap(), action);
     }
 }

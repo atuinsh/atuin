@@ -116,6 +116,7 @@ pub(crate) async fn fetch_usage(endpoint: &reqwest::Url, token: &str) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn deserializes_server_payload() {
@@ -177,13 +178,13 @@ mod tests {
         assert_eq!(snapshot.as_percentage(), None);
     }
 
-    #[test]
-    fn formats_reset_deltas() {
-        let mins = |m: u64| Duration::from_secs(m * 60);
-        assert_eq!(format_reset_delta(mins(4 * 24 * 60 + 300)), "4d");
-        assert_eq!(format_reset_delta(mins(23 * 60 + 59)), "23h");
-        assert_eq!(format_reset_delta(mins(56)), "56m");
-        assert_eq!(format_reset_delta(Duration::from_secs(30)), "1m");
+    #[rstest]
+    #[case::days(Duration::from_secs((4 * 24 * 60 + 300) * 60), "4d")]
+    #[case::hours(Duration::from_secs((23 * 60 + 59) * 60), "23h")]
+    #[case::minutes(Duration::from_secs(56 * 60), "56m")]
+    #[case::sub_minute(Duration::from_secs(30), "1m")]
+    fn format_reset_delta_cases(#[case] delta: Duration, #[case] expected: &str) {
+        assert_eq!(format_reset_delta(delta), expected);
     }
 
     #[test]

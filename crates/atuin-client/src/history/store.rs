@@ -413,6 +413,7 @@ impl HistoryStore {
 mod tests {
     use atuin_domain::record::{DecryptedData, Host, HostId, Record};
     use futures::TryStreamExt;
+    use rstest::*;
     use time::macros::datetime;
 
     use crate::{
@@ -424,83 +425,10 @@ mod tests {
 
     use super::History;
 
-    #[test]
-    fn test_serialize_deserialize_create() {
-        let bytes = [
-            204, 0, 196, 153, 205, 0, 2, 156, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49,
-            55, 53, 55, 99, 100, 50, 97, 101, 101, 54, 53, 99, 100, 55, 56, 54, 49, 102, 57, 99,
-            56, 49, 207, 23, 166, 251, 212, 181, 82, 0, 0, 100, 0, 162, 108, 115, 217, 41, 47, 85,
-            115, 101, 114, 115, 47, 101, 108, 108, 105, 101, 47, 115, 114, 99, 47, 103, 105, 116,
-            104, 117, 98, 46, 99, 111, 109, 47, 97, 116, 117, 105, 110, 115, 104, 47, 97, 116, 117,
-            105, 110, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 97, 100, 56, 57, 55, 53, 57, 55,
-            56, 53, 50, 53, 50, 55, 97, 51, 49, 99, 57, 57, 56, 48, 53, 57, 170, 98, 111, 111, 112,
-            58, 101, 108, 108, 105, 101, 192, 165, 101, 108, 108, 105, 101, 192, 164, 98, 97, 115,
-            104,
-        ];
-
-        let history = History {
-            id: "018cd4fe81757cd2aee65cd7861f9c81".to_owned().into(),
-            timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00),
-            duration: 100,
-            exit: 0,
-            command: "ls".to_owned(),
-            cwd: "/Users/ellie/src/github.com/atuinsh/atuin".to_owned(),
-            session: "018cd4fead897597852527a31c998059".to_owned(),
-            hostname: "boop:ellie".to_owned(),
-            author: "ellie".to_owned(),
-            intent: None,
-            deleted_at: None,
-            shell: Some("bash".to_owned()),
-        };
-
-        let record = HistoryRecord::Create(history);
-
-        let serialized = record.serialize().expect("failed to serialize history");
-        assert_eq!(serialized.0, bytes);
-
-        let deserialized = HistoryRecord::deserialize(&serialized, Version::LATEST.name())
-            .expect("failed to deserialize HistoryRecord");
-        assert_eq!(deserialized, record);
-
-        // check the snapshot too
-        let deserialized =
-            HistoryRecord::deserialize(&DecryptedData(Vec::from(bytes)), Version::LATEST.name())
-                .expect("failed to deserialize HistoryRecord");
-        assert_eq!(deserialized, record);
-    }
-
-    #[test]
-    fn test_serialize_deserialize_delete() {
-        let bytes = [
-            204, 1, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49, 55, 53, 55, 99, 100, 50,
-            97, 101, 101, 54, 53, 99, 100, 55, 56, 54, 49, 102, 57, 99, 56, 49,
-        ];
-        let record = HistoryRecord::Delete("018cd4fe81757cd2aee65cd7861f9c81".to_string().into());
-
-        let serialized = record.serialize().expect("failed to serialize history");
-        assert_eq!(serialized.0, bytes);
-
-        let deserialized = HistoryRecord::deserialize(&serialized, Version::LATEST.name())
-            .expect("failed to deserialize HistoryRecord");
-        assert_eq!(deserialized, record);
-
-        let deserialized =
-            HistoryRecord::deserialize(&DecryptedData(Vec::from(bytes)), Version::LATEST.name())
-                .expect("failed to deserialize HistoryRecord");
-        assert_eq!(deserialized, record);
-    }
-
-    #[tokio::test]
-    async fn test_history_skips_corrupt_records() {
-        let store = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let host_id = HostId(atuin_common::utils::uuid_v7());
-        let key = [0u8; 32];
-
-        let history_store = HistoryStore::new(store.clone(), host_id, key);
-
-        let history = History {
+    /// The identical `History` literal used by both async tests.
+    #[fixture]
+    fn sample_history() -> History {
+        History {
             id: "018cd4fe81757cd2aee65cd7861f9c81".to_owned().into(),
             timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00),
             duration: 100,
@@ -513,8 +441,88 @@ mod tests {
             intent: None,
             deleted_at: None,
             shell: None,
-        };
+        }
+    }
 
+    /// A `:memory:` `SqliteStore`, its `HostId`, and the `HistoryStore` built on it.
+    ///
+    /// Separate `:memory:` `SqliteStore` instances are INDEPENDENT databases, so the store
+    /// and the `HistoryStore` layered on it must originate from a single fixture.
+    #[fixture]
+    async fn stores() -> (SqliteStore, HostId, HistoryStore) {
+        let store = SqliteStore::new(":memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let host_id = HostId(atuin_common::utils::uuid_v7());
+        let history_store = HistoryStore::new(store.clone(), host_id, [0u8; 32]);
+        (store, host_id, history_store)
+    }
+
+    fn assert_record_roundtrip(record: HistoryRecord, expected_bytes: &[u8]) {
+        let serialized = record.serialize().expect("failed to serialize history");
+        assert_eq!(serialized.0, expected_bytes);
+
+        let deserialized = HistoryRecord::deserialize(&serialized, Version::LATEST.name())
+            .expect("failed to deserialize HistoryRecord");
+        assert_eq!(deserialized, record);
+
+        // check the snapshot too
+        let deserialized = HistoryRecord::deserialize(
+            &DecryptedData(Vec::from(expected_bytes)),
+            Version::LATEST.name(),
+        )
+        .expect("failed to deserialize HistoryRecord");
+        assert_eq!(deserialized, record);
+    }
+
+    #[rstest]
+    #[case::create(
+        HistoryRecord::Create(History {
+            id: "018cd4fe81757cd2aee65cd7861f9c81".to_owned().into(),
+            timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00),
+            duration: 100,
+            exit: 0,
+            command: "ls".to_owned(),
+            cwd: "/Users/ellie/src/github.com/atuinsh/atuin".to_owned(),
+            session: "018cd4fead897597852527a31c998059".to_owned(),
+            hostname: "boop:ellie".to_owned(),
+            author: "ellie".to_owned(),
+            intent: None,
+            deleted_at: None,
+            shell: Some("bash".to_owned()),
+        }),
+        vec![
+            204, 0, 196, 153, 205, 0, 2, 156, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49,
+            55, 53, 55, 99, 100, 50, 97, 101, 101, 54, 53, 99, 100, 55, 56, 54, 49, 102, 57, 99,
+            56, 49, 207, 23, 166, 251, 212, 181, 82, 0, 0, 100, 0, 162, 108, 115, 217, 41, 47, 85,
+            115, 101, 114, 115, 47, 101, 108, 108, 105, 101, 47, 115, 114, 99, 47, 103, 105, 116,
+            104, 117, 98, 46, 99, 111, 109, 47, 97, 116, 117, 105, 110, 115, 104, 47, 97, 116, 117,
+            105, 110, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 97, 100, 56, 57, 55, 53, 57, 55,
+            56, 53, 50, 53, 50, 55, 97, 51, 49, 99, 57, 57, 56, 48, 53, 57, 170, 98, 111, 111, 112,
+            58, 101, 108, 108, 105, 101, 192, 165, 101, 108, 108, 105, 101, 192, 164, 98, 97, 115,
+            104,
+        ]
+    )]
+    #[case::delete(
+        HistoryRecord::Delete("018cd4fe81757cd2aee65cd7861f9c81".to_string().into()),
+        vec![
+            204, 1, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49, 55, 53, 55, 99, 100, 50,
+            97, 101, 101, 54, 53, 99, 100, 55, 56, 54, 49, 102, 57, 99, 56, 49,
+        ]
+    )]
+    fn test_serialize_deserialize(#[case] record: HistoryRecord, #[case] expected_bytes: Vec<u8>) {
+        assert_record_roundtrip(record, &expected_bytes);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_history_skips_corrupt_records(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+        #[from(sample_history)] history: History,
+    ) {
+        let (store, host_id, history_store) = parts;
         history_store.push(history.clone()).await.unwrap();
 
         // a record in the history tag encrypted with a different key - the store is corrupt,
@@ -538,31 +546,15 @@ mod tests {
         assert_eq!(records[0], HistoryRecord::Create(history));
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_incremental_build_returns_created_histories() {
-        let store = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let host_id = HostId(atuin_common::utils::uuid_v7());
-        let key = [0u8; 32];
-
-        let history_store = HistoryStore::new(store.clone(), host_id, key);
-
-        let history = History {
-            id: "018cd4fe81757cd2aee65cd7861f9c81".to_owned().into(),
-            timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00),
-            duration: 100,
-            exit: 0,
-            command: "ls".to_owned(),
-            cwd: "/".to_owned(),
-            session: "018cd4fead897597852527a31c998059".to_owned(),
-            hostname: "test:test".to_owned(),
-            author: "test".to_owned(),
-            intent: None,
-            deleted_at: None,
-            shell: None,
-        };
-
+    async fn test_incremental_build_returns_created_histories(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+        #[from(sample_history)] history: History,
+    ) {
+        let (_store, _host_id, history_store) = parts;
         // `push` returns the RECORD id (record-store id-space), distinct from
         // `history.id` (the HistoryId). This distinction is the whole bug.
         let (record_id, _) = history_store.push(history.clone()).await.unwrap();

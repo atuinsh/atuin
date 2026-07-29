@@ -133,23 +133,29 @@ fn hash_content(content: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    #[test]
-    fn record_and_check_fresh() {
+    #[fixture]
+    fn recorded() -> (FileReadTracker, NamedTempFile) {
         let mut tracker = FileReadTracker::default();
         let mut tmp = NamedTempFile::new().unwrap();
-        write!(tmp, "hello world").unwrap();
+        write!(tmp, "original").unwrap();
 
         let path = tmp.path().to_path_buf();
         let content = std::fs::read(&path).unwrap();
         let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
 
-        tracker.record_read(path.clone(), &content, mtime);
+        tracker.record_read(path, &content, mtime);
 
+        (tracker, tmp)
+    }
+
+    #[rstest]
+    fn record_and_check_fresh(#[from(recorded)] (tracker, tmp): (FileReadTracker, NamedTempFile)) {
         assert!(matches!(
-            tracker.check_freshness(&path).unwrap(),
+            tracker.check_freshness(tmp.path()).unwrap(),
             FreshnessCheck::Fresh
         ));
     }
@@ -164,50 +170,34 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn check_stale_after_modification() {
-        let mut tracker = FileReadTracker::default();
-        let mut tmp = NamedTempFile::new().unwrap();
-        write!(tmp, "original").unwrap();
-
-        let path = tmp.path().to_path_buf();
-        let content = std::fs::read(&path).unwrap();
-        let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
-
-        tracker.record_read(path.clone(), &content, mtime);
-
+    #[rstest]
+    fn check_stale_after_modification(
+        #[from(recorded)] (tracker, tmp): (FileReadTracker, NamedTempFile),
+    ) {
         // Small delay to ensure the filesystem mtime advances
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         // Modify the file
-        std::fs::write(&path, "modified").unwrap();
+        std::fs::write(tmp.path(), "modified").unwrap();
 
         assert!(matches!(
-            tracker.check_freshness(&path).unwrap(),
+            tracker.check_freshness(tmp.path()).unwrap(),
             FreshnessCheck::Stale
         ));
     }
 
-    #[test]
-    fn update_after_edit_makes_fresh() {
-        let mut tracker = FileReadTracker::default();
-        let mut tmp = NamedTempFile::new().unwrap();
-        write!(tmp, "original").unwrap();
-
-        let path = tmp.path().to_path_buf();
-        let content = std::fs::read(&path).unwrap();
-        let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
-
-        tracker.record_read(path.clone(), &content, mtime);
-
+    #[rstest]
+    fn update_after_edit_makes_fresh(
+        #[from(recorded)] (mut tracker, tmp): (FileReadTracker, NamedTempFile),
+    ) {
         // Simulate an edit
         let new_content = b"edited content";
-        std::fs::write(&path, new_content).unwrap();
-        let new_mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
-        tracker.update_after_edit(&path, new_content, new_mtime);
+        std::fs::write(tmp.path(), new_content).unwrap();
+        let new_mtime = std::fs::metadata(tmp.path()).unwrap().modified().unwrap();
+        tracker.update_after_edit(tmp.path(), new_content, new_mtime);
 
         assert!(matches!(
-            tracker.check_freshness(&path).unwrap(),
+            tracker.check_freshness(tmp.path()).unwrap(),
             FreshnessCheck::Fresh
         ));
     }

@@ -737,34 +737,33 @@ fn kill_process(pid: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::{fixture, rstest};
 
-    #[test]
-    fn test_version_matches() {
-        assert!(daemon_matches_expected(
-            DAEMON_VERSION,
-            DAEMON_PROTOCOL_VERSION
-        ));
+    #[rstest]
+    #[case::matches(DAEMON_VERSION, DAEMON_PROTOCOL_VERSION, true)]
+    #[case::wrong_version("0.0.0", DAEMON_PROTOCOL_VERSION, false)]
+    #[case::wrong_protocol(DAEMON_VERSION, 999, false)]
+    #[case::wrong_both("0.0.0", 999, false)]
+    fn daemon_matches_expected_cases(
+        #[case] version: &str,
+        #[case] protocol: u32,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(daemon_matches_expected(version, protocol), expected);
     }
 
-    #[test]
-    fn test_version_mismatch() {
-        assert!(!daemon_matches_expected("0.0.0", DAEMON_PROTOCOL_VERSION));
-        assert!(!daemon_matches_expected(DAEMON_VERSION, 999));
-        assert!(!daemon_matches_expected("0.0.0", 999));
-    }
-
-    #[test]
-    fn test_mismatch_message_version() {
-        let msg = daemon_mismatch_message("0.0.0", DAEMON_PROTOCOL_VERSION);
-        assert!(msg.contains("out of date"), "got: {msg}");
-        assert!(msg.contains("0.0.0"));
-        assert!(msg.contains(DAEMON_VERSION));
-    }
-
-    #[test]
-    fn test_mismatch_message_protocol() {
-        let msg = daemon_mismatch_message(DAEMON_VERSION, 999);
-        assert!(msg.contains("protocol mismatch"), "got: {msg}");
+    #[rstest]
+    #[case::out_of_date("0.0.0", DAEMON_PROTOCOL_VERSION, vec!["out of date", "0.0.0", DAEMON_VERSION])]
+    #[case::protocol_mismatch(DAEMON_VERSION, 999, vec!["protocol mismatch"])]
+    fn daemon_mismatch_message_cases(
+        #[case] version: &str,
+        #[case] protocol: u32,
+        #[case] needles: Vec<&str>,
+    ) {
+        let msg = daemon_mismatch_message(version, protocol);
+        for needle in needles {
+            assert!(msg.contains(needle), "got: {msg}");
+        }
     }
 
     #[test]
@@ -774,11 +773,17 @@ mod tests {
         assert_eq!(lock, PathBuf::from("/tmp/atuin-daemon.pid.startup.lock"));
     }
 
-    #[test]
-    fn test_pidfile_guard_acquire_and_drop() {
+    #[fixture]
+    fn pidfile() -> (tempfile::TempDir, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
-        let pidfile = tmp.path().join("daemon.pid");
+        let path = tmp.path().join("daemon.pid");
+        (tmp, path)
+    }
 
+    #[rstest]
+    fn test_pidfile_guard_acquire_and_drop(
+        #[from(pidfile)] (_tmp, pidfile): (tempfile::TempDir, PathBuf),
+    ) {
         {
             let _guard = PidfileGuard::acquire(&pidfile).unwrap();
             // Guard holds an exclusive lock — on Windows other handles cannot
@@ -795,11 +800,10 @@ mod tests {
         let _guard2 = PidfileGuard::acquire(&pidfile).unwrap();
     }
 
-    #[test]
-    fn test_pidfile_guard_prevents_double_acquire() {
-        let tmp = tempfile::tempdir().unwrap();
-        let pidfile = tmp.path().join("daemon.pid");
-
+    #[rstest]
+    fn test_pidfile_guard_prevents_double_acquire(
+        #[from(pidfile)] (_tmp, pidfile): (tempfile::TempDir, PathBuf),
+    ) {
         let _guard = PidfileGuard::acquire(&pidfile).unwrap();
         let result = PidfileGuard::acquire(&pidfile);
         assert!(result.is_err());

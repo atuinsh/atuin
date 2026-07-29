@@ -1799,7 +1799,7 @@ mod tests {
     use eyre::Result;
     use rstest::rstest;
 
-    use super::{AiEndpointProtocol, Settings, UtcOffsetSpec};
+    use super::{AiEndpointProtocol, FilterMode, Settings, UtcOffsetSpec};
     use url::Url;
 
     #[rstest]
@@ -1867,8 +1867,15 @@ mod tests {
         assert_eq!(super::DEFAULT_HUB_URL.host_str(), Some("hub.atuin.sh"));
     }
 
-    #[test]
-    fn can_choose_workspace_filters_when_in_git_context() -> Result<()> {
+    #[rstest]
+    #[case::in_git_context(true, true, FilterMode::Workspace)]
+    #[case::not_in_git_context(true, false, FilterMode::Host)]
+    #[case::workspaces_disabled(false, true, FilterMode::Host)]
+    fn workspace_filter_selection(
+        #[case] workspaces: bool,
+        #[case] git_root: bool,
+        #[case] expected: FilterMode,
+    ) {
         let mut settings = super::Settings::default();
         settings.search.filters = vec![
             super::FilterMode::Workspace,
@@ -1877,48 +1884,9 @@ mod tests {
             super::FilterMode::Session,
             super::FilterMode::Global,
         ];
-        settings.workspaces = true;
+        settings.workspaces = workspaces;
 
-        assert_eq!(
-            settings.default_filter_mode(true),
-            super::FilterMode::Workspace,
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn wont_choose_workspace_filters_when_not_in_git_context() -> Result<()> {
-        let mut settings = super::Settings::default();
-        settings.search.filters = vec![
-            super::FilterMode::Workspace,
-            super::FilterMode::Host,
-            super::FilterMode::Directory,
-            super::FilterMode::Session,
-            super::FilterMode::Global,
-        ];
-        settings.workspaces = true;
-
-        assert_eq!(settings.default_filter_mode(false), super::FilterMode::Host,);
-
-        Ok(())
-    }
-
-    #[test]
-    fn wont_choose_workspace_filters_when_workspaces_disabled() -> Result<()> {
-        let mut settings = super::Settings::default();
-        settings.search.filters = vec![
-            super::FilterMode::Workspace,
-            super::FilterMode::Host,
-            super::FilterMode::Directory,
-            super::FilterMode::Session,
-            super::FilterMode::Global,
-        ];
-        settings.workspaces = false;
-
-        assert_eq!(settings.default_filter_mode(true), super::FilterMode::Host,);
-
-        Ok(())
+        assert_eq!(settings.default_filter_mode(git_root), expected);
     }
 
     #[test]

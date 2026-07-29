@@ -284,8 +284,10 @@ mod tests {
 
     use super::{DecryptedData, Diff, Record, RecordStatus};
     use pretty_assertions::assert_eq;
+    use rstest::{fixture, rstest};
     use uuid::Uuid;
 
+    #[fixture]
     fn test_record() -> Record<DecryptedData> {
         Record::builder()
             .host(Host::new(HostId(Uuid::now_v7())))
@@ -296,10 +298,9 @@ mod tests {
             .build()
     }
 
-    #[test]
-    fn record_index() {
+    #[rstest]
+    fn record_index(#[from(test_record)] record: Record<DecryptedData>) {
         let mut index = RecordStatus::new();
-        let record = test_record();
 
         index.set(record.clone());
 
@@ -312,10 +313,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn record_index_overwrite() {
+    #[rstest]
+    fn record_index_overwrite(#[from(test_record)] record: Record<DecryptedData>) {
         let mut index = RecordStatus::new();
-        let record = test_record();
         let child = record.append(vec![1, 2, 3]);
 
         index.set(record.clone());
@@ -330,14 +330,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn record_index_no_diff() {
+    #[rstest]
+    fn record_index_no_diff(#[from(test_record)] record1: Record<DecryptedData>) {
         // Here, they both have the same version and should have no diff
 
         let mut index1 = RecordStatus::new();
         let mut index2 = RecordStatus::new();
-
-        let record1 = test_record();
 
         index1.set(record1.clone());
         index2.set(record1);
@@ -347,14 +345,13 @@ mod tests {
         assert_eq!(0, diff.len(), "expected empty diff");
     }
 
-    #[test]
-    fn record_index_single_diff() {
+    #[rstest]
+    fn record_index_single_diff(#[from(test_record)] record1: Record<DecryptedData>) {
         // Here, they both have the same stores, but one is ahead by a single record
 
         let mut index1 = RecordStatus::new();
         let mut index2 = RecordStatus::new();
 
-        let record1 = test_record();
         let record2 = record1.append(vec![1, 2, 3]);
 
         index1.set(record1);
@@ -374,7 +371,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn record_index_multi_diff() {
         // A much more complex case, with a bunch more checks
         let mut index1 = RecordStatus::new();

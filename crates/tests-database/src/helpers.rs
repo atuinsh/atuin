@@ -57,21 +57,18 @@ pub async fn destroy_test_db(settings: &DbSettings) -> eyre::Result<()> {
 mod tests {
     use super::*;
     use regex::Regex;
+    use rstest::rstest;
 
-    #[test]
-    fn test_settings_none() -> eyre::Result<()> {
-        let settings = get_settings(None)?;
-        let re = Regex::new(r"sqlite://.*[\\/]atuin_test_db_\d+").unwrap();
+    #[rstest]
+    #[case::none(None, r"sqlite://.*[\\/]atuin_test_db_\d+")]
+    #[case::with_param(
+        Some("postgres://user:pass@host/database_?mode=ssl".into()),
+        r"postgres://user:pass@host/database_\d+\?mode=ssl"
+    )]
+    fn settings(#[case] input: Option<String>, #[case] pattern: &str) -> eyre::Result<()> {
+        let settings = get_settings(input)?;
+        let re = Regex::new(pattern)?;
         assert!(re.is_match(&settings.db_uri), "{}", &settings.db_uri);
-        Ok(())
-    }
-
-    #[test]
-    fn test_settings_with_param() -> eyre::Result<()> {
-        let settings = get_settings(Some("postgres://user:pass@host/database_?mode=ssl".into()))?;
-        let re = Regex::new(r"postgres://user:pass@host/database_\d+\?mode=ssl")?;
-        assert!(re.is_match(&settings.db_uri), "{}", &settings.db_uri);
-
         Ok(())
     }
 }

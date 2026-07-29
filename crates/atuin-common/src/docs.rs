@@ -45,22 +45,20 @@ const fn version_segment(version: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn stable_releases_pin_to_their_minor() {
-        assert_eq!(version_segment("18.17.0"), "18.17");
-        assert_eq!(version_segment("18.17.1"), "18.17");
-        assert_eq!(version_segment("19.0.0"), "19.0");
-        assert_eq!(version_segment("100.200.300"), "100.200");
-    }
-
-    #[test]
-    fn prereleases_fall_back_to_main() {
-        // Pinning these to `18.18.0-beta.2` would 404 once 18.18.0 shipped and
-        // the preview was pruned.
-        assert_eq!(version_segment("18.18.0-beta.2"), "main");
-        assert_eq!(version_segment("18.16.0-beta.1"), "main");
-        assert_eq!(version_segment("19.0.0-rc.1"), "main");
+    #[rstest]
+    #[case::stable_patch_zero("18.17.0", "18.17")]
+    #[case::stable_patch_one("18.17.1", "18.17")]
+    #[case::stable_major_bump("19.0.0", "19.0")]
+    #[case::stable_large("100.200.300", "100.200")]
+    // Pinning these to `18.18.0-beta.2` would 404 once 18.18.0 shipped and
+    // the preview was pruned.
+    #[case::prerelease_beta("18.18.0-beta.2", "main")]
+    #[case::prerelease_beta_older("18.16.0-beta.1", "main")]
+    #[case::prerelease_rc("19.0.0-rc.1", "main")]
+    fn version_segment_maps_release_to_docs_segment(#[case] version: &str, #[case] expected: &str) {
+        assert_eq!(version_segment(version), expected);
     }
 
     #[test]

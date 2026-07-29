@@ -179,28 +179,19 @@ fn format_iso8601(dt: OffsetDateTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::*;
 
     // ── sanitize_path ──────────────────────────────────────────
 
-    #[test]
-    fn sanitize_absolute_path() {
-        let path = Path::new("/Users/me/.config/atuin/config.toml");
-        assert_eq!(
-            sanitize_path(path),
-            "Users%2Fme%2F.config%2Fatuin%2Fconfig.toml"
-        );
-    }
-
-    #[test]
-    fn sanitize_preserves_existing_percent() {
-        let path = Path::new("/data/100%done/file.txt");
-        assert_eq!(sanitize_path(path), "data%2F100%25done%2Ffile.txt");
-    }
-
-    #[test]
-    fn sanitize_relative_path() {
-        let path = Path::new("relative/path.txt");
-        assert_eq!(sanitize_path(path), "relative%2Fpath.txt");
+    #[rstest]
+    #[case::absolute(
+        "/Users/me/.config/atuin/config.toml",
+        "Users%2Fme%2F.config%2Fatuin%2Fconfig.toml"
+    )]
+    #[case::preserves_percent("/data/100%done/file.txt", "data%2F100%25done%2Ffile.txt")]
+    #[case::relative("relative/path.txt", "relative%2Fpath.txt")]
+    fn sanitize_path_cases(#[case] input: std::path::PathBuf, #[case] expected: &str) {
+        assert_eq!(sanitize_path(&input), expected);
     }
 
     #[test]
@@ -240,20 +231,23 @@ mod tests {
 
     // ── atomic_write_file ──────────────────────────────────────
 
-    #[test]
-    fn atomic_write_creates_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("test.txt");
+    #[fixture]
+    fn tmp() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
+    }
+
+    #[rstest]
+    fn atomic_write_creates_file(tmp: tempfile::TempDir) {
+        let target = tmp.path().join("test.txt");
 
         atomic_write_file(&target, b"hello world").unwrap();
 
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello world");
     }
 
-    #[test]
-    fn atomic_write_overwrites_existing() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("test.txt");
+    #[rstest]
+    fn atomic_write_overwrites_existing(tmp: tempfile::TempDir) {
+        let target = tmp.path().join("test.txt");
 
         std::fs::write(&target, "old content").unwrap();
         atomic_write_file(&target, b"new content").unwrap();
@@ -261,10 +255,9 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "new content");
     }
 
-    #[test]
-    fn atomic_write_creates_parent_dirs() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("sub").join("dir").join("test.txt");
+    #[rstest]
+    fn atomic_write_creates_parent_dirs(tmp: tempfile::TempDir) {
+        let target = tmp.path().join("sub").join("dir").join("test.txt");
 
         atomic_write_file(&target, b"nested").unwrap();
 
@@ -272,12 +265,11 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn atomic_write_preserves_permissions() {
+    #[rstest]
+    fn atomic_write_preserves_permissions(tmp: tempfile::TempDir) {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("test.txt");
+        let target = tmp.path().join("test.txt");
 
         std::fs::write(&target, "original").unwrap();
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
@@ -290,12 +282,22 @@ mod tests {
 
     // ── SnapshotStore ──────────────────────────────────────────
 
-    #[test]
-    fn snapshot_creates_file_and_manifest() {
+    #[fixture]
+    fn store() -> (tempfile::TempDir, std::path::PathBuf, SnapshotStore) {
         let dir = tempfile::tempdir().unwrap();
         let session_dir = dir.path().join("session-abc");
-        let mut store = SnapshotStore::open(session_dir.clone()).unwrap();
+        let store = SnapshotStore::open(session_dir.clone()).unwrap();
+        (dir, session_dir, store)
+    }
 
+    #[rstest]
+    fn snapshot_creates_file_and_manifest(
+        #[from(store)] (_dir, session_dir, mut store): (
+            tempfile::TempDir,
+            std::path::PathBuf,
+            SnapshotStore,
+        ),
+    ) {
         let file_path = Path::new("/Users/me/.config/foo.toml");
         let created = store
             .ensure_snapshot(file_path, b"[key]\nval = 1\n")
@@ -327,12 +329,14 @@ mod tests {
         assert_eq!(entry["size_bytes"].as_u64().unwrap(), 14);
     }
 
-    #[test]
-    fn snapshot_is_idempotent() {
-        let dir = tempfile::tempdir().unwrap();
-        let session_dir = dir.path().join("session-abc");
-        let mut store = SnapshotStore::open(session_dir.clone()).unwrap();
-
+    #[rstest]
+    fn snapshot_is_idempotent(
+        #[from(store)] (_dir, session_dir, mut store): (
+            tempfile::TempDir,
+            std::path::PathBuf,
+            SnapshotStore,
+        ),
+    ) {
         let path = Path::new("/etc/hosts");
         let first = store.ensure_snapshot(path, b"first content").unwrap();
         let second = store.ensure_snapshot(path, b"different content").unwrap();
@@ -373,12 +377,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn snapshot_multiple_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let session_dir = dir.path().join("session-abc");
-        let mut store = SnapshotStore::open(session_dir.clone()).unwrap();
-
+    #[rstest]
+    fn snapshot_multiple_files(
+        #[from(store)] (_dir, session_dir, mut store): (
+            tempfile::TempDir,
+            std::path::PathBuf,
+            SnapshotStore,
+        ),
+    ) {
         store
             .ensure_snapshot(Path::new("/etc/hosts"), b"hosts content")
             .unwrap();

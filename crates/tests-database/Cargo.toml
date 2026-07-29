@@ -32,3 +32,6 @@ snowflake_uid = { version = "0.1.1" }
 
 regex.workspace = true
 url = "2.5.8"
+
+[dev-dependencies]
+rstest = { workspace = true }

@@ -363,26 +363,19 @@ async fn run_non_interactive(
 mod tests {
     use super::{AuthorPattern, Cmd};
     use clap::Parser;
+    use rstest::rstest;
 
-    #[test]
-    fn search_for_triple_dash() {
-        // Issue #3028: searching for `---` should not be treated as a CLI flag
-        let cmd = Cmd::try_parse_from(["search", "---"]);
-        assert!(cmd.is_ok(), "Failed to parse '---' as a query: {cmd:?}");
-        let cmd = cmd.unwrap();
-        assert_eq!(cmd.query, vec!["---".to_string()]);
+    #[rstest]
+    // triple_dash: Issue #3028 - searching for `---` should not be treated as a CLI flag
+    #[case::triple_dash(vec!["search", "---"], vec!["---"])]
+    // double_dash_value: searching for strings starting with -- should also work
+    #[case::double_dash_value(vec!["search", "--", "--foo"], vec!["--foo"])]
+    fn parses_query_args(#[case] args: Vec<&str>, #[case] expected: Vec<&str>) {
+        let cmd = Cmd::try_parse_from(args).expect("should parse as query");
+        assert_eq!(cmd.query, expected);
     }
 
-    #[test]
-    fn search_for_double_dash_value() {
-        // Searching for strings starting with -- should also work
-        let cmd = Cmd::try_parse_from(["search", "--", "--foo"]);
-        assert!(cmd.is_ok());
-        let cmd = cmd.unwrap();
-        assert_eq!(cmd.query, vec!["--foo".to_string()]);
-    }
-
-    #[test]
+    #[rstest]
     fn search_author_cli_flag() {
         let cmd =
             Cmd::try_parse_from(["search", "--author", "codex", "--author", "ellie"]).unwrap();

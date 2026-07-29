@@ -34,3 +34,6 @@ tempfile = { workspace = true }
 minijinja = { workspace = true }
 serde_json = { workspace = true }
 
+[dev-dependencies]
+rstest = { workspace = true }
+

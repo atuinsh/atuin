@@ -1220,7 +1220,7 @@ impl<'a> Iterator for QueryTokenizer<'a> {
 mod test {
     use super::*;
     use crate::settings::test_local_timeout;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::time::{Duration, Instant};
     use time::format_description::well_known::Rfc3339;
 
@@ -1232,6 +1232,13 @@ mod test {
             host_id: "test-host".to_string(),
             git_root: None,
         }
+    }
+
+    #[fixture]
+    async fn empty_db() -> Sqlite {
+        Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap()
     }
 
     async fn assert_search_eq(
@@ -1323,11 +1330,13 @@ mod test {
     // `stats --filter-mode` scopes over a period by handing `list` an inclusive
     // `(from, to)` range. The bounds must be inclusive on both ends so a command
     // recorded exactly on a period boundary (e.g. at midnight) is still counted.
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_list_range_is_inclusive() {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn test_list_range_is_inclusive(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
         let context = Context {
             hostname: "booop".to_string(),
             session: "beep boop".to_string(),
@@ -1366,11 +1375,13 @@ mod test {
         assert_eq!(hits[0].command, "ls /home/ellie");
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_active_returns_only_requested_rows() {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn test_load_active_returns_only_requested_rows(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
         let alpha = save_history_item(&db, "echo alpha").await;
         let bravo = save_history_item(&db, "echo bravo").await;
         let _charlie = save_history_item(&db, "echo charlie").await;
@@ -1385,11 +1396,13 @@ mod test {
         assert_eq!(commands, vec!["echo alpha", "echo bravo"]);
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_active_empty_never_reaches_sqlite() {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn test_load_active_empty_never_reaches_sqlite(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
         save_history_item(&db, "echo alpha").await;
 
         // `select ... where id in ()` is a syntax error, so the empty case must
@@ -1399,11 +1412,13 @@ mod test {
         assert!(loaded.is_empty());
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_active_skips_soft_deleted() {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn test_load_active_skips_soft_deleted(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
         let mut alpha = save_history_item(&db, "echo alpha").await;
         let bravo = save_history_item(&db, "echo bravo").await;
 
@@ -1420,11 +1435,13 @@ mod test {
         assert_eq!(loaded[0].command, "echo bravo");
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_active_missing_ids_are_omitted() {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn test_load_active_missing_ids_are_omitted(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
         let alpha = save_history_item(&db, "echo alpha").await;
 
         let loaded = db
@@ -1436,12 +1453,13 @@ mod test {
         assert_eq!(loaded[0].command, "echo alpha");
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_active_chunks_past_sqlite_param_limit() {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
-
+    async fn test_load_active_chunks_past_sqlite_param_limit(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
         // Comfortably over SQLITE_MAX_VARIABLE_NUMBER's 999 floor: a single
         // `in (...)` with one placeholder per id would fail here.
         let mut ids = Vec::new();
@@ -1676,11 +1694,14 @@ mod test {
         .unwrap();
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_reordered_fuzzy() {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn test_search_reordered_fuzzy(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let mut db = db;
         // test ordering of results: we should choose the first, even though it happened longer ago.
 
         new_history_item(&mut db, "curl").await.unwrap();
@@ -1764,12 +1785,14 @@ mod test {
         .await;
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_paged_basic() {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
-
+    async fn test_paged_basic(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let mut db = db;
         // Add 5 history items
         for i in 0..5 {
             new_history_item(&mut db, &format!("command{}", i))
@@ -1800,12 +1823,13 @@ mod test {
         assert!(page4.is_none());
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_paged_empty() {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
-
+    async fn test_paged_empty(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
         // Create a paged iterator on empty database
         let mut paged = db.all_paged(10, false, false);
 
@@ -1814,12 +1838,14 @@ mod test {
         assert!(page.is_none());
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_paged_unique() {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
-
+    async fn test_paged_unique(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let mut db = db;
         // Add duplicate commands
         new_history_item(&mut db, "duplicate").await.unwrap();
         new_history_item(&mut db, "duplicate").await.unwrap();
@@ -1837,12 +1863,14 @@ mod test {
         assert_eq!(page_unique.len(), 3);
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_paged_include_deleted() {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
-
+    async fn test_paged_include_deleted(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let mut db = db;
         // Add items
         new_history_item(&mut db, "keep1").await.unwrap();
         new_history_item(&mut db, "keep2").await.unwrap();
@@ -1897,19 +1925,16 @@ mod test {
         assert_eq!(page_deleted.len(), 2);
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_bench_dupes() {
-        let context = Context {
-            hostname: "test:host".to_string(),
-            session: "beepboopiamasession".to_string(),
-            cwd: "/home/ellie".to_string(),
-            host_id: "test-host".to_string(),
-            git_root: None,
-        };
+    async fn test_search_bench_dupes(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let mut db = db;
+        let context = new_context();
 
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
         for _i in 1..10000 {
             new_history_item(&mut db, "i am a duplicated command")
                 .await

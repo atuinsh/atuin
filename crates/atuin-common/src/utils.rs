@@ -200,6 +200,7 @@ where
 mod tests {
     use super::*;
     use pretty_assertions::assert_ne;
+    use rstest::rstest;
 
     #[cfg(not(windows))]
     #[test]
@@ -306,13 +307,11 @@ mod tests {
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 
-    #[test]
-    fn dumb_random_test() {
+    #[rstest]
+    fn dumb_random_test<const N: usize>(#[values([(); 8], [(); 16], [(); 32])] _n: [(); N]) {
         // Obviously not a test of randomness, but make sure we haven't made some
         // catastrophic error
 
-        assert_ne!(crypto_random_string::<8>(), crypto_random_string::<8>());
-        assert_ne!(crypto_random_string::<16>(), crypto_random_string::<16>());
-        assert_ne!(crypto_random_string::<32>(), crypto_random_string::<32>());
+        assert_ne!(crypto_random_string::<N>(), crypto_random_string::<N>());
     }
 }

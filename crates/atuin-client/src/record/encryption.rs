@@ -205,41 +205,70 @@ impl Assertions<'_> {
 mod tests {
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{Host, Record};
+    use rstest::*;
 
     use super::*;
 
-    #[test]
-    fn round_trip() {
-        let key = Key::<V4, Local>::new_os_random();
+    #[fixture]
+    fn key() -> Key<V4, Local> {
+        Key::<V4, Local>::new_os_random()
+    }
 
+    #[fixture]
+    fn data() -> DecryptedData {
+        DecryptedData(vec![1, 2, 3, 4])
+    }
+
+    #[fixture]
+    fn ad_parts() -> (RecordId, HostId) {
+        (RecordId(uuid_v7()), HostId(uuid_v7()))
+    }
+
+    #[fixture]
+    fn sample_record() -> Record<DecryptedData> {
+        Record::builder()
+            .id(RecordId(uuid_v7()))
+            .version("v0".to_owned())
+            .tag("kv".to_owned())
+            .host(Host::new(HostId(uuid_v7())))
+            .timestamp(1687244806000000)
+            .data(DecryptedData(vec![1, 2, 3, 4]))
+            .idx(0)
+            .build()
+    }
+
+    #[rstest]
+    fn round_trip(key: Key<V4, Local>, data: DecryptedData, ad_parts: (RecordId, HostId)) {
+        let (rid, hid) = ad_parts;
+        let idx = 0;
         let ad = AdditionalData {
-            id: &RecordId(uuid_v7()),
+            id: &rid,
             version: "v0",
             tag: "kv",
-            host: &HostId(uuid_v7()),
-            idx: &0,
+            host: &hid,
+            idx: &idx,
         };
-
-        let data = DecryptedData(vec![1, 2, 3, 4]);
 
         let encrypted = PASETO_V4::encrypt(data.clone(), ad, &key.to_bytes());
         let decrypted = PASETO_V4::decrypt(encrypted, ad, &key.to_bytes()).unwrap();
         assert_eq!(decrypted, data);
     }
 
-    #[test]
-    fn same_entry_different_output() {
-        let key = Key::<V4, Local>::new_os_random();
-
+    #[rstest]
+    fn same_entry_different_output(
+        key: Key<V4, Local>,
+        data: DecryptedData,
+        ad_parts: (RecordId, HostId),
+    ) {
+        let (rid, hid) = ad_parts;
+        let idx = 0;
         let ad = AdditionalData {
-            id: &RecordId(uuid_v7()),
+            id: &rid,
             version: "v0",
             tag: "kv",
-            host: &HostId(uuid_v7()),
-            idx: &0,
+            host: &hid,
+            idx: &idx,
         };
-
-        let data = DecryptedData(vec![1, 2, 3, 4]);
 
         let encrypted = PASETO_V4::encrypt(data.clone(), ad, &key.to_bytes());
         let encrypted2 = PASETO_V4::encrypt(data, ad, &key.to_bytes());
@@ -250,20 +279,23 @@ mod tests {
         );
     }
 
-    #[test]
-    fn cannot_decrypt_different_key() {
-        let key = Key::<V4, Local>::new_os_random();
+    #[rstest]
+    fn cannot_decrypt_different_key(
+        key: Key<V4, Local>,
+        data: DecryptedData,
+        ad_parts: (RecordId, HostId),
+    ) {
         let fake_key = Key::<V4, Local>::new_os_random();
 
+        let (rid, hid) = ad_parts;
+        let idx = 0;
         let ad = AdditionalData {
-            id: &RecordId(uuid_v7()),
+            id: &rid,
             version: "v0",
             tag: "kv",
-            host: &HostId(uuid_v7()),
-            idx: &0,
+            host: &hid,
+            idx: &idx,
         };
-
-        let data = DecryptedData(vec![1, 2, 3, 4]);
 
         let encrypted = PASETO_V4::encrypt(data, ad, &key.to_bytes());
         let error = PASETO_V4::decrypt(encrypted, ad, &fake_key.to_bytes()).unwrap_err();
@@ -279,7 +311,7 @@ mod tests {
         )));
     }
 
-    #[test]
+    #[rstest]
     fn cannot_decrypt_cek_with_missing_footer_contents() {
         let key = Key::<V4, Local>::new_os_random();
 
@@ -293,19 +325,21 @@ mod tests {
         );
     }
 
-    #[test]
-    fn cannot_decrypt_different_id() {
-        let key = Key::<V4, Local>::new_os_random();
-
+    #[rstest]
+    fn cannot_decrypt_different_id(
+        key: Key<V4, Local>,
+        data: DecryptedData,
+        ad_parts: (RecordId, HostId),
+    ) {
+        let (rid, hid) = ad_parts;
+        let idx = 0;
         let ad = AdditionalData {
-            id: &RecordId(uuid_v7()),
+            id: &rid,
             version: "v0",
             tag: "kv",
-            host: &HostId(uuid_v7()),
-            idx: &0,
+            host: &hid,
+            idx: &idx,
         };
-
-        let data = DecryptedData(vec![1, 2, 3, 4]);
 
         let encrypted = PASETO_V4::encrypt(data, ad, &key.to_bytes());
 
@@ -316,20 +350,24 @@ mod tests {
         let _ = PASETO_V4::decrypt(encrypted, ad, &key.to_bytes()).unwrap_err();
     }
 
-    #[test]
-    fn re_encrypt_round_trip() {
-        let key1 = Key::<V4, Local>::new_os_random();
+    #[rstest]
+    fn re_encrypt_round_trip(
+        key: Key<V4, Local>,
+        data: DecryptedData,
+        ad_parts: (RecordId, HostId),
+    ) {
+        let key1 = key;
         let key2 = Key::<V4, Local>::new_os_random();
 
+        let (rid, hid) = ad_parts;
+        let idx = 0;
         let ad = AdditionalData {
-            id: &RecordId(uuid_v7()),
+            id: &rid,
             version: "v0",
             tag: "kv",
-            host: &HostId(uuid_v7()),
-            idx: &0,
+            host: &hid,
+            idx: &idx,
         };
-
-        let data = DecryptedData(vec![1, 2, 3, 4]);
 
         let encrypted1 = PASETO_V4::encrypt(data.clone(), ad, &key1.to_bytes());
         let encrypted2 =
@@ -348,20 +386,10 @@ mod tests {
         assert_eq!(decrypted, data);
     }
 
-    #[test]
-    fn full_record_round_trip() {
+    #[rstest]
+    fn full_record_round_trip(sample_record: Record<DecryptedData>) {
         let key = [0x55; 32];
-        let record = Record::builder()
-            .id(RecordId(uuid_v7()))
-            .version("v0".to_owned())
-            .tag("kv".to_owned())
-            .host(Host::new(HostId(uuid_v7())))
-            .timestamp(1687244806000000)
-            .data(DecryptedData(vec![1, 2, 3, 4]))
-            .idx(0)
-            .build();
-
-        let encrypted = record.encrypt::<PASETO_V4>(&key);
+        let encrypted = sample_record.encrypt::<PASETO_V4>(&key);
 
         assert!(!encrypted.data.data.is_empty());
         assert!(!encrypted.data.content_encryption_key.is_empty());
@@ -371,20 +399,10 @@ mod tests {
         assert_eq!(decrypted.data.0, [1, 2, 3, 4]);
     }
 
-    #[test]
-    fn full_record_round_trip_fail() {
+    #[rstest]
+    fn full_record_round_trip_fail(sample_record: Record<DecryptedData>) {
         let key = [0x55; 32];
-        let record = Record::builder()
-            .id(RecordId(uuid_v7()))
-            .version("v0".to_owned())
-            .tag("kv".to_owned())
-            .host(Host::new(HostId(uuid_v7())))
-            .timestamp(1687244806000000)
-            .data(DecryptedData(vec![1, 2, 3, 4]))
-            .idx(0)
-            .build();
-
-        let encrypted = record.encrypt::<PASETO_V4>(&key);
+        let encrypted = sample_record.encrypt::<PASETO_V4>(&key);
 
         let mut enc1 = encrypted.clone();
         enc1.host = Host::new(HostId(uuid_v7()));

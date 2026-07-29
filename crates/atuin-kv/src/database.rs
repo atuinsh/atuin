@@ -167,18 +167,29 @@ impl Database {
 #[cfg(test)]
 mod test {
     use super::*;
+    use rstest::*;
 
-    #[tokio::test]
-    async fn test_list() {
-        let db = Database::new("sqlite::memory:", 1.0).await.unwrap();
-        let scripts = db.list(None).await.unwrap();
-        assert_eq!(scripts.len(), 0);
+    #[fixture]
+    async fn db() -> Database {
+        Database::new("sqlite::memory:", 1.0).await.unwrap()
+    }
 
-        let entry = KvEntry::builder()
+    #[fixture]
+    fn entry() -> KvEntry {
+        KvEntry::builder()
             .namespace("test".to_string())
             .key("test".to_string())
             .value("test".to_string())
-            .build();
+            .build()
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_list(#[future] db: Database, entry: KvEntry) {
+        let db = db.await;
+
+        let scripts = db.list(None).await.unwrap();
+        assert_eq!(scripts.len(), 0);
 
         db.save(&entry).await.unwrap();
 
@@ -189,15 +200,10 @@ mod test {
         assert_eq!(entries[0].value, "test");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_save_load() {
-        let db = Database::new("sqlite::memory:", 1.0).await.unwrap();
-
-        let entry = KvEntry::builder()
-            .namespace("test".to_string())
-            .key("test".to_string())
-            .value("test".to_string())
-            .build();
+    async fn test_save_load(#[future] db: Database, entry: KvEntry) {
+        let db = db.await;
 
         db.save(&entry).await.unwrap();
 
@@ -210,15 +216,10 @@ mod test {
         assert_eq!(loaded, entry);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_delete() {
-        let db = Database::new("sqlite::memory:", 1.0).await.unwrap();
-
-        let entry = KvEntry::builder()
-            .namespace("test".to_string())
-            .key("test".to_string())
-            .value("test".to_string())
-            .build();
+    async fn test_delete(#[future] db: Database, entry: KvEntry) {
+        let db = db.await;
 
         db.save(&entry).await.unwrap();
 

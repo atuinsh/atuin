@@ -143,48 +143,34 @@ pub static SECRET_PATTERNS_RE: LazyLock<RegexSet> = LazyLock::new(|| {
 #[cfg(test)]
 mod tests {
     use regex::Regex;
+    use rstest::rstest;
 
     use crate::secrets::{SECRET_PATTERNS, TestValue};
 
-    #[test]
-    fn test_secrets() {
+    #[rstest]
+    fn secrets(#[values(false, true)] embed: bool) {
         for (name, regex, test) in SECRET_PATTERNS {
             let re =
                 Regex::new(regex).unwrap_or_else(|_| panic!("Failed to compile regex for {name}"));
 
+            let label = if embed { "embedded test" } else { "test" };
+            let wrap = |s: &str| {
+                if embed {
+                    format!("some random text {s} some more random text")
+                } else {
+                    s.to_string()
+                }
+            };
+
             match test {
                 TestValue::Single(test) => {
-                    assert!(re.is_match(test), "{name} test failed!");
+                    assert!(re.is_match(&wrap(test)), "{name} {label} failed!");
                 }
                 TestValue::Multiple(tests) => {
                     for test_str in tests.iter() {
                         assert!(
-                            re.is_match(test_str),
-                            "{name} test with value \"{test_str}\" failed!"
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_secrets_embedded() {
-        for (name, regex, test) in SECRET_PATTERNS {
-            let re =
-                Regex::new(regex).unwrap_or_else(|_| panic!("Failed to compile regex for {name}"));
-
-            match test {
-                TestValue::Single(test) => {
-                    let embedded = format!("some random text {test} some more random text");
-                    assert!(re.is_match(&embedded), "{name} embedded test failed!");
-                }
-                TestValue::Multiple(tests) => {
-                    for test_str in tests.iter() {
-                        let embedded = format!("some random text {test_str} some more random text");
-                        assert!(
-                            re.is_match(&embedded),
-                            "{name} embedded test with value \"{test_str}\" failed!"
+                            re.is_match(&wrap(test_str)),
+                            "{name} {label} with value \"{test_str}\" failed!"
                         );
                     }
                 }

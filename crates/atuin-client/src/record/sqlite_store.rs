@@ -407,10 +407,12 @@ mod tests {
             .build()
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn create_db() {
-        let db = SqliteStore::new(":memory:", test_local_timeout()).await;
-        assert!(db.is_ok(), "db could not be created: {:?}", db.err());
+    async fn create_db(#[future(awt)] store: SqliteStore) {
+        // the `store` fixture opens/creates the db and unwraps; a successful
+        // injection proves creation succeeded. confirm it is queryable.
+        assert_eq!(store.len_all().await.unwrap(), 0, "db could not be created");
     }
 
     #[rstest]

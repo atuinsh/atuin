@@ -217,43 +217,33 @@ bind "?" _atuin_ai_question_mark
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn test_generate_zsh_integration() {
-        let result = generate_zsh_integration();
-        assert!(result.contains("self-atuin-ai-question-mark"));
-        assert!(result.contains("bindkey"));
-        assert!(result.contains("atuin ai inline --hook"));
-        assert!(result.contains("__atuin_ai_print__"));
-        assert!(result.contains("__atuin_ai_cancel__"));
-        assert!(result.contains("__atuin_ai_execute__"));
-        assert!(result.contains("__atuin_ai_insert__"));
-        assert!(result.contains("zle self-insert"));
-    }
-
-    #[test]
-    fn test_generate_bash_integration() {
-        let result = generate_bash_integration();
-        assert!(result.contains("_atuin_ai_question_mark"));
-        assert!(result.contains("bind"));
-        assert!(result.contains("READLINE_LINE"));
-        assert!(result.contains("atuin ai inline --hook"));
-        assert!(result.contains("__atuin_ai_print__"));
-        assert!(result.contains("__atuin_ai_cancel__"));
-        assert!(result.contains("__atuin_ai_execute__"));
-        assert!(result.contains("__atuin_ai_insert__"));
-    }
-
-    #[test]
-    fn test_generate_fish_integration() {
-        let result = generate_fish_integration();
-        assert!(result.contains("_atuin_ai_question_mark"));
-        assert!(result.contains("bind"));
-        assert!(result.contains("commandline"));
-        assert!(result.contains("atuin ai inline --hook"));
-        assert!(result.contains("__atuin_ai_print__"));
-        assert!(result.contains("__atuin_ai_cancel__"));
-        assert!(result.contains("__atuin_ai_execute__"));
-        assert!(result.contains("__atuin_ai_insert__"));
+    #[rstest]
+    #[case::zsh(
+        generate_zsh_integration(),
+        &["self-atuin-ai-question-mark", "bindkey", "zle self-insert"]
+    )]
+    #[case::bash(
+        generate_bash_integration(),
+        &["_atuin_ai_question_mark", "bind", "READLINE_LINE"]
+    )]
+    #[case::fish(
+        generate_fish_integration(),
+        &["_atuin_ai_question_mark", "bind", "commandline"]
+    )]
+    fn generates_shell_integration(#[case] result: &str, #[case] extras: &[&str]) {
+        for t in [
+            "atuin ai inline --hook",
+            "__atuin_ai_print__",
+            "__atuin_ai_cancel__",
+            "__atuin_ai_execute__",
+            "__atuin_ai_insert__",
+        ] {
+            assert!(result.contains(t), "missing common token {t}");
+        }
+        for t in extras {
+            assert!(result.contains(t), "missing shell token {t}");
+        }
     }
 }

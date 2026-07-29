@@ -1376,6 +1376,7 @@ impl PermissibleToolCall for LoadSkillToolCall {
 mod tests {
     use super::*;
     use atuin_common::filter;
+    use rstest::*;
 
     fn read_rule(scope: Option<&str>) -> Rule {
         Rule {
@@ -1435,34 +1436,36 @@ mod tests {
         );
     }
 
-    #[test]
-    fn atuin_output_ranges_are_optional() {
+    #[rstest]
+    fn atuin_output_ranges_are_optional() -> eyre::Result<()> {
         let input = serde_json::json!({
             "history_id": "018f0000000070008000000000000000"
         });
 
-        let call = AtuinOutputToolCall::try_from(&input).unwrap();
+        let call = AtuinOutputToolCall::try_from(&input)?;
 
         assert_eq!(
             call.history_id.as_simple().to_string(),
             "018f0000000070008000000000000000"
         );
         assert!(call.ranges.is_empty());
+        Ok(())
     }
 
-    #[test]
-    fn atuin_output_parses_line_ranges() {
+    #[rstest]
+    fn atuin_output_parses_line_ranges() -> eyre::Result<()> {
         let input = serde_json::json!({
             "history_id": "018f0000000070008000000000000000",
             "ranges": [[0, 30], [-100, -1]]
         });
 
-        let call = AtuinOutputToolCall::try_from(&input).unwrap();
+        let call = AtuinOutputToolCall::try_from(&input)?;
 
         assert_eq!(call.ranges, vec![(0, 30), (-100, -1)]);
+        Ok(())
     }
 
-    #[test]
+    #[rstest]
     fn atuin_output_formats_lines_like_read_file() {
         let lines = vec![
             atuin_daemon::semantic::OutputLine {
@@ -1481,45 +1484,108 @@ mod tests {
         );
     }
 
-    #[test]
-    fn no_scope_matches_everything() {
-        assert!(read_tool("any/path.txt").matches_rule(&read_rule(None)));
-        assert!(write_tool("any/path.txt").matches_rule(&write_rule(None)));
+    #[rstest]
+    #[case::read_rule_none(read_rule(None), true)]
+    #[case::write_implies_read(write_rule(None), true)]
+    fn read_tool_rule_name(#[case] rule: Rule, #[case] expected: bool) {
+        assert_eq!(read_tool("foo.txt").matches_rule(&rule), expected);
     }
 
-    #[test]
-    fn wildcard_star_matches_everything() {
-        assert!(read_tool("foo/bar.rs").matches_rule(&read_rule(Some("*"))));
+    #[rstest]
+    #[case::write_rule_none(write_rule(None), true)]
+    #[case::read_does_not_imply_write(read_rule(None), false)]
+    fn write_tool_rule_name(#[case] rule: Rule, #[case] expected: bool) {
+        assert_eq!(write_tool("foo.txt").matches_rule(&rule), expected);
     }
 
-    #[test]
-    fn write_implies_read() {
-        // A Write rule also permits reads on the same path
-        assert!(read_tool("foo.txt").matches_rule(&write_rule(None)));
-        // But a Read rule does not permit writes
-        assert!(!write_tool("foo.txt").matches_rule(&read_rule(None)));
-    }
-
-    #[test]
-    fn edit_uses_write_rule() {
+    #[rstest]
+    #[case::edit_uses_write(write_rule(None), true)]
+    #[case::edit_rejects_read(read_rule(None), false)]
+    fn edit_tool_rule_name(#[case] rule: Rule, #[case] expected: bool) {
         let edit = EditToolCall {
             path: expand_path("/home/user/config.toml"),
             old_string: "x".into(),
             new_string: "y".into(),
             replace_all: false,
         };
-        assert!(edit.matches_rule(&write_rule(None)));
-        assert!(!edit.matches_rule(&read_rule(None)));
+        assert_eq!(edit.matches_rule(&rule), expected);
     }
 
-    #[test]
-    fn extension_glob() {
-        assert!(read_tool("notes.md").matches_rule(&read_rule(Some("*.md"))));
-        assert!(!read_tool("notes.txt").matches_rule(&read_rule(Some("*.md"))));
+    #[rstest]
+    #[case::wildcard_star("foo/bar.rs", "*", true)]
+    #[case::extension_glob_matches("notes.md", "*.md", true)]
+    #[case::extension_glob_rejects("notes.txt", "*.md", false)]
+    #[cfg_attr(
+        unix,
+        case::unix_absolute_glob_matches("/home/user/src/main.rs", "/home/user/src/*.rs", true)
+    )]
+    #[cfg_attr(
+        unix,
+        case::unix_absolute_glob_rejects(
+            "/home/user/docs/readme.md",
+            "/home/user/src/*.rs",
+            false
+        )
+    )]
+    #[cfg_attr(
+        unix,
+        case::unix_double_star_matches(
+            "/project/crates/foo/src/lib.rs",
+            "/project/crates/**/*.rs",
+            true
+        )
+    )]
+    #[cfg_attr(
+        unix,
+        case::unix_double_star_rejects(
+            "/project/crates/foo/src/lib.py",
+            "/project/crates/**/*.rs",
+            false
+        )
+    )]
+    #[cfg_attr(
+        windows,
+        case::windows_absolute_glob_matches(
+            r"C:\Users\dev\src\main.rs",
+            "C:/Users/dev/src/*.rs",
+            true
+        )
+    )]
+    #[cfg_attr(
+        windows,
+        case::windows_absolute_glob_rejects(
+            r"C:\Users\dev\docs\readme.md",
+            "C:/Users/dev/src/*.rs",
+            false
+        )
+    )]
+    #[cfg_attr(
+        windows,
+        case::windows_double_star_matches(
+            r"C:\project\crates\foo\src\lib.rs",
+            "C:/project/crates/**/*.rs",
+            true
+        )
+    )]
+    #[cfg_attr(
+        windows,
+        case::windows_double_star_rejects(
+            r"C:\project\crates\foo\src\lib.py",
+            "C:/project/crates/**/*.rs",
+            false
+        )
+    )]
+    fn read_scope_glob(#[case] path: &str, #[case] scope: &str, #[case] expected: bool) {
+        assert_eq!(
+            read_tool(path).matches_rule(&read_rule(Some(scope))),
+            expected
+        );
     }
 
-    #[test]
-    fn relative_multi_segment_glob() {
+    #[rstest]
+    #[case("crates/**/*.rs", true)]
+    #[case("crates/**/*.py", false)]
+    fn relative_multi_segment_glob(#[case] scope: &str, #[case] expected: bool) {
         // This matches against the path relative to cwd
         let cwd = std::env::current_dir().unwrap();
         let abs = cwd
@@ -1528,8 +1594,7 @@ mod tests {
             .join("src")
             .join("lib.rs");
         let tool = read_tool(abs.to_str().unwrap());
-        assert!(tool.matches_rule(&read_rule(Some("crates/**/*.rs"))));
-        assert!(!tool.matches_rule(&read_rule(Some("crates/**/*.py"))));
+        assert_eq!(tool.matches_rule(&read_rule(Some(scope))), expected);
     }
 
     // ── all_covered_by tests (compound shell command semantics) ──
@@ -1551,41 +1616,30 @@ mod tests {
         }
     }
 
-    #[test]
-    fn all_covered_by_simple_command() {
-        let rules = vec![shell_rule(Some("git *"))];
-        assert!(shell_tool("git add .").all_covered_by(&rules));
-        assert!(!shell_tool("npm test").all_covered_by(&rules));
+    #[rstest]
+    #[case::git_scope_allows(vec![shell_rule(Some("git *"))], "git add .", true)]
+    #[case::git_scope_rejects_npm(vec![shell_rule(Some("git *"))], "npm test", false)]
+    #[case::compound_all_covered(
+        vec![shell_rule(Some("git *")), shell_rule(Some("npm *"))],
+        "git add . && npm test",
+        true
+    )]
+    #[case::compound_partially_covered(
+        vec![shell_rule(Some("git *"))],
+        "git add . && npm test",
+        false
+    )]
+    #[case::unscoped_covers_all(vec![shell_rule(None)], "git add . && rm -rf /", true)]
+    #[case::wildcard_covers_all(vec![shell_rule(Some("*"))], "git add . && npm test", true)]
+    fn shell_all_covered_by(
+        #[case] rules: Vec<Rule>,
+        #[case] command: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(shell_tool(command).all_covered_by(&rules), expected);
     }
 
-    #[test]
-    fn all_covered_by_compound_all_covered() {
-        let rules = vec![shell_rule(Some("git *")), shell_rule(Some("npm *"))];
-        assert!(shell_tool("git add . && npm test").all_covered_by(&rules));
-    }
-
-    #[test]
-    fn all_covered_by_compound_partially_covered() {
-        // Only git is allowed — npm subcommand is not covered, so the
-        // compound command must not be auto-allowed.
-        let rules = vec![shell_rule(Some("git *"))];
-        assert!(!shell_tool("git add . && npm test").all_covered_by(&rules));
-    }
-
-    #[test]
-    fn all_covered_by_unscoped_shell_rule() {
-        // Shell without scope covers everything
-        let rules = vec![shell_rule(None)];
-        assert!(shell_tool("git add . && rm -rf /").all_covered_by(&rules));
-    }
-
-    #[test]
-    fn all_covered_by_wildcard_shell_rule() {
-        let rules = vec![shell_rule(Some("*"))];
-        assert!(shell_tool("git add . && npm test").all_covered_by(&rules));
-    }
-
-    #[test]
+    #[rstest]
     fn all_covered_by_non_shell_tool_unchanged() {
         // Non-shell tools use the default (any single rule matches)
         let rules = vec![read_rule(Some("*.md"))];
@@ -1593,14 +1647,14 @@ mod tests {
         assert!(!read_tool("notes.txt").all_covered_by(&rules));
     }
 
-    #[test]
+    #[rstest]
     fn matches_rule_still_uses_any_semantics() {
         // matches_rule (used for deny/ask) still triggers on any subcommand
         let rule = shell_rule(Some("rm *"));
         assert!(shell_tool("git add . && rm -rf /").matches_rule(&rule));
     }
 
-    #[test]
+    #[rstest]
     fn bare_pattern_asymmetry() {
         // Deny (matches_rule, prefix_bare=true): bare "rm" blocks "rm -rf /"
         let deny_rule = shell_rule(Some("rm"));
@@ -1614,37 +1668,6 @@ mod tests {
         // Bare prefix match is word-boundary, not substring — "rm" must not match "rmbackup"
         assert!(!shell_tool("rmbackup").matches_rule(&deny_rule));
         assert!(!shell_tool("rmbackup /tmp").matches_rule(&deny_rule));
-    }
-
-    // ── Unix-specific tests (absolute paths with forward slashes) ──
-
-    #[cfg(unix)]
-    mod unix {
-        use super::*;
-
-        #[test]
-        fn absolute_glob() {
-            assert!(
-                read_tool("/home/user/src/main.rs")
-                    .matches_rule(&read_rule(Some("/home/user/src/*.rs")))
-            );
-            assert!(
-                !read_tool("/home/user/docs/readme.md")
-                    .matches_rule(&read_rule(Some("/home/user/src/*.rs")))
-            );
-        }
-
-        #[test]
-        fn double_star_glob() {
-            assert!(
-                read_tool("/project/crates/foo/src/lib.rs")
-                    .matches_rule(&read_rule(Some("/project/crates/**/*.rs")))
-            );
-            assert!(
-                !read_tool("/project/crates/foo/src/lib.py")
-                    .matches_rule(&read_rule(Some("/project/crates/**/*.rs")))
-            );
-        }
     }
 
     // ── edit_file execution tests ──
@@ -1679,36 +1702,53 @@ mod tests {
             }
         }
 
-        #[test]
-        fn successful_single_replacement() {
-            let (_dir, path, tracker) = setup_tracked_file("[section]\nkey = old_value\n");
+        #[rstest]
+        #[case::single(
+            "[section]\nkey = old_value\n",
+            "old_value",
+            "new_value",
+            false,
+            "[section]\nkey = new_value\n",
+            None
+        )]
+        #[case::replace_all(
+            "aaa bbb aaa ccc aaa",
+            "aaa",
+            "xxx",
+            true,
+            "xxx bbb xxx ccc xxx",
+            Some("3 occurrences")
+        )]
+        #[case::multiline(
+            "[section]\nkey1 = val1\nkey2 = val2\n[other]\n",
+            "key1 = val1\nkey2 = val2",
+            "key1 = new1\nkey2 = new2",
+            false,
+            "[section]\nkey1 = new1\nkey2 = new2\n[other]\n",
+            None
+        )]
+        fn edit_success(
+            #[case] content: &str,
+            #[case] old: &str,
+            #[case] new: &str,
+            #[case] replace_all: bool,
+            #[case] expected: &str,
+            #[case] success_substr: Option<&str>,
+        ) {
+            let (_dir, path, tracker) = setup_tracked_file(content);
 
-            let call = edit_call(&path, "old_value", "new_value", false);
+            let call = edit_call(&path, old, new, replace_all);
             let (outcome, new_bytes) = call.execute(&path, &tracker);
 
             assert!(matches!(outcome, ToolOutcome::Success(_)));
+            if let Some(s) = success_substr {
+                assert!(matches!(outcome, ToolOutcome::Success(ref out) if out.contains(s)));
+            }
             assert!(new_bytes.is_some());
-            assert_eq!(
-                std::fs::read_to_string(&path).unwrap(),
-                "[section]\nkey = new_value\n"
-            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
         }
 
-        #[test]
-        fn successful_replace_all() {
-            let (_dir, path, tracker) = setup_tracked_file("aaa bbb aaa ccc aaa");
-
-            let call = edit_call(&path, "aaa", "xxx", true);
-            let (outcome, _) = call.execute(&path, &tracker);
-
-            assert!(matches!(outcome, ToolOutcome::Success(ref s) if s.contains("3 occurrences")));
-            assert_eq!(
-                std::fs::read_to_string(&path).unwrap(),
-                "xxx bbb xxx ccc xxx"
-            );
-        }
-
-        #[test]
+        #[rstest]
         fn error_file_not_read() {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("unread.txt");
@@ -1727,7 +1767,7 @@ mod tests {
             }
         }
 
-        #[test]
+        #[rstest]
         fn error_file_modified_since_read() {
             let (_dir, path, tracker) = setup_tracked_file("original");
 
@@ -1747,56 +1787,51 @@ mod tests {
             }
         }
 
-        #[test]
-        fn error_no_match() {
-            let (_dir, path, tracker) = setup_tracked_file("hello world");
+        #[rstest]
+        #[case::no_match("hello world", "nonexistent", "replacement", false, &["not found"], false)]
+        #[case::multiple_without_replace_all(
+            "foo bar foo baz foo",
+            "foo",
+            "qux",
+            false,
+            &["3 matches", "replace_all"],
+            true
+        )]
+        #[case::empty_old_string("content", "", "something", false, &[], true)]
+        #[case::preserves_on_no_match(
+            "[config]\nport = 8080\nhost = localhost\n",
+            "port = 9090",
+            "port = 3000",
+            false,
+            &[],
+            true
+        )]
+        fn edit_error(
+            #[case] content: &str,
+            #[case] old: &str,
+            #[case] new: &str,
+            #[case] replace_all: bool,
+            #[case] expect_substrings: &[&str],
+            #[case] check_unchanged: bool,
+        ) {
+            let (_dir, path, tracker) = setup_tracked_file(content);
 
-            let call = edit_call(&path, "nonexistent", "replacement", false);
-            let (outcome, new_bytes) = call.execute(&path, &tracker);
+            let (outcome, new_bytes) =
+                edit_call(&path, old, new, replace_all).execute(&path, &tracker);
 
             assert!(new_bytes.is_none());
-            match outcome {
-                ToolOutcome::Error(msg) => {
-                    assert!(msg.contains("not found"), "got: {msg}");
-                }
-                _ => panic!("expected error"),
+            let ToolOutcome::Error(msg) = outcome else {
+                panic!("expected error")
+            };
+            for s in expect_substrings {
+                assert!(msg.contains(*s), "got: {msg}");
+            }
+            if check_unchanged {
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
             }
         }
 
-        #[test]
-        fn error_multiple_matches_without_replace_all() {
-            let (_dir, path, tracker) = setup_tracked_file("foo bar foo baz foo");
-
-            let call = edit_call(&path, "foo", "qux", false);
-            let (outcome, new_bytes) = call.execute(&path, &tracker);
-
-            assert!(new_bytes.is_none());
-            match outcome {
-                ToolOutcome::Error(msg) => {
-                    assert!(msg.contains("3 matches"), "got: {msg}");
-                    assert!(msg.contains("replace_all"), "got: {msg}");
-                }
-                _ => panic!("expected error"),
-            }
-            // File should be unchanged
-            assert_eq!(
-                std::fs::read_to_string(&path).unwrap(),
-                "foo bar foo baz foo"
-            );
-        }
-
-        #[test]
-        fn error_empty_old_string() {
-            let (_dir, path, tracker) = setup_tracked_file("content");
-
-            let call = edit_call(&path, "", "something", false);
-            let (outcome, new_bytes) = call.execute(&path, &tracker);
-
-            assert!(new_bytes.is_none());
-            assert!(matches!(outcome, ToolOutcome::Error(_)));
-        }
-
-        #[test]
+        #[rstest]
         fn error_file_does_not_exist() {
             let tracker = FileReadTracker::default();
             let dir = tempfile::tempdir().unwrap();
@@ -1812,39 +1847,6 @@ mod tests {
                 }
                 _ => panic!("expected error"),
             }
-        }
-
-        #[test]
-        fn preserves_file_when_no_match() {
-            let original = "[config]\nport = 8080\nhost = localhost\n";
-            let (_dir, path, tracker) = setup_tracked_file(original);
-
-            let call = edit_call(&path, "port = 9090", "port = 3000", false);
-            let (outcome, _) = call.execute(&path, &tracker);
-
-            assert!(matches!(outcome, ToolOutcome::Error(_)));
-            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
-        }
-
-        #[test]
-        fn multiline_replacement() {
-            let content = "[section]\nkey1 = val1\nkey2 = val2\n[other]\n";
-            let (_dir, path, tracker) = setup_tracked_file(content);
-
-            let call = edit_call(
-                &path,
-                "key1 = val1\nkey2 = val2",
-                "key1 = new1\nkey2 = new2",
-                false,
-            );
-            let (outcome, new_bytes) = call.execute(&path, &tracker);
-
-            assert!(matches!(outcome, ToolOutcome::Success(_)));
-            assert!(new_bytes.is_some());
-            assert_eq!(
-                std::fs::read_to_string(&path).unwrap(),
-                "[section]\nkey1 = new1\nkey2 = new2\n[other]\n"
-            );
         }
     }
 
@@ -1876,7 +1878,7 @@ mod tests {
             tracker.update_after_edit(path, new_bytes, mtime);
         }
 
-        #[test]
+        #[rstest]
         fn full_read_snapshot_edit_cycle() {
             let dir = tempfile::tempdir().unwrap();
             let file_path = dir.path().join("config.toml");
@@ -1921,7 +1923,7 @@ mod tests {
             assert_eq!(snapshot_content, "[db]\nhost = localhost\nport = 5432\n");
         }
 
-        #[test]
+        #[rstest]
         fn second_edit_without_reread() {
             let dir = tempfile::tempdir().unwrap();
             let file_path = dir.path().join("config.toml");
@@ -1959,7 +1961,7 @@ mod tests {
             );
         }
 
-        #[test]
+        #[rstest]
         fn external_modification_between_edits() {
             let dir = tempfile::tempdir().unwrap();
             let file_path = dir.path().join("config.toml");
@@ -2004,7 +2006,7 @@ mod tests {
             );
         }
 
-        #[test]
+        #[rstest]
         fn snapshot_only_created_once_per_file() {
             let dir = tempfile::tempdir().unwrap();
             let file_path = dir.path().join("config.toml");
@@ -2038,7 +2040,7 @@ mod tests {
             assert!(!created); // idempotent — already snapshotted
         }
 
-        #[test]
+        #[rstest]
         fn permission_cache_grant_and_check() {
             let mut cache = EditPermissionCache::default();
             let path = std::path::PathBuf::from("/Users/me/.config/atuin/config.toml");
@@ -2065,10 +2067,14 @@ mod tests {
     mod write {
         use super::*;
 
-        #[test]
-        fn creates_new_file() {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("new_file.txt");
+        #[fixture]
+        fn tempdir() -> tempfile::TempDir {
+            tempfile::tempdir().unwrap()
+        }
+
+        #[rstest]
+        fn creates_new_file(tempdir: tempfile::TempDir) {
+            let path = tempdir.path().join("new_file.txt");
 
             let call = WriteToolCall {
                 path: path.clone(),
@@ -2082,56 +2088,45 @@ mod tests {
             assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello\nworld\n");
         }
 
-        #[test]
-        fn error_file_exists_without_overwrite() {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("existing.txt");
+        #[rstest]
+        #[case::rejects_without_overwrite(false, "new content", true, "original")]
+        #[case::overwrites_with_flag(true, "replaced content\n", false, "replaced content\n")]
+        fn write_over_existing(
+            tempdir: tempfile::TempDir,
+            #[case] overwrite: bool,
+            #[case] new_content: &str,
+            #[case] expect_error: bool,
+            #[case] expected_final: &str,
+        ) {
+            let path = tempdir.path().join("existing.txt");
             std::fs::write(&path, "original").unwrap();
 
             let call = WriteToolCall {
                 path: path.clone(),
-                content: "new content".to_string(),
-                overwrite: false,
+                content: new_content.to_string(),
+                overwrite,
             };
             let (outcome, new_bytes) = call.execute(&path);
 
-            assert!(new_bytes.is_none());
-            match outcome {
-                ToolOutcome::Error(msg) => {
-                    assert!(msg.contains("already exists"), "got: {msg}");
-                    assert!(msg.contains("overwrite"), "got: {msg}");
+            if expect_error {
+                assert!(new_bytes.is_none());
+                match outcome {
+                    ToolOutcome::Error(msg) => {
+                        assert!(msg.contains("already exists"), "got: {msg}");
+                        assert!(msg.contains("overwrite"), "got: {msg}");
+                    }
+                    _ => panic!("expected error"),
                 }
-                _ => panic!("expected error"),
+            } else {
+                assert!(matches!(outcome, ToolOutcome::Success(_)));
+                assert!(new_bytes.is_some());
             }
-            // Original preserved
-            assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), expected_final);
         }
 
-        #[test]
-        fn overwrites_existing_file_when_flag_set() {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("existing.txt");
-            std::fs::write(&path, "original").unwrap();
-
-            let call = WriteToolCall {
-                path: path.clone(),
-                content: "replaced content\n".to_string(),
-                overwrite: true,
-            };
-            let (outcome, new_bytes) = call.execute(&path);
-
-            assert!(matches!(outcome, ToolOutcome::Success(_)));
-            assert!(new_bytes.is_some());
-            assert_eq!(
-                std::fs::read_to_string(&path).unwrap(),
-                "replaced content\n"
-            );
-        }
-
-        #[test]
-        fn creates_parent_directories() {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("sub").join("dir").join("file.txt");
+        #[rstest]
+        fn creates_parent_directories(tempdir: tempfile::TempDir) {
+            let path = tempdir.path().join("sub").join("dir").join("file.txt");
 
             let call = WriteToolCall {
                 path: path.clone(),
@@ -2144,10 +2139,9 @@ mod tests {
             assert_eq!(std::fs::read_to_string(&path).unwrap(), "nested\n");
         }
 
-        #[test]
-        fn error_path_is_directory() {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().to_path_buf();
+        #[rstest]
+        fn error_path_is_directory(tempdir: tempfile::TempDir) {
+            let path = tempdir.path().to_path_buf();
 
             let call = WriteToolCall {
                 path: path.clone(),
@@ -2158,37 +2152,6 @@ mod tests {
 
             assert!(new_bytes.is_none());
             assert!(matches!(outcome, ToolOutcome::Error(ref msg) if msg.contains("directory")));
-        }
-    }
-
-    // ── Windows-specific tests (absolute paths with drive letters) ──
-
-    #[cfg(windows)]
-    mod windows {
-        use super::*;
-
-        #[test]
-        fn absolute_glob() {
-            assert!(
-                read_tool(r"C:\Users\dev\src\main.rs")
-                    .matches_rule(&read_rule(Some("C:/Users/dev/src/*.rs")))
-            );
-            assert!(
-                !read_tool(r"C:\Users\dev\docs\readme.md")
-                    .matches_rule(&read_rule(Some("C:/Users/dev/src/*.rs")))
-            );
-        }
-
-        #[test]
-        fn double_star_glob() {
-            assert!(
-                read_tool(r"C:\project\crates\foo\src\lib.rs")
-                    .matches_rule(&read_rule(Some("C:/project/crates/**/*.rs")))
-            );
-            assert!(
-                !read_tool(r"C:\project\crates\foo\src\lib.py")
-                    .matches_rule(&read_rule(Some("C:/project/crates/**/*.rs")))
-            );
         }
     }
 }
