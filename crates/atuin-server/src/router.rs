@@ -1,4 +1,4 @@
-use atuin_common::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ErrorResponse};
+use atuin_domain::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ErrorResponse};
 use axum::{
     Router,
     extract::{FromRequestParts, Request},

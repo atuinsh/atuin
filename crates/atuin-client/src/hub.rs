@@ -13,13 +13,9 @@ use std::time::Duration;
 use eyre::{Context, Result, bail};
 use reqwest::{StatusCode, Url, header::USER_AGENT};
 
-use atuin_common::{
-    api::{
-        ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, CliCodeResponse, CliVerifyResponse,
-        ErrorResponse,
-    },
-    tls::ensure_crypto_provider,
-    url::UrlAppendExt,
+use atuin_common::{tls::ensure_crypto_provider, url::UrlAppendExt};
+use atuin_domain::api::{
+    ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, CliCodeResponse, CliVerifyResponse, ErrorResponse,
 };
 
 use crate::settings::Settings;

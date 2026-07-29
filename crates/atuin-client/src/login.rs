@@ -1,4 +1,4 @@
-use atuin_common::api::LoginRequest;
+use atuin_domain::api::LoginRequest;
 use eyre::{Context, Result, bail};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;

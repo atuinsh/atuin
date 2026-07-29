@@ -14,7 +14,11 @@ env:
 jobs:
   benchmarks:
     name: Run benchmarks
-    runs-on: codspeed-macro
+    # Dedicated Depot machine: no queueing for the shared codspeed-macro pool
+    # and no cross-environment comparisons from mixed runner generations.
+    # Walltime mode supports arm64 macOS (the codspeed runner ships
+    # aarch64-apple-darwin builds).
+    runs-on: depot-macos-26
 
     permissions:
       contents: read # required for actions/checkout

@@ -1,6 +1,6 @@
 use atuin_client::history::Version;
 use atuin_client::history::store::HistoryRecord;
-use atuin_common::record::DecryptedData;
+use atuin_domain::record::DecryptedData;
 
 use crate::_util::context::BenchCtx;
 use crate::history::BenchHistory;

@@ -1,5 +1,5 @@
 use ::sqlx::{FromRow, Result};
-use atuin_common::record::{EncryptedData, Host, Record};
+use atuin_domain::record::{EncryptedData, Host, Record};
 use atuin_server_database::models::{Session, User};
 use sqlx::{Row, postgres::PgRow};
 

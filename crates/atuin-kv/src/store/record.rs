@@ -1,4 +1,4 @@
-use atuin_common::record::DecryptedData;
+use atuin_domain::record::DecryptedData;
 use eyre::{Result, bail, ensure, eyre};
 use typed_builder::TypedBuilder;
 
