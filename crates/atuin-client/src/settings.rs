@@ -1,6 +1,6 @@
 use atuin_common::logs::LogLevel;
-use atuin_common::record::HostId;
 use atuin_common::utils;
+use atuin_domain::record::HostId;
 use clap::ValueEnum;
 use config::{
     Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat, builder::DefaultState,

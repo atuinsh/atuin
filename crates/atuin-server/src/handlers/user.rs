@@ -27,7 +27,8 @@ use atuin_server_database::{
 
 use reqwest::header::CONTENT_TYPE;
 
-use atuin_common::{api::*, utils::crypto_random_string};
+use atuin_common::utils::crypto_random_string;
+use atuin_domain::api::*;
 
 pub fn verify_str(hash: &str, password: &str) -> bool {
     let arg2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default());

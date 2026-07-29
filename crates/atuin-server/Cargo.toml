@@ -20,6 +20,7 @@ path = "src/bin/main.rs"
 
 [dependencies]
 atuin-common = { workspace = true }
+atuin-domain = { workspace = true }
 atuin-server-database = { workspace = true }
 atuin-server-postgres = { workspace = true }
 atuin-server-sqlite = { workspace = true }

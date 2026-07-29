@@ -79,6 +79,10 @@ strum = { version = "0.27", features = ["strum_macros"] }
 path = "../atuin-common"
 version = "18.18.1"
 
+[dependencies.atuin-domain]
+path = "../atuin-domain"
+version = "18.18.1"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 pretty_assertions = { workspace = true }

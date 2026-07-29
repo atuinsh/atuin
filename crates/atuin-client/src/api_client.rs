@@ -8,19 +8,12 @@ use reqwest::{
     header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT},
 };
 
-use atuin_common::{
-    api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION},
-    record::{EncryptedData, HostId, Record, RecordIdx},
-    tls::ensure_crypto_provider,
-    url::UrlAppendExt,
+use atuin_common::{tls::ensure_crypto_provider, url::UrlAppendExt};
+use atuin_domain::api::{
+    ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION, ChangePasswordRequest, ErrorResponse,
+    LoginRequest, LoginResponse, MeResponse, RegisterResponse,
 };
-use atuin_common::{
-    api::{
-        ChangePasswordRequest, ErrorResponse, LoginRequest, LoginResponse, MeResponse,
-        RegisterResponse,
-    },
-    record::RecordStatus,
-};
+use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 
 use semver::Version;
 
@@ -168,7 +161,7 @@ pub async fn login(
 
 #[cfg(feature = "check-update")]
 pub async fn latest_version() -> Result<Version> {
-    use atuin_common::api::IndexResponse;
+    use atuin_domain::api::IndexResponse;
 
     ensure_crypto_provider();
     let url = crate::settings::DEFAULT_SYNC_URL.clone();

@@ -7,7 +7,7 @@ use thiserror::Error;
 use super::{encryption::PASETO_V4, sqlite_store::SqliteStore};
 use crate::{api_client::Client, settings::Settings};
 
-use atuin_common::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus};
+use atuin_domain::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 
 #[derive(Error, Debug)]
@@ -373,7 +373,7 @@ pub async fn sync(
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::record::{Diff, EncryptedData, HostId, Record};
+    use atuin_domain::record::{Diff, EncryptedData, HostId, Record};
     use pretty_assertions::assert_eq;
 
     use crate::{
@@ -387,7 +387,7 @@ mod tests {
 
     fn test_record() -> Record<EncryptedData> {
         Record::builder()
-            .host(atuin_common::record::Host::new(HostId(
+            .host(atuin_domain::record::Host::new(HostId(
                 atuin_common::utils::uuid_v7(),
             )))
             .version("v1".into())

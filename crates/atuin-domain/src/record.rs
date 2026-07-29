@@ -46,7 +46,7 @@ pub type RecordIdx = u64;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypedBuilder)]
 pub struct Record<Data> {
     /// a unique ID
-    #[builder(default = RecordId(crate::utils::uuid_v7()))]
+    #[builder(default = RecordId(Uuid::now_v7()))]
     pub id: RecordId,
 
     /// The integer record ID. This is only unique per (host, tag).
@@ -284,12 +284,13 @@ mod tests {
 
     use super::{DecryptedData, Diff, Record, RecordStatus};
     use pretty_assertions::assert_eq;
+    use uuid::Uuid;
 
     fn test_record() -> Record<DecryptedData> {
         Record::builder()
-            .host(Host::new(HostId(crate::utils::uuid_v7())))
+            .host(Host::new(HostId(Uuid::now_v7())))
             .version("v1".into())
-            .tag(crate::utils::uuid_v7().simple().to_string())
+            .tag(Uuid::now_v7().simple().to_string())
             .data(DecryptedData(vec![0, 1, 2, 3]))
             .idx(0)
             .build()

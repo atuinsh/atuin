@@ -1,4 +1,4 @@
-use atuin_common::record::{
+use atuin_domain::record::{
     AdditionalData, DecryptedData, EncryptedData, Encryption, HostId, RecordId, RecordIdx,
 };
 use base64::{Engine, engine::general_purpose};
@@ -203,10 +203,8 @@ impl Assertions<'_> {
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::{
-        record::{Host, Record},
-        utils::uuid_v7,
-    };
+    use atuin_common::utils::uuid_v7;
+    use atuin_domain::record::{Host, Record};
 
     use super::*;
 

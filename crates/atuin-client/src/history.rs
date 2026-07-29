@@ -3,9 +3,9 @@ use rmp::encode;
 use std::env;
 
 use atuin_common::filter::OrFilter;
-use atuin_common::record::DecryptedData;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::{normalize_optional_string, uuid_v7};
+use atuin_domain::record::DecryptedData;
 use std::sync::LazyLock;
 
 use eyre::{Result, bail};

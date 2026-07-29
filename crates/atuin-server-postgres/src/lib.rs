@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use rand::Rng;
 
 use async_trait::async_trait;
-use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
+use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 use atuin_server_database::models::{NewSession, NewUser, Session, User};
 use atuin_server_database::{Database, DbError, DbResult, DbSettings};
 use sqlx::postgres::PgPoolOptions;

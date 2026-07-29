@@ -101,7 +101,7 @@ pub async fn login(
     // registration works
     let login_response = api_client::login(
         address,
-        atuin_common::api::LoginRequest { username, password },
+        atuin_domain::api::LoginRequest { username, password },
         &Default::default(),
     )
     .await

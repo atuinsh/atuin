@@ -4,7 +4,7 @@ use tracing::instrument;
 use crate::handlers::ErrorResponseStatus;
 use crate::router::UserAuth;
 
-use atuin_common::api::*;
+use atuin_domain::api::*;
 
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn get(
