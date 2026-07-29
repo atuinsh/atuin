@@ -65,7 +65,7 @@ This will delete your account, and all history from the remote server. It won't 
 
 We don't currently have a password reset system. As long as you're still logged in on at least one machine, it's safe to delete and re-create your account.
 
-## I'm not using sync — why is Atuin connecting to api.atuin.sh?
+## I'm not using sync — why is Atuin connecting to `api.atuin.sh`?
 
 That's the update checker. At most once per hour, Atuin checks `https://api.atuin.sh` for the latest release, and lets you know if you're out of date. It's a version lookup — no history or personal data is involved.
 

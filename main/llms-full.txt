@@ -2744,35 +2744,35 @@ $env.config = (
 
 ## Atuin UI shortcuts
 
-| Shortcut                                  | Action                                                                                                         |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Enter                                     | Execute selected item                                                                                          |
-| Tab                                       | Select item and edit                                                                                           |
-| Ctrl + r                                  | Cycle through filter modes                                                                                     |
-| Ctrl + s                                  | Cycle through search modes                                                                                     |
-| Alt + 1 to Alt + 9                        | Select item by the number located near it                                                                      |
-| Ctrl + c / Ctrl + d / Ctrl + g / Esc      | Return original                                                                                                |
-| Ctrl + y                                  | Copy selected item to clipboard                                                                                |
-| Ctrl + ← / Alt + b                        | Move the cursor to the previous word                                                                           |
-| Ctrl + → / Alt + f                        | Move the cursor to the next word                                                                               |
-| Ctrl + b / ←                              | Move the cursor to the left                                                                                    |
-| Ctrl + f / →                              | Move the cursor to the right                                                                                   |
-| Ctrl + a / Home                           | Move the cursor to the start of the line                                                                       |
-| Ctrl + e / End                            | Move the cursor to the end of the line                                                                         |
-| Ctrl + Backspace / Ctrl + Alt + Backspace | Remove the previous word / remove the word just before the cursor                                              |
-| Ctrl + Delete / Ctrl + Alt + Delete       | Remove the next word or the word just after the cursor                                                         |
-| Ctrl + w                                  | Remove the word before the cursor even if it spans across the word boundaries                                  |
-| Ctrl + u                                  | Clear the current line                                                                                         |
-| Ctrl + n / Ctrl + j / ↓                   | Select the next item on the list                                                                               |
-| Ctrl + p / Ctrl + k / ↑                   | Select the previous item on the list                                                                           |
-| Ctrl + o                                  | Open the [inspector](#inspector)                                                                               |
-| Page Down                                 | Scroll search results one page down                                                                            |
-| Page Up                                   | Scroll search results one page up                                                                              |
-| ↓ (on the first entry)                    | Return original or return query depending on [settings](https://docs.atuin.sh/configuration/config/#exit_mode) |
-| Ctrl + a, d                               | Delete the selected history entry                                                                              |
-| Ctrl + a, D                               | Delete **all** history entries matching the selected command                                                   |
-| Ctrl + a, a                               | Move cursor to the start of the line                                                                           |
-| Ctrl + a, c                               | Switch to the context of the currently selected command / return to default                                    |
+| Shortcut                             | Action                                                                                                         |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| Enter                                | Execute selected item                                                                                          |
+| Tab                                  | Select item and edit                                                                                           |
+| Ctrl + r                             | Cycle through filter modes                                                                                     |
+| Ctrl + s                             | Cycle through search modes                                                                                     |
+| Alt + 1 to Alt + 9                   | Select item by the number located near it                                                                      |
+| Ctrl + c / Ctrl + d / Ctrl + g / Esc | Return original                                                                                                |
+| Ctrl + y                             | Copy selected item to clipboard                                                                                |
+| Ctrl + ← / Alt + b                   | Move the cursor to the previous word                                                                           |
+| Ctrl + → / Alt + f                   | Move the cursor to the next word                                                                               |
+| Ctrl + b / ←                         | Move the cursor to the left                                                                                    |
+| Ctrl + f / →                         | Move the cursor to the right                                                                                   |
+| Ctrl + a / Home                      | Move the cursor to the start of the line                                                                       |
+| Ctrl + e / End                       | Move the cursor to the end of the line                                                                         |
+| Ctrl + Backspace / Alt + Backspace   | Remove the previous word / remove the word just before the cursor                                              |
+| Ctrl + Delete / Alt + d              | Remove the next word or the word just after the cursor                                                         |
+| Ctrl + w                             | Remove the word before the cursor even if it spans across the word boundaries                                  |
+| Ctrl + u                             | Clear the current line                                                                                         |
+| Ctrl + n / Ctrl + j / ↓              | Select the next item on the list                                                                               |
+| Ctrl + p / Ctrl + k / ↑              | Select the previous item on the list                                                                           |
+| Ctrl + o                             | Open the [inspector](#inspector)                                                                               |
+| Page Down                            | Scroll search results one page down                                                                            |
+| Page Up                              | Scroll search results one page up                                                                              |
+| ↓ (on the first entry)               | Return original or return query depending on [settings](https://docs.atuin.sh/configuration/config/#exit_mode) |
+| Ctrl + a, d                          | Delete the selected history entry                                                                              |
+| Ctrl + a, D                          | Delete **all** history entries matching the selected command                                                   |
+| Ctrl + a, a                          | Move cursor to the start of the line                                                                           |
+| Ctrl + a, c                          | Switch to the context of the currently selected command / return to default                                    |
 
 ### Prefix mode
 
@@ -5563,7 +5563,7 @@ This will delete your account, and all history from the remote server. It won't 
 
 We don't currently have a password reset system. As long as you're still logged in on at least one machine, it's safe to delete and re-create your account.
 
-## I'm not using sync — why is Atuin connecting to api.atuin.sh?
+## I'm not using sync — why is Atuin connecting to `api.atuin.sh`?
 
 That's the update checker. At most once per hour, Atuin checks `https://api.atuin.sh` for the latest release, and lets you know if you're out of date. It's a version lookup — no history or personal data is involved.
 
