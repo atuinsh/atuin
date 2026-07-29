@@ -242,11 +242,9 @@ pub fn truncate_query(query: &str) -> &str {
     }
 }
 
-/// Normalize Latin diacritics to their ASCII equivalents (`é` → `e`) using
-/// the same table as nucleo's `Normalization::Smart`, so unaccented queries
-/// keep matching accented history entries — frizbee does no normalization of
-/// its own. Maps char to char, so char positions are preserved. Borrows the
-/// input when it is already normalized.
+/// Normalize Latin diacritics to their ASCII equivalents (`é` → `e`) so
+/// unaccented queries match accented history entries. Maps char to char so
+/// char positions are preserved.
 pub fn normalize_diacritics(s: &str) -> Cow<'_, str> {
     use super::normalize::normalize;
     if s.is_ascii() || !s.chars().any(|c| normalize(c) != c) {
