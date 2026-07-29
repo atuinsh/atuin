@@ -216,8 +216,8 @@ $env.config = (
 | Ctrl + f / →                              | Move the cursor to the right                                                  |
 | Ctrl + a / Home                           | Move the cursor to the start of the line                                      |
 | Ctrl + e / End                            | Move the cursor to the end of the line                                        |
-| Ctrl + Backspace / Ctrl + Alt + Backspace | Remove the previous word / remove the word just before the cursor             |
-| Ctrl + Delete / Ctrl + Alt + Delete       | Remove the next word or the word just after the cursor                        |
+| Ctrl + Backspace / Alt + Backspace        | Remove the previous word / remove the word just before the cursor             |
+| Ctrl + Delete / Alt + d                   | Remove the next word or the word just after the cursor                        |
 | Ctrl + w                                  | Remove the word before the cursor even if it spans across the word boundaries |
 | Ctrl + u                                  | Clear the current line                                                        |
 | Ctrl + n / Ctrl + j / ↓                   | Select the next item on the list                                              |
