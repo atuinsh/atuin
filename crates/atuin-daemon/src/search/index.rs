@@ -333,6 +333,9 @@ impl SearchIndex {
                     entry.get_mut().add_invocation(history, &self.interner);
                 }
                 dashmap::Entry::Vacant(vacant) => {
+                    // TODO: It's very unlikely that we'll have more than 2^32 history entries, but
+                    // we should handle this case better. Truncating the index results in pushing
+                    // a command with an incorrect haystack index.
                     let Some(data) =
                         CommandData::new(history, &self.interner, haystack.len() as u32)
                     else {
@@ -483,12 +486,7 @@ impl SearchIndex {
         } else {
             let commands: Vec<&Arc<str>> =
                 candidates.iter().map(|&(_, hay)| &hay.normalized).collect();
-            // Use every core, like nucleo did — mid-sized indexes regress
-            // badly on many-core machines if matching stays single-threaded.
-            // But below ~10k candidates, stay serial: frizbee hands out
-            // 2048-item chunks, so a small list gets barely any overlap and
-            // scoped thread spawn/join costs more than it saves (measured
-            // ~500us on CodSpeed's runners, walltime mode).
+            // Use all cores when the number of commands is sufficiently large.
             let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
             let matches = tracing::span!(Level::TRACE, "index_search_match").in_scope(|| {
                 if threads > 1 && commands.len() >= 10_000 {
