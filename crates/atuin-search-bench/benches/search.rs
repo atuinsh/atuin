@@ -30,6 +30,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use atuin_client::history::History;
 use atuin_client::settings::Search as SearchSettings;
+use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use atuin_daemon::search::{IndexFilterMode, SearchIndex};
 use atuin_search_bench::corpus;
