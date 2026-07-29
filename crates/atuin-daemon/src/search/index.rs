@@ -389,10 +389,10 @@ impl SearchIndex {
 
         // Filter target resolved once per search (intern/parse the string
         // here) so the per-command checks below are integer-set lookups
-        enum Filter {
+        enum Filter<'a> {
             All,
             Dir(Spur),
-            Workspace(String),
+            Workspace(&'a str),
             Host(Spur),
             Session([u8; 16]),
             /// Target has never been seen by the index; nothing can match
@@ -403,7 +403,7 @@ impl SearchIndex {
             IndexFilterMode::Directory(dir) => {
                 self.interner.get(dir).map_or(Filter::Nothing, Filter::Dir)
             }
-            IndexFilterMode::Workspace(prefix) => Filter::Workspace(prefix.clone()),
+            IndexFilterMode::Workspace(prefix) => Filter::Workspace(&prefix),
             IndexFilterMode::Host(hostname) => self
                 .interner
                 .get(hostname)
