@@ -30,8 +30,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use atuin_client::history::History;
 use atuin_client::settings::Search as SearchSettings;
+use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
-use atuin_daemon::search::{IndexFilterMode, SearchIndex, ShellFilter};
+use atuin_daemon::search::{IndexFilterMode, SearchIndex};
 use atuin_search_bench::corpus;
 use time::OffsetDateTime;
 
@@ -196,7 +197,7 @@ fn index(scale: usize) -> Arc<SearchIndex> {
     }
 
     eprintln!("building index from {scale} history lines...");
-    let index = SearchIndex::new(ShellFilter::ALL);
+    let index = SearchIndex::new(OrFilter::all());
     let now = OffsetDateTime::now_utc();
     for (i, command) in commands()[..scale].iter().enumerate() {
         let history: History = History::import()
