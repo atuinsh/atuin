@@ -407,6 +407,7 @@ impl SearchIndex {
                     let mut indices: Vec<u32> = self
                         .commands
                         .iter()
+                        .filter(|entry| (entry.haystack_index as usize) < haystack.len())
                         .filter(|entry| match &filter {
                             Filter::All | Filter::Nothing => unreachable!(),
                             Filter::Dir(dir) => entry.has_invocation_in_dir(*dir),
@@ -420,9 +421,6 @@ impl SearchIndex {
                         .collect();
                     indices.sort_unstable();
                     indices
-                        .into_iter()
-                        .filter(|i| (*i as usize) < haystack.len())
-                        .collect()
                 }
             });
 
