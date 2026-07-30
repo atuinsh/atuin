@@ -3,7 +3,7 @@ use eyre::{Result, bail};
 
 use super::login::or_user_input;
 use atuin_client::{
-    auth::{self, AuthResponse},
+    auth::{self, AuthClient, AuthResponse},
     record::sqlite_store::SqliteStore,
     settings::{Settings, SyncAuth},
 };
