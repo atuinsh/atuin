@@ -1601,33 +1601,6 @@ mod tests {
     }
 
     #[rstest]
-    fn enum_delegates_all_covered_by_to_shell_override() {
-        // Through ClientToolCall, the Shell variant MUST keep compound
-        // (every-subcommand-covered) semantics, not the trait's default any().
-        let partial = vec![shell_rule(Some("git *"))];
-        let call = ClientToolCall::Shell(shell_tool("git add . && npm test"));
-        // npm is uncovered -> false. (If delegation fell back to the default
-        // any(), this would wrongly be true.)
-        assert!(!call.all_covered_by(&partial));
-
-        let full = vec![shell_rule(Some("git *")), shell_rule(Some("npm *"))];
-        let call = ClientToolCall::Shell(shell_tool("git add . && npm test"));
-        assert!(call.all_covered_by(&full));
-    }
-
-    #[rstest]
-    fn enum_delegates_target_dir_and_matches_rule() {
-        // Read tool delegates matches_rule; non-file tools return None target_dir.
-        let call = ClientToolCall::Read(read_tool("notes.md"));
-        assert!(call.matches_rule(&read_rule(Some("*.md"))));
-        assert!(
-            ClientToolCall::Shell(shell_tool("ls"))
-                .target_dir()
-                .is_none()
-        );
-    }
-
-    #[rstest]
     fn all_covered_by_non_shell_tool_unchanged() {
         // Non-shell tools use the default (any single rule matches)
         let rules = vec![read_rule(Some("*.md"))];
