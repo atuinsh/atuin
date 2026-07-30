@@ -225,5 +225,5 @@ fn daemon_search(bencher: divan::Bencher, case: &Case) {
     } else {
         IndexFilterMode::Global
     };
-    bencher.bench(|| index.search(case.query, filter.clone(), LIMIT));
+    bencher.bench(|| index.search(case.query, filter.clone(), LIMIT).count());
 }
