@@ -18,8 +18,15 @@ on:
     - cron: "0 16 * * 2-5" # 8am PST
   workflow_dispatch:
 
+# Serialize runs so an overlapping manual + scheduled run can't both
+# prepare the same version and collide on push.
+concurrency:
+  group: beta-release
+  cancel-in-progress: false
+
+# Pushes use RELEASE_TOKEN, not GITHUB_TOKEN; checkouts only need read.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   gate:
@@ -33,6 +40,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Decide whether to release
         id: check
@@ -81,11 +89,14 @@ jobs:
       OLD_VERSION: ${{ needs.gate.outputs.old-version }}
       NEW_VERSION: ${{ needs.gate.outputs.new-version }}
     steps:
+      # persist-credentials: false so no write-capable credential is on disk
+      # while the third-party actions below run. RELEASE_TOKEN is injected
+      # only in the final push step.
       - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_TOKEN }}
+          persist-credentials: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -125,10 +136,14 @@ jobs:
           } > CHANGELOG.md
 
       - name: Commit, tag, and push
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "chore(release): prepare for release $NEW_VERSION"
           git tag "v$NEW_VERSION"
-          git push --atomic origin main "refs/tags/v$NEW_VERSION"
+          git push --atomic \
+              "https://x-access-token:${RELEASE_TOKEN}@github.com/${{ github.repository }}.git" \
+              "HEAD:refs/heads/main" "refs/tags/v$NEW_VERSION"
