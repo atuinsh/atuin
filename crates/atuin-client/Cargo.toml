@@ -36,6 +36,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 url = { workspace = true }
 humantime = "2.1.0"
+ambassador = { workspace = true }
 async-trait = { workspace = true }
 itertools = { workspace = true }
 rand = { workspace = true }

@@ -16,6 +16,7 @@ readme.workspace = true
 [dependencies]
 atuin-client = { path = "../atuin-client", version = "18.19.0-beta.1" }
 atuin-common = { path = "../atuin-common", version = "18.19.0-beta.1" }
+ambassador = { workspace = true }
 derive_more = { workspace = true }
 atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.19.0-beta.1" }
 atuin-history = { path = "../atuin-history", version = "18.19.0-beta.1" }
