@@ -1,4 +1,8 @@
 [target.x86_64-unknown-illumos]
 pre-build = [
     "apt-get update && apt-get install --assume-yes --no-install-recommends perl make",
+    # openssl-src builds vendored OpenSSL with the solaris64 target, whose Makefile
+    # calls `granlib` (the Solaris name for GNU ranlib). The cross image ships the
+    # toolchain's ranlib as x86_64-unknown-illumos-ranlib but no `granlib`, so provide it.
+    "ln -sf \"$(command -v x86_64-unknown-illumos-ranlib)\" /usr/local/bin/granlib",
 ]
