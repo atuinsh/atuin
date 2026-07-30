@@ -63,27 +63,6 @@ pub struct Alias {
     pub value: AliasValue,
 }
 
-/// The outcome of rendering aliases into a shell's config syntax.
-///
-/// Rendering is best-effort: an alias a shell cannot express — an invalid name
-/// for the dialect, or a body with no representation — lands in `skipped`
-/// rather than failing the whole render, so a partial-but-valid config is
-/// always produced and the shell still starts.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Rendered {
-    /// The config snippet to source, as bytes.
-    pub script: BString,
-    /// Aliases with no representation in this shell.
-    pub skipped: Vec<Skipped>,
-}
-
-/// An alias that could not be rendered, and why.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Skipped {
-    pub name: BString,
-    pub reason: String,
-}
-
 #[cfg(test)]
 mod alias_value_tests {
     use super::AliasValue;

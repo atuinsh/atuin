@@ -14,6 +14,7 @@ use thiserror::Error;
 
 mod alias;
 mod posix;
+mod render;
 
 pub mod bash;
 pub mod fish;
@@ -21,7 +22,8 @@ pub mod sh;
 pub mod xonsh;
 pub mod zsh;
 
-pub use alias::{Alias, AliasValue, AliasesError, Rendered, Skipped};
+pub use alias::{Alias, AliasValue, AliasesError};
+pub use render::{Rendered, Skipped};
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum RunError {
