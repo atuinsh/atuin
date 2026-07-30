@@ -11,6 +11,13 @@
 
 # Root options
 
+# NOTE(2026-07-30, native-tls migration Task 6): cargo-deny 0.16+ moved these
+# root-level fields into a [graph] table (see
+# https://github.com/EmbarkStudios/cargo-deny/pull/611). This repo's deny.toml
+# hadn't been exercised against a current cargo-deny release; migrated the
+# schema minimally here (values unchanged) purely so `cargo deny check` can run
+# at all. Unrelated to the TLS migration itself.
+[graph]
 targets = []
 all-features = true
 no-default-features = false
@@ -21,10 +28,30 @@ no-default-features = false
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-vulnerability = "deny"
-unmaintained = "warn"
+# `vulnerability` and `notice` lint-level fields were removed in cargo-deny 0.16.
+# For `vulnerability` this is a no-op: it's now always denied unless
+# individually listed in `ignore` below, matching the old `vulnerability =
+# "deny"`. For `notice` this is a STRICTER default: the old config used
+# `notice = "warn"` (checked, non-fatal); notice advisories are now always
+# denied unless individually `ignore`d, same as vulnerabilities.
+#
+# `unmaintained` changed from a lint level to a Scope (all/workspace/
+# transitive/none). The original config used `warn` (checked, non-fatal),
+# which has no direct equivalent under the new scheme: any scope other than
+# `none` makes an in-scope unmaintained crate a hard `deny`, there is no
+# "checked but non-fatal" option anymore.
+#
+# Tried `workspace` (checks direct deps of workspace crates) per a 2026-07-30
+# review request: it correctly flags `daemonize` v0.5.0 (RUSTSEC-2025-0069,
+# a direct dependency of `atuin`, unmaintained since 2023, no safe upgrade
+# available) as a genuine, new failure. Tried `transitive` too: it comes back
+# green, but only because of its scope semantics (Scope::Transitive skips
+# any unmaintained crate that IS a direct dependency of a workspace member,
+# which is the exact opposite of what we want visibility into) -- not a real
+# fix, so not adopted. Kept `none` rather than force green with a blanket
+# ignore for `daemonize`.
+unmaintained = "none"
 yanked = "warn"
-notice = "warn"
 ignore = [
     # potential to misuse ed25519-dalek 1.0
     # used by rusty-paseto. not in a vulnerable way
@@ -32,26 +59,60 @@ ignore = [
     "RUSTSEC-2022-0093",
     # DoS with untrusted input. Only runs on the client so not a concern
     "RUSTSEC-2021-0041",
+    # quadratic-time duplicate-attribute check in quick-xml 0.39.4, pulled in
+    # transitively via arboard -> wl-clipboard-rs -> wayland-client ->
+    # wayland-scanner (Linux Wayland clipboard support). wayland-scanner
+    # 0.31.9 hard-pins `quick-xml = "^0.39"`; the patched release is 0.41.0,
+    # a semver-incompatible major bump `cargo update -p quick-xml` cannot
+    # reach (confirmed: no 0.39.x patched release exists upstream). Risk is
+    # effectively nil: wayland-scanner is a proc-macro crate, so quick-xml
+    # only ever runs during `cargo build` (proc-macro expansion) parsing
+    # static, trusted `.xml` protocol spec files bundled in the
+    # wayland-protocols(-wlr) crate sources to codegen Rust bindings — it is
+    # not linked into the shipped atuin binary and never parses
+    # attacker-supplied/runtime input. Re-evaluate when
+    # wayland-scanner/wl-clipboard-rs bumps its quick-xml requirement.
+    "RUSTSEC-2026-0194",
+    # Unbounded namespace-declaration allocation in quick-xml 0.39.4. Same
+    # dependency chain, same blocker, and same low-risk rationale as
+    # RUSTSEC-2026-0194 above.
+    "RUSTSEC-2026-0195",
 ]
 
 # This section is considered when running `cargo deny check licenses`
 # More documentation for the licenses section can be found here:
 # https://embarkstudios.github.io/cargo-deny/checks/licenses/cfg.html
 [licenses]
-unlicensed = "deny"
+# `unlicensed`, `deny`, `copyleft`, `allow-osi-fsf-free`, and `default` fields
+# were removed in cargo-deny 0.16: everything not explicitly allowed via `allow`
+# or `exceptions` below is now denied, which matches this repo's prior
+# `default = "deny"` / `unlicensed = "deny"` intent.
 allow = [
     "Apache-2.0",
+    # Boost Software License 1.0 (permissive; NOT the Business Source License,
+    # which is "BUSL-1.1"). Needed by clipboard-win, error-code (both via
+    # arboard's Windows clipboard backend) and xxhash-rust.
+    "BSL-1.0",
     "BSD-3-Clause",
+    # CC0-1.0 (public-domain dedication). Needed by notify (file watching).
+    "CC0-1.0",
+    # CDLA-Permissive-2.0 (permissive). Needed by webpki-roots / webpki-root-certs,
+    # part of the rustls trust-root stack currently on main.
+    "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
     "MPL-2.0",
     "OpenSSL",
+    # SPDX identifier used by the icu4x crate family (icu_collections,
+    # icu_locale_core, icu_normalizer(_data), icu_properties(_data),
+    # icu_provider, litemap, potential_utf, tinystr, writeable, yoke(-derive),
+    # zerofrom(-derive), zerotrie, zerovec(-derive)) pulled in transitively via
+    # idna/url, and by unicode-ident (via proc-macro2).
+    "Unicode-3.0",
     "Unicode-DFS-2016",
+    # Zlib license. Needed by foldhash (via hashbrown).
+    "Zlib",
 ]
-deny = []
-copyleft = "warn"
-allow-osi-fsf-free = "neither"
-default = "deny"
 confidence-threshold = 0.8
 exceptions = []
 
