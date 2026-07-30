@@ -14,6 +14,9 @@ dependencies = [
     "pytest-rerunfailures>=16.4",# retry only transient pexpect TIMEOUT/EOF, surgically
     "pytest-html>=4.2",          # self-contained failure report (screen + container logs)
     "pytest-icdiff>=0.9",        # side-by-side diffs for failed pyte-screen assertions
+    # GitHub Actions integration (auto-activate under GITHUB_ACTIONS; no-op locally):
+    "pytest-github-actions-annotate-failures>=0.4.1",  # inline PR-diff annotations
+    "pytest-md-report>=0.8",     # pass/fail markdown table for $GITHUB_STEP_SUMMARY
 ]
 
 [tool.pytest.ini_options]

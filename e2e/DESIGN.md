@@ -73,6 +73,11 @@ All verified on this suite's stack (pytest 9.1.1 / Python 3.14.6):
   test's rendered pyte screen(s) and container logs (clients + server) to the
   report and prints them, so a red CI run is debuggable. `--html=report.html`.
 - **pytest-icdiff** — side-by-side diffs for failed multi-line screen assertions.
+- **pytest-github-actions-annotate-failures** — auto-activates under
+  `GITHUB_ACTIONS`; annotates each failing assertion inline on the PR diff (one
+  annotation per flaky test, not per rerun). No-op locally.
+- **pytest-md-report** — the CI workflow writes a pass/fail table into
+  `$GITHUB_STEP_SUMMARY` (`--md-report-output` per run). Not enabled locally.
 
 Deliberately deferred: **pytest-xdist** (parallelism is the biggest speedup but
 session-scoped container fixtures need worker-aware names + `--dist loadgroup`

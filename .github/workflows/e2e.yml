@@ -23,22 +23,40 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
+      # pytest-github-actions-annotate-failures auto-activates under GITHUB_ACTIONS
+      # and annotates each failing assertion inline on the PR diff (one annotation
+      # per flaky test, not per rerun). No flag needed.
       - name: Run E2E (${{ matrix.shell }})
         working-directory: e2e
         run: |
           uv sync
           uv run pytest -v -m "not tui" \
             --html=report-${{ matrix.shell }}.html --self-contained-html \
+            --md-report --md-report-output=report-${{ matrix.shell }}.md \
             tests/test_capture.py::test_command_is_captured[${{ matrix.shell }}]
       - name: Sync round-trip
         if: matrix.shell == 'zsh'
         working-directory: e2e
         run: |
-          uv run pytest -v --html=report-sync.html --self-contained-html \
+          uv run pytest -v \
+            --html=report-sync.html --self-contained-html \
+            --md-report --md-report-output=report-sync.md \
             tests/test_sync.py
 
-      # On failure the report embeds the rendered screen + container logs for each
-      # failed test -- the whole point of the failure-context hook.
+      # Pass/fail table at the top of the run, even when a test above failed.
+      - name: Job summary
+        if: always()
+        working-directory: e2e
+        run: |
+          for f in report-*.md; do
+            [ -f "$f" ] || continue
+            printf '### %s\n\n' "${f%.md}" >> "$GITHUB_STEP_SUMMARY"
+            cat "$f" >> "$GITHUB_STEP_SUMMARY"
+            printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      # On failure the HTML report embeds the rendered screen + container logs for
+      # each failed test -- the whole point of the failure-context hook.
       - name: Upload failure report
         if: failure()
         uses: actions/upload-artifact@v4
