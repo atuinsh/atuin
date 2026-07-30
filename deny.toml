@@ -1,55 +1,11 @@
-# This template contains all of the possible sections and their default values
-
-# Note that all fields that take a lint level have these possible values:
-# * deny - An error will be produced and the check will fail
-# * warn - A warning will be produced, but the check will not fail
-# * allow - No warning or error will be produced, though in some cases a note
-# will be
-
-# The values provided in this template are the default values that will be used
-# when any section or field is not specified in your own configuration
-
-# Root options
-
-# NOTE(2026-07-30, native-tls migration Task 6): cargo-deny 0.16+ moved these
-# root-level fields into a [graph] table (see
-# https://github.com/EmbarkStudios/cargo-deny/pull/611). This repo's deny.toml
-# hadn't been exercised against a current cargo-deny release; migrated the
-# schema minimally here (values unchanged) purely so `cargo deny check` can run
-# at all. Unrelated to the TLS migration itself.
 [graph]
 targets = []
 all-features = true
 no-default-features = false
 
-# This section is considered when running `cargo deny check advisories`
-# More documentation for the advisories section can be found here:
-# https://embarkstudios.github.io/cargo-deny/checks/advisories/cfg.html
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-# `vulnerability` and `notice` lint-level fields were removed in cargo-deny 0.16.
-# For `vulnerability` this is a no-op: it's now always denied unless
-# individually listed in `ignore` below, matching the old `vulnerability =
-# "deny"`. For `notice` this is a STRICTER default: the old config used
-# `notice = "warn"` (checked, non-fatal); notice advisories are now always
-# denied unless individually `ignore`d, same as vulnerabilities.
-#
-# `unmaintained` changed from a lint level to a Scope (all/workspace/
-# transitive/none). The original config used `warn` (checked, non-fatal),
-# which has no direct equivalent under the new scheme: any scope other than
-# `none` makes an in-scope unmaintained crate a hard `deny`, there is no
-# "checked but non-fatal" option anymore.
-#
-# Tried `workspace` (checks direct deps of workspace crates) per a 2026-07-30
-# review request: it correctly flags `daemonize` v0.5.0 (RUSTSEC-2025-0069,
-# a direct dependency of `atuin`, unmaintained since 2023, no safe upgrade
-# available) as a genuine, new failure. Tried `transitive` too: it comes back
-# green, but only because of its scope semantics (Scope::Transitive skips
-# any unmaintained crate that IS a direct dependency of a workspace member,
-# which is the exact opposite of what we want visibility into) -- not a real
-# fix, so not adopted. Kept `none` rather than force green with a blanket
-# ignore for `daemonize`.
 unmaintained = "none"
 yanked = "warn"
 ignore = [
@@ -65,14 +21,7 @@ ignore = [
     "RUSTSEC-2026-0195",
 ]
 
-# This section is considered when running `cargo deny check licenses`
-# More documentation for the licenses section can be found here:
-# https://embarkstudios.github.io/cargo-deny/checks/licenses/cfg.html
 [licenses]
-# `unlicensed`, `deny`, `copyleft`, `allow-osi-fsf-free`, and `default` fields
-# were removed in cargo-deny 0.16: everything not explicitly allowed via `allow`
-# or `exceptions` below is now denied, which matches this repo's prior
-# `default = "deny"` / `unlicensed = "deny"` intent.
 allow = [
     "Apache-2.0",
     "BSL-1.0",
@@ -82,26 +31,12 @@ allow = [
     "ISC",
     "MIT",
     "MPL-2.0",
-    "OpenSSL",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
     "Zlib",
 ]
 confidence-threshold = 0.8
 exceptions = []
 
-# Some crates don't have (easily) machine readable licensing information,
-# adding a clarification entry for it allows you to manually specify the
-# licensing information
-[[licenses.clarify]]
-name = "ring"
-version = "*"
-expression = "MIT AND ISC AND OpenSSL"
-license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
-
-# This section is considered when running `cargo deny check bans`.
-# More documentation about the 'bans' section can be found here:
-# https://embarkstudios.github.io/cargo-deny/checks/bans/cfg.html
 [bans]
 multiple-versions = "allow"
 wildcards = "warn"
@@ -113,26 +48,5 @@ deny = []
 skip = []
 skip-tree = []
 
-# This section is considered when running `cargo deny check sources`.
-# More documentation about the 'sources' section can be found here:
-# https://embarkstudios.github.io/cargo-deny/checks/sources/cfg.html
 [sources]
-# Lint level for what to happen when a crate from a crate registry that is not
-# in the allow list is encountered
 unknown-registry = "warn"
-# Lint level for what to happen when a crate from a git repository that is not
-# in the allow list is encountered
-unknown-git = "warn"
-# List of URLs for allowed crate registries. Defaults to the crates.io index
-# if not specified. If it is specified but empty, no registries are allowed.
-allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# List of URLs for allowed Git repositories
-allow-git = []
-
-[sources.allow-org]
-# 1 or more github.com organizations to allow git sources for
-github = []
-# 1 or more gitlab.com organizations to allow git sources for
-gitlab = []
-# 1 or more bitbucket.org organizations to allow git sources for
-bitbucket = []
