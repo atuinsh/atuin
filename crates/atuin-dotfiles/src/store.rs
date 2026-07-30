@@ -5,6 +5,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 // This will be noticeable similar to the kv store, though I expect the two shall diverge
 // While we will support a range of shell config, I'd rather have a larger number of small records
 // + stores, rather than one mega config store.
+use atuin_common::shell::{AliasValue, Shell};
 use atuin_common::utils::unquote;
 use atuin_domain::record::{DecryptedData, Host, HostId};
 use eyre::{Result, bail, ensure, eyre};
@@ -141,12 +142,17 @@ impl AliasStore {
 
     pub async fn posix(&self) -> Result<String> {
         let aliases = self.aliases().await?;
-        Ok(Self::format_posix(&aliases))
+        Ok(Self::render(Shell::Sh, &aliases))
+    }
+
+    pub async fn fish(&self) -> Result<String> {
+        let aliases = self.aliases().await?;
+        Ok(Self::render(Shell::Fish, &aliases))
     }
 
     pub async fn xonsh(&self) -> Result<String> {
         let aliases = self.aliases().await?;
-        Ok(Self::format_xonsh(&aliases))
+        Ok(Self::render(Shell::Xonsh, &aliases))
     }
 
     pub async fn powershell(&self) -> Result<String> {
@@ -154,28 +160,32 @@ impl AliasStore {
         Ok(Self::format_powershell(&aliases))
     }
 
-    fn format_posix(aliases: &[Alias]) -> String {
-        let mut config = String::new();
+    /// Render `aliases` into `shell`'s config syntax via the shared shell
+    /// library, logging any the shell cannot represent.
+    fn render(shell: Shell, aliases: &[Alias]) -> String {
+        let shell_aliases: Vec<atuin_common::shell::Alias> = aliases
+            .iter()
+            .map(|alias| {
+                // Records may store the value already quoted; strip one layer so
+                // the renderer quotes exactly once.
+                let value = unquote(&alias.value).unwrap_or_else(|_| alias.value.clone());
+                atuin_common::shell::Alias {
+                    name: alias.name.clone().into(),
+                    value: AliasValue::Command(value.into()),
+                }
+            })
+            .collect();
 
-        for alias in aliases {
-            // If it's quoted, remove the quotes. If it's not quoted, do nothing.
-            let value = unquote(alias.value.as_str()).unwrap_or(alias.value.clone());
+        let rendered = shell
+            .interface()
+            .expect("a built-in shell always has an interface")
+            .render_aliases(&shell_aliases);
 
-            // we're about to quote it ourselves anyway!
-            config.push_str(&format!("alias {}='{}'\n", alias.name, value));
+        for skipped in &rendered.skipped {
+            tracing::warn!("skipping alias {:?}: {}", skipped.name, skipped.reason);
         }
 
-        config
-    }
-
-    fn format_xonsh(aliases: &[Alias]) -> String {
-        let mut config = String::new();
-
-        for alias in aliases {
-            config.push_str(&format!("aliases['{}'] ='{}'\n", alias.name, alias.value));
-        }
-
-        config
+        String::from_utf8_lossy(rendered.script.as_slice()).into_owned()
     }
 
     fn format_powershell(aliases: &[Alias]) -> String {
@@ -194,25 +204,24 @@ impl AliasStore {
 
         let aliases = self.aliases().await?;
 
-        // Build for all supported shells
-        let posix = Self::format_posix(&aliases);
-        let xonsh = Self::format_xonsh(&aliases);
+        // Build for all supported shells.
+        let posix = Self::render(Shell::Sh, &aliases);
+        let fish = Self::render(Shell::Fish, &aliases);
+        let xonsh = Self::render(Shell::Xonsh, &aliases);
         let powershell = Self::format_powershell(&aliases);
 
-        // All the same contents, maybe optimize in the future or perhaps there will be quirks
-        // per-shell
-        // I'd prefer separation atm
-        let zsh = dir.join("aliases.zsh");
-        let bash = dir.join("aliases.bash");
-        let fish = dir.join("aliases.fish");
-        let xsh = dir.join("aliases.xsh");
-        let ps1 = dir.join("aliases.ps1");
+        let zsh_path = dir.join("aliases.zsh");
+        let bash_path = dir.join("aliases.bash");
+        let fish_path = dir.join("aliases.fish");
+        let xsh_path = dir.join("aliases.xsh");
+        let ps1_path = dir.join("aliases.ps1");
 
-        tokio::fs::write(zsh, &posix).await?;
-        tokio::fs::write(bash, &posix).await?;
-        tokio::fs::write(fish, &posix).await?;
-        tokio::fs::write(xsh, &xonsh).await?;
-        tokio::fs::write(ps1, &powershell).await?;
+        // bash and zsh share POSIX syntax; fish, xonsh and powershell differ.
+        tokio::fs::write(zsh_path, &posix).await?;
+        tokio::fs::write(bash_path, &posix).await?;
+        tokio::fs::write(fish_path, &fish).await?;
+        tokio::fs::write(xsh_path, &xonsh).await?;
+        tokio::fs::write(ps1_path, &powershell).await?;
 
         Ok(())
     }
