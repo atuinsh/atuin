@@ -11,7 +11,7 @@ use ratatui_image::{
     protocol::StatefulProtocol,
 };
 
-use crate::models::{HistorySource, Model};
+use crate::models::{HistorySource, Mode, Model};
 use crate::msg::Msg;
 use crate::runtime::{App, Cmd};
 use crate::search::views::history_list::HistoryListView;
@@ -54,7 +54,7 @@ impl<S: HistorySource> App for SearchInteractive<S> {
 
     fn update(&mut self, msg: Msg) -> Cmd {
         match msg {
-            Msg::Key(key) if is_quit(&key) => Cmd::Quit,
+            Msg::Key(key) if is_ctrl_c(&key) => Cmd::Quit,
             Msg::Key(key) => self.on_key(key),
             Msg::Resize(..) => self.ensure_loaded(),
             Msg::HistoryTotal(total) => {
@@ -137,9 +137,33 @@ impl<S: HistorySource> App for SearchInteractive<S> {
 
 impl<S: HistorySource> SearchInteractive<S> {
     fn on_key(&mut self, key: KeyEvent) -> Cmd {
-        if is_quit(&key) {
+        match self.model.mode() {
+            None => self.on_key_plain(key),
+            Some(Mode::Search) => self.on_key_search(key),
+            Some(Mode::Normal { .. }) => self.on_key_normal(key),
+        }
+    }
+
+    /// Non-modal handling: Esc quits; everything else is text entry / nav.
+    fn on_key_plain(&mut self, key: KeyEvent) -> Cmd {
+        if key.code == KeyCode::Esc {
             return Cmd::Quit;
         }
+        self.on_key_edit(key)
+    }
+
+    /// SEARCH mode: like the non-modal interface, but Esc drops to NORMAL.
+    fn on_key_search(&mut self, key: KeyEvent) -> Cmd {
+        if key.code == KeyCode::Esc {
+            self.model.enter_normal();
+            return Cmd::None;
+        }
+        self.on_key_edit(key)
+    }
+
+    /// Shared text-entry handling (non-modal + SEARCH): Enter accepts, printable
+    /// keys edit the query, arrows/page navigate the list.
+    fn on_key_edit(&mut self, key: KeyEvent) -> Cmd {
         if key.code == KeyCode::Enter {
             return Cmd::Quit; // accept (returning the command is a follow-up)
         }
@@ -174,6 +198,55 @@ impl<S: HistorySource> SearchInteractive<S> {
         } else {
             self.ensure_loaded() // nav / cursor move → maybe fetch a browse window
         }
+    }
+
+    /// NORMAL (command) mode: a small vim keymap. No key types text.
+    fn on_key_normal(&mut self, key: KeyEvent) -> Cmd {
+        match key.code {
+            KeyCode::Enter => return Cmd::Quit, // accept
+            KeyCode::Char('q') => return Cmd::Quit,
+            KeyCode::Esc => {
+                self.model.clear_count();
+                return Cmd::None;
+            }
+            KeyCode::Char('i') | KeyCode::Char('/') => {
+                self.model.enter_search();
+                return Cmd::None;
+            }
+            // Numeric count prefix: 1–9 always; 0 only extends an existing count.
+            KeyCode::Char(d @ '1'..='9') => {
+                self.model.push_count_digit(d as u8 - b'0');
+                return Cmd::None;
+            }
+            KeyCode::Char('0') if self.model.count_pending() => {
+                self.model.push_count_digit(0);
+                return Cmd::None;
+            }
+            // --- motions: consume the count, then load the new window below ---
+            KeyCode::Char('j') | KeyCode::Down => {
+                let n = self.model.take_count();
+                self.model.history.select_prev_by(n);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let n = self.model.take_count();
+                self.model.history.select_next_by(n);
+            }
+            KeyCode::PageDown => {
+                self.model.clear_count();
+                self.model.history.page_up();
+            }
+            KeyCode::PageUp => {
+                self.model.clear_count();
+                self.model.history.page_down();
+            }
+            // h/l are reserved (future horizontal scroll); any other key just
+            // cancels a pending count. Neither types text.
+            _ => {
+                self.model.clear_count();
+                return Cmd::None;
+            }
+        }
+        self.ensure_loaded()
     }
 
     /// Load browse mode: the total history count and the first window.
@@ -222,9 +295,8 @@ impl<S: HistorySource> SearchInteractive<S> {
     }
 }
 
-fn is_quit(key: &KeyEvent) -> bool {
-    let ctrl_c = key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
-    ctrl_c || key.code == KeyCode::Esc
+fn is_ctrl_c(key: &KeyEvent) -> bool {
+    key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
 }
 
 /// Prepare the turtle logo for rendering — but only when the terminal supports
@@ -264,15 +336,32 @@ mod tests {
         }
     }
 
-    fn app() -> SearchInteractive<TestSource> {
+    fn app_with_mode(mode: Option<Mode>) -> SearchInteractive<TestSource> {
         let model = Model {
             theme: Theme::default(),
             enter_accept: true,
             history: HistoryList::new(),
             search: SearchInput::new(),
-            mode: None,
+            mode,
         };
         SearchInteractive::new(model, None, TestSource)
+    }
+
+    fn app() -> SearchInteractive<TestSource> {
+        app_with_mode(None)
+    }
+
+    fn modal_app_normal() -> SearchInteractive<TestSource> {
+        app_with_mode(Some(Mode::Normal { count: None }))
+    }
+
+    fn modal_app_search() -> SearchInteractive<TestSource> {
+        app_with_mode(Some(Mode::Search))
+    }
+
+    fn seed(app: &mut SearchInteractive<TestSource>, total: usize, height: u16) {
+        app.model.history.set_viewport_height(height);
+        app.model.history.set_total(total);
     }
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -376,5 +465,116 @@ mod tests {
         assert_eq!(app.model.search.value(), "");
         assert!(matches!(cmd, Cmd::Batch(_)), "clearing query should browse");
         assert_eq!(app.model.history.total(), 0, "browse reset clears the list");
+    }
+
+    #[test]
+    fn ctrl_c_quits() {
+        let mut app = app();
+        let cmd = app.update(Msg::Key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(matches!(cmd, Cmd::Quit));
+    }
+
+    #[test]
+    fn search_mode_types_query() {
+        let mut app = modal_app_search();
+        app.on_key(key(KeyCode::Char('l')));
+        app.on_key(key(KeyCode::Char('s')));
+        assert_eq!(app.model.search.value(), "ls");
+    }
+
+    #[test]
+    fn search_esc_switches_to_normal_not_quit() {
+        let mut app = modal_app_search();
+        let cmd = app.on_key(key(KeyCode::Esc));
+        assert!(matches!(cmd, Cmd::None));
+        assert_eq!(app.model.mode(), Some(Mode::Normal { count: None }));
+    }
+
+    #[test]
+    fn search_enter_accepts() {
+        let mut app = modal_app_search();
+        assert!(matches!(app.on_key(key(KeyCode::Enter)), Cmd::Quit));
+    }
+
+    #[test]
+    fn normal_i_and_slash_enter_search() {
+        let mut app = modal_app_normal();
+        app.on_key(key(KeyCode::Char('i')));
+        assert_eq!(app.model.mode(), Some(Mode::Search));
+        app.on_key(key(KeyCode::Esc)); // back to NORMAL
+        app.on_key(key(KeyCode::Char('/')));
+        assert_eq!(app.model.mode(), Some(Mode::Search));
+    }
+
+    #[test]
+    fn normal_keys_do_not_type() {
+        let mut app = modal_app_normal();
+        app.on_key(key(KeyCode::Char('j')));
+        app.on_key(key(KeyCode::Char('k')));
+        app.on_key(key(KeyCode::Char('x')));
+        assert_eq!(app.model.search.value(), "");
+    }
+
+    #[test]
+    fn normal_q_quits_and_enter_accepts() {
+        let mut app = modal_app_normal();
+        assert!(matches!(app.on_key(key(KeyCode::Char('q'))), Cmd::Quit));
+        assert!(matches!(app.on_key(key(KeyCode::Enter)), Cmd::Quit));
+    }
+
+    #[test]
+    fn normal_bare_j_moves_one() {
+        let mut app = modal_app_normal();
+        seed(&mut app, 100, 20);
+        app.model.history.select_last(); // 99
+        app.on_key(key(KeyCode::Char('j')));
+        assert_eq!(app.model.history.selected(), 98);
+    }
+
+    #[test]
+    fn normal_count_jumps_multiple_rows() {
+        let mut app = modal_app_normal();
+        seed(&mut app, 100, 20);
+        app.model.history.select_last(); // 99
+        app.on_key(key(KeyCode::Char('1')));
+        app.on_key(key(KeyCode::Char('0')));
+        app.on_key(key(KeyCode::Char('j')));
+        assert_eq!(app.model.history.selected(), 89);
+    }
+
+    #[test]
+    fn normal_zero_without_count_is_noop() {
+        let mut app = modal_app_normal();
+        seed(&mut app, 100, 20);
+        app.model.history.select_last(); // 99
+        app.on_key(key(KeyCode::Char('0'))); // bare 0 → no-op
+        app.on_key(key(KeyCode::Char('j'))); // moves 1
+        assert_eq!(app.model.history.selected(), 98);
+    }
+
+    #[test]
+    fn normal_esc_clears_pending_count() {
+        let mut app = modal_app_normal();
+        seed(&mut app, 100, 20);
+        app.model.history.select_last(); // 99
+        app.on_key(key(KeyCode::Char('5')));
+        app.on_key(key(KeyCode::Esc)); // cancels the 5
+        app.on_key(key(KeyCode::Char('j'))); // moves 1, not 5
+        assert_eq!(app.model.history.selected(), 98);
+        assert_eq!(app.model.mode(), Some(Mode::Normal { count: None }));
+    }
+
+    #[test]
+    fn normal_h_l_are_reserved_noops() {
+        let mut app = modal_app_normal();
+        seed(&mut app, 100, 20);
+        app.model.history.select_last(); // 99
+        app.on_key(key(KeyCode::Char('h')));
+        app.on_key(key(KeyCode::Char('l')));
+        assert_eq!(app.model.history.selected(), 99, "h/l must not move");
+        assert_eq!(app.model.search.value(), "", "h/l must not type");
     }
 }
