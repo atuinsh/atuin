@@ -223,9 +223,23 @@ type FrecencyMap = Arc<Vec<u32>>;
 /// (diacritics removed) we actually match against.
 struct HaystackEntry {
     /// The original text of the entry.
-    original: Arc<str>,
+    pub original: Arc<str>,
     /// The [normalized](normalize_diacritics) version of the text, with diacritics removed.
-    normalized: Arc<str>,
+    pub normalized: Arc<str>,
+}
+
+impl HaystackEntry {
+    /// Create a new [`HaystackEntry`] from an [`Arc<str>`].
+    pub fn new(text: Arc<str>) -> Self {
+        let normalized = match normalize_diacritics(&text) {
+            Cow::Borrowed(_) => text.clone(),
+            Cow::Owned(normalized) => normalized.into(),
+        };
+        Self {
+            original: text,
+            normalized,
+        }
+    }
 }
 
 /// A deduplicated search index with frecency-based ranking.
@@ -302,9 +316,8 @@ impl SearchIndex {
             // Existing command - just update invocations
             entry.add_invocation(history, &self.interner);
         } else {
-            let command_arc: Arc<str> = command.into();
             let mut haystack = self.haystack.write().expect("haystack lock poisoned");
-            match self.commands.entry(Arc::clone(&command_arc)) {
+            match self.commands.entry(Arc::from(command)) {
                 dashmap::Entry::Occupied(mut entry) => {
                     entry.get_mut().add_invocation(history, &self.interner);
                 }
@@ -315,17 +328,10 @@ impl SearchIndex {
                     let Some(data) =
                         CommandData::new(history, &self.interner, haystack.len() as u32)
                     else {
-                        return; // Invalid UUIDs, skip this entry
+                        return; // Invalid UUID, skip this entry
                     };
+                    haystack.push(HaystackEntry::new(vacant.key().clone()));
                     vacant.insert(data);
-                    let normalized = match normalize_diacritics(&command_arc) {
-                        Cow::Borrowed(_) => Arc::clone(&command_arc),
-                        Cow::Owned(normalized) => normalized.into(),
-                    };
-                    haystack.push(HaystackEntry {
-                        original: command_arc,
-                        normalized,
-                    });
                 }
             }
         }
