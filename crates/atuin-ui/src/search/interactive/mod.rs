@@ -71,6 +71,8 @@ impl<S: HistorySource> App for SearchInteractive<S> {
                 self.model.history.apply(start, rows);
                 Cmd::None
             }
+            // Wired up in a later task: applying results and the stale-query guard.
+            Msg::SearchResults { .. } => Cmd::None,
         }
     }
 

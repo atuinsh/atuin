@@ -181,6 +181,10 @@ pub trait HistorySource: Clone + Send + 'static {
 
     /// The rows for the logical `range`.
     fn load(&self, range: Range<usize>) -> impl Future<Output = Vec<HistoryRow>> + Send;
+
+    /// The (bounded) rows matching `query`, newest first. An empty query is not
+    /// asked of this method — the app uses browse mode instead.
+    fn search(&self, query: &str) -> impl Future<Output = Vec<HistoryRow>> + Send;
 }
 
 #[cfg(test)]

@@ -169,7 +169,7 @@ impl Widget for HistoryCount<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::HistoryList;
+    use crate::models::{HistoryList, SearchInput};
     use ratatui_image::picker::Picker;
 
     const TURTLE_PNG: &[u8] = include_bytes!("../../../assets/atuin-turtle.png");
@@ -179,6 +179,7 @@ mod tests {
             theme: Theme::default(),
             enter_accept: true,
             history: HistoryList::new(),
+            search: SearchInput::new(),
         };
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);

@@ -16,4 +16,6 @@ pub enum Msg {
     HistoryTotal(usize),
     /// A window of history rows loaded for logical `[start, start + rows.len())`.
     HistoryLoaded { start: usize, rows: Vec<HistoryRow> },
+    /// Results for a completed search of `query`.
+    SearchResults { query: String, rows: Vec<HistoryRow> },
 }

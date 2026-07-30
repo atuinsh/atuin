@@ -15,6 +15,8 @@ pub struct Model {
     /// Whether `<enter>` runs (`true`) or edits (`false`) the selected command.
     pub enter_accept: bool,
     pub history: HistoryList,
+    /// The current search query and its editing cursor.
+    pub search: SearchInput,
 }
 
 impl Model {

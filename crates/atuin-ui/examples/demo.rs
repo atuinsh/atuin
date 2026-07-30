@@ -30,31 +30,43 @@ struct SyntheticHistory {
     base_time: i64,
 }
 
+impl SyntheticHistory {
+    fn row(&self, i: usize) -> HistoryRow {
+        let n = i as i64;
+        let command = match i % 6 {
+            0 => format!("git commit -m \"fix bug #{i}\""),
+            1 => "ls -la | grep foo".to_string(),
+            2 => "cargo build --release && ./run.sh".to_string(),
+            3 => format!("echo $HOME/{i} > out.txt"),
+            4 => "docker run -it --rm ubuntu bash # debug".to_string(),
+            _ => "find . -name '*.rs' | xargs wc -l".to_string(),
+        };
+        HistoryRow {
+            id: format!("row-{i}"),
+            command,
+            timestamp: self.base_time - n * 90,
+            duration: ((n * 37) % 3000 + 5) * 1_000_000,
+            exit: if i.is_multiple_of(9) { 1 } else { 0 },
+        }
+    }
+}
+
 impl HistorySource for SyntheticHistory {
     async fn total(&self) -> usize {
         self.total
     }
 
     async fn load(&self, range: Range<usize>) -> Vec<HistoryRow> {
-        range
-            .map(|i| {
-                let n = i as i64;
-                let command = match i % 6 {
-                    0 => format!("git commit -m \"fix bug #{i}\""),
-                    1 => "ls -la | grep foo".to_string(),
-                    2 => "cargo build --release && ./run.sh".to_string(),
-                    3 => format!("echo $HOME/{i} > out.txt"),
-                    4 => "docker run -it --rm ubuntu bash # debug".to_string(),
-                    _ => "find . -name '*.rs' | xargs wc -l".to_string(),
-                };
-                HistoryRow {
-                    id: format!("row-{i}"),
-                    command,
-                    timestamp: self.base_time - n * 90, // each row 90s older
-                    duration: ((n * 37) % 3000 + 5) * 1_000_000, // 5..3005 ms
-                    exit: if i % 9 == 0 { 1 } else { 0 },
-                }
-            })
+        range.map(|i| self.row(i)).collect()
+    }
+
+    async fn search(&self, query: &str) -> Vec<HistoryRow> {
+        let needle = query.to_lowercase();
+        // Scan a bounded prefix of the synthetic history; collect up to 200 hits.
+        (0..self.total.min(50_000))
+            .map(|i| self.row(i))
+            .filter(|r| r.command.to_lowercase().contains(&needle))
+            .take(200)
             .collect()
     }
 }
@@ -88,6 +100,7 @@ async fn main() -> io::Result<()> {
         theme,
         enter_accept: true,
         history: HistoryList::new(),
+        search: atuin_ui::models::SearchInput::new(),
     };
 
     let base_time = SystemTime::now()
