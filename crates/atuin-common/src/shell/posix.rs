@@ -293,6 +293,13 @@ mod var_render_tests {
     }
 
     #[test]
+    fn bareword_value_with_all_safe_chars_is_unquoted() {
+        let r = render_vars(&[var("P", "a_b-c.d/e", true)]);
+        assert_eq!(r.script, BString::from("export P=a_b-c.d/e\n"));
+        assert!(r.skipped.is_empty());
+    }
+
+    #[test]
     fn spaces_force_double_quotes_and_export_prefix() {
         let r = render_vars(&[var("FOO", "bar baz", true)]);
         assert_eq!(r.script, BString::from("export FOO=\"bar baz\"\n"));

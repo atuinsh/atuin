@@ -75,6 +75,13 @@ mod tests {
     }
 
     #[test]
+    fn bareword_value_with_all_safe_chars_is_unquoted() {
+        let r = render_vars(&[var("P", "a_b-c.d/e", true)]);
+        assert_eq!(r.script, BString::from("$P=a_b-c.d/e\n"));
+        assert!(r.skipped.is_empty());
+    }
+
+    #[test]
     fn escapes_backslash_and_double_quote() {
         let r = render_vars(&[var("V", r#"a"b\c"#, true)]);
         assert_eq!(r.script, BString::from(concat!(r#"$V="a\"b\\c""#, "\n")));
