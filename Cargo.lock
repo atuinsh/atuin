@@ -1889,9 +1889,9 @@ dependencies = [
 
 [[package]]
 name = "frizbee"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a151c9ed9ab8cefc76a76b7a15292fc83575f70cf2076d238e0a3251f69738ba"
+checksum = "c0633b457eaadb5bcbee26b5b4cad3196ae4b18cfc968a353e19e7c1a944e56a"
 
 [[package]]
 name = "fs-err"
