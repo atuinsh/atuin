@@ -23,6 +23,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -94,6 +98,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -123,6 +131,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
@@ -168,6 +180,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -197,6 +213,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
       - name: Install latest rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -222,6 +242,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master

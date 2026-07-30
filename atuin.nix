@@ -10,6 +10,8 @@
   installShellFiles,
   rustPlatform,
   libiconv,
+  pkg-config,
+  openssl,
 }:
 rustPlatform.buildRustPackage {
   name = "atuin";
@@ -22,9 +24,11 @@ rustPlatform.buildRustPackage {
     allowBuiltinFetchGit = true;
   };
 
-  nativeBuildInputs = [ installShellFiles ];
+  nativeBuildInputs = [ installShellFiles pkg-config ];
 
-  buildInputs = lib.optionals stdenv.isDarwin [ libiconv ];
+  buildInputs = [ openssl ] ++ lib.optionals stdenv.isDarwin [ libiconv ];
+
+  OPENSSL_NO_VENDOR = 1;
 
   postInstall = ''
     installShellCompletion --cmd atuin \
