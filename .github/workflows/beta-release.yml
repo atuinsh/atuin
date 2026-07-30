@@ -5,9 +5,10 @@ name: Beta Release
 # `## [unreleased]` changelog section, commit, then tag. The tag push triggers
 # release.yml. Prereleases are not published to crates.io.
 #
-# Requires a `RELEASE_TOKEN` secret (PAT or GitHub App token with
-# contents: write). The default GITHUB_TOKEN cannot be used: tags pushed with
-# it do not trigger other workflows, so release.yml would never run.
+# Requires a `RELEASE_TOKEN` secret: a PAT belonging to the atuin-bot user
+# with contents: write on this repo. The default GITHUB_TOKEN cannot be used:
+# tags pushed with it do not trigger other workflows, so release.yml would
+# never run.
 
 on:
   schedule:
@@ -139,11 +140,11 @@ jobs:
         env:
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "atuin-bot"
+          git config user.email "engineering@atuin.sh"
           git add -A
           git commit -m "chore(release): prepare for release $NEW_VERSION"
           git tag "v$NEW_VERSION"
           git push --atomic \
-              "https://x-access-token:${RELEASE_TOKEN}@github.com/${{ github.repository }}.git" \
+              "https://atuin-bot:${RELEASE_TOKEN}@github.com/${{ github.repository }}.git" \
               "HEAD:refs/heads/main" "refs/tags/v$NEW_VERSION"
