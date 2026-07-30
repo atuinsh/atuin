@@ -220,7 +220,7 @@ impl<S: HistorySource> SearchInteractive<S> {
                 self.model.clear_count();
                 return Cmd::None;
             }
-            KeyCode::Char('i') | KeyCode::Char('/') => {
+            KeyCode::Char('i') | KeyCode::Char('a') | KeyCode::Char('/') => {
                 self.model.enter_search();
                 return Cmd::None;
             }
@@ -516,13 +516,16 @@ mod tests {
     }
 
     #[test]
-    fn normal_i_and_slash_enter_search() {
-        let mut app = modal_app_normal();
-        app.on_key(key(KeyCode::Char('i')));
-        assert_eq!(app.model.mode(), Some(Mode::Search));
-        app.on_key(key(KeyCode::Esc)); // back to NORMAL
-        app.on_key(key(KeyCode::Char('/')));
-        assert_eq!(app.model.mode(), Some(Mode::Search));
+    fn normal_i_a_and_slash_enter_search() {
+        for enter in ['i', 'a', '/'] {
+            let mut app = modal_app_normal();
+            app.on_key(key(KeyCode::Char(enter)));
+            assert_eq!(
+                app.model.mode(),
+                Some(Mode::Search),
+                "'{enter}' should enter SEARCH"
+            );
+        }
     }
 
     #[test]
