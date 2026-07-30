@@ -225,15 +225,14 @@ impl Cmd {
             #[cfg(feature = "daemon")]
             Self::Daemon(cmd) => cmd.run(settings, sqlite_store, db).await,
 
-            Self::History(_) | Self::Hook(_) | Self::Init(_) | Self::Doctor | Self::Config(_) => {
+            Self::History(_)
+            | Self::Hook(_)
+            | Self::Init(_)
+            | Self::Doctor
+            | Self::Config(_)
+            | Self::Lab(_) => {
                 unreachable!()
             }
-
-            // Handled by the early-return match above, alongside Doctor/Config.
-            // A separate arm rather than another alternative in the pattern
-            // above because `cfg` attributes cannot be applied to individual
-            // or-pattern alternatives.
-            Self::Lab(_) => unreachable!(),
 
             #[cfg(feature = "ai")]
             Self::Ai(cli) => atuin_ai::commands::run(cli, &settings).await,
