@@ -19,7 +19,7 @@ use crate::fsm::effects::{Effect, ExitAction, PermissionTarget, TimeoutKind};
 use crate::fsm::events::{Event, PermissionChoice, PermissionResponse};
 use crate::fsm::tools::ToolPreviewData;
 use crate::fsm::{AgentFsm, AgentState};
-use crate::tools::ClientToolCall;
+use crate::tools::{ClientToolCall, PermissibleToolCall};
 use crate::tui::events::PermissionResult;
 use crate::tui::persist::PersistJob;
 use crate::tui::recall::RecallState;

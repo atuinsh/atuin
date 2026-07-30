@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use ambassador::{Delegate, delegatable_trait};
 use atuin_client::history::AuthorPattern;
 use atuin_common::ansi;
 use atuin_common::filter::OrFilter;
@@ -157,7 +158,8 @@ pub(crate) struct ToolPreview {
 }
 
 /// A tool call from the server, with parsed input parameters.
-#[derive(Debug, Clone, derive_more::From)]
+#[derive(Debug, Clone, derive_more::From, Delegate)]
+#[delegate(PermissibleToolCall)]
 pub(crate) enum ClientToolCall {
     Read(ReadToolCall),
     Edit(EditToolCall),
@@ -234,33 +236,10 @@ impl ClientToolCall {
             | ClientToolCall::LoadSkill(_) => None,
         }
     }
-
-    pub(crate) fn matches_rule(&self, rule: &Rule) -> bool {
-        match self {
-            ClientToolCall::Read(tool) => tool.matches_rule(rule),
-            ClientToolCall::Edit(tool) => tool.matches_rule(rule),
-            ClientToolCall::Write(tool) => tool.matches_rule(rule),
-            ClientToolCall::Shell(tool) => tool.matches_rule(rule),
-            ClientToolCall::AtuinHistory(tool) => tool.matches_rule(rule),
-            ClientToolCall::AtuinOutput(tool) => tool.matches_rule(rule),
-            ClientToolCall::LoadSkill(tool) => tool.matches_rule(rule),
-        }
-    }
-
-    pub(crate) fn target_dir(&self) -> Option<&Path> {
-        match self {
-            ClientToolCall::Read(tool) => tool.target_dir(),
-            ClientToolCall::Edit(tool) => tool.target_dir(),
-            ClientToolCall::Write(tool) => tool.target_dir(),
-            ClientToolCall::Shell(tool) => tool.target_dir(),
-            ClientToolCall::AtuinHistory(tool) => tool.target_dir(),
-            ClientToolCall::AtuinOutput(tool) => tool.target_dir(),
-            ClientToolCall::LoadSkill(tool) => tool.target_dir(),
-        }
-    }
 }
 
 /// A trait for tool calls that can be checked against permission rules.
+#[delegatable_trait]
 pub(crate) trait PermissibleToolCall {
     /// Checks if this tool call matches the given permission rule.
     fn matches_rule(&self, rule: &Rule) -> bool;
@@ -276,24 +255,6 @@ pub(crate) trait PermissibleToolCall {
     /// Returns the target directory of this tool call, if applicable, for checking against directory-based rules.
     fn target_dir(&self) -> Option<&Path> {
         None
-    }
-}
-
-impl PermissibleToolCall for ClientToolCall {
-    fn matches_rule(&self, rule: &Rule) -> bool {
-        self.matches_rule(rule)
-    }
-
-    fn all_covered_by(&self, rules: &[Rule]) -> bool {
-        match self {
-            ClientToolCall::Shell(tool) => tool.all_covered_by(rules),
-            // LoadSkill is always auto-approved, but support rules for completeness
-            _ => rules.iter().any(|r| self.matches_rule(r)),
-        }
-    }
-
-    fn target_dir(&self) -> Option<&Path> {
-        self.target_dir()
     }
 }
 
@@ -1637,6 +1598,33 @@ mod tests {
         #[case] expected: bool,
     ) {
         assert_eq!(shell_tool(command).all_covered_by(&rules), expected);
+    }
+
+    #[rstest]
+    fn enum_delegates_all_covered_by_to_shell_override() {
+        // Through ClientToolCall, the Shell variant MUST keep compound
+        // (every-subcommand-covered) semantics, not the trait's default any().
+        let partial = vec![shell_rule(Some("git *"))];
+        let call = ClientToolCall::Shell(shell_tool("git add . && npm test"));
+        // npm is uncovered -> false. (If delegation fell back to the default
+        // any(), this would wrongly be true.)
+        assert!(!call.all_covered_by(&partial));
+
+        let full = vec![shell_rule(Some("git *")), shell_rule(Some("npm *"))];
+        let call = ClientToolCall::Shell(shell_tool("git add . && npm test"));
+        assert!(call.all_covered_by(&full));
+    }
+
+    #[rstest]
+    fn enum_delegates_target_dir_and_matches_rule() {
+        // Read tool delegates matches_rule; non-file tools return None target_dir.
+        let call = ClientToolCall::Read(read_tool("notes.md"));
+        assert!(call.matches_rule(&read_rule(Some("*.md"))));
+        assert!(
+            ClientToolCall::Shell(shell_tool("ls"))
+                .target_dir()
+                .is_none()
+        );
     }
 
     #[rstest]
