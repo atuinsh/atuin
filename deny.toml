@@ -6,8 +6,8 @@ no-default-features = false
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-unmaintained = "none"
-yanked = "warn"
+unmaintained = "workspace"
+yanked = "deny"
 ignore = [
     # Pulled in through
     #   arboard ->
@@ -19,6 +19,8 @@ ignore = [
     # No upstream patch. Runs only on client, no severe concern.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    # daemonize (RUSTSEC-2025-0069): unmaintained, no maintained replacement.
+    "RUSTSEC-2025-0069",
 ]
 
 [licenses]
@@ -40,8 +42,8 @@ exceptions = [
 ]
 
 [bans]
-multiple-versions = "allow"
-wildcards = "warn"
+multiple-versions = "warn"
+wildcards = "deny"
 highlight = "all"
 workspace-default-features = "allow"
 external-default-features = "allow"
@@ -51,4 +53,6 @@ skip = []
 skip-tree = []
 
 [sources]
-unknown-registry = "warn"
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
