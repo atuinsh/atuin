@@ -34,6 +34,10 @@
 ## enable or disable automatic update checks
 # update_check = true
 
+## which release channel to follow with `atuin update` and update checks
+## "stable" for stable releases only, "nightly" to also receive prereleases
+# update_channel = "stable"
+
 ## address of the sync server
 # sync_address = "https://api.atuin.sh"
 
