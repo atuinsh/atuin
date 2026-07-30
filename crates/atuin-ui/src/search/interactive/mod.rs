@@ -133,40 +133,31 @@ impl<S: HistorySource> App for SearchInteractive<S> {
 
 impl<S: HistorySource> SearchInteractive<S> {
     fn on_key(&mut self, key: KeyEvent) -> Cmd {
-        // The list is inverted (newest at the bottom), so "up" moves to older
-        // entries and "down" to newer ones.
-        let handled = match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.model.history.select_next();
-                true
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.model.history.select_prev();
-                true
-            }
-            KeyCode::PageUp => {
-                self.model.history.page_down();
-                true
-            }
-            KeyCode::PageDown => {
-                self.model.history.page_up();
-                true
-            }
-            KeyCode::Home => {
-                self.model.history.select_first();
-                true
-            }
-            KeyCode::End => {
-                self.model.history.select_last();
-                true
-            }
-            _ => false,
-        };
-        if handled {
-            self.ensure_loaded()
-        } else {
-            Cmd::None
+        if is_quit(&key) {
+            return Cmd::Quit;
         }
+        if key.code == KeyCode::Enter {
+            return Cmd::Quit; // accept (returning the command is a follow-up)
+        }
+
+        // The list is inverted (newest at the bottom): up = older, down = newer.
+        match key.code {
+            KeyCode::Up => self.model.history.select_next(),
+            KeyCode::Down => self.model.history.select_prev(),
+            KeyCode::PageUp => self.model.history.page_down(),
+            KeyCode::PageDown => self.model.history.page_up(),
+            // Editing keys act on the query.
+            KeyCode::Char(c) => self.model.search.insert(c),
+            KeyCode::Backspace => self.model.search.backspace(),
+            KeyCode::Delete => self.model.search.delete(),
+            KeyCode::Left => self.model.search.left(),
+            KeyCode::Right => self.model.search.right(),
+            KeyCode::Home => self.model.search.home(),
+            KeyCode::End => self.model.search.end(),
+            _ => return Cmd::None,
+        }
+        // Task 7 replaces this line with query-aware search/browse dispatch.
+        self.ensure_loaded()
     }
 
     /// Load the window the model wants resident, if it isn't already.
@@ -188,7 +179,7 @@ impl<S: HistorySource> SearchInteractive<S> {
 
 fn is_quit(key: &KeyEvent) -> bool {
     let ctrl_c = key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
-    ctrl_c || matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
+    ctrl_c || key.code == KeyCode::Esc
 }
 
 /// Prepare the turtle logo for rendering — but only when the terminal supports
@@ -206,4 +197,62 @@ pub fn build_turtle_logo() -> Option<StatefulProtocol> {
     }
     let image = image::load_from_memory(TURTLE_PNG).ok()?;
     Some(picker.new_resize_protocol(image))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{HistoryList, HistoryRow, SearchInput};
+    use crate::theme::Theme;
+
+    #[derive(Clone)]
+    struct TestSource;
+    impl HistorySource for TestSource {
+        async fn total(&self) -> usize {
+            0
+        }
+        async fn load(&self, _range: Range<usize>) -> Vec<HistoryRow> {
+            Vec::new()
+        }
+        async fn search(&self, _query: &str) -> Vec<HistoryRow> {
+            Vec::new()
+        }
+    }
+
+    fn app() -> SearchInteractive<TestSource> {
+        let model = Model {
+            theme: Theme::default(),
+            enter_accept: true,
+            history: HistoryList::new(),
+            search: SearchInput::new(),
+        };
+        SearchInteractive::new(model, None, TestSource)
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::empty())
+    }
+
+    #[test]
+    fn typing_edits_the_query() {
+        let mut app = app();
+        app.on_key(key(KeyCode::Char('l')));
+        app.on_key(key(KeyCode::Char('s')));
+        assert_eq!(app.model.search.value(), "ls");
+        app.on_key(key(KeyCode::Backspace));
+        assert_eq!(app.model.search.value(), "l");
+    }
+
+    #[test]
+    fn q_is_typed_not_quit() {
+        let mut app = app();
+        app.on_key(key(KeyCode::Char('q')));
+        assert_eq!(app.model.search.value(), "q");
+    }
+
+    #[test]
+    fn esc_quits() {
+        let mut app = app();
+        assert!(matches!(app.on_key(key(KeyCode::Esc)), Cmd::Quit));
+    }
 }
