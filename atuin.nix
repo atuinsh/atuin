@@ -33,6 +33,13 @@ rustPlatform.buildRustPackage {
 
   OPENSSL_NO_VENDOR = 1;
 
+  # native-tls pulls OpenSSL into the sqlx-macros proc-macro, which rustc dlopens at
+  # build time. With OPENSSL_NO_VENDOR it links libssl.so.3 dynamically, so the loader
+  # needs it on LD_LIBRARY_PATH while the proc-macro is loaded.
+  preBuild = ''
+    export LD_LIBRARY_PATH="${lib.makeLibraryPath [ openssl ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  '';
+
   postInstall = ''
     installShellCompletion --cmd atuin \
       --bash <($out/bin/atuin gen-completions -s bash) \
