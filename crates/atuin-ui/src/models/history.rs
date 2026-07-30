@@ -150,6 +150,26 @@ impl HistoryList {
         self.window_start = start;
         self.window = VecDeque::from(rows);
     }
+
+    /// Load a full, bounded result set (e.g. search results) as the entire list,
+    /// resetting scroll/selection to the newest row. Keeps the viewport height.
+    pub fn set_results(&mut self, rows: Vec<HistoryRow>) {
+        self.total = rows.len();
+        self.window_start = 0;
+        self.selected = 0;
+        self.offset = 0;
+        self.window = VecDeque::from(rows);
+    }
+
+    /// Clear the list back to empty (before re-loading browse mode). Keeps the
+    /// viewport height so the reload computes the right window.
+    pub fn reset(&mut self) {
+        self.total = 0;
+        self.window_start = 0;
+        self.selected = 0;
+        self.offset = 0;
+        self.window.clear();
+    }
 }
 
 /// Supplies history rows on demand — implemented by the host over its database,
@@ -235,6 +255,37 @@ mod tests {
         list.page_down();
         assert_eq!(list.selected(), 0);
         assert!(list.row(0).is_none());
+        assert!(list.desired_range().is_empty());
+    }
+
+    #[test]
+    fn set_results_loads_all_and_resets_selection() {
+        let mut list = HistoryList::new();
+        list.set_viewport_height(10);
+        list.set_total(5_000_000);
+        list.select_last(); // move selection far away
+
+        let rows: Vec<_> = (0..3).map(row).collect();
+        list.set_results(rows);
+
+        assert_eq!(list.total(), 3);
+        assert_eq!(list.selected(), 0);
+        assert_eq!(list.offset(), 0);
+        assert!(list.row(0).is_some() && list.row(2).is_some());
+    }
+
+    #[test]
+    fn reset_clears_but_keeps_viewport_height() {
+        let mut list = HistoryList::new();
+        list.set_viewport_height(10);
+        list.set_results((0..3).map(row).collect());
+
+        list.reset();
+
+        assert_eq!(list.total(), 0);
+        assert_eq!(list.selected(), 0);
+        assert!(list.row(0).is_none());
+        // viewport height survives, so nav still pages correctly after a reload.
         assert!(list.desired_range().is_empty());
     }
 }
