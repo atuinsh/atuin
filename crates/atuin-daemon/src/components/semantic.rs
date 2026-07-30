@@ -105,6 +105,7 @@ impl Default for SemanticComponent {
     }
 }
 
+#[tonic::async_trait]
 impl Component for SemanticComponent {
     fn name(&self) -> &'static str {
         "semantic"

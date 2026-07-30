@@ -435,7 +435,6 @@ dependencies = [
  "atuin-history",
  "dashmap",
  "derive_more",
- "enum_dispatch",
  "eyre",
  "frizbee",
  "futures",
