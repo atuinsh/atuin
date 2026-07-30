@@ -1,0 +1,27 @@
+[project]
+name = "atuin-e2e"
+version = "0.0.0"
+description = "End-to-end tests for atuin: real shells + binaries + sync, driven through containers."
+requires-python = ">=3.11"
+dependencies = [
+    "pytest>=8.0",
+    "pexpect>=4.9",
+    "pyte>=0.8.2",
+    "testcontainers>=4.8",
+    "docker>=7.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = [
+    # pexpect uses forkpty(); testcontainers runs threads. Benign here, and noisy.
+    "ignore:.*forkpty.*:DeprecationWarning",
+]
+markers = [
+    "sync: multi-client sync scenarios (need the server fixture)",
+    "tui: interactive TUI scenarios driven through a PTY",
+]
+
+[tool.ruff]
+line-length = 100

@@ -1,0 +1,35 @@
+name: e2e
+
+# End-to-end tests are heavier than the Rust suite (they build images and run
+# containers), so they run on their own workflow rather than blocking the fast CI.
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "e2e/**"
+      - ".github/workflows/e2e.yml"
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [zsh, bash]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run E2E (${{ matrix.shell }})
+        working-directory: e2e
+        run: |
+          uv sync
+          uv run pytest -v -m "not tui" \
+            tests/test_capture.py::test_command_is_captured[${{ matrix.shell }}]
+      - name: Sync round-trip
+        if: matrix.shell == 'zsh'
+        working-directory: e2e
+        run: uv run pytest -v tests/test_sync.py
