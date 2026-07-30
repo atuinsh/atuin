@@ -169,7 +169,7 @@ impl SearchEngine for Search {
                         "daemon_search.resp.item",
                         query_id = response.query_id
                     );
-                    let _span2 = span2.enter();
+                    let span2_guard = span2.enter();
                     // Only process if the query_id matches (prevents stale responses)
                     if response.query_id == query_id {
                         let uuids = response
@@ -183,7 +183,7 @@ impl SearchEngine for Search {
                             .collect::<Vec<_>>();
                         ids.extend(uuids);
                     }
-                    drop(_span2);
+                    drop(span2_guard);
                     drop(span2);
                 }
             })
