@@ -58,11 +58,17 @@ impl<S: HistorySource> App for SearchInteractive<S> {
             Msg::Key(key) => self.on_key(key),
             Msg::Resize(..) => self.ensure_loaded(),
             Msg::HistoryTotal(total) => {
-                self.model.history.set_total(total);
-                self.ensure_loaded()
+                if self.model.search.value().is_empty() {
+                    self.model.history.set_total(total);
+                    self.ensure_loaded()
+                } else {
+                    Cmd::None
+                }
             }
             Msg::HistoryLoaded { start, rows } => {
-                self.model.history.apply(start, rows);
+                if self.model.search.value().is_empty() {
+                    self.model.history.apply(start, rows);
+                }
                 Cmd::None
             }
             Msg::SearchResults { query, rows } => {
@@ -83,6 +89,8 @@ impl<S: HistorySource> App for SearchInteractive<S> {
         ])
         .areas(frame.area());
 
+        // The list's viewport height is only known at render time (especially inline);
+        // record it so `update`'s navigation and loading use the truth.
         self.model.history.set_viewport_height(body.height);
 
         frame.render_stateful_widget(
@@ -143,8 +151,14 @@ impl<S: HistorySource> SearchInteractive<S> {
             KeyCode::Down => self.model.history.select_prev(),
             KeyCode::PageUp => self.model.history.page_down(),
             KeyCode::PageDown => self.model.history.page_up(),
-            // Editing keys act on the query.
-            KeyCode::Char(c) => self.model.search.insert(c),
+            // Editing keys act on the query. Ctrl/Alt combos are shortcuts, not text.
+            KeyCode::Char(c)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                self.model.search.insert(c)
+            }
             KeyCode::Backspace => self.model.search.backspace(),
             KeyCode::Delete => self.model.search.delete(),
             KeyCode::Left => self.model.search.left(),
@@ -323,5 +337,42 @@ mod tests {
             rows: vec![hrow("old thing")],
         });
         assert_eq!(app.model.history.total(), 0);
+    }
+
+    #[test]
+    fn browse_load_ignored_while_searching() {
+        let mut app = app();
+        for c in "git".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        app.update(Msg::SearchResults {
+            query: "git".into(),
+            rows: vec![hrow("git a"), hrow("git b")],
+        });
+        assert_eq!(app.model.history.total(), 2);
+        // A stale browse load must NOT clobber the active search results.
+        app.update(Msg::HistoryTotal(5_000_000));
+        app.update(Msg::HistoryLoaded {
+            start: 0,
+            rows: vec![hrow("browse x")],
+        });
+        assert_eq!(app.model.history.total(), 2, "browse load clobbered search");
+    }
+
+    #[test]
+    fn ctrl_modified_char_is_not_typed() {
+        let mut app = app();
+        app.on_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(app.model.search.value(), "", "Ctrl+A must not insert 'a'");
+    }
+
+    #[test]
+    fn clearing_query_reverts_to_browse() {
+        let mut app = app();
+        app.on_key(key(KeyCode::Char('g')));
+        let cmd = app.on_key(key(KeyCode::Backspace));
+        assert_eq!(app.model.search.value(), "");
+        assert!(matches!(cmd, Cmd::Batch(_)), "clearing query should browse");
+        assert_eq!(app.model.history.total(), 0, "browse reset clears the list");
     }
 }
