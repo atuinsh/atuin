@@ -16,17 +16,17 @@ pub mod skim;
 #[allow(unused)] // settings is only used if daemon feature is enabled
 pub fn engine(search_mode: SearchMode, settings: &Settings) -> AnySearchEngine {
     match search_mode {
-        SearchMode::Skim => AnySearchEngine::Skim(skim::Search::new()),
+        SearchMode::Skim => skim::Search::new().into(),
         #[cfg(feature = "daemon")]
-        SearchMode::DaemonFuzzy => AnySearchEngine::Daemon(daemon::Search::new(settings)),
+        SearchMode::DaemonFuzzy => daemon::Search::new(settings).into(),
         #[cfg(not(feature = "daemon"))]
         SearchMode::DaemonFuzzy => {
             // Fall back to fuzzy mode if daemon feature is not enabled
-            AnySearchEngine::Db(db::Search(DbSearchMode::Fuzzy))
+            db::Search(DbSearchMode::Fuzzy).into()
         }
-        SearchMode::Prefix => AnySearchEngine::Db(db::Search(DbSearchMode::Prefix)),
-        SearchMode::FullText => AnySearchEngine::Db(db::Search(DbSearchMode::FullText)),
-        SearchMode::Fuzzy => AnySearchEngine::Db(db::Search(DbSearchMode::Fuzzy)),
+        SearchMode::Prefix => db::Search(DbSearchMode::Prefix).into(),
+        SearchMode::FullText => db::Search(DbSearchMode::FullText).into(),
+        SearchMode::Fuzzy => db::Search(DbSearchMode::Fuzzy).into(),
     }
 }
 

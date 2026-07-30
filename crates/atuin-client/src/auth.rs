@@ -44,7 +44,14 @@ pub enum MutateResponse {
 /// CLI commands use this trait so they don't need to know which backend is
 /// active — they just prompt for input and call these methods.
 #[enum_dispatch]
-// enum_dispatch can only delegate a bare `async fn` (not the `-> impl Future + Send` form).
+// `async fn` in a public trait leaves the returned futures without a `Send`
+// bound, which the lint flags because a generic `T: AuthClient` or
+// `dyn AuthClient` caller then can't assume the futures are `Send`. We never use
+// the trait through such an abstraction: every call goes through the concrete
+// `AnyAuthClient` enum, where the compiler sees the real future type and checks
+// its `Send`-ness directly wherever it matters. So the missing trait-level bound
+// never bites. (enum_dispatch also can't delegate the `-> impl Future + Send`
+// desugaring the lint suggests, so the allow is required regardless.)
 #[allow(async_fn_in_trait)]
 pub trait AuthClient: Send + Sync {
     /// Log in with username + password, optionally providing a TOTP code.
@@ -85,18 +92,16 @@ pub enum AnyAuthClient {
 pub async fn auth_client(settings: &Settings) -> AnyAuthClient {
     if settings.is_hub_sync() {
         let endpoint = settings.hub_endpoint();
-        AnyAuthClient::Hub(HubAuthClient::new(
-            &endpoint,
-            settings.hub_session_token().await.ok(),
-        ))
+        HubAuthClient::new(&endpoint, settings.hub_session_token().await.ok()).into()
     } else {
-        AnyAuthClient::Legacy(LegacyAuthClient::new(
+        LegacyAuthClient::new(
             &settings.sync_address,
             settings.session_token().await.ok(),
             settings.network_connect_timeout,
             settings.network_timeout,
             settings.extra_headers.clone(),
-        ))
+        )
+        .into()
     }
 }
 
