@@ -1,8 +1,10 @@
 pub mod action_ctx;
 pub mod history;
+pub mod search_input;
 
 pub use action_ctx::{Action, ActionCtx};
 pub use history::{HistoryList, HistoryRow, HistorySource};
+pub use search_input::SearchInput;
 
 use crate::theme::Theme;
 
