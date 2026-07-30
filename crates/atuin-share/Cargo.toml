@@ -28,5 +28,8 @@ tokio = { workspace = true }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 
-[dev-dependencies]
-rstest = { workspace = true }
+# Tests live in `test/`, not `src/`. Cargo only auto-discovers `tests/`, so the
+# singular `test/` directory is registered explicitly.
+[[test]]
+name = "public_api"
+path = "test/public_api.rs"

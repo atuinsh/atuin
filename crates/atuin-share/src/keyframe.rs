@@ -12,21 +12,3 @@
 pub fn keyframe_bytes(screen: &vt100::Screen) -> Vec<u8> {
     screen.contents_formatted()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::keyframe_bytes;
-
-    #[test]
-    fn keyframe_reproduces_screen_contents() {
-        let mut a = vt100::Parser::new(10, 40, 0);
-        a.process(b"\x1b[2J\x1b[HHello\r\n\x1b[1;31mWorld\x1b[0m");
-
-        let kf = keyframe_bytes(a.screen());
-
-        let mut b = vt100::Parser::new(10, 40, 0);
-        b.process(&kf);
-
-        assert_eq!(a.screen().contents(), b.screen().contents());
-    }
-}
