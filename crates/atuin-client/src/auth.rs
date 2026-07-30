@@ -44,9 +44,7 @@ pub enum MutateResponse {
 /// CLI commands use this trait so they don't need to know which backend is
 /// active — they just prompt for input and call these methods.
 #[enum_dispatch]
-// enum_dispatch can only delegate a bare `async fn` (not the `-> impl Future +
-// Send` form), and this trait is public and called across crates by the CLI, so
-// the async_fn_in_trait lint cannot be resolved by reducing visibility here.
+// enum_dispatch can only delegate a bare `async fn` (not the `-> impl Future + Send` form).
 #[allow(async_fn_in_trait)]
 pub trait AuthClient: Send + Sync {
     /// Log in with username + password, optionally providing a TOTP code.

@@ -4,7 +4,8 @@
 //!
 //! - [`DaemonState`]: Shared state owned by the daemon
 //! - [`DaemonHandle`]: A lightweight, cloneable handle for accessing daemon state
-//! - [`Component`]: A trait for implementing daemon components
+//! - `Component`: An internal trait for implementing daemon components
+//!   (dispatched over via the [`AnyComponent`] enum)
 //! - [`Daemon`]: The main daemon orchestrator
 //! - [`DaemonBuilder`]: Builder for constructing and configuring the daemon
 
