@@ -85,7 +85,7 @@ pub trait Shell: Send + Sync {
 /// to compile.
 const _: fn(&dyn Shell) = |_shell| {};
 
-#[derive(PartialEq, derive_more::Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Display)]
 pub enum ShellKind {
     #[display("sh")]
     Sh,
@@ -95,6 +95,10 @@ pub enum ShellKind {
     Fish,
     #[display("zsh")]
     Zsh,
+    #[display("dash")]
+    Dash,
+    #[display("ksh")]
+    Ksh,
     #[display("xonsh")]
     Xonsh,
     #[display("nu")]
@@ -174,6 +178,8 @@ impl ShellKind {
             "bash" => ShellKind::Bash,
             "fish" => ShellKind::Fish,
             "zsh" => ShellKind::Zsh,
+            "dash" => ShellKind::Dash,
+            "ksh" => ShellKind::Ksh,
             "xonsh" => ShellKind::Xonsh,
             "nu" => ShellKind::Nu,
             "sh" => ShellKind::Sh,
@@ -195,7 +201,11 @@ impl ShellKind {
             ShellKind::Zsh => Box::new(zsh::Zsh::new(Path::new("zsh"))),
             ShellKind::Fish => Box::new(fish::Fish::new(Path::new("fish"))),
             ShellKind::Xonsh => Box::new(xonsh::Xonsh::new(Path::new("xonsh"))),
-            ShellKind::Nu | ShellKind::Powershell | ShellKind::Unknown => return None,
+            ShellKind::Nu
+            | ShellKind::Powershell
+            | ShellKind::Dash
+            | ShellKind::Ksh
+            | ShellKind::Unknown => return None,
         };
         Some(shell)
     }
