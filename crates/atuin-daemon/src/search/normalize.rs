@@ -2,7 +2,7 @@
 //!
 //! Vendored from atuin-nucleo, a fork of helix-editor/nucleo:
 //!
-//!   https://github.com/atuinsh/atuin/blob/v18.18.1/crates/atuin-nucleo/matcher/src/chars/normalize.rs
+//! <https://github.com/atuinsh/atuin/blob/v18.18.1/crates/atuin-nucleo/matcher/src/chars/normalize.rs>
 //!
 //! nucleo is licensed under the Mozilla Public License 2.0; this file remains
 //! covered by MPL-2.0 (<https://mozilla.org/MPL/2.0/>) independently of the
