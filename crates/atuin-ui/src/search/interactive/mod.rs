@@ -127,8 +127,9 @@ impl<S: HistorySource> App for SearchInteractive<S> {
 
         // The terminal cursor lives in the query — shown while typing (non-modal
         // or SEARCH), hidden in NORMAL (navigation, no text entry).
-        if !matches!(self.model.mode(), Some(Mode::Normal { .. })) {
-            let indicator = if self.model.mode().is_some() {
+        let mode = self.model.mode();
+        if !matches!(mode, Some(Mode::Normal { .. })) {
+            let indicator = if matches!(mode, Some(Mode::Search)) {
                 MODE_INDICATOR_WIDTH
             } else {
                 0
@@ -249,8 +250,13 @@ impl<S: HistorySource> SearchInteractive<S> {
                 self.model.clear_count();
                 self.model.history.page_down();
             }
-            // h/l are reserved (future horizontal scroll); any other key just
-            // cancels a pending count. Neither types text.
+            // h/l complete the hjkl set but have no vertical target yet (reserved
+            // for future horizontal scroll): consume without moving or typing.
+            KeyCode::Char('h') | KeyCode::Char('l') => {
+                self.model.clear_count();
+                return Cmd::None;
+            }
+            // Any other key just cancels a pending count. Doesn't type text.
             _ => {
                 self.model.clear_count();
                 return Cmd::None;
@@ -586,5 +592,50 @@ mod tests {
         app.on_key(key(KeyCode::Char('l')));
         assert_eq!(app.model.history.selected(), 99, "h/l must not move");
         assert_eq!(app.model.search.value(), "", "h/l must not type");
+    }
+
+    #[test]
+    fn normal_nav_during_active_search_keeps_results() {
+        // Type a query in SEARCH, get results, drop to NORMAL, navigate.
+        let mut app = modal_app_search();
+        for c in "git".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        app.update(Msg::SearchResults {
+            query: "git".into(),
+            rows: vec![hrow("git status"), hrow("git log")],
+        });
+        assert_eq!(app.model.history.total(), 2);
+
+        app.on_key(key(KeyCode::Esc)); // SEARCH -> NORMAL, query still "git"
+        assert_eq!(app.model.mode(), Some(Mode::Normal { count: None }));
+
+        // A NORMAL motion must not clobber the search results or fetch browse data:
+        // the result set is fully resident, so no browse Cmd is emitted.
+        let cmd = app.on_key(key(KeyCode::Char('j')));
+        assert_eq!(app.model.history.total(), 2, "search results survived NORMAL nav");
+        assert!(matches!(cmd, Cmd::None), "no browse load emitted during active search");
+    }
+
+    #[test]
+    fn normal_pageupdown_page_the_list() {
+        let mut app = modal_app_normal();
+        seed(&mut app, 100, 20); // viewport height 20 => page = 20
+        app.model.history.select_last(); // 99 (oldest / visual top)
+        app.on_key(key(KeyCode::PageDown)); // pages toward newest by one viewport
+        assert_eq!(app.model.history.selected(), 79);
+        app.on_key(key(KeyCode::PageUp)); // pages back toward oldest
+        assert_eq!(app.model.history.selected(), 99);
+    }
+
+    #[test]
+    fn ctrl_c_quits_from_any_mode() {
+        for mut app in [modal_app_search(), modal_app_normal()] {
+            let cmd = app.update(Msg::Key(KeyEvent::new(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+            )));
+            assert!(matches!(cmd, Cmd::Quit));
+        }
     }
 }
