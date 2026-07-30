@@ -26,11 +26,6 @@ fn parse_uuid_bytes(s: &str) -> Option<[u8; 16]> {
     Uuid::parse_str(s).ok().map(|u| *u.as_bytes())
 }
 
-/// Format a 16-byte array as a UUID string.
-fn format_uuid_bytes(bytes: &[u8; 16]) -> String {
-    Uuid::from_bytes(*bytes).to_string()
-}
-
 /// Pre-computed frecency data for O(1) lookup.
 #[derive(Debug, Clone, Default)]
 pub struct FrecencyData {
@@ -173,8 +168,8 @@ impl CommandData {
     }
 
     /// Get the most recent history ID for this command.
-    pub fn most_recent_id(&self) -> String {
-        format_uuid_bytes(&self.most_recent_id)
+    pub fn most_recent_id(&self) -> [u8; 16] {
+        self.most_recent_id
     }
 
     /// Check if any invocation matches an interned directory (exact match).
@@ -360,7 +355,7 @@ impl SearchIndex {
         query: &str,
         filter_mode: IndexFilterMode,
         limit: u32,
-    ) -> Vec<String> {
+    ) -> Vec<[u8; 16]> {
         // Get precomputed frecency map (may be None if not yet computed)
         let frecency_map = self.frecency_map.read().await.clone();
 

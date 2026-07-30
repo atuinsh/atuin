@@ -14,7 +14,6 @@ use tokio::sync::RwLock;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{Level, debug, error, info, instrument, span, trace};
-use uuid::Uuid;
 
 use crate::{
     daemon::{Component, DaemonHandle},
@@ -392,14 +391,10 @@ impl SearchSvc for SearchGrpcService {
                     .await;
                 drop(index);
 
-                // Convert history IDs to bytes
+                // Convert UUID arrays to `Vec`s
                 let ids: Vec<Vec<u8>> = history_ids
-                    .iter()
-                    .filter_map(|id| {
-                        Uuid::parse_str(id)
-                            .ok()
-                            .map(|uuid| uuid.as_bytes().to_vec())
-                    })
+                    .into_iter()
+                    .map(Vec::from)
                     .collect();
 
                 if tx.send(Ok(SearchResponse { query_id, ids })).await.is_err() {
