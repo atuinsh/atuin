@@ -16,7 +16,7 @@ use tonic::{Request, Response, Status, Streaming};
 use tracing::{Level, debug, error, info, instrument, span, trace};
 
 use crate::{
-    daemon::{Component, DaemonHandle},
+    daemon::{DaemonHandle, IsComponent},
     events::DaemonEvent,
     search::{
         FilterMode, IndexFilterMode, SearchIndex, SearchRequest, SearchResponse,
@@ -173,7 +173,7 @@ impl Default for SearchComponent {
     }
 }
 
-impl Component for SearchComponent {
+impl IsComponent for SearchComponent {
     fn name(&self) -> &'static str {
         "search"
     }

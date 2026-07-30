@@ -18,7 +18,7 @@ use tonic::{Request, Response, Status};
 use tracing::{Level, instrument};
 
 use crate::{
-    daemon::{Component, DaemonHandle},
+    daemon::{DaemonHandle, IsComponent},
     events::DaemonEvent,
     history::{
         CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest, HistoryEntry,
@@ -80,7 +80,7 @@ impl Default for HistoryComponent {
     }
 }
 
-impl Component for HistoryComponent {
+impl IsComponent for HistoryComponent {
     fn name(&self) -> &'static str {
         "history"
     }

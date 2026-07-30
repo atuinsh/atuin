@@ -14,7 +14,7 @@ pub mod semantic;
 pub mod server;
 
 // Re-export core daemon types for convenience
-pub use daemon::{Component, Daemon, DaemonBuilder, DaemonHandle};
+pub use daemon::{Component, Daemon, DaemonBuilder, DaemonHandle, IsComponent};
 pub use events::DaemonEvent;
 
 // Re-export components

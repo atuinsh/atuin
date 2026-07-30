@@ -187,7 +187,7 @@ impl std::fmt::Debug for DaemonHandle {
 ///     handle: Option<DaemonHandle>,
 /// }
 ///
-/// impl Component for MyComponent {
+/// impl IsComponent for MyComponent {
 ///     fn name(&self) -> &'static str { "my-component" }
 ///
 ///     async fn start(&mut self, handle: DaemonHandle) -> Result<()> {
@@ -215,7 +215,7 @@ impl std::fmt::Debug for DaemonHandle {
 /// ```
 #[delegatable_trait]
 #[allow(async_fn_in_trait)]
-pub trait Component: Send + Sync {
+pub trait IsComponent: Send + Sync {
     /// Human-readable name for logging and debugging.
     fn name(&self) -> &'static str;
 
@@ -241,8 +241,8 @@ pub trait Component: Send + Sync {
 
 /// Static-dispatch enum over the daemon components.
 #[derive(Delegate, derive_more::From)]
-#[delegate(Component)]
-pub enum ComponentImpl {
+#[delegate(IsComponent)]
+pub enum Component {
     History(HistoryComponent),
     Search(SearchComponent),
     Semantic(SemanticComponent),
@@ -270,7 +270,7 @@ pub enum ComponentImpl {
 /// Events emitted during handling are queued and processed in subsequent
 /// iterations, ensuring the loop eventually drains.
 pub struct Daemon {
-    components: Vec<ComponentImpl>,
+    components: Vec<Component>,
     handle: DaemonHandle,
 }
 
@@ -399,7 +399,7 @@ pub struct DaemonBuilder {
     settings: Settings,
     store: Option<SqliteStore>,
     history_db: Option<HistoryDatabase>,
-    components: Vec<ComponentImpl>,
+    components: Vec<Component>,
 }
 
 impl DaemonBuilder {
@@ -428,7 +428,7 @@ impl DaemonBuilder {
     /// Register a component.
     ///
     /// Components are started in registration order and stopped in reverse order.
-    pub fn component(mut self, component: impl Into<ComponentImpl>) -> Self {
+    pub fn component(mut self, component: impl Into<Component>) -> Self {
         self.components.push(component.into());
         self
     }
