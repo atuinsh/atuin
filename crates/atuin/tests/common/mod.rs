@@ -4,7 +4,6 @@ use atuin_client::api_client;
 use atuin_common::utils::uuid_v7;
 use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
 use atuin_server_database::DbSettings;
-use atuin_server_postgres::Postgres;
 use futures_util::TryFutureExt;
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 use tracing::{Dispatch, dispatcher};
@@ -48,7 +47,7 @@ pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHan
     let server = tokio::spawn(async move {
         let _tracing_guard = dispatcher::set_default(&dispatch);
 
-        if let Err(e) = launch_with_tcp_listener::<Postgres>(
+        if let Err(e) = launch_with_tcp_listener(
             server_settings,
             listener,
             shutdown_rx.unwrap_or_else(|_| ()),

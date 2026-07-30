@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use atuin_common::utils::{crypto_random_string, uuid_v7};
 use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordIdx};
 use atuin_server_database::{
@@ -45,14 +47,13 @@ async fn test_full_db_story() -> eyre::Result<()> {
     let settings = &test_db.settings;
 
     match settings.db_type() {
-        DbType::Postgres => run_the_test::<Postgres>(settings).await,
-        DbType::Sqlite => run_the_test::<Sqlite>(settings).await,
+        DbType::Postgres => run_the_test(Arc::new(Postgres::new(settings).await?)).await,
+        DbType::Sqlite => run_the_test(Arc::new(Sqlite::new(settings).await?)).await,
         DbType::Unknown => todo!(),
     }
 }
 
-async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
-    let db = DB::new(settings).await?;
+async fn run_the_test(db: Arc<dyn Database>) -> eyre::Result<()> {
     // register a user
     let new_user = NewUser {
         username: "foo".to_owned(),

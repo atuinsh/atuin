@@ -84,9 +84,7 @@ impl Debug for DbSettings {
 }
 
 #[async_trait]
-pub trait Database: Sized + Clone + Send + Sync + 'static {
-    async fn new(settings: &DbSettings) -> DbResult<Self>;
-
+pub trait Database: Send + Sync + 'static {
     async fn get_session(&self, token: &str) -> DbResult<Session>;
     async fn get_session_user(&self, token: &str) -> DbResult<User>;
     async fn add_session(&self, session: &NewSession) -> DbResult<()>;

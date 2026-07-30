@@ -7,14 +7,12 @@ use crate::{
     handlers::{ErrorResponse, ErrorResponseStatus, RespExt},
     router::{AppState, UserAuth},
 };
-use atuin_server_database::Database;
-
 use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn post<DB: Database>(
+pub async fn post(
     UserAuth(user): UserAuth,
-    state: State<AppState<DB>>,
+    state: State<AppState>,
     Json(records): Json<Vec<Record<EncryptedData>>>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
     let State(AppState { database, settings }) = state;
@@ -51,9 +49,9 @@ pub async fn post<DB: Database>(
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn index<DB: Database>(
+pub async fn index(
     UserAuth(user): UserAuth,
-    state: State<AppState<DB>>,
+    state: State<AppState>,
 ) -> Result<Json<RecordStatus>, ErrorResponseStatus<'static>> {
     let State(AppState {
         database,
@@ -84,10 +82,10 @@ pub struct NextParams {
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn next<DB: Database>(
+pub async fn next(
     params: Query<NextParams>,
     UserAuth(user): UserAuth,
-    state: State<AppState<DB>>,
+    state: State<AppState>,
 ) -> Result<Json<Vec<Record<EncryptedData>>>, ErrorResponseStatus<'static>> {
     let State(AppState {
         database,

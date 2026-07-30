@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use atuin_domain::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ErrorResponse};
 use axum::{
     Router,
@@ -21,15 +23,12 @@ use atuin_server_database::{Database, DbError, models::User};
 
 pub struct UserAuth(pub User);
 
-impl<DB: Send + Sync> FromRequestParts<AppState<DB>> for UserAuth
-where
-    DB: Database,
-{
+impl FromRequestParts<AppState> for UserAuth {
     type Rejection = ErrorResponseStatus<'static>;
 
     async fn from_request_parts(
         req: &mut Parts,
-        state: &AppState<DB>,
+        state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         let auth_header = req
             .headers
@@ -101,12 +100,12 @@ async fn semver(request: Request, next: Next) -> Response {
 }
 
 #[derive(Clone)]
-pub struct AppState<DB: Database> {
-    pub database: DB,
+pub struct AppState {
+    pub database: Arc<dyn Database>,
     pub settings: Settings,
 }
 
-pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
+pub fn router(database: Arc<dyn Database>, settings: Settings) -> Router {
     let routes = Router::new()
         .route("/", get(handlers::index))
         .route("/healthz", get(handlers::health::health_check));

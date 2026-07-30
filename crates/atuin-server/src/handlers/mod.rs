@@ -1,5 +1,4 @@
 use atuin_domain::api::{ErrorResponse, IndexResponse};
-use atuin_server_database::Database;
 use axum::{Json, extract::State, http, response::IntoResponse};
 
 use crate::router::AppState;
@@ -10,7 +9,7 @@ pub mod v0;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub async fn index<DB: Database>(state: State<AppState<DB>>) -> Json<IndexResponse> {
+pub async fn index(state: State<AppState>) -> Json<IndexResponse> {
     let homage = r#""Through the fathomless deeps of space swims the star turtle Great A'Tuin, bearing on its back the four giant elephants who carry on their shoulders the mass of the Discworld." -- Sir Terry Pratchett"#;
 
     let version = state

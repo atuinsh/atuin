@@ -31,9 +31,8 @@ impl Postgres {
     }
 }
 
-#[async_trait]
-impl Database for Postgres {
-    async fn new(settings: &DbSettings) -> DbResult<Self> {
+impl Postgres {
+    pub async fn new(settings: &DbSettings) -> DbResult<Self> {
         let pool = PgPoolOptions::new()
             .max_connections(100)
             .connect(settings.db_uri.as_str())
@@ -92,7 +91,10 @@ impl Database for Postgres {
 
         Ok(Self { pool, read_pool })
     }
+}
 
+#[async_trait]
+impl Database for Postgres {
     #[instrument(skip_all)]
     async fn get_session(&self, token: &str) -> DbResult<Session> {
         sqlx::query_as("select id, user_id, token from sessions where token = $1")

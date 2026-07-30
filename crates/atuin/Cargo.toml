@@ -136,4 +136,3 @@ rstest = { workspace = true }
 # TODO: Consider moving these tests to atuin-server crate instead (client would become a dev dep there)
 atuin-server = { workspace = true }
 atuin-server-database = { workspace = true }
-atuin-server-postgres = { workspace = true }

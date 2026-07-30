@@ -2,10 +2,13 @@
 
 use std::future::Future;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
-use atuin_server_database::Database;
+use atuin_server_database::{Database, DbSettings, DbType};
+use atuin_server_postgres::Postgres;
+use atuin_server_sqlite::Sqlite;
 use axum::{Router, serve};
-use eyre::{Context, Result};
+use eyre::{Context, Result, eyre};
 
 mod handlers;
 mod metrics;
@@ -42,8 +45,8 @@ async fn shutdown_signal() {
     eprintln!("Shutting down gracefully...");
 }
 
-pub async fn launch<Db: Database>(settings: Settings, addr: SocketAddr) -> Result<()> {
-    launch_with_tcp_listener::<Db>(
+pub async fn launch(settings: Settings, addr: SocketAddr) -> Result<()> {
+    launch_with_tcp_listener(
         settings,
         TcpListener::bind(addr)
             .await
@@ -53,12 +56,12 @@ pub async fn launch<Db: Database>(settings: Settings, addr: SocketAddr) -> Resul
     .await
 }
 
-pub async fn launch_with_tcp_listener<Db: Database>(
+pub async fn launch_with_tcp_listener(
     settings: Settings,
     listener: TcpListener,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<()> {
-    let r = make_router::<Db>(settings).await?;
+    let r = make_router(settings).await?;
 
     serve(listener, r.into_make_service())
         .with_graceful_shutdown(shutdown)
@@ -88,8 +91,20 @@ pub async fn launch_metrics_server(host: String, port: u16) -> Result<()> {
     Ok(())
 }
 
-async fn make_router<Db: Database>(settings: Settings) -> Result<Router, eyre::Error> {
-    let db = Db::new(&settings.db_settings)
+async fn connect(settings: &DbSettings) -> Result<Arc<dyn Database>> {
+    let db: Arc<dyn Database> = match settings.db_type() {
+        DbType::Postgres => Arc::new(Postgres::new(settings).await?),
+        DbType::Sqlite => Arc::new(Sqlite::new(settings).await?),
+        DbType::Unknown => {
+            return Err(eyre!("db_uri must start with postgres:// or sqlite://"));
+        }
+    };
+
+    Ok(db)
+}
+
+async fn make_router(settings: Settings) -> Result<Router, eyre::Error> {
+    let db = connect(&settings.db_settings)
         .await
         .wrap_err_with(|| format!("failed to connect to db: {:?}", settings.db_settings))?;
     let r = router::router(db, settings);

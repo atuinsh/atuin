@@ -20,9 +20,8 @@ pub struct Sqlite {
     pool: sqlx::Pool<sqlx::sqlite::Sqlite>,
 }
 
-#[async_trait]
-impl Database for Sqlite {
-    async fn new(settings: &DbSettings) -> DbResult<Self> {
+impl Sqlite {
+    pub async fn new(settings: &DbSettings) -> DbResult<Self> {
         let opts = SqliteConnectOptions::from_str(&settings.db_uri)?
             .journal_mode(SqliteJournalMode::Wal)
             .create_if_missing(true);
@@ -36,7 +35,10 @@ impl Database for Sqlite {
 
         Ok(Self { pool })
     }
+}
 
+#[async_trait]
+impl Database for Sqlite {
     #[instrument(skip_all)]
     async fn get_session(&self, token: &str) -> DbResult<Session> {
         sqlx::query_as("select id, user_id, token from sessions where token = $1")

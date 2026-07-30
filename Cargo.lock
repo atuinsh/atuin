@@ -231,7 +231,6 @@ dependencies = [
  "atuin-scripts",
  "atuin-server",
  "atuin-server-database",
- "atuin-server-postgres",
  "clap",
  "clap_complete",
  "clap_complete_nushell",
