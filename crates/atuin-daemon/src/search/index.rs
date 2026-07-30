@@ -246,7 +246,7 @@ impl IndexFilterMode {
             Self::Directory(dir) => interner
                 .get(dir)
                 .map_or(CompiledFilter::Nothing, CompiledFilter::Directory),
-            Self::Workspace(prefix) => CompiledFilter::Workspace(&prefix),
+            Self::Workspace(prefix) => CompiledFilter::Workspace(prefix),
             Self::Host(hostname) => interner
                 .get(hostname)
                 .map_or(CompiledFilter::Nothing, CompiledFilter::Host),
@@ -888,7 +888,7 @@ mod tests {
         let expected = index.commands.get("echo déjà-vu").unwrap().most_recent_id();
 
         let results: Vec<_> = index.search("deja", IndexFilterMode::Global, 10).collect();
-        assert_eq!(results, vec![expected.clone()]);
+        assert_eq!(results, vec![expected]);
 
         let results: Vec<_> = index.search("déjà", IndexFilterMode::Global, 10).collect();
         assert_eq!(results, vec![expected]);
