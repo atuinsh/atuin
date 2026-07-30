@@ -15,7 +15,7 @@ use crate::models::{HistorySource, Mode, Model};
 use crate::msg::Msg;
 use crate::runtime::{App, Cmd};
 use crate::search::views::history_list::HistoryListView;
-use crate::search::views::search_input::SearchInputView;
+use crate::search::views::search_input::{MODE_INDICATOR_WIDTH, SearchInputView};
 use crate::search::views::titlebar::TitleBarView;
 
 /// The atuin turtle, embedded at compile time.
@@ -125,13 +125,23 @@ impl<S: HistorySource> App for SearchInteractive<S> {
             input,
         );
 
-        // Show the terminal cursor in the input, after the prompt + query cursor.
-        let cursor_x =
-            input.x + PROMPT.chars().count() as u16 + self.model.search.cursor_char() as u16;
-        frame.set_cursor_position(Position::new(
-            cursor_x.min(input.right().saturating_sub(1)),
-            input.y,
-        ));
+        // The terminal cursor lives in the query — shown while typing (non-modal
+        // or SEARCH), hidden in NORMAL (navigation, no text entry).
+        if !matches!(self.model.mode(), Some(Mode::Normal { .. })) {
+            let indicator = if self.model.mode().is_some() {
+                MODE_INDICATOR_WIDTH
+            } else {
+                0
+            };
+            let cursor_x = input.x
+                + indicator
+                + PROMPT.chars().count() as u16
+                + self.model.search.cursor_char() as u16;
+            frame.set_cursor_position(Position::new(
+                cursor_x.min(input.right().saturating_sub(1)),
+                input.y,
+            ));
+        }
     }
 }
 

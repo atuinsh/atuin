@@ -13,7 +13,7 @@ use std::io;
 use std::ops::Range;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use atuin_ui::models::{HistoryList, HistoryRow, HistorySource, Model};
+use atuin_ui::models::{HistoryList, HistoryRow, HistorySource, Mode, Model};
 use atuin_ui::runtime;
 use atuin_ui::search::interactive::{SearchInteractive, build_turtle_logo};
 use atuin_ui::theme::Theme;
@@ -96,12 +96,14 @@ async fn main() -> io::Result<()> {
         annotation: Style::default().fg(Color::Gray),
         ..Default::default()
     };
+    // `ATUIN_UI_VIM=1` boots the vim-style modal interface (in SEARCH mode).
+    let mode = std::env::var_os("ATUIN_UI_VIM").map(|_| Mode::Search);
     let model = Model {
         theme,
         enter_accept: true,
         history: HistoryList::new(),
         search: atuin_ui::models::SearchInput::new(),
-        mode: None,
+        mode,
     };
 
     let base_time = SystemTime::now()
