@@ -1,4 +1,4 @@
-use super::{IsSearchEngine, SearchState};
+use super::{SearchEngine, SearchState};
 use atuin_client::{
     database::Database,
     database::OptFilters,
@@ -13,7 +13,7 @@ use tracing::{Level, instrument};
 
 pub struct Search(pub DbSearchMode);
 
-impl IsSearchEngine for Search {
+impl SearchEngine for Search {
     #[instrument(skip_all, level = Level::TRACE, name = "db_search", fields(mode = ?self.0, query = %state.input.as_str()))]
     async fn full_query(
         &mut self,

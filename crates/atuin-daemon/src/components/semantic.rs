@@ -14,7 +14,7 @@ use tonic::{Request, Response, Status, Streaming};
 use tracing::{Level, instrument};
 
 use crate::{
-    daemon::{DaemonHandle, IsComponent},
+    daemon::{Component, DaemonHandle},
     events::DaemonEvent,
     semantic::{
         CommandCapture, CommandOutputReply, CommandOutputRequest, OutputLine, RecordCommandsReply,
@@ -105,7 +105,7 @@ impl Default for SemanticComponent {
     }
 }
 
-impl IsComponent for SemanticComponent {
+impl Component for SemanticComponent {
     fn name(&self) -> &'static str {
         "semantic"
     }

@@ -14,7 +14,7 @@ use tokio::task::yield_now;
 use tracing::{Level, instrument, warn};
 use uuid;
 
-use super::{IsSearchEngine, SearchState};
+use super::{SearchEngine, SearchState};
 
 pub struct Search {
     all_history: Vec<(History, i32)>,
@@ -30,7 +30,7 @@ impl Search {
     }
 }
 
-impl IsSearchEngine for Search {
+impl SearchEngine for Search {
     #[instrument(skip_all, level = Level::TRACE, name = "skim_search", fields(query = %state.input.as_str()))]
     async fn full_query(
         &mut self,

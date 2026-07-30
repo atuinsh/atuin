@@ -44,8 +44,11 @@ pub enum MutateResponse {
 /// CLI commands use this trait so they don't need to know which backend is
 /// active — they just prompt for input and call these methods.
 #[enum_dispatch]
+// enum_dispatch can only delegate a bare `async fn` (not the `-> impl Future +
+// Send` form), and this trait is public and called across crates by the CLI, so
+// the async_fn_in_trait lint cannot be resolved by reducing visibility here.
 #[allow(async_fn_in_trait)]
-pub trait IsAuthClient: Send + Sync {
+pub trait AuthClient: Send + Sync {
     /// Log in with username + password, optionally providing a TOTP code.
     async fn login(
         &self,
@@ -74,22 +77,22 @@ pub trait IsAuthClient: Send + Sync {
 }
 
 /// Static-dispatch enum over the two auth backends.
-#[enum_dispatch(IsAuthClient)]
-pub enum AuthClient {
+#[enum_dispatch(AuthClient)]
+pub enum AnyAuthClient {
     Legacy(LegacyAuthClient),
     Hub(HubAuthClient),
 }
 
 /// Resolve the appropriate [`AuthClient`] for the current settings.
-pub async fn auth_client(settings: &Settings) -> AuthClient {
+pub async fn auth_client(settings: &Settings) -> AnyAuthClient {
     if settings.is_hub_sync() {
         let endpoint = settings.hub_endpoint();
-        AuthClient::Hub(HubAuthClient::new(
+        AnyAuthClient::Hub(HubAuthClient::new(
             &endpoint,
             settings.hub_session_token().await.ok(),
         ))
     } else {
-        AuthClient::Legacy(LegacyAuthClient::new(
+        AnyAuthClient::Legacy(LegacyAuthClient::new(
             &settings.sync_address,
             settings.session_token().await.ok(),
             settings.network_connect_timeout,
@@ -151,7 +154,7 @@ impl LegacyAuthClient {
     }
 }
 
-impl IsAuthClient for LegacyAuthClient {
+impl AuthClient for LegacyAuthClient {
     async fn login(
         &self,
         username: &str,
@@ -277,7 +280,7 @@ struct HubErrorResponse {
     code: Option<String>,
 }
 
-impl IsAuthClient for HubAuthClient {
+impl AuthClient for HubAuthClient {
     async fn login(
         &self,
         username: &str,

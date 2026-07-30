@@ -1,9 +1,9 @@
-use enum_dispatch::enum_dispatch;
 use atuin_client::{
     database::{Context, Database, DbSearchMode, OptFilters},
     history::{History, HistoryId, all_user_author_filter},
     settings::{FilterMode, SearchMode, Settings, Shells},
 };
+use enum_dispatch::enum_dispatch;
 use eyre::Result;
 
 use super::cursor::Cursor;
@@ -14,19 +14,19 @@ pub mod db;
 pub mod skim;
 
 #[allow(unused)] // settings is only used if daemon feature is enabled
-pub fn engine(search_mode: SearchMode, settings: &Settings) -> SearchEngine {
+pub fn engine(search_mode: SearchMode, settings: &Settings) -> AnySearchEngine {
     match search_mode {
-        SearchMode::Skim => SearchEngine::Skim(skim::Search::new()),
+        SearchMode::Skim => AnySearchEngine::Skim(skim::Search::new()),
         #[cfg(feature = "daemon")]
-        SearchMode::DaemonFuzzy => SearchEngine::Daemon(daemon::Search::new(settings)),
+        SearchMode::DaemonFuzzy => AnySearchEngine::Daemon(daemon::Search::new(settings)),
         #[cfg(not(feature = "daemon"))]
         SearchMode::DaemonFuzzy => {
             // Fall back to fuzzy mode if daemon feature is not enabled
-            SearchEngine::Db(db::Search(DbSearchMode::Fuzzy))
+            AnySearchEngine::Db(db::Search(DbSearchMode::Fuzzy))
         }
-        SearchMode::Prefix => SearchEngine::Db(db::Search(DbSearchMode::Prefix)),
-        SearchMode::FullText => SearchEngine::Db(db::Search(DbSearchMode::FullText)),
-        SearchMode::Fuzzy => SearchEngine::Db(db::Search(DbSearchMode::Fuzzy)),
+        SearchMode::Prefix => AnySearchEngine::Db(db::Search(DbSearchMode::Prefix)),
+        SearchMode::FullText => AnySearchEngine::Db(db::Search(DbSearchMode::FullText)),
+        SearchMode::Fuzzy => AnySearchEngine::Db(db::Search(DbSearchMode::Fuzzy)),
     }
 }
 
@@ -66,8 +66,7 @@ impl SearchState {
 }
 
 #[enum_dispatch]
-#[allow(async_fn_in_trait)]
-pub trait IsSearchEngine: Send + Sync + 'static {
+pub trait SearchEngine: Send + Sync + 'static {
     async fn full_query(
         &mut self,
         state: &SearchState,
@@ -102,8 +101,8 @@ pub trait IsSearchEngine: Send + Sync + 'static {
 }
 
 /// Static-dispatch enum over the search-engine backends.
-#[enum_dispatch(IsSearchEngine)]
-pub enum SearchEngine {
+#[enum_dispatch(SearchEngine)]
+pub enum AnySearchEngine {
     Db(db::Search),
     Skim(skim::Search),
     #[cfg(feature = "daemon")]

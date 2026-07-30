@@ -18,7 +18,7 @@ use atuin_client::{
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
 
 use crate::{
-    daemon::{DaemonHandle, IsComponent},
+    daemon::{Component, DaemonHandle},
     events::DaemonEvent,
 };
 
@@ -68,7 +68,7 @@ impl Default for SyncComponent {
     }
 }
 
-impl IsComponent for SyncComponent {
+impl Component for SyncComponent {
     fn name(&self) -> &'static str {
         "sync"
     }

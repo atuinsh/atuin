@@ -5,11 +5,11 @@ use std::{
     time::Duration,
 };
 
-use enum_dispatch::enum_dispatch;
 use atuin_client::history::AuthorPattern;
 use atuin_common::ansi;
 use atuin_common::filter::OrFilter;
 use atuin_common::time::UtcOffsetExt;
+use enum_dispatch::enum_dispatch;
 use eyre::Result;
 use uuid::Uuid;
 

@@ -10,11 +10,11 @@
 
 use std::sync::Arc;
 
-use enum_dispatch::enum_dispatch;
 use atuin_client::{
     database::Sqlite as HistoryDatabase, encryption, record::sqlite_store::SqliteStore,
     settings::Settings,
 };
+use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result};
 use tokio::sync::{RwLock, broadcast};
 
@@ -187,7 +187,7 @@ impl std::fmt::Debug for DaemonHandle {
 ///     handle: Option<DaemonHandle>,
 /// }
 ///
-/// impl IsComponent for MyComponent {
+/// impl Component for MyComponent {
 ///     fn name(&self) -> &'static str { "my-component" }
 ///
 ///     async fn start(&mut self, handle: DaemonHandle) -> Result<()> {
@@ -214,8 +214,7 @@ impl std::fmt::Debug for DaemonHandle {
 /// }
 /// ```
 #[enum_dispatch]
-#[allow(async_fn_in_trait)]
-pub trait IsComponent: Send + Sync {
+pub(crate) trait Component: Send + Sync {
     /// Human-readable name for logging and debugging.
     fn name(&self) -> &'static str;
 
@@ -240,8 +239,8 @@ pub trait IsComponent: Send + Sync {
 }
 
 /// Static-dispatch enum over the daemon components.
-#[enum_dispatch(IsComponent)]
-pub enum Component {
+#[enum_dispatch(Component)]
+pub enum AnyComponent {
     History(HistoryComponent),
     Search(SearchComponent),
     Semantic(SemanticComponent),
@@ -269,7 +268,7 @@ pub enum Component {
 /// Events emitted during handling are queued and processed in subsequent
 /// iterations, ensuring the loop eventually drains.
 pub struct Daemon {
-    components: Vec<Component>,
+    components: Vec<AnyComponent>,
     handle: DaemonHandle,
 }
 
@@ -398,7 +397,7 @@ pub struct DaemonBuilder {
     settings: Settings,
     store: Option<SqliteStore>,
     history_db: Option<HistoryDatabase>,
-    components: Vec<Component>,
+    components: Vec<AnyComponent>,
 }
 
 impl DaemonBuilder {
@@ -427,7 +426,7 @@ impl DaemonBuilder {
     /// Register a component.
     ///
     /// Components are started in registration order and stopped in reverse order.
-    pub fn component(mut self, component: impl Into<Component>) -> Self {
+    pub fn component(mut self, component: impl Into<AnyComponent>) -> Self {
         self.components.push(component.into());
         self
     }
