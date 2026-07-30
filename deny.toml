@@ -53,29 +53,15 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 unmaintained = "none"
 yanked = "warn"
 ignore = [
-    # potential to misuse ed25519-dalek 1.0
-    # used by rusty-paseto. not in a vulnerable way
-    # and we don't even use paseto public key crypto so we don't use this
-    "RUSTSEC-2022-0093",
-    # DoS with untrusted input. Only runs on the client so not a concern
-    "RUSTSEC-2021-0041",
-    # quadratic-time duplicate-attribute check in quick-xml 0.39.4, pulled in
-    # transitively via arboard -> wl-clipboard-rs -> wayland-client ->
-    # wayland-scanner (Linux Wayland clipboard support). wayland-scanner
-    # 0.31.9 hard-pins `quick-xml = "^0.39"`; the patched release is 0.41.0,
-    # a semver-incompatible major bump `cargo update -p quick-xml` cannot
-    # reach (confirmed: no 0.39.x patched release exists upstream). Risk is
-    # effectively nil: wayland-scanner is a proc-macro crate, so quick-xml
-    # only ever runs during `cargo build` (proc-macro expansion) parsing
-    # static, trusted `.xml` protocol spec files bundled in the
-    # wayland-protocols(-wlr) crate sources to codegen Rust bindings — it is
-    # not linked into the shipped atuin binary and never parses
-    # attacker-supplied/runtime input. Re-evaluate when
-    # wayland-scanner/wl-clipboard-rs bumps its quick-xml requirement.
+    # Pulled in through
+    #   arboard ->
+    #     wl-clipboard-rs ->
+    #       wayland-client ->
+    #         wayland-scanner ->
+    #           quick-xml 0.39.4 <-- problematic
+    #
+    # No upstream patch. Runs only on client, no severe concern.
     "RUSTSEC-2026-0194",
-    # Unbounded namespace-declaration allocation in quick-xml 0.39.4. Same
-    # dependency chain, same blocker, and same low-risk rationale as
-    # RUSTSEC-2026-0194 above.
     "RUSTSEC-2026-0195",
 ]
 
@@ -89,28 +75,16 @@ ignore = [
 # `default = "deny"` / `unlicensed = "deny"` intent.
 allow = [
     "Apache-2.0",
-    # Boost Software License 1.0 (permissive; NOT the Business Source License,
-    # which is "BUSL-1.1"). Needed by clipboard-win, error-code (both via
-    # arboard's Windows clipboard backend) and xxhash-rust.
     "BSL-1.0",
     "BSD-3-Clause",
-    # CC0-1.0 (public-domain dedication). Needed by notify (file watching).
     "CC0-1.0",
-    # CDLA-Permissive-2.0 (permissive). Needed by webpki-roots / webpki-root-certs,
-    # part of the rustls trust-root stack currently on main.
     "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
     "MPL-2.0",
     "OpenSSL",
-    # SPDX identifier used by the icu4x crate family (icu_collections,
-    # icu_locale_core, icu_normalizer(_data), icu_properties(_data),
-    # icu_provider, litemap, potential_utf, tinystr, writeable, yoke(-derive),
-    # zerofrom(-derive), zerotrie, zerovec(-derive)) pulled in transitively via
-    # idna/url, and by unicode-ident (via proc-macro2).
     "Unicode-3.0",
     "Unicode-DFS-2016",
-    # Zlib license. Needed by foldhash (via hashbrown).
     "Zlib",
 ]
 confidence-threshold = 0.8
