@@ -324,6 +324,37 @@ pub(super) fn read_user_password() -> String {
     password.expect("Failed to read from input")
 }
 
+pub(super) fn read_and_confirm_password(enter_prompt: &str, confirm_prompt: &str) -> String {
+    confirm_password_loop(enter_prompt, confirm_prompt, |prompt: &str| {
+        prompt_password(prompt)
+    })
+    .expect("Failed to read from input")
+}
+
+fn confirm_password_loop<F>(
+    enter_prompt: &str,
+    confirm_prompt: &str,
+    mut prompt: F,
+) -> io::Result<String>
+where
+    F: FnMut(&str) -> io::Result<String>,
+{
+    loop {
+        let password = prompt(enter_prompt)?;
+        if password.is_empty() {
+            eprintln!("Password cannot be empty. Please try again.");
+            continue;
+        }
+
+        let confirmation = prompt(confirm_prompt)?;
+        if password == confirmation {
+            return Ok(password);
+        }
+
+        eprintln!("Passwords do not match. Please try again.");
+    }
+}
+
 fn read_user_input(name: &'static str) -> String {
     eprint!("Please enter {name}: ");
     get_input().expect("Failed to read from input")
@@ -332,6 +363,7 @@ fn read_user_input(name: &'static str) -> String {
 #[cfg(test)]
 mod tests {
     use atuin_client::encryption::Key;
+    use std::io;
 
     #[test]
     fn mnemonic_round_trip() {
@@ -348,5 +380,51 @@ mod tests {
             phrase,
             "adapt amused able anxiety mother adapt beef gaze amount else seat alcohol cage lottery avoid scare alcohol cactus school avoid coral adjust catch pink"
         );
+    }
+
+    #[test]
+    fn confirm_password_matches_first_try() {
+        let mut inputs = vec!["hunter2".to_string(), "hunter2".to_string()].into_iter();
+        let mut calls = 0;
+        let result = super::confirm_password_loop("enter: ", "confirm: ", |_prompt| {
+            calls += 1;
+            Ok(inputs.next().expect("ran out of scripted inputs"))
+        });
+        assert_eq!(result.unwrap(), "hunter2");
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn confirm_password_reprompts_on_mismatch() {
+        let mut inputs = vec!["hunter2", "typo", "hunter2", "hunter2"]
+            .into_iter()
+            .map(String::from);
+        let mut calls = 0;
+        let result = super::confirm_password_loop("enter: ", "confirm: ", |_prompt| {
+            calls += 1;
+            Ok(inputs.next().expect("ran out of scripted inputs"))
+        });
+        assert_eq!(result.unwrap(), "hunter2");
+        assert_eq!(calls, 4);
+    }
+
+    #[test]
+    fn confirm_password_reprompts_on_empty() {
+        let mut inputs = vec!["", "hunter2", "hunter2"].into_iter().map(String::from);
+        let mut calls = 0;
+        let result = super::confirm_password_loop("enter: ", "confirm: ", |_prompt| {
+            calls += 1;
+            Ok(inputs.next().expect("ran out of scripted inputs"))
+        });
+        assert_eq!(result.unwrap(), "hunter2");
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn confirm_password_propagates_read_error() {
+        let result = super::confirm_password_loop("enter: ", "confirm: ", |_prompt| {
+            Err(io::Error::new(io::ErrorKind::UnexpectedEof, "eof"))
+        });
+        assert!(result.is_err());
     }
 }

@@ -125,10 +125,12 @@ impl Cmd {
 
             let username = or_user_input(self.username.clone(), "username");
             let email = or_user_input(self.email.clone(), "email");
-            let password = self
-                .password
-                .clone()
-                .unwrap_or_else(super::login::read_user_password);
+            let password = self.password.clone().unwrap_or_else(|| {
+                super::login::read_and_confirm_password(
+                    "Please enter password: ",
+                    "Please confirm password: ",
+                )
+            });
 
             if password.is_empty() {
                 bail!("please provide a password");
