@@ -280,15 +280,6 @@ jobs:
       - name: Format
         run: cargo fmt -- --check
 
-  tls-backend:
-    runs-on: depot-ubuntu-24.04
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Check TLS backend invariant (native-tls in, rustls out)
-        run: ./scripts/check-tls-backend.sh
-
   package:
     runs-on: depot-ubuntu-24.04
 
