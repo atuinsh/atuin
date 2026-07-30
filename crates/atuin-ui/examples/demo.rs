@@ -101,6 +101,7 @@ async fn main() -> io::Result<()> {
         enter_accept: true,
         history: HistoryList::new(),
         search: atuin_ui::models::SearchInput::new(),
+        mode: None,
     };
 
     let base_time = SystemTime::now()

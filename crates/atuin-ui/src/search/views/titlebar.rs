@@ -180,6 +180,7 @@ mod tests {
             enter_accept: true,
             history: HistoryList::new(),
             search: SearchInput::new(),
+            mode: None,
         };
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);

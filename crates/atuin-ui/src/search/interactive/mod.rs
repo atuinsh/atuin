@@ -269,6 +269,7 @@ mod tests {
             enter_accept: true,
             history: HistoryList::new(),
             search: SearchInput::new(),
+            mode: None,
         };
         SearchInteractive::new(model, None, TestSource)
     }
