@@ -1,4 +1,4 @@
-use async_trait::async_trait;
+use ambassador::{Delegate, delegatable_trait};
 use atuin_client::{
     database::{Context, Database, DbSearchMode, OptFilters},
     history::{History, HistoryId, all_user_author_filter},
@@ -14,19 +14,19 @@ pub mod db;
 pub mod skim;
 
 #[allow(unused)] // settings is only used if daemon feature is enabled
-pub fn engine(search_mode: SearchMode, settings: &Settings) -> Box<dyn SearchEngine> {
+pub fn engine(search_mode: SearchMode, settings: &Settings) -> SearchEngineImpl {
     match search_mode {
-        SearchMode::Skim => Box::new(skim::Search::new()),
+        SearchMode::Skim => SearchEngineImpl::Skim(skim::Search::new()),
         #[cfg(feature = "daemon")]
-        SearchMode::DaemonFuzzy => Box::new(daemon::Search::new(settings)),
+        SearchMode::DaemonFuzzy => SearchEngineImpl::Daemon(daemon::Search::new(settings)),
         #[cfg(not(feature = "daemon"))]
         SearchMode::DaemonFuzzy => {
             // Fall back to fuzzy mode if daemon feature is not enabled
-            Box::new(db::Search(DbSearchMode::Fuzzy))
+            SearchEngineImpl::Db(db::Search(DbSearchMode::Fuzzy))
         }
-        SearchMode::Prefix => Box::new(db::Search(DbSearchMode::Prefix)),
-        SearchMode::FullText => Box::new(db::Search(DbSearchMode::FullText)),
-        SearchMode::Fuzzy => Box::new(db::Search(DbSearchMode::Fuzzy)),
+        SearchMode::Prefix => SearchEngineImpl::Db(db::Search(DbSearchMode::Prefix)),
+        SearchMode::FullText => SearchEngineImpl::Db(db::Search(DbSearchMode::FullText)),
+        SearchMode::Fuzzy => SearchEngineImpl::Db(db::Search(DbSearchMode::Fuzzy)),
     }
 }
 
@@ -65,7 +65,8 @@ impl SearchState {
     }
 }
 
-#[async_trait]
+#[delegatable_trait]
+#[allow(async_fn_in_trait)]
 pub trait SearchEngine: Send + Sync + 'static {
     async fn full_query(
         &mut self,
@@ -98,4 +99,14 @@ pub trait SearchEngine: Send + Sync + 'static {
     }
 
     fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize>;
+}
+
+/// Static-dispatch enum over the search-engine backends.
+#[derive(Delegate)]
+#[delegate(SearchEngine)]
+pub enum SearchEngineImpl {
+    Db(db::Search),
+    Skim(skim::Search),
+    #[cfg(feature = "daemon")]
+    Daemon(daemon::Search),
 }

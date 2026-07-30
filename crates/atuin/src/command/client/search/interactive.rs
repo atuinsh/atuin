@@ -15,7 +15,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{
     cursor::Cursor,
-    engines::{SearchEngine, SearchState},
+    engines::{SearchEngine, SearchEngineImpl, SearchState},
     history_list::{HistoryList, ListState},
 };
 use atuin_client::{
@@ -135,7 +135,7 @@ pub struct State {
 
     keymaps: KeymapSet,
     search: SearchState,
-    engine: Box<dyn SearchEngine>,
+    engine: SearchEngineImpl,
     now: Box<dyn Fn() -> OffsetDateTime + Send>,
 }
 
@@ -966,7 +966,7 @@ impl State {
         match self.tab_index {
             0 => {
                 let history_highlighter = HistoryHighlighter {
-                    engine: self.engine.as_ref(),
+                    engine: &self.engine,
                     search_input: self.search.input.as_str(),
                 };
                 let results_list = Self::build_results_list(

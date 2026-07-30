@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use atuin_client::{
     database::{Database, DbSearchMode, OptFilters},
     history::{History, all_user_author_filter},
@@ -111,7 +110,6 @@ impl Search {
     }
 }
 
-#[async_trait]
 impl SearchEngine for Search {
     #[instrument(skip_all, level = Level::TRACE, name = "daemon_search", fields(query = %state.input.as_str()))]
     async fn full_query(
