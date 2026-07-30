@@ -1,0 +1,25 @@
+[package]
+name = "atuin-ui"
+edition = "2024"
+description = "Terminal UI for Atuin"
+
+rust-version = { workspace = true }
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+[dependencies]
+ratatui = { workspace = true }
+ratatui-image = "11.0.6"
+image = { version = "0.25", default-features = false, features = ["png"] }
+# `release_max_level_debug` statically compiles out trace-level spans (our
+# per-widget render instrumentation) in release builds, leaving zero overhead.
+tracing = { workspace = true, features = ["release_max_level_debug"] }
+tokio = { workspace = true }
+
+[dev-dependencies]
+# For the demo's optional Chrome trace (ATUIN_UI_TRACE=1).
+tracing-subscriber = { workspace = true }
+tracing-chrome = "0.7"
