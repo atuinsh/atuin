@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ratatui::{
     Frame,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Position},
 };
 use ratatui_image::{
     picker::{Picker, ProtocolType},
@@ -15,6 +15,7 @@ use crate::models::{HistorySource, Model};
 use crate::msg::Msg;
 use crate::runtime::{App, Cmd};
 use crate::search::views::history_list::HistoryListView;
+use crate::search::views::search_input::SearchInputView;
 use crate::search::views::titlebar::TitleBarView;
 
 /// The atuin turtle, embedded at compile time.
@@ -22,6 +23,9 @@ const TURTLE_PNG: &[u8] = include_bytes!("../../../assets/atuin-turtle.png");
 
 /// Rows to load at startup, before the first render establishes the real height.
 const INITIAL_WINDOW: Range<usize> = 0..128;
+
+/// The search prompt shown before the query.
+const PROMPT: &str = "> ";
 
 /// The interactive search application, driven by the [`runtime`](crate::runtime)
 /// and backed by a [`HistorySource`].
@@ -77,11 +81,13 @@ impl<S: HistorySource> App for SearchInteractive<S> {
     }
 
     fn view(&mut self, frame: &mut Frame<'_>) {
-        let [header, body] =
-            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(frame.area());
+        let [header, body, input] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .areas(frame.area());
 
-        // The list's viewport height is only known at render time (especially
-        // inline); record it so `update`'s navigation and loading use the truth.
         self.model.history.set_viewport_height(body.height);
 
         frame.render_stateful_widget(
@@ -93,6 +99,7 @@ impl<S: HistorySource> App for SearchInteractive<S> {
             header,
             &mut self.logo,
         );
+
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
@@ -104,6 +111,23 @@ impl<S: HistorySource> App for SearchInteractive<S> {
             },
             body,
         );
+
+        frame.render_widget(
+            SearchInputView {
+                prompt: PROMPT,
+                input: &self.model.search,
+                theme: &self.model.theme,
+            },
+            input,
+        );
+
+        // Show the terminal cursor in the input, after the prompt + query cursor.
+        let cursor_x =
+            input.x + PROMPT.chars().count() as u16 + self.model.search.cursor_char() as u16;
+        frame.set_cursor_position(Position::new(
+            cursor_x.min(input.right().saturating_sub(1)),
+            input.y,
+        ));
     }
 }
 
