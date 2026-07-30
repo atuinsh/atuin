@@ -472,10 +472,16 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "tree-sitter")]
     #[test]
     fn dash_is_parsed_as_posix() {
-        let result = parse_shell_command("ls && cat foo", ShellKind::Dash);
-        assert_eq!(names(&result.subcommands), vec!["ls", "cat"]);
+        // Command substitution: only the posix grammar extracts the inner `git`;
+        // parse_fallback cannot see past the `$(...)` — so this actually proves
+        // Dash routes to posix rather than to the fallback path.
+        let result = parse_shell_command("echo $(git rev-parse HEAD)", ShellKind::Dash);
+        let n = names(&result.subcommands);
+        assert!(n.contains(&"echo"), "should contain echo: {n:?}");
+        assert!(n.contains(&"git"), "should contain git: {n:?}");
     }
 
     #[cfg(feature = "tree-sitter")]
