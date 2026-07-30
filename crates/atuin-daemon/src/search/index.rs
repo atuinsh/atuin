@@ -7,20 +7,19 @@
 //! - Frecency-based ranking (frequency + recency)
 //! - Dynamic filtering by directory, host, session, etc.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use super::normalize_diacritics;
+use std::borrow::Cow;
+use std::cmp::Ordering;
+use std::collections::HashSet;
+use std::sync::{Arc, RwLock};
 
 use atuin_client::history::{History, is_known_agent};
 use atuin_client::settings::Search;
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
-use atuin_nucleo::{Injector, Nucleo, pattern};
 use dashmap::DashMap;
 use lasso::{Spur, ThreadedRodeo};
 use time::OffsetDateTime;
-use tokio::sync::RwLock;
 use tracing::{Level, instrument};
 use uuid::Uuid;
 
@@ -28,11 +27,6 @@ use uuid::Uuid;
 /// Returns None if the string is not a valid UUID.
 fn parse_uuid_bytes(s: &str) -> Option<[u8; 16]> {
     Uuid::parse_str(s).ok().map(|u| *u.as_bytes())
-}
-
-/// Format a 16-byte array as a UUID string.
-fn format_uuid_bytes(bytes: &[u8; 16]) -> String {
-    Uuid::from_bytes(*bytes).to_string()
 }
 
 /// Pre-computed frecency data for O(1) lookup.
@@ -114,12 +108,24 @@ pub struct CommandData {
     hosts: HashSet<Spur>,
     /// All sessions where this command has been run (as 16-byte UUIDs).
     sessions: HashSet<[u8; 16]>,
+    /// Position of this command in `SearchIndex::haystack`, so filtered
+    /// searches can walk the command map without hashing command strings.
+    haystack_index: u32,
 }
 
 impl CommandData {
     /// Create a new CommandData from a history entry.
-    /// Returns None if the history entry has invalid UUIDs.
-    pub fn new(history: &History, interner: &ThreadedRodeo) -> Option<Self> {
+    ///
+    /// Returns [`None`] if the history entry has invalid UUIDs or if the haystack index exceeds
+    /// 2^32.
+    pub fn new(history: &History, haystack_index: usize, interner: &ThreadedRodeo) -> Option<Self> {
+        let Ok(haystack_index) = u32::try_from(haystack_index) else {
+            // TODO: It's very unlikely that we'll have more than 2^32 history entries, but if that
+            // ends up being a realistic possibility, we should handle this case better than simply
+            // dropping new commands from the index.
+            return None;
+        };
+
         let history_id = parse_uuid_bytes(&history.id.0)?;
         let session = parse_uuid_bytes(&history.session)?;
         let timestamp = history.timestamp.unix_timestamp();
@@ -138,6 +144,7 @@ impl CommandData {
             directories: HashSet::from([dir_key]),
             hosts: HashSet::from([host_key]),
             sessions: HashSet::from([session]),
+            haystack_index,
         })
     }
 
@@ -173,16 +180,15 @@ impl CommandData {
     }
 
     /// Get the most recent history ID for this command.
-    pub fn most_recent_id(&self) -> String {
-        format_uuid_bytes(&self.most_recent_id)
+    pub fn most_recent_id(&self) -> [u8; 16] {
+        self.most_recent_id
     }
 
-    /// Check if any invocation matches a directory filter (exact match).
-    /// O(1) lookup using pre-computed index.
-    pub fn has_invocation_in_dir(&self, dir: &str, interner: &ThreadedRodeo) -> bool {
-        interner
-            .get(dir)
-            .is_some_and(|spur| self.directories.contains(&spur))
+    /// Check if any invocation matches an interned directory (exact match).
+    /// O(1) integer-set lookup; the caller resolves the directory string to a
+    /// `Spur` once per search.
+    pub fn has_invocation_in_dir(&self, dir: Spur) -> bool {
+        self.directories.contains(&dir)
     }
 
     /// Check if any invocation matches a directory prefix (workspace/git root).
@@ -193,18 +199,17 @@ impl CommandData {
             .any(|&spur| interner.resolve(&spur).starts_with(prefix))
     }
 
-    /// Check if any invocation matches a hostname.
-    /// O(1) lookup using pre-computed index.
-    pub fn has_invocation_on_host(&self, hostname: &str, interner: &ThreadedRodeo) -> bool {
-        interner
-            .get(hostname)
-            .is_some_and(|spur| self.hosts.contains(&spur))
+    /// Check if any invocation matches an interned hostname.
+    /// O(1) integer-set lookup; the caller resolves the hostname to a `Spur`
+    /// once per search.
+    pub fn has_invocation_on_host(&self, hostname: Spur) -> bool {
+        self.hosts.contains(&hostname)
     }
 
-    /// Check if any invocation matches a session.
-    /// O(1) lookup using pre-computed index.
-    pub fn has_invocation_in_session(&self, session: &str) -> bool {
-        parse_uuid_bytes(session).is_some_and(|bytes| self.sessions.contains(&bytes))
+    /// Check if any invocation matches a session (as parsed UUID bytes).
+    /// O(1) lookup; the caller parses the session string once per search.
+    pub fn has_invocation_in_session(&self, session: &[u8; 16]) -> bool {
+        self.sessions.contains(session)
     }
 }
 
@@ -223,14 +228,98 @@ pub enum IndexFilterMode {
     Session(String),
 }
 
+/// A "compiled" form of [`IndexFilterMode`], with most of the strings interned and parsed.
+enum CompiledFilter<'a> {
+    All,
+    Directory(Spur),
+    Workspace(&'a str),
+    Host(Spur),
+    Session([u8; 16]),
+    /// Used when a target (host/dir/session) has never been seen by the index -- nothing can match.
+    Nothing,
+}
+
+impl IndexFilterMode {
+    /// "Compile" this filter by interning and parsing its strings.
+    fn compile(&self, interner: &ThreadedRodeo) -> CompiledFilter<'_> {
+        match self {
+            Self::Global => CompiledFilter::All,
+            Self::Directory(dir) => interner
+                .get(dir)
+                .map_or(CompiledFilter::Nothing, CompiledFilter::Directory),
+            Self::Workspace(prefix) => CompiledFilter::Workspace(prefix),
+            Self::Host(hostname) => interner
+                .get(hostname)
+                .map_or(CompiledFilter::Nothing, CompiledFilter::Host),
+            Self::Session(session) => {
+                parse_uuid_bytes(session).map_or(CompiledFilter::Nothing, CompiledFilter::Session)
+            }
+        }
+    }
+}
+
 /// Shareable frecency map: command -> frecency score.
-/// Wrapped in Arc for zero-copy sharing with scorer callbacks.
-type FrecencyMap = Arc<HashMap<Arc<str>, u32>>;
+type FrecencyMap = Arc<Vec<u32>>;
+
+/// One entry in the fuzzy matcher's haystack: the original string plus the normalized version
+/// (diacritics removed) we actually match against.
+struct HaystackEntry {
+    /// The original text of the entry.
+    pub original: Arc<str>,
+    /// The [normalized](normalize_diacritics) version of the text, with diacritics removed.
+    pub normalized: Arc<str>,
+}
+
+impl HaystackEntry {
+    /// Create a new [`HaystackEntry`] from an [`Arc<str>`].
+    pub fn new(text: Arc<str>) -> Self {
+        let normalized = match normalize_diacritics(&text) {
+            Cow::Borrowed(_) => text.clone(),
+            Cow::Owned(normalized) => normalized.into(),
+        };
+        Self {
+            original: text,
+            normalized,
+        }
+    }
+}
+
+/// Represents how closely a command matches a search query.
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct Score {
+    // Fields must be in this order so we rank by fuzzy score first and only use frecency
+    // for ties. See #3702.
+    pub fuzzy_score: u16,
+    pub frecency: u32,
+    pub index: u32,
+}
+
+/// Scores are ordered as follows:
+///
+/// * Fuzzy score (highest first)
+/// * If equal, frecency (highest first)
+/// * If equal, index (lowest first)
+impl Ord for Score {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (other.fuzzy_score, other.frecency, self.index).cmp(&(
+            self.fuzzy_score,
+            self.frecency,
+            other.index,
+        ))
+    }
+}
+
+impl PartialOrd for Score {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 /// A deduplicated search index with frecency-based ranking.
 ///
 /// Commands are stored by their text, with metadata about all invocations.
-/// Nucleo handles fuzzy matching, while frecency is computed via scorer callback.
+/// Frizbee handles fuzzy matching; results are ranked by match quality,
+/// with frecency breaking ties between equally good matches.
 ///
 /// Global frecency is precomputed by a background task and used for scoring.
 /// If frecency data is not available, search still works but without frecency ranking;
@@ -241,14 +330,25 @@ pub struct SearchIndex {
     /// Using `DashMap` for concurrent read/write access, wrapped in `Arc` for sharing with scorer.
     /// Keys are `Arc<str>` to enable zero-copy sharing with frecency_map.
     commands: Arc<DashMap<Arc<str>, CommandData>>,
-    /// Nucleo fuzzy matcher - items are command strings.
-    nucleo: RwLock<Nucleo<String>>,
-    /// Injector for adding new commands to Nucleo.
-    injector: Injector<String>,
+
+    /// Unique commands in insertion order — the fuzzy matcher's haystack.
+    /// Shares the `Arc<str>` allocations with `commands`.
+    ///
+    /// Lock order: paths that need both this lock and a `commands` shard lock
+    /// must take this one first (see `add_history`, `search`,
+    /// `rebuild_frecency`); acquiring in the reverse order can deadlock.
+    haystack: RwLock<Vec<HaystackEntry>>,
+
     /// Precomputed global frecency map. Updated by background task.
+    ///
+    /// Aligned with [`Self::haystack`] by index, so scoring a match is an
+    /// array access instead of hashing the command string. Commands added after
+    /// the last rebuild sit past the end and score 0 until the next rebuild.
     frecency_map: RwLock<Option<FrecencyMap>>,
+
     /// String interner for deduplicating cwd, hostname, and directory paths.
     interner: Arc<ThreadedRodeo>,
+
     /// Controls which shells' commands are included.
     pub shells: OrFilter<Vec<String>>,
 }
@@ -256,15 +356,9 @@ pub struct SearchIndex {
 impl SearchIndex {
     /// Create a new empty search index.
     pub fn new(shells: OrFilter<Vec<String>>) -> Self {
-        let nucleo_config = atuin_nucleo::Config::DEFAULT;
-        // Single column for command text
-        let nucleo = Nucleo::<String>::new(nucleo_config, Arc::new(|| {}), None, 1);
-        let injector = nucleo.injector();
-
         Self {
             commands: Arc::new(DashMap::new()),
-            nucleo: RwLock::new(nucleo),
-            injector,
+            haystack: RwLock::new(Vec::new()),
             frecency_map: RwLock::new(None),
             interner: Arc::new(ThreadedRodeo::new()),
             shells,
@@ -293,16 +387,20 @@ impl SearchIndex {
             // Existing command - just update invocations
             entry.add_invocation(history, &self.interner);
         } else {
-            // New command - create Arc<str> once and share it
-            let Some(data) = CommandData::new(history, &self.interner) else {
-                return; // Invalid UUIDs, skip this entry
-            };
-            let command_arc: Arc<str> = command.into();
-            self.commands.insert(Arc::clone(&command_arc), data);
-            // Nucleo still needs String (unavoidable copy for fuzzy matching)
-            self.injector.push(command_arc.to_string(), |cmd, cols| {
-                cols[0] = cmd.clone().into();
-            });
+            let mut haystack = self.haystack.write().unwrap();
+            match self.commands.entry(Arc::from(command)) {
+                dashmap::Entry::Occupied(mut entry) => {
+                    entry.get_mut().add_invocation(history, &self.interner);
+                }
+                dashmap::Entry::Vacant(vacant) => {
+                    let Some(data) = CommandData::new(history, haystack.len(), &self.interner)
+                    else {
+                        return; // Skip invalid commands
+                    };
+                    haystack.push(HaystackEntry::new(vacant.key().clone()));
+                    vacant.insert(data);
+                }
+            }
         }
         // Note: frecency_map is rebuilt by background task, not invalidated here
     }
@@ -320,64 +418,123 @@ impl SearchIndex {
         self.commands.len()
     }
 
-    /// Get the number of items in Nucleo (should match command_count).
-    pub async fn nucleo_item_count(&self) -> u32 {
-        self.nucleo.read().await.snapshot().item_count()
-    }
-
     /// Search for commands matching a query.
     ///
-    /// Returns a list of history IDs (most recent invocation per command).
+    /// Returns an iterator of history IDs as parsed UUIDs (most recent invocation per command).
     /// Uses precomputed global frecency for scoring if available.
     #[instrument(skip_all, level = tracing::Level::TRACE, name = "index_search", fields(query = %query))]
-    pub async fn search(
+    pub fn search(
         &self,
         query: &str,
         filter_mode: IndexFilterMode,
         limit: u32,
-    ) -> Vec<String> {
-        let mut nucleo = self.nucleo.write().await;
-
+    ) -> impl Iterator<Item = [u8; 16]> {
         // Get precomputed frecency map (may be None if not yet computed)
-        let frecency_map = self.frecency_map.read().await.clone();
+        let frecency_map = self.frecency_map.read().unwrap().clone();
 
-        // Build filter based on mode
-        let filter = self.build_filter(&filter_mode);
-        nucleo.set_filter(filter);
+        let query = super::truncate_query(query);
+        // Match accent-insensitively: the haystack side is normalized in
+        // add_history, so an accented query must be normalized too
+        let query = normalize_diacritics(query);
 
-        // Build scorer from precomputed frecency (or None if not available)
-        let scorer = Self::build_scorer(frecency_map);
-        nucleo.set_scorer(scorer);
+        let haystack = self.haystack.read().unwrap();
+        let filter = filter_mode.compile(&self.interner);
 
-        // Update pattern
-        nucleo.pattern.reparse(
-            0,
-            query,
-            pattern::CaseMatching::Smart,
-            pattern::Normalization::Smart,
-            false,
-        );
+        // Filter pre-pass: collect the candidate commands for this filter mode. This is sorted
+        // vector of haystack indices.
+        let get_candidates = || match &filter {
+            CompiledFilter::All => haystack.iter().enumerate().map(|(i, _)| i as u32).collect(),
+            CompiledFilter::Nothing => Vec::new(),
+            _ => {
+                let mut indices: Vec<u32> = self
+                    .commands
+                    .iter()
+                    .filter(|entry| (entry.haystack_index as usize) < haystack.len())
+                    .filter(|entry| match &filter {
+                        CompiledFilter::All | CompiledFilter::Nothing => unreachable!(),
+                        CompiledFilter::Directory(dir) => entry.has_invocation_in_dir(*dir),
+                        CompiledFilter::Workspace(prefix) => {
+                            entry.has_invocation_in_workspace(prefix, &self.interner)
+                        }
+                        CompiledFilter::Host(hostname) => entry.has_invocation_on_host(*hostname),
+                        CompiledFilter::Session(session) => {
+                            entry.has_invocation_in_session(session)
+                        }
+                    })
+                    .map(|entry| entry.haystack_index)
+                    .collect();
+                indices.sort_unstable();
+                indices
+            }
+        };
 
-        tracing::span!(Level::TRACE, "index_search_tick").in_scope(|| {
-            // Tick until complete
-            while nucleo.tick(10).running {}
-        });
+        let candidates =
+            tracing::span!(Level::TRACE, "index_search_filter").in_scope(get_candidates);
 
-        // Collect results
-        let snapshot = nucleo.snapshot();
-        let matched_count = snapshot.matched_item_count().min(limit);
+        let candidate_frecency = |candidate_index: usize| {
+            let hay_idx = candidates[candidate_index] as usize;
+            frecency_map
+                .as_ref()
+                .and_then(|f| f.get(hay_idx).copied())
+                .unwrap_or(0)
+        };
 
-        tracing::span!(Level::TRACE, "index_search_results").in_scope(|| {
-            snapshot
-                .matched_items(..matched_count)
-                .filter_map(|item| {
-                    let cmd = item.data;
-                    // DashMap<Arc<str>, _>::get accepts &str via Borrow trait
-                    self.commands
-                        .get(cmd.as_str())
-                        .map(|data| data.most_recent_id())
+        let config = frizbee::Config::default()
+            .casing(frizbee::CaseMatching::Smart)
+            .sort(frizbee::SortStrategy::IndexAsc);
+        let mut matcher = frizbee::Matcher::from_query(&query, &config);
+
+        // An empty query matches every candidate with fuzzy score 0, so skip
+        // the matcher and rank purely by frecency
+        let mut scored: Vec<Score> = if matcher.patterns().is_empty() {
+            (0..candidates.len())
+                .map(|i| Score {
+                    fuzzy_score: 0,
+                    frecency: candidate_frecency(i),
+                    index: i as u32,
                 })
                 .collect()
+        } else {
+            // This is a vec of `&Arc<str>` instead of `&str` because `&Arc<str>` is the size of one
+            // pointer while `&str` is the size of two.
+            let normalized_commands: Vec<&Arc<str>> = candidates
+                .iter()
+                .map(|i| &haystack[*i as usize].normalized)
+                .collect();
+            // Use all cores when the number of commands is sufficiently large.
+            let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+            let matches = tracing::span!(Level::TRACE, "index_search_match").in_scope(|| {
+                if threads > 1 && normalized_commands.len() >= 10_000 {
+                    matcher.match_list_parallel(&normalized_commands, threads)
+                } else {
+                    matcher.match_list(&normalized_commands)
+                }
+            });
+            matches
+                .iter()
+                .map(|m| Score {
+                    fuzzy_score: m.score,
+                    frecency: candidate_frecency(m.index as usize),
+                    index: m.index,
+                })
+                .collect()
+        };
+
+        tracing::span!(Level::TRACE, "index_search_results").in_scope(|| {
+            // only the top `limit` results are returned, so partition them
+            // out before sorting instead of sorting every match
+            let limit = limit as usize;
+            if scored.len() > limit {
+                scored.select_nth_unstable(limit);
+                scored.truncate(limit);
+            }
+            scored.sort_unstable();
+            scored.into_iter().filter_map(move |score| {
+                let haystack_index = candidates[score.index as usize];
+                self.commands
+                    .get(haystack[haystack_index as usize].original.as_ref())
+                    .map(|data| data.most_recent_id())
+            })
         })
     }
 
@@ -391,9 +548,8 @@ impl SearchIndex {
     /// - `frequency_score_multiplier`: Weight for frequency component
     /// - `frecency_score_multiplier`: Overall multiplier for final score
     #[instrument(skip_all, level = tracing::Level::DEBUG, name = "rebuild_frecency")]
-    pub async fn rebuild_frecency(&self, search_settings: &Search) {
+    pub fn rebuild_frecency(&self, search_settings: &Search) {
         let now = OffsetDateTime::now_utc().unix_timestamp();
-        let mut frecency_map: HashMap<Arc<str>, u32> = HashMap::new();
 
         // Clamp multipliers to non-negative values to prevent broken frecency ranking
         // (negative values would produce unexpected results when cast to u32)
@@ -401,65 +557,24 @@ impl SearchIndex {
         let frequency_mul = search_settings.frequency_score_multiplier.max(0.0);
         let frecency_mul = search_settings.frecency_score_multiplier.max(0.0);
 
-        for entry in self.commands.iter() {
-            let frecency = entry
-                .global_frecency
-                .compute(now, recency_mul, frequency_mul);
-            // Apply overall frecency multiplier and round to u32
-            let frecency = (frecency as f64 * frecency_mul).round() as u32;
-            // Arc::clone is cheap - just increments reference count
-            frecency_map.insert(Arc::clone(entry.key()), frecency);
-        }
-
-        *self.frecency_map.write().await = Some(Arc::new(frecency_map));
-    }
-
-    /// Build filter predicate for the given mode.
-    fn build_filter(&self, mode: &IndexFilterMode) -> Option<atuin_nucleo::Filter<String>> {
-        // For Global mode, no filter needed
-        if matches!(mode, IndexFilterMode::Global) {
-            return None;
-        }
-
-        // Pre-compute which commands pass the filter
-        // Use HashSet<String> for the short-lived filter (simpler than Arc lookup)
-        let passing_commands: Arc<HashSet<String>> = {
-            let mut set = HashSet::new();
-            for entry in self.commands.iter() {
-                let passes = match mode {
-                    IndexFilterMode::Global => unreachable!(),
-                    IndexFilterMode::Directory(dir) => {
-                        entry.has_invocation_in_dir(dir, &self.interner)
-                    }
-                    IndexFilterMode::Workspace(prefix) => {
-                        entry.has_invocation_in_workspace(prefix, &self.interner)
-                    }
-                    IndexFilterMode::Host(hostname) => {
-                        entry.has_invocation_on_host(hostname, &self.interner)
-                    }
-                    IndexFilterMode::Session(session) => entry.has_invocation_in_session(session),
-                };
-                if passes {
-                    // Convert Arc<str> to String for filter lookup
-                    set.insert(entry.key().to_string());
-                }
-            }
-            Arc::new(set)
+        // Aligned with `haystack` by index; see FrecencyMap
+        let frecencies: Vec<u32> = {
+            let haystack = self.haystack.read().unwrap();
+            haystack
+                .iter()
+                .map(|hay| {
+                    self.commands.get(hay.original.as_ref()).map_or(0, |data| {
+                        let frecency =
+                            data.global_frecency
+                                .compute(now, recency_mul, frequency_mul);
+                        // Apply overall frecency multiplier and round to u32
+                        (frecency as f64 * frecency_mul).round() as u32
+                    })
+                })
+                .collect()
         };
 
-        Some(Arc::new(move |cmd: &String| passing_commands.contains(cmd)))
-    }
-
-    /// Build scorer from precomputed frecency map.
-    ///
-    /// Returns None if frecency map is not available (search still works, just without frecency ranking).
-    fn build_scorer(frecency_map: Option<FrecencyMap>) -> Option<atuin_nucleo::Scorer<String>> {
-        let map = frecency_map?;
-        Some(Arc::new(move |cmd: &String, fuzzy_score: u32| {
-            // HashMap<Arc<str>, _>::get accepts &str via Borrow trait
-            let frecency = map.get(cmd.as_str()).copied().unwrap_or(0);
-            fuzzy_score + frecency
-        }))
+        *self.frecency_map.write().unwrap() = Some(Arc::new(frecencies));
     }
 }
 
@@ -567,7 +682,7 @@ mod tests {
         let history1 = make_history("git status", dir1, datetime!(2024-01-01 10:00 UTC));
         let history2 = make_history("git status", dir2, datetime!(2024-01-01 12:00 UTC));
 
-        let mut data = CommandData::new(&history1, &interner).unwrap();
+        let mut data = CommandData::new(&history1, 0, &interner).unwrap();
         assert_eq!(data.global_frecency.count, 1);
         let id1 = data.most_recent_id();
 
@@ -592,7 +707,7 @@ mod tests {
         let h1 = make_history("git status", dir1, datetime!(2024-01-01 10:00 UTC));
         let h2 = make_history("git status", dir2, datetime!(2024-01-01 12:00 UTC));
 
-        let mut data = CommandData::new(&h1, &interner).unwrap();
+        let mut data = CommandData::new(&h1, 0, &interner).unwrap();
         data.add_invocation(&h2, &interner);
 
         let (check1, check2, check3) = if cfg!(windows) {
@@ -627,9 +742,14 @@ mod tests {
             )
         };
 
-        assert!(data.has_invocation_in_dir(&check1, &interner));
-        assert!(data.has_invocation_in_dir(&check2, &interner));
-        assert!(!data.has_invocation_in_dir(&check3, &interner));
+        let in_dir = |dir: &str| {
+            interner
+                .get(dir)
+                .is_some_and(|spur| data.has_invocation_in_dir(spur))
+        };
+        assert!(in_dir(&check1));
+        assert!(in_dir(&check2));
+        assert!(!in_dir(&check3));
 
         let (check1, check2, check3) = if cfg!(windows) {
             (
@@ -656,8 +776,8 @@ mod tests {
         assert!(!data.has_invocation_in_workspace(&check3, &interner));
     }
 
-    #[tokio::test]
-    async fn search_index_add_and_search() {
+    #[test]
+    fn search_index_add_and_search() {
         let index = SearchIndex::default();
 
         let h1 = make_history(
@@ -683,11 +803,11 @@ mod tests {
         assert_eq!(index.command_count(), 3);
 
         // Search for "git" - should match 2 commands
-        let results = index.search("git", IndexFilterMode::Global, 10).await;
+        let results: Vec<_> = index.search("git", IndexFilterMode::Global, 10).collect();
         assert_eq!(results.len(), 2);
 
         // Search with directory filter
-        let results = index
+        let results: Vec<_> = index
             .search(
                 "",
                 IndexFilterMode::Directory(
@@ -698,11 +818,198 @@ mod tests {
                 ),
                 10,
             )
-            .await;
+            .collect();
         assert_eq!(results.len(), 2); // git status and git commit
     }
 
-    #[tokio::test]
+    /// Regression test for #3702: a frequently-run command whose match is
+    /// scattered across words must not outrank a contiguous match, no matter
+    /// how large its frecency score is.
+    #[test]
+    fn contiguous_match_beats_frequent_scattered_match() {
+        let index = SearchIndex::default();
+
+        // contiguous match for "foo bar", run once
+        let contiguous = make_history("foo bar --baz", "/tmp", datetime!(2024-01-01 10:00 UTC));
+        index.add_history(&contiguous);
+
+        // scattered match (b..a..r spread over "build-analyzer-report"), run
+        // 200 times so its frecency dwarfs any fuzzy score difference
+        for _ in 0..200 {
+            let h = make_history(
+                "foo build-analyzer-report",
+                "/tmp",
+                datetime!(2024-01-01 10:00 UTC),
+            );
+            index.add_history(&h);
+        }
+
+        index.rebuild_frecency(&Search::default());
+
+        let results: Vec<_> = index
+            .search("foo bar", IndexFilterMode::Global, 10)
+            .collect();
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            results[0],
+            index
+                .commands
+                .get("foo bar --baz")
+                .unwrap()
+                .most_recent_id(),
+            "contiguous match must rank above the high-frecency scattered match"
+        );
+    }
+
+    /// Frecency still orders results between equally good matches, so
+    /// most-recently/frequently-used behavior is preserved where match
+    /// quality can't differentiate.
+    #[test]
+    fn equal_matches_order_by_frecency() {
+        let index = SearchIndex::default();
+
+        index.add_history(&make_history(
+            "echo alpha",
+            "/tmp",
+            datetime!(2024-01-01 10:00 UTC),
+        ));
+        // same fuzzy score for the query, much higher frecency
+        for _ in 0..50 {
+            let h = make_history("echo beta", "/tmp", datetime!(2024-01-01 10:00 UTC));
+            index.add_history(&h);
+        }
+
+        index.rebuild_frecency(&Search::default());
+
+        let results: Vec<_> = index.search("echo", IndexFilterMode::Global, 10).collect();
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            results[0],
+            index.commands.get("echo beta").unwrap().most_recent_id(),
+            "ties in match quality should be broken by frecency"
+        );
+    }
+
+    /// Regression test: frizbee does no unicode normalization of its own, so
+    /// the index normalizes both sides — an unaccented query must keep
+    /// matching accented history entries (nucleo's old Normalization::Smart
+    /// behavior), and an accented query must still find its own entry.
+    #[test]
+    fn diacritics_normalized_for_matching() {
+        let index = SearchIndex::default();
+
+        index.add_history(&make_history(
+            "echo déjà-vu",
+            "/tmp",
+            datetime!(2024-01-01 10:00 UTC),
+        ));
+        index.add_history(&make_history(
+            "echo plain",
+            "/tmp",
+            datetime!(2024-01-01 10:00 UTC),
+        ));
+
+        let expected = index.commands.get("echo déjà-vu").unwrap().most_recent_id();
+
+        let results: Vec<_> = index.search("deja", IndexFilterMode::Global, 10).collect();
+        assert_eq!(results, vec![expected]);
+
+        let results: Vec<_> = index.search("déjà", IndexFilterMode::Global, 10).collect();
+        assert_eq!(results, vec![expected]);
+    }
+
+    /// A deterministic synthetic corpus large enough to cross the 10k
+    /// parallel-matching threshold, shaped like real history (repeated
+    /// prefixes, multi-word commands, a few accented entries).
+    fn equivalence_corpus() -> Vec<String> {
+        let prefixes = [
+            "git status",
+            "git push origin",
+            "cargo build --release",
+            "docker compose up",
+            "ls -la",
+            "echo déjà",
+            "kubectl get pods -n",
+            "make -j",
+        ];
+        (0..12_000)
+            .map(|i| format!("{} run-{i}", prefixes[i % prefixes.len()]))
+            .collect()
+    }
+
+    /// The parallel-matching switch must be invisible in the results:
+    /// frizbee's match_list_parallel must return exactly the same matches,
+    /// scores, and order as match_list for our config. Guards the 10k
+    /// threshold in search(), which machines cross as history grows.
+    #[test]
+    fn parallel_matching_equals_serial() {
+        let corpus = equivalence_corpus();
+        let haystack: Vec<&str> = corpus.iter().map(String::as_str).collect();
+        let config = frizbee::Config::default()
+            .casing(frizbee::CaseMatching::Smart)
+            .sort(frizbee::SortStrategy::IndexAsc);
+
+        // multi-atom and negated atoms exercise the progressive-filter path
+        for query in ["git", "git p", "docker compose up", "cargo !release", "g"] {
+            let serial = frizbee::Matcher::from_query(query, &config).match_list(&haystack);
+            for threads in [2, 8] {
+                let parallel = frizbee::Matcher::from_query(query, &config)
+                    .match_list_parallel(&haystack, threads);
+                assert_eq!(serial.len(), parallel.len(), "query {query:?}");
+                for (s, p) in serial.iter().zip(&parallel) {
+                    assert_eq!(
+                        (s.index, s.score),
+                        (p.index, p.score),
+                        "query {query:?}, {threads} threads"
+                    );
+                }
+            }
+        }
+    }
+
+    /// End-to-end determinism above the parallel threshold: the same query
+    /// against the same index must return the same ranked IDs every time.
+    #[test]
+    fn search_results_stable_above_parallel_threshold() {
+        let index = SearchIndex::default();
+        for (i, command) in equivalence_corpus().iter().enumerate() {
+            // spread timestamps so frecency scores actually differ
+            let ts = datetime!(2024-01-01 00:00 UTC) + time::Duration::minutes((i % 1440) as i64);
+            index.add_history(&make_history(command, "/tmp", ts));
+        }
+        assert!(
+            index.command_count() > 10_000,
+            "corpus must cross threshold"
+        );
+        index.rebuild_frecency(&Search::default());
+
+        for query in ["git", "git p", "docker compose up", "deja", ""] {
+            let first: Vec<_> = index.search(query, IndexFilterMode::Global, 200).collect();
+            for _ in 0..2 {
+                let again: Vec<_> = index.search(query, IndexFilterMode::Global, 200).collect();
+                assert_eq!(first, again, "query {query:?} returned unstable results");
+            }
+        }
+    }
+
+    /// Queries longer than frizbee can score are truncated instead of
+    /// panicking in Matcher::from_query.
+    #[test]
+    fn long_query_truncated_not_panicking() {
+        let index = SearchIndex::default();
+        index.add_history(&make_history(
+            "echo hello",
+            "/tmp",
+            datetime!(2024-01-01 10:00 UTC),
+        ));
+
+        let long_query = "a".repeat(5000);
+        let results: Vec<_> = index
+            .search(&long_query, IndexFilterMode::Global, 10)
+            .collect();
+        assert!(results.is_empty());
+    }
+
     #[rstest]
     #[case::all(&[], 7)]
     #[case::bash(&["bash"], 1)]
@@ -711,7 +1018,7 @@ mod tests {
     #[case::unknown(&[""], 4)]
     #[case::fish(&["fish"], 0)]
     #[case::fish_unknown(&["fish", ""], 4)]
-    async fn search_with_shell_filter(#[case] shells: &[&str], #[case] expected_count: usize) {
+    fn search_with_shell_filter(#[case] shells: &[&str], #[case] expected_count: usize) {
         let filter =
             OrFilter::from_list(shells.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
                 .unwrap_or_default();
@@ -731,7 +1038,7 @@ mod tests {
             index.add_history(&history);
         }
 
-        let results = index.search("echo", IndexFilterMode::Global, 100).await;
+        let results: Vec<_> = index.search("echo", IndexFilterMode::Global, 100).collect();
         assert_eq!(results.len(), expected_count, "{results:?}");
     }
 }

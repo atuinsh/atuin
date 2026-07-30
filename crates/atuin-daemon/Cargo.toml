@@ -40,7 +40,7 @@ futures = "0.3"
 hyper-util = "0.1"
 
 rand.workspace = true
-atuin-nucleo = { workspace = true }
+frizbee = { workspace = true }
 
 
 [target.'cfg(target_os = "linux")'.dependencies]

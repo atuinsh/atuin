@@ -133,16 +133,6 @@ fn cases() -> Vec<Case> {
     cases
 }
 
-fn runtime() -> &'static tokio::runtime::Runtime {
-    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("failed to build tokio runtime")
-    })
-}
-
 fn commands() -> &'static Vec<String> {
     static COMMANDS: OnceLock<Vec<String>> = OnceLock::new();
     COMMANDS.get_or_init(|| {
@@ -208,20 +198,17 @@ fn index(scale: usize) -> Arc<SearchIndex> {
             .into();
         index.add_history(&history);
     }
-    let rt = runtime();
-    rt.block_on(index.rebuild_frecency(&SearchSettings::default()));
+    index.rebuild_frecency(&SearchSettings::default());
     eprintln!("index ready: {} unique commands", index.command_count());
 
     for query in QUERIES {
-        let n = rt
-            .block_on(index.search(query, IndexFilterMode::Global, LIMIT))
-            .len();
+        let n = index.search(query, IndexFilterMode::Global, LIMIT).count();
         eprintln!("  {query:?}: {n} results (limit {LIMIT})");
     }
     let dir = filter_dir();
-    let n = rt
-        .block_on(index.search("git", IndexFilterMode::Directory(dir.clone()), LIMIT))
-        .len();
+    let n = index
+        .search("git", IndexFilterMode::Directory(dir.clone()), LIMIT)
+        .count();
     eprintln!("  \"git\" in {dir:?}: {n} results (limit {LIMIT})");
     assert!(n > 0, "directory filter matched nothing; filter is broken");
 
@@ -233,11 +220,10 @@ fn index(scale: usize) -> Arc<SearchIndex> {
 #[divan::bench(args = cases())]
 fn daemon_search(bencher: divan::Bencher, case: &Case) {
     let index = index(case.scale);
-    let rt = runtime();
     let filter = if case.directory_filter {
         IndexFilterMode::Directory(filter_dir())
     } else {
         IndexFilterMode::Global
     };
-    bencher.bench(|| rt.block_on(index.search(case.query, filter.clone(), LIMIT)));
+    bencher.bench(|| index.search(case.query, filter.clone(), LIMIT).count());
 }

@@ -5,10 +5,7 @@ use atuin_client::{
     settings::Settings,
 };
 use atuin_daemon::client::{DaemonClientErrorKind, SearchClient, SearchParams, classify_error};
-use atuin_nucleo_matcher::{
-    Config, Matcher, Utf32Str,
-    pattern::{CaseMatching, Normalization, Pattern},
-};
+use atuin_daemon::search::{normalize_diacritics, truncate_query};
 use eyre::Result;
 use tracing::{Level, debug, instrument, span};
 use uuid::Uuid;
@@ -230,16 +227,93 @@ impl SearchEngine for Search {
             return super::db::get_highlight_indices_fulltext(command, search_input);
         }
 
-        let mut matcher = Matcher::new(Config::DEFAULT);
-        let pattern = Pattern::parse(search_input, CaseMatching::Smart, Normalization::Smart);
+        // Mirror the daemon's query handling: truncate before frizbee sees
+        // the query (a long enough atom panics Matcher::from_query) and
+        // normalize diacritics so highlighting agrees with matching
+        let search_input = normalize_diacritics(truncate_query(search_input));
+        let matchable = normalize_diacritics(command);
 
-        let mut indices: Vec<u32> = Vec::new();
-        let mut haystack_buf = Vec::new();
+        let config = frizbee::Config::default().casing(frizbee::CaseMatching::Smart);
+        let mut matcher = frizbee::Matcher::from_query(&search_input, &config);
+        let Some(result) = matcher.match_one_indices(&matchable, 0) else {
+            return Vec::new();
+        };
 
-        let haystack = Utf32Str::new(command, &mut haystack_buf);
-        pattern.indices(haystack, &mut matcher, &mut indices);
+        // frizbee returns indices in reverse order, as byte offsets into
+        // `matchable` (every byte of a matched multibyte char); the renderer
+        // tests byte offsets into `command`, whose byte layout differs from
+        // `matchable` wherever normalization shrank a char (é → e).
+        // Normalization maps char to char, so hop matchable-byte → char
+        // position → command-byte.
+        let mut indices = result.indices;
+        indices.sort_unstable();
+        indices.dedup();
+        if command.is_ascii() {
+            indices.into_iter().map(|i| i as usize).collect()
+        } else {
+            let matchable_byte_to_char: std::collections::HashMap<usize, usize> = matchable
+                .char_indices()
+                .enumerate()
+                .map(|(char_idx, (byte_idx, _))| (byte_idx, char_idx))
+                .collect();
+            let command_char_to_byte: Vec<usize> = command
+                .char_indices()
+                .map(|(byte_idx, _)| byte_idx)
+                .collect();
+            let mut bytes: Vec<usize> = indices
+                .into_iter()
+                .filter_map(|i| matchable_byte_to_char.get(&(i as usize)))
+                .filter_map(|&char_idx| command_char_to_byte.get(char_idx).copied())
+                .collect();
+            bytes.dedup();
+            bytes
+        }
+    }
+}
 
-        // Convert u32 indices to usize
-        indices.into_iter().map(|i| i as usize).collect()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test: the daemon truncates queries before frizbee sees
+    /// them, but highlighting used the raw input — a pasted query with an
+    /// atom past frizbee's needle limit panicked in `Matcher::from_query`.
+    #[test]
+    fn long_query_does_not_panic_highlighting() {
+        let engine = Search::new(&Settings::default());
+        let long_query = "a".repeat(5000);
+        let indices = engine.get_highlight_indices("echo hello", &long_query);
+        assert!(indices.is_empty());
+    }
+
+    /// Highlighting matches accent-insensitively, like the daemon's index,
+    /// and returns byte offsets into the original command — the renderer
+    /// tests each display char's source byte against these ("echo déjà" is
+    /// e0 c1 h2 o3 ␣4 d5 é6 j8 à9; é and à are two bytes each).
+    #[test]
+    fn accented_command_highlights_unaccented_query() {
+        let engine = Search::new(&Settings::default());
+        let indices = engine.get_highlight_indices("echo déjà", "deja");
+        assert_eq!(indices, vec![5, 6, 8, 9]);
+    }
+
+    /// A multibyte char before the match must not shift the highlight:
+    /// frizbee's offsets are into the normalized text ("emacs test"), which
+    /// is one byte shorter than the command wherever é shrank to e.
+    #[test]
+    fn multibyte_char_before_match_does_not_shift_highlight() {
+        let engine = Search::new(&Settings::default());
+        let indices = engine.get_highlight_indices("émacs test", "test");
+        assert_eq!(indices, vec![7, 8, 9, 10]);
+    }
+
+    /// Non-Latin text doesn't normalize, so matchable and command share a
+    /// byte layout; offsets still land on the match ("日本 git" is 日0 本3
+    /// ␣6 g7 i8 t9).
+    #[test]
+    fn cjk_prefix_highlights_at_correct_bytes() {
+        let engine = Search::new(&Settings::default());
+        let indices = engine.get_highlight_indices("日本 git", "git");
+        assert_eq!(indices, vec![7, 8, 9]);
     }
 }

@@ -14,7 +14,6 @@ use tokio::sync::RwLock;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{Level, debug, error, info, instrument, span, trace};
-use uuid::Uuid;
 
 use crate::{
     daemon::{Component, DaemonHandle},
@@ -91,7 +90,7 @@ where
     R: Future<Output: Deref<Target = SearchIndex>>,
 {
     let settings = handle.settings().await;
-    index().await.rebuild_frecency(&settings.search).await;
+    index().await.rebuild_frecency(&settings.search);
     info!("Frecency map built");
 }
 
@@ -387,22 +386,23 @@ impl SearchSvc for SearchGrpcService {
                 };
 
                 // Perform the search
-                let history_ids = span!(Level::TRACE, "daemon_search_query", %query, query_id)
-                    .in_scope(|| async { index.search(&query, index_filter, RESULTS_LIMIT).await })
-                    .await;
+                let history_ids: Vec<Vec<u8>> =
+                    span!(Level::TRACE, "daemon_search_query", %query, query_id).in_scope(|| {
+                        index
+                            .search(&query, index_filter, RESULTS_LIMIT)
+                            .map(Vec::from)
+                            .collect()
+                    });
                 drop(index);
 
-                // Convert history IDs to bytes
-                let ids: Vec<Vec<u8>> = history_ids
-                    .iter()
-                    .filter_map(|id| {
-                        Uuid::parse_str(id)
-                            .ok()
-                            .map(|uuid| uuid.as_bytes().to_vec())
-                    })
-                    .collect();
-
-                if tx.send(Ok(SearchResponse { query_id, ids })).await.is_err() {
+                if tx
+                    .send(Ok(SearchResponse {
+                        query_id,
+                        ids: history_ids,
+                    }))
+                    .await
+                    .is_err()
+                {
                     break; // Client disconnected
                 }
             }
