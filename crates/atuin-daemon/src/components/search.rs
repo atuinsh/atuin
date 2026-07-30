@@ -386,14 +386,23 @@ impl SearchSvc for SearchGrpcService {
                 };
 
                 // Perform the search
-                let history_ids = span!(Level::TRACE, "daemon_search_query", %query, query_id)
-                    .in_scope(|| index.search(&query, index_filter, RESULTS_LIMIT));
+                let history_ids: Vec<Vec<u8>> =
+                    span!(Level::TRACE, "daemon_search_query", %query, query_id).in_scope(|| {
+                        index
+                            .search(&query, index_filter, RESULTS_LIMIT)
+                            .map(Vec::from)
+                            .collect()
+                    });
                 drop(index);
 
-                // Convert UUID arrays to `Vec`s
-                let ids: Vec<Vec<u8>> = history_ids.into_iter().map(Vec::from).collect();
-
-                if tx.send(Ok(SearchResponse { query_id, ids })).await.is_err() {
+                if tx
+                    .send(Ok(SearchResponse {
+                        query_id,
+                        ids: history_ids,
+                    }))
+                    .await
+                    .is_err()
+                {
                     break; // Client disconnected
                 }
             }

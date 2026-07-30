@@ -398,10 +398,15 @@ impl SearchIndex {
 
     /// Search for commands matching a query.
     ///
-    /// Returns a list of history IDs (most recent invocation per command).
+    /// Returns an iterator of history IDs as parsed UUIDs (most recent invocation per command).
     /// Uses precomputed global frecency for scoring if available.
     #[instrument(skip_all, level = tracing::Level::TRACE, name = "index_search", fields(query = %query))]
-    pub fn search(&self, query: &str, filter_mode: IndexFilterMode, limit: u32) -> Vec<[u8; 16]> {
+    pub fn search(
+        &self,
+        query: &str,
+        filter_mode: IndexFilterMode,
+        limit: u32,
+    ) -> impl Iterator<Item = [u8; 16]> {
         // Get precomputed frecency map (may be None if not yet computed)
         let frecency_map = self.frecency_map.read().unwrap().clone();
 
@@ -500,19 +505,12 @@ impl SearchIndex {
                 scored.truncate(limit);
             }
             scored.sort_unstable();
-
-            scored
-                .iter()
-                .filter_map(|score| {
-                    self.commands
-                        .get(
-                            haystack[candidates[score.index as usize] as usize]
-                                .original
-                                .as_ref(),
-                        )
-                        .map(|data| data.most_recent_id())
-                })
-                .collect()
+            scored.into_iter().filter_map(move |score| {
+                let haystack_index = candidates[score.index as usize];
+                self.commands
+                    .get(haystack[haystack_index as usize].original.as_ref())
+                    .map(|data| data.most_recent_id())
+            })
         })
     }
 
@@ -781,20 +779,22 @@ mod tests {
         assert_eq!(index.command_count(), 3);
 
         // Search for "git" - should match 2 commands
-        let results = index.search("git", IndexFilterMode::Global, 10);
+        let results: Vec<_> = index.search("git", IndexFilterMode::Global, 10).collect();
         assert_eq!(results.len(), 2);
 
         // Search with directory filter
-        let results = index.search(
-            "",
-            IndexFilterMode::Directory(
-                "/home/user/project"
-                    .display_rich()
-                    .trailing_slash(true)
-                    .to_string(),
-            ),
-            10,
-        );
+        let results: Vec<_> = index
+            .search(
+                "",
+                IndexFilterMode::Directory(
+                    "/home/user/project"
+                        .display_rich()
+                        .trailing_slash(true)
+                        .to_string(),
+                ),
+                10,
+            )
+            .collect();
         assert_eq!(results.len(), 2); // git status and git commit
     }
 
@@ -822,7 +822,9 @@ mod tests {
 
         index.rebuild_frecency(&Search::default());
 
-        let results = index.search("foo bar", IndexFilterMode::Global, 10);
+        let results: Vec<_> = index
+            .search("foo bar", IndexFilterMode::Global, 10)
+            .collect();
         assert_eq!(results.len(), 2);
         assert_eq!(
             results[0],
@@ -855,7 +857,7 @@ mod tests {
 
         index.rebuild_frecency(&Search::default());
 
-        let results = index.search("echo", IndexFilterMode::Global, 10);
+        let results: Vec<_> = index.search("echo", IndexFilterMode::Global, 10).collect();
         assert_eq!(results.len(), 2);
         assert_eq!(
             results[0],
@@ -885,10 +887,10 @@ mod tests {
 
         let expected = index.commands.get("echo déjà-vu").unwrap().most_recent_id();
 
-        let results = index.search("deja", IndexFilterMode::Global, 10);
+        let results: Vec<_> = index.search("deja", IndexFilterMode::Global, 10).collect();
         assert_eq!(results, vec![expected.clone()]);
 
-        let results = index.search("déjà", IndexFilterMode::Global, 10);
+        let results: Vec<_> = index.search("déjà", IndexFilterMode::Global, 10).collect();
         assert_eq!(results, vec![expected]);
     }
 
@@ -958,9 +960,9 @@ mod tests {
         index.rebuild_frecency(&Search::default());
 
         for query in ["git", "git p", "docker compose up", "deja", ""] {
-            let first = index.search(query, IndexFilterMode::Global, 200);
+            let first: Vec<_> = index.search(query, IndexFilterMode::Global, 200).collect();
             for _ in 0..2 {
-                let again = index.search(query, IndexFilterMode::Global, 200);
+                let again: Vec<_> = index.search(query, IndexFilterMode::Global, 200).collect();
                 assert_eq!(first, again, "query {query:?} returned unstable results");
             }
         }
@@ -978,7 +980,9 @@ mod tests {
         ));
 
         let long_query = "a".repeat(5000);
-        let results = index.search(&long_query, IndexFilterMode::Global, 10);
+        let results: Vec<_> = index
+            .search(&long_query, IndexFilterMode::Global, 10)
+            .collect();
         assert!(results.is_empty());
     }
 
@@ -1010,7 +1014,7 @@ mod tests {
             index.add_history(&history);
         }
 
-        let results = index.search("echo", IndexFilterMode::Global, 100);
+        let results: Vec<_> = index.search("echo", IndexFilterMode::Global, 100).collect();
         assert_eq!(results.len(), expected_count, "{results:?}");
     }
 }
