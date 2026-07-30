@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use ambassador::{Delegate, delegatable_trait};
+use enum_dispatch::enum_dispatch;
 use atuin_client::{
     database::Sqlite as HistoryDatabase, encryption, record::sqlite_store::SqliteStore,
     settings::Settings,
@@ -213,7 +213,7 @@ impl std::fmt::Debug for DaemonHandle {
 ///     }
 /// }
 /// ```
-#[delegatable_trait]
+#[enum_dispatch]
 #[allow(async_fn_in_trait)]
 pub trait IsComponent: Send + Sync {
     /// Human-readable name for logging and debugging.
@@ -240,8 +240,7 @@ pub trait IsComponent: Send + Sync {
 }
 
 /// Static-dispatch enum over the daemon components.
-#[derive(Delegate, derive_more::From)]
-#[delegate(IsComponent)]
+#[enum_dispatch(IsComponent)]
 pub enum Component {
     History(HistoryComponent),
     Search(SearchComponent),

@@ -40,18 +40,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
-name = "ambassador"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd3d4da7fddbc6567cbd7b5c30364f91313701b1857ab5b925eb3acf06162eed"
-dependencies = [
- "itertools 0.10.5",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -228,7 +216,6 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 name = "atuin"
 version = "18.19.0-beta.1"
 dependencies = [
- "ambassador",
  "arboard",
  "async-trait",
  "atuin-ai",
@@ -251,6 +238,7 @@ dependencies = [
  "crossterm",
  "daemonize",
  "derive_more",
+ "enum_dispatch",
  "eyre",
  "frizbee",
  "fs-err",
@@ -258,7 +246,7 @@ dependencies = [
  "fuzzy-matcher",
  "indicatif",
  "interim",
- "itertools 0.14.0",
+ "itertools",
  "norm",
  "open",
  "proptest",
@@ -296,7 +284,6 @@ dependencies = [
 name = "atuin-ai"
 version = "18.19.0-beta.1"
 dependencies = [
- "ambassador",
  "async-stream",
  "async-trait",
  "atuin-client",
@@ -308,6 +295,7 @@ dependencies = [
  "crossterm",
  "derive_more",
  "directories",
+ "enum_dispatch",
  "eventsource-stream",
  "eye_declare",
  "eye_declare_engine",
@@ -354,7 +342,6 @@ dependencies = [
 name = "atuin-client"
 version = "18.19.0-beta.1"
 dependencies = [
- "ambassador",
  "async-trait",
  "atuin-common",
  "atuin-domain",
@@ -366,13 +353,14 @@ dependencies = [
  "crypto_secretbox",
  "derive_more",
  "directories",
+ "enum_dispatch",
  "eyre",
  "fs-err",
  "futures",
  "humantime",
  "indicatif",
  "interim",
- "itertools 0.14.0",
+ "itertools",
  "memchr",
  "minspan",
  "notify",
@@ -417,7 +405,7 @@ dependencies = [
  "directories",
  "eyre",
  "getrandom 0.4.3",
- "itertools 0.14.0",
+ "itertools",
  "pretty_assertions",
  "proptest",
  "rstest",
@@ -441,13 +429,13 @@ dependencies = [
 name = "atuin-daemon"
 version = "18.19.0-beta.1"
 dependencies = [
- "ambassador",
  "atuin-client",
  "atuin-common",
  "atuin-dotfiles",
  "atuin-history",
  "dashmap",
  "derive_more",
+ "enum_dispatch",
  "eyre",
  "frizbee",
  "futures",
@@ -1084,7 +1072,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2fd05482a95823ffe421e8a9ba24fa22a6a30d594e2c60455cbb43a41bf2d8fa"
 dependencies = [
  "divan-macros",
- "itertools 0.14.0",
+ "itertools",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
@@ -1686,6 +1674,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "enum_dispatch"
+version = "0.3.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa18ce2bc66555b3218614519ac839ddb759a7d6720732f979ef8d13be147ecd"
+dependencies = [
+ "once_cell",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2644,15 +2644,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1082f0c48f143442a1ac6122f67e360ceee130b967af4d50996e5154a45df46"
 dependencies = [
  "nom 8.0.0",
-]
-
-[[package]]
-name = "itertools"
-version = "0.10.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-dependencies = [
- "either",
 ]
 
 [[package]]
@@ -3739,7 +3730,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools",
  "log",
  "multimap",
  "petgraph",
@@ -3760,7 +3751,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -4011,7 +4002,7 @@ dependencies = [
  "compact_str",
  "hashbrown 0.16.1",
  "indoc",
- "itertools 0.14.0",
+ "itertools",
  "kasuari",
  "lru",
  "strum",
@@ -4063,7 +4054,7 @@ dependencies = [
  "hashbrown 0.16.1",
  "indoc",
  "instability",
- "itertools 0.14.0",
+ "itertools",
  "line-clipping",
  "ratatui-core",
  "strum",
@@ -5999,7 +5990,7 @@ version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "16b380a1238663e5f8a691f9039c73e1cdae598a30e9855f541d29b08b53e9a5"
 dependencies = [
- "itertools 0.14.0",
+ "itertools",
  "unicode-segmentation",
  "unicode-width 0.2.2",
 ]

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ambassador::{delegatable_trait, Delegate};
+use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result, bail};
 use reqwest::{StatusCode, Url, header::USER_AGENT};
 use serde::Deserialize;
@@ -43,7 +43,7 @@ pub enum MutateResponse {
 ///
 /// CLI commands use this trait so they don't need to know which backend is
 /// active — they just prompt for input and call these methods.
-#[delegatable_trait]
+#[enum_dispatch]
 #[allow(async_fn_in_trait)]
 pub trait IsAuthClient: Send + Sync {
     /// Log in with username + password, optionally providing a TOTP code.
@@ -74,8 +74,7 @@ pub trait IsAuthClient: Send + Sync {
 }
 
 /// Static-dispatch enum over the two auth backends.
-#[derive(Delegate)]
-#[delegate(IsAuthClient)]
+#[enum_dispatch(IsAuthClient)]
 pub enum AuthClient {
     Legacy(LegacyAuthClient),
     Hub(HubAuthClient),

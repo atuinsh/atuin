@@ -18,7 +18,7 @@ daemon = []
 tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
 
 [dependencies]
-ambassador = { workspace = true }
+enum_dispatch = { workspace = true }
 async-trait = { workspace = true }
 atuin-client = { workspace = true }
 derive_more = { workspace = true }

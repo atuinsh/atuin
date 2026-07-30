@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use ambassador::{Delegate, delegatable_trait};
+use enum_dispatch::enum_dispatch;
 use atuin_client::history::AuthorPattern;
 use atuin_common::ansi;
 use atuin_common::filter::OrFilter;
@@ -158,8 +158,8 @@ pub(crate) struct ToolPreview {
 }
 
 /// A tool call from the server, with parsed input parameters.
-#[derive(Debug, Clone, derive_more::From, Delegate)]
-#[delegate(PermissibleToolCall)]
+#[derive(Debug, Clone)]
+#[enum_dispatch(PermissibleToolCall)]
 pub(crate) enum ClientToolCall {
     Read(ReadToolCall),
     Edit(EditToolCall),
@@ -239,7 +239,7 @@ impl ClientToolCall {
 }
 
 /// A trait for tool calls that can be checked against permission rules.
-#[delegatable_trait]
+#[enum_dispatch]
 pub(crate) trait PermissibleToolCall {
     /// Checks if this tool call matches the given permission rule.
     fn matches_rule(&self, rule: &Rule) -> bool;

@@ -1,4 +1,4 @@
-use ambassador::{Delegate, delegatable_trait};
+use enum_dispatch::enum_dispatch;
 use atuin_client::{
     database::{Context, Database, DbSearchMode, OptFilters},
     history::{History, HistoryId, all_user_author_filter},
@@ -65,7 +65,7 @@ impl SearchState {
     }
 }
 
-#[delegatable_trait]
+#[enum_dispatch]
 #[allow(async_fn_in_trait)]
 pub trait IsSearchEngine: Send + Sync + 'static {
     async fn full_query(
@@ -102,8 +102,7 @@ pub trait IsSearchEngine: Send + Sync + 'static {
 }
 
 /// Static-dispatch enum over the search-engine backends.
-#[derive(Delegate)]
-#[delegate(IsSearchEngine)]
+#[enum_dispatch(IsSearchEngine)]
 pub enum SearchEngine {
     Db(db::Search),
     Skim(skim::Search),
