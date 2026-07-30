@@ -256,6 +256,16 @@ jobs:
       - name: Format
         run: cargo fmt -- --check
 
+  deny:
+    runs-on: depot-ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
   package:
     runs-on: depot-ubuntu-24.04
 
