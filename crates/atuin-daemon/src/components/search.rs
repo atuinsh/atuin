@@ -392,10 +392,7 @@ impl SearchSvc for SearchGrpcService {
                 drop(index);
 
                 // Convert UUID arrays to `Vec`s
-                let ids: Vec<Vec<u8>> = history_ids
-                    .into_iter()
-                    .map(Vec::from)
-                    .collect();
+                let ids: Vec<Vec<u8>> = history_ids.into_iter().map(Vec::from).collect();
 
                 if tx.send(Ok(SearchResponse { query_id, ids })).await.is_err() {
                     break; // Client disconnected

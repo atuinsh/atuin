@@ -112,8 +112,17 @@ pub struct CommandData {
 
 impl CommandData {
     /// Create a new CommandData from a history entry.
-    /// Returns None if the history entry has invalid UUIDs.
-    pub fn new(history: &History, interner: &ThreadedRodeo, haystack_index: u32) -> Option<Self> {
+    ///
+    /// Returns [`None`] if the history entry has invalid UUIDs or if the haystack index exceeds
+    /// 2^32.
+    pub fn new(history: &History, haystack_index: usize, interner: &ThreadedRodeo) -> Option<Self> {
+        let Ok(haystack_index) = u32::try_from(haystack_index) else {
+            // TODO: It's very unlikely that we'll have more than 2^32 history entries, but if that
+            // ends up being a realistic possibility, we should handle this case better than simply
+            // dropping new commands from the index.
+            return None;
+        };
+
         let history_id = parse_uuid_bytes(&history.id.0)?;
         let session = parse_uuid_bytes(&history.session)?;
         let timestamp = history.timestamp.unix_timestamp();
@@ -214,6 +223,36 @@ pub enum IndexFilterMode {
     Host(String),
     /// Filter to commands run in a specific session.
     Session(String),
+}
+
+/// A "compiled" form of [`IndexFilterMode`], with most of the strings interned and parsed.
+enum CompiledFilter<'a> {
+    All,
+    Directory(Spur),
+    Workspace(&'a str),
+    Host(Spur),
+    Session([u8; 16]),
+    /// Used when a target (host/dir/session) has never been seen by the index -- nothing can match.
+    Nothing,
+}
+
+impl IndexFilterMode {
+    /// "Compile" this filter by interning and parsing its strings.
+    fn compile(&self, interner: &ThreadedRodeo) -> CompiledFilter<'_> {
+        match self {
+            Self::Global => CompiledFilter::All,
+            Self::Directory(dir) => interner
+                .get(dir)
+                .map_or(CompiledFilter::Nothing, CompiledFilter::Directory),
+            Self::Workspace(prefix) => CompiledFilter::Workspace(&prefix),
+            Self::Host(hostname) => interner
+                .get(hostname)
+                .map_or(CompiledFilter::Nothing, CompiledFilter::Host),
+            Self::Session(session) => {
+                parse_uuid_bytes(session).map_or(CompiledFilter::Nothing, CompiledFilter::Session)
+            }
+        }
+    }
 }
 
 /// Shareable frecency map: command -> frecency score.
@@ -322,13 +361,9 @@ impl SearchIndex {
                     entry.get_mut().add_invocation(history, &self.interner);
                 }
                 dashmap::Entry::Vacant(vacant) => {
-                    // TODO: It's very unlikely that we'll have more than 2^32 history entries, but
-                    // we should handle this case better. Truncating the index results in pushing
-                    // a command with an incorrect haystack index.
-                    let Some(data) =
-                        CommandData::new(history, &self.interner, haystack.len() as u32)
+                    let Some(data) = CommandData::new(history, haystack.len(), &self.interner)
                     else {
-                        return; // Invalid UUID, skip this entry
+                        return; // Skip invalid commands
                     };
                     haystack.push(HaystackEntry::new(vacant.key().clone()));
                     vacant.insert(data);
@@ -371,52 +406,31 @@ impl SearchIndex {
         let query = normalize_diacritics(query);
 
         let haystack = self.haystack.read().expect("haystack lock poisoned");
-
-        // Filter target resolved once per search (intern/parse the string
-        // here) so the per-command checks below are integer-set lookups
-        enum Filter<'a> {
-            All,
-            Dir(Spur),
-            Workspace(&'a str),
-            Host(Spur),
-            Session([u8; 16]),
-            /// Target has never been seen by the index; nothing can match
-            Nothing,
-        }
-        let filter = match &filter_mode {
-            IndexFilterMode::Global => Filter::All,
-            IndexFilterMode::Directory(dir) => {
-                self.interner.get(dir).map_or(Filter::Nothing, Filter::Dir)
-            }
-            IndexFilterMode::Workspace(prefix) => Filter::Workspace(&prefix),
-            IndexFilterMode::Host(hostname) => self
-                .interner
-                .get(hostname)
-                .map_or(Filter::Nothing, Filter::Host),
-            IndexFilterMode::Session(session) => {
-                parse_uuid_bytes(session).map_or(Filter::Nothing, Filter::Session)
-            }
-        };
+        let filter = filter_mode.compile(&self.interner);
 
         // Filter pre-pass: collect the candidate commands for this filter mode. This is sorted
         // vector of haystack indices.
         let candidates: Vec<u32> =
             tracing::span!(Level::TRACE, "index_search_filter").in_scope(|| match &filter {
-                Filter::All => haystack.iter().enumerate().map(|(i, _)| i as u32).collect(),
-                Filter::Nothing => Vec::new(),
+                CompiledFilter::All => haystack.iter().enumerate().map(|(i, _)| i as u32).collect(),
+                CompiledFilter::Nothing => Vec::new(),
                 _ => {
                     let mut indices: Vec<u32> = self
                         .commands
                         .iter()
                         .filter(|entry| (entry.haystack_index as usize) < haystack.len())
                         .filter(|entry| match &filter {
-                            Filter::All | Filter::Nothing => unreachable!(),
-                            Filter::Dir(dir) => entry.has_invocation_in_dir(*dir),
-                            Filter::Workspace(prefix) => {
+                            CompiledFilter::All | CompiledFilter::Nothing => unreachable!(),
+                            CompiledFilter::Directory(dir) => entry.has_invocation_in_dir(*dir),
+                            CompiledFilter::Workspace(prefix) => {
                                 entry.has_invocation_in_workspace(prefix, &self.interner)
                             }
-                            Filter::Host(hostname) => entry.has_invocation_on_host(*hostname),
-                            Filter::Session(session) => entry.has_invocation_in_session(session),
+                            CompiledFilter::Host(hostname) => {
+                                entry.has_invocation_on_host(*hostname)
+                            }
+                            CompiledFilter::Session(session) => {
+                                entry.has_invocation_in_session(session)
+                            }
                         })
                         .map(|entry| entry.haystack_index)
                         .collect();
@@ -650,7 +664,7 @@ mod tests {
         let history1 = make_history("git status", dir1, datetime!(2024-01-01 10:00 UTC));
         let history2 = make_history("git status", dir2, datetime!(2024-01-01 12:00 UTC));
 
-        let mut data = CommandData::new(&history1, &interner, 0).unwrap();
+        let mut data = CommandData::new(&history1, 0, &interner).unwrap();
         assert_eq!(data.global_frecency.count, 1);
         let id1 = data.most_recent_id();
 
@@ -675,7 +689,7 @@ mod tests {
         let h1 = make_history("git status", dir1, datetime!(2024-01-01 10:00 UTC));
         let h2 = make_history("git status", dir2, datetime!(2024-01-01 12:00 UTC));
 
-        let mut data = CommandData::new(&h1, &interner, 0).unwrap();
+        let mut data = CommandData::new(&h1, 0, &interner).unwrap();
         data.add_invocation(&h2, &interner);
 
         let (check1, check2, check3) = if cfg!(windows) {
