@@ -256,6 +256,32 @@ jobs:
       - name: Format
         run: cargo fmt -- --check
 
+  deny:
+    runs-on: depot-ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+
+      - uses: taiki-e/install-action@v2
+        name: Install cargo-deny
+        with:
+          tool: cargo-deny
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-deny-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run cargo deny
+        run: cargo deny check
+
   package:
     runs-on: depot-ubuntu-24.04
 
