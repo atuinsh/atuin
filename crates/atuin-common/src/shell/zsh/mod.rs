@@ -13,7 +13,7 @@ use tracing::instrument;
 
 use bstr::BString;
 
-use super::{Alias, AliasValue, AliasesError, IsShell, Rendered, RunError, Var, posix};
+use super::{Alias, AliasValue, AliasesError, Rendered, RunError, Shell, Var, posix};
 
 mod alias;
 
@@ -141,7 +141,7 @@ impl Zsh {
 }
 
 #[async_trait::async_trait]
-impl IsShell for Zsh {
+impl Shell for Zsh {
     fn canonical_name(&self) -> &'static str {
         "zsh"
     }

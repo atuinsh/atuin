@@ -13,7 +13,7 @@ use futures::{
 use tracing::instrument;
 
 use super::{
-    Alias, AliasValue, AliasesError, IsShell, Rendered, RunError, Var,
+    Alias, AliasValue, AliasesError, Rendered, RunError, Shell, Var,
     posix::{self, Aliases},
 };
 
@@ -109,7 +109,7 @@ impl Bash {
 }
 
 #[async_trait::async_trait]
-impl IsShell for Bash {
+impl Shell for Bash {
     fn canonical_name(&self) -> &'static str {
         "bash"
     }

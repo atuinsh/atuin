@@ -46,7 +46,7 @@ pub enum RunError {
 }
 
 #[async_trait::async_trait]
-pub trait IsShell: Send + Sync {
+pub trait Shell: Send + Sync {
     /// Get the name of this shell that we use internal to atuin.
     fn canonical_name(&self) -> &'static str;
 
@@ -80,13 +80,13 @@ pub trait IsShell: Send + Sync {
     fn render_vars(&self, vars: &[Var]) -> Rendered;
 }
 
-/// Compile-time proof that `IsShell` is object-safe. If a method signature ever
+/// Compile-time proof that `Shell` is object-safe. If a method signature ever
 /// reintroduces a generic, associated type, or `impl Trait` argument, this fails
 /// to compile.
-const _: fn(&dyn IsShell) = |_shell| {};
+const _: fn(&dyn Shell) = |_shell| {};
 
 #[derive(PartialEq, derive_more::Display)]
-pub enum Shell {
+pub enum ShellKind {
     #[display("sh")]
     Sh,
     #[display("bash")]
@@ -114,8 +114,8 @@ pub enum ShellError {
     ExecError(String),
 }
 
-impl Shell {
-    pub fn current() -> Shell {
+impl ShellKind {
+    pub fn current() -> ShellKind {
         let sys = System::new_all();
 
         let process = sys
@@ -129,32 +129,32 @@ impl Shell {
         let shell = parent.name().trim().to_lowercase();
         let shell = shell.strip_prefix('-').unwrap_or(&shell);
 
-        Shell::from_string(shell.to_string())
+        ShellKind::from_string(shell.to_string())
     }
 
-    pub fn from_env() -> Shell {
-        std::env::var("ATUIN_SHELL").map_or(Shell::Unknown, |shell| {
-            Shell::from_string(shell.trim().to_lowercase())
+    pub fn from_env() -> ShellKind {
+        std::env::var("ATUIN_SHELL").map_or(ShellKind::Unknown, |shell| {
+            ShellKind::from_string(shell.trim().to_lowercase())
         })
     }
 
     /// Best-effort attempt to determine the default shell
     /// This implementation will be different across different platforms
-    /// Caller should ensure to handle Shell::Unknown correctly
-    pub fn default_shell() -> Result<Shell, ShellError> {
+    /// Caller should ensure to handle ShellKind::Unknown correctly
+    pub fn default_shell() -> Result<ShellKind, ShellError> {
         let sys = System::name().unwrap_or("".to_string()).to_lowercase();
 
         // TODO: Support Linux
         // I'm pretty sure we can use /etc/passwd there, though there will probably be some issues
         let path = if sys.contains("darwin") {
             // This works in my testing so far
-            Shell::Sh.run_interactive([
+            ShellKind::Sh.run_interactive([
                 "dscl localhost -read \"/Local/Default/Users/$USER\" shell | awk '{print $2}'",
             ])?
         } else if cfg!(windows) {
-            return Ok(Shell::Powershell);
+            return Ok(ShellKind::Powershell);
         } else {
-            Shell::Sh.run_interactive(["getent passwd $LOGNAME | cut -d: -f7"])?
+            ShellKind::Sh.run_interactive(["getent passwd $LOGNAME | cut -d: -f7"])?
         };
 
         let path = Path::new(path.trim());
@@ -164,38 +164,38 @@ impl Shell {
             return Err(ShellError::NotSupported);
         }
 
-        Ok(Shell::from_string(
+        Ok(ShellKind::from_string(
             shell.unwrap().to_string_lossy().to_string(),
         ))
     }
 
-    pub fn from_string(name: String) -> Shell {
+    pub fn from_string(name: String) -> ShellKind {
         match name.as_str() {
-            "bash" => Shell::Bash,
-            "fish" => Shell::Fish,
-            "zsh" => Shell::Zsh,
-            "xonsh" => Shell::Xonsh,
-            "nu" => Shell::Nu,
-            "sh" => Shell::Sh,
-            "powershell" => Shell::Powershell,
+            "bash" => ShellKind::Bash,
+            "fish" => ShellKind::Fish,
+            "zsh" => ShellKind::Zsh,
+            "xonsh" => ShellKind::Xonsh,
+            "nu" => ShellKind::Nu,
+            "sh" => ShellKind::Sh,
+            "powershell" => ShellKind::Powershell,
 
-            _ => Shell::Unknown,
+            _ => ShellKind::Unknown,
         }
     }
 
-    /// Construct the object-safe [`IsShell`] interface for this shell, if atuin
+    /// Construct the object-safe [`Shell`] interface for this shell, if atuin
     /// has an implementation for it (`None` for nu, powershell and unknown).
     ///
     /// The executable is resolved from `$PATH` by its canonical name when a
     /// command is run.
-    pub fn interface(&self) -> Option<Box<dyn IsShell>> {
-        let shell: Box<dyn IsShell> = match self {
-            Shell::Bash => Box::new(bash::Bash::new(Path::new("bash"))),
-            Shell::Sh => Box::new(sh::Sh::new(Path::new("sh"))),
-            Shell::Zsh => Box::new(zsh::Zsh::new(Path::new("zsh"))),
-            Shell::Fish => Box::new(fish::Fish::new(Path::new("fish"))),
-            Shell::Xonsh => Box::new(xonsh::Xonsh::new(Path::new("xonsh"))),
-            Shell::Nu | Shell::Powershell | Shell::Unknown => return None,
+    pub fn interface(&self) -> Option<Box<dyn Shell>> {
+        let shell: Box<dyn Shell> = match self {
+            ShellKind::Bash => Box::new(bash::Bash::new(Path::new("bash"))),
+            ShellKind::Sh => Box::new(sh::Sh::new(Path::new("sh"))),
+            ShellKind::Zsh => Box::new(zsh::Zsh::new(Path::new("zsh"))),
+            ShellKind::Fish => Box::new(fish::Fish::new(Path::new("fish"))),
+            ShellKind::Xonsh => Box::new(xonsh::Xonsh::new(Path::new("xonsh"))),
+            ShellKind::Nu | ShellKind::Powershell | ShellKind::Unknown => return None,
         };
         Some(shell)
     }

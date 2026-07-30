@@ -6,7 +6,7 @@ use std::{
 #[cfg(unix)]
 use std::io::Read as _;
 
-use atuin_common::{shell::Shell, string::EscapeNonPrintablePosixExt as _};
+use atuin_common::{shell::ShellKind, string::EscapeNonPrintablePosixExt as _};
 use eyre::Result;
 use futures_util::FutureExt;
 use semver::Version;
@@ -2077,8 +2077,13 @@ pub async fn history(
 
     let accept = accept
         && matches!(
-            Shell::from_env(),
-            Shell::Zsh | Shell::Fish | Shell::Bash | Shell::Xonsh | Shell::Nu | Shell::Powershell
+            ShellKind::from_env(),
+            ShellKind::Zsh
+                | ShellKind::Fish
+                | ShellKind::Bash
+                | ShellKind::Xonsh
+                | ShellKind::Nu
+                | ShellKind::Powershell
         );
 
     let accept_prefix = "__atuin_accept__:";

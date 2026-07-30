@@ -2,7 +2,7 @@ use eyre::{Result, ensure, eyre};
 use rmp::{decode, encode};
 use serde::Serialize;
 
-use atuin_common::shell::Shell;
+use atuin_common::shell::ShellKind;
 
 use crate::store::AliasStore;
 
@@ -81,7 +81,7 @@ impl Var {
 /// Aliases already present in the store are skipped. Returns the aliases that
 /// were newly set.
 pub async fn import_aliases(store: &AliasStore) -> Result<Vec<Alias>> {
-    let shell = Shell::current()
+    let shell = ShellKind::current()
         .interface()
         .ok_or_else(|| eyre!("importing aliases is not supported for the current shell"))?;
 

@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_common::shell::{Shell, Var as ShellVar};
+use atuin_common::shell::{ShellKind, Var as ShellVar};
 use atuin_domain::record::{DecryptedData, Host, HostId};
 use eyre::{Result, bail, ensure, eyre};
 
@@ -117,17 +117,17 @@ impl VarStore {
 
     pub async fn xonsh(&self) -> Result<String> {
         let env = self.vars().await?;
-        Ok(Self::render(Shell::Xonsh, &env))
+        Ok(Self::render(ShellKind::Xonsh, &env))
     }
 
     pub async fn fish(&self) -> Result<String> {
         let env = self.vars().await?;
-        Ok(Self::render(Shell::Fish, &env))
+        Ok(Self::render(ShellKind::Fish, &env))
     }
 
     pub async fn posix(&self) -> Result<String> {
         let env = self.vars().await?;
-        Ok(Self::render(Shell::Sh, &env))
+        Ok(Self::render(ShellKind::Sh, &env))
     }
 
     pub async fn powershell(&self) -> Result<String> {
@@ -137,7 +137,7 @@ impl VarStore {
 
     /// Render `env` into `shell`'s config syntax via the shared shell library,
     /// logging any variable the shell cannot represent.
-    fn render(shell: Shell, env: &[Var]) -> String {
+    fn render(shell: ShellKind, env: &[Var]) -> String {
         let shell_vars: Vec<ShellVar> = env
             .iter()
             .map(|var| ShellVar {
@@ -176,9 +176,9 @@ impl VarStore {
         let env = self.vars().await?;
 
         // Build for all supported shells.
-        let posix = Self::render(Shell::Sh, &env);
-        let fish = Self::render(Shell::Fish, &env);
-        let xonsh = Self::render(Shell::Xonsh, &env);
+        let posix = Self::render(ShellKind::Sh, &env);
+        let fish = Self::render(ShellKind::Fish, &env);
+        let xonsh = Self::render(ShellKind::Xonsh, &env);
         let powershell = Self::format_powershell(&env);
 
         let zsh_path = dir.join("vars.zsh");

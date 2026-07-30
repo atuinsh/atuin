@@ -13,7 +13,7 @@ use tracing::instrument;
 
 use bstr::BString;
 
-use super::{Alias, AliasValue, AliasesError, IsShell, Rendered, RunError, Var};
+use super::{Alias, AliasValue, AliasesError, Rendered, RunError, Shell, Var};
 
 mod alias;
 mod var;
@@ -159,7 +159,7 @@ impl Xonsh {
 }
 
 #[async_trait::async_trait]
-impl IsShell for Xonsh {
+impl Shell for Xonsh {
     fn canonical_name(&self) -> &'static str {
         "xonsh"
     }
