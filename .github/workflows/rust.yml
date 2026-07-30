@@ -80,14 +80,14 @@ jobs:
         run: cross build -p atuin-common --locked --target ${{ matrix.target }}
 
       - name: Run cross build client
-        run: cross build -p atuin-client --locked --target ${{ matrix.target }}
+        run: cross build -p atuin-client --locked --target ${{ matrix.target }} --features vendored-tls
 
       - name: Run cross build server
-        run: cross build -p atuin-server --locked --target ${{ matrix.target }}
+        run: cross build -p atuin-server --locked --target ${{ matrix.target }} --features vendored-tls
 
       - name: Run cross build main
         run: |
-          cross build --all --locked --target ${{ matrix.target }}
+          cross build --all --locked --target ${{ matrix.target }} --features vendored-tls
 
   unit-test:
     strategy:

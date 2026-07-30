@@ -19,6 +19,9 @@ sync = ["reqwest"]
 hub = ["reqwest"]
 daemon = []
 check-update = []
+# Statically link (vendor) OpenSSL for native-tls instead of using the system
+# libssl. Used for portable release artifacts; a no-op on macOS/Windows.
+vendored-tls = ["reqwest?/native-tls-vendored"]
 
 [dependencies]
 derive_more = { workspace = true }

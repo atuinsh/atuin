@@ -1,0 +1,4 @@
+[target.x86_64-unknown-illumos]
+pre-build = [
+    "apt-get update && apt-get install --assume-yes --no-install-recommends perl make",
+]
