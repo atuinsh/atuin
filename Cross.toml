@@ -1,0 +1,12 @@
+[target.x86_64-unknown-illumos]
+pre-build = [
+    # perl+make build the vendored (target) OpenSSL. pkg-config+libssl-dev satisfy the
+    # HOST openssl-sys that the sqlx-macros proc-macro links: resolver v2 resolves the
+    # proc-macro graph separately, so `vendored-tls` never reaches it and it needs a
+    # real system OpenSSL on the build host.
+    "apt-get update && apt-get install --assume-yes --no-install-recommends perl make pkg-config libssl-dev",
+    # openssl-src builds vendored OpenSSL with the solaris64 target, whose Makefile
+    # calls `granlib` (the Solaris name for GNU ranlib). The cross image ships the
+    # toolchain's ranlib as x86_64-unknown-illumos-ranlib but no `granlib`, so provide it.
+    "ln -sf \"$(command -v x86_64-unknown-illumos-ranlib)\" /usr/local/bin/granlib",
+]

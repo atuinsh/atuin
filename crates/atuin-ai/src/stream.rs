@@ -6,7 +6,6 @@ use atuin_client::history::History;
 use atuin_client::settings::AiCapabilities;
 
 use crate::context::history_output_capability_available;
-use atuin_common::tls::ensure_crypto_provider;
 use atuin_common::url::UrlAppendExt;
 
 use eventsource_stream::Eventsource;
@@ -130,7 +129,6 @@ pub(crate) fn create_chat_stream(
     skill_overflow: Option<String>,
 ) -> std::pin::Pin<Box<dyn futures::Stream<Item = Result<StreamFrame>> + Send>> {
     Box::pin(async_stream::stream! {
-        ensure_crypto_provider();
         let endpoint = match hub_address.append_path("api/cli/chat") {
             Ok(url) => url,
             Err(e) => {

@@ -5,7 +5,7 @@ use eyre::{Context, Result, bail};
 use reqwest::{StatusCode, Url, header::USER_AGENT};
 use serde::Deserialize;
 
-use atuin_common::{tls::ensure_crypto_provider, url::UrlAppendExt};
+use atuin_common::url::UrlAppendExt;
 use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ChangePasswordRequest, LoginRequest, LoginResponse,
     RegisterResponse,
@@ -126,7 +126,6 @@ impl LegacyAuthClient {
             .as_deref()
             .ok_or_else(|| eyre::eyre!("Not logged in"))?;
 
-        ensure_crypto_provider();
         let mut headers = crate::api_client::extra_headers_map(&self.extra_headers)?;
         headers.insert(
             reqwest::header::AUTHORIZATION,
@@ -278,7 +277,6 @@ impl AuthClient for HubAuthClient {
         password: &str,
         totp_code: Option<&str>,
     ) -> Result<AuthResponse> {
-        ensure_crypto_provider();
         let url = self.address.append_path("api/v0/login")?;
         let client = reqwest::Client::new();
 
@@ -326,7 +324,6 @@ impl AuthClient for HubAuthClient {
     }
 
     async fn register(&self, username: &str, email: &str, password: &str) -> Result<AuthResponse> {
-        ensure_crypto_provider();
         let url = self.address.append_path("api/v0/register")?;
         let client = reqwest::Client::new();
 
@@ -380,7 +377,6 @@ impl AuthClient for HubAuthClient {
             );
         }
 
-        ensure_crypto_provider();
         let url = self.address.append_path("api/v0/account/password")?;
         let client = reqwest::Client::new();
 
@@ -452,7 +448,6 @@ impl AuthClient for HubAuthClient {
             );
         }
 
-        ensure_crypto_provider();
         let url = self.address.append_path("api/v0/account")?;
         let client = reqwest::Client::new();
 

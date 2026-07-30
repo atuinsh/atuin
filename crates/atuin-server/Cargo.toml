@@ -18,6 +18,11 @@ path = "src/lib.rs"
 name = "atuin-server"
 path = "src/bin/main.rs"
 
+[features]
+# Statically link (vendor) OpenSSL for native-tls instead of using the system
+# libssl. Used for portable release artifacts; a no-op on macOS/Windows.
+vendored-tls = ["reqwest/native-tls-vendored"]
+
 [dependencies]
 atuin-common = { workspace = true }
 atuin-domain = { workspace = true }

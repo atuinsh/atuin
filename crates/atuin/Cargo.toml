@@ -49,6 +49,7 @@ pty-proxy = ["dep:atuin-pty-proxy"]
 hex = ["pty-proxy"]
 clipboard = ["arboard"]
 check-update = ["atuin-client/check-update"]
+vendored-tls = ["atuin-client?/vendored-tls"]
 
 [dependencies]
 atuin-ai = { path = "../atuin-ai", version = "18.19.0-beta.2", optional = true, default-features = false }
