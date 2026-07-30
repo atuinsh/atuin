@@ -76,6 +76,6 @@ For TLS/HTTPS support, we recommend using a reverse proxy such as nginx, Caddy, 
 
 The Atuin client verifies TLS certificates using your operating system's native trust store — macOS Keychain, the Windows certificate store, or the system CA bundle on Linux/illumos (honoring the `SSL_CERT_FILE`/`SSL_CERT_DIR` environment variables). Certificates trusted by `curl` or your browser are trusted by Atuin.
 
-This means a self-hosted server behind a private/enterprise CA, or reached through a corporate SSL-inspection (MITM) proxy, works as long as that CA is installed in the system trust store — for example with `update-ca-certificates` on Debian/Ubuntu, or by adding it to Keychain on macOS. `atuin-server` does not terminate TLS itself; it still relies on the reverse proxy described above for that.
+This means a self-hosted server behind a private/enterprise CA, or reached through a corporate SSL-inspection (MITM) proxy, works as long as that CA is installed in the trust store of the machine running the Atuin client — for example with `update-ca-certificates` on Debian/Ubuntu, or by adding it to Keychain on macOS. `atuin-server` does not terminate TLS itself; it still relies on the reverse proxy described above for that.
 
 If your server connects to PostgreSQL over TLS, that connection also uses the OS-native TLS stack (OpenSSL on Linux), which is generally more permissive with private-CA or self-signed Postgres certificates.
