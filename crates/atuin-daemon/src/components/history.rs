@@ -80,7 +80,6 @@ impl Default for HistoryComponent {
     }
 }
 
-#[tonic::async_trait]
 impl Component for HistoryComponent {
     fn name(&self) -> &'static str {
         "history"

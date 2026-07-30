@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use ambassador::{Delegate, delegatable_trait};
 use atuin_client::{
     database::Sqlite as HistoryDatabase, encryption, record::sqlite_store::SqliteStore,
     settings::Settings,
@@ -17,6 +18,7 @@ use atuin_client::{
 use eyre::{Context, Result};
 use tokio::sync::{RwLock, broadcast};
 
+use crate::components::{HistoryComponent, SearchComponent, SemanticComponent, SyncComponent};
 use crate::events::DaemonEvent;
 
 // ============================================================================
@@ -185,7 +187,6 @@ impl std::fmt::Debug for DaemonHandle {
 ///     handle: Option<DaemonHandle>,
 /// }
 ///
-/// #[async_trait]
 /// impl Component for MyComponent {
 ///     fn name(&self) -> &'static str { "my-component" }
 ///
@@ -212,7 +213,8 @@ impl std::fmt::Debug for DaemonHandle {
 ///     }
 /// }
 /// ```
-#[tonic::async_trait]
+#[delegatable_trait]
+#[allow(async_fn_in_trait)]
 pub trait Component: Send + Sync {
     /// Human-readable name for logging and debugging.
     fn name(&self) -> &'static str;
@@ -237,6 +239,16 @@ pub trait Component: Send + Sync {
     async fn stop(&mut self) -> Result<()>;
 }
 
+/// Static-dispatch enum over the daemon components.
+#[derive(Delegate, derive_more::From)]
+#[delegate(Component)]
+pub enum ComponentImpl {
+    History(HistoryComponent),
+    Search(SearchComponent),
+    Semantic(SemanticComponent),
+    Sync(SyncComponent),
+}
+
 // ============================================================================
 // Daemon
 // ============================================================================
@@ -258,7 +270,7 @@ pub trait Component: Send + Sync {
 /// Events emitted during handling are queued and processed in subsequent
 /// iterations, ensuring the loop eventually drains.
 pub struct Daemon {
-    components: Vec<Box<dyn Component>>,
+    components: Vec<ComponentImpl>,
     handle: DaemonHandle,
 }
 
@@ -387,7 +399,7 @@ pub struct DaemonBuilder {
     settings: Settings,
     store: Option<SqliteStore>,
     history_db: Option<HistoryDatabase>,
-    components: Vec<Box<dyn Component>>,
+    components: Vec<ComponentImpl>,
 }
 
 impl DaemonBuilder {
@@ -416,8 +428,8 @@ impl DaemonBuilder {
     /// Register a component.
     ///
     /// Components are started in registration order and stopped in reverse order.
-    pub fn component(mut self, component: impl Component + 'static) -> Self {
-        self.components.push(Box::new(component));
+    pub fn component(mut self, component: impl Into<ComponentImpl>) -> Self {
+        self.components.push(component.into());
         self
     }
 
