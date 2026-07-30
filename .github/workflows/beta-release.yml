@@ -1,0 +1,150 @@
+name: Beta Release
+
+# Automated daily beta release. Follows the same steps as the /release skill's
+# prerelease path: bump the workspace version, refresh the running
+# `## [unreleased]` changelog section, commit, then tag. The tag push triggers
+# release.yml. Prereleases are not published to crates.io.
+#
+# Requires a `RELEASE_TOKEN` secret: a PAT belonging to the atuin-bot user
+# with contents: write on this repo. The default GITHUB_TOKEN cannot be used:
+# tags pushed with it do not trigger other workflows, so release.yml would
+# never run.
+
+on:
+  schedule:
+    # Tuesday-Friday. GitHub cron is UTC, which has no DST. Both candidate
+    # hours are scheduled and the gate job lets through only the run where
+    # it is actually 8am in America/Los_Angeles.
+    - cron: "0 15 * * 2-5" # 8am PDT
+    - cron: "0 16 * * 2-5" # 8am PST
+  workflow_dispatch:
+
+# Serialize runs so an overlapping manual + scheduled run can't both
+# prepare the same version and collide on push.
+concurrency:
+  group: beta-release
+  cancel-in-progress: false
+
+# Pushes use RELEASE_TOKEN, not GITHUB_TOKEN; checkouts only need read.
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: depot-ubuntu-24.04
+    if: github.repository == 'atuinsh/atuin'
+    outputs:
+      go: ${{ steps.check.outputs.go }}
+      old-version: ${{ steps.check.outputs.old-version }}
+      new-version: ${{ steps.check.outputs.new-version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Decide whether to release
+        id: check
+        run: |
+          # DST gate: skip the cron entry that isn't 8am Pacific.
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            hour=$(TZ=America/Los_Angeles date +%H)
+            if [ "$hour" != "08" ]; then
+              echo "It is ${hour}:00 in America/Los_Angeles; the other cron entry covers 8am. Skipping."
+              echo "go=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            # Don't cut identical betas on quiet days. Manual runs skip this
+            # check and always release.
+            latest_tag=$(git describe --tags --abbrev=0)
+            if [ "$(git rev-list "$latest_tag..HEAD" --count)" = "0" ]; then
+              echo "No commits on main since $latest_tag. Skipping."
+              echo "go=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          current=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if [[ "$current" =~ ^(.+)-beta\.([0-9]+)$ ]]; then
+            next="${BASH_REMATCH[1]}-beta.$((BASH_REMATCH[2] + 1))"
+          elif [[ "$current" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            # The last beta was promoted to stable: start the next series by
+            # bumping the minor version and resetting to beta.1.
+            next="${BASH_REMATCH[1]}.$((BASH_REMATCH[2] + 1)).0-beta.1"
+          else
+            echo "::error::Workspace version '$current' is neither a beta nor a stable release. Fix it manually with /release."
+            exit 1
+          fi
+
+          echo "Releasing: $current -> $next"
+          echo "go=true" >> "$GITHUB_OUTPUT"
+          echo "old-version=$current" >> "$GITHUB_OUTPUT"
+          echo "new-version=$next" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
+    runs-on: depot-ubuntu-24.04
+    env:
+      OLD_VERSION: ${{ needs.gate.outputs.old-version }}
+      NEW_VERSION: ${{ needs.gate.outputs.new-version }}
+    steps:
+      # persist-credentials: false so no write-capable credential is on disk
+      # while the third-party actions below run. RELEASE_TOKEN is injected
+      # only in the final push step.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
+      - name: Bump versions
+        run: |
+          VERSION_PATTERN="${OLD_VERSION//./\\.}"
+          find . -type f -name 'Cargo.toml' -not -path './.git/*' \
+              -exec sed -i "s/$VERSION_PATTERN/$NEW_VERSION/g" {} \;
+          cargo update --workspace
+
+          updated=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ "$updated" != "$NEW_VERSION" ]; then
+            echo "::error::Workspace version is '$updated' after bump, expected '$NEW_VERSION'"
+            exit 1
+          fi
+
+      - name: Update changelog
+        run: |
+          git-cliff --unreleased --strip all -o /tmp/unreleased.md
+
+          # Replace the existing `## [unreleased]` section with the fresh one,
+          # keeping it above the first versioned heading.
+          awk '/^## \[[Uu]nreleased\]/{skip=1; next} /^## /{skip=0} !skip' \
+              CHANGELOG.md > /tmp/stripped.md
+          first=$(grep -n '^## ' /tmp/stripped.md | head -1 | cut -d: -f1)
+          {
+            head -n "$((first - 1))" /tmp/stripped.md
+            cat /tmp/unreleased.md
+            echo
+            tail -n "+$first" /tmp/stripped.md
+          } > CHANGELOG.md
+
+      - name: Commit, tag, and push
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          git config user.name "atuin-bot"
+          git config user.email "engineering@atuin.sh"
+          git add -A
+          git commit -m "chore(release): prepare for release $NEW_VERSION"
+          git tag "v$NEW_VERSION"
+          git push --atomic \
+              "https://atuin-bot:${RELEASE_TOKEN}@github.com/${{ github.repository }}.git" \
+              "HEAD:refs/heads/main" "refs/tags/v$NEW_VERSION"

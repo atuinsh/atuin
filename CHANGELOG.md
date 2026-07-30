@@ -6,42 +6,16 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
-- *(config)* Preserve comments in `atuin config set` ([#3766](https://github.com/atuinsh/atuin/issues/3766))
-- Fix atuin-search-bench/benches/search.rs ([#3788](https://github.com/atuinsh/atuin/issues/3788))
-- Close OSC133 C when launching Atuin AI to prevent content erasure ([#3794](https://github.com/atuinsh/atuin/issues/3794))
-
-
-### Documentation
-
-- Clarify update check network, provide build command ([#3767](https://github.com/atuinsh/atuin/issues/3767))
-- Remove old i18n docs ([#3787](https://github.com/atuinsh/atuin/issues/3787))
+- *(client)* Avoid panic decoding an empty encryption key ([#3803](https://github.com/atuinsh/atuin/issues/3803))
+- Authenticate beta release push as atuin-bot ([#3809](https://github.com/atuinsh/atuin/issues/3809))
 
 
 ### Features
 
-- *(config)* Validate new settings in `atuin config set` before writing them to disk ([#3769](https://github.com/atuinsh/atuin/issues/3769))
-- Remove word with ALT-Backspace ALT-D ([#2457](https://github.com/atuinsh/atuin/issues/2457))
+- *(client)* Show intent in inspector ([#3804](https://github.com/atuinsh/atuin/issues/3804))
+- Add scheduled beta release workflow ([#3805](https://github.com/atuinsh/atuin/issues/3805))
 
 
-### Miscellaneous Tasks
-
-- *(ci)* Fix `package` step ([#3770](https://github.com/atuinsh/atuin/issues/3770))
-- Remove Store trait ([#3779](https://github.com/atuinsh/atuin/issues/3779))
-- Daemon search benchmark (divan + CodSpeed) ([#3763](https://github.com/atuinsh/atuin/issues/3763))
-- Run CodSpeed benchmarks on macro runners in walltime mode ([#3786](https://github.com/atuinsh/atuin/issues/3786))
-- Add `OrFilter` as a replacement for `Vec`s as filter lists ([#3768](https://github.com/atuinsh/atuin/issues/3768))
-- Add `atuin-domain` crate for shared domain types ([#3790](https://github.com/atuinsh/atuin/issues/3790))
-- Run CodSpeed walltime benchmarks on depot-macos-26 ([#3791](https://github.com/atuinsh/atuin/issues/3791))
-
-
-### Testing
-
-- Adopt rstest across the workspace test suite ([#3785](https://github.com/atuinsh/atuin/issues/3785))
-
-
-### Daemon
-
-- Replace nucleo with frizbee, rank by match quality with frecency tiebreak ([#3782](https://github.com/atuinsh/atuin/issues/3782))
 
 ## 18.18.1
 

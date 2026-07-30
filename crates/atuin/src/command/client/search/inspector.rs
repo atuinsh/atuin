@@ -139,6 +139,10 @@ pub fn draw_stats_table(
         ]),
         Row::new(vec!["Exit".to_string(), history.exit.to_string()]),
         Row::new(vec!["Directory".to_string(), history.cwd.clone()]),
+        Row::new(vec![
+            "Intent".to_string(),
+            history.intent.clone().unwrap_or_default(),
+        ]),
         Row::new(vec!["Session".to_string(), history.session.clone()]),
         Row::new(vec!["Total runs".to_string(), stats.total.to_string()]),
     ];

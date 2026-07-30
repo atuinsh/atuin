@@ -2,6 +2,7 @@
 name = "atuin-search-bench"
 version = "0.1.0"
 edition = "2021"
+license = { workspace = true }
 publish = false
 
 # Not a distributable app; without this dist treats the bench binary as a

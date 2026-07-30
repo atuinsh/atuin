@@ -10,8 +10,8 @@ homepage = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.19.0-beta.1" }
-atuin-domain = { path = "../atuin-domain", version = "18.19.0-beta.1" }
+atuin-common = { path = "../atuin-common", version = "18.19.0-beta.2" }
+atuin-domain = { path = "../atuin-domain", version = "18.19.0-beta.2" }
 derive_more = { workspace = true }
 
 async-trait = { workspace = true }

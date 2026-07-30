@@ -214,7 +214,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "atuin"
-version = "18.19.0-beta.1"
+version = "18.19.0-beta.2"
 dependencies = [
  "arboard",
  "async-trait",
@@ -282,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-ai"
-version = "18.19.0-beta.1"
+version = "18.19.0-beta.2"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -340,7 +340,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-client"
-version = "18.19.0-beta.1"
+version = "18.19.0-beta.2"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -398,7 +398,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "18.19.0-beta.1"
+version = "18.19.0-beta.2"
 dependencies = [
  "base64",
  "derive_more",
@@ -427,7 +427,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-daemon"
-version = "18.19.0-beta.1"
+version = "18.19.0-beta.2"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -464,7 +464,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-domain"
-version = "18.19.0-beta.1"
+version = "18.19.0-beta.2"
 dependencies = [
  "derive_more",
  "eyre",
@@ -480,7 +480,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-dotfiles"
-version = "18.19.0-beta.1"
+version = "18.19.0-beta.2"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -498,7 +498,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-history"
-version = "18.19.0-beta.1"
+version = "18.19.0-beta.2"
 dependencies = [
  "atuin-client",
  "codspeed-divan-compat",
@@ -512,7 +512,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-kv"
-version = "18.19.0-beta.1"
+version = "18.19.0-beta.2"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -549,7 +549,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-pty-proxy"
-version = "18.19.0-beta.1"
+version = "18.19.0-beta.2"
 dependencies = [
  "atuin-common",
  "clap",
@@ -563,7 +563,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-scripts"
-version = "18.19.0-beta.1"
+version = "18.19.0-beta.2"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -600,7 +600,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server"
-version = "18.19.0-beta.1"
+version = "18.19.0-beta.2"
 dependencies = [
  "argon2",
  "atuin-common",
@@ -628,7 +628,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-database"
-version = "18.19.0-beta.1"
+version = "18.19.0-beta.2"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -644,7 +644,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-postgres"
-version = "18.19.0-beta.1"
+version = "18.19.0-beta.2"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -663,7 +663,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-sqlite"
-version = "18.19.0-beta.1"
+version = "18.19.0-beta.2"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -1160,14 +1160,14 @@ checksum = "baf0a07a401f374238ab8e2f11a104d2851bf9ce711ec69804834de8af45c7af"
 
 [[package]]
 name = "config"
-version = "0.15.21"
+version = "0.15.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fe5feec195269515c4722937cd7ffcfe7b4205d18d2e6577b7223ecb159ab00"
+checksum = "b85f248a4de22d204ceabc6299d89d2c70fbd7f09fea53c06c852369652d8139"
 dependencies = [
  "pathdiff",
  "serde_core",
  "toml",
- "winnow 0.7.15",
+ "winnow",
 ]
 
 [[package]]
@@ -5346,7 +5346,7 @@ dependencies = [
 
 [[package]]
 name = "tests-database"
-version = "18.19.0-beta.1"
+version = "18.19.0-beta.2"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -5567,7 +5567,7 @@ dependencies = [
  "toml_datetime",
  "toml_parser",
  "toml_writer",
- "winnow 1.0.3",
+ "winnow",
 ]
 
 [[package]]
@@ -5589,7 +5589,7 @@ dependencies = [
  "toml_datetime",
  "toml_parser",
  "toml_writer",
- "winnow 1.0.3",
+ "winnow",
 ]
 
 [[package]]
@@ -5598,7 +5598,7 @@ version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2abe9b86193656635d2411dc43050282ca48aa31c2451210f4202550afb7526"
 dependencies = [
- "winnow 1.0.3",
+ "winnow",
 ]
 
 [[package]]
@@ -6716,15 +6716,6 @@ name = "windows_x86_64_msvc"
 version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
-
-[[package]]
-name = "winnow"
-version = "0.7.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "winnow"
