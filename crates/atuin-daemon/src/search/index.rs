@@ -8,7 +8,9 @@
 //! - Dynamic filtering by directory, host, session, etc.
 
 use super::normalize_diacritics;
-use std::{borrow::Cow, collections::HashSet, sync::Arc};
+use std::borrow::Cow;
+use std::collections::HashSet;
+use std::sync::{Arc, RwLock};
 
 use atuin_client::history::{History, is_known_agent};
 use atuin_client::settings::Search;
@@ -303,16 +305,14 @@ pub struct SearchIndex {
     /// Lock order: paths that need both this lock and a `commands` shard lock
     /// must take this one first (see `add_history`, `search`,
     /// `rebuild_frecency`); acquiring in the reverse order can deadlock.
-    ///
-    /// This is a synchronous `RwLock`: do not `await` while holding this lock.
-    haystack: std::sync::RwLock<Vec<HaystackEntry>>,
+    haystack: RwLock<Vec<HaystackEntry>>,
 
     /// Precomputed global frecency map. Updated by background task.
     ///
     /// Aligned with [`Self::haystack`] by index, so scoring a match is an
     /// array access instead of hashing the command string. Commands added after
     /// the last rebuild sit past the end and score 0 until the next rebuild.
-    frecency_map: tokio::sync::RwLock<Option<FrecencyMap>>,
+    frecency_map: RwLock<Option<FrecencyMap>>,
 
     /// String interner for deduplicating cwd, hostname, and directory paths.
     interner: Arc<ThreadedRodeo>,
@@ -326,8 +326,8 @@ impl SearchIndex {
     pub fn new(shells: OrFilter<Vec<String>>) -> Self {
         Self {
             commands: Arc::new(DashMap::new()),
-            haystack: std::sync::RwLock::new(Vec::new()),
-            frecency_map: tokio::sync::RwLock::new(None),
+            haystack: RwLock::new(Vec::new()),
+            frecency_map: RwLock::new(None),
             interner: Arc::new(ThreadedRodeo::new()),
             shells,
         }
@@ -355,7 +355,7 @@ impl SearchIndex {
             // Existing command - just update invocations
             entry.add_invocation(history, &self.interner);
         } else {
-            let mut haystack = self.haystack.write().expect("haystack lock poisoned");
+            let mut haystack = self.haystack.write().unwrap();
             match self.commands.entry(Arc::from(command)) {
                 dashmap::Entry::Occupied(mut entry) => {
                     entry.get_mut().add_invocation(history, &self.interner);
@@ -391,21 +391,16 @@ impl SearchIndex {
     /// Returns a list of history IDs (most recent invocation per command).
     /// Uses precomputed global frecency for scoring if available.
     #[instrument(skip_all, level = tracing::Level::TRACE, name = "index_search", fields(query = %query))]
-    pub async fn search(
-        &self,
-        query: &str,
-        filter_mode: IndexFilterMode,
-        limit: u32,
-    ) -> Vec<[u8; 16]> {
+    pub fn search(&self, query: &str, filter_mode: IndexFilterMode, limit: u32) -> Vec<[u8; 16]> {
         // Get precomputed frecency map (may be None if not yet computed)
-        let frecency_map = self.frecency_map.read().await.clone();
+        let frecency_map = self.frecency_map.read().unwrap().clone();
 
         let query = super::truncate_query(query);
         // Match accent-insensitively: the haystack side is normalized in
         // add_history, so an accented query must be normalized too
         let query = normalize_diacritics(query);
 
-        let haystack = self.haystack.read().expect("haystack lock poisoned");
+        let haystack = self.haystack.read().unwrap();
         let filter = filter_mode.compile(&self.interner);
 
         // Filter pre-pass: collect the candidate commands for this filter mode. This is sorted
@@ -530,7 +525,7 @@ impl SearchIndex {
     /// - `frequency_score_multiplier`: Weight for frequency component
     /// - `frecency_score_multiplier`: Overall multiplier for final score
     #[instrument(skip_all, level = tracing::Level::DEBUG, name = "rebuild_frecency")]
-    pub async fn rebuild_frecency(&self, search_settings: &Search) {
+    pub fn rebuild_frecency(&self, search_settings: &Search) {
         let now = OffsetDateTime::now_utc().unix_timestamp();
 
         // Clamp multipliers to non-negative values to prevent broken frecency ranking
@@ -541,7 +536,7 @@ impl SearchIndex {
 
         // Aligned with `haystack` by index; see FrecencyMap
         let frecencies: Vec<u32> = {
-            let haystack = self.haystack.read().expect("haystack lock poisoned");
+            let haystack = self.haystack.read().unwrap();
             haystack
                 .iter()
                 .map(|hay| {
@@ -556,7 +551,7 @@ impl SearchIndex {
                 .collect()
         };
 
-        *self.frecency_map.write().await = Some(Arc::new(frecencies));
+        *self.frecency_map.write().unwrap() = Some(Arc::new(frecencies));
     }
 }
 
@@ -758,8 +753,8 @@ mod tests {
         assert!(!data.has_invocation_in_workspace(&check3, &interner));
     }
 
-    #[tokio::test]
-    async fn search_index_add_and_search() {
+    #[test]
+    fn search_index_add_and_search() {
         let index = SearchIndex::default();
 
         let h1 = make_history(
@@ -785,30 +780,28 @@ mod tests {
         assert_eq!(index.command_count(), 3);
 
         // Search for "git" - should match 2 commands
-        let results = index.search("git", IndexFilterMode::Global, 10).await;
+        let results = index.search("git", IndexFilterMode::Global, 10);
         assert_eq!(results.len(), 2);
 
         // Search with directory filter
-        let results = index
-            .search(
-                "",
-                IndexFilterMode::Directory(
-                    "/home/user/project"
-                        .display_rich()
-                        .trailing_slash(true)
-                        .to_string(),
-                ),
-                10,
-            )
-            .await;
+        let results = index.search(
+            "",
+            IndexFilterMode::Directory(
+                "/home/user/project"
+                    .display_rich()
+                    .trailing_slash(true)
+                    .to_string(),
+            ),
+            10,
+        );
         assert_eq!(results.len(), 2); // git status and git commit
     }
 
     /// Regression test for #3702: a frequently-run command whose match is
     /// scattered across words must not outrank a contiguous match, no matter
     /// how large its frecency score is.
-    #[tokio::test]
-    async fn contiguous_match_beats_frequent_scattered_match() {
+    #[test]
+    fn contiguous_match_beats_frequent_scattered_match() {
         let index = SearchIndex::default();
 
         // contiguous match for "foo bar", run once
@@ -826,9 +819,9 @@ mod tests {
             index.add_history(&h);
         }
 
-        index.rebuild_frecency(&Search::default()).await;
+        index.rebuild_frecency(&Search::default());
 
-        let results = index.search("foo bar", IndexFilterMode::Global, 10).await;
+        let results = index.search("foo bar", IndexFilterMode::Global, 10);
         assert_eq!(results.len(), 2);
         assert_eq!(
             results[0],
@@ -844,8 +837,8 @@ mod tests {
     /// Frecency still orders results between equally good matches, so
     /// most-recently/frequently-used behavior is preserved where match
     /// quality can't differentiate.
-    #[tokio::test]
-    async fn equal_matches_order_by_frecency() {
+    #[test]
+    fn equal_matches_order_by_frecency() {
         let index = SearchIndex::default();
 
         index.add_history(&make_history(
@@ -859,9 +852,9 @@ mod tests {
             index.add_history(&h);
         }
 
-        index.rebuild_frecency(&Search::default()).await;
+        index.rebuild_frecency(&Search::default());
 
-        let results = index.search("echo", IndexFilterMode::Global, 10).await;
+        let results = index.search("echo", IndexFilterMode::Global, 10);
         assert_eq!(results.len(), 2);
         assert_eq!(
             results[0],
@@ -874,8 +867,8 @@ mod tests {
     /// the index normalizes both sides — an unaccented query must keep
     /// matching accented history entries (nucleo's old Normalization::Smart
     /// behavior), and an accented query must still find its own entry.
-    #[tokio::test]
-    async fn diacritics_normalized_for_matching() {
+    #[test]
+    fn diacritics_normalized_for_matching() {
         let index = SearchIndex::default();
 
         index.add_history(&make_history(
@@ -891,10 +884,10 @@ mod tests {
 
         let expected = index.commands.get("echo déjà-vu").unwrap().most_recent_id();
 
-        let results = index.search("deja", IndexFilterMode::Global, 10).await;
+        let results = index.search("deja", IndexFilterMode::Global, 10);
         assert_eq!(results, vec![expected.clone()]);
 
-        let results = index.search("déjà", IndexFilterMode::Global, 10).await;
+        let results = index.search("déjà", IndexFilterMode::Global, 10);
         assert_eq!(results, vec![expected]);
     }
 
@@ -949,8 +942,8 @@ mod tests {
 
     /// End-to-end determinism above the parallel threshold: the same query
     /// against the same index must return the same ranked IDs every time.
-    #[tokio::test]
-    async fn search_results_stable_above_parallel_threshold() {
+    #[test]
+    fn search_results_stable_above_parallel_threshold() {
         let index = SearchIndex::default();
         for (i, command) in equivalence_corpus().iter().enumerate() {
             // spread timestamps so frecency scores actually differ
@@ -961,12 +954,12 @@ mod tests {
             index.command_count() > 10_000,
             "corpus must cross threshold"
         );
-        index.rebuild_frecency(&Search::default()).await;
+        index.rebuild_frecency(&Search::default());
 
         for query in ["git", "git p", "docker compose up", "deja", ""] {
-            let first = index.search(query, IndexFilterMode::Global, 200).await;
+            let first = index.search(query, IndexFilterMode::Global, 200);
             for _ in 0..2 {
-                let again = index.search(query, IndexFilterMode::Global, 200).await;
+                let again = index.search(query, IndexFilterMode::Global, 200);
                 assert_eq!(first, again, "query {query:?} returned unstable results");
             }
         }
@@ -974,8 +967,8 @@ mod tests {
 
     /// Queries longer than frizbee can score are truncated instead of
     /// panicking in Matcher::from_query.
-    #[tokio::test]
-    async fn long_query_truncated_not_panicking() {
+    #[test]
+    fn long_query_truncated_not_panicking() {
         let index = SearchIndex::default();
         index.add_history(&make_history(
             "echo hello",
@@ -984,11 +977,10 @@ mod tests {
         ));
 
         let long_query = "a".repeat(5000);
-        let results = index.search(&long_query, IndexFilterMode::Global, 10).await;
+        let results = index.search(&long_query, IndexFilterMode::Global, 10);
         assert!(results.is_empty());
     }
 
-    #[tokio::test]
     #[rstest]
     #[case::all(&[], 7)]
     #[case::bash(&["bash"], 1)]
@@ -997,7 +989,7 @@ mod tests {
     #[case::unknown(&[""], 4)]
     #[case::fish(&["fish"], 0)]
     #[case::fish_unknown(&["fish", ""], 4)]
-    async fn search_with_shell_filter(#[case] shells: &[&str], #[case] expected_count: usize) {
+    fn search_with_shell_filter(#[case] shells: &[&str], #[case] expected_count: usize) {
         let filter =
             OrFilter::from_list(shells.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
                 .unwrap_or_default();
@@ -1017,7 +1009,7 @@ mod tests {
             index.add_history(&history);
         }
 
-        let results = index.search("echo", IndexFilterMode::Global, 100).await;
+        let results = index.search("echo", IndexFilterMode::Global, 100);
         assert_eq!(results.len(), expected_count, "{results:?}");
     }
 }

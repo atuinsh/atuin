@@ -90,7 +90,7 @@ where
     R: Future<Output: Deref<Target = SearchIndex>>,
 {
     let settings = handle.settings().await;
-    index().await.rebuild_frecency(&settings.search).await;
+    index().await.rebuild_frecency(&settings.search);
     info!("Frecency map built");
 }
 
@@ -387,8 +387,7 @@ impl SearchSvc for SearchGrpcService {
 
                 // Perform the search
                 let history_ids = span!(Level::TRACE, "daemon_search_query", %query, query_id)
-                    .in_scope(|| async { index.search(&query, index_filter, RESULTS_LIMIT).await })
-                    .await;
+                    .in_scope(|| index.search(&query, index_filter, RESULTS_LIMIT));
                 drop(index);
 
                 // Convert UUID arrays to `Vec`s
