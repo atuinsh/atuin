@@ -23,7 +23,13 @@ uv sync
 uv run pytest                 # everything
 uv run pytest -m "not tui"    # skip the timing-sensitive TUI tests
 uv run pytest tests/test_sync.py -v
+uv run pytest --html=report.html --self-contained-html   # debuggable report
 ```
+
+Tests carry a per-body timeout and retry only on transient PTY misses
+(`pexpect` TIMEOUT/EOF), never on real assertion failures. On any failure the
+rendered screen and container logs are printed and attached to the HTML report.
+See [`DESIGN.md`](./DESIGN.md#tooling-pytest-plugins) for the plugin set.
 
 The first run builds the base image (compiles atuin — a few minutes). It's
 cached afterwards. Force a rebuild after changing atuin source:

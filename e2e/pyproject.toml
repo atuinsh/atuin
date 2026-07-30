@@ -9,11 +9,20 @@ dependencies = [
     "pyte>=0.8.2",
     "testcontainers>=4.8",
     "docker>=7.1",
+    # Reliability + reporting (see DESIGN.md "Tooling"):
+    "pytest-timeout>=2.4",       # kill a hung PTY expect instead of hanging CI
+    "pytest-rerunfailures>=16.4",# retry only transient pexpect TIMEOUT/EOF, surgically
+    "pytest-html>=4.2",          # self-contained failure report (screen + container logs)
+    "pytest-icdiff>=0.9",        # side-by-side diffs for failed pyte-screen assertions
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+# --timeout caps the test *body* only (timeout_func_only), so slow container/image
+# fixture setup on the first run isn't counted. signal method interrupts the blocked
+# PTY read and fails just that test (never use thread here -- it kills the whole run).
+addopts = "-ra --timeout=120 --timeout-method=signal"
+timeout_func_only = true
 filterwarnings = [
     # pexpect uses forkpty(); testcontainers runs threads. Benign here, and noisy.
     "ignore:.*forkpty.*:DeprecationWarning",

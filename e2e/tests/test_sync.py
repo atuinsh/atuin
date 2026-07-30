@@ -11,9 +11,14 @@ import pytest
 
 from harness import atuin
 
+pytestmark = [
+    pytest.mark.sync,
+    # Retry only transient pexpect PTY misses, never a real sync/assertion failure.
+    pytest.mark.flaky(reruns=2, reruns_delay=1, only_rerun=["TIMEOUT", "EOF"]),
+]
 
-@pytest.mark.sync
-def test_history_syncs_between_two_clients(server, make_client):
+
+def test_history_syncs_between_two_clients(server, make_client, shells):
     shell = "zsh"
     client_a = make_client(shell)
     client_b = make_client(shell)
@@ -27,11 +32,7 @@ def test_history_syncs_between_two_clients(server, make_client):
     # A: register, record a command via real hooks, push.
     atuin.register(client_a, username, email, password)
     key = atuin.read_key(client_a)
-    pty = atuin.open_shell(client_a, shell)
-    try:
-        pty.run(marker)
-    finally:
-        pty.close()
+    shells(client_a, shell).run(marker)
     atuin.sync(client_a)
 
     # B: log into the same account with A's key, pull.

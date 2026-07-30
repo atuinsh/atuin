@@ -58,6 +58,29 @@ host: pytest ──testcontainers──┬─ server container (atuin-server, sq
   `logfile_read`, so `expect` handles synchronisation while `pyte` handles
   "what's on screen".
 
+## Tooling (pytest plugins)
+
+All verified on this suite's stack (pytest 9.1.1 / Python 3.14.6):
+
+- **pytest-timeout** — caps each test *body* (`timeout_func_only`, so slow
+  container/image fixture setup isn't counted) via the `signal` method, which
+  interrupts a blocked PTY read and fails just that test. Prevents a hung
+  `expect()` from hanging CI.
+- **pytest-rerunfailures** — the PTY tests carry
+  `@pytest.mark.flaky(reruns=2, only_rerun=["TIMEOUT", "EOF"])`, so a transient
+  pexpect miss retries but a real capture/sync/assertion bug still fails fast.
+- **pytest-html** + failure hook — `pytest_runtest_makereport` attaches each
+  test's rendered pyte screen(s) and container logs (clients + server) to the
+  report and prints them, so a red CI run is debuggable. `--html=report.html`.
+- **pytest-icdiff** — side-by-side diffs for failed multi-line screen assertions.
+
+Deliberately deferred: **pytest-xdist** (parallelism is the biggest speedup but
+session-scoped container fixtures need worker-aware names + `--dist loadgroup`
+for the sync tests first); **pytest-randomly** (order-leak canary, separate job);
+**syrupy** (snapshot normalized panes only). Multi-assert-per-screen uses the
+native pytest-9 `subtests` fixture — no plugin. `pytest-cov` is not used: it would
+measure only the Python harness, not the Rust `atuin` binary.
+
 ## Staged roadmap
 
 1. **Walking skeleton (this PR):** zsh + bash; capture test + two-client sync

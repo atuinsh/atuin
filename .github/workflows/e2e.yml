@@ -28,8 +28,21 @@ jobs:
         run: |
           uv sync
           uv run pytest -v -m "not tui" \
+            --html=report-${{ matrix.shell }}.html --self-contained-html \
             tests/test_capture.py::test_command_is_captured[${{ matrix.shell }}]
       - name: Sync round-trip
         if: matrix.shell == 'zsh'
         working-directory: e2e
-        run: uv run pytest -v tests/test_sync.py
+        run: |
+          uv run pytest -v --html=report-sync.html --self-contained-html \
+            tests/test_sync.py
+
+      # On failure the report embeds the rendered screen + container logs for each
+      # failed test -- the whole point of the failure-context hook.
+      - name: Upload failure report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report-${{ matrix.shell }}
+          path: e2e/report-*.html
+          if-no-files-found: ignore

@@ -10,21 +10,21 @@ import pytest
 
 from harness import atuin
 
+# Retry only transient pexpect PTY misses (TIMEOUT/EOF), never assertion failures --
+# a real capture bug still fails fast.
+pytestmark = pytest.mark.flaky(reruns=2, reruns_delay=1, only_rerun=["TIMEOUT", "EOF"])
+
 # bash + zsh are the verified baseline. fish + nu images/adapters exist but their
 # hook + prompt handling still needs tuning -- add them here as they stabilise.
 VERIFIED_SHELLS = ["zsh", "bash"]
 
 
 @pytest.mark.parametrize("shell", VERIFIED_SHELLS)
-def test_command_is_captured(shell, make_client):
+def test_command_is_captured(shell, make_client, shells):
     client = make_client(shell)
     marker = f"echo capture-{uuid.uuid4().hex[:8]}"
 
-    pty = atuin.open_shell(client, shell)
-    try:
-        pty.run(marker)
-    finally:
-        pty.close()
+    shells(client, shell).run(marker)
 
     recorded = atuin.search_cmd_only(client, marker.split()[1])
     assert any(marker in line for line in recorded), (
