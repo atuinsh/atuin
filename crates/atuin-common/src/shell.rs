@@ -138,21 +138,6 @@ impl Shell {
         })
     }
 
-    pub fn config_file(&self) -> Option<std::path::PathBuf> {
-        let mut path = directories::BaseDirs::new()?.home_dir().to_owned();
-
-        // TODO: handle all shells
-        match self {
-            Shell::Bash => path.push(".bashrc"),
-            Shell::Zsh => path.push(".zshrc"),
-            Shell::Fish => path.push(".config/fish/config.fish"),
-
-            _ => return None,
-        };
-
-        Some(path)
-    }
-
     /// Best-effort attempt to determine the default shell
     /// This implementation will be different across different platforms
     /// Caller should ensure to handle Shell::Unknown correctly
@@ -198,13 +183,6 @@ impl Shell {
         }
     }
 
-    /// Returns true if the shell is posix-like
-    /// Note that while fish is not posix compliant, it behaves well enough for our current
-    /// featureset that this does not matter.
-    pub fn is_posixish(&self) -> bool {
-        matches!(self, Shell::Bash | Shell::Fish | Shell::Zsh)
-    }
-
     /// Construct the object-safe [`IsShell`] interface for this shell, if atuin
     /// has an implementation for it (`None` for nu, powershell and unknown).
     ///
@@ -222,7 +200,7 @@ impl Shell {
         Some(shell)
     }
 
-    pub fn run_interactive<I, S>(&self, args: I) -> Result<String, ShellError>
+    fn run_interactive<I, S>(&self, args: I) -> Result<String, ShellError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
