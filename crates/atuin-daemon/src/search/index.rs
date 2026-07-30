@@ -495,9 +495,11 @@ impl SearchIndex {
                 })
                 .collect()
         } else {
-            let normalized_commands: Vec<&str> = candidates
+            // This is a vec of `&Arc<str>` instead of `&str` because `&Arc<str>` is the size of one
+            // pointer while `&str` is the size of two.
+            let normalized_commands: Vec<&Arc<str>> = candidates
                 .iter()
-                .map(|i| &*haystack[*i as usize].normalized)
+                .map(|i| &haystack[*i as usize].normalized)
                 .collect();
             // Use all cores when the number of commands is sufficiently large.
             let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
