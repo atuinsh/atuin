@@ -49,17 +49,7 @@ impl<S> SearchInteractive<S> {
 
 impl<S: HistorySource> App for SearchInteractive<S> {
     fn init(&mut self) -> Cmd {
-        let total_src = self.source.clone();
-        let window_src = self.source.clone();
-        Cmd::Batch(vec![
-            Cmd::task(async move { Msg::HistoryTotal(total_src.total().await) }),
-            Cmd::task(async move {
-                Msg::HistoryLoaded {
-                    start: INITIAL_WINDOW.start,
-                    rows: window_src.load(INITIAL_WINDOW).await,
-                }
-            }),
-        ])
+        self.browse()
     }
 
     fn update(&mut self, msg: Msg) -> Cmd {
@@ -75,8 +65,13 @@ impl<S: HistorySource> App for SearchInteractive<S> {
                 self.model.history.apply(start, rows);
                 Cmd::None
             }
-            // Wired up in a later task: applying results and the stale-query guard.
-            Msg::SearchResults { .. } => Cmd::None,
+            Msg::SearchResults { query, rows } => {
+                // Ignore results for a query the user has since changed.
+                if query == self.model.search.value() {
+                    self.model.history.set_results(rows);
+                }
+                Cmd::None
+            }
         }
     }
 
@@ -140,6 +135,8 @@ impl<S: HistorySource> SearchInteractive<S> {
             return Cmd::Quit; // accept (returning the command is a follow-up)
         }
 
+        let before = self.model.search.value().to_owned();
+
         // The list is inverted (newest at the bottom): up = older, down = newer.
         match key.code {
             KeyCode::Up => self.model.history.select_next(),
@@ -156,8 +153,41 @@ impl<S: HistorySource> SearchInteractive<S> {
             KeyCode::End => self.model.search.end(),
             _ => return Cmd::None,
         }
-        // Task 7 replaces this line with query-aware search/browse dispatch.
-        self.ensure_loaded()
+
+        if self.model.search.value() != before {
+            self.search() // query changed → re-run search (or browse if now empty)
+        } else {
+            self.ensure_loaded() // nav / cursor move → maybe fetch a browse window
+        }
+    }
+
+    /// Load browse mode: the total history count and the first window.
+    fn browse(&self) -> Cmd {
+        let total_src = self.source.clone();
+        let window_src = self.source.clone();
+        Cmd::Batch(vec![
+            Cmd::task(async move { Msg::HistoryTotal(total_src.total().await) }),
+            Cmd::task(async move {
+                Msg::HistoryLoaded {
+                    start: INITIAL_WINDOW.start,
+                    rows: window_src.load(INITIAL_WINDOW).await,
+                }
+            }),
+        ])
+    }
+
+    /// Dispatch on the current query: browse when empty, otherwise search.
+    fn search(&mut self) -> Cmd {
+        let query = self.model.search.value().to_owned();
+        if query.is_empty() {
+            self.model.history.reset();
+            return self.browse();
+        }
+        let source = self.source.clone();
+        Cmd::task(async move {
+            let rows = source.search(&query).await;
+            Msg::SearchResults { query, rows }
+        })
     }
 
     /// Load the window the model wants resident, if it isn't already.
@@ -254,5 +284,44 @@ mod tests {
     fn esc_quits() {
         let mut app = app();
         assert!(matches!(app.on_key(key(KeyCode::Esc)), Cmd::Quit));
+    }
+
+    fn hrow(cmd: &str) -> HistoryRow {
+        HistoryRow {
+            id: cmd.into(),
+            command: cmd.into(),
+            timestamp: 0,
+            duration: 0,
+            exit: 0,
+        }
+    }
+
+    #[test]
+    fn matching_results_replace_the_list() {
+        let mut app = app();
+        for c in "git".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        let rows = vec![hrow("git status"), hrow("git log")];
+        app.update(Msg::SearchResults {
+            query: "git".into(),
+            rows,
+        });
+        assert_eq!(app.model.history.total(), 2);
+        assert_eq!(app.model.history.selected(), 0);
+    }
+
+    #[test]
+    fn stale_results_are_ignored() {
+        let mut app = app();
+        for c in "new".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        // A result for an older query the user has since changed.
+        app.update(Msg::SearchResults {
+            query: "old".into(),
+            rows: vec![hrow("old thing")],
+        });
+        assert_eq!(app.model.history.total(), 0);
     }
 }
