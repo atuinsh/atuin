@@ -283,6 +283,16 @@ impl HaystackEntry {
     }
 }
 
+/// Represents how closely a command matches a search query.
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+struct Score {
+    // Fields must be in this order so we rank by fuzzy score first and only use frecency
+    // for ties. See #3702.
+    pub fuzzy_score: u16,
+    pub frecency: u32,
+    pub index: u32,
+}
+
 /// A deduplicated search index with frecency-based ranking.
 ///
 /// Commands are stored by their text, with metadata about all invocations.
@@ -405,37 +415,37 @@ impl SearchIndex {
 
         // Filter pre-pass: collect the candidate commands for this filter mode. This is sorted
         // vector of haystack indices.
-        let candidates: Vec<u32> =
-            tracing::span!(Level::TRACE, "index_search_filter").in_scope(|| match &filter {
-                CompiledFilter::All => haystack.iter().enumerate().map(|(i, _)| i as u32).collect(),
-                CompiledFilter::Nothing => Vec::new(),
-                _ => {
-                    let mut indices: Vec<u32> = self
-                        .commands
-                        .iter()
-                        .filter(|entry| (entry.haystack_index as usize) < haystack.len())
-                        .filter(|entry| match &filter {
-                            CompiledFilter::All | CompiledFilter::Nothing => unreachable!(),
-                            CompiledFilter::Directory(dir) => entry.has_invocation_in_dir(*dir),
-                            CompiledFilter::Workspace(prefix) => {
-                                entry.has_invocation_in_workspace(prefix, &self.interner)
-                            }
-                            CompiledFilter::Host(hostname) => {
-                                entry.has_invocation_on_host(*hostname)
-                            }
-                            CompiledFilter::Session(session) => {
-                                entry.has_invocation_in_session(session)
-                            }
-                        })
-                        .map(|entry| entry.haystack_index)
-                        .collect();
-                    indices.sort_unstable();
-                    indices
-                }
-            });
+        let get_candidates = || match &filter {
+            CompiledFilter::All => haystack.iter().enumerate().map(|(i, _)| i as u32).collect(),
+            CompiledFilter::Nothing => Vec::new(),
+            _ => {
+                let mut indices: Vec<u32> = self
+                    .commands
+                    .iter()
+                    .filter(|entry| (entry.haystack_index as usize) < haystack.len())
+                    .filter(|entry| match &filter {
+                        CompiledFilter::All | CompiledFilter::Nothing => unreachable!(),
+                        CompiledFilter::Directory(dir) => entry.has_invocation_in_dir(*dir),
+                        CompiledFilter::Workspace(prefix) => {
+                            entry.has_invocation_in_workspace(prefix, &self.interner)
+                        }
+                        CompiledFilter::Host(hostname) => entry.has_invocation_on_host(*hostname),
+                        CompiledFilter::Session(session) => {
+                            entry.has_invocation_in_session(session)
+                        }
+                    })
+                    .map(|entry| entry.haystack_index)
+                    .collect();
+                indices.sort_unstable();
+                indices
+            }
+        };
 
-        let frecency = |candidate: u32| {
-            let hay_idx = candidates[candidate as usize] as usize;
+        let candidates =
+            tracing::span!(Level::TRACE, "index_search_filter").in_scope(get_candidates);
+
+        let candidate_frecency = |candidate_index: usize| {
+            let hay_idx = candidates[candidate_index] as usize;
             frecency_map
                 .as_ref()
                 .and_then(|f| f.get(hay_idx).copied())
@@ -447,44 +457,35 @@ impl SearchIndex {
             .sort(frizbee::SortStrategy::IndexAsc);
         let mut matcher = frizbee::Matcher::from_query(&query, &config);
 
-        #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
-        struct Score {
-            // Fields must be in this order so we rank by fuzzy score first and only use frecency
-            // for ties. See #3702.
-            pub fuzzy_score: u16,
-            pub frecency: u32,
-            pub index: u32,
-        }
-
         // An empty query matches every candidate with fuzzy score 0, so skip
         // the matcher and rank purely by frecency
         let mut scored: Vec<Score> = if matcher.patterns().is_empty() {
-            (0..candidates.len() as u32)
+            (0..candidates.len())
                 .map(|i| Score {
                     fuzzy_score: 0,
-                    frecency: frecency(i),
-                    index: i,
+                    frecency: candidate_frecency(i),
+                    index: i as u32,
                 })
                 .collect()
         } else {
-            let commands: Vec<&Arc<str>> = candidates
+            let normalized_commands: Vec<&str> = candidates
                 .iter()
-                .map(|i| &haystack[*i as usize].normalized)
+                .map(|i| &*haystack[*i as usize].normalized)
                 .collect();
             // Use all cores when the number of commands is sufficiently large.
             let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
             let matches = tracing::span!(Level::TRACE, "index_search_match").in_scope(|| {
-                if threads > 1 && commands.len() >= 10_000 {
-                    matcher.match_list_parallel(&commands, threads)
+                if threads > 1 && normalized_commands.len() >= 10_000 {
+                    matcher.match_list_parallel(&normalized_commands, threads)
                 } else {
-                    matcher.match_list(&commands)
+                    matcher.match_list(&normalized_commands)
                 }
             });
             matches
                 .iter()
                 .map(|m| Score {
                     fuzzy_score: m.score,
-                    frecency: frecency(m.index),
+                    frecency: candidate_frecency(m.index as usize),
                     index: m.index,
                 })
                 .collect()
