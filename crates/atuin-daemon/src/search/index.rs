@@ -9,6 +9,7 @@
 
 use super::normalize_diacritics;
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
@@ -284,13 +285,34 @@ impl HaystackEntry {
 }
 
 /// Represents how closely a command matches a search query.
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 struct Score {
     // Fields must be in this order so we rank by fuzzy score first and only use frecency
     // for ties. See #3702.
     pub fuzzy_score: u16,
     pub frecency: u32,
     pub index: u32,
+}
+
+/// Scores are ordered as follows:
+///
+/// * Fuzzy score (highest first)
+/// * If equal, frecency (highest first)
+/// * If equal, index (lowest first)
+impl Ord for Score {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (other.fuzzy_score, other.frecency, self.index).cmp(&(
+            self.fuzzy_score,
+            self.frecency,
+            other.index,
+        ))
+    }
+}
+
+impl PartialOrd for Score {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 /// A deduplicated search index with frecency-based ranking.
