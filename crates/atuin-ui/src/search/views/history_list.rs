@@ -34,8 +34,10 @@ impl Widget for HistoryListView<'_> {
             if index >= self.model.total() {
                 break;
             }
+            // Inverted: the newest visible row (offset) sits at the bottom, older
+            // rows stack upward — the list grows up from the search input below.
             let line = Rect {
-                y: area.y + i,
+                y: area.y + area.height - 1 - i,
                 height: 1,
                 ..area
             };
@@ -79,10 +81,10 @@ impl Widget for HistoryRowView<'_> {
         // reverse-video bar when selected. The pieces render their fg on top.
         buf.set_style(area, if self.selected { selected } else { base });
 
-        let [time_area, duration_area, command_area] = Layout::horizontal([
-            Constraint::Length(TIME_WIDTH),
-            Constraint::Length(DURATION_WIDTH),
+        let [command_area, duration_area, time_area] = Layout::horizontal([
             Constraint::Min(0),
+            Constraint::Length(DURATION_WIDTH),
+            Constraint::Length(TIME_WIDTH),
         ])
         .spacing(1)
         .areas(area);

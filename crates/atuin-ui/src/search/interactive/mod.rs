@@ -107,20 +107,22 @@ impl<S: HistorySource> App for SearchInteractive<S> {
 
 impl<S: HistorySource> SearchInteractive<S> {
     fn on_key(&mut self, key: KeyEvent) -> Cmd {
+        // The list is inverted (newest at the bottom), so "up" moves to older
+        // entries and "down" to newer ones.
         let handled = match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 self.model.history.select_next();
                 true
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 self.model.history.select_prev();
                 true
             }
-            KeyCode::PageDown => {
+            KeyCode::PageUp => {
                 self.model.history.page_down();
                 true
             }
-            KeyCode::PageUp => {
+            KeyCode::PageDown => {
                 self.model.history.page_up();
                 true
             }
