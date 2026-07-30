@@ -84,6 +84,16 @@ impl HistoryList {
         self.select_to(self.selected.saturating_sub(1));
     }
 
+    /// Move the selection `n` rows toward older entries (higher index), clamped.
+    pub fn select_next_by(&mut self, n: usize) {
+        self.select_to(self.selected.saturating_add(n));
+    }
+
+    /// Move the selection `n` rows toward newer entries (lower index), clamped.
+    pub fn select_prev_by(&mut self, n: usize) {
+        self.select_to(self.selected.saturating_sub(n));
+    }
+
     pub fn page_down(&mut self) {
         self.select_to(self.selected.saturating_add(self.page()));
     }
@@ -291,5 +301,23 @@ mod tests {
         assert!(list.row(0).is_none());
         // viewport height survives, so nav still pages correctly after a reload.
         assert!(list.desired_range().is_empty());
+    }
+
+    #[test]
+    fn select_by_count_moves_and_clamps() {
+        let mut list = HistoryList::new();
+        list.set_viewport_height(20);
+        list.set_total(100);
+
+        list.select_last(); // 99 (oldest / visual top)
+        list.select_prev_by(10); // down 10 toward newest
+        assert_eq!(list.selected(), 89);
+        list.select_next_by(5); // up 5 toward oldest
+        assert_eq!(list.selected(), 94);
+
+        list.select_prev_by(1000); // saturates at the newest
+        assert_eq!(list.selected(), 0);
+        list.select_next_by(1000); // clamps at the oldest
+        assert_eq!(list.selected(), 99);
     }
 }
