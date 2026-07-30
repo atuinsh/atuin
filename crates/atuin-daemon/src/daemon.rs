@@ -223,7 +223,7 @@ impl std::fmt::Debug for DaemonHandle {
 // suggested fix — desugaring to `-> impl Future + Send` — isn't available:
 // enum_dispatch can only delegate a bare `async fn`.
 #[allow(async_fn_in_trait)]
-pub trait Component: Send + Sync {
+pub trait Component: Send + Sync + Into<AnyComponent> {
     /// Human-readable name for logging and debugging.
     fn name(&self) -> &'static str;
 
@@ -435,7 +435,7 @@ impl DaemonBuilder {
     /// Register a component.
     ///
     /// Components are started in registration order and stopped in reverse order.
-    pub fn component(mut self, component: impl Into<AnyComponent>) -> Self {
+    pub fn component(mut self, component: impl Component) -> Self {
         self.components.push(component.into());
         self
     }
