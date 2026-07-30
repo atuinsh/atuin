@@ -36,7 +36,6 @@ directories = { workspace = true }
 sysinfo = "0.30.7"
 base64 = { workspace = true }
 getrandom = "0.4"
-rustls = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, optional = true }
 unicode-width = { version = "0.2", optional = true }

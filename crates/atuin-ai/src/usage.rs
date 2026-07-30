@@ -90,7 +90,6 @@ pub(crate) fn cache_key(token: &str) -> String {
 /// Fetch current usage from the hub. Mirrors the `credits` object on the
 /// chat `done` event, for refreshing without starting a chat.
 pub(crate) async fn fetch_usage(endpoint: &reqwest::Url, token: &str) -> Result<UsageSnapshot> {
-    atuin_common::tls::ensure_crypto_provider();
     let url = endpoint.append_path("api/cli/usage")?;
 
     let response = reqwest::Client::new()

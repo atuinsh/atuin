@@ -8,7 +8,7 @@ use reqwest::{
     header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT},
 };
 
-use atuin_common::{tls::ensure_crypto_provider, url::UrlAppendExt};
+use atuin_common::url::UrlAppendExt;
 use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION, ChangePasswordRequest, ErrorResponse,
     LoginRequest, LoginResponse, MeResponse, RegisterResponse,
@@ -105,7 +105,6 @@ pub async fn register(
     password: &str,
     extra_headers: &HashMap<String, String>,
 ) -> Result<RegisterResponse> {
-    ensure_crypto_provider();
     let mut map = HashMap::new();
     map.insert("username", username);
     map.insert("email", email);
@@ -141,7 +140,6 @@ pub async fn login(
     req: LoginRequest,
     extra_headers: &HashMap<String, String>,
 ) -> Result<LoginResponse> {
-    ensure_crypto_provider();
     let url = address.append(["login"])?;
     let client = client_builder(extra_headers).build()?;
 
@@ -163,7 +161,6 @@ pub async fn login(
 pub async fn latest_version() -> Result<Version> {
     use atuin_domain::api::IndexResponse;
 
-    ensure_crypto_provider();
     let url = crate::settings::DEFAULT_SYNC_URL.clone();
     let client = reqwest::Client::new();
 
@@ -251,7 +248,6 @@ impl<'a> Client<'a> {
         timeout: u64,
         extra_headers: &HashMap<String, String>,
     ) -> Result<Self> {
-        ensure_crypto_provider();
         let mut headers = extra_headers_map(extra_headers)?;
         headers.insert(AUTHORIZATION, auth.to_header_value().parse()?);
         headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
@@ -452,7 +448,6 @@ mod tests {
             .await;
         });
 
-        ensure_crypto_provider();
         let client = client_builder(&extra_headers).build().unwrap();
         let err = client
             .get(format!("http://127.0.0.1:{port}/"))
@@ -489,7 +484,6 @@ mod tests {
             .await;
         });
 
-        ensure_crypto_provider();
         let client = client_builder(&extra_headers).build().unwrap();
         let resp = client
             .get(format!("http://127.0.0.1:{port}/"))

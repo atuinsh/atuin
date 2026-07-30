@@ -71,11 +71,6 @@ ratatui = "0.30.0"
 sql-builder = "3"
 tempfile = { version = "3.19" }
 minijinja = "2.9.0"
-rustls = { version = "0.23", default-features = false, features = [
-  "ring",
-  "std",
-  "tls12",
-] }
 glob-match = "0.2.1"
 imara-diff = "0.2"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }

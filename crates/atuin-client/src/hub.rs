@@ -13,7 +13,7 @@ use std::time::Duration;
 use eyre::{Context, Result, bail};
 use reqwest::{StatusCode, Url, header::USER_AGENT};
 
-use atuin_common::{tls::ensure_crypto_provider, url::UrlAppendExt};
+use atuin_common::url::UrlAppendExt;
 use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, CliCodeResponse, CliVerifyResponse, ErrorResponse,
 };
@@ -191,7 +191,6 @@ pub async fn link_account(hub_address: &Url, cli_token: &str) -> Result<()> {
 
     debug!("Linking CLI account to Hub at {}", hub_address);
 
-    ensure_crypto_provider();
     let client = reqwest::Client::new();
 
     let resp = client
@@ -246,7 +245,6 @@ async fn handle_resp_error(resp: reqwest::Response) -> Result<reqwest::Response>
 
 /// Request a CLI auth code from the Atuin Hub
 async fn request_code(address: &Url) -> Result<CliCodeResponse> {
-    ensure_crypto_provider();
     let url = address.append_path("auth/cli/code")?;
     let client = reqwest::Client::new();
 
@@ -266,7 +264,6 @@ async fn request_code(address: &Url) -> Result<CliCodeResponse> {
 
 /// Poll to verify the CLI auth code and get the session token
 async fn verify_code(address: &Url, code: &str) -> Result<CliVerifyResponse> {
-    ensure_crypto_provider();
     let mut url = address.append_path("auth/cli/verify")?;
     let client = reqwest::Client::new();
 
