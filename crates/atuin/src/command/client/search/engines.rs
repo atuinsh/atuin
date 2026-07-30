@@ -14,19 +14,19 @@ pub mod db;
 pub mod skim;
 
 #[allow(unused)] // settings is only used if daemon feature is enabled
-pub fn engine(search_mode: SearchMode, settings: &Settings) -> SearchEngineImpl {
+pub fn engine(search_mode: SearchMode, settings: &Settings) -> SearchEngine {
     match search_mode {
-        SearchMode::Skim => SearchEngineImpl::Skim(skim::Search::new()),
+        SearchMode::Skim => SearchEngine::Skim(skim::Search::new()),
         #[cfg(feature = "daemon")]
-        SearchMode::DaemonFuzzy => SearchEngineImpl::Daemon(daemon::Search::new(settings)),
+        SearchMode::DaemonFuzzy => SearchEngine::Daemon(daemon::Search::new(settings)),
         #[cfg(not(feature = "daemon"))]
         SearchMode::DaemonFuzzy => {
             // Fall back to fuzzy mode if daemon feature is not enabled
-            SearchEngineImpl::Db(db::Search(DbSearchMode::Fuzzy))
+            SearchEngine::Db(db::Search(DbSearchMode::Fuzzy))
         }
-        SearchMode::Prefix => SearchEngineImpl::Db(db::Search(DbSearchMode::Prefix)),
-        SearchMode::FullText => SearchEngineImpl::Db(db::Search(DbSearchMode::FullText)),
-        SearchMode::Fuzzy => SearchEngineImpl::Db(db::Search(DbSearchMode::Fuzzy)),
+        SearchMode::Prefix => SearchEngine::Db(db::Search(DbSearchMode::Prefix)),
+        SearchMode::FullText => SearchEngine::Db(db::Search(DbSearchMode::FullText)),
+        SearchMode::Fuzzy => SearchEngine::Db(db::Search(DbSearchMode::Fuzzy)),
     }
 }
 
@@ -67,7 +67,7 @@ impl SearchState {
 
 #[delegatable_trait]
 #[allow(async_fn_in_trait)]
-pub trait SearchEngine: Send + Sync + 'static {
+pub trait IsSearchEngine: Send + Sync + 'static {
     async fn full_query(
         &mut self,
         state: &SearchState,
@@ -103,8 +103,8 @@ pub trait SearchEngine: Send + Sync + 'static {
 
 /// Static-dispatch enum over the search-engine backends.
 #[derive(Delegate)]
-#[delegate(SearchEngine)]
-pub enum SearchEngineImpl {
+#[delegate(IsSearchEngine)]
+pub enum SearchEngine {
     Db(db::Search),
     Skim(skim::Search),
     #[cfg(feature = "daemon")]

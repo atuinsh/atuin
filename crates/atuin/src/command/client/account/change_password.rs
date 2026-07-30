@@ -2,7 +2,7 @@ use clap::Parser;
 use eyre::{Result, bail};
 
 use atuin_client::{
-    auth::{self, AuthClient, MutateResponse},
+    auth::{self, IsAuthClient, MutateResponse},
     settings::Settings,
 };
 use rpassword::prompt_password;

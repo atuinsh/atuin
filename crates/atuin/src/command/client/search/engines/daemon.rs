@@ -9,7 +9,7 @@ use eyre::Result;
 use tracing::{Level, debug, instrument, span};
 use uuid::Uuid;
 
-use super::{SearchEngine, SearchState};
+use super::{IsSearchEngine, SearchState};
 use crate::command::client::daemon;
 
 pub struct Search {
@@ -110,7 +110,7 @@ impl Search {
     }
 }
 
-impl SearchEngine for Search {
+impl IsSearchEngine for Search {
     #[instrument(skip_all, level = Level::TRACE, name = "daemon_search", fields(query = %state.input.as_str()))]
     async fn full_query(
         &mut self,

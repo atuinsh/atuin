@@ -45,7 +45,7 @@ pub enum MutateResponse {
 /// active — they just prompt for input and call these methods.
 #[delegatable_trait]
 #[allow(async_fn_in_trait)]
-pub trait AuthClient: Send + Sync {
+pub trait IsAuthClient: Send + Sync {
     /// Log in with username + password, optionally providing a TOTP code.
     async fn login(
         &self,
@@ -75,22 +75,22 @@ pub trait AuthClient: Send + Sync {
 
 /// Static-dispatch enum over the two auth backends.
 #[derive(Delegate)]
-#[delegate(AuthClient)]
-pub enum AuthClientImpl {
+#[delegate(IsAuthClient)]
+pub enum AuthClient {
     Legacy(LegacyAuthClient),
     Hub(HubAuthClient),
 }
 
 /// Resolve the appropriate [`AuthClient`] for the current settings.
-pub async fn auth_client(settings: &Settings) -> AuthClientImpl {
+pub async fn auth_client(settings: &Settings) -> AuthClient {
     if settings.is_hub_sync() {
         let endpoint = settings.hub_endpoint();
-        AuthClientImpl::Hub(HubAuthClient::new(
+        AuthClient::Hub(HubAuthClient::new(
             &endpoint,
             settings.hub_session_token().await.ok(),
         ))
     } else {
-        AuthClientImpl::Legacy(LegacyAuthClient::new(
+        AuthClient::Legacy(LegacyAuthClient::new(
             &settings.sync_address,
             settings.session_token().await.ok(),
             settings.network_connect_timeout,
@@ -152,7 +152,7 @@ impl LegacyAuthClient {
     }
 }
 
-impl AuthClient for LegacyAuthClient {
+impl IsAuthClient for LegacyAuthClient {
     async fn login(
         &self,
         username: &str,
@@ -278,7 +278,7 @@ struct HubErrorResponse {
     code: Option<String>,
 }
 
-impl AuthClient for HubAuthClient {
+impl IsAuthClient for HubAuthClient {
     async fn login(
         &self,
         username: &str,

@@ -15,7 +15,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{
     cursor::Cursor,
-    engines::{SearchEngine, SearchEngineImpl, SearchState},
+    engines::{IsSearchEngine, SearchEngine, SearchState},
     history_list::{HistoryList, ListState},
 };
 use atuin_client::{
@@ -135,7 +135,7 @@ pub struct State {
 
     keymaps: KeymapSet,
     search: SearchState,
-    engine: SearchEngineImpl,
+    engine: SearchEngine,
     now: Box<dyn Fn() -> OffsetDateTime + Send>,
 }
 

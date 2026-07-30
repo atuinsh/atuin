@@ -5,7 +5,7 @@ use eyre::{Context, Result, bail};
 use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{
-    auth::{self, AuthClient, AuthResponse},
+    auth::{self, AuthResponse, IsAuthClient},
     encryption::{Key, decode_key, encode_key, load_key},
     record::sqlite_store::SqliteStore,
     record::sync::{self, SyncError},
