@@ -100,7 +100,7 @@ pub(super) fn render_aliases(aliases: &[Alias]) -> Rendered {
         script.extend_from_slice(b"alias ");
         script.extend_from_slice(&alias.name);
         script.push(b' ');
-        fish_single_quote(&alias.value.shcmd(), &mut script);
+        super::fish_single_quote(&alias.value.shcmd(), &mut script);
         script.push(b'\n');
     }
 
@@ -114,20 +114,6 @@ fn is_valid_name(name: &[u8]) -> bool {
         && !name
             .iter()
             .any(|&b| b == b'=' || b == b'\'' || b.is_ascii_whitespace() || b.is_ascii_control())
-}
-
-/// Append `bytes` to `out`, single-quoted with fish's escaping (`\` → `\\`,
-/// `'` → `\'`).
-fn fish_single_quote(bytes: &[u8], out: &mut BString) {
-    out.push(b'\'');
-    for &b in bytes {
-        match b {
-            b'\\' => out.extend_from_slice(br"\\"),
-            b'\'' => out.extend_from_slice(br"\'"),
-            _ => out.push(b),
-        }
-    }
-    out.push(b'\'');
 }
 
 #[cfg(test)]

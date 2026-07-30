@@ -13,7 +13,7 @@ use tracing::instrument;
 
 use bstr::BString;
 
-use super::{Alias, AliasValue, AliasesError, IsShell, Rendered, RunError, posix};
+use super::{Alias, AliasValue, AliasesError, IsShell, Rendered, RunError, Var, posix};
 
 mod alias;
 
@@ -170,5 +170,9 @@ impl IsShell for Zsh {
 
     fn render_aliases(&self, aliases: &[Alias]) -> Rendered {
         posix::render_aliases(aliases)
+    }
+
+    fn render_vars(&self, vars: &[Var]) -> Rendered {
+        posix::render_vars(vars)
     }
 }

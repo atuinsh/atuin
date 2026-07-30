@@ -8,7 +8,7 @@ use winnow::{
 
 use bstr::BString;
 
-use super::{Alias, AliasValue, AliasesError, Rendered, RunError, Skipped};
+use super::{Alias, AliasValue, AliasesError, Rendered, RunError, Skipped, Var};
 
 pub(super) type Aliases = HashMap<BString, AliasValue>;
 
@@ -162,6 +162,52 @@ fn single_quote(bytes: &[u8], out: &mut BString) {
     out.push(b'\'');
 }
 
+/// Render vars as POSIX assignments: `export NAME=value` for exported vars,
+/// `NAME=value` for shell vars. Non-bareword values are double-quoted.
+pub(super) fn render_vars(vars: &[Var]) -> Rendered {
+    let mut script = BString::default();
+    let mut skipped = Vec::new();
+
+    for var in vars {
+        if !super::var::is_valid_var_name(&var.name) {
+            skipped.push(Skipped {
+                name: var.name.clone(),
+                reason: "not a valid variable name for a POSIX shell".to_owned(),
+            });
+            continue;
+        }
+        if var.export {
+            script.extend_from_slice(b"export ");
+        }
+        script.extend_from_slice(&var.name);
+        script.push(b'=');
+        posix_value(&var.value, &mut script);
+        script.push(b'\n');
+    }
+
+    Rendered { script, skipped }
+}
+
+/// Append `value`: bare if safe, else double-quoted with `\`, `"`, `$` and
+/// backtick escaped so the shell does not expand or re-interpret it.
+fn posix_value(value: &[u8], out: &mut BString) {
+    if super::var::is_bareword(value) {
+        out.extend_from_slice(value);
+        return;
+    }
+    out.push(b'"');
+    for &b in value {
+        match b {
+            b'\\' => out.extend_from_slice(br"\\"),
+            b'"' => out.extend_from_slice(br#"\""#),
+            b'$' => out.extend_from_slice(br"\$"),
+            b'`' => out.extend_from_slice(br"\`"),
+            _ => out.push(b),
+        }
+    }
+    out.push(b'"');
+}
+
 #[cfg(test)]
 mod render_tests {
     use super::*;
@@ -223,6 +269,55 @@ mod render_tests {
         let r = render_aliases(&[]);
         assert!(r.script.is_empty());
         assert!(r.skipped.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod var_render_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn var(name: &str, value: &str, export: bool) -> Var {
+        Var {
+            name: BString::from(name),
+            value: BString::from(value),
+            export,
+        }
+    }
+
+    #[test]
+    fn bareword_value_is_unquoted() {
+        let r = render_vars(&[var("FOO", "bar", true)]);
+        assert_eq!(r.script, BString::from("export FOO=bar\n"));
+        assert!(r.skipped.is_empty());
+    }
+
+    #[test]
+    fn spaces_force_double_quotes_and_export_prefix() {
+        let r = render_vars(&[var("FOO", "bar baz", true)]);
+        assert_eq!(r.script, BString::from("export FOO=\"bar baz\"\n"));
+    }
+
+    #[test]
+    fn shell_var_has_no_export_prefix() {
+        let r = render_vars(&[var("FOO", "bar baz", false)]);
+        assert_eq!(r.script, BString::from("FOO=\"bar baz\"\n"));
+    }
+
+    #[test]
+    fn escapes_dollar_backtick_quote_and_backslash() {
+        let r = render_vars(&[var("V", r#"a$b`c"d\e"#, true)]);
+        assert_eq!(
+            r.script,
+            BString::from(concat!(r#"export V="a\$b\`c\"d\\e""#, "\n"))
+        );
+    }
+
+    #[test]
+    fn skips_invalid_names() {
+        let r = render_vars(&[var("1BAD", "x", true)]);
+        assert!(r.script.is_empty());
+        assert_eq!(r.skipped.len(), 1);
     }
 }
 

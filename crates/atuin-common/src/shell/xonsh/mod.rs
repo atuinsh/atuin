@@ -13,9 +13,10 @@ use tracing::instrument;
 
 use bstr::BString;
 
-use super::{Alias, AliasValue, AliasesError, IsShell, Rendered, RunError};
+use super::{Alias, AliasValue, AliasesError, IsShell, Rendered, RunError, Var};
 
 mod alias;
+mod var;
 
 pub(super) type Aliases = HashMap<BString, AliasValue>;
 
@@ -187,5 +188,9 @@ impl IsShell for Xonsh {
 
     fn render_aliases(&self, aliases: &[Alias]) -> Rendered {
         alias::render_aliases(aliases)
+    }
+
+    fn render_vars(&self, vars: &[Var]) -> Rendered {
+        var::render_vars(vars)
     }
 }

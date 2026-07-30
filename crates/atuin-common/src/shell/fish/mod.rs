@@ -13,11 +13,26 @@ use tracing::instrument;
 
 use bstr::BString;
 
-use super::{Alias, AliasValue, AliasesError, IsShell, Rendered, RunError};
+use super::{Alias, AliasValue, AliasesError, IsShell, Rendered, RunError, Var};
 
 mod alias;
+mod var;
 
 pub(super) type Aliases = HashMap<BString, AliasValue>;
+
+/// Append `bytes` to `out`, single-quoted with fish's escaping (`\` → `\\`,
+/// `'` → `\'`). Shared by fish alias and var rendering.
+pub(super) fn fish_single_quote(bytes: &[u8], out: &mut BString) {
+    out.push(b'\'');
+    for &b in bytes {
+        match b {
+            b'\\' => out.extend_from_slice(br"\\"),
+            b'\'' => out.extend_from_slice(br"\'"),
+            _ => out.push(b),
+        }
+    }
+    out.push(b'\'');
+}
 
 type Probe<T, E> = Shared<BoxFuture<'static, Result<T, E>>>;
 
@@ -170,5 +185,9 @@ impl IsShell for Fish {
 
     fn render_aliases(&self, aliases: &[Alias]) -> Rendered {
         alias::render_aliases(aliases)
+    }
+
+    fn render_vars(&self, vars: &[Var]) -> Rendered {
+        var::render_vars(vars)
     }
 }

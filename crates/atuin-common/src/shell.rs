@@ -15,6 +15,7 @@ use thiserror::Error;
 mod alias;
 mod posix;
 mod render;
+mod var;
 
 pub mod bash;
 pub mod fish;
@@ -24,6 +25,7 @@ pub mod zsh;
 
 pub use alias::{Alias, AliasValue, AliasesError};
 pub use render::{Rendered, Skipped};
+pub use var::Var;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum RunError {
@@ -70,6 +72,12 @@ pub trait IsShell: Send + Sync {
     /// Best-effort: aliases this shell cannot represent are reported in
     /// [`Rendered::skipped`] rather than failing the whole render.
     fn render_aliases(&self, aliases: &[Alias]) -> Rendered;
+
+    /// Render the given variables into this shell's config syntax.
+    ///
+    /// Best-effort: variables this shell cannot represent are reported in
+    /// [`Rendered::skipped`] rather than failing the whole render.
+    fn render_vars(&self, vars: &[Var]) -> Rendered;
 }
 
 /// Compile-time proof that `IsShell` is object-safe. If a method signature ever

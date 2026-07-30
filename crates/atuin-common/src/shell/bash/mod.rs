@@ -13,7 +13,7 @@ use futures::{
 use tracing::instrument;
 
 use super::{
-    Alias, AliasValue, AliasesError, IsShell, Rendered, RunError,
+    Alias, AliasValue, AliasesError, IsShell, Rendered, RunError, Var,
     posix::{self, Aliases},
 };
 
@@ -138,5 +138,9 @@ impl IsShell for Bash {
 
     fn render_aliases(&self, aliases: &[Alias]) -> Rendered {
         posix::render_aliases(aliases)
+    }
+
+    fn render_vars(&self, vars: &[Var]) -> Rendered {
+        posix::render_vars(vars)
     }
 }
