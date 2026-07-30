@@ -120,6 +120,7 @@ impl<S: HistorySource> App for SearchInteractive<S> {
                 prompt: PROMPT,
                 input: &self.model.search,
                 theme: &self.model.theme,
+                mode: self.model.mode(),
             },
             input,
         );
