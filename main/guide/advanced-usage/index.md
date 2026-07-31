@@ -28,7 +28,6 @@ The search mode decides how Atuin interprets your query text. Cycle through the 
 | fuzzy (default) | Fuzzily, using the [fzf syntax](https://github.com/junegunn/fzf#search-syntax) — see [fuzzy search syntax](https://docs.atuin.sh/configuration/config/#fuzzy-search-syntax) |
 | prefix          | Commands that start with your query                                                                                                                                         |
 | fulltext        | Commands that contain your query anywhere                                                                                                                                   |
-| skim            | Using the [skim syntax](https://github.com/lotabout/skim#search-syntax)                                                                                                     |
 | daemon-fuzzy    | Like `fuzzy`, but served from the [daemon's](https://docs.atuin.sh/reference/daemon/index.md) in-memory index, with tunable scoring                                         |
 
 To change the default, set [`search_mode`](https://docs.atuin.sh/configuration/config/#search_mode).

@@ -211,7 +211,7 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `exit`               | Exit the TUI (behavior depends on the `exit_mode` setting)                                                                  |
 | `redraw`             | Redraw the screen                                                                                                           |
 | `cycle-filter-mode`  | Cycle through the enabled [filter modes](https://docs.atuin.sh/configuration/config/#filter_mode)                           |
-| `cycle-search-mode`  | Cycle through [search modes](https://docs.atuin.sh/configuration/config/#search_mode) (fuzzy, prefix, fulltext, skim)       |
+| `cycle-search-mode`  | Cycle through [search modes](https://docs.atuin.sh/configuration/config/#search_mode) (prefix, fulltext, (daemon-)fuzzy)    |
 | `toggle-tab`         | Toggle between the search tab and inspector tab                                                                             |
 | `switch-context`     | Switch to the [context](https://docs.atuin.sh/guide/advanced-usage/#context-switch) of the currently selected command       |
 | `clear-context`      | Return to the initial [context](https://docs.atuin.sh/guide/advanced-usage/#context-switch)                                 |

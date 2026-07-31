@@ -591,7 +591,6 @@ The search mode decides how Atuin interprets your query text. Cycle through the 
 | fuzzy (default) | Fuzzily, using the [fzf syntax](https://github.com/junegunn/fzf#search-syntax) — see [fuzzy search syntax](https://docs.atuin.sh/configuration/config/#fuzzy-search-syntax) |
 | prefix          | Commands that start with your query                                                                                                                                         |
 | fulltext        | Commands that contain your query anywhere                                                                                                                                   |
-| skim            | Using the [skim syntax](https://github.com/lotabout/skim#search-syntax)                                                                                                     |
 | daemon-fuzzy    | Like `fuzzy`, but served from the [daemon's](https://docs.atuin.sh/reference/daemon/index.md) in-memory index, with tunable scoring                                         |
 
 To change the default, set [`search_mode`](https://docs.atuin.sh/configuration/config/#search_mode).
@@ -1488,12 +1487,11 @@ sync_frequency = "1h"
 
 Default: `fuzzy`
 
-Which search mode to use. Atuin supports `prefix`, `fulltext`, `fuzzy`, `daemon-fuzzy`, and `skim` search modes.
+Which search mode to use. Atuin supports `prefix`, `fulltext`, `fuzzy`, and `daemon-fuzzy` search modes.
 
 - `prefix` mode searches for "query\*".
 - `fulltext` mode searches for "\*query\*".
 - `fuzzy` applies the [fuzzy search syntax](#fuzzy-search-syntax).
-- `skim` applies the [skim search syntax](https://github.com/lotabout/skim#search-syntax).
 
 ```
 search_mode = "fuzzy"
@@ -1515,9 +1513,7 @@ autostart = true
 
 You can customize the priority given to frequency, recency, and frecency scores in this mode. See [the score multipliers section](#score-multipliers) for more information.
 
-Interactive-only modes
-
-The `daemon-fuzzy` and `skim` modes take effect only for interactive TUI searches. Non-interactive `atuin search` commands will treat these modes as `fuzzy` instead.
+Note: in non-interactive searches (manually running `atuin search` from the command line), `daemon-fuzzy` behaves like `fuzzy`.
 
 #### `fuzzy` search syntax
 
@@ -3047,7 +3043,7 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `exit`               | Exit the TUI (behavior depends on the `exit_mode` setting)                                                                  |
 | `redraw`             | Redraw the screen                                                                                                           |
 | `cycle-filter-mode`  | Cycle through the enabled [filter modes](https://docs.atuin.sh/configuration/config/#filter_mode)                           |
-| `cycle-search-mode`  | Cycle through [search modes](https://docs.atuin.sh/configuration/config/#search_mode) (fuzzy, prefix, fulltext, skim)       |
+| `cycle-search-mode`  | Cycle through [search modes](https://docs.atuin.sh/configuration/config/#search_mode) (prefix, fulltext, (daemon-)fuzzy)    |
 | `toggle-tab`         | Toggle between the search tab and inspector tab                                                                             |
 | `switch-context`     | Switch to the [context](https://docs.atuin.sh/guide/advanced-usage/#context-switch) of the currently selected command       |
 | `clear-context`      | Return to the initial [context](https://docs.atuin.sh/guide/advanced-usage/#context-switch)                                 |

@@ -18,7 +18,7 @@ usage, self-hosting, and AI features.
 - [Setting up sync](https://docs.atuin.sh/guide/sync/index.md): Register an account and set up end-to-end encrypted history sync.
 - [Import existing history](https://docs.atuin.sh/guide/import/index.md): Import existing shell history from bash, zsh, fish, and others.
 - [Basic usage](https://docs.atuin.sh/guide/basic-usage/index.md): What Atuin records, how to use the TUI, and common config tweaks.
-- [Advanced usage](https://docs.atuin.sh/guide/advanced-usage/index.md): Filter modes (global, host, session, directory, workspace) and search modes (fuzzy, full-text, skim).
+- [Advanced usage](https://docs.atuin.sh/guide/advanced-usage/index.md): Filter modes (global, host, session, directory, workspace) and search modes (prefix, fulltext, fuzzy, daemon-fuzzy).
 - [Shell Integration](https://docs.atuin.sh/guide/shell-integration/index.md): How shell hooks work, environment variables, and embedded terminals.
 - [AI Agent Hooks](https://docs.atuin.sh/guide/agent-hooks/index.md): Capture commands from AI coding agents (Claude Code, Codex, pi) and filter by author.
 - [Excluding commands](https://docs.atuin.sh/guide/excluding-commands/index.md): Keep commands out of history with ignorespace, history_filter, and cwd_filter.
