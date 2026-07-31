@@ -298,6 +298,12 @@ enter_accept = true
 ## The port that should be used for TCP on non unix systems
 # tcp_port = 8889
 
+## Upload local history to the server when the daemon shuts down.
+## Useful when the daemon's lifetime is tied to the shell session (e.g. a
+## systemd user service that stops on SSH disconnect). Upload-only and
+## time-bounded, so the daemon still exits promptly.
+# sync_on_shutdown = false
+
 # [theme]
 ## Color theme to use for rendering in the terminal.
 ## There are some built-in themes, including the base theme ("default"),
