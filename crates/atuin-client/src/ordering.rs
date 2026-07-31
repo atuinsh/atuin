@@ -28,6 +28,7 @@ where
 mod tests {
     use super::*;
     use crate::history::History;
+    use rstest::rstest;
     use time::OffsetDateTime;
 
     fn hist(command: &str) -> History {
@@ -43,19 +44,14 @@ mod tests {
         res.into_iter().map(|h| h.command).collect()
     }
 
+    #[rstest]
     // A non-matching row must sort last, not ahead of a genuine match.
-    #[test]
-    fn reorder_nonmatch_sorts_last() {
-        let res = vec![hist("screen"), hist("hello")];
-        let out = reorder_fuzzy(DbSearchMode::Fuzzy, "screen", res);
-        assert_eq!(commands(out), vec!["screen", "hello"]);
-    }
-
+    #[case::nonmatch_sorts_last("screen", vec!["screen", "hello"], vec!["screen", "hello"])]
     // The unchanged match path: a tight match outranks a loose one.
-    #[test]
-    fn reorder_matches_by_span() {
-        let res = vec![hist("central urllib"), hist("curl")];
-        let out = reorder_fuzzy(DbSearchMode::Fuzzy, "curl", res);
-        assert_eq!(commands(out), vec!["curl", "central urllib"]);
+    #[case::matches_by_span("curl", vec!["central urllib", "curl"], vec!["curl", "central urllib"])]
+    fn reorder_ranks(#[case] query: &str, #[case] input: Vec<&str>, #[case] expected: Vec<&str>) {
+        let res = input.into_iter().map(hist).collect();
+        let out = reorder_fuzzy(DbSearchMode::Fuzzy, query, res);
+        assert_eq!(commands(out), expected);
     }
 }
