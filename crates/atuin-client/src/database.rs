@@ -806,8 +806,8 @@ impl Database for Sqlite {
             .fetch_all(&self.pool)
             .await?;
 
-        let reorder_query = fuzzy_ranking_query(orig_query);
-        Ok(ordering::reorder_fuzzy(search_mode, &reorder_query, res))
+        let reorder_terms = fuzzy_ranking_terms(orig_query);
+        Ok(ordering::reorder_fuzzy(search_mode, &reorder_terms, res))
     }
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>> {
@@ -1126,10 +1126,10 @@ impl SqlBuilderExt for SqlBuilder {
     }
 }
 
-/// The characters the span scorer ranks on. SQL matches on the tokenizer's plain terms, so the
-/// ranking query must drop everything SQL never matched literally: whitespace, the `| ^ $ ' r/../`
-/// operators, and negated terms, whose characters SQL excluded rather than required.
-fn fuzzy_ranking_query(query: &str) -> String {
+/// The terms the span scorer ranks on. SQL matches on the tokenizer's plain terms, so ranking must
+/// drop everything SQL never matched literally: whitespace, the `| ^ $ ' r/../` operators, and
+/// negated terms, whose characters SQL excluded rather than required.
+fn fuzzy_ranking_terms(query: &str) -> Vec<&str> {
     QueryTokenizer::new(query)
         .filter(|token| !token.is_inverse())
         .filter_map(|token| match token {
@@ -1934,48 +1934,50 @@ mod test {
         NothingScored,
     }
 
-    // Characterises which query shapes the span scorer can actually rank. The ranking query is a
-    // single concatenation of the plain terms, but SQL emits one independent condition per term,
-    // so any shape where the two disagree leaves every row unscored. `NothingScored` rows are
-    // defects, recorded here to pin current behaviour.
+    // Characterises which query shapes the span scorer can actually rank. Each term is ranked
+    // independently, matching how SQL emits one condition per term, so the surviving
+    // `NothingScored` rows are all the same defect: SQL matched by folding case, which the span
+    // scorer does not.
     #[rstest]
     // A lone term, and terms in the order they appear in the command, rank correctly.
-    #[case::plain_term("screen", "screen", ("screen", "search green"), RankedBy::Span)]
-    #[case::terms_in_command_order("foo bar", "foobar", ("foo bar", "foo qux bar"), RankedBy::Span)]
-    #[case::exact_word_terms("'foo 'bar", "foobar", ("foo bar", "foo qux bar"), RankedBy::Span)]
-    // Anchors rank as long as no term sits on the impossible side of them.
-    #[case::start_anchor_then_term("^foo bar", "foobar", ("foo bar", "foo qux bar"), RankedBy::Span)]
-    #[case::term_then_end_anchor("foo screen$", "fooscreen", ("foo screen", "foo x screen"), RankedBy::Span)]
+    #[case::plain_term("screen", &["screen"], ("screen", "search green"), RankedBy::Span)]
+    #[case::terms_in_command_order("foo bar", &["foo", "bar"], ("foo bar", "foo qux bar"), RankedBy::Span)]
+    #[case::exact_word_terms("'foo 'bar", &["foo", "bar"], ("foo bar", "foo qux bar"), RankedBy::Span)]
+    // Terms SQL matches independently rank independently, in whichever order the command has them.
+    #[case::terms_out_of_command_order("bar foo", &["bar", "foo"], ("foo bar", "foo qux bar"), RankedBy::Span)]
+    // Anchors rank from either side: a term is no longer required to follow the anchored one.
+    #[case::start_anchor_then_term("^foo bar", &["foo", "bar"], ("foo bar", "foo qux bar"), RankedBy::Span)]
+    #[case::term_before_start_anchor("bar ^foo", &["bar", "foo"], ("foo bar", "foo qux bar"), RankedBy::Span)]
+    #[case::term_then_end_anchor("foo screen$", &["foo", "screen"], ("foo screen", "foo x screen"), RankedBy::Span)]
+    #[case::term_after_end_anchor("screen$ foo", &["screen", "foo"], ("foo screen", "foo x screen"), RankedBy::Span)]
     // A negated term is a filter, not a ranking signal, so it drops out and the rest still ranks.
-    #[case::negated_term("foo screen !zzz", "fooscreen", ("foo screen", "foo x screen"), RankedBy::Span)]
-    #[case::negated_start_anchor("bar !^foo", "bar", ("bar", "b a r"), RankedBy::Span)]
+    #[case::negated_term("foo screen !zzz", &["foo", "screen"], ("foo screen", "foo x screen"), RankedBy::Span)]
+    #[case::negated_start_anchor("bar !^foo", &["bar"], ("bar", "b a r"), RankedBy::Span)]
     // An uppercase term switches SQL to case-sensitive GLOB, which agrees with the span scorer.
-    #[case::uppercase_term("LS", "LS", ("LS", "L x S"), RankedBy::Span)]
-    #[case::mixed_case_uppercase_term("LS foo", "LSfoo", ("LS foo", "LS x foo"), RankedBy::Span)]
+    #[case::uppercase_term("LS", &["LS"], ("LS", "L x S"), RankedBy::Span)]
+    #[case::mixed_case_uppercase_term("LS foo", &["LS", "foo"], ("LS foo", "LS x foo"), RankedBy::Span)]
     // A regex is a filter too; the plain term alongside it still ranks.
-    #[case::regex_with_term("r/screen/ foo", "foo", ("foo screen", "f o o screen"), RankedBy::Span)]
+    #[case::regex_with_term("r/screen/ foo", &["foo"], ("foo screen", "f o o screen"), RankedBy::Span)]
+    // Only one alternation branch is present per row, so ranking runs on the branch that matched.
+    #[case::alternation_ranks_matched_branch("foo | bar", &["foo", "bar"], ("foo", "f o o"), RankedBy::Span)]
+    // Matching more of the query outranks matching less of it, however tight the lesser match is.
+    #[case::alternation_prefers_matching_both("foo | bar", &["foo", "bar"], ("foo bar", "foo"), RankedBy::Span)]
     // Nothing left to rank on, or nothing to tell the rows apart. Recency is the right answer.
-    #[case::regex_only("r/screen/", "", ("foo screen", "foo x screen"), RankedBy::TiedSpan)]
-    #[case::negated_term_only("!zzz", "", ("foo screen", "foo x screen"), RankedBy::TiedSpan)]
-    #[case::start_anchor_only("^foo", "foo", ("foo bar", "foo qux bar"), RankedBy::TiedSpan)]
-    #[case::end_anchor_only("screen$", "screen", ("foo screen", "foo x screen"), RankedBy::TiedSpan)]
-    // Terms SQL matches independently, but the concatenation demands them in query order.
-    #[case::terms_out_of_command_order("bar foo", "barfoo", ("foo bar", "foo qux bar"), RankedBy::NothingScored)]
-    // SQL requires either branch; the concatenation demands every one of them.
-    #[case::alternation("foo | bar", "foobar", ("foo", "bar"), RankedBy::NothingScored)]
-    #[case::alternation_three_way("foo | bar | qux", "foobarqux", ("foo", "bar"), RankedBy::NothingScored)]
-    // `^foo` pins foo at offset 0, so nothing in the concatenation can precede it.
-    #[case::term_before_start_anchor("bar ^foo", "barfoo", ("foo bar", "foo qux bar"), RankedBy::NothingScored)]
-    // `screen$` pins screen at the end, so nothing in the concatenation can follow it.
-    #[case::term_after_end_anchor("screen$ foo", "screenfoo", ("foo screen", "foo x screen"), RankedBy::NothingScored)]
+    #[case::regex_only("r/screen/", &[], ("foo screen", "foo x screen"), RankedBy::TiedSpan)]
+    #[case::negated_term_only("!zzz", &[], ("foo screen", "foo x screen"), RankedBy::TiedSpan)]
+    #[case::start_anchor_only("^foo", &["foo"], ("foo bar", "foo qux bar"), RankedBy::TiedSpan)]
+    #[case::end_anchor_only("screen$", &["screen"], ("foo screen", "foo x screen"), RankedBy::TiedSpan)]
+    // Each row matches one branch equally tightly, so there is nothing to choose between them.
+    #[case::alternation("foo | bar", &["foo", "bar"], ("foo", "bar"), RankedBy::TiedSpan)]
+    #[case::alternation_three_way("foo | bar | qux", &["foo", "bar", "qux"], ("foo", "bar"), RankedBy::TiedSpan)]
     // SQL matched only by case folding, which LIKE does and the span scorer does not. Unaffected by
     // an uppercase term elsewhere in the query: each term picks LIKE or GLOB on its own.
-    #[case::lowercase_term_matching_uppercase("ls", "ls", ("LS", "L x S"), RankedBy::NothingScored)]
-    #[case::mixed_case_lowercase_term("ls FOO", "lsFOO", ("LS FOO", "LS x FOO"), RankedBy::NothingScored)]
+    #[case::lowercase_term_matching_uppercase("ls", &["ls"], ("LS", "L x S"), RankedBy::NothingScored)]
+    #[case::mixed_case_lowercase_term("ls FOO", &["ls", "FOO"], ("LS FOO", "LS x FOO"), RankedBy::NothingScored)]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_fuzzy_operator_ranking(
         #[case] query: &str,
-        #[case] expected_ranking_query: &str,
+        #[case] expected_terms: &[&str],
         #[case] rows: (&str, &str),
         #[case] ranked_by: RankedBy,
     ) {
@@ -1983,9 +1985,9 @@ mod test {
         let db = db_with_ages(&[tighter, looser]).await;
 
         assert_eq!(
-            fuzzy_ranking_query(query),
-            expected_ranking_query,
-            "ranking query for {query:?}"
+            fuzzy_ranking_terms(query),
+            expected_terms,
+            "ranking terms for {query:?}"
         );
 
         let results = assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, 2)
