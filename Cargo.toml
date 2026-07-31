@@ -102,3 +102,14 @@ codegen-units = 1
 # For local development against a local eye-declare, uncomment below
 #eye_declare = { path = "../eye_declare/crates/eye_declare" }
 #eye_declare_engine = { path = "../eye_declare/crates/eye_declare_engine" }
+
+[patch.crates-io]
+# axoasset (axoupdater's HTTP layer) hardcodes reqwest's "default-tls" feature,
+# which would force the rustls/aws-lc-rs backend into our builds via feature
+# unification, alongside the native-tls backend the workspace actually uses.
+# The vendored copy (from the atuinsh/axoasset fork, branch remote-tls-feature,
+# managed by vendor/vendor.sh) makes the TLS backend selectable so reqwest
+# follows the workspace configuration. A path is used rather than the fork's
+# git URL because git-sourced patches break crates.io publishing. Drop this
+# once the change is upstreamed and released.
+axoasset = { path = "vendor/axoasset" }

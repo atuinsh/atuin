@@ -63,7 +63,7 @@ vendored-tls = ["atuin-client?/vendored-tls"]
 # (dist enables it in dist-workspace.toml), so package-manager and
 # `cargo install` builds skip axoupdater and its dependency tree — notably
 # axoasset's rustls/aws-lc-rs reqwest backend, which is only avoided by the
-# [patch.crates-io] vendored axoasset when building from this repo.
+# [patch.crates-io] axoasset fork when building from this repo.
 self-update = ["dep:axoupdater"]
 
 [dependencies]
