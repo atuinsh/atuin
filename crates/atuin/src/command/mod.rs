@@ -117,7 +117,7 @@ const SUGGEST_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_mil
 const SUGGEST_QUEUE_DEPTH: usize = 8;
 
 /// Prefix completions from history for the pty-proxy popup. Experimental:
-/// gated on `pty_proxy.suggestions` or `ATUIN_PTY_PROXY_SUGGEST=1`.
+/// gated on `suggest.enabled` or `ATUIN_PTY_PROXY_SUGGEST=1`.
 /// Daemon index when enabled, sqlite prefix search otherwise; the backend
 /// lives on its own thread like [`semantic_command_capture_sink`].
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
@@ -125,11 +125,11 @@ fn history_suggestion_provider() -> Option<atuin_pty_proxy::SuggestionProvider> 
     use std::sync::mpsc;
 
     let settings = atuin_client::settings::Settings::new().ok()?;
-    if !settings.pty_proxy.suggestions && !is_truthy_env("ATUIN_PTY_PROXY_SUGGEST") {
+    if !settings.suggest.enabled && !is_truthy_env("ATUIN_PTY_PROXY_SUGGEST") {
         return None;
     }
 
-    let min_chars = settings.pty_proxy.suggestions_min_chars.max(1);
+    let min_chars = settings.suggest.min_chars.max(1);
     let (req_tx, req_rx) =
         mpsc::sync_channel::<(String, mpsc::Sender<Vec<String>>)>(SUGGEST_QUEUE_DEPTH);
 
@@ -212,10 +212,7 @@ impl SuggestionBackend {
                 .ok();
             }
             if let Some(client) = self.daemon.as_mut() {
-                match client
-                    .suggest(query, self.settings.pty_proxy.suggestions_limit)
-                    .await
-                {
+                match client.suggest(query, self.settings.suggest.limit).await {
                     Ok(commands) => return commands,
                     // Drop the connection and fall through to sqlite for
                     // this query; the next one retries the daemon.
@@ -253,7 +250,7 @@ impl SuggestionBackend {
             context,
             query,
             OptFilters {
-                limit: Some(i64::from(self.settings.pty_proxy.suggestions_limit)),
+                limit: Some(i64::from(self.settings.suggest.limit)),
                 ..OptFilters::default()
             },
         )

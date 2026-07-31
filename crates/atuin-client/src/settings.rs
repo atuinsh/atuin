@@ -524,8 +524,7 @@ pub struct Daemon {
     pub tcp_port: u64,
 }
 
-/// Settings for `atuin pty-proxy`.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct PtyProxy {
     /// If enabled, `atuin init` emits shell code that re-execs the shell
     /// inside `atuin pty-proxy`, so no separate `atuin pty-proxy init` line
@@ -533,25 +532,28 @@ pub struct PtyProxy {
     /// unix platforms.
     #[serde(alias = "enable")]
     pub enabled: bool,
-
-    /// Experimental inline suggestion popup in the pty proxy.
-    /// Also enabled by `ATUIN_PTY_PROXY_SUGGEST=1`.
-    pub suggestions: bool,
-
-    /// Maximum number of history entries fetched per keystroke.
-    pub suggestions_limit: u32,
-
-    /// Minimum typed characters before suggestions appear.
-    pub suggestions_min_chars: usize,
 }
 
-impl Default for PtyProxy {
+/// Settings for the inline history suggestions in `atuin pty-proxy`.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Suggest {
+    /// Experimental inline suggestion popup in the pty proxy.
+    /// Also enabled by `ATUIN_PTY_PROXY_SUGGEST=1`.
+    pub enabled: bool,
+
+    /// Maximum number of history entries fetched per keystroke.
+    pub limit: u32,
+
+    /// Minimum typed characters before suggestions appear.
+    pub min_chars: usize,
+}
+
+impl Default for Suggest {
     fn default() -> Self {
         Self {
             enabled: false,
-            suggestions: false,
-            suggestions_limit: 8,
-            suggestions_min_chars: 1,
+            limit: 8,
+            min_chars: 1,
         }
     }
 }
@@ -1128,6 +1130,9 @@ pub struct Settings {
     pub pty_proxy: PtyProxy,
 
     #[serde(default)]
+    pub suggest: Suggest,
+
+    #[serde(default)]
     pub search: Search,
 
     #[serde(default)]
@@ -1533,9 +1538,10 @@ impl Settings {
             .set_default("smart_sort", false)?
             .set_default("command_chaining", false)?
             .set_default("store_failed", true)?
-            .set_default("pty_proxy.suggestions", false)?
-            .set_default("pty_proxy.suggestions_limit", 8)?
-            .set_default("pty_proxy.suggestions_min_chars", 1)?
+            .set_default("pty_proxy.enabled", false)?
+            .set_default("suggest.enabled", false)?
+            .set_default("suggest.limit", 8)?
+            .set_default("suggest.min_chars", 1)?
             .set_default("daemon.sync_frequency", 300)?
             .set_default("daemon.enabled", false)?
             .set_default("daemon.autostart", false)?
