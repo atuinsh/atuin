@@ -44,15 +44,10 @@ pub enum MutateResponse {
 /// CLI commands use this trait so they don't need to know which backend is
 /// active — they just prompt for input and call these methods.
 #[enum_dispatch]
-// rustc's `async_fn_in_trait` lint: `async fn` in a publicly-reachable trait
-// doesn't promise the returned futures are `Send`. The lint's own guidance is to
-// allow it when the trait is "used only in your own code" / you "do not care
-// about auto traits like `Send` on the `Future`"; every call goes through the
-// concrete `AnyAuthClient` enum (never a generic `T: AuthClient` or `dyn`), so
-// the missing `Send` bound is never relied on. Its suggested fix — desugaring to
-// `-> impl Future + Send` — isn't available: enum_dispatch can only delegate a
-// bare `async fn`.
-#[allow(async_fn_in_trait)]
+#[allow(
+    async_fn_in_trait,
+    reason = "only used within our code and we don't need it to be Send"
+)]
 pub trait AuthClient: Send + Sync {
     /// Log in with username + password, optionally providing a TOTP code.
     async fn login(
@@ -92,16 +87,18 @@ pub enum AnyAuthClient {
 pub async fn auth_client(settings: &Settings) -> AnyAuthClient {
     if settings.is_hub_sync() {
         let endpoint = settings.hub_endpoint();
-        HubAuthClient::new(&endpoint, settings.hub_session_token().await.ok()).into()
+        AnyAuthClient::Hub(HubAuthClient::new(
+            &endpoint,
+            settings.hub_session_token().await.ok(),
+        ))
     } else {
-        LegacyAuthClient::new(
+        AnyAuthClient::Legacy(LegacyAuthClient::new(
             &settings.sync_address,
             settings.session_token().await.ok(),
             settings.network_connect_timeout,
             settings.network_timeout,
             settings.extra_headers.clone(),
-        )
-        .into()
+        ))
     }
 }
 

@@ -215,14 +215,10 @@ impl std::fmt::Debug for DaemonHandle {
 /// }
 /// ```
 #[enum_dispatch]
-// rustc's `async_fn_in_trait` lint: `async fn` in a publicly-reachable trait
-// doesn't promise the returned futures are `Send`. The lint's own guidance is to
-// allow it when you "do not care about auto traits like `Send` on the `Future`";
-// the daemon only ever drives components through the concrete `AnyComponent`
-// enum, awaited inline, so no `Send` bound on the futures is required. Its
-// suggested fix — desugaring to `-> impl Future + Send` — isn't available:
-// enum_dispatch can only delegate a bare `async fn`.
-#[allow(async_fn_in_trait)]
+#[allow(
+    async_fn_in_trait,
+    reason = "only used within our code and we don't need it to be Send"
+)]
 pub trait Component: Send + Sync + Into<AnyComponent> {
     /// Human-readable name for logging and debugging.
     fn name(&self) -> &'static str;
