@@ -99,14 +99,37 @@ impl<W: Write> Compositor<W> {
     }
 
     /// Apply a chunk of pty output: erase the overlay (screen == model),
-    /// forward the chunk to both the model and the terminal, then repaint
-    /// the popup. All in one write, so no other output can interleave.
+    /// forward the chunk, then repaint the popup.
+    ///
+    /// Latency discipline: the chunk reaches the terminal before any model
+    /// work. The vt100 parse only feeds the *next* erase/draw/snapshot, so
+    /// it runs after the write — and overlay repaints go out as a small
+    /// second write that lags the output instead of delaying it. With no
+    /// overlay in play this is a pure pass-through: no copy, no allocation,
+    /// one write.
     ///
     /// Ghost text is deliberately *not* repainted here: this chunk may have
     /// changed the command line, and painting the stale suffix at the new
     /// cursor would briefly duplicate the freshly echoed characters. The
     /// suggestion pass that follows the echo repaints it.
     pub(crate) fn apply_pty(&mut self, data: &[u8]) {
+        let overlay_idle =
+            self.drawn.is_none() && self.ghost_row.is_none() && self.content.is_none();
+
+        // Fast path: nothing painted and nothing pending. The pre-write
+        // boundary scan only runs when an overlay could paint before the
+        // next chunk (a later paint must not splice into a sequence this
+        // chunk left unterminated).
+        if overlay_idle
+            && self.tail.is_empty()
+            && (!self.split_partials || complete_prefix_len(data) == data.len())
+        {
+            let _ = self.out.write_all(data);
+            let _ = self.out.flush();
+            self.parser.process(data);
+            return;
+        }
+
         let mut buf = Vec::with_capacity(data.len() + 256);
         self.erase_into(&mut buf);
 
@@ -120,11 +143,15 @@ impl<W: Write> Compositor<W> {
         let (ready, tail) = pending.split_at(ready_len);
         self.tail = tail.to_vec();
 
-        self.parser.process(ready);
+        // User-visible bytes first; the model catches up after the write.
         buf.extend_from_slice(ready);
+        let _ = self.out.write_all(&buf);
+        let _ = self.out.flush();
+        self.parser.process(ready);
 
-        self.draw_into(&mut buf, false);
-        self.flush(buf);
+        let mut repaint = Vec::new();
+        self.draw_into(&mut repaint, false);
+        self.flush(repaint);
     }
 
     /// Flush any withheld partial-sequence tail (e.g. on shutdown).
@@ -550,6 +577,17 @@ mod tests {
         let mut c = compositor();
         c.apply_pty(b"plain \x1b[31mred\x1b[0m text\r\n");
         assert_eq!(c.out, b"plain \x1b[31mred\x1b[0m text\r\n");
+    }
+
+    /// The write-first fast path must still keep the model in sync, or the
+    /// next erase/draw/snapshot would composite against stale state.
+    #[rstest]
+    fn fast_path_still_feeds_the_model() {
+        let mut c = compositor();
+        c.apply_pty(b"$ hello");
+        assert_eq!(c.out, b"$ hello");
+        assert_eq!(c.parser.screen().contents().trim_end(), "$ hello");
+        assert_eq!(c.parser.screen().cursor_position(), (0, 7));
     }
 
     #[rstest]
