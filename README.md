@@ -110,9 +110,6 @@ Then restart your shell!
 > [Bash](https://docs.atuin.sh/latest/guide/installation/#installing-the-shell-plugin)
 > section of the shell plugin documentation.
 
-# Security
-
-If you find any security issues, we'd appreciate it if you could alert <ellie@atuin.sh>
 
 # Related projects
 - [Catpuccin for Atuin](https://github.com/catppuccin/atuin)
