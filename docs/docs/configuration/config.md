@@ -108,13 +108,12 @@ sync_frequency = "1h"
 
 Default: `fuzzy`
 
-Which search mode to use. Atuin supports `prefix`, `fulltext`, `fuzzy`, `daemon-fuzzy`, and
-`skim` search modes.
+Which search mode to use. Atuin supports `prefix`, `fulltext`, `fuzzy`, and
+`daemon-fuzzy` search modes.
 
 - `prefix` mode searches for "query\*".
 - `fulltext` mode searches for "\*query\*".
 - `fuzzy` applies the [fuzzy search syntax](#fuzzy-search-syntax).
-- `skim` applies the [skim search syntax](https://github.com/lotabout/skim#search-syntax).
 
 ```toml
 search_mode = "fuzzy"
@@ -136,11 +135,7 @@ search_mode = "fuzzy"
 
     You can customize the priority given to frequency, recency, and frecency scores in this mode. See [the score multipliers section](#score-multipliers) for more information.
 
-!!! note "Interactive-only modes"
-
-    The `daemon-fuzzy` and `skim` modes take effect only for interactive TUI
-    searches. Non-interactive `atuin search` commands will treat these modes
-    as `fuzzy` instead.
+    Note: in non-interactive searches (manually running `atuin search` from the command line), `daemon-fuzzy` behaves like `fuzzy`.
 
 #### `fuzzy` search syntax
 

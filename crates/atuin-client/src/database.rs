@@ -214,13 +214,13 @@ impl From<DbSearchMode> for SearchMode {
 impl SearchMode {
     /// Get the [`DbSearchMode`] that most closely matches this [`SearchMode`].
     ///
-    /// This maps [`SearchMode::Skim`] and [`SearchMode::DaemonFuzzy`], which are interactive-only,
-    /// to [`DbSearchMode::Fuzzy`].
+    /// This maps [`SearchMode::DaemonFuzzy`], which is interactive-only, to
+    /// [`DbSearchMode::Fuzzy`].
     pub fn closest_db_mode(self) -> DbSearchMode {
         match self {
             SearchMode::Prefix => DbSearchMode::Prefix,
             SearchMode::FullText => DbSearchMode::FullText,
-            SearchMode::Fuzzy | SearchMode::Skim | SearchMode::DaemonFuzzy => DbSearchMode::Fuzzy,
+            SearchMode::Fuzzy | SearchMode::DaemonFuzzy => DbSearchMode::Fuzzy,
         }
     }
 }
@@ -1741,11 +1741,9 @@ mod test {
     #[case::prefix(SearchMode::Prefix, DbSearchMode::Prefix)]
     #[case::full_text(SearchMode::FullText, DbSearchMode::FullText)]
     #[case::fuzzy(SearchMode::Fuzzy, DbSearchMode::Fuzzy)]
-    // `Skim` and `DaemonFuzzy` never reach the database in the interactive path:
-    // `engines::engine` routes them to the skim matcher and the daemon index. When they do
-    // arrive via `atuin search --search-mode ...`, the closest database behaviour is a plain
-    // fuzzy query. See issue #3670.
-    #[case::skim_degrades_to_fuzzy(SearchMode::Skim, DbSearchMode::Fuzzy)]
+    // `DaemonFuzzy` never reaches the database in the interactive path: `engines::engine` routes it
+    // to the daemon index. When it does arrive via `atuin search --search-mode daemon-fuzzy`, the
+    // closest database behaviour is a plain fuzzy query. See issue #3670.
     #[case::daemon_fuzzy_degrades_to_fuzzy(SearchMode::DaemonFuzzy, DbSearchMode::Fuzzy)]
     fn closest_db_mode_maps_every_search_mode(
         #[case] mode: SearchMode,
@@ -1762,14 +1760,13 @@ mod test {
         assert_eq!(SearchMode::from(mode).closest_db_mode(), mode);
     }
 
-    /// Issue #3670: `atuin search --search-mode daemon-fuzzy` reached the database as
-    /// an unrecognised mode. It took the fuzzy SQL path but skipped the fuzzy relevance
-    /// reordering, so results came back in raw timestamp order while plain `--search-mode
-    /// fuzzy` ranked them by minimum matching span. Both interactive-only modes must now
-    /// behave exactly like `fuzzy` once they reach the database.
+    /// Issue #3670: `atuin search --search-mode daemon-fuzzy` reached the database as an
+    /// unrecognised mode. It took the fuzzy SQL path but skipped the fuzzy relevance reordering, so
+    /// results came back in raw timestamp order while plain `--search-mode fuzzy` ranked them by
+    /// minimum matching span. `daemon-fuzzy` must behave exactly like `fuzzy` once it reaches the
+    /// database.
     #[rstest]
     #[case::daemon_fuzzy(SearchMode::DaemonFuzzy)]
-    #[case::skim(SearchMode::Skim)]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_interactive_only_modes_rank_like_fuzzy(#[case] mode: SearchMode) {
         let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())

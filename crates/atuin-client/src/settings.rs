@@ -45,24 +45,46 @@ pub static DEFAULT_SYNC_URL: LazyLock<Url> =
 pub static DEFAULT_HUB_URL: LazyLock<Url> =
     LazyLock::new(|| Url::parse("https://hub.atuin.sh").expect("default hub endpoint is valid"));
 
-#[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SearchMode {
-    #[serde(rename = "prefix")]
     Prefix,
-
-    #[serde(rename = "fulltext")]
-    #[clap(aliases = &["fulltext"])]
     FullText,
-
-    #[serde(rename = "fuzzy")]
     Fuzzy,
-
-    #[serde(rename = "skim")]
-    Skim,
-
-    #[serde(rename = "daemon-fuzzy")]
-    #[clap(aliases = &["daemon-fuzzy"])]
     DaemonFuzzy,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum RequestedSearchMode {
+    Prefix,
+    #[clap(alias("full-text"))]
+    Fulltext,
+    Fuzzy,
+    DaemonFuzzy,
+    /// Removed: falls back to [`Self::Fuzzy`] but shows a warning.
+    #[clap(hide = true)]
+    Skim,
+}
+
+impl RequestedSearchMode {
+    /// Return the actual search mode that will be used.
+    ///
+    /// Not all requested modes are supported; this method returns the closest supported mode for
+    /// the given requested mode.
+    pub fn effective_mode(self) -> SearchMode {
+        match self {
+            Self::Prefix => SearchMode::Prefix,
+            Self::Fulltext => SearchMode::FullText,
+            Self::Fuzzy | Self::Skim => SearchMode::Fuzzy,
+            Self::DaemonFuzzy => SearchMode::DaemonFuzzy,
+        }
+    }
+}
+
+impl From<RequestedSearchMode> for SearchMode {
+    fn from(requested: RequestedSearchMode) -> Self {
+        requested.effective_mode()
+    }
 }
 
 impl SearchMode {
@@ -71,22 +93,20 @@ impl SearchMode {
             SearchMode::Prefix => "PREFIX",
             SearchMode::FullText => "FULLTXT",
             SearchMode::Fuzzy => "FUZZY",
-            SearchMode::Skim => "SKIM",
             SearchMode::DaemonFuzzy => "DAEMON",
         }
     }
+
     pub fn next(&self, settings: &Settings) -> Self {
         match self {
             SearchMode::Prefix => SearchMode::FullText,
-            // if the user is using skim, we go to skim
-            SearchMode::FullText if settings.search_mode == SearchMode::Skim => SearchMode::Skim,
             // if the user is using daemon-fuzzy, we go to daemon-fuzzy
-            SearchMode::FullText if settings.search_mode == SearchMode::DaemonFuzzy => {
+            SearchMode::FullText if settings.search_mode() == SearchMode::DaemonFuzzy => {
                 SearchMode::DaemonFuzzy
             }
             // otherwise fuzzy.
             SearchMode::FullText => SearchMode::Fuzzy,
-            SearchMode::Fuzzy | SearchMode::Skim | SearchMode::DaemonFuzzy => SearchMode::Prefix,
+            SearchMode::Fuzzy | SearchMode::DaemonFuzzy => SearchMode::Prefix,
         }
     }
 }
@@ -1000,10 +1020,12 @@ pub struct Settings {
     pub db_path: PathBuf,
     pub record_store_path: PathBuf,
     pub key_path: PathBuf,
-    pub search_mode: SearchMode,
+    #[serde(rename = "search_mode")]
+    pub requested_search_mode: RequestedSearchMode,
     pub filter_mode: Option<FilterMode>,
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
-    pub search_mode_shell_up_key_binding: Option<SearchMode>,
+    #[serde(rename = "search_mode_shell_up_key_binding")]
+    pub requested_search_mode_shell_up_key_binding: Option<RequestedSearchMode>,
     pub shell_up_key_binding: bool,
     pub inline_height: u16,
     pub inline_height_shell_up_key_binding: Option<u16>,
@@ -1108,6 +1130,15 @@ impl Settings {
             .expect("Could not build config")
             .try_deserialize()
             .expect("Could not deserialize config")
+    }
+
+    pub fn search_mode(&self) -> SearchMode {
+        self.requested_search_mode.into()
+    }
+
+    pub fn search_mode_shell_up_key_binding(&self) -> Option<SearchMode> {
+        self.requested_search_mode_shell_up_key_binding
+            .map(Into::into)
     }
 
     pub(crate) fn effective_data_dir() -> PathBuf {
@@ -1813,7 +1844,10 @@ mod tests {
     use eyre::Result;
     use rstest::rstest;
 
-    use super::{AiEndpointProtocol, FilterMode, Settings, UtcOffsetSpec};
+    use super::{
+        AiEndpointProtocol, ConfigFile, FileFormat, FilterMode, RequestedSearchMode, SearchMode,
+        Settings, UtcOffsetSpec,
+    };
     use url::Url;
 
     #[rstest]
@@ -2052,5 +2086,67 @@ mod tests {
         assert_eq!(config.inspector.len(), 1);
         assert!(config.vim_insert.is_empty());
         assert!(config.prefix.is_empty());
+    }
+
+    /// Deserialize a TOML string into a [`Settings`] object.
+    fn parse_settings(toml: &str) -> Settings {
+        Settings::builder_with_data_dir(&atuin_common::utils::data_dir())
+            .expect("could not build settings builder")
+            .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+            .build()
+            .expect("could not build config")
+            .try_deserialize()
+            .expect("could not deserialize config")
+    }
+
+    #[test]
+    fn skim_is_requested_but_resolves_to_fuzzy() {
+        let settings = parse_settings("search_mode = \"skim\"\n");
+
+        assert_eq!(settings.requested_search_mode, RequestedSearchMode::Skim);
+        assert_eq!(settings.search_mode(), SearchMode::Fuzzy);
+    }
+
+    #[test]
+    fn skim_shell_up_key_binding_resolves_to_fuzzy() {
+        let settings = parse_settings("search_mode_shell_up_key_binding = \"skim\"\n");
+
+        assert_eq!(
+            settings.requested_search_mode_shell_up_key_binding,
+            Some(RequestedSearchMode::Skim)
+        );
+        assert_eq!(
+            settings.search_mode_shell_up_key_binding(),
+            Some(SearchMode::Fuzzy)
+        );
+    }
+
+    #[rstest]
+    #[case("prefix", RequestedSearchMode::Prefix)]
+    #[case("fulltext", RequestedSearchMode::Fulltext)]
+    #[case("fuzzy", RequestedSearchMode::Fuzzy)]
+    #[case("daemon-fuzzy", RequestedSearchMode::DaemonFuzzy)]
+    #[case("skim", RequestedSearchMode::Skim)]
+    fn requested_search_mode_parses_correctly(
+        #[case] value: &str,
+        #[case] expected: RequestedSearchMode,
+    ) {
+        let settings = parse_settings(&format!("search_mode = \"{value}\"\n"));
+        assert_eq!(settings.requested_search_mode, expected);
+    }
+
+    #[rstest]
+    #[case(RequestedSearchMode::Prefix, SearchMode::Prefix)]
+    #[case(RequestedSearchMode::Fulltext, SearchMode::FullText)]
+    #[case(RequestedSearchMode::Fuzzy, SearchMode::Fuzzy)]
+    #[case(RequestedSearchMode::DaemonFuzzy, SearchMode::DaemonFuzzy)]
+    // "skim" was removed -- maps to "fuzzy"
+    #[case(RequestedSearchMode::Skim, SearchMode::Fuzzy)]
+    fn effective_search_mode_matches_requested(
+        #[case] requested: RequestedSearchMode,
+        #[case] expected: SearchMode,
+    ) {
+        assert_eq!(requested.effective_mode(), expected);
+        assert_eq!(SearchMode::from(requested), expected);
     }
 }
