@@ -1937,11 +1937,14 @@ mod test {
 
     // Isolates the operator fix: the "$" survives whitespace stripping, so both rows score None
     // and fall back to recency; only dropping operators ranks them by span and the tight match wins.
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_fuzzy_operator_true_span() {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn test_search_fuzzy_operator_true_span(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let mut db = db;
 
         let now = OffsetDateTime::now_utc();
         let tight = "foo screen";
@@ -1973,11 +1976,14 @@ mod test {
 
     // Dropping operators from the ranking query must not disturb SQL matching: the end-anchor
     // still selects only commands ending in the term.
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_fuzzy_operator_query_returns_expected() {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn test_search_fuzzy_operator_query_returns_expected(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let mut db = db;
 
         new_history_item(&mut db, "use screen").await.unwrap();
         new_history_item(&mut db, "screenshot tool").await.unwrap();
