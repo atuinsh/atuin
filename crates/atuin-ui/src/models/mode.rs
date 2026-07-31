@@ -23,12 +23,13 @@ impl Mode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn labels_are_six_columns() {
-        assert_eq!(Mode::Normal { count: None }.label(), "NORMAL");
-        assert_eq!(Mode::Search.label(), "SEARCH");
-        assert_eq!(Mode::Normal { count: None }.label().chars().count(), 6);
-        assert_eq!(Mode::Search.label().chars().count(), 6);
+    #[rstest]
+    #[case::normal(Mode::Normal { count: None }, "NORMAL")]
+    #[case::search(Mode::Search, "SEARCH")]
+    fn label_names_the_mode_in_six_columns(#[case] mode: Mode, #[case] expected: &str) {
+        assert_eq!(mode.label(), expected);
+        assert_eq!(mode.label().chars().count(), 6, "labels must be six columns");
     }
 }

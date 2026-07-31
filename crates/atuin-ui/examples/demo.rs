@@ -11,7 +11,7 @@
 //!
 //! With `ATUIN_UI_VIM=1`, boots the vim-style modal interface: SEARCH first
 //! (type to filter), `Esc` -> NORMAL for `hjkl`/count navigation, `i`/`a`/`/`
-//! back to SEARCH, `Enter` accepts, `q` or `Ctrl-C` quits.
+//! back to SEARCH, `Enter` accepts; from NORMAL, `q`/`Esc`/`Ctrl-C` exit.
 
 use std::io;
 use std::ops::Range;

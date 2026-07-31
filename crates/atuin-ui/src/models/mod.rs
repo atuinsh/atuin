@@ -90,8 +90,11 @@ impl Model {
 mod tests {
     use super::*;
     use crate::theme::Theme;
+    use rstest::{fixture, rstest};
 
-    fn modal_model() -> Model {
+    /// A modal model starting in NORMAL with no pending count.
+    #[fixture]
+    fn modal() -> Model {
         Model {
             theme: Theme::default(),
             enter_accept: true,
@@ -101,46 +104,49 @@ mod tests {
         }
     }
 
-    #[test]
-    fn count_accumulates_decimal_digits() {
-        let mut m = modal_model();
-        m.push_count_digit(1);
-        m.push_count_digit(0);
-        assert!(m.count_pending());
-        assert_eq!(m.take_count(), 10);
-        assert!(!m.count_pending(), "take resets the count");
+    #[rstest]
+    #[case::single(&[5], 5)]
+    #[case::two_digits(&[1, 0], 10)]
+    #[case::three_digits(&[2, 5, 0], 250)]
+    fn take_count_reads_the_accumulated_digits(
+        mut modal: Model,
+        #[case] digits: &[u8],
+        #[case] expected: usize,
+    ) {
+        for &d in digits {
+            modal.push_count_digit(d);
+        }
+        assert!(modal.count_pending());
+        assert_eq!(modal.take_count(), expected);
+        assert!(!modal.count_pending(), "take resets the count");
     }
 
-    #[test]
-    fn take_count_defaults_to_one() {
-        let mut m = modal_model();
-        assert_eq!(m.take_count(), 1);
+    #[rstest]
+    fn take_count_defaults_to_one(mut modal: Model) {
+        assert_eq!(modal.take_count(), 1);
     }
 
-    #[test]
-    fn clear_count_discards_pending() {
-        let mut m = modal_model();
-        m.push_count_digit(9);
-        m.clear_count();
-        assert!(!m.count_pending());
-        assert_eq!(m.take_count(), 1);
+    #[rstest]
+    fn clear_count_discards_pending(mut modal: Model) {
+        modal.push_count_digit(9);
+        modal.clear_count();
+        assert!(!modal.count_pending());
+        assert_eq!(modal.take_count(), 1);
     }
 
-    #[test]
-    fn mode_transitions_stay_within_modal() {
-        let mut m = modal_model();
-        m.enter_search();
-        assert_eq!(m.mode(), Some(Mode::Search));
-        m.enter_normal();
-        assert_eq!(m.mode(), Some(Mode::Normal { count: None }));
+    #[rstest]
+    fn mode_transitions_stay_within_modal(mut modal: Model) {
+        modal.enter_search();
+        assert_eq!(modal.mode(), Some(Mode::Search));
+        modal.enter_normal();
+        assert_eq!(modal.mode(), Some(Mode::Normal { count: None }));
     }
 
-    #[test]
-    fn non_modal_ignores_mode_mutations() {
-        let mut m = modal_model();
-        m.mode = None;
-        m.enter_normal(); // no-op on a non-modal model
-        assert_eq!(m.mode(), None);
-        assert_eq!(m.take_count(), 1);
+    #[rstest]
+    fn non_modal_ignores_mode_mutations(mut modal: Model) {
+        modal.mode = None;
+        modal.enter_normal(); // no-op on a non-modal model
+        assert_eq!(modal.mode(), None);
+        assert_eq!(modal.take_count(), 1);
     }
 }

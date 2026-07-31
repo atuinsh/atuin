@@ -200,6 +200,7 @@ pub trait HistorySource: Clone + Send + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::{fixture, rstest};
 
     fn row(i: usize) -> HistoryRow {
         HistoryRow {
@@ -209,6 +210,16 @@ mod tests {
             duration: 0,
             exit: 0,
         }
+    }
+
+    /// A fresh list with a set viewport height and total. Defaults to height 10
+    /// and empty; override per-test with `#[with(height, total)]`.
+    #[fixture]
+    fn list(#[default(10)] height: u16, #[default(0)] total: usize) -> HistoryList {
+        let mut list = HistoryList::new();
+        list.set_viewport_height(height);
+        list.set_total(total);
+        list
     }
 
     /// Mimic the app's load step: whenever the desired range isn't resident,
@@ -221,11 +232,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn window_stays_bounded_scrolling_millions() {
-        let mut list = HistoryList::new();
-        list.set_viewport_height(20);
-        list.set_total(5_000_000);
+    #[rstest]
+    fn window_stays_bounded_scrolling_millions(#[with(20, 5_000_000)] mut list: HistoryList) {
         ensure_loaded(&mut list);
 
         for _ in 0..2000 {
@@ -245,12 +253,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn selection_stays_visible() {
-        let mut list = HistoryList::new();
-        list.set_viewport_height(10);
-        list.set_total(100);
-
+    #[rstest]
+    fn selection_stays_visible(#[with(10, 100)] mut list: HistoryList) {
         list.select_last();
         assert_eq!(list.selected(), 99);
         assert!(list.selected() >= list.offset() && list.selected() < list.offset() + 10);
@@ -260,11 +264,8 @@ mod tests {
         assert_eq!(list.offset(), 0);
     }
 
-    #[test]
-    fn empty_list_is_safe() {
-        let mut list = HistoryList::new();
-        list.set_viewport_height(10);
-        list.set_total(0);
+    #[rstest]
+    fn empty_list_is_safe(#[with(10, 0)] mut list: HistoryList) {
         list.select_next();
         list.page_down();
         assert_eq!(list.selected(), 0);
@@ -272,11 +273,8 @@ mod tests {
         assert!(list.desired_range().is_empty());
     }
 
-    #[test]
-    fn set_results_loads_all_and_resets_selection() {
-        let mut list = HistoryList::new();
-        list.set_viewport_height(10);
-        list.set_total(5_000_000);
+    #[rstest]
+    fn set_results_loads_all_and_resets_selection(#[with(10, 5_000_000)] mut list: HistoryList) {
         list.select_last(); // move selection far away
 
         let rows: Vec<_> = (0..3).map(row).collect();
@@ -288,10 +286,8 @@ mod tests {
         assert!(list.row(0).is_some() && list.row(2).is_some());
     }
 
-    #[test]
-    fn reset_clears_but_keeps_viewport_height() {
-        let mut list = HistoryList::new();
-        list.set_viewport_height(10);
+    #[rstest]
+    fn reset_clears_but_keeps_viewport_height(#[with(10, 0)] mut list: HistoryList) {
         list.set_results((0..3).map(row).collect());
 
         list.reset();
@@ -303,21 +299,25 @@ mod tests {
         assert!(list.desired_range().is_empty());
     }
 
-    #[test]
-    fn select_by_count_moves_and_clamps() {
-        let mut list = HistoryList::new();
-        list.set_viewport_height(20);
-        list.set_total(100);
-
-        list.select_last(); // 99 (oldest / visual top)
-        list.select_prev_by(10); // down 10 toward newest
-        assert_eq!(list.selected(), 89);
-        list.select_next_by(5); // up 5 toward oldest
-        assert_eq!(list.selected(), 94);
-
-        list.select_prev_by(1000); // saturates at the newest
-        assert_eq!(list.selected(), 0);
-        list.select_next_by(1000); // clamps at the oldest
-        assert_eq!(list.selected(), 99);
+    #[rstest]
+    // start index, count, toward_newer (j/down = select_prev_by), expected selection
+    #[case::down_by_10(99, 10, true, 89)]
+    #[case::up_by_5(89, 5, false, 94)]
+    #[case::down_saturates_at_newest(50, 1000, true, 0)]
+    #[case::up_clamps_at_oldest(50, 1000, false, 99)]
+    fn select_by_count_moves_and_clamps(
+        #[with(20, 100)] mut list: HistoryList,
+        #[case] start: usize,
+        #[case] count: usize,
+        #[case] toward_newer: bool,
+        #[case] expected: usize,
+    ) {
+        list.select_to(start);
+        if toward_newer {
+            list.select_prev_by(count);
+        } else {
+            list.select_next_by(count);
+        }
+        assert_eq!(list.selected(), expected);
     }
 }

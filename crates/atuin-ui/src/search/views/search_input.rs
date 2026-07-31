@@ -1,6 +1,6 @@
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Constraint, Layout, Rect},
     style::Modifier,
     text::{Line, Span},
     widgets::{Paragraph, Widget},
@@ -30,20 +30,54 @@ pub struct SearchInputView<'render> {
 impl Widget for SearchInputView<'_> {
     #[instrument(level = "trace", name = "SearchInputView::render", skip_all, fields(area = ?area))]
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let mut spans = Vec::with_capacity(5);
-        if let Some(mode) = self.mode {
-            spans.push(Span::styled("| ", self.theme.annotation));
-            spans.push(Span::styled(
-                mode.label(),
+        // When modal, reserve the chip's column on the left; the prompt + query
+        // fill the rest. Non-modal renders prompt + query across the whole row.
+        let rest = match self.mode {
+            Some(mode) => {
+                let [chip, rest] = Layout::horizontal([
+                    Constraint::Length(MODE_INDICATOR_WIDTH),
+                    Constraint::Min(0),
+                ])
+                .areas(area);
+                ModeIndicator {
+                    mode,
+                    theme: self.theme,
+                }
+                .render(chip, buf);
+                rest
+            }
+            None => area,
+        };
+
+        let line = Line::from(vec![
+            Span::styled(self.prompt, self.theme.annotation),
+            Span::styled(self.input.value(), self.theme.base),
+        ]);
+        Paragraph::new(line).style(self.theme.base).render(rest, buf);
+    }
+}
+
+/// The vim mode chip: `| MODE | `, drawn before the prompt when the interface is
+/// modal. Fixed [`MODE_INDICATOR_WIDTH`] columns wide, so the caller reserves its
+/// column and offsets the cursor by it.
+#[derive(Clone, Copy)]
+struct ModeIndicator<'render> {
+    mode: Mode,
+    theme: &'render Theme,
+}
+
+impl Widget for ModeIndicator<'_> {
+    #[instrument(level = "trace", name = "ModeIndicator::render", skip_all, fields(area = ?area))]
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let line = Line::from(vec![
+            Span::styled("| ", self.theme.annotation),
+            Span::styled(
+                self.mode.label(),
                 self.theme.annotation.add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::styled(" | ", self.theme.annotation));
-        }
-        spans.push(Span::styled(self.prompt, self.theme.annotation));
-        spans.push(Span::styled(self.input.value(), self.theme.base));
-        Paragraph::new(Line::from(spans))
-            .style(self.theme.base)
-            .render(area, buf);
+            ),
+            Span::styled(" | ", self.theme.annotation),
+        ]);
+        Paragraph::new(line).style(self.theme.base).render(area, buf);
     }
 }
 
@@ -51,6 +85,7 @@ impl Widget for SearchInputView<'_> {
 mod tests {
     use super::*;
     use crate::models::Mode;
+    use rstest::rstest;
 
     fn render_line(mode: Option<Mode>, query: &str, width: u16) -> String {
         let theme = Theme::default();
@@ -70,26 +105,24 @@ mod tests {
         (0..width).map(|x| buf[(x, 0)].symbol()).collect()
     }
 
-    #[test]
-    fn plain_mode_has_no_indicator() {
-        assert!(render_line(None, "grep", 30).starts_with("> grep"));
+    #[rstest]
+    #[case::plain(None, "grep", "> grep")]
+    #[case::normal(Some(Mode::Normal { count: None }), "grep", "| NORMAL | > grep")]
+    #[case::search(Some(Mode::Search), "ls", "| SEARCH | > ls")]
+    fn renders_optional_chip_then_prompt_and_query(
+        #[case] mode: Option<Mode>,
+        #[case] query: &str,
+        #[case] expected_prefix: &str,
+    ) {
+        let line = render_line(mode, query, 30);
+        assert!(line.starts_with(expected_prefix), "got {line:?}");
     }
 
-    #[test]
-    fn normal_mode_shows_indicator() {
-        let line = render_line(Some(Mode::Normal { count: None }), "grep", 30);
-        assert!(line.starts_with("| NORMAL | > grep"), "got {line:?}");
-    }
-
-    #[test]
-    fn search_mode_shows_indicator() {
-        let line = render_line(Some(Mode::Search), "ls", 30);
-        assert!(line.starts_with("| SEARCH | > ls"), "got {line:?}");
-    }
-
-    #[test]
-    fn indicator_width_matches_rendered_prefix() {
-        let line = render_line(Some(Mode::Normal { count: None }), "", 30);
-        assert_eq!(&line[..MODE_INDICATOR_WIDTH as usize], "| NORMAL | ");
+    #[rstest]
+    #[case::normal(Mode::Normal { count: None }, "| NORMAL | ")]
+    #[case::search(Mode::Search, "| SEARCH | ")]
+    fn chip_fills_exactly_its_reserved_width(#[case] mode: Mode, #[case] chip: &str) {
+        let line = render_line(Some(mode), "", 30);
+        assert_eq!(&line[..MODE_INDICATOR_WIDTH as usize], chip);
     }
 }

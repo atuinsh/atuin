@@ -216,10 +216,7 @@ impl<S: HistorySource> SearchInteractive<S> {
         match key.code {
             KeyCode::Enter => return Cmd::Quit, // accept
             KeyCode::Char('q') => return Cmd::Quit,
-            KeyCode::Esc => {
-                self.model.clear_count();
-                return Cmd::None;
-            }
+            KeyCode::Esc => return Cmd::Quit, // exit the UI
             KeyCode::Char('i') | KeyCode::Char('a') | KeyCode::Char('/') => {
                 self.model.enter_search();
                 return Cmd::None;
@@ -337,6 +334,7 @@ mod tests {
     use super::*;
     use crate::models::{HistoryList, HistoryRow, SearchInput};
     use crate::theme::Theme;
+    use rstest::{fixture, rstest};
 
     #[derive(Clone)]
     struct TestSource;
@@ -352,7 +350,11 @@ mod tests {
         }
     }
 
-    fn app_with_mode(mode: Option<Mode>) -> SearchInteractive<TestSource> {
+    // `App` (the runtime trait) is in scope via `use super::*`, so alias the
+    // concrete test app under a different name.
+    type TestApp = SearchInteractive<TestSource>;
+
+    fn app_with_mode(mode: Option<Mode>) -> TestApp {
         let model = Model {
             theme: Theme::default(),
             enter_accept: true,
@@ -363,48 +365,42 @@ mod tests {
         SearchInteractive::new(model, None, TestSource)
     }
 
-    fn app() -> SearchInteractive<TestSource> {
+    /// The non-modal interface (today's plain search).
+    #[fixture]
+    fn plain() -> TestApp {
         app_with_mode(None)
     }
 
-    fn modal_app_normal() -> SearchInteractive<TestSource> {
+    /// The modal interface booted in NORMAL mode.
+    #[fixture]
+    fn normal() -> TestApp {
         app_with_mode(Some(Mode::Normal { count: None }))
     }
 
-    fn modal_app_search() -> SearchInteractive<TestSource> {
+    /// The modal interface booted in SEARCH mode.
+    #[fixture]
+    fn search() -> TestApp {
         app_with_mode(Some(Mode::Search))
-    }
-
-    fn seed(app: &mut SearchInteractive<TestSource>, total: usize, height: u16) {
-        app.model.history.set_viewport_height(height);
-        app.model.history.set_total(total);
     }
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::empty())
     }
 
-    #[test]
-    fn typing_edits_the_query() {
-        let mut app = app();
-        app.on_key(key(KeyCode::Char('l')));
-        app.on_key(key(KeyCode::Char('s')));
-        assert_eq!(app.model.search.value(), "ls");
-        app.on_key(key(KeyCode::Backspace));
-        assert_eq!(app.model.search.value(), "l");
+    fn ctrl(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
     }
 
-    #[test]
-    fn q_is_typed_not_quit() {
-        let mut app = app();
-        app.on_key(key(KeyCode::Char('q')));
-        assert_eq!(app.model.search.value(), "q");
+    fn type_chars(app: &mut TestApp, s: &str) {
+        for c in s.chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
     }
 
-    #[test]
-    fn esc_quits() {
-        let mut app = app();
-        assert!(matches!(app.on_key(key(KeyCode::Esc)), Cmd::Quit));
+    /// Give the list `total` rows over a `height`-row viewport.
+    fn seed(app: &mut TestApp, total: usize, height: u16) {
+        app.model.history.set_viewport_height(height);
+        app.model.history.set_total(total);
     }
 
     fn hrow(cmd: &str) -> HistoryRow {
@@ -417,228 +413,203 @@ mod tests {
         }
     }
 
-    #[test]
-    fn matching_results_replace_the_list() {
-        let mut app = app();
-        for c in "git".chars() {
-            app.on_key(key(KeyCode::Char(c)));
-        }
-        let rows = vec![hrow("git status"), hrow("git log")];
-        app.update(Msg::SearchResults {
-            query: "git".into(),
-            rows,
-        });
-        assert_eq!(app.model.history.total(), 2);
-        assert_eq!(app.model.history.selected(), 0);
+    // --- non-modal (plain) interface -----------------------------------------
+
+    #[rstest]
+    fn typing_edits_the_query(mut plain: TestApp) {
+        type_chars(&mut plain, "ls");
+        assert_eq!(plain.model.search.value(), "ls");
+        plain.on_key(key(KeyCode::Backspace));
+        assert_eq!(plain.model.search.value(), "l");
     }
 
-    #[test]
-    fn stale_results_are_ignored() {
-        let mut app = app();
-        for c in "new".chars() {
-            app.on_key(key(KeyCode::Char(c)));
-        }
-        // A result for an older query the user has since changed.
-        app.update(Msg::SearchResults {
-            query: "old".into(),
-            rows: vec![hrow("old thing")],
-        });
-        assert_eq!(app.model.history.total(), 0);
+    #[rstest]
+    fn q_is_typed_not_quit(mut plain: TestApp) {
+        plain.on_key(key(KeyCode::Char('q')));
+        assert_eq!(plain.model.search.value(), "q");
     }
 
-    #[test]
-    fn browse_load_ignored_while_searching() {
-        let mut app = app();
-        for c in "git".chars() {
-            app.on_key(key(KeyCode::Char(c)));
-        }
-        app.update(Msg::SearchResults {
-            query: "git".into(),
-            rows: vec![hrow("git a"), hrow("git b")],
-        });
-        assert_eq!(app.model.history.total(), 2);
-        // A stale browse load must NOT clobber the active search results.
-        app.update(Msg::HistoryTotal(5_000_000));
-        app.update(Msg::HistoryLoaded {
-            start: 0,
-            rows: vec![hrow("browse x")],
-        });
-        assert_eq!(app.model.history.total(), 2, "browse load clobbered search");
+    #[rstest]
+    fn esc_quits(mut plain: TestApp) {
+        assert!(matches!(plain.on_key(key(KeyCode::Esc)), Cmd::Quit));
     }
 
-    #[test]
-    fn ctrl_modified_char_is_not_typed() {
-        let mut app = app();
-        app.on_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
-        assert_eq!(app.model.search.value(), "", "Ctrl+A must not insert 'a'");
+    #[rstest]
+    fn ctrl_modified_char_is_not_typed(mut plain: TestApp) {
+        plain.on_key(ctrl('a'));
+        assert_eq!(plain.model.search.value(), "", "Ctrl+A must not insert 'a'");
     }
 
-    #[test]
-    fn clearing_query_reverts_to_browse() {
-        let mut app = app();
-        app.on_key(key(KeyCode::Char('g')));
-        let cmd = app.on_key(key(KeyCode::Backspace));
-        assert_eq!(app.model.search.value(), "");
-        assert!(matches!(cmd, Cmd::Batch(_)), "clearing query should browse");
-        assert_eq!(app.model.history.total(), 0, "browse reset clears the list");
-    }
-
-    #[test]
-    fn ctrl_c_quits() {
-        let mut app = app();
-        let cmd = app.update(Msg::Key(KeyEvent::new(
-            KeyCode::Char('c'),
-            KeyModifiers::CONTROL,
-        )));
-        assert!(matches!(cmd, Cmd::Quit));
-    }
-
-    #[test]
-    fn search_mode_types_query() {
-        let mut app = modal_app_search();
-        app.on_key(key(KeyCode::Char('l')));
-        app.on_key(key(KeyCode::Char('s')));
-        assert_eq!(app.model.search.value(), "ls");
-    }
-
-    #[test]
-    fn search_esc_switches_to_normal_not_quit() {
-        let mut app = modal_app_search();
-        let cmd = app.on_key(key(KeyCode::Esc));
-        assert!(matches!(cmd, Cmd::None));
-        assert_eq!(app.model.mode(), Some(Mode::Normal { count: None }));
-    }
-
-    #[test]
-    fn search_enter_accepts() {
-        let mut app = modal_app_search();
-        assert!(matches!(app.on_key(key(KeyCode::Enter)), Cmd::Quit));
-    }
-
-    #[test]
-    fn normal_i_a_and_slash_enter_search() {
-        for enter in ['i', 'a', '/'] {
-            let mut app = modal_app_normal();
-            app.on_key(key(KeyCode::Char(enter)));
-            assert_eq!(
-                app.model.mode(),
-                Some(Mode::Search),
-                "'{enter}' should enter SEARCH"
-            );
-        }
-    }
-
-    #[test]
-    fn normal_keys_do_not_type() {
-        let mut app = modal_app_normal();
-        app.on_key(key(KeyCode::Char('j')));
-        app.on_key(key(KeyCode::Char('k')));
-        app.on_key(key(KeyCode::Char('x')));
-        assert_eq!(app.model.search.value(), "");
-    }
-
-    #[test]
-    fn normal_q_quits_and_enter_accepts() {
-        let mut app = modal_app_normal();
-        assert!(matches!(app.on_key(key(KeyCode::Char('q'))), Cmd::Quit));
-        assert!(matches!(app.on_key(key(KeyCode::Enter)), Cmd::Quit));
-    }
-
-    #[test]
-    fn normal_bare_j_moves_one() {
-        let mut app = modal_app_normal();
-        seed(&mut app, 100, 20);
-        app.model.history.select_last(); // 99
-        app.on_key(key(KeyCode::Char('j')));
-        assert_eq!(app.model.history.selected(), 98);
-    }
-
-    #[test]
-    fn normal_count_jumps_multiple_rows() {
-        let mut app = modal_app_normal();
-        seed(&mut app, 100, 20);
-        app.model.history.select_last(); // 99
-        app.on_key(key(KeyCode::Char('1')));
-        app.on_key(key(KeyCode::Char('0')));
-        app.on_key(key(KeyCode::Char('j')));
-        assert_eq!(app.model.history.selected(), 89);
-    }
-
-    #[test]
-    fn normal_zero_without_count_is_noop() {
-        let mut app = modal_app_normal();
-        seed(&mut app, 100, 20);
-        app.model.history.select_last(); // 99
-        app.on_key(key(KeyCode::Char('0'))); // bare 0 → no-op
-        app.on_key(key(KeyCode::Char('j'))); // moves 1
-        assert_eq!(app.model.history.selected(), 98);
-    }
-
-    #[test]
-    fn normal_esc_clears_pending_count() {
-        let mut app = modal_app_normal();
-        seed(&mut app, 100, 20);
-        app.model.history.select_last(); // 99
-        app.on_key(key(KeyCode::Char('5')));
-        app.on_key(key(KeyCode::Esc)); // cancels the 5
-        app.on_key(key(KeyCode::Char('j'))); // moves 1, not 5
-        assert_eq!(app.model.history.selected(), 98);
-        assert_eq!(app.model.mode(), Some(Mode::Normal { count: None }));
-    }
-
-    #[test]
-    fn normal_h_l_are_reserved_noops() {
-        let mut app = modal_app_normal();
-        seed(&mut app, 100, 20);
-        app.model.history.select_last(); // 99
-        app.on_key(key(KeyCode::Char('h')));
-        app.on_key(key(KeyCode::Char('l')));
-        assert_eq!(app.model.history.selected(), 99, "h/l must not move");
-        assert_eq!(app.model.search.value(), "", "h/l must not type");
-    }
-
-    #[test]
-    fn normal_nav_during_active_search_keeps_results() {
-        // Type a query in SEARCH, get results, drop to NORMAL, navigate.
-        let mut app = modal_app_search();
-        for c in "git".chars() {
-            app.on_key(key(KeyCode::Char(c)));
-        }
-        app.update(Msg::SearchResults {
+    #[rstest]
+    fn matching_results_replace_the_list(mut plain: TestApp) {
+        type_chars(&mut plain, "git");
+        plain.update(Msg::SearchResults {
             query: "git".into(),
             rows: vec![hrow("git status"), hrow("git log")],
         });
-        assert_eq!(app.model.history.total(), 2);
+        assert_eq!(plain.model.history.total(), 2);
+        assert_eq!(plain.model.history.selected(), 0);
+    }
 
-        app.on_key(key(KeyCode::Esc)); // SEARCH -> NORMAL, query still "git"
-        assert_eq!(app.model.mode(), Some(Mode::Normal { count: None }));
+    #[rstest]
+    fn stale_results_are_ignored(mut plain: TestApp) {
+        type_chars(&mut plain, "new");
+        // A result for an older query the user has since changed.
+        plain.update(Msg::SearchResults {
+            query: "old".into(),
+            rows: vec![hrow("old thing")],
+        });
+        assert_eq!(plain.model.history.total(), 0);
+    }
+
+    #[rstest]
+    fn browse_load_ignored_while_searching(mut plain: TestApp) {
+        type_chars(&mut plain, "git");
+        plain.update(Msg::SearchResults {
+            query: "git".into(),
+            rows: vec![hrow("git a"), hrow("git b")],
+        });
+        assert_eq!(plain.model.history.total(), 2);
+        // A stale browse load must NOT clobber the active search results.
+        plain.update(Msg::HistoryTotal(5_000_000));
+        plain.update(Msg::HistoryLoaded {
+            start: 0,
+            rows: vec![hrow("browse x")],
+        });
+        assert_eq!(plain.model.history.total(), 2, "browse load clobbered search");
+    }
+
+    #[rstest]
+    fn clearing_query_reverts_to_browse(mut plain: TestApp) {
+        plain.on_key(key(KeyCode::Char('g')));
+        let cmd = plain.on_key(key(KeyCode::Backspace));
+        assert_eq!(plain.model.search.value(), "");
+        assert!(matches!(cmd, Cmd::Batch(_)), "clearing query should browse");
+        assert_eq!(plain.model.history.total(), 0, "browse reset clears the list");
+    }
+
+    // --- SEARCH mode ---------------------------------------------------------
+
+    #[rstest]
+    fn search_mode_types_query(mut search: TestApp) {
+        type_chars(&mut search, "ls");
+        assert_eq!(search.model.search.value(), "ls");
+    }
+
+    #[rstest]
+    fn search_esc_switches_to_normal(mut search: TestApp) {
+        let cmd = search.on_key(key(KeyCode::Esc));
+        assert!(matches!(cmd, Cmd::None));
+        assert_eq!(search.model.mode(), Some(Mode::Normal { count: None }));
+    }
+
+    #[rstest]
+    fn search_enter_accepts(mut search: TestApp) {
+        assert!(matches!(search.on_key(key(KeyCode::Enter)), Cmd::Quit));
+    }
+
+    // --- NORMAL mode ---------------------------------------------------------
+
+    #[rstest]
+    #[case::insert('i')]
+    #[case::append('a')]
+    #[case::search('/')]
+    fn normal_i_a_and_slash_enter_search(mut normal: TestApp, #[case] enter: char) {
+        normal.on_key(key(KeyCode::Char(enter)));
+        assert_eq!(
+            normal.model.mode(),
+            Some(Mode::Search),
+            "'{enter}' should enter SEARCH"
+        );
+    }
+
+    #[rstest]
+    fn normal_keys_do_not_type(mut normal: TestApp) {
+        for c in ['j', 'k', 'x'] {
+            normal.on_key(key(KeyCode::Char(c)));
+        }
+        assert_eq!(normal.model.search.value(), "");
+    }
+
+    #[rstest]
+    fn normal_q_quits(mut normal: TestApp) {
+        assert!(matches!(normal.on_key(key(KeyCode::Char('q'))), Cmd::Quit));
+    }
+
+    #[rstest]
+    fn normal_enter_accepts(mut normal: TestApp) {
+        assert!(matches!(normal.on_key(key(KeyCode::Enter)), Cmd::Quit));
+    }
+
+    #[rstest]
+    fn normal_esc_exits(mut normal: TestApp) {
+        assert!(matches!(normal.on_key(key(KeyCode::Esc)), Cmd::Quit));
+    }
+
+    #[rstest]
+    // keys pressed after selecting the oldest row (99), then the expected selection
+    #[case::bare_j(&['j'], 98)]
+    #[case::ten_j(&['1', '0', 'j'], 89)]
+    #[case::bare_zero_is_noop(&['0', 'j'], 98)]
+    #[case::count_cancelled_by_unmapped_key(&['5', 'x', 'j'], 98)]
+    fn normal_count_navigation(mut normal: TestApp, #[case] keys: &[char], #[case] expected: usize) {
+        seed(&mut normal, 100, 20);
+        normal.model.history.select_last(); // 99 (oldest / visual top)
+        for &c in keys {
+            normal.on_key(key(KeyCode::Char(c)));
+        }
+        assert_eq!(normal.model.history.selected(), expected);
+    }
+
+    #[rstest]
+    #[case::h('h')]
+    #[case::l('l')]
+    fn normal_h_l_are_reserved_noops(mut normal: TestApp, #[case] c: char) {
+        seed(&mut normal, 100, 20);
+        normal.model.history.select_last(); // 99
+        normal.on_key(key(KeyCode::Char(c)));
+        assert_eq!(normal.model.history.selected(), 99, "{c} must not move");
+        assert_eq!(normal.model.search.value(), "", "{c} must not type");
+    }
+
+    #[rstest]
+    fn normal_pageupdown_page_the_list(mut normal: TestApp) {
+        seed(&mut normal, 100, 20); // viewport height 20 => page = 20
+        normal.model.history.select_last(); // 99 (oldest / visual top)
+        normal.on_key(key(KeyCode::PageDown)); // pages toward newest by one viewport
+        assert_eq!(normal.model.history.selected(), 79);
+        normal.on_key(key(KeyCode::PageUp)); // pages back toward oldest
+        assert_eq!(normal.model.history.selected(), 99);
+    }
+
+    #[rstest]
+    fn normal_nav_during_active_search_keeps_results(mut search: TestApp) {
+        // Type a query in SEARCH, get results, drop to NORMAL, navigate.
+        type_chars(&mut search, "git");
+        search.update(Msg::SearchResults {
+            query: "git".into(),
+            rows: vec![hrow("git status"), hrow("git log")],
+        });
+        assert_eq!(search.model.history.total(), 2);
+
+        search.on_key(key(KeyCode::Esc)); // SEARCH -> NORMAL, query still "git"
+        assert_eq!(search.model.mode(), Some(Mode::Normal { count: None }));
 
         // A NORMAL motion must not clobber the search results or fetch browse data:
         // the result set is fully resident, so no browse Cmd is emitted.
-        let cmd = app.on_key(key(KeyCode::Char('j')));
-        assert_eq!(app.model.history.total(), 2, "search results survived NORMAL nav");
+        let cmd = search.on_key(key(KeyCode::Char('j')));
+        assert_eq!(search.model.history.total(), 2, "search results survived NORMAL nav");
         assert!(matches!(cmd, Cmd::None), "no browse load emitted during active search");
     }
 
-    #[test]
-    fn normal_pageupdown_page_the_list() {
-        let mut app = modal_app_normal();
-        seed(&mut app, 100, 20); // viewport height 20 => page = 20
-        app.model.history.select_last(); // 99 (oldest / visual top)
-        app.on_key(key(KeyCode::PageDown)); // pages toward newest by one viewport
-        assert_eq!(app.model.history.selected(), 79);
-        app.on_key(key(KeyCode::PageUp)); // pages back toward oldest
-        assert_eq!(app.model.history.selected(), 99);
-    }
+    // --- mode-independent ----------------------------------------------------
 
-    #[test]
-    fn ctrl_c_quits_from_any_mode() {
-        for mut app in [modal_app_search(), modal_app_normal()] {
-            let cmd = app.update(Msg::Key(KeyEvent::new(
-                KeyCode::Char('c'),
-                KeyModifiers::CONTROL,
-            )));
-            assert!(matches!(cmd, Cmd::Quit));
-        }
+    #[rstest]
+    #[case::plain(None)]
+    #[case::search(Some(Mode::Search))]
+    #[case::normal(Some(Mode::Normal { count: None }))]
+    fn ctrl_c_quits_from_any_mode(#[case] mode: Option<Mode>) {
+        let mut app = app_with_mode(mode);
+        assert!(matches!(app.update(Msg::Key(ctrl('c'))), Cmd::Quit));
     }
 }

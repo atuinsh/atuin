@@ -707,6 +707,7 @@ dependencies = [
  "image",
  "ratatui",
  "ratatui-image",
+ "rstest",
  "tokio",
  "tracing",
  "tracing-chrome",

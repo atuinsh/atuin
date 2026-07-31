@@ -20,6 +20,7 @@ tracing = { workspace = true, features = ["release_max_level_debug"] }
 tokio = { workspace = true }
 
 [dev-dependencies]
+rstest = { workspace = true }
 # For the demo's optional Chrome trace (ATUIN_UI_TRACE=1).
 tracing-subscriber = { workspace = true }
 tracing-chrome = "0.7"
