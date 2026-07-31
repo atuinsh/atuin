@@ -70,4 +70,5 @@ enabled = true
 ```
 
 See the [`tmux` config reference](../configuration/config.md#tmux) for sizing and
-requirements.
+requirements. If you use iTerm2's native tmux integration, keep the popup off —
+it can't display tmux popups.
