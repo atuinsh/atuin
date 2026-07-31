@@ -109,10 +109,13 @@ fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
     });
 }
 
-/// Timeout and queue depth for the popup's request/reply to the suggestion
-/// worker — bounded so a slow backend can never wedge the proxy's UI.
+/// How long the popup waits for the suggestion worker before giving up, so
+/// a slow backend can never wedge the proxy's UI.
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
 const SUGGEST_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Queued queries beyond this are dropped rather than backing up behind a
+/// slow backend.
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
 const SUGGEST_QUEUE_DEPTH: usize = 8;
 
@@ -136,7 +139,8 @@ fn history_suggestion_provider() -> Option<atuin_pty_proxy::SuggestionProvider> 
     std::thread::spawn(move || suggestion_worker(settings, req_rx));
 
     Some(Box::new(move |line: &str| {
-        if line.chars().count() < min_chars {
+        // take(min_chars) keeps the length check O(min_chars), not O(line).
+        if line.chars().take(min_chars).count() < min_chars {
             return Vec::new();
         }
         let (reply_tx, reply_rx) = mpsc::channel();

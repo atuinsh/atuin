@@ -117,24 +117,27 @@ impl<W: Write> Compositor<W> {
             return Ok(());
         }
 
-        let mut buf = Vec::with_capacity(data.len() + 256);
+        let mut buf = Vec::with_capacity(256);
         self.erase_into(&mut buf);
 
         self.tail.extend_from_slice(data);
-        let pending = std::mem::take(&mut self.tail);
-        let ready_len = if self.split_partials && pending.len() <= MAX_TAIL_BYTES {
-            complete_prefix_len(&pending)
+        let mut ready = std::mem::take(&mut self.tail);
+        let ready_len = if self.split_partials && ready.len() <= MAX_TAIL_BYTES {
+            complete_prefix_len(&ready)
         } else {
-            pending.len()
+            ready.len()
         };
-        let (ready, tail) = pending.split_at(ready_len);
-        self.tail = tail.to_vec();
+        self.tail = ready.split_off(ready_len);
 
         // User-visible bytes first; the model catches up after the write.
-        buf.extend_from_slice(ready);
-        self.out.write_all(&buf)?;
+        if buf.is_empty() {
+            self.out.write_all(&ready)?;
+        } else {
+            buf.extend_from_slice(&ready);
+            self.out.write_all(&buf)?;
+        }
         self.out.flush()?;
-        self.parser.process(ready);
+        self.parser.process(&ready);
 
         let mut repaint = Vec::new();
         self.draw_into(&mut repaint, false);
@@ -255,70 +258,7 @@ impl<W: Write> Compositor<W> {
 
         buf.extend_from_slice(b"\x1b[?25l");
         if !solo_ghost {
-            let mut visible = content.suggestions.len().min(MAX_POPUP_ROWS);
-
-            // Below if it fits, else above, else the roomier side shrunk —
-            // never over the command line itself.
-            let below = (rows - cursor_row - 1) as usize;
-            let above = cursor_row as usize;
-            let first_row = if below >= visible {
-                cursor_row + 1
-            } else if above >= visible {
-                cursor_row - visible as u16
-            } else if below >= above {
-                visible = below;
-                cursor_row + 1
-            } else {
-                visible = above;
-                0
-            };
-
-            if visible > 0 {
-                // Slide the selection window to keep the highlight visible.
-                if selected < self.window_offset {
-                    self.window_offset = selected;
-                }
-                if selected >= self.window_offset + visible {
-                    self.window_offset = selected + 1 - visible;
-                }
-                self.window_offset = self.window_offset.min(content.suggestions.len() - visible);
-                let window = &content.suggestions[self.window_offset..self.window_offset + visible];
-
-                // Left-align with the start of the typed line, sliding left to fit.
-                let line_width = content.line.width().min(u16::MAX as usize) as u16;
-                let width = window
-                    .iter()
-                    .map(|s| s.width() + 2)
-                    .max()
-                    .unwrap_or(2)
-                    .clamp(MIN_POPUP_WIDTH, cols as usize);
-                let col = cursor_col
-                    .saturating_sub(line_width)
-                    .min(cols.saturating_sub(width as u16));
-
-                for (i, suggestion) in window.iter().enumerate() {
-                    let row = first_row + i as u16;
-                    move_to(buf, row, col);
-                    buf.extend_from_slice(if self.window_offset + i == selected {
-                        SELECTED_STYLE
-                    } else {
-                        UNSELECTED_STYLE
-                    });
-
-                    let (fitted, fitted_width) = fit_to_width(suggestion, width - 2);
-                    let mut text = String::with_capacity(width + 1);
-                    text.push(' ');
-                    text.push_str(&fitted);
-                    for _ in 1 + fitted_width..width {
-                        text.push(' ');
-                    }
-                    buf.extend_from_slice(text.as_bytes());
-                }
-                self.drawn = Some(DrawnRegion {
-                    first_row,
-                    count: visible as u16,
-                });
-            }
+            self.drawn = draw_popup(buf, screen, content, selected, &mut self.window_offset);
         }
 
         // Ghost only into cells the model says are blank, so it never
@@ -336,6 +276,87 @@ impl<W: Write> Compositor<W> {
 
         hand_back(buf, screen);
     }
+}
+
+/// Paint the dropdown rows; returns the region drawn, if any.
+///
+/// `window_offset` persists across repaints so the visible slice doesn't
+/// jump while the selection moves within it.
+fn draw_popup(
+    buf: &mut Vec<u8>,
+    screen: &vt100::Screen,
+    content: &OverlayContent,
+    selected: usize,
+    window_offset: &mut usize,
+) -> Option<DrawnRegion> {
+    let (rows, cols) = screen.size();
+    let (cursor_row, cursor_col) = screen.cursor_position();
+    let mut visible = content.suggestions.len().min(MAX_POPUP_ROWS);
+
+    // Below if it fits, else above, else the roomier side shrunk — never
+    // over the command line itself.
+    let below = (rows - cursor_row - 1) as usize;
+    let above = cursor_row as usize;
+    let first_row = if below >= visible {
+        cursor_row + 1
+    } else if above >= visible {
+        cursor_row - visible as u16
+    } else if below >= above {
+        visible = below;
+        cursor_row + 1
+    } else {
+        visible = above;
+        0
+    };
+    if visible == 0 {
+        return None;
+    }
+
+    // Slide the selection window to keep the highlight visible.
+    if selected < *window_offset {
+        *window_offset = selected;
+    }
+    if selected >= *window_offset + visible {
+        *window_offset = selected + 1 - visible;
+    }
+    *window_offset = (*window_offset).min(content.suggestions.len() - visible);
+    let window = &content.suggestions[*window_offset..*window_offset + visible];
+
+    // Left-align with the start of the typed line, sliding left to fit.
+    let line_width = content.line.width().min(u16::MAX as usize) as u16;
+    let width = window
+        .iter()
+        .map(|s| s.width() + 2)
+        .max()
+        .unwrap_or(2)
+        .clamp(MIN_POPUP_WIDTH, cols as usize);
+    let col = cursor_col
+        .saturating_sub(line_width)
+        .min(cols.saturating_sub(width as u16));
+
+    for (i, suggestion) in window.iter().enumerate() {
+        let row = first_row + i as u16;
+        move_to(buf, row, col);
+        buf.extend_from_slice(if *window_offset + i == selected {
+            SELECTED_STYLE
+        } else {
+            UNSELECTED_STYLE
+        });
+
+        let (fitted, fitted_width) = fit_to_width(suggestion, width - 2);
+        let mut text = String::with_capacity(width + 1);
+        text.push(' ');
+        text.push_str(&fitted);
+        for _ in 1 + fitted_width..width {
+            text.push(' ');
+        }
+        buf.extend_from_slice(text.as_bytes());
+    }
+
+    Some(DrawnRegion {
+        first_row,
+        count: visible as u16,
+    })
 }
 
 /// Longest printable prefix of `text` fitting `budget` display cells, and

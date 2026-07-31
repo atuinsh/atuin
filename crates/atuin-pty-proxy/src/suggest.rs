@@ -29,9 +29,10 @@ const MAX_INPUT_BUF_BYTES: usize = 64 * 1024;
 /// doesn't extend the typed prefix (fuzzy hits).
 const KILL_LINE: u8 = 0x15;
 
-/// How long a lone `ESC` may wait for the rest of a split key sequence
-/// before it's treated as a real Escape press.
+/// Polls before a lone `ESC` counts as a real Escape press rather than the
+/// start of a split key sequence.
 const ESC_POLL_RETRIES: u32 = 3;
+/// Sleep between those polls; retries × interval is the felt Escape delay.
 const ESC_POLL_INTERVAL: Duration = Duration::from_millis(8);
 
 pub(crate) struct Suggest<W: Write> {

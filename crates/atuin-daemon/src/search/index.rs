@@ -561,38 +561,36 @@ impl SearchIndex {
         let frecency_map = self.frecency_map.read().unwrap().clone();
         let haystack = self.haystack.read().unwrap();
 
-        let mut matches: Vec<(u32, i64, usize)> = haystack
+        let mut matches: Vec<SuggestMatch> = haystack
             .iter()
             .enumerate()
             .filter(|(_, entry)| {
                 !entry.original.contains('\n')
                     && starts_with_folded(&entry.normalized, &query, fold_case)
             })
-            .map(|(index, entry)| {
-                let frecency = frecency_map
+            .map(|(haystack_index, entry)| SuggestMatch {
+                frecency: frecency_map
                     .as_ref()
-                    .and_then(|map| map.get(index).copied())
-                    .unwrap_or(0);
-                let recency = self
+                    .and_then(|map| map.get(haystack_index).copied())
+                    .unwrap_or(0),
+                recency: self
                     .commands
                     .get(entry.original.as_ref())
-                    .map_or(0, |data| data.most_recent_timestamp());
-                (frecency, recency, index)
+                    .map_or(0, |data| data.most_recent_timestamp()),
+                haystack_index,
             })
             .collect();
 
         // Partition the top `limit` out before sorting, like `search` above,
         // so a one-character query doesn't sort thousands of matches.
-        let rank =
-            |&(frecency, recency, _): &(u32, i64, usize)| (Reverse(frecency), Reverse(recency));
         if matches.len() > limit {
-            matches.select_nth_unstable_by_key(limit, rank);
+            matches.select_nth_unstable_by_key(limit, SuggestMatch::rank);
             matches.truncate(limit);
         }
-        matches.sort_unstable_by_key(rank);
+        matches.sort_unstable_by_key(SuggestMatch::rank);
         matches
             .into_iter()
-            .map(|(_, _, index)| haystack[index].original.to_string())
+            .map(|m| haystack[m.haystack_index].original.to_string())
             .collect()
     }
 
@@ -639,6 +637,21 @@ impl SearchIndex {
 impl Default for SearchIndex {
     fn default() -> Self {
         Self::new(OrFilter::all())
+    }
+}
+
+/// A prefix-matched command with everything needed to rank it.
+struct SuggestMatch {
+    frecency: u32,
+    /// Unix timestamp of the most recent invocation.
+    recency: i64,
+    haystack_index: usize,
+}
+
+impl SuggestMatch {
+    /// Best first: frecency, then most recent invocation.
+    fn rank(&self) -> (Reverse<u32>, Reverse<i64>) {
+        (Reverse(self.frecency), Reverse(self.recency))
     }
 }
 
