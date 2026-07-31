@@ -218,84 +218,104 @@ impl<W: Write> Compositor<W> {
             return;
         }
 
-        let visible = content
-            .suggestions
-            .len()
-            .min(MAX_POPUP_ROWS)
-            .min(rows as usize - 1);
         let selected = content.selected.min(content.suggestions.len() - 1);
+        let ghost_suffix = content.suggestions[selected]
+            .strip_prefix(content.line.as_str())
+            .filter(|suffix| !suffix.is_empty());
 
-        // Slide the selection window to keep the highlight visible.
-        if selected < self.window_offset {
-            self.window_offset = selected;
-        }
-        if selected >= self.window_offset + visible {
-            self.window_offset = selected + 1 - visible;
-        }
-        self.window_offset = self.window_offset.min(content.suggestions.len() - visible);
-        let window = &content.suggestions[self.window_offset..self.window_offset + visible];
-
-        // Below the cursor when there's room, above otherwise.
-        let count = visible as u16;
-        let below = rows.saturating_sub(cursor_row + 1);
-        let first_row = if below >= count {
-            cursor_row + 1
-        } else {
-            cursor_row.saturating_sub(count)
-        };
-
-        // Left-align with the start of the typed line, sliding left to fit.
-        let line_width = content.line.width().min(u16::MAX as usize) as u16;
-        let width = window
-            .iter()
-            .map(|s| s.width() + 2)
-            .max()
-            .unwrap_or(2)
-            .min(cols as usize)
-            .max(4);
-        let col = cursor_col
-            .saturating_sub(line_width)
-            .min(cols.saturating_sub(width as u16));
+        // A single suggestion that's already shown in full as ghost text
+        // doesn't need a dropdown too.
+        let solo_ghost = content.suggestions.len() == 1 && ghost_suffix.is_some();
 
         buf.extend_from_slice(b"\x1b[?25l");
-        for (i, suggestion) in window.iter().enumerate() {
-            let row = first_row + i as u16;
-            move_to(buf, row, col);
-            buf.extend_from_slice(if self.window_offset + i == selected {
-                SELECTED_STYLE
-            } else {
-                UNSELECTED_STYLE
-            });
+        if !solo_ghost {
+            let mut visible = content.suggestions.len().min(MAX_POPUP_ROWS);
 
-            let mut text = String::with_capacity(width + 1);
-            let mut used = 1;
-            text.push(' ');
-            // Control characters would corrupt the popup row (a stray \n in
-            // a suggestion breaks out of it entirely); render them visibly.
-            for ch in suggestion.chars().map(printable) {
-                let ch_width = ch.width().unwrap_or(0);
-                if used + ch_width > width - 1 {
-                    break;
+            // Below the cursor when the whole popup fits, above when that
+            // side fits, otherwise the roomier side — shrunk to fit so the
+            // popup never covers the command line itself.
+            let below = (rows - cursor_row - 1) as usize;
+            let above = cursor_row as usize;
+            let first_row = if below >= visible {
+                cursor_row + 1
+            } else if above >= visible {
+                cursor_row - visible as u16
+            } else if below >= above {
+                visible = below;
+                cursor_row + 1
+            } else {
+                visible = above;
+                0
+            };
+
+            if visible > 0 {
+                // Slide the selection window to keep the highlight visible.
+                if selected < self.window_offset {
+                    self.window_offset = selected;
                 }
-                text.push(ch);
-                used += ch_width;
+                if selected >= self.window_offset + visible {
+                    self.window_offset = selected + 1 - visible;
+                }
+                self.window_offset =
+                    self.window_offset.min(content.suggestions.len() - visible);
+                let window =
+                    &content.suggestions[self.window_offset..self.window_offset + visible];
+
+                // Left-align with the start of the typed line, sliding left
+                // to fit.
+                let line_width = content.line.width().min(u16::MAX as usize) as u16;
+                let width = window
+                    .iter()
+                    .map(|s| s.width() + 2)
+                    .max()
+                    .unwrap_or(2)
+                    .min(cols as usize)
+                    .max(4);
+                let col = cursor_col
+                    .saturating_sub(line_width)
+                    .min(cols.saturating_sub(width as u16));
+
+                for (i, suggestion) in window.iter().enumerate() {
+                    let row = first_row + i as u16;
+                    move_to(buf, row, col);
+                    buf.extend_from_slice(if self.window_offset + i == selected {
+                        SELECTED_STYLE
+                    } else {
+                        UNSELECTED_STYLE
+                    });
+
+                    let mut text = String::with_capacity(width + 1);
+                    let mut used = 1;
+                    text.push(' ');
+                    // Control characters would corrupt the popup row (a
+                    // stray \n in a suggestion breaks out of it entirely);
+                    // render them visibly.
+                    for ch in suggestion.chars().map(printable) {
+                        let ch_width = ch.width().unwrap_or(0);
+                        if used + ch_width > width - 1 {
+                            break;
+                        }
+                        text.push(ch);
+                        used += ch_width;
+                    }
+                    while used < width {
+                        text.push(' ');
+                        used += 1;
+                    }
+                    buf.extend_from_slice(text.as_bytes());
+                }
+                self.drawn = Some(DrawnRegion {
+                    first_row,
+                    count: visible as u16,
+                });
             }
-            while used < width {
-                text.push(' ');
-                used += 1;
-            }
-            buf.extend_from_slice(text.as_bytes());
         }
-        self.drawn = Some(DrawnRegion { first_row, count });
 
         // Fish-style ghost text: the selected suggestion's suffix, dim, at
         // the cursor — but only into cells the model says are blank, so it
         // never covers mid-line edits or a right-side prompt. Fuzzy matches
         // that don't extend the typed line have no suffix to ghost.
-        if with_ghost
-            && let Some(suffix) = content.suggestions[selected].strip_prefix(content.line.as_str())
-            && !suffix.is_empty()
-        {
+        if with_ghost && let Some(suffix) = ghost_suffix {
             let budget = blank_cells_after_cursor(screen) as usize;
             let mut text = String::new();
             let mut used = 0;
@@ -575,6 +595,49 @@ mod tests {
     }
 
     #[rstest]
+    fn single_prefix_suggestion_shows_ghost_without_dropdown() {
+        let mut c = compositor();
+        c.apply_pty(b"$ git st");
+        c.set_overlay(Some(content("git st", &["git status"], 0)));
+
+        assert!(c.flags.ghost.load(Ordering::Acquire));
+        assert!(
+            !c.flags.popup.load(Ordering::Acquire),
+            "no dropdown when the lone suggestion is fully shown as ghost"
+        );
+        let shown = screen_text(&displayed(&c));
+        assert_eq!(shown.trim_end(), "$ git status");
+    }
+
+    #[rstest]
+    fn single_fuzzy_suggestion_still_shows_dropdown() {
+        let mut c = compositor();
+        c.apply_pty(b"$ stat");
+        // Not a prefix of the typed line: no ghost is possible, so the
+        // dropdown is the only way to see the suggestion.
+        c.set_overlay(Some(content("stat", &["git status"], 0)));
+
+        assert!(c.flags.popup.load(Ordering::Acquire));
+        assert!(!c.flags.ghost.load(Ordering::Acquire));
+    }
+
+    #[rstest]
+    fn tiny_screen_popup_never_covers_the_command_line() {
+        let flags = Arc::new(OverlayFlags::default());
+        let mut c: Compositor<Vec<u8>> = Compositor::new(4, 40, Vec::new(), flags, true);
+        // Cursor on row 1 of a 4-row screen: neither side fits 3 rows.
+        c.apply_pty(b"one\r\n$ g");
+        let all = ["git a", "git b", "git c"];
+        c.set_overlay(Some(content("g", &all, 0)));
+
+        let region = c.drawn.expect("popup drawn");
+        let cursor_row = c.parser.screen().cursor_position().0;
+        for row in region.first_row..region.first_row + region.count {
+            assert_ne!(row, cursor_row, "popup row overlaps the command line");
+        }
+    }
+
+    #[rstest]
     fn ghost_text_draws_at_cursor() {
         let mut c = compositor();
         c.apply_pty(b"$ git st");
@@ -626,7 +689,7 @@ mod tests {
     fn no_paint_on_alternate_screen() {
         let mut c = compositor();
         c.apply_pty(b"$ vim\r\n\x1b[?1049h\x1b[2JEDITOR");
-        c.set_overlay(Some(content("x", &["xyz"], 0)));
+        c.set_overlay(Some(content("x", &["xyz", "xzz"], 0)));
 
         let shown = screen_text(&displayed(&c));
         assert!(!shown.contains("xyz"), "no popup over alt screen: {shown:?}");
@@ -638,16 +701,17 @@ mod tests {
         let mut c = compositor();
         c.apply_pty(b"$ ");
         // 40-col screen; suggestion of 30 wide chars = 60 cells must clamp.
+        // (Two suggestions so the dropdown actually renders.)
         let wide = "\u{6f22}".repeat(30);
-        c.set_overlay(Some(content("", &[&wide], 0)));
+        c.set_overlay(Some(content("", &[&wide, "short"], 0)));
 
         let checker = displayed(&c);
-        // Row 1 holds the popup; every cell must be within bounds and the
-        // popup row must not have wrapped onto row 2.
-        let row2: String = (0..40)
-            .filter_map(|col| checker.screen().cell(2, col).map(|c| c.contents().to_string()))
+        // Rows 1-2 hold the popup; the clamped wide row must not have
+        // wrapped past it onto row 3.
+        let row3: String = (0..40)
+            .filter_map(|col| checker.screen().cell(3, col).map(|c| c.contents().to_string()))
             .collect();
-        assert!(row2.trim().is_empty(), "no wrap past popup row: {row2:?}");
+        assert!(row3.trim().is_empty(), "no wrap past popup rows: {row3:?}");
     }
 
     #[rstest]
