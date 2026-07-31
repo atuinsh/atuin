@@ -210,8 +210,10 @@ pub(crate) struct KeyFilter<W: Write> {
 impl<W: Write> KeyFilter<W> {
     /// Process one stdin chunk and return the bytes to forward to the pty.
     ///
-    /// Pass-through when hidden. When visible, a chunk ending in a possible
-    /// key prefix (e.g. a lone `ESC`) briefly waits for its tail before
+    /// Pass-through when hidden. When visible, the chunk is tokenized so
+    /// keys batched into one read (arrow auto-repeat, fast typing) are each
+    /// intercepted or forwarded in order. A chunk ending in a possible key
+    /// prefix (e.g. a lone `ESC`) briefly waits for its tail before
     /// deciding; an `ESC` that stays lone dismisses the popup.
     pub(crate) fn process<'a>(
         &self,
@@ -223,19 +225,29 @@ impl<W: Write> KeyFilter<W> {
         }
 
         let mut bytes = chunk.to_vec();
-        while is_partial_interceptable(&bytes) && wait_for_more(&*stdin) {
-            let mut more = [0u8; 16];
-            match stdin.read(&mut more) {
-                Ok(n) if n > 0 => bytes.extend_from_slice(&more[..n]),
-                _ => break,
+        let mut out = Vec::new();
+        let mut pos = 0;
+        while pos < bytes.len() {
+            while is_partial_interceptable(&bytes[pos..]) {
+                if !(wait_for_more(&*stdin) && read_more(&mut bytes, stdin)) {
+                    break;
+                }
+            }
+
+            let rest = &bytes[pos..];
+            let Some(key) = match_key(rest) else {
+                out.push(bytes[pos]);
+                pos += 1;
+                continue;
+            };
+            pos += key.len();
+            match self.intercept(key) {
+                KeyAction::Forward => out.extend_from_slice(key),
+                KeyAction::Consume => {}
+                KeyAction::Replace(replacement) => out.extend_from_slice(&replacement),
             }
         }
-
-        match self.intercept(&bytes) {
-            KeyAction::Forward => Cow::Owned(bytes),
-            KeyAction::Consume => Cow::Borrowed(&[]),
-            KeyAction::Replace(replacement) => Cow::Owned(replacement),
-        }
+        Cow::Owned(out)
     }
 
     fn visible(&self) -> bool {
@@ -360,6 +372,29 @@ fn is_partial_interceptable(bytes: &[u8]) -> bool {
     INTERCEPTABLE
         .iter()
         .any(|seq| seq.len() > bytes.len() && seq.starts_with(bytes))
+}
+
+/// Longest interceptable key at the start of `rest`. A bare `ESC` only
+/// counts when nothing follows it — `ESC [` etc. is the start of some other
+/// key's sequence, not an Escape press.
+fn match_key(rest: &[u8]) -> Option<&'static [u8]> {
+    INTERCEPTABLE
+        .iter()
+        .filter(|seq| rest.starts_with(seq))
+        .max_by_key(|seq| seq.len())
+        .copied()
+        .filter(|seq| *seq != b"\x1b" || rest.len() == 1)
+}
+
+fn read_more(bytes: &mut Vec<u8>, stdin: &mut impl Read) -> bool {
+    let mut more = [0u8; 16];
+    match stdin.read(&mut more) {
+        Ok(n) if n > 0 => {
+            bytes.extend_from_slice(&more[..n]);
+            true
+        }
+        _ => false,
+    }
 }
 
 /// FIONREAD rather than poll(2), which doesn't work on tty fds on macOS.
@@ -616,6 +651,36 @@ mod tests {
         assert_eq!(fx.filter.state.lock().unwrap().selected, 0);
         assert!(fx.filter.process(b"\x1b[A", &mut fx.stdin).is_empty());
         assert_eq!(fx.filter.state.lock().unwrap().selected, 1);
+    }
+
+    #[rstest]
+    fn batched_keys_are_each_handled_in_order() {
+        let mut fx = fixture("g", &["git status", "grep foo"], 0);
+        // A typed char and a Down arrow coalesced into one read: the char
+        // forwards, the arrow navigates.
+        let out = fx.filter.process(b"x\x1b[B", &mut fx.stdin);
+        assert_eq!(&*out, b"x");
+        assert_eq!(fx.filter.state.lock().unwrap().selected, 1);
+
+        // Arrow auto-repeat: two Downs in one read both apply.
+        let out = fx.filter.process(b"\x1b[B\x1b[B", &mut fx.stdin);
+        assert!(out.is_empty());
+        assert_eq!(fx.filter.state.lock().unwrap().selected, 1);
+
+        // Navigation batched with an accept: nav applies first, then the
+        // accept emits the newly selected suggestion's suffix.
+        let out = fx.filter.process(b"\x1b[B\t", &mut fx.stdin);
+        assert_eq!(&*out, b"it status");
+    }
+
+    #[rstest]
+    fn unmatched_escape_sequences_pass_through_intact() {
+        let mut fx = fixture("git st", &["git status"], 0);
+        // Ctrl+Left shares a prefix with the intercepted Ctrl+Right; it must
+        // neither dismiss (bare-ESC misfire) nor be mangled.
+        let out = fx.filter.process(b"\x1b[1;5D", &mut fx.stdin);
+        assert_eq!(&*out, b"\x1b[1;5D");
+        assert!(fx.filter.visible(), "popup not dismissed by unrelated CSI");
     }
 
     #[rstest]

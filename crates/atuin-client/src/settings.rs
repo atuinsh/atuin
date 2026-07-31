@@ -515,7 +515,6 @@ pub struct PtyProxy {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Suggest {
     /// Experimental inline suggestion popup in the pty proxy.
-    /// Also enabled by `ATUIN_PTY_PROXY_SUGGEST=1`.
     pub enabled: bool,
 
     /// Maximum number of history entries fetched per keystroke.

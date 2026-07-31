@@ -166,15 +166,33 @@ impl<W: Write> Compositor<W> {
         let _ = self.flush(buf);
     }
 
-    /// Resize reflow scrambles screen and model unpredictably; drop the
-    /// bookkeeping without painting and let the next pass repaint cleanly.
+    /// Resize reflow scrambles screen and model unpredictably, so restoring
+    /// covered rows from the model is unreliable here. Best effort: blank
+    /// the popup's old below-cursor rows (they were blank before it drew);
+    /// ghost text sits on the prompt line, which shells repaint after
+    /// SIGWINCH anyway.
     pub(crate) fn resize(&mut self, rows: u16, cols: u16) {
+        let drawn = self.drawn.take();
+        let (old_cursor_row, _) = self.parser.screen().cursor_position();
+
         self.content = None;
-        self.drawn = None;
         self.ghost_row = None;
         self.window_offset = 0;
         self.parser.screen_mut().set_size(rows, cols);
-        self.update_flags();
+
+        let mut buf = Vec::new();
+        if let Some(region) = drawn
+            && region.first_row > old_cursor_row
+        {
+            buf.extend_from_slice(b"\x1b[0m");
+            let end = region.first_row.saturating_add(region.count).min(rows);
+            for row in region.first_row..end {
+                move_to(&mut buf, row, 0);
+                buf.extend_from_slice(b"\x1b[2K");
+            }
+            hand_back(&mut buf, self.parser.screen());
+        }
+        let _ = self.flush(buf);
     }
 
     fn flush(&mut self, buf: Vec<u8>) -> std::io::Result<()> {
@@ -796,6 +814,22 @@ mod tests {
             cell.fgcolor(),
             vt100::Color::Idx(1),
             "overlay must not clobber the shell's active SGR state"
+        );
+    }
+
+    #[rstest]
+    fn resize_blanks_stale_popup_rows() {
+        let mut c = compositor();
+        c.apply_pty(b"$ st").unwrap();
+        // Non-prefix matches: dropdown only, drawn below the cursor.
+        c.set_overlay(Some(content("st", &["git status", "git stash"], 0)));
+        assert!(screen_text(&displayed(&c)).contains("git status"));
+
+        c.resize(10, 40);
+        let shown = screen_text(&displayed(&c));
+        assert!(
+            !shown.contains("git status"),
+            "popup rows blanked on resize: {shown:?}"
         );
     }
 

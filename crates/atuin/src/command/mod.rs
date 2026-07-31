@@ -120,15 +120,15 @@ const SUGGEST_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_mil
 const SUGGEST_QUEUE_DEPTH: usize = 8;
 
 /// Prefix completions from history for the pty-proxy popup. Experimental:
-/// gated on `suggest.enabled` or `ATUIN_PTY_PROXY_SUGGEST=1`.
-/// Daemon index when enabled, sqlite prefix search otherwise; the backend
-/// lives on its own thread like [`semantic_command_capture_sink`].
+/// gated on `suggest.enabled`. Daemon index when enabled, sqlite prefix
+/// search otherwise; the backend lives on its own thread like
+/// [`semantic_command_capture_sink`].
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
 fn history_suggestion_provider() -> Option<atuin_pty_proxy::SuggestionProvider> {
     use std::sync::mpsc;
 
     let settings = atuin_client::settings::Settings::new().ok()?;
-    if !settings.suggest.enabled && !is_truthy_env("ATUIN_PTY_PROXY_SUGGEST") {
+    if !settings.suggest.enabled {
         return None;
     }
 
@@ -307,11 +307,7 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
     }))
 }
 
-#[cfg(all(
-    any(feature = "daemon", feature = "client"),
-    feature = "pty-proxy",
-    unix
-))]
+#[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]
 #[inline]
 fn is_truthy_env(name: &str) -> bool {
     std::env::var(name)
