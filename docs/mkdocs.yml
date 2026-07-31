@@ -60,6 +60,7 @@ theme:
 
 plugins:
   - search
+  - macros # Read repo facts (e.g. the MSRV) into pages; see main.py
   - privacy # Download external assets at compile time for user privacy
   - git-revision-date-localized:
       enable_creation_date: true
