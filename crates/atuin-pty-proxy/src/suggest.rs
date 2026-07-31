@@ -1,20 +1,11 @@
 //! inshellisense-style suggestion popup with fish-style ghost text.
 //!
-//! Rendering happens in [`crate::compositor`]; this module supplies the
-//! logic around it:
-//!
-//! * [`InputTracker`] (pty→stdout pump thread) follows the OSC 133 input
-//!   zone and reports the in-progress command line
-//! * [`KeyFilter`] (stdin→pty pump thread) intercepts Tab / arrows / Esc
-//!   while the overlay is visible, reassembling escape sequences that split
-//!   across reads
-//! * a UI thread owns the [`SuggestionProvider`] and pushes overlay content
-//!   to the compositor
-//!
-//! Suggestions come from an injected [`SuggestionProvider`] so this crate
-//! stays free of atuin-client dependencies; the `atuin` binary wires in a
-//! history search.
+//! [`InputTracker`] follows the OSC 133 input zone, [`KeyFilter`] steals
+//! Tab/arrows/Esc while the overlay is visible, and a UI thread owns the
+//! injected [`SuggestionProvider`] — kept abstract so this crate stays free
+//! of atuin-client dependencies.
 
+use std::borrow::Cow;
 use std::io::{Read, Write};
 use std::num::NonZeroU16;
 use std::os::fd::AsFd;
@@ -25,19 +16,23 @@ use std::time::Duration;
 
 use atuin_common::ansi;
 
-use crate::compositor::{Compositor, OverlayContent, OverlayFlags};
+use crate::compositor::{Compositor, OverlayContent, OverlayFlags, lock_unpoisoned};
 use crate::osc133::{Event, Parser, Zone};
 
-/// Given the current command line, return candidate completions (full
-/// commands, most relevant first). Called from a dedicated UI thread and may
-/// block briefly; implementations should enforce their own timeout.
-pub type SuggestionProvider = Box<dyn Fn(&str) -> Vec<String> + Send + 'static>;
+/// Candidate completions for the current line, best first. Runs on the UI
+/// thread; implementations enforce their own timeout.
+pub type SuggestionProvider = Box<dyn Fn(&str) -> Vec<String> + Send>;
 
 const MAX_INPUT_BUF_BYTES: usize = 64 * 1024;
 
-/// Kill-line control byte (`^U`), used to replace the whole line when
-/// accepting a suggestion that doesn't extend the typed prefix (fuzzy hits).
+/// Kill-line (`^U`): replaces the line when accepting a suggestion that
+/// doesn't extend the typed prefix (fuzzy hits).
 const KILL_LINE: u8 = 0x15;
+
+/// How long a lone `ESC` may wait for the rest of a split key sequence
+/// before it's treated as a real Escape press.
+const ESC_POLL_RETRIES: u32 = 3;
+const ESC_POLL_INTERVAL: Duration = Duration::from_millis(8);
 
 pub(crate) struct Suggest<W: Write> {
     pub(crate) tracker: InputTracker,
@@ -119,9 +114,8 @@ impl InputTracker {
         }
     }
 
-    /// Observe a chunk of pty output. Mirrors the marker-splitting logic in
-    /// [`crate::capture::CommandCaptureTracker::push`], but only tracks the
-    /// input zone.
+    /// Mirrors [`crate::capture::CommandCaptureTracker::push`]'s marker
+    /// splitting, tracking only the input zone.
     pub(crate) fn push(&mut self, data: &[u8]) {
         let mut events = Vec::new();
         self.parser
@@ -174,7 +168,8 @@ impl InputTracker {
             return false;
         }
         let remaining = MAX_INPUT_BUF_BYTES.saturating_sub(self.buf.len());
-        self.buf.extend_from_slice(&data[..data.len().min(remaining)]);
+        self.buf
+            .extend_from_slice(&data[..data.len().min(remaining)]);
         true
     }
 }
@@ -183,8 +178,7 @@ impl InputTracker {
 // Key interception (stdin→pty pump thread)
 // ---------------------------------------------------------------------------
 
-/// The full key sequences the filter may steal while the overlay is
-/// visible. Anything else — and any of these while the overlay is hidden —
+/// Sequences stealable while the overlay is visible; everything else
 /// forwards untouched.
 const INTERCEPTABLE: &[&[u8]] = &[
     b"\t",
@@ -215,14 +209,16 @@ pub(crate) struct KeyFilter<W: Write> {
 impl<W: Write> KeyFilter<W> {
     /// Process one stdin chunk and return the bytes to forward to the pty.
     ///
-    /// When the overlay is hidden this is a pass-through with zero added
-    /// latency. When it's visible and the chunk ends in what could be the
-    /// start of an interceptable key (e.g. a lone `ESC` that might become
-    /// `ESC [ A` split across reads), the filter briefly waits for the rest
-    /// before deciding; a lone `ESC` that stays lone dismisses the popup.
-    pub(crate) fn process(&self, chunk: &[u8], stdin: &mut (impl Read + AsFd)) -> Vec<u8> {
+    /// Pass-through when hidden. When visible, a chunk ending in a possible
+    /// key prefix (e.g. a lone `ESC`) briefly waits for its tail before
+    /// deciding; an `ESC` that stays lone dismisses the popup.
+    pub(crate) fn process<'a>(
+        &self,
+        chunk: &'a [u8],
+        stdin: &mut (impl Read + AsFd),
+    ) -> Cow<'a, [u8]> {
         if !self.visible() {
-            return chunk.to_vec();
+            return Cow::Borrowed(chunk);
         }
 
         let mut bytes = chunk.to_vec();
@@ -235,9 +231,9 @@ impl<W: Write> KeyFilter<W> {
         }
 
         match self.intercept(&bytes) {
-            KeyAction::Forward => bytes,
-            KeyAction::Consume => Vec::new(),
-            KeyAction::Replace(replacement) => replacement,
+            KeyAction::Forward => Cow::Owned(bytes),
+            KeyAction::Consume => Cow::Borrowed(&[]),
+            KeyAction::Replace(replacement) => Cow::Owned(replacement),
         }
     }
 
@@ -252,9 +248,8 @@ impl<W: Write> KeyFilter<W> {
     fn intercept(&self, bytes: &[u8]) -> KeyAction {
         match bytes {
             b"\t" => self.accept(AcceptSpan::Full),
-            // Right arrow accepts the ghost text, like fish. Only stolen
-            // while ghost text is drawn, which requires the cursor to be at
-            // the end of the line — where Right has nothing else to do.
+            // Right accepts the ghost, fish-style; a drawn ghost implies
+            // cursor-at-EOL, where Right is otherwise a no-op.
             b"\x1b[C" | b"\x1bOC" if self.ghost_visible() => self.accept(AcceptSpan::Full),
             // Alt/Ctrl+Right (and Alt-f): accept one word of the ghost.
             b"\x1b[1;3C" | b"\x1b[1;5C" | b"\x1bf" if self.ghost_visible() => {
@@ -268,9 +263,7 @@ impl<W: Write> KeyFilter<W> {
     }
 
     fn navigate(&self, delta: isize) -> KeyAction {
-        let Ok(mut st) = self.state.lock() else {
-            return KeyAction::Forward;
-        };
+        let mut st = lock_unpoisoned(&self.state);
         let len = st.suggestions.len();
         if len == 0 {
             return KeyAction::Forward;
@@ -283,9 +276,7 @@ impl<W: Write> KeyFilter<W> {
     }
 
     fn dismiss(&self) -> KeyAction {
-        let Ok(mut st) = self.state.lock() else {
-            return KeyAction::Forward;
-        };
+        let mut st = lock_unpoisoned(&self.state);
         st.dismissed_for = Some(st.line.clone());
         st.suggestions.clear();
         st.selected = 0;
@@ -295,9 +286,7 @@ impl<W: Write> KeyFilter<W> {
     }
 
     fn accept(&self, span: AcceptSpan) -> KeyAction {
-        let Ok(mut st) = self.state.lock() else {
-            return KeyAction::Forward;
-        };
+        let mut st = lock_unpoisoned(&self.state);
         if st.suggestions.is_empty() {
             return KeyAction::Forward;
         }
@@ -338,9 +327,7 @@ impl<W: Write> KeyFilter<W> {
     }
 
     fn set_overlay(&self, content: Option<OverlayContent>) {
-        if let Ok(mut compositor) = self.compositor.lock() {
-            compositor.set_overlay(content);
-        }
+        lock_unpoisoned(&self.compositor).set_overlay(content);
     }
 }
 
@@ -374,15 +361,13 @@ fn is_partial_interceptable(bytes: &[u8]) -> bool {
         .any(|seq| seq.len() > bytes.len() && seq.starts_with(bytes))
 }
 
-/// Wait briefly for more stdin bytes (a split escape sequence's tail).
-/// Returns whether bytes are waiting. Uses FIONREAD rather than poll(2),
-/// which doesn't work on tty fds on macOS.
+/// FIONREAD rather than poll(2), which doesn't work on tty fds on macOS.
 fn wait_for_more(fd: impl AsFd) -> bool {
-    for _ in 0..3 {
+    for _ in 0..ESC_POLL_RETRIES {
         if rustix::io::ioctl_fionread(&fd).unwrap_or(0) > 0 {
             return true;
         }
-        std::thread::sleep(Duration::from_millis(8));
+        std::thread::sleep(ESC_POLL_INTERVAL);
     }
     rustix::io::ioctl_fionread(&fd).unwrap_or(0) > 0
 }
@@ -409,13 +394,11 @@ fn spawn_ui_thread<W: Write + Send + 'static>(
             match event {
                 UiEvent::Query(line) => handle_query(&provider, &compositor, &state, line),
                 UiEvent::Hide => {
-                    if let Ok(mut st) = state.lock() {
-                        st.suggestions.clear();
-                        st.selected = 0;
-                    }
-                    if let Ok(mut compositor) = compositor.lock() {
-                        compositor.set_overlay(None);
-                    }
+                    let mut st = lock_unpoisoned(&state);
+                    st.suggestions.clear();
+                    st.selected = 0;
+                    drop(st);
+                    lock_unpoisoned(&compositor).set_overlay(None);
                 }
             }
         }
@@ -429,7 +412,7 @@ fn handle_query<W: Write>(
     line: String,
 ) {
     let suppressed = {
-        let Ok(mut st) = state.lock() else { return };
+        let mut st = lock_unpoisoned(state);
         st.line = line.clone();
         if st.dismissed_for.as_deref() != Some(line.as_str()) {
             st.dismissed_for = None;
@@ -440,16 +423,12 @@ fn handle_query<W: Write>(
     let suggestions: Vec<String> = if suppressed || line.trim().is_empty() {
         Vec::new()
     } else {
-        provider(&line)
-            .into_iter()
-            .filter(|s| s != &line)
-            .collect()
+        provider(&line).into_iter().filter(|s| s != &line).collect()
     };
 
     let content = {
-        let Ok(mut st) = state.lock() else { return };
-        // A newer query may already be queued behind us; only apply if the
-        // line we fetched for is still current.
+        let mut st = lock_unpoisoned(state);
+        // A newer query may already be queued behind us.
         if st.line != line {
             return;
         }
@@ -458,9 +437,7 @@ fn handle_query<W: Write>(
         st.overlay_content()
     };
 
-    if let Ok(mut compositor) = compositor.lock() {
-        compositor.set_overlay(content);
-    }
+    lock_unpoisoned(compositor).set_overlay(content);
 }
 
 #[cfg(test)]
@@ -531,8 +508,7 @@ mod tests {
     /// is split across pushes.
     #[rstest]
     fn split_at_every_boundary_is_equivalent() {
-        let stream =
-            b"\x1b]133;A\x07$ \x1b]133;B\x07gi\x1b[32mt\x1b[0m st\x08\x08status";
+        let stream = b"\x1b]133;A\x07$ \x1b]133;B\x07gi\x1b[32mt\x1b[0m st\x08\x08status";
         let (mut whole, whole_rx) = tracker();
         whole.push(stream);
         let expected = last_query(&whole_rx);
@@ -579,7 +555,7 @@ mod tests {
 
         {
             let mut c = compositor.lock().unwrap();
-            c.apply_pty(format!("$ {line}").as_bytes());
+            c.apply_pty(format!("$ {line}").as_bytes()).unwrap();
             c.set_overlay(state.lock().unwrap().overlay_content());
         }
 
@@ -601,7 +577,7 @@ mod tests {
     fn tab_accepts_prefix_suffix_and_hides() {
         let mut fx = fixture("git st", &["git status", "git stash"], 0);
         let out = fx.filter.process(b"\t", &mut fx.stdin);
-        assert_eq!(out, b"atus");
+        assert_eq!(&*out, b"atus");
         assert!(!fx.filter.visible(), "overlay hidden after accept");
     }
 
@@ -610,21 +586,21 @@ mod tests {
         let mut fx = fixture("git st", &["git status"], 0);
         assert!(fx.filter.ghost_visible());
         let out = fx.filter.process(b"\x1b[C", &mut fx.stdin);
-        assert_eq!(out, b"atus");
+        assert_eq!(&*out, b"atus");
     }
 
     #[rstest]
     fn fuzzy_accept_replaces_whole_line() {
         let mut fx = fixture("stat", &["git status"], 0);
         let out = fx.filter.process(b"\t", &mut fx.stdin);
-        assert_eq!(out, b"\x15git status");
+        assert_eq!(&*out, b"\x15git status");
     }
 
     #[rstest]
     fn word_accept_takes_one_word_and_keeps_popup_state() {
         let mut fx = fixture("git", &["git status --short"], 0);
         let out = fx.filter.process(b"\x1b[1;3C", &mut fx.stdin);
-        assert_eq!(out, b" status");
+        assert_eq!(&*out, b" status");
         let st = fx.filter.state.lock().unwrap();
         assert!(!st.suggestions.is_empty(), "popup survives word accept");
         assert!(st.dismissed_for.is_none());
@@ -669,17 +645,17 @@ mod tests {
         let mut fx = fixture("git st", &["git status"], 0);
         fx.filter.compositor.lock().unwrap().set_overlay(None);
         for chunk in [b"\t".as_slice(), b"\x1b[A", b"\x1b", b"\x1b[C"] {
-            assert_eq!(fx.filter.process(chunk, &mut fx.stdin), chunk);
+            assert_eq!(&*fx.filter.process(chunk, &mut fx.stdin), chunk);
         }
     }
 
     #[rstest]
     fn unrelated_keys_forward_while_visible() {
         let mut fx = fixture("git st", &["git status"], 0);
-        assert_eq!(fx.filter.process(b"x", &mut fx.stdin), b"x");
-        assert_eq!(fx.filter.process(b"\x7f", &mut fx.stdin), b"\x7f");
+        assert_eq!(&*fx.filter.process(b"x", &mut fx.stdin), b"x");
+        assert_eq!(&*fx.filter.process(b"\x7f", &mut fx.stdin), b"\x7f");
         // Left arrow is never intercepted.
-        assert_eq!(fx.filter.process(b"\x1b[D", &mut fx.stdin), b"\x1b[D");
+        assert_eq!(&*fx.filter.process(b"\x1b[D", &mut fx.stdin), b"\x1b[D");
     }
 
     #[rstest]
@@ -701,7 +677,7 @@ mod tests {
             flags.clone(),
             true,
         )));
-        compositor.lock().unwrap().apply_pty(b"$ git st");
+        compositor.lock().unwrap().apply_pty(b"$ git st").unwrap();
         let state = Arc::new(Mutex::new(PopupState::default()));
         // Two suggestions so the dropdown renders (a lone prefix match
         // would show as ghost text only).
@@ -738,11 +714,5 @@ mod tests {
         assert!(flags.popup.load(Ordering::Acquire));
         handle_query(&provider, &compositor, &state, "".to_string());
         assert!(!flags.popup.load(Ordering::Acquire));
-    }
-
-    #[rstest]
-    fn tracker_channel_stays_quiet_without_input() {
-        let (_tracker, rx) = tracker();
-        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
     }
 }

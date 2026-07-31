@@ -3,7 +3,7 @@ use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use crate::compositor::Compositor;
+use crate::compositor::{Compositor, lock_unpoisoned};
 
 /// Identifies one registered subscriber for its lifetime, so
 /// [`Msg::Unsubscribe`] can name the entry to drop. Process-unique and
@@ -89,10 +89,7 @@ fn serve_connection(
                 Err(_) => break,
             };
 
-            let data = match compositor.lock() {
-                Ok(compositor) => encode_screen(compositor.screen()),
-                Err(_) => break,
-            };
+            let data = encode_screen(lock_unpoisoned(&compositor).screen());
             let _ = stream.write_all(&data);
             let _ = stream.flush();
         }
