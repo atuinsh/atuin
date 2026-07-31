@@ -703,7 +703,10 @@ mod tests {
         )));
         compositor.lock().unwrap().apply_pty(b"$ git st");
         let state = Arc::new(Mutex::new(PopupState::default()));
-        let provider: SuggestionProvider = Box::new(|_| vec!["git status".to_string()]);
+        // Two suggestions so the dropdown renders (a lone prefix match
+        // would show as ghost text only).
+        let provider: SuggestionProvider =
+            Box::new(|_| vec!["git status".to_string(), "git stash".to_string()]);
 
         handle_query(&provider, &compositor, &state, "git st".to_string());
         assert!(flags.popup.load(Ordering::Acquire));
