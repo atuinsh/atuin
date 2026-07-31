@@ -500,6 +500,7 @@ pub struct Theme {
     pub max_depth: Option<u8>,
 }
 
+/// Settings for `atuin pty-proxy`.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct PtyProxy {
     /// If enabled, `atuin init` emits shell code that re-execs the shell
@@ -508,6 +509,28 @@ pub struct PtyProxy {
     /// unix platforms.
     #[serde(alias = "enable")]
     pub enabled: bool,
+
+    /// Enable the experimental inline suggestion popup (history-powered
+    /// autocomplete with fish-style ghost text) inside the pty proxy.
+    /// Can also be enabled with `ATUIN_PTY_PROXY_SUGGEST=1`.
+    pub suggestions: bool,
+
+    /// Maximum number of history entries fetched per keystroke.
+    pub suggestions_limit: u64,
+
+    /// Minimum typed characters before suggestions appear.
+    pub suggestions_min_chars: u64,
+}
+
+impl Default for PtyProxy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            suggestions: false,
+            suggestions_limit: 8,
+            suggestions_min_chars: 1,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1491,6 +1514,9 @@ impl Settings {
             .set_default("smart_sort", false)?
             .set_default("command_chaining", false)?
             .set_default("store_failed", true)?
+            .set_default("pty_proxy.suggestions", false)?
+            .set_default("pty_proxy.suggestions_limit", 8)?
+            .set_default("pty_proxy.suggestions_min_chars", 1)?
             .set_default("daemon.sync_frequency", 300)?
             .set_default("daemon.enabled", false)?
             .set_default("daemon.autostart", false)?

@@ -92,11 +92,106 @@ fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
     #[allow(clippy::useless_conversion)]
     let child_umask = Some(u32::from(prev_umask.bits()));
 
+    #[cfg(feature = "client")]
+    let suggestions = history_suggestion_provider();
+    #[cfg(not(feature = "client"))]
+    let suggestions = None;
+
     #[cfg(feature = "daemon")]
-    proxy.run(semantic_command_capture_sink(), child_umask);
+    proxy.run(semantic_command_capture_sink(), suggestions, child_umask);
 
     #[cfg(not(feature = "daemon"))]
-    proxy.run(None, child_umask);
+    proxy.run(None, suggestions, child_umask);
+}
+
+/// Suggestion popup provider for `atuin pty-proxy`, backed by a search of
+/// the local history database using the configured `search_mode` (fuzzy by
+/// default). Experimental: only active with `pty_proxy.suggestions = true`
+/// in the config or `ATUIN_PTY_PROXY_SUGGEST=1` in the environment.
+///
+/// The database lives on its own thread with a small runtime, mirroring
+/// [`semantic_command_capture_sink`]; the returned closure just does a
+/// bounded request/reply so a slow query can never wedge the proxy's UI.
+#[cfg(all(feature = "client", feature = "pty-proxy", unix))]
+fn history_suggestion_provider() -> Option<atuin_pty_proxy::SuggestionProvider> {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let settings = atuin_client::settings::Settings::new().ok()?;
+    if !settings.pty_proxy.suggestions && !is_truthy_env("ATUIN_PTY_PROXY_SUGGEST") {
+        return None;
+    }
+
+    let min_chars = usize::try_from(settings.pty_proxy.suggestions_min_chars).unwrap_or(1);
+    let (req_tx, req_rx) = mpsc::sync_channel::<(String, mpsc::Sender<Vec<String>>)>(8);
+
+    std::thread::spawn(move || suggestion_worker(&settings, &req_rx));
+
+    Some(Box::new(move |line: &str| {
+        if line.chars().count() < min_chars.max(1) {
+            return Vec::new();
+        }
+        let (reply_tx, reply_rx) = mpsc::channel();
+        if req_tx.try_send((line.to_string(), reply_tx)).is_err() {
+            return Vec::new();
+        }
+        reply_rx
+            .recv_timeout(Duration::from_millis(250))
+            .unwrap_or_default()
+    }))
+}
+
+#[cfg(all(feature = "client", feature = "pty-proxy", unix))]
+fn suggestion_worker(
+    settings: &atuin_client::settings::Settings,
+    req_rx: &std::sync::mpsc::Receiver<(String, std::sync::mpsc::Sender<Vec<String>>)>,
+) {
+    use atuin_client::database::{Database, OptFilters, Sqlite, query_context};
+    use atuin_client::settings::FilterMode;
+
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        return;
+    };
+
+    let Ok(db) = runtime.block_on(Sqlite::new(&settings.db_path, settings.local_timeout)) else {
+        return;
+    };
+    // The proxy runs outside the hooked shell (no ATUIN_SESSION yet), so use
+    // the sessionless context and a global filter.
+    let Ok(context) = runtime.block_on(query_context()) else {
+        return;
+    };
+
+    let search_mode = settings.search_mode.closest_db_mode();
+    let limit = i64::try_from(settings.pty_proxy.suggestions_limit).unwrap_or(8);
+
+    while let Ok((query, reply_tx)) = req_rx.recv() {
+        let results = runtime
+            .block_on(db.search(
+                search_mode,
+                FilterMode::Global,
+                &context,
+                &query,
+                OptFilters {
+                    limit: Some(limit),
+                    ..OptFilters::default()
+                },
+            ))
+            .unwrap_or_default();
+
+        // Multiline commands can't be typed into the pty safely — each
+        // newline would submit the line so far. Skip them until accept
+        // learns bracketed paste.
+        let commands = results
+            .into_iter()
+            .map(|entry| entry.command)
+            .filter(|command| !command.contains('\n'))
+            .collect();
+        let _ = reply_tx.send(commands);
+    }
 }
 
 #[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]
@@ -140,7 +235,7 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
     }))
 }
 
-#[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]
+#[cfg(all(any(feature = "daemon", feature = "client"), feature = "pty-proxy", unix))]
 #[inline]
 fn is_truthy_env(name: &str) -> bool {
     std::env::var(name)
