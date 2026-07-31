@@ -12,7 +12,7 @@ entirely and stay local.
 ## Quickstart
 
 ```bash
-bash <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
+curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 ```
 
 Restart your shell, then press ++ctrl+r++ or the ++up++ arrow to search. Type a
