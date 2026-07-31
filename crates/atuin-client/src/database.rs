@@ -811,17 +811,7 @@ impl Sqlite {
         let res =
             sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(query)).fetch_all(&self.pool).await?;
 
-        // Rank against the same characters SQL matched: drop spaces, operators and negated terms.
-        let reorder_query: String = QueryTokenizer::new(orig_query)
-            .filter(|token| !token.is_inverse())
-            .filter_map(|token| match token {
-                QueryToken::Match(term, _)
-                | QueryToken::MatchStart(term, _)
-                | QueryToken::MatchEnd(term, _)
-                | QueryToken::MatchFull(term, _) => Some(term),
-                QueryToken::Or | QueryToken::Regex(_) => None,
-            })
-            .collect();
+        let reorder_query = fuzzy_ranking_query(orig_query);
         Ok(ordering::reorder_fuzzy(search_mode, &reorder_query, res))
     }
 
@@ -1119,6 +1109,22 @@ impl SqlBuilderExt for SqlBuilder {
             self.and_where(cond)
         }
     }
+}
+
+/// The characters the span scorer ranks on. SQL matches on the tokenizer's plain terms, so the
+/// ranking query must drop everything SQL never matched literally: whitespace, the `| ^ $ ' r/../`
+/// operators, and negated terms, whose characters SQL excluded rather than required.
+fn fuzzy_ranking_query(query: &str) -> String {
+    QueryTokenizer::new(query)
+        .filter(|token| !token.is_inverse())
+        .filter_map(|token| match token {
+            QueryToken::Match(term, _)
+            | QueryToken::MatchStart(term, _)
+            | QueryToken::MatchEnd(term, _)
+            | QueryToken::MatchFull(term, _) => Some(term),
+            QueryToken::Or | QueryToken::Regex(_) => None,
+        })
+        .collect()
 }
 
 pub struct QueryTokenizer<'a> {
