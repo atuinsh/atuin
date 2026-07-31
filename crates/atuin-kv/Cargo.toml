@@ -14,9 +14,9 @@ readme.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-atuin-client = { path = "../atuin-client", version = "18.19.0-beta.2" }
-atuin-common = { path = "../atuin-common", version = "18.19.0-beta.2" }
-atuin-domain = { path = "../atuin-domain", version = "18.19.0-beta.2" }
+atuin-client = { path = "../atuin-client", version = "18.19.0-beta.3" }
+atuin-common = { path = "../atuin-common", version = "18.19.0-beta.3" }
+atuin-domain = { path = "../atuin-domain", version = "18.19.0-beta.3" }
 derive_more = { workspace = true }
 
 tracing = { workspace = true }
