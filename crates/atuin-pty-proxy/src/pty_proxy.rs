@@ -35,7 +35,7 @@ pub struct Init {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 #[value(rename_all = "lower")]
 #[allow(clippy::enum_variant_names, clippy::doc_markdown)]
-enum Shell {
+pub enum Shell {
     /// Zsh setup
     Zsh,
     /// Bash setup
@@ -152,6 +152,17 @@ fn env_flag(name: &str) -> bool {
             "1" | "true" | "yes" | "on"
         )
     })
+}
+
+/// Shell code that re-execs the current shell inside `atuin pty-proxy`.
+///
+/// Guarded by `ATUIN_PTY_PROXY_ACTIVE`, so it is safe to emit more than once
+/// per shell startup: whichever copy runs first wins and the rest no-op. This
+/// lets `atuin init` embed the preamble (via the `pty_proxy.enabled` setting)
+/// without conflicting with an existing standalone `atuin pty-proxy init`
+/// line in shell config.
+pub fn init_script(shell: Shell) -> &'static str {
+    render_init(shell)
 }
 
 fn render_init(shell: Shell) -> &'static str {
