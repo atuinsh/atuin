@@ -1,9 +1,9 @@
-use async_trait::async_trait;
 use atuin_client::{
     database::{Context, Database, DbSearchMode, OptFilters},
     history::{History, HistoryId, all_user_author_filter},
     settings::{FilterMode, SearchMode, Settings, Shells},
 };
+use enum_dispatch::enum_dispatch;
 use eyre::Result;
 
 use super::cursor::Cursor;
@@ -14,19 +14,19 @@ pub mod db;
 pub mod skim;
 
 #[allow(unused)] // settings is only used if daemon feature is enabled
-pub fn engine(search_mode: SearchMode, settings: &Settings) -> Box<dyn SearchEngine> {
+pub fn engine(search_mode: SearchMode, settings: &Settings) -> AnySearchEngine {
     match search_mode {
-        SearchMode::Skim => Box::new(skim::Search::new()),
+        SearchMode::Skim => skim::Search::new().into(),
         #[cfg(feature = "daemon")]
-        SearchMode::DaemonFuzzy => Box::new(daemon::Search::new(settings)),
+        SearchMode::DaemonFuzzy => daemon::Search::new(settings).into(),
         #[cfg(not(feature = "daemon"))]
         SearchMode::DaemonFuzzy => {
             // Fall back to fuzzy mode if daemon feature is not enabled
-            Box::new(db::Search(DbSearchMode::Fuzzy))
+            db::Search(DbSearchMode::Fuzzy).into()
         }
-        SearchMode::Prefix => Box::new(db::Search(DbSearchMode::Prefix)),
-        SearchMode::FullText => Box::new(db::Search(DbSearchMode::FullText)),
-        SearchMode::Fuzzy => Box::new(db::Search(DbSearchMode::Fuzzy)),
+        SearchMode::Prefix => db::Search(DbSearchMode::Prefix).into(),
+        SearchMode::FullText => db::Search(DbSearchMode::FullText).into(),
+        SearchMode::Fuzzy => db::Search(DbSearchMode::Fuzzy).into(),
     }
 }
 
@@ -65,7 +65,7 @@ impl SearchState {
     }
 }
 
-#[async_trait]
+#[enum_dispatch]
 pub trait SearchEngine: Send + Sync + 'static {
     async fn full_query(
         &mut self,
@@ -98,4 +98,13 @@ pub trait SearchEngine: Send + Sync + 'static {
     }
 
     fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize>;
+}
+
+/// Static-dispatch enum over the search-engine backends.
+#[enum_dispatch(SearchEngine)]
+pub enum AnySearchEngine {
+    Db(db::Search),
+    Skim(skim::Search),
+    #[cfg(feature = "daemon")]
+    Daemon(daemon::Search),
 }

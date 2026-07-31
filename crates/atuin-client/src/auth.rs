@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use async_trait::async_trait;
+use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result, bail};
 use reqwest::{StatusCode, Url, header::USER_AGENT};
 use serde::Deserialize;
@@ -43,7 +43,11 @@ pub enum MutateResponse {
 ///
 /// CLI commands use this trait so they don't need to know which backend is
 /// active — they just prompt for input and call these methods.
-#[async_trait]
+#[enum_dispatch]
+#[allow(
+    async_fn_in_trait,
+    reason = "only used within our code and we don't need it to be Send"
+)]
 pub trait AuthClient: Send + Sync {
     /// Log in with username + password, optionally providing a TOTP code.
     async fn login(
@@ -72,22 +76,29 @@ pub trait AuthClient: Send + Sync {
     ) -> Result<MutateResponse>;
 }
 
+/// Static-dispatch enum over the two auth backends.
+#[enum_dispatch(AuthClient)]
+pub enum AnyAuthClient {
+    Legacy(LegacyAuthClient),
+    Hub(HubAuthClient),
+}
+
 /// Resolve the appropriate [`AuthClient`] for the current settings.
-pub async fn auth_client(settings: &Settings) -> Box<dyn AuthClient> {
+pub async fn auth_client(settings: &Settings) -> AnyAuthClient {
     if settings.is_hub_sync() {
         let endpoint = settings.hub_endpoint();
-        Box::new(HubAuthClient::new(
+        AnyAuthClient::Hub(HubAuthClient::new(
             &endpoint,
             settings.hub_session_token().await.ok(),
-        )) as Box<dyn AuthClient>
+        ))
     } else {
-        Box::new(LegacyAuthClient::new(
+        AnyAuthClient::Legacy(LegacyAuthClient::new(
             &settings.sync_address,
             settings.session_token().await.ok(),
             settings.network_connect_timeout,
             settings.network_timeout,
             settings.extra_headers.clone(),
-        )) as Box<dyn AuthClient>
+        ))
     }
 }
 
@@ -142,7 +153,6 @@ impl LegacyAuthClient {
     }
 }
 
-#[async_trait]
 impl AuthClient for LegacyAuthClient {
     async fn login(
         &self,
@@ -269,7 +279,6 @@ struct HubErrorResponse {
     code: Option<String>,
 }
 
-#[async_trait]
 impl AuthClient for HubAuthClient {
     async fn login(
         &self,

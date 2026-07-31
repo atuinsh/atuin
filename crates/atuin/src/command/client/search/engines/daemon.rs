@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use atuin_client::{
     database::{Database, DbSearchMode, OptFilters},
     history::{History, all_user_author_filter},
@@ -111,7 +110,6 @@ impl Search {
     }
 }
 
-#[async_trait]
 impl SearchEngine for Search {
     #[instrument(skip_all, level = Level::TRACE, name = "daemon_search", fields(query = %state.input.as_str()))]
     async fn full_query(
@@ -171,7 +169,7 @@ impl SearchEngine for Search {
                         "daemon_search.resp.item",
                         query_id = response.query_id
                     );
-                    let _span2 = span2.enter();
+                    let span2_guard = span2.enter();
                     // Only process if the query_id matches (prevents stale responses)
                     if response.query_id == query_id {
                         let uuids = response
@@ -185,7 +183,7 @@ impl SearchEngine for Search {
                             .collect::<Vec<_>>();
                         ids.extend(uuids);
                     }
-                    drop(_span2);
+                    drop(span2_guard);
                     drop(span2);
                 }
             })

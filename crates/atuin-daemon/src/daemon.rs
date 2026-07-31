@@ -5,6 +5,7 @@
 //! - [`DaemonState`]: Shared state owned by the daemon
 //! - [`DaemonHandle`]: A lightweight, cloneable handle for accessing daemon state
 //! - [`Component`]: A trait for implementing daemon components
+//!   (dispatched over via the [`AnyComponent`] enum)
 //! - [`Daemon`]: The main daemon orchestrator
 //! - [`DaemonBuilder`]: Builder for constructing and configuring the daemon
 
@@ -14,9 +15,11 @@ use atuin_client::{
     database::Sqlite as HistoryDatabase, encryption, record::sqlite_store::SqliteStore,
     settings::Settings,
 };
+use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result};
 use tokio::sync::{RwLock, broadcast};
 
+use crate::components::{HistoryComponent, SearchComponent, SemanticComponent, SyncComponent};
 use crate::events::DaemonEvent;
 
 // ============================================================================
@@ -185,7 +188,6 @@ impl std::fmt::Debug for DaemonHandle {
 ///     handle: Option<DaemonHandle>,
 /// }
 ///
-/// #[async_trait]
 /// impl Component for MyComponent {
 ///     fn name(&self) -> &'static str { "my-component" }
 ///
@@ -212,8 +214,12 @@ impl std::fmt::Debug for DaemonHandle {
 ///     }
 /// }
 /// ```
-#[tonic::async_trait]
-pub trait Component: Send + Sync {
+#[enum_dispatch]
+#[allow(
+    async_fn_in_trait,
+    reason = "only used within our code and we don't need it to be Send"
+)]
+pub trait Component: Send + Sync + Into<AnyComponent> {
     /// Human-readable name for logging and debugging.
     fn name(&self) -> &'static str;
 
@@ -237,6 +243,15 @@ pub trait Component: Send + Sync {
     async fn stop(&mut self) -> Result<()>;
 }
 
+/// Static-dispatch enum over the daemon components.
+#[enum_dispatch(Component)]
+pub enum AnyComponent {
+    History(HistoryComponent),
+    Search(SearchComponent),
+    Semantic(SemanticComponent),
+    Sync(SyncComponent),
+}
+
 // ============================================================================
 // Daemon
 // ============================================================================
@@ -258,7 +273,7 @@ pub trait Component: Send + Sync {
 /// Events emitted during handling are queued and processed in subsequent
 /// iterations, ensuring the loop eventually drains.
 pub struct Daemon {
-    components: Vec<Box<dyn Component>>,
+    components: Vec<AnyComponent>,
     handle: DaemonHandle,
 }
 
@@ -387,7 +402,7 @@ pub struct DaemonBuilder {
     settings: Settings,
     store: Option<SqliteStore>,
     history_db: Option<HistoryDatabase>,
-    components: Vec<Box<dyn Component>>,
+    components: Vec<AnyComponent>,
 }
 
 impl DaemonBuilder {
@@ -416,8 +431,8 @@ impl DaemonBuilder {
     /// Register a component.
     ///
     /// Components are started in registration order and stopped in reverse order.
-    pub fn component(mut self, component: impl Component + 'static) -> Self {
-        self.components.push(Box::new(component));
+    pub fn component(mut self, component: impl Component) -> Self {
+        self.components.push(component.into());
         self
     }
 

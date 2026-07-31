@@ -90,6 +90,7 @@ crossterm = { workspace = true, features = ["use-dev-tty"] }
 unicode-width = "0.2"
 itertools = { workspace = true }
 tokio = { workspace = true }
+enum_dispatch = { workspace = true }
 async-trait = { workspace = true }
 interim = { workspace = true }
 clap = { workspace = true }

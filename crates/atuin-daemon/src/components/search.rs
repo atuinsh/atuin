@@ -173,7 +173,6 @@ impl Default for SearchComponent {
     }
 }
 
-#[tonic::async_trait]
 impl Component for SearchComponent {
     fn name(&self) -> &'static str {
         "search"

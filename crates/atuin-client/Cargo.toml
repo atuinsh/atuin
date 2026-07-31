@@ -39,6 +39,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 url = { workspace = true }
 humantime = "2.1.0"
+enum_dispatch = { workspace = true }
 async-trait = { workspace = true }
 itertools = { workspace = true }
 rand = { workspace = true }

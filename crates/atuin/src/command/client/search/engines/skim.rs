@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use async_trait::async_trait;
 use atuin_client::{
     database::Database,
     history::{History, is_known_agent},
@@ -31,7 +30,6 @@ impl Search {
     }
 }
 
-#[async_trait]
 impl SearchEngine for Search {
     #[instrument(skip_all, level = Level::TRACE, name = "skim_search", fields(query = %state.input.as_str()))]
     async fn full_query(
