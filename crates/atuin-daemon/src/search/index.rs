@@ -9,7 +9,7 @@
 
 use super::normalize_diacritics;
 use std::borrow::Cow;
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
@@ -180,6 +180,10 @@ impl CommandData {
     }
 
     /// Get the most recent history ID for this command.
+    pub fn most_recent_timestamp(&self) -> i64 {
+        self.most_recent_timestamp
+    }
+
     pub fn most_recent_id(&self) -> [u8; 16] {
         self.most_recent_id
     }
@@ -538,6 +542,59 @@ impl SearchIndex {
         })
     }
 
+    /// Prefix completions for the suggestion UI: commands starting with
+    /// `query`, best first.
+    ///
+    /// Matching is literal (no fuzzy scoring — frizbee would admit mid-word
+    /// matches, which read as noise under an in-progress command line), but
+    /// smart-cased and diacritic-normalized like the fuzzy search. Ranking
+    /// reuses the same precomputed frecency map, with the most recent
+    /// invocation as a tiebreak — which also covers commands newer than the
+    /// last frecency rebuild.
+    ///
+    /// Multiline commands are excluded: the suggestion UI can neither render
+    /// nor safely type them.
+    #[instrument(skip_all, level = tracing::Level::TRACE, name = "index_suggest", fields(query = %query))]
+    pub fn suggest(&self, query: &str, limit: usize) -> Vec<String> {
+        if query.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        let query = normalize_diacritics(super::truncate_query(query));
+        // Mirror frizbee's `CaseMatching::Smart`: an all-lowercase query
+        // matches case-insensitively, any capital makes it exact.
+        let fold_case = !query.chars().any(char::is_uppercase);
+
+        let frecency_map = self.frecency_map.read().unwrap().clone();
+        let haystack = self.haystack.read().unwrap();
+
+        let mut matches: Vec<(u32, i64, usize)> = haystack
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                !entry.original.contains('\n')
+                    && starts_with_folded(&entry.normalized, &query, fold_case)
+            })
+            .map(|(index, entry)| {
+                let frecency = frecency_map
+                    .as_ref()
+                    .and_then(|map| map.get(index).copied())
+                    .unwrap_or(0);
+                let recency = self
+                    .commands
+                    .get(entry.original.as_ref())
+                    .map_or(0, |data| data.most_recent_timestamp());
+                (frecency, recency, index)
+            })
+            .collect();
+
+        matches.sort_unstable_by_key(|&(frecency, recency, _)| (Reverse(frecency), Reverse(recency)));
+        matches.truncate(limit);
+        matches
+            .into_iter()
+            .map(|(_, _, index)| haystack[index].original.to_string())
+            .collect()
+    }
+
     /// Rebuild the global frecency map.
     ///
     /// This should be called by a background task periodically.
@@ -582,6 +639,20 @@ impl Default for SearchIndex {
     fn default() -> Self {
         Self::new(OrFilter::all())
     }
+}
+
+/// Prefix test with optional Unicode case folding, comparing char by char so
+/// multi-byte case pairs (e.g. `İ`) can't slice mid-character.
+fn starts_with_folded(text: &str, prefix: &str, fold_case: bool) -> bool {
+    if !fold_case {
+        return text.starts_with(prefix);
+    }
+    let mut text_chars = text.chars();
+    prefix.chars().all(|prefix_char| {
+        text_chars
+            .next()
+            .is_some_and(|text_char| text_char.to_lowercase().eq(prefix_char.to_lowercase()))
+    })
 }
 
 #[cfg(test)]
@@ -820,6 +891,79 @@ mod tests {
             )
             .collect();
         assert_eq!(results.len(), 2); // git status and git commit
+    }
+
+    #[test]
+    fn suggest_returns_prefix_matches_only() {
+        let index = SearchIndex::default();
+        for (command, ts) in [
+            ("git status", datetime!(2024-01-01 10:00 UTC)),
+            ("git stash pop", datetime!(2024-01-01 10:05 UTC)),
+            ("echo git st", datetime!(2024-01-01 10:10 UTC)),
+            ("ls -la", datetime!(2024-01-01 10:15 UTC)),
+        ] {
+            index.add_history(&make_history(command, "/home/user", ts));
+        }
+
+        let results = index.suggest("git st", 10);
+        assert_eq!(results.len(), 2, "no mid-string matches: {results:?}");
+        assert!(results.iter().all(|c| c.starts_with("git st")));
+    }
+
+    #[test]
+    fn suggest_ranks_by_frecency_then_recency() {
+        let index = SearchIndex::default();
+        // "git status" run three times, "git stash pop" once but most
+        // recently.
+        for ts in [
+            datetime!(2024-01-01 10:00 UTC),
+            datetime!(2024-01-02 10:00 UTC),
+            datetime!(2024-01-03 10:00 UTC),
+        ] {
+            index.add_history(&make_history("git status", "/home/user", ts));
+        }
+        index.add_history(&make_history(
+            "git stash pop",
+            "/home/user",
+            datetime!(2024-01-04 10:00 UTC),
+        ));
+
+        // Before a frecency rebuild, ranking falls back to recency.
+        let results = index.suggest("git st", 10);
+        assert_eq!(results[0], "git stash pop");
+
+        // After the rebuild, the frequent command wins.
+        index.rebuild_frecency(&Search::default());
+        let results = index.suggest("git st", 10);
+        assert_eq!(results[0], "git status");
+    }
+
+    #[test]
+    fn suggest_honors_limit_smart_case_and_skips_multiline() {
+        let index = SearchIndex::default();
+        for (command, ts) in [
+            ("Git Status --Long", datetime!(2024-01-01 10:00 UTC)),
+            ("git stash list", datetime!(2024-01-01 10:05 UTC)),
+            ("git status\necho multiline", datetime!(2024-01-01 10:10 UTC)),
+            ("git st", datetime!(2024-01-01 10:15 UTC)),
+        ] {
+            index.add_history(&make_history(command, "/home/user", ts));
+        }
+
+        // Lowercase query folds case; the multiline entry never appears.
+        let results = index.suggest("git st", 10);
+        assert!(results.iter().any(|c| c == "Git Status --Long"));
+        assert!(results.iter().all(|c| !c.contains('\n')));
+
+        // A capital in the query makes matching exact.
+        let results = index.suggest("Git", 10);
+        assert_eq!(results, vec!["Git Status --Long".to_string()]);
+
+        // Limit is respected.
+        assert_eq!(index.suggest("git", 2).len(), 2);
+
+        // Empty queries suggest nothing.
+        assert!(index.suggest("", 10).is_empty());
     }
 
     /// Regression test for #3702: a frequently-run command whose match is

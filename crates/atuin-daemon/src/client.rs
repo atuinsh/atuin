@@ -31,7 +31,8 @@ use crate::history::{
 };
 use crate::search::{
     FilterMode as RpcFilterMode, PrepareIndexRequest, SearchContext as RpcSearchContext,
-    SearchRequest, SearchResponse, search_client::SearchClient as SearchServiceClient,
+    SearchRequest, SearchResponse, SuggestRequest,
+    search_client::SearchClient as SearchServiceClient,
 };
 use crate::semantic::{
     CommandCapture, CommandOutputReply, CommandOutputRequest, OutputRange, RecordCommandsReply,
@@ -278,6 +279,26 @@ impl SearchClient {
         };
         self.client.prepare_index(request).await?;
         Ok(())
+    }
+
+    /// Prefix completions for the pty-proxy suggestion UI: commands starting
+    /// with `query`, best first.
+    #[instrument(
+        skip_all,
+        level = Level::TRACE,
+        name = "daemon_client_suggest",
+        fields(query = %query),
+    )]
+    pub async fn suggest(&mut self, query: &str, limit: u32) -> Result<Vec<String>> {
+        let response = self
+            .client
+            .suggest(SuggestRequest {
+                query: query.to_string(),
+                limit,
+            })
+            .await?;
+
+        Ok(response.into_inner().commands)
     }
 }
 

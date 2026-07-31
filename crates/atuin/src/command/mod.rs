@@ -104,12 +104,16 @@ fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
     proxy.run(None, suggestions, child_umask);
 }
 
-/// Suggestion popup provider for `atuin pty-proxy`, backed by a search of
-/// the local history database using the configured `search_mode` (fuzzy by
-/// default). Experimental: only active with `pty_proxy.suggestions = true`
-/// in the config or `ATUIN_PTY_PROXY_SUGGEST=1` in the environment.
+/// Suggestion popup provider for `atuin pty-proxy`: prefix completions from
+/// history, best first. Experimental: only active with
+/// `pty_proxy.suggestions = true` in the config or `ATUIN_PTY_PROXY_SUGGEST=1`
+/// in the environment.
 ///
-/// The database lives on its own thread with a small runtime, mirroring
+/// Served by the daemon's in-memory search index when the daemon is enabled
+/// (frecency-ranked, no database access per keystroke), falling back to a
+/// prefix search of the local sqlite database otherwise.
+///
+/// The backend lives on its own thread with a small runtime, mirroring
 /// [`semantic_command_capture_sink`]; the returned closure just does a
 /// bounded request/reply so a slow query can never wedge the proxy's UI.
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
@@ -146,9 +150,6 @@ fn suggestion_worker(
     settings: &atuin_client::settings::Settings,
     req_rx: &std::sync::mpsc::Receiver<(String, std::sync::mpsc::Sender<Vec<String>>)>,
 ) {
-    use atuin_client::database::{Database, OptFilters, Sqlite, query_context};
-    use atuin_client::settings::FilterMode;
-
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -156,41 +157,107 @@ fn suggestion_worker(
         return;
     };
 
-    let Ok(db) = runtime.block_on(Sqlite::new(&settings.db_path, settings.local_timeout)) else {
-        return;
-    };
-    // The proxy runs outside the hooked shell (no ATUIN_SESSION yet), so use
-    // the sessionless context and a global filter.
-    let Ok(context) = runtime.block_on(query_context()) else {
-        return;
-    };
-
-    let search_mode = settings.search_mode.closest_db_mode();
-    let limit = i64::try_from(settings.pty_proxy.suggestions_limit).unwrap_or(8);
+    let limit = u32::try_from(settings.pty_proxy.suggestions_limit).unwrap_or(8);
+    let mut backend = SuggestionBackend::default();
 
     while let Ok((query, reply_tx)) = req_rx.recv() {
-        let results = runtime
-            .block_on(db.search(
-                search_mode,
-                FilterMode::Global,
-                &context,
-                &query,
-                OptFilters {
-                    limit: Some(limit),
-                    ..OptFilters::default()
-                },
-            ))
-            .unwrap_or_default();
+        let results = runtime.block_on(backend.fetch(settings, &query, limit));
 
         // Multiline commands can't be typed into the pty safely — each
-        // newline would submit the line so far. Skip them until accept
-        // learns bracketed paste.
+        // newline would submit the line so far. The daemon filters them
+        // already; this also covers the sqlite fallback.
         let commands = results
             .into_iter()
-            .map(|entry| entry.command)
             .filter(|command| !command.contains('\n'))
             .collect();
         let _ = reply_tx.send(commands);
+    }
+}
+
+/// Lazily connected suggestion backends: the daemon's search index first,
+/// the local sqlite database as fallback.
+#[cfg(all(feature = "client", feature = "pty-proxy", unix))]
+#[derive(Default)]
+struct SuggestionBackend {
+    #[cfg(feature = "daemon")]
+    daemon: Option<atuin_daemon::client::SearchClient>,
+    local: Option<(
+        atuin_client::database::Sqlite,
+        atuin_client::database::Context,
+    )>,
+}
+
+#[cfg(all(feature = "client", feature = "pty-proxy", unix))]
+impl SuggestionBackend {
+    async fn fetch(
+        &mut self,
+        settings: &atuin_client::settings::Settings,
+        query: &str,
+        limit: u32,
+    ) -> Vec<String> {
+        // Prefer the daemon: its in-memory index answers prefix queries
+        // without touching sqlite and ranks with the same frecency scores
+        // as interactive search.
+        #[cfg(feature = "daemon")]
+        if settings.daemon.enabled {
+            if self.daemon.is_none() {
+                self.daemon =
+                    atuin_daemon::client::SearchClient::new(settings.daemon.socket_path.clone())
+                        .await
+                        .ok();
+            }
+            if let Some(client) = self.daemon.as_mut() {
+                match client.suggest(query, limit).await {
+                    Ok(commands) => return commands,
+                    // Drop the connection and fall through to sqlite for
+                    // this query; the next one retries the daemon.
+                    Err(_) => self.daemon = None,
+                }
+            }
+        }
+
+        self.fetch_local(settings, query, limit).await
+    }
+
+    async fn fetch_local(
+        &mut self,
+        settings: &atuin_client::settings::Settings,
+        query: &str,
+        limit: u32,
+    ) -> Vec<String> {
+        use atuin_client::database::{Database, DbSearchMode, OptFilters, Sqlite, query_context};
+        use atuin_client::settings::FilterMode;
+
+        if self.local.is_none() {
+            let Ok(db) = Sqlite::new(&settings.db_path, settings.local_timeout).await else {
+                return Vec::new();
+            };
+            // The proxy runs outside the hooked shell (no ATUIN_SESSION
+            // yet), so use the sessionless context and a global filter.
+            let Ok(context) = query_context().await else {
+                return Vec::new();
+            };
+            self.local = Some((db, context));
+        }
+        let Some((db, context)) = self.local.as_ref() else {
+            return Vec::new();
+        };
+
+        db.search(
+            DbSearchMode::Prefix,
+            FilterMode::Global,
+            context,
+            query,
+            OptFilters {
+                limit: Some(i64::from(limit)),
+                ..OptFilters::default()
+            },
+        )
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| entry.command)
+        .collect()
     }
 }
 

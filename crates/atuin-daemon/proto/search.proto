@@ -40,7 +40,19 @@ message PrepareIndexRequest {
 
 message PrepareIndexResponse {}
 
+// Prefix completions for the pty-proxy suggestion UI: commands that start
+// with the typed line, best first.
+message SuggestRequest {
+  string query = 1;
+  uint32 limit = 2;
+}
+
+message SuggestReply {
+  repeated string commands = 1;
+}
+
 service Search {
   rpc Search(stream SearchRequest) returns (stream SearchResponse);
   rpc PrepareIndex(PrepareIndexRequest) returns (PrepareIndexResponse);
+  rpc Suggest(SuggestRequest) returns (SuggestReply);
 }
