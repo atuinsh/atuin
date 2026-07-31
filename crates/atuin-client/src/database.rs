@@ -1998,6 +1998,46 @@ mod test {
         .await;
     }
 
+    // A negated term's characters are absent from every row by construction, so ranking against
+    // them scores every row None and falls back to recency, burying the tight match.
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fuzzy_inverse_true_span(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let mut db = db;
+
+        let now = OffsetDateTime::now_utc();
+        let tight = "foo screen";
+        let loose = "foo x screen";
+
+        new_history_item_at(&mut db, tight, Some(now - time::Duration::days(5)))
+            .await
+            .unwrap();
+        new_history_item_at(&mut db, loose, Some(now - time::Duration::hours(1)))
+            .await
+            .unwrap();
+
+        // "!zzz" excludes neither row, so both are ranked and the tight match must win.
+        let results = assert_search_eq(
+            &db,
+            DbSearchMode::Fuzzy,
+            FilterMode::Global,
+            "foo screen !zzz",
+            2,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            results[0].command,
+            tight,
+            "\"foo screen !zzz\" should rank the tight match first, got: {:?}",
+            results.iter().map(|h| &h.command).collect::<Vec<_>>()
+        );
+    }
+
     #[rstest]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_paged_basic(
