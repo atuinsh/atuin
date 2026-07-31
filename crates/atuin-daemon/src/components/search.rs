@@ -19,10 +19,14 @@ use crate::{
     daemon::{Component, DaemonHandle},
     events::DaemonEvent,
     search::{
-        FilterMode, IndexFilterMode, SearchIndex, SearchRequest, SearchResponse,
+        FilterMode, IndexFilterMode, SearchIndex, SearchRequest, SearchResponse, SuggestReply,
+        SuggestRequest,
         search_server::{Search as SearchSvc, SearchServer},
     },
 };
+
+/// Cap on suggestions returned per request, whatever the client asks for.
+const SUGGEST_LIMIT: u32 = 50;
 
 const PAGE_SIZE: usize = 5000;
 const RESULTS_LIMIT: u32 = 200;
@@ -410,6 +414,17 @@ impl SearchSvc for SearchGrpcService {
         // Convert receiver to stream
         let out_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
         Ok(Response::new(Box::pin(out_stream)))
+    }
+
+    #[instrument(skip_all, level = Level::TRACE, name = "suggest_rpc")]
+    async fn suggest(
+        &self,
+        request: Request<SuggestRequest>,
+    ) -> Result<Response<SuggestReply>, Status> {
+        let request = request.into_inner();
+        let limit = request.limit.min(SUGGEST_LIMIT) as usize;
+        let commands = self.index.read().await.suggest(&request.query, limit);
+        Ok(Response::new(SuggestReply { commands }))
     }
 }
 
