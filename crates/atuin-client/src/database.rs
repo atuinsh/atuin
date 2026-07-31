@@ -1489,6 +1489,24 @@ mod test {
         assert_eq!(loaded.len(), 1200);
     }
 
+    // Inserts oldest-first with well-separated timestamps, so recency order is the reverse of the
+    // argument order rather than a product of clock resolution.
+    async fn db_with_ages(commands: &[&str]) -> Sqlite {
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        let now = OffsetDateTime::now_utc();
+        for (i, command) in commands.iter().enumerate() {
+            let age = time::Duration::hours((commands.len() - i) as i64);
+            new_history_item_at(&mut db, command, Some(now - age))
+                .await
+                .unwrap();
+        }
+
+        db
+    }
+
     async fn db_with(commands: &[&str]) -> Sqlite {
         let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
             .await
@@ -1900,6 +1918,91 @@ mod test {
             vec!["use screen"],
         )
         .await;
+    }
+
+    // Which signal decides the order of two matched rows, given the tighter match is always the
+    // older of the two. Distinguishes a legitimate tie from ranking not happening at all: both put
+    // the newer row first, but only one of them is correct.
+    #[derive(Debug, Clone, Copy)]
+    enum RankedBy {
+        // The tighter match wins despite being older.
+        Span,
+        // Both rows score the same span, so recency correctly breaks the tie.
+        TiedSpan,
+        // No row matches the ranking query, so every key is usize::MAX and the stable sort leaves
+        // SQL's recency order untouched. Ranking is off.
+        NothingScored,
+    }
+
+    // Characterises which query shapes the span scorer can actually rank. The ranking query is a
+    // single concatenation of the plain terms, but SQL emits one independent condition per term,
+    // so any shape where the two disagree leaves every row unscored. `NothingScored` rows are
+    // defects, recorded here to pin current behaviour.
+    #[rstest]
+    // A lone term, and terms in the order they appear in the command, rank correctly.
+    #[case::plain_term("screen", "screen", ("screen", "search green"), RankedBy::Span)]
+    #[case::terms_in_command_order("foo bar", "foobar", ("foo bar", "foo qux bar"), RankedBy::Span)]
+    #[case::exact_word_terms("'foo 'bar", "foobar", ("foo bar", "foo qux bar"), RankedBy::Span)]
+    // Anchors rank as long as no term sits on the impossible side of them.
+    #[case::start_anchor_then_term("^foo bar", "foobar", ("foo bar", "foo qux bar"), RankedBy::Span)]
+    #[case::term_then_end_anchor("foo screen$", "fooscreen", ("foo screen", "foo x screen"), RankedBy::Span)]
+    // A negated term is a filter, not a ranking signal, so it drops out and the rest still ranks.
+    #[case::negated_term("foo screen !zzz", "fooscreen", ("foo screen", "foo x screen"), RankedBy::Span)]
+    #[case::negated_start_anchor("bar !^foo", "bar", ("bar", "b a r"), RankedBy::Span)]
+    // An uppercase term switches SQL to case-sensitive GLOB, which agrees with the span scorer.
+    #[case::uppercase_term("LS", "LS", ("LS", "L x S"), RankedBy::Span)]
+    #[case::mixed_case_uppercase_term("LS foo", "LSfoo", ("LS foo", "LS x foo"), RankedBy::Span)]
+    // A regex is a filter too; the plain term alongside it still ranks.
+    #[case::regex_with_term("r/screen/ foo", "foo", ("foo screen", "f o o screen"), RankedBy::Span)]
+    // Nothing left to rank on, or nothing to tell the rows apart. Recency is the right answer.
+    #[case::regex_only("r/screen/", "", ("foo screen", "foo x screen"), RankedBy::TiedSpan)]
+    #[case::negated_term_only("!zzz", "", ("foo screen", "foo x screen"), RankedBy::TiedSpan)]
+    #[case::start_anchor_only("^foo", "foo", ("foo bar", "foo qux bar"), RankedBy::TiedSpan)]
+    #[case::end_anchor_only("screen$", "screen", ("foo screen", "foo x screen"), RankedBy::TiedSpan)]
+    // Terms SQL matches independently, but the concatenation demands them in query order.
+    #[case::terms_out_of_command_order("bar foo", "barfoo", ("foo bar", "foo qux bar"), RankedBy::NothingScored)]
+    // SQL requires either branch; the concatenation demands every one of them.
+    #[case::alternation("foo | bar", "foobar", ("foo", "bar"), RankedBy::NothingScored)]
+    #[case::alternation_three_way("foo | bar | qux", "foobarqux", ("foo", "bar"), RankedBy::NothingScored)]
+    // `^foo` pins foo at offset 0, so nothing in the concatenation can precede it.
+    #[case::term_before_start_anchor("bar ^foo", "barfoo", ("foo bar", "foo qux bar"), RankedBy::NothingScored)]
+    // `screen$` pins screen at the end, so nothing in the concatenation can follow it.
+    #[case::term_after_end_anchor("screen$ foo", "screenfoo", ("foo screen", "foo x screen"), RankedBy::NothingScored)]
+    // SQL matched only by case folding, which LIKE does and the span scorer does not. Unaffected by
+    // an uppercase term elsewhere in the query: each term picks LIKE or GLOB on its own.
+    #[case::lowercase_term_matching_uppercase("ls", "ls", ("LS", "L x S"), RankedBy::NothingScored)]
+    #[case::mixed_case_lowercase_term("ls FOO", "lsFOO", ("LS FOO", "LS x FOO"), RankedBy::NothingScored)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fuzzy_operator_ranking(
+        #[case] query: &str,
+        #[case] expected_ranking_query: &str,
+        #[case] rows: (&str, &str),
+        #[case] ranked_by: RankedBy,
+    ) {
+        let (tighter, looser) = rows;
+        let db = db_with_ages(&[tighter, looser]).await;
+
+        assert_eq!(
+            fuzzy_ranking_query(query),
+            expected_ranking_query,
+            "ranking query for {query:?}"
+        );
+
+        let results = assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, 2)
+            .await
+            .unwrap();
+
+        // Recency puts `looser` first, so only span scoring can surface `tighter`.
+        let expected_first = match ranked_by {
+            RankedBy::Span => tighter,
+            RankedBy::TiedSpan | RankedBy::NothingScored => looser,
+        };
+        assert_eq!(
+            results[0].command,
+            expected_first,
+            "{query:?} should rank by {ranked_by:?}, got: {:?}",
+            results.iter().map(|h| &h.command).collect::<Vec<_>>()
+        );
     }
 
     #[rstest]
