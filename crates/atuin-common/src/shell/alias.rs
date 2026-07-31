@@ -67,41 +67,28 @@ pub struct Alias {
 mod alias_value_tests {
     use super::AliasValue;
     use bstr::BString;
+    use rstest::rstest;
 
-    #[test]
-    fn command_shcmd_is_passthrough() {
-        let v = AliasValue::Command(BString::from("ls -l"));
-        assert_eq!(v.shcmd(), BString::from("ls -l"));
-    }
-
-    #[test]
-    fn argv_shcmd_single_quotes_each_argument() {
-        let v = AliasValue::Argv(vec![
+    #[rstest]
+    #[case::command_shcmd_is_passthrough(AliasValue::Command(BString::from("ls -l")), "ls -l")]
+    #[case::argv_shcmd_single_quotes_each_argument(
+        AliasValue::Argv(vec![
             BString::from("git"),
             BString::from("commit"),
             BString::from("-m"),
             BString::from("hello world"),
-        ]);
-        assert_eq!(
-            v.shcmd(),
-            BString::from(r"'git' 'commit' '-m' 'hello world'")
-        );
-    }
-
-    #[test]
-    fn argv_shcmd_preserves_empty_and_escapes_quote() {
-        assert_eq!(
-            AliasValue::Argv(vec![
-                BString::from("echo"),
-                BString::from(""),
-                BString::from("x")
-            ])
-            .shcmd(),
-            BString::from(r"'echo' '' 'x'"),
-        );
-        assert_eq!(
-            AliasValue::Argv(vec![BString::from("echo"), BString::from("it's")]).shcmd(),
-            BString::from(r"'echo' 'it'\''s'"),
-        );
+        ]),
+        r"'git' 'commit' '-m' 'hello world'"
+    )]
+    #[case::argv_shcmd_preserves_empty(
+        AliasValue::Argv(vec![BString::from("echo"), BString::from(""), BString::from("x")]),
+        r"'echo' '' 'x'"
+    )]
+    #[case::argv_shcmd_escapes_quote(
+        AliasValue::Argv(vec![BString::from("echo"), BString::from("it's")]),
+        r"'echo' 'it'\''s'"
+    )]
+    fn renders_shcmd(#[case] value: AliasValue, #[case] expected: &str) {
+        assert_eq!(value.shcmd(), BString::from(expected));
     }
 }

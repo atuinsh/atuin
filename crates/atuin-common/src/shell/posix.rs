@@ -212,6 +212,7 @@ fn posix_value(value: &[u8], out: &mut BString) {
 mod render_tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     fn alias(name: &str, value: AliasValue) -> Alias {
         Alias {
@@ -220,35 +221,27 @@ mod render_tests {
         }
     }
 
-    #[test]
-    fn renders_a_plain_command() {
-        let r = render_aliases(&[alias("ll", AliasValue::Command(BString::from("ls -l")))]);
-        assert_eq!(r.script, BString::from("alias ll='ls -l'\n"));
+    #[rstest]
+    #[case::plain_command(
+        "ll",
+        AliasValue::Command(BString::from("ls -l")),
+        "alias ll='ls -l'\n"
+    )]
+    #[case::escapes_embedded_single_quote(
+        "x",
+        AliasValue::Command(BString::from("echo it's")),
+        "alias x='echo it'\\''s'\n"
+    )]
+    #[case::empty_body("e", AliasValue::Command(BString::default()), "alias e=''\n")]
+    #[case::argv_round_trips(
+        "g",
+        AliasValue::Argv(vec![BString::from("git"), BString::from("st")]),
+        concat!(r"alias g=''\''git'\'' '\''st'\'''", "\n")
+    )]
+    fn renders_alias(#[case] name: &str, #[case] value: AliasValue, #[case] expected: &str) {
+        let r = render_aliases(&[alias(name, value)]);
+        assert_eq!(r.script, BString::from(expected));
         assert!(r.skipped.is_empty());
-    }
-
-    #[test]
-    fn escapes_embedded_single_quote_in_the_body() {
-        let r = render_aliases(&[alias("x", AliasValue::Command(BString::from("echo it's")))]);
-        assert_eq!(r.script, BString::from("alias x='echo it'\\''s'\n"));
-    }
-
-    #[test]
-    fn empty_body_renders_empty_quotes() {
-        let r = render_aliases(&[alias("e", AliasValue::Command(BString::default()))]);
-        assert_eq!(r.script, BString::from("alias e=''\n"));
-    }
-
-    #[test]
-    fn argv_body_round_trips_exactly() {
-        let r = render_aliases(&[alias(
-            "g",
-            AliasValue::Argv(vec![BString::from("git"), BString::from("st")]),
-        )]);
-        assert_eq!(
-            r.script,
-            BString::from(concat!(r"alias g=''\''git'\'' '\''st'\'''", "\n"))
-        );
     }
 
     #[test]
@@ -276,6 +269,7 @@ mod render_tests {
 mod var_render_tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     fn var(name: &str, value: &str, export: bool) -> Var {
         Var {
@@ -285,39 +279,26 @@ mod var_render_tests {
         }
     }
 
-    #[test]
-    fn bareword_value_is_unquoted() {
-        let r = render_vars(&[var("FOO", "bar", true)]);
-        assert_eq!(r.script, BString::from("export FOO=bar\n"));
+    #[rstest]
+    #[case::bareword_is_unquoted("FOO", "bar", true, "export FOO=bar\n")]
+    #[case::all_safe_chars_is_unquoted("P", "a_b-c.d/e", true, "export P=a_b-c.d/e\n")]
+    #[case::spaces_force_double_quotes("FOO", "bar baz", true, "export FOO=\"bar baz\"\n")]
+    #[case::shell_var_has_no_export_prefix("FOO", "bar baz", false, "FOO=\"bar baz\"\n")]
+    #[case::escapes_dollar_backtick_quote_and_backslash(
+        "V",
+        r#"a$b`c"d\e"#,
+        true,
+        concat!(r#"export V="a\$b\`c\"d\\e""#, "\n")
+    )]
+    fn renders_var(
+        #[case] name: &str,
+        #[case] value: &str,
+        #[case] export: bool,
+        #[case] expected: &str,
+    ) {
+        let r = render_vars(&[var(name, value, export)]);
+        assert_eq!(r.script, BString::from(expected));
         assert!(r.skipped.is_empty());
-    }
-
-    #[test]
-    fn bareword_value_with_all_safe_chars_is_unquoted() {
-        let r = render_vars(&[var("P", "a_b-c.d/e", true)]);
-        assert_eq!(r.script, BString::from("export P=a_b-c.d/e\n"));
-        assert!(r.skipped.is_empty());
-    }
-
-    #[test]
-    fn spaces_force_double_quotes_and_export_prefix() {
-        let r = render_vars(&[var("FOO", "bar baz", true)]);
-        assert_eq!(r.script, BString::from("export FOO=\"bar baz\"\n"));
-    }
-
-    #[test]
-    fn shell_var_has_no_export_prefix() {
-        let r = render_vars(&[var("FOO", "bar baz", false)]);
-        assert_eq!(r.script, BString::from("FOO=\"bar baz\"\n"));
-    }
-
-    #[test]
-    fn escapes_dollar_backtick_quote_and_backslash() {
-        let r = render_vars(&[var("V", r#"a$b`c"d\e"#, true)]);
-        assert_eq!(
-            r.script,
-            BString::from(concat!(r#"export V="a\$b\`c\"d\\e""#, "\n"))
-        );
     }
 
     #[test]
@@ -332,6 +313,7 @@ mod var_render_tests {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     fn map(pairs: &[(&[u8], &[u8])]) -> Aliases {
         pairs
@@ -340,70 +322,42 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn decodes_bash_escaped_quote() {
-        assert_eq!(
-            parse_aliases(br"alias whoops='echo it'\''s fine'").unwrap(),
-            map(&[(b"whoops", b"echo it's fine")])
-        );
+    #[rstest]
+    #[case::bash_escaped_quote(
+        br"alias whoops='echo it'\''s fine'",
+        &[(b"whoops".as_slice(), b"echo it's fine".as_slice())]
+    )]
+    #[case::dash_double_quoted_quote(
+        br#"whoops='echo it'"'"'s fine'"#,
+        &[(b"whoops".as_slice(), b"echo it's fine".as_slice())]
+    )]
+    #[case::dash_missing_alias_prefix(b"ll='ls -l'\n", &[(b"ll".as_slice(), b"ls -l".as_slice())])]
+    #[case::embedded_newline(
+        b"alias multi='line one\nline two'\nalias after='x'\n",
+        &[
+            (b"multi".as_slice(), b"line one\nline two".as_slice()),
+            (b"after".as_slice(), b"x".as_slice()),
+        ]
+    )]
+    #[case::non_utf8(b"alias bin='\xff\xfe'", &[(b"bin".as_slice(), b"\xff\xfe".as_slice())])]
+    #[case::empty_input(b"", &[])]
+    #[case::empty_value(b"alias e=''", &[(b"e".as_slice(), b"".as_slice())])]
+    #[case::last_duplicate_wins(
+        b"alias a='first'\nalias a='second'\n",
+        &[(b"a".as_slice(), b"second".as_slice())]
+    )]
+    fn parses_aliases(#[case] input: &[u8], #[case] expected: &[(&[u8], &[u8])]) {
+        assert_eq!(parse_aliases(input).unwrap(), map(expected));
     }
 
-    #[test]
-    fn decodes_dash_double_quoted_quote() {
-        assert_eq!(
-            parse_aliases(br#"whoops='echo it'"'"'s fine'"#).unwrap(),
-            map(&[(b"whoops", b"echo it's fine")])
-        );
-    }
-
-    #[test]
-    fn accepts_dash_missing_alias_prefix() {
-        assert_eq!(
-            parse_aliases(b"ll='ls -l'\n").unwrap(),
-            map(&[(b"ll", b"ls -l")])
-        );
-    }
-
-    #[test]
-    fn preserves_embedded_newline() {
-        assert_eq!(
-            parse_aliases(b"alias multi='line one\nline two'\nalias after='x'\n").unwrap(),
-            map(&[(b"multi", b"line one\nline two"), (b"after", b"x")])
-        );
-    }
-
-    #[test]
-    fn preserves_non_utf8() {
-        assert_eq!(
-            parse_aliases(b"alias bin='\xff\xfe'").unwrap(),
-            map(&[(b"bin", &[0xff, 0xfe])])
-        );
-    }
-
-    #[test]
-    fn name_does_not_run_across_a_newline() {
-        // Regression: `take_while(|b| b != b'=')` without excluding `\n` made this return
-        // Ok({"to use foo\nalias a": "b"}) -- a WRONG map, not an error.
-        let result = parse_aliases(b"alias to use foo\nalias a='b'\n");
+    #[rstest]
+    // `name_does_not_run_across_a_newline` regression: `take_while(|b| b != b'=')`
+    // without excluding `\n` made this return Ok({"to use foo\nalias a": "b"}) -- a
+    // WRONG map, not an error.
+    #[case::name_does_not_run_across_a_newline(b"alias to use foo\nalias a='b'\n")]
+    #[case::trailing_garbage_rather_than_truncating(b"alias ll='ls -l'\nnot an alias line\n")]
+    fn rejects(#[case] input: &[u8]) {
+        let result = parse_aliases(input);
         assert!(result.is_err(), "expected Err, got {result:?}");
-    }
-
-    #[test]
-    fn rejects_trailing_garbage_rather_than_truncating() {
-        assert!(parse_aliases(b"alias ll='ls -l'\nnot an alias line\n").is_err());
-    }
-
-    #[test]
-    fn parses_empty_input_and_empty_values() {
-        assert_eq!(parse_aliases(b"").unwrap(), Aliases::new());
-        assert_eq!(parse_aliases(b"alias e=''").unwrap(), map(&[(b"e", b"")]));
-    }
-
-    #[test]
-    fn last_duplicate_definition_wins() {
-        assert_eq!(
-            parse_aliases(b"alias a='first'\nalias a='second'\n").unwrap(),
-            map(&[(b"a", b"second")])
-        );
     }
 }

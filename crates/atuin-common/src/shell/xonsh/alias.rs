@@ -98,6 +98,7 @@ fn py_str(bytes: &[u8], out: &mut BString) {
 mod render_tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     fn alias(name: &str, value: AliasValue) -> Alias {
         Alias {
@@ -113,25 +114,20 @@ mod render_tests {
         assert!(r.skipped.is_empty());
     }
 
-    #[test]
-    fn renders_argv_as_python_list() {
-        let r = render_aliases(&[alias(
-            "g",
-            AliasValue::Argv(vec![BString::from("git"), BString::from("status")]),
-        )]);
-        assert_eq!(
-            r.script,
-            BString::from("aliases['g'] = ['git', 'status']\n")
-        );
-    }
-
-    #[test]
-    fn escapes_quotes_and_backslashes() {
-        let r = render_aliases(&[alias("q", AliasValue::Command(BString::from(r"it's \ x")))]);
-        assert_eq!(
-            r.script,
-            BString::from(concat!(r"aliases['q'] = 'it\'s \\ x'", "\n"))
-        );
+    #[rstest]
+    #[case::renders_argv_as_python_list(
+        "g",
+        AliasValue::Argv(vec![BString::from("git"), BString::from("status")]),
+        "aliases['g'] = ['git', 'status']\n"
+    )]
+    #[case::escapes_quotes_and_backslashes(
+        "q",
+        AliasValue::Command(BString::from(r"it's \ x")),
+        concat!(r"aliases['q'] = 'it\'s \\ x'", "\n")
+    )]
+    fn renders_alias(#[case] name: &str, #[case] value: AliasValue, #[case] expected: &str) {
+        let r = render_aliases(&[alias(name, value)]);
+        assert_eq!(r.script, BString::from(expected));
     }
 }
 
@@ -139,6 +135,7 @@ mod render_tests {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     fn parse(input: &[u8]) -> Aliases {
         parse_aliases(input).unwrap()
@@ -160,31 +157,25 @@ mod tests {
         );
     }
 
-    #[test]
-    fn shcmd_quotes_each_argument() {
-        let m = parse(br#"{"commit": ["git", "commit", "-m", "hello world"]}"#);
-        assert_eq!(
-            m[&BString::from(&b"commit"[..])].shcmd(),
-            BString::from(&br"'git' 'commit' '-m' 'hello world'"[..])
-        );
-    }
-
-    #[test]
-    fn shcmd_preserves_empty_arguments() {
-        let m = parse(br#"{"e": ["echo", "", "x"]}"#);
-        assert_eq!(
-            m[&BString::from(&b"e"[..])].shcmd(),
-            BString::from(&br"'echo' '' 'x'"[..])
-        );
-    }
-
-    #[test]
-    fn shcmd_escapes_embedded_quote() {
-        let m = parse(br#"{"q": ["echo", "it's"]}"#);
-        assert_eq!(
-            m[&BString::from(&b"q"[..])].shcmd(),
-            BString::from(&br"'echo' 'it'\''s'"[..])
-        );
+    #[rstest]
+    #[case::shcmd_quotes_each_argument(
+        br#"{"commit": ["git", "commit", "-m", "hello world"]}"#.as_slice(),
+        b"commit".as_slice(),
+        br"'git' 'commit' '-m' 'hello world'".as_slice()
+    )]
+    #[case::shcmd_preserves_empty_arguments(
+        br#"{"e": ["echo", "", "x"]}"#.as_slice(),
+        b"e".as_slice(),
+        br"'echo' '' 'x'".as_slice()
+    )]
+    #[case::shcmd_escapes_embedded_quote(
+        br#"{"q": ["echo", "it's"]}"#.as_slice(),
+        b"q".as_slice(),
+        br"'echo' 'it'\''s'".as_slice()
+    )]
+    fn shcmd_renders_arguments(#[case] input: &[u8], #[case] key: &[u8], #[case] expected: &[u8]) {
+        let m = parse(input);
+        assert_eq!(m[&BString::from(key)].shcmd(), BString::from(expected));
     }
 
     #[test]

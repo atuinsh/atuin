@@ -440,6 +440,7 @@ fn find_subslice(haystack: &[&str], needle: &[&str]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     fn names(cmds: &[ShellCommand]) -> Vec<&str> {
         cmds.iter().map(|c| c.name.as_str()).collect()
@@ -449,287 +450,175 @@ mod tests {
         cmds.iter().map(|c| c.full.as_str()).collect()
     }
 
-    #[test]
-    fn simple_command() {
-        let result = parse_shell_command("ls -la /tmp", ShellKind::Bash);
-        assert_eq!(names(&result.subcommands), vec!["ls"]);
-        assert_eq!(fulls(&result.subcommands), vec!["ls -la /tmp"]);
+    // Parses that pin the exact extracted subcommands. `expected_fulls` is only
+    // asserted when the original test did (`None` skips that check).
+    #[rstest]
+    #[case::simple_command(ShellKind::Bash, "ls -la /tmp", &["ls"], Some(&["ls -la /tmp"][..]))]
+    #[case::pipeline(ShellKind::Bash, "cat file.txt | grep foo | wc -l", &["cat", "grep", "wc"], None)]
+    #[case::command_chaining(
+        ShellKind::Bash,
+        "git add . && git commit -m 'hi'",
+        &["git", "git"],
+        Some(&["git add .", "git commit -m 'hi'"][..])
+    )]
+    #[case::semicolon_separated(ShellKind::Bash, "echo hello; echo world", &["echo", "echo"], None)]
+    #[case::fish_simple_command(ShellKind::Fish, "ls -la /tmp", &["ls"], None)]
+    #[case::fallback_double_ampersand_and_pipe_pipe(
+        ShellKind::Unknown,
+        "ls && cat foo || echo fail",
+        &["ls", "cat", "echo"],
+        Some(&["ls", "cat foo", "echo fail"][..])
+    )]
+    #[case::fallback_pipe_without_double(
+        ShellKind::Unknown,
+        "ls | grep foo",
+        &["ls", "grep"],
+        Some(&["ls", "grep foo"][..])
+    )]
+    fn parse_exact(
+        #[case] kind: ShellKind,
+        #[case] code: &str,
+        #[case] expected_names: &[&str],
+        #[case] expected_fulls: Option<&[&str]>,
+    ) {
+        let result = parse_shell_command(code, kind);
+        assert_eq!(names(&result.subcommands), expected_names);
+        if let Some(f) = expected_fulls {
+            assert_eq!(fulls(&result.subcommands), f);
+        }
     }
 
-    #[test]
-    fn pipeline() {
-        let result = parse_shell_command("cat file.txt | grep foo | wc -l", ShellKind::Bash);
-        assert_eq!(names(&result.subcommands), vec!["cat", "grep", "wc"]);
-    }
-
-    #[test]
-    fn command_chaining() {
-        let result = parse_shell_command("git add . && git commit -m 'hi'", ShellKind::Bash);
-        assert_eq!(names(&result.subcommands), vec!["git", "git"]);
-        assert_eq!(
-            fulls(&result.subcommands),
-            vec!["git add .", "git commit -m 'hi'"]
-        );
-    }
-
-    #[cfg(feature = "tree-sitter")]
-    #[test]
-    fn dash_is_parsed_as_posix() {
-        // Command substitution: only the posix grammar extracts the inner `git`;
-        // parse_fallback cannot see past the `$(...)` — so this actually proves
-        // Dash routes to posix rather than to the fallback path.
-        let result = parse_shell_command("echo $(git rev-parse HEAD)", ShellKind::Dash);
+    // Parses that only require certain subcommands to be present (subset match).
+    #[rstest]
+    #[case::fallback_splits_correctly(ShellKind::Unknown, "ls && cat foo || echo fail", &["ls", "cat", "echo"])]
+    #[case::fish_conditional(ShellKind::Fish, "git add .; and git commit -m hi", &["git"])]
+    fn parse_contains_names(
+        #[case] kind: ShellKind,
+        #[case] code: &str,
+        #[case] expected: &[&str],
+    ) {
+        let result = parse_shell_command(code, kind);
         let n = names(&result.subcommands);
-        assert!(n.contains(&"echo"), "should contain echo: {n:?}");
-        assert!(n.contains(&"git"), "should contain git: {n:?}");
+        for name in expected {
+            assert!(n.contains(name), "should contain {name}: {n:?}");
+        }
     }
 
+    // Exact parses that only the tree-sitter grammars can extract.
     #[cfg(feature = "tree-sitter")]
-    #[test]
-    fn command_substitution() {
-        let result = parse_shell_command("echo $(git rev-parse HEAD)", ShellKind::Bash);
+    #[rstest]
+    #[case::subshell(ShellKind::Bash, "(cd /tmp && ls)", &["cd", "ls"], None)]
+    #[case::variable_assignment_excluded(
+        ShellKind::Bash,
+        "FOO=bar ls -la /tmp",
+        &["ls"],
+        Some(&["ls -la /tmp"][..])
+    )]
+    #[case::variable_assignment_multiple(
+        ShellKind::Bash,
+        "A=1 B=2 git status",
+        &["git"],
+        Some(&["git status"][..])
+    )]
+    fn parse_exact_tree_sitter(
+        #[case] kind: ShellKind,
+        #[case] code: &str,
+        #[case] expected_names: &[&str],
+        #[case] expected_fulls: Option<&[&str]>,
+    ) {
+        let result = parse_shell_command(code, kind);
+        assert_eq!(names(&result.subcommands), expected_names);
+        if let Some(f) = expected_fulls {
+            assert_eq!(fulls(&result.subcommands), f);
+        }
+    }
+
+    // Subset parses that only the tree-sitter grammars can extract (command and
+    // backtick substitution, control flow, nested substitution, ...).
+    #[cfg(feature = "tree-sitter")]
+    #[rstest]
+    // `dash_is_parsed_as_posix`: only the posix grammar extracts the inner `git`
+    // from `$(...)` -- parse_fallback cannot see past it -- so this proves Dash
+    // routes to posix rather than to the fallback path.
+    #[case::dash_is_parsed_as_posix(ShellKind::Dash, "echo $(git rev-parse HEAD)", &["echo", "git"])]
+    #[case::command_substitution(ShellKind::Bash, "echo $(git rev-parse HEAD)", &["echo", "git"])]
+    #[case::backtick_substitution(ShellKind::Bash, "echo `date`", &["echo", "date"])]
+    #[case::for_loop(ShellKind::Bash, "for f in *.txt; do cat $f; done", &["cat"])]
+    #[case::if_statement(
+        ShellKind::Bash,
+        "if [ -f foo ]; then cat foo; else echo nope; fi",
+        &["cat", "echo"]
+    )]
+    #[case::nested_substitution(
+        ShellKind::Bash,
+        "echo \"Result: $(git log --oneline | head -1)\"",
+        &["echo", "git", "head"]
+    )]
+    #[case::fish_command_substitution(ShellKind::Fish, "echo (date)", &["echo", "date"])]
+    fn parse_contains_tree_sitter(
+        #[case] kind: ShellKind,
+        #[case] code: &str,
+        #[case] expected: &[&str],
+    ) {
+        let result = parse_shell_command(code, kind);
         let n = names(&result.subcommands);
-        assert!(n.contains(&"echo"), "should contain echo: {n:?}");
-        assert!(n.contains(&"git"), "should contain git: {n:?}");
+        for name in expected {
+            assert!(n.contains(name), "should contain {name}: {n:?}");
+        }
     }
 
-    #[cfg(feature = "tree-sitter")]
-    #[test]
-    fn backtick_substitution() {
-        let result = parse_shell_command("echo `date`", ShellKind::Bash);
-        let n = names(&result.subcommands);
-        assert!(n.contains(&"echo"), "should contain echo: {n:?}");
-        assert!(n.contains(&"date"), "should contain date: {n:?}");
-    }
-
-    #[cfg(feature = "tree-sitter")]
-    #[test]
-    fn subshell() {
-        let result = parse_shell_command("(cd /tmp && ls)", ShellKind::Bash);
-        assert_eq!(names(&result.subcommands), vec!["cd", "ls"]);
-    }
-
-    #[test]
-    fn semicolon_separated() {
-        let result = parse_shell_command("echo hello; echo world", ShellKind::Bash);
-        assert_eq!(names(&result.subcommands), vec!["echo", "echo"]);
-    }
-
-    #[cfg(feature = "tree-sitter")]
-    #[test]
-    fn for_loop() {
-        let result = parse_shell_command("for f in *.txt; do cat $f; done", ShellKind::Bash);
-        assert!(names(&result.subcommands).contains(&"cat"));
-    }
-
-    #[cfg(feature = "tree-sitter")]
-    #[test]
-    fn if_statement() {
-        let result = parse_shell_command(
-            "if [ -f foo ]; then cat foo; else echo nope; fi",
-            ShellKind::Bash,
-        );
-        let n = names(&result.subcommands);
-        assert!(n.contains(&"cat"), "should contain cat: {n:?}");
-        assert!(n.contains(&"echo"), "should contain echo: {n:?}");
-    }
-
-    #[test]
-    fn scope_matching_wildcard() {
-        let commands = vec![
-            ShellCommand {
-                name: "git".into(),
-                full: "git commit -m msg".into(),
-            },
-            ShellCommand {
-                name: "npm".into(),
-                full: "npm test".into(),
-            },
-        ];
-        assert!(any_subcommand_matches(&commands, true, "*"));
-    }
-
-    #[test]
-    fn scope_matching_prefix() {
-        let commands = vec![
-            ShellCommand {
-                name: "git".into(),
-                full: "git commit -m msg".into(),
-            },
-            ShellCommand {
-                name: "npm".into(),
-                full: "npm test".into(),
-            },
-        ];
-        assert!(any_subcommand_matches(&commands, true, "git commit *"));
-        assert!(!any_subcommand_matches(&commands, true, "git push *"));
-        assert!(!any_subcommand_matches(&commands, true, "git push"));
-        assert!(any_subcommand_matches(&commands, true, "npm *"));
-        assert!(any_subcommand_matches(&commands, true, "npm test"));
-
-        // prefix_bare=true: bare "git commit" prefix-matches "git commit -m msg" (deny/ask)
-        assert!(any_subcommand_matches(&commands, true, "git commit"));
-        // prefix_bare=false: bare "git commit" does NOT match "git commit -m msg" (allow)
-        assert!(!any_subcommand_matches(&commands, false, "git commit"));
-        // Exact match works in both modes when command has no extra args
-        assert!(any_subcommand_matches(&commands, false, "npm test"));
-    }
-
-    #[test]
-    fn scope_word_boundary_vs_glob() {
-        let commands = vec![
-            ShellCommand {
-                name: "ls".into(),
-                full: "ls -a".into(),
-            },
-            ShellCommand {
-                name: "lsof".into(),
-                full: "lsof -i :3000".into(),
-            },
-        ];
-        // `ls *` — word boundary: matches `ls -a` but not `lsof`
-        assert!(any_subcommand_matches(&commands, true, "ls *"));
-        assert!(!any_subcommand_matches(&commands, true, "cat *"));
-        assert!(any_subcommand_matches(&commands, true, "lsof *"));
-
-        // `ls*` — glob/prefix: matches both `ls -a` and `lsof`
-        assert!(any_subcommand_matches(&commands, true, "ls*"));
-    }
-
-    #[test]
-    fn scope_exact_match() {
-        let commands = vec![ShellCommand {
-            name: "ls".into(),
-            full: "ls".into(),
-        }];
-        assert!(any_subcommand_matches(&commands, true, "ls"));
-        assert!(!any_subcommand_matches(&commands, true, "cat"));
-    }
-
-    #[cfg(feature = "tree-sitter")]
-    #[test]
-    fn nested_substitution() {
-        let result = parse_shell_command(
-            "echo \"Result: $(git log --oneline | head -1)\"",
-            ShellKind::Bash,
-        );
-        let n = names(&result.subcommands);
-        assert!(n.contains(&"echo"), "should contain echo: {n:?}");
-        assert!(n.contains(&"git"), "should contain git: {n:?}");
-        assert!(n.contains(&"head"), "should contain head: {n:?}");
-    }
-
-    #[test]
-    fn fallback_splits_correctly() {
-        let result = parse_shell_command("ls && cat foo || echo fail", ShellKind::Unknown);
-        let n = names(&result.subcommands);
-        assert!(n.contains(&"ls"), "should contain ls: {n:?}");
-        assert!(n.contains(&"cat"), "should contain cat: {n:?}");
-        assert!(n.contains(&"echo"), "should contain echo: {n:?}");
-    }
-
-    #[test]
-    fn fish_simple_command() {
-        let result = parse_shell_command("ls -la /tmp", ShellKind::Fish);
-        assert_eq!(names(&result.subcommands), vec!["ls"]);
-    }
-
-    #[test]
-    fn fish_conditional() {
-        let result = parse_shell_command("git add .; and git commit -m hi", ShellKind::Fish);
-        let n = names(&result.subcommands);
-        assert!(n.contains(&"git"), "should contain git: {n:?}");
-    }
-
-    #[cfg(feature = "tree-sitter")]
-    #[test]
-    fn fish_command_substitution() {
-        let result = parse_shell_command("echo (date)", ShellKind::Fish);
-        let n = names(&result.subcommands);
-        assert!(n.contains(&"echo"), "should contain echo: {n:?}");
-        assert!(n.contains(&"date"), "should contain date: {n:?}");
-    }
-
-    #[cfg(feature = "tree-sitter")]
-    #[test]
-    fn variable_assignment_excluded() {
-        let result = parse_shell_command("FOO=bar ls -la /tmp", ShellKind::Bash);
-        assert_eq!(names(&result.subcommands), vec!["ls"]);
-        assert_eq!(fulls(&result.subcommands), vec!["ls -la /tmp"]);
-    }
-
-    #[cfg(feature = "tree-sitter")]
-    #[test]
-    fn variable_assignment_multiple() {
-        let result = parse_shell_command("A=1 B=2 git status", ShellKind::Bash);
-        assert_eq!(names(&result.subcommands), vec!["git"]);
-        assert_eq!(fulls(&result.subcommands), vec!["git status"]);
-    }
-
-    #[test]
-    fn fallback_double_ampersand_and_pipe_pipe() {
-        let result = parse_shell_command("ls && cat foo || echo fail", ShellKind::Unknown);
-        assert_eq!(names(&result.subcommands), vec!["ls", "cat", "echo"]);
-        assert_eq!(
-            fulls(&result.subcommands),
-            vec!["ls", "cat foo", "echo fail"]
-        );
-    }
-
-    #[test]
-    fn fallback_pipe_without_double() {
-        let result = parse_shell_command("ls | grep foo", ShellKind::Unknown);
-        assert_eq!(names(&result.subcommands), vec!["ls", "grep"]);
-        assert_eq!(fulls(&result.subcommands), vec!["ls", "grep foo"]);
-    }
-
-    #[test]
-    fn scope_middle_wildcard() {
-        let commands = vec![ShellCommand {
-            name: "git".into(),
-            full: "git commit -m amend".into(),
-        }];
-        assert!(any_subcommand_matches(&commands, true, "git * amend"));
-        assert!(any_subcommand_matches(
-            &commands,
-            true,
-            "git commit * amend"
-        ));
-        assert!(!any_subcommand_matches(&commands, true, "git push * amend"));
-    }
-
-    #[test]
-    fn scope_middle_wildcard_zero_words() {
-        let commands = vec![ShellCommand {
-            name: "git".into(),
-            full: "git commit".into(),
-        }];
-        // `*` matches zero words, so `git * commit` should match `git commit`
-        assert!(any_subcommand_matches(&commands, true, "git * commit"));
-    }
-
-    #[test]
-    fn scope_leading_wildcard() {
-        let commands = vec![ShellCommand {
-            name: "docker".into(),
-            full: "docker run --rm alpine".into(),
-        }];
-        assert!(any_subcommand_matches(&commands, true, "* alpine"));
-        assert!(!any_subcommand_matches(&commands, true, "* ubuntu"));
-    }
-
-    #[test]
-    fn scope_multiple_wildcards() {
-        let commands = vec![ShellCommand {
-            name: "git".into(),
-            full: "git rebase -i HEAD~5".into(),
-        }];
-        assert!(any_subcommand_matches(&commands, true, "git * -i * HEAD~5"));
-        assert!(!any_subcommand_matches(
-            &commands,
-            true,
-            "git * -i * HEAD~10"
-        ));
+    // Scope matching (`any_subcommand_matches`). Pure string matching -- no
+    // tree-sitter -- so these run in every feature configuration. The `s0x` cases
+    // were folded in from the previously separate `adversarial` scope tests.
+    #[rstest]
+    #[case::wildcard_star(&[("git", "git commit -m msg"), ("npm", "npm test")], true, "*", true)]
+    #[case::git_commit_prefix(&[("git", "git commit -m msg"), ("npm", "npm test")], true, "git commit *", true)]
+    #[case::git_push_prefix_no_match(&[("git", "git commit -m msg"), ("npm", "npm test")], true, "git push *", false)]
+    #[case::git_push_bare_no_match(&[("git", "git commit -m msg"), ("npm", "npm test")], true, "git push", false)]
+    #[case::npm_prefix(&[("git", "git commit -m msg"), ("npm", "npm test")], true, "npm *", true)]
+    #[case::npm_test_bare(&[("git", "git commit -m msg"), ("npm", "npm test")], true, "npm test", true)]
+    #[case::git_commit_bare_deny(&[("git", "git commit -m msg"), ("npm", "npm test")], true, "git commit", true)]
+    #[case::git_commit_bare_allow(&[("git", "git commit -m msg"), ("npm", "npm test")], false, "git commit", false)]
+    #[case::npm_test_exact_allow(&[("git", "git commit -m msg"), ("npm", "npm test")], false, "npm test", true)]
+    #[case::ls_word_boundary(&[("ls", "ls -a"), ("lsof", "lsof -i :3000")], true, "ls *", true)]
+    #[case::cat_word_boundary_no_match(&[("ls", "ls -a"), ("lsof", "lsof -i :3000")], true, "cat *", false)]
+    #[case::lsof_word_boundary(&[("ls", "ls -a"), ("lsof", "lsof -i :3000")], true, "lsof *", true)]
+    #[case::ls_glob_prefix(&[("ls", "ls -a"), ("lsof", "lsof -i :3000")], true, "ls*", true)]
+    #[case::ls_exact(&[("ls", "ls")], true, "ls", true)]
+    #[case::cat_exact_no_match(&[("ls", "ls")], true, "cat", false)]
+    #[case::middle_wildcard_amend(&[("git", "git commit -m amend")], true, "git * amend", true)]
+    #[case::middle_wildcard_commit_amend(&[("git", "git commit -m amend")], true, "git commit * amend", true)]
+    #[case::middle_wildcard_push_amend_no_match(&[("git", "git commit -m amend")], true, "git push * amend", false)]
+    #[case::middle_wildcard_zero_words(&[("git", "git commit")], true, "git * commit", true)]
+    #[case::leading_wildcard_alpine(&[("docker", "docker run --rm alpine")], true, "* alpine", true)]
+    #[case::leading_wildcard_ubuntu_no_match(&[("docker", "docker run --rm alpine")], true, "* ubuntu", false)]
+    #[case::multiple_wildcards(&[("git", "git rebase -i HEAD~5")], true, "git * -i * HEAD~5", true)]
+    #[case::multiple_wildcards_no_match(&[("git", "git rebase -i HEAD~5")], true, "git * -i * HEAD~10", false)]
+    #[case::s01_empty_scope(&[("ls", "ls")], true, "", true)]
+    #[case::s03_only_wildcard_space_star(&[("ls", "ls")], true, " *", true)]
+    #[case::s04_glob_matches_empty(&[("ls", "ls")], true, "ls*", true)]
+    #[case::s05_middle_wildcard_empty_match(&[("git", "git commit")], true, "git * commit", true)]
+    #[case::s06_consecutive_wildcards(&[("git", "git commit")], true, "git ** commit", true)]
+    #[case::s07_lower_wildcard_no_match(&[("LS", "LS -la")], true, "ls *", false)]
+    #[case::s07_upper_wildcard(&[("LS", "LS -la")], true, "LS *", true)]
+    #[case::s07_lower_bare_no_match(&[("LS", "LS -la")], true, "ls", false)]
+    #[case::s07_upper_bare(&[("LS", "LS -la")], true, "LS", true)]
+    #[case::s07_upper_bare_strict_no_match(&[("LS", "LS -la")], false, "LS", false)]
+    #[case::s08_multi_word_exact_no_subcommand(&[("git", "git commit-amend")], true, "git commit", false)]
+    fn scope_matching(
+        #[case] commands: &[(&str, &str)],
+        #[case] prefix_bare: bool,
+        #[case] scope: &str,
+        #[case] expected: bool,
+    ) {
+        let cmds: Vec<ShellCommand> = commands
+            .iter()
+            .map(|(n, f)| ShellCommand {
+                name: (*n).into(),
+                full: (*f).into(),
+            })
+            .collect();
+        assert_eq!(any_subcommand_matches(&cmds, prefix_bare, scope), expected);
     }
 }
 
@@ -853,85 +742,5 @@ mod adversarial {
         let result = parse_shell_command(code, ShellKind::Bash);
         assert_eq!(cmd_names(&result.subcommands), &[expected_name]);
         assert_eq!(result.subcommands[0].full, expected_full);
-    }
-
-    // ────────────────────────────────────────────────────────────
-    // Level 12: Scope matching adversarial
-    // ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn s01_empty_scope() {
-        let commands = vec![ShellCommand {
-            name: "ls".into(),
-            full: "ls".into(),
-        }];
-        // Empty scope matches everything (nothing to constrain)
-        assert!(any_subcommand_matches(&commands, true, ""));
-    }
-
-    #[test]
-    fn s03_only_wildcard_space_star() {
-        let commands = vec![ShellCommand {
-            name: "ls".into(),
-            full: "ls".into(),
-        }];
-        // " *" with empty prefix = match anything
-        assert!(any_subcommand_matches(&commands, true, " *"));
-    }
-
-    #[test]
-    fn s04_glob_matches_empty() {
-        let commands = vec![ShellCommand {
-            name: "ls".into(),
-            full: "ls".into(),
-        }];
-        // `ls*` matches `ls` (prefix match with nothing after)
-        assert!(any_subcommand_matches(&commands, true, "ls*"));
-    }
-
-    #[test]
-    fn s05_middle_wildcard_empty_match() {
-        // `git * commit` matches `git commit` (* = zero words)
-        let commands = vec![ShellCommand {
-            name: "git".into(),
-            full: "git commit".into(),
-        }];
-        assert!(any_subcommand_matches(&commands, true, "git * commit"));
-    }
-
-    #[test]
-    fn s06_consecutive_wildcards() {
-        // `git ** commit` should behave like `git * commit`
-        let commands = vec![ShellCommand {
-            name: "git".into(),
-            full: "git commit".into(),
-        }];
-        assert!(any_subcommand_matches(&commands, true, "git ** commit"));
-    }
-
-    #[test]
-    fn s07_case_sensitivity() {
-        let commands = vec![ShellCommand {
-            name: "LS".into(),
-            full: "LS -la".into(),
-        }];
-        // Wildcard: case matters
-        assert!(!any_subcommand_matches(&commands, true, "ls *"));
-        assert!(any_subcommand_matches(&commands, true, "LS *"));
-        // prefix_bare=true: bare "LS" prefix-matches "LS -la"
-        assert!(!any_subcommand_matches(&commands, true, "ls"));
-        assert!(any_subcommand_matches(&commands, true, "LS"));
-        // prefix_bare=false: bare "LS" does NOT match "LS -la"
-        assert!(!any_subcommand_matches(&commands, false, "LS"));
-    }
-
-    #[test]
-    fn s08_multi_word_exact_no_subcommand() {
-        // `git commit` should not match `git commit-amend`
-        let commands = vec![ShellCommand {
-            name: "git".into(),
-            full: "git commit-amend".into(),
-        }];
-        assert!(!any_subcommand_matches(&commands, true, "git commit"));
     }
 }

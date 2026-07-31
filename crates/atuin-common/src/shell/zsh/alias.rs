@@ -181,6 +181,7 @@ pub(super) fn parse_aliases(input: &[u8]) -> Result<Aliases, AliasesError> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     fn parse(input: &[u8]) -> HashMap<BString, BString> {
         parse_aliases(input)
@@ -193,53 +194,30 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn parses_bare_value() {
-        assert_eq!(
-            parse(b"alias plain=man\n")[&BString::from(&b"plain"[..])],
-            BString::from(&b"man"[..])
-        );
+    #[rstest]
+    #[case::parses_bare_value(b"alias plain=man\n", b"plain", b"man")]
+    #[case::parses_single_quoted_with_escaped_quote(
+        br"alias whoops='echo it'\''s fine'",
+        b"whoops",
+        b"echo it's fine"
+    )]
+    #[case::decodes_ansi_c_newline(
+        b"alias multi=$'line one\\nline two'\n",
+        b"multi",
+        b"line one\nline two"
+    )]
+    #[case::decodes_ansi_c_octal(b"alias a=$'\\101'\n", b"a", b"A")]
+    #[case::decodes_ansi_c_hex(b"alias b=$'\\x41'\n", b"b", b"A")]
+    #[case::decodes_ansi_c_backslash(b"alias c=$'\\\\'\n", b"c", b"\\")]
+    fn parses_value(#[case] input: &[u8], #[case] key: &[u8], #[case] expected: &[u8]) {
+        assert_eq!(parse(input)[&BString::from(key)], BString::from(expected));
     }
 
-    #[test]
-    fn parses_single_quoted_with_escaped_quote() {
-        assert_eq!(
-            parse(br"alias whoops='echo it'\''s fine'")[&BString::from(&b"whoops"[..])],
-            BString::from(&b"echo it's fine"[..])
-        );
-    }
-
-    #[test]
-    fn decodes_ansi_c_newline() {
-        assert_eq!(
-            parse(b"alias multi=$'line one\\nline two'\n")[&BString::from(&b"multi"[..])],
-            BString::from(&b"line one\nline two"[..])
-        );
-    }
-
-    #[test]
-    fn decodes_ansi_c_octal_and_hex_and_backslash() {
-        assert_eq!(
-            parse(b"alias a=$'\\101'\n")[&BString::from(&b"a"[..])],
-            BString::from(&b"A"[..])
-        );
-        assert_eq!(
-            parse(b"alias b=$'\\x41'\n")[&BString::from(&b"b"[..])],
-            BString::from(&b"A"[..])
-        );
-        assert_eq!(
-            parse(b"alias c=$'\\\\'\n")[&BString::from(&b"c"[..])],
-            BString::from(&b"\\"[..])
-        );
-    }
-
-    #[test]
-    fn name_does_not_run_across_a_newline() {
-        assert!(parse_aliases(b"alias to use foo\nalias a=b\n").is_err());
-    }
-
-    #[test]
-    fn rejects_trailing_garbage() {
-        assert!(parse_aliases(b"alias ll='ls -l'\nnonsense\n").is_err());
+    #[rstest]
+    #[case::name_does_not_run_across_a_newline(b"alias to use foo\nalias a=b\n")]
+    #[case::trailing_garbage(b"alias ll='ls -l'\nnonsense\n")]
+    fn rejects(#[case] input: &[u8]) {
+        let result = parse_aliases(input);
+        assert!(result.is_err(), "expected Err, got {result:?}");
     }
 }

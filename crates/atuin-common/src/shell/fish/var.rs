@@ -38,6 +38,7 @@ pub(super) fn render_vars(vars: &[Var]) -> Rendered {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     fn var(name: &str, value: &str, export: bool) -> Var {
         Var {
@@ -47,38 +48,35 @@ mod tests {
         }
     }
 
-    #[test]
-    fn exported_var_uses_gx_and_quotes_spaces() {
-        let r = render_vars(&[var("FOO", "bar baz", true)]);
-        assert_eq!(r.script, BString::from("set -gx FOO 'bar baz'\n"));
+    #[rstest]
+    #[case::exported_var_uses_gx_and_quotes_spaces(
+        "FOO",
+        "bar baz",
+        true,
+        "set -gx FOO 'bar baz'\n"
+    )]
+    #[case::shell_var_uses_g_not_gx("FOO", "bar baz", false, "set -g FOO 'bar baz'\n")]
+    #[case::bareword_value_is_unquoted("FOO", "bar", true, "set -gx FOO bar\n")]
+    #[case::bareword_value_with_all_safe_chars_is_unquoted(
+        "P",
+        "a_b-c.d/e",
+        true,
+        "set -gx P a_b-c.d/e\n"
+    )]
+    #[case::escapes_backslash_and_quote_the_fish_way(
+        "V",
+        r"a'b\",
+        true,
+        concat!(r"set -gx V 'a\'b\\'", "\n")
+    )]
+    fn renders_var(
+        #[case] name: &str,
+        #[case] value: &str,
+        #[case] export: bool,
+        #[case] expected: &str,
+    ) {
+        let r = render_vars(&[var(name, value, export)]);
+        assert_eq!(r.script, BString::from(expected));
         assert!(r.skipped.is_empty());
-    }
-
-    #[test]
-    fn shell_var_uses_g_not_gx() {
-        let r = render_vars(&[var("FOO", "bar baz", false)]);
-        assert_eq!(r.script, BString::from("set -g FOO 'bar baz'\n"));
-    }
-
-    #[test]
-    fn bareword_value_is_unquoted() {
-        let r = render_vars(&[var("FOO", "bar", true)]);
-        assert_eq!(r.script, BString::from("set -gx FOO bar\n"));
-    }
-
-    #[test]
-    fn bareword_value_with_all_safe_chars_is_unquoted() {
-        let r = render_vars(&[var("P", "a_b-c.d/e", true)]);
-        assert_eq!(r.script, BString::from("set -gx P a_b-c.d/e\n"));
-        assert!(r.skipped.is_empty());
-    }
-
-    #[test]
-    fn escapes_backslash_and_quote_the_fish_way() {
-        let r = render_vars(&[var("V", r"a'b\", true)]);
-        assert_eq!(
-            r.script,
-            BString::from(concat!(r"set -gx V 'a\'b\\'", "\n"))
-        );
     }
 }

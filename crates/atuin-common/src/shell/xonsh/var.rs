@@ -52,6 +52,7 @@ fn py_str(value: &[u8], out: &mut BString) {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     fn var(name: &str, value: &str, export: bool) -> Var {
         Var {
@@ -61,29 +62,40 @@ mod tests {
         }
     }
 
-    #[test]
-    fn spaces_force_python_double_quotes() {
-        let r = render_vars(&[var("FOO", "bar baz", true)]);
-        assert_eq!(r.script, BString::from("$FOO=\"bar baz\"\n"));
+    #[rstest]
+    #[case::spaces_force_python_double_quotes("FOO", "bar baz", true, "$FOO=\"bar baz\"\n")]
+    #[case::bareword_value_with_all_safe_chars_is_unquoted(
+        "P",
+        "a_b-c.d/e",
+        true,
+        "$P=a_b-c.d/e\n"
+    )]
+    fn renders_var_and_skips_nothing(
+        #[case] name: &str,
+        #[case] value: &str,
+        #[case] export: bool,
+        #[case] expected: &str,
+    ) {
+        let r = render_vars(&[var(name, value, export)]);
+        assert_eq!(r.script, BString::from(expected));
         assert!(r.skipped.is_empty());
     }
 
-    #[test]
-    fn bareword_value_is_unquoted_and_export_is_ignored() {
-        let r = render_vars(&[var("FOO", "bar", false)]);
-        assert_eq!(r.script, BString::from("$FOO=bar\n"));
-    }
-
-    #[test]
-    fn bareword_value_with_all_safe_chars_is_unquoted() {
-        let r = render_vars(&[var("P", "a_b-c.d/e", true)]);
-        assert_eq!(r.script, BString::from("$P=a_b-c.d/e\n"));
-        assert!(r.skipped.is_empty());
-    }
-
-    #[test]
-    fn escapes_backslash_and_double_quote() {
-        let r = render_vars(&[var("V", r#"a"b\c"#, true)]);
-        assert_eq!(r.script, BString::from(concat!(r#"$V="a\"b\\c""#, "\n")));
+    #[rstest]
+    #[case::bareword_value_is_unquoted_and_export_is_ignored("FOO", "bar", false, "$FOO=bar\n")]
+    #[case::escapes_backslash_and_double_quote(
+        "V",
+        r#"a"b\c"#,
+        true,
+        concat!(r#"$V="a\"b\\c""#, "\n")
+    )]
+    fn renders_var(
+        #[case] name: &str,
+        #[case] value: &str,
+        #[case] export: bool,
+        #[case] expected: &str,
+    ) {
+        let r = render_vars(&[var(name, value, export)]);
+        assert_eq!(r.script, BString::from(expected));
     }
 }

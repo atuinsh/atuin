@@ -120,6 +120,7 @@ fn is_valid_name(name: &[u8]) -> bool {
 mod render_tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     fn alias(name: &str, value: AliasValue) -> Alias {
         Alias {
@@ -135,17 +136,21 @@ mod render_tests {
         assert!(r.skipped.is_empty());
     }
 
-    #[test]
-    fn escapes_single_quote_the_fish_way() {
-        let r = render_aliases(&[alias("x", AliasValue::Command(BString::from("echo it's")))]);
-        assert_eq!(r.script, BString::from("alias x 'echo it\\'s'\n"));
-    }
-
-    #[test]
-    fn escapes_backslash_so_it_cannot_eat_the_quote() {
-        // The case POSIX quoting gets wrong in fish: a trailing backslash.
-        let r = render_aliases(&[alias("b", AliasValue::Command(BString::from(r"a\")))]);
-        assert_eq!(r.script, BString::from("alias b 'a\\\\'\n"));
+    #[rstest]
+    #[case::escapes_single_quote_the_fish_way(
+        "x",
+        AliasValue::Command(BString::from("echo it's")),
+        "alias x 'echo it\\'s'\n"
+    )]
+    // The case POSIX quoting gets wrong in fish: a trailing backslash.
+    #[case::escapes_backslash_so_it_cannot_eat_the_quote(
+        "b",
+        AliasValue::Command(BString::from(r"a\")),
+        "alias b 'a\\\\'\n"
+    )]
+    fn escapes_body(#[case] name: &str, #[case] value: AliasValue, #[case] expected: &str) {
+        let r = render_aliases(&[alias(name, value)]);
+        assert_eq!(r.script, BString::from(expected));
     }
 
     #[test]
@@ -160,6 +165,7 @@ mod render_tests {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     fn parse(input: &[u8]) -> HashMap<BString, BString> {
         parse_aliases(input)
@@ -172,37 +178,31 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn parses_bare_and_quoted() {
-        assert_eq!(
-            parse(b"alias plain man\n")[&BString::from(&b"plain"[..])],
-            BString::from(&b"man"[..])
-        );
-        assert_eq!(
-            parse(b"alias ll 'ls -l'\n")[&BString::from(&b"ll"[..])],
-            BString::from(&b"ls -l"[..])
-        );
-    }
-
-    #[test]
-    fn decodes_backslash_escapes() {
-        assert_eq!(
-            parse(br"alias q 'it\'s'")[&BString::from(&b"q"[..])],
-            BString::from(&b"it's"[..])
-        );
-        assert_eq!(
-            parse(br"alias b 'a\\b'")[&BString::from(&b"b"[..])],
-            BString::from(&br"a\b"[..])
-        );
-    }
-
-    #[test]
-    fn does_not_use_equals_as_separator() {
-        // fish records are `alias NAME VALUE`; an `=` is just an ordinary byte.
-        assert_eq!(
-            parse(b"alias k 'a=b'\n")[&BString::from(&b"k"[..])],
-            BString::from(&b"a=b"[..])
-        );
+    #[rstest]
+    #[case::parses_bare(b"alias plain man\n".as_slice(), b"plain".as_slice(), b"man".as_slice())]
+    #[case::parses_quoted(
+        b"alias ll 'ls -l'\n".as_slice(),
+        b"ll".as_slice(),
+        b"ls -l".as_slice()
+    )]
+    #[case::decodes_escaped_single_quote(
+        br"alias q 'it\'s'".as_slice(),
+        b"q".as_slice(),
+        b"it's".as_slice()
+    )]
+    #[case::decodes_double_backslash(
+        br"alias b 'a\\b'".as_slice(),
+        b"b".as_slice(),
+        br"a\b".as_slice()
+    )]
+    // fish records are `alias NAME VALUE`; an `=` is just an ordinary byte.
+    #[case::does_not_use_equals_as_separator(
+        b"alias k 'a=b'\n".as_slice(),
+        b"k".as_slice(),
+        b"a=b".as_slice()
+    )]
+    fn parses_values(#[case] input: &[u8], #[case] name: &[u8], #[case] expected: &[u8]) {
+        assert_eq!(parse(input)[&BString::from(name)], BString::from(expected));
     }
 
     #[test]
