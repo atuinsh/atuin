@@ -1921,23 +1921,18 @@ mod test {
     }
 
     // Which signal decides the order of two matched rows, given the tighter match is always the
-    // older of the two. Distinguishes a legitimate tie from ranking not happening at all: both put
-    // the newer row first, but only one of them is correct.
+    // older of the two.
     #[derive(Debug, Clone, Copy)]
     enum RankedBy {
         // The tighter match wins despite being older.
         Span,
-        // Both rows score the same span, so recency correctly breaks the tie.
+        // Both rows score alike, so recency correctly breaks the tie.
         TiedSpan,
-        // No row matches the ranking query, so every key is usize::MAX and the stable sort leaves
-        // SQL's recency order untouched. Ranking is off.
-        NothingScored,
     }
 
-    // Characterises which query shapes the span scorer can actually rank. Each term is ranked
-    // independently, matching how SQL emits one condition per term, so the surviving
-    // `NothingScored` rows are all the same defect: SQL matched by folding case, which the span
-    // scorer does not.
+    // Every query shape the tokenizer can produce, and how it ranks. Each term is scored on its own
+    // against the command, mirroring the one condition per term SQL emits, so a shape ranks
+    // whenever any term discriminates between the rows and ties only when none does.
     #[rstest]
     // A lone term, and terms in the order they appear in the command, rank correctly.
     #[case::plain_term("screen", &["screen"], ("screen", "search green"), RankedBy::Span)]
@@ -1970,10 +1965,10 @@ mod test {
     // Each row matches one branch equally tightly, so there is nothing to choose between them.
     #[case::alternation("foo | bar", &["foo", "bar"], ("foo", "bar"), RankedBy::TiedSpan)]
     #[case::alternation_three_way("foo | bar | qux", &["foo", "bar", "qux"], ("foo", "bar"), RankedBy::TiedSpan)]
-    // SQL matched only by case folding, which LIKE does and the span scorer does not. Unaffected by
-    // an uppercase term elsewhere in the query: each term picks LIKE or GLOB on its own.
-    #[case::lowercase_term_matching_uppercase("ls", &["ls"], ("LS", "L x S"), RankedBy::NothingScored)]
-    #[case::mixed_case_lowercase_term("ls FOO", &["ls", "FOO"], ("LS FOO", "LS x FOO"), RankedBy::NothingScored)]
+    // A lowercase term folds case for ranking exactly as LIKE did for matching. Each term decides
+    // that on its own, so an uppercase term elsewhere in the query does not disturb it.
+    #[case::lowercase_term_matching_uppercase("ls", &["ls"], ("LS", "L x S"), RankedBy::Span)]
+    #[case::mixed_case_lowercase_term("ls FOO", &["ls", "FOO"], ("LS FOO", "LS x FOO"), RankedBy::Span)]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_fuzzy_operator_ranking(
         #[case] query: &str,
@@ -1997,7 +1992,7 @@ mod test {
         // Recency puts `looser` first, so only span scoring can surface `tighter`.
         let expected_first = match ranked_by {
             RankedBy::Span => tighter,
-            RankedBy::TiedSpan | RankedBy::NothingScored => looser,
+            RankedBy::TiedSpan => looser,
         };
         assert_eq!(
             results[0].command,

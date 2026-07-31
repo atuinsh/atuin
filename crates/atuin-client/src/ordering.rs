@@ -17,20 +17,40 @@ pub fn reorder_fuzzy(mode: DbSearchMode, terms: &[&str], res: Vec<History>) -> V
 ///
 /// Terms are ordered by how many went unfound before width, so a row matching more of the query
 /// always outranks one matching less, and a row matching nothing at all sorts last.
+///
+/// Each term folds case exactly where SQL did. Smart case sends an uppercase term to GLOB, which
+/// is case-sensitive, and a lowercase one to LIKE, which folds ASCII case; ranking a lowercase
+/// term without folding would score a row SQL matched only by folding as a non-match.
 fn reorder<F, A>(terms: &[&str], f: F, res: Vec<A>) -> Vec<A>
 where
     F: Fn(&A) -> &String,
 {
-    let terms: Vec<Vec<char>> = terms.iter().map(|term| term.chars().collect()).collect();
+    // Paired with whether SQL matched the term case-sensitively.
+    let terms: Vec<(Vec<char>, bool)> = terms
+        .iter()
+        .map(|term| (term.chars().collect(), term.contains(char::is_uppercase)))
+        .collect();
+
+    let needs_folded = terms.iter().any(|(_, exact)| !*exact);
 
     let mut r = res;
     r.sort_by_cached_key(|h| {
         let command: Vec<char> = f(h).chars().collect();
+        // Folding per character keeps offsets aligned with `command`, over the same ASCII-only range
+        // LIKE folds. A command carrying no ASCII case folds to itself, so it needs no copy.
+        let folded: Option<Vec<char>> = (needs_folded
+            && command.iter().any(char::is_ascii_uppercase))
+        .then(|| command.iter().map(char::to_ascii_lowercase).collect());
 
         let mut unfound = 0usize;
         let (mut lo, mut hi) = (usize::MAX, 0usize);
-        for term in &terms {
-            match minspan::span(term, &command) {
+        for (term, exact_term) in &terms {
+            let command = if *exact_term {
+                &command
+            } else {
+                folded.as_ref().unwrap_or(&command)
+            };
+            match minspan::span(term, command) {
                 Some((from, to)) => {
                     lo = lo.min(from);
                     hi = hi.max(to);
