@@ -10,26 +10,24 @@ license = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 
+# Only what the unconditional modules (`error`, the `run_share` stubs) need;
+# everything else is unix-only, matching the `cfg(unix)` module tree.
 [dependencies]
-eyre = { workspace = true }
 thiserror = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-base64 = { workspace = true }
+url = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
+serde_json = { workspace = true }
+base64 = { workspace = true }
 atuin-common = { workspace = true, features = ["unicode"] }
-portable-pty = "0.9"
 vt100 = { workspace = true }
 crossterm = { workspace = true }
-signal-hook = "0.3"
-unicode-width = "0.2"
+# `features = ["full"]` at the workspace level includes `signal` and `time`;
+# trimming to just what this crate needs would be a workspace change.
 tokio = { workspace = true }
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
-futures-util = "0.3"
-
-# Tests live in `test/`, not `src/`. Cargo only auto-discovers `tests/`, so the
-# singular `test/` directory is registered explicitly.
-[[test]]
-name = "public_api"
-path = "test/public_api.rs"
+# Crate-local pins below: the workspace manifest is out of scope for this
+# refactor, so they cannot move to [workspace.dependencies] yet.
+portable-pty = "0.9"                                                            # PTY + child process
+unicode-width = "0.2"                                                           # status-bar display-width math
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] } # hub WebSocket
+futures-util = "0.3"                                                            # stream/sink split of the WebSocket

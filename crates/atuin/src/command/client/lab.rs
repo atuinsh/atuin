@@ -1,5 +1,6 @@
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
+use url::Url;
 
 use atuin_client::settings::Settings;
 
@@ -20,13 +21,16 @@ impl Cmd {
     pub async fn run(self, settings: &Settings) -> Result<()> {
         match self {
             Self::Share { write } => {
-                let hub_url = lab_ws_url(settings);
+                let hub_url = lab_ws_url(settings)?;
                 let api_token = lab_api_token(settings).await?;
-                atuin_share::run_share(atuin_share::ShareOptions {
+                // `atuin_share::Error` converts to `eyre::Report` via the
+                // blanket `From<E: std::error::Error>`.
+                Ok(atuin_share::run_share(atuin_share::ShareOptions {
                     write,
                     hub_url,
                     api_token,
                 })
+                .await?)
             }
         }
     }
@@ -35,19 +39,18 @@ impl Cmd {
 /// Resolve the Hub websocket base URL from settings, honouring self-hosted Hubs
 /// via `Settings::hub_endpoint()`.
 ///
-/// `ATUIN_LAB_HUB_URL` is returned **verbatim** (only a trailing slash is
-/// trimmed) and its scheme is never rewritten: local development runs against a
-/// plain-HTTP dev hub as `ws://localhost:4000`, and upgrading that to `wss`
-/// would fail the handshake. The scheme is only derived when the override is
-/// absent.
-fn lab_ws_url(settings: &Settings) -> String {
+/// `ATUIN_LAB_HUB_URL` is parsed **as given** and its scheme is never rewritten:
+/// local development runs against a plain-HTTP dev hub as `ws://localhost:4000`,
+/// and upgrading that to `wss` would fail the handshake. The scheme is only
+/// derived (http→ws, https→wss) when the override is absent.
+fn lab_ws_url(settings: &Settings) -> Result<Url> {
     if let Ok(u) = std::env::var("ATUIN_LAB_HUB_URL") {
-        return u.trim_end_matches('/').to_string();
+        return Url::parse(&u).wrap_err("ATUIN_LAB_HUB_URL is not a valid URL");
     }
     let mut url = settings.hub_endpoint();
     let ws_scheme = if url.scheme() == "http" { "ws" } else { "wss" };
     let _ = url.set_scheme(ws_scheme);
-    url.to_string().trim_end_matches('/').to_string()
+    Ok(url)
 }
 
 /// The **Hub** session token — *not* the sync/`atuin-server` session token.

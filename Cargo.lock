@@ -656,17 +656,14 @@ dependencies = [
  "atuin-common",
  "base64",
  "crossterm",
- "eyre",
  "futures-util",
  "portable-pty",
- "rstest",
- "serde",
  "serde_json",
- "signal-hook",
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
  "unicode-width 0.2.2",
+ "url",
  "vt100",
 ]
 

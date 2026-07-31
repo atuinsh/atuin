@@ -1,33 +1,34 @@
 //! Phoenix channel client over a WebSocket (JSON serializer, `vsn=2.0.0`).
 //!
-//! The session loop lives on plain OS threads talking over `std::sync::mpsc`,
-//! so the transport owns a **dedicated current-thread tokio runtime in its own
-//! OS thread**. It must never build a runtime on the calling thread: `atuin
-//! lab share` is dispatched from inside `runtime.block_on(run_inner(..))` and a
-//! nested runtime panics with *"Cannot start a runtime from within a runtime"*.
+//! The whole transport is the [`Transport`] struct: [`Transport::new`] builds
+//! it, [`Transport::run`] is the relay loop. `run_share` drives it with
+//! `tokio::spawn(transport.run(..))` on the CLI's existing runtime — no thread
+//! or runtime of its own. (The session it talks to is itself a future on that
+//! same runtime.)
 //!
 //! A transport drop never kills the subshell: a lost socket only produces
 //! `Inbound::Disconnected` and a backoff-ed reconnect that resumes the *same*
 //! hub session via the secret `host_resume_token`.
 
-use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
 use serde_json::{Value, json};
-use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::oneshot;
 use tokio_tungstenite::tungstenite::Message;
+use url::Url;
 
 use crate::backpressure::{Backoff, OutboundQueue};
-use crate::protocol::{
-    Incoming, b64_decode, b64_encode, decode, encode_heartbeat, encode_join, encode_push,
-};
+use crate::protocol::{Incoming, PhoenixPush, b64_encode, encode_heartbeat};
+use crate::render::WriteMode;
 use crate::session::{Inbound, Outbound};
 
 /// The host's channel topic.
 const TOPIC: &str = "share:host";
 /// Phoenix `join_ref`; also the `ref` of the join push, so join replies are
-/// identifiable. Every later push uses a strictly greater ref.
+/// identifiable. Every later push uses a strictly greater ref — see
+/// [`RefSequence`].
 const JOIN_REF: &str = "1";
 /// Phoenix heartbeat cadence.
 const HEARTBEAT: Duration = Duration::from_secs(30);
@@ -35,43 +36,23 @@ const HEARTBEAT: Duration = Duration::from_secs(30);
 /// keyframe request. ~8 KiB per frame, so a couple of MiB at most.
 const OUTBOUND_CAP: usize = 256;
 
-/// Build the hub's WebSocket URL.
-#[must_use]
-pub fn ws_url(hub_url: &str, api_token: &str) -> String {
-    format!("{hub_url}/sockets/share/websocket?vsn=2.0.0&token={api_token}")
-}
+/// The hub's share WebSocket endpoint path, appended to any path already on
+/// the base URL (a hub behind a reverse-proxy path prefix keeps working).
+const WS_PATH: &str = "/sockets/share/websocket";
+/// Query key selecting the Phoenix serializer version.
+const WS_VSN_KEY: &str = "vsn";
+/// Phoenix serializer version: v2 JSON array frames.
+const WS_VSN: &str = "2.0.0";
+/// Query key carrying the API token.
+const WS_TOKEN_KEY: &str = "token";
 
-/// Build the `phx_join` payload.
-///
-/// `resume_token` is the **secret** `host_resume_token` handed back in the join
-/// reply — never the public share token, which is in the link and would let
-/// anyone holding it hijack the host role.
-#[must_use]
-pub fn join_payload(write: bool, resume_token: Option<&str>) -> Value {
-    match resume_token {
-        Some(t) => json!({ "write": write, "resume_token": t }),
-        None => json!({ "write": write }),
-    }
-}
-
-/// Map a hub → CLI event onto an `Inbound`. Unknown events yield `None` and are
-/// ignored, so the hub can add events without breaking older clients.
-fn to_inbound(event: &str, payload: &Value) -> Option<Inbound> {
-    match event {
-        "input" => b64_decode(payload["data"].as_str().unwrap_or_default())
-            .ok()
-            .map(Inbound::Input),
-        "set_size" => Some(Inbound::SetSize {
-            cols: u16::try_from(payload["cols"].as_u64()?).ok()?,
-            rows: u16::try_from(payload["rows"].as_u64()?).ok()?,
-        }),
-        "participants" => Some(Inbound::Participants(
-            u32::try_from(payload["count"].as_u64()?).ok()?,
-        )),
-        "request_keyframe" => Some(Inbound::RequestKeyframe),
-        _ => None,
-    }
-}
+/// Phoenix's channel-join control event.
+const EVENT_JOIN: &str = "phx_join";
+/// Host → hub push events.
+const EVENT_OUTPUT: &str = "output";
+const EVENT_KEYFRAME: &str = "keyframe";
+const EVENT_HOST_SIZE: &str = "host_size";
+const EVENT_END: &str = "end";
 
 #[derive(Debug, thiserror::Error)]
 enum TransportError {
@@ -95,43 +76,226 @@ type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 type WsSink = futures_util::stream::SplitSink<WsStream, Message>;
 
+/// The Phoenix `ref` counter for one connection's pushes.
+///
+/// Starts one past [`JOIN_REF`] (the join push's own `ref`), so every later
+/// push carries a strictly greater ref and the join reply stays unambiguous.
+struct RefSequence {
+    next: u64,
+}
+
+impl RefSequence {
+    fn new() -> Self {
+        let join_ref: u64 = JOIN_REF.parse().expect("JOIN_REF is a numeric literal");
+        Self { next: join_ref + 1 }
+    }
+
+    /// Take the next ref, advancing the counter.
+    fn take(&mut self) -> String {
+        let r = self.next;
+        self.next = self.next.saturating_add(1);
+        r.to_string()
+    }
+}
+
 /// The write half of a joined channel, plus its Phoenix `ref` counter.
 struct Wire {
     sink: WsSink,
-    next_ref: u64,
+    refs: RefSequence,
 }
 
 impl Wire {
-    fn take_ref(&mut self) -> String {
-        let r = self.next_ref;
-        self.next_ref = self.next_ref.saturating_add(1);
-        r.to_string()
+    /// Wrap the sink of a fresh connection. See [`RefSequence`] for where the
+    /// push counter starts relative to the join.
+    fn new(sink: WsSink) -> Self {
+        Self {
+            sink,
+            refs: RefSequence::new(),
+        }
     }
 
-    async fn push(&mut self, event: &str, payload: Value) -> Result<(), TransportError> {
-        let r = self.take_ref();
-        let frame = encode_push(JOIN_REF, &r, TOPIC, event, payload);
+    /// Send a pre-encoded frame as-is. Only the join push uses this: its `ref`
+    /// is [`JOIN_REF`] itself, not one taken from the counter.
+    async fn send_raw(&mut self, frame: String) -> Result<(), TransportError> {
         self.sink.send(Message::Text(frame)).await?;
         Ok(())
     }
 
-    async fn heartbeat(&mut self) -> Result<(), TransportError> {
-        let r = self.take_ref();
-        self.sink.send(Message::Text(encode_heartbeat(&r))).await?;
-        Ok(())
+    /// Push one event to the host topic, stamped with the next `ref`.
+    async fn push(&mut self, event: &str, payload: Value) -> Result<(), TransportError> {
+        let r = self.refs.take();
+        let frame = PhoenixPush {
+            join_ref: JOIN_REF,
+            ref_: &r,
+            topic: TOPIC,
+            event,
+            payload: &payload,
+        }
+        .encode();
+        self.send_raw(frame).await
     }
 
+    /// Send the periodic Phoenix heartbeat.
+    async fn heartbeat(&mut self) -> Result<(), TransportError> {
+        let r = self.refs.take();
+        let frame = encode_heartbeat(&r);
+        self.send_raw(frame).await
+    }
+
+    /// Flush the underlying WebSocket sink.
     async fn flush(&mut self) -> Result<(), TransportError> {
         self.sink.flush().await?;
         Ok(())
     }
 }
 
-/// Client state that must survive reconnects.
-struct Client {
-    hub_url: String,
+/// One connection's write side: the joined [`Wire`] and the outbound queue
+/// whose lifetime matches it.
+///
+/// The queue is **fresh per connection** on purpose: anything the session
+/// produced while we were disconnected is still sitting in `out_rx`, and
+/// draining that backlog through a new queue is exactly what trips the
+/// overflow into a keyframe request — one resync frame instead of megabytes of
+/// stale replay.
+struct Connection {
+    wire: Wire,
+    queue: OutboundQueue,
+}
+
+impl Connection {
+    /// Pair a fresh queue with the sink of a just-established connection.
+    fn new(sink: WsSink) -> Self {
+        Self {
+            wire: Wire::new(sink),
+            queue: OutboundQueue::new(OUTBOUND_CAP),
+        }
+    }
+
+    /// Push the channel join. It goes out with `join_ref` as its `ref` (see
+    /// [`JOIN_REF`]); [`Wire::new`] started the push counter just past it.
+    async fn join(&mut self, payload: &Value) -> Result<(), TransportError> {
+        let frame = PhoenixPush {
+            join_ref: JOIN_REF,
+            ref_: JOIN_REF,
+            topic: TOPIC,
+            event: EVENT_JOIN,
+            payload,
+        }
+        .encode();
+        self.wire.send_raw(frame).await
+    }
+
+    /// Relay one batch of session items: the item that woke the select arm,
+    /// plus everything queued behind it while the last send was in flight —
+    /// absorbed here so the backlog is measured (and collapsed) in one place
+    /// rather than dribbling out frame by frame. Returns `true` when the
+    /// session is over.
+    async fn relay_batch(
+        &mut self,
+        first: Outbound,
+        out_rx: &mut UnboundedReceiver<Outbound>,
+        in_tx: &UnboundedSender<Inbound>,
+    ) -> Result<bool, TransportError> {
+        let mut batch = vec![first];
+        while let Ok(more) = out_rx.try_recv() {
+            batch.push(more);
+        }
+        for item in batch {
+            if self.handle_outbound(item, in_tx).await? {
+                self.wire.flush().await?;
+                return Ok(true);
+            }
+        }
+        self.flush().await?;
+        Ok(false)
+    }
+
+    /// Send everything the queue holds, in `seq` order.
+    ///
+    /// A no-op while a resync keyframe is outstanding: after an overflow the
+    /// hub's replay buffer has a gap, and nothing may precede the keyframe that
+    /// closes it — including the flushes done by the `host_size` and `end`
+    /// paths.
+    async fn flush(&mut self) -> Result<(), TransportError> {
+        if self.queue.awaiting_keyframe() {
+            return Ok(());
+        }
+        for frame in self.queue.drain_output() {
+            self.wire
+                .push(
+                    EVENT_OUTPUT,
+                    json!({ "seq": frame.seq, "data": b64_encode(&frame.data) }),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Handle one item from the session. Returns `true` when the session is
+    /// over.
+    async fn handle_outbound(
+        &mut self,
+        item: Outbound,
+        in_tx: &UnboundedSender<Inbound>,
+    ) -> Result<bool, TransportError> {
+        match item {
+            Outbound::Output(frame) => {
+                self.queue.push_output(frame);
+                if self.queue.needs_keyframe() {
+                    // The backlog was collapsed. Replaying it would desync every
+                    // viewer, and synthesising a keyframe *here* would break the
+                    // seq invariant (a keyframe's payload and `seq` must be
+                    // minted together by the session's single owner). So ask the
+                    // session for one; it answers immediately, even if the child
+                    // never writes again.
+                    //
+                    // `clear_keyframe_flag` only stops us re-asking: the queue
+                    // stays in `awaiting_keyframe`, discarding output, until that
+                    // keyframe is actually written — otherwise we would send
+                    // frames sitting on the far side of the gap we just created.
+                    self.queue.drain_output();
+                    self.queue.clear_keyframe_flag();
+                    let _ = in_tx.send(Inbound::RequestKeyframe);
+                }
+            }
+            Outbound::Keyframe(frame) => {
+                self.flush().await?;
+                self.wire
+                    .push(
+                        EVENT_KEYFRAME,
+                        json!({ "seq": frame.seq, "data": b64_encode(&frame.data) }),
+                    )
+                    .await?;
+                // Ends any resync window opened by an overflow: output queued
+                // after this keyframe carries a greater `seq`, so the hub's
+                // buffer is contiguous again.
+                self.queue.on_keyframe_sent();
+            }
+            Outbound::HostSize { cols, rows } => {
+                self.flush().await?;
+                self.wire
+                    .push(EVENT_HOST_SIZE, json!({ "cols": cols, "rows": rows }))
+                    .await?;
+            }
+            Outbound::End => {
+                self.flush().await?;
+                self.wire.push(EVENT_END, json!({})).await?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+}
+
+/// The hub transport: connects, joins `share:host`, relays events both ways, and
+/// reconnects with exponential backoff — resuming the same session with the
+/// secret `host_resume_token`.
+///
+/// The fields are the state that must survive reconnects.
+pub(crate) struct Transport {
+    hub_url: Url,
     api_token: String,
-    write: bool,
+    write: WriteMode,
     /// The **secret** host credential from the join reply. Never the public
     /// token.
     host_resume_token: Option<String>,
@@ -142,16 +306,43 @@ struct Client {
     /// URL can go into the subshell's `ATUIN_SHARE_URL` before the shell spawns.
     /// Taken (set to `None`) after firing once; reconnects leave the already
     /// spawned shell's environment untouched.
-    first_url_tx: Option<Sender<String>>,
+    first_url_tx: Option<oneshot::Sender<String>>,
     backoff: Backoff,
 }
 
-impl Client {
-    /// Reconnect forever until the session ends for good.
-    async fn run(&mut self, out_rx: &mut UnboundedReceiver<Outbound>, in_tx: &Sender<Inbound>) {
+impl Transport {
+    /// Build a transport. `first_url_tx` receives the join URL on the first
+    /// successful join; the reconnect state starts empty.
+    pub(crate) fn new(
+        hub_url: Url,
+        api_token: String,
+        write: WriteMode,
+        first_url_tx: oneshot::Sender<String>,
+    ) -> Self {
+        Self {
+            hub_url,
+            api_token,
+            write,
+            host_resume_token: None,
+            last_public_token: None,
+            first_url_tx: Some(first_url_tx),
+            backoff: Backoff::new(),
+        }
+    }
+
+    /// Relay until the session ends, reconnecting with backoff in between.
+    ///
+    /// Runs as a task on the caller's tokio runtime (`tokio::spawn`) — it needs
+    /// no thread or runtime of its own. The session keeps running (and the
+    /// subshell keeps living) whether or not the hub is reachable.
+    pub(crate) async fn run(
+        mut self,
+        mut out_rx: UnboundedReceiver<Outbound>,
+        in_tx: UnboundedSender<Inbound>,
+    ) {
         let mut reported = false;
         loop {
-            match self.connect_once(out_rx, in_tx).await {
+            match self.connect_once(&mut out_rx, &in_tx).await {
                 // The session is over (`end`, or the session dropped its
                 // sender). Do not reconnect — the link is meant to die.
                 Ok(()) => return,
@@ -180,31 +371,21 @@ impl Client {
     async fn connect_once(
         &mut self,
         out_rx: &mut UnboundedReceiver<Outbound>,
-        in_tx: &Sender<Inbound>,
+        in_tx: &UnboundedSender<Inbound>,
     ) -> Result<(), TransportError> {
-        let (ws, _resp) =
-            tokio_tungstenite::connect_async(ws_url(&self.hub_url, &self.api_token)).await?;
+        let (ws, _resp) = tokio_tungstenite::connect_async(self.ws_url().as_str()).await?;
         let (sink, mut stream) = ws.split();
-        let mut wire = Wire { sink, next_ref: 2 };
 
-        let join = encode_join(
-            JOIN_REF,
-            JOIN_REF,
-            TOPIC,
-            join_payload(self.write, self.host_resume_token.as_deref()),
-        );
-        wire.sink.send(Message::Text(join)).await?;
+        // Per-connection write state (wire + fresh queue), joined immediately.
+        let mut conn = Connection::new(sink);
+        conn.join(&self.join_payload()).await?;
 
-        // A fresh queue per connection: anything the session produced while we
-        // were disconnected is still sitting in `out_rx`, and draining it below
-        // is exactly what trips the overflow into a keyframe request.
-        let mut queue = OutboundQueue::new(OUTBOUND_CAP);
         let mut heartbeat = tokio::time::interval(HEARTBEAT);
         heartbeat.tick().await; // the first tick completes immediately
 
         loop {
             tokio::select! {
-                _ = heartbeat.tick() => wire.heartbeat().await?,
+                _ = heartbeat.tick() => conn.wire.heartbeat().await?,
 
                 frame = stream.next() => {
                     let Some(frame) = frame else {
@@ -223,29 +404,52 @@ impl Client {
                 item = out_rx.recv() => {
                     // The session dropped its sender: nothing left to send.
                     let Some(item) = item else { return Ok(()) };
-                    // Absorb everything queued while the last send was in
-                    // flight, so the backlog is measured (and collapsed) in one
-                    // place rather than dribbling out frame by frame.
-                    let mut batch = vec![item];
-                    while let Ok(more) = out_rx.try_recv() {
-                        batch.push(more);
+                    if conn.relay_batch(item, out_rx, in_tx).await? {
+                        return Ok(());
                     }
-                    for it in batch {
-                        if handle_outbound(it, &mut queue, &mut wire, in_tx).await? {
-                            wire.flush().await?;
-                            return Ok(());
-                        }
-                    }
-                    flush_queue(&mut queue, &mut wire).await?;
                 }
             }
         }
     }
 
-    fn handle_text(&mut self, raw: &str, in_tx: &Sender<Inbound>) -> Result<(), TransportError> {
+    /// The hub's channel WebSocket endpoint, derived from the base `hub_url`:
+    /// [`WS_PATH`] is **appended** to any path on the base (never replaces it
+    /// — `wss://example.com/hub` must keep its `/hub` prefix), and the query
+    /// is rebuilt from scratch.
+    fn ws_url(&self) -> Url {
+        let mut url = self.hub_url.clone();
+        let prefix = url.path().trim_end_matches('/').to_string();
+        url.set_path(&format!("{prefix}{WS_PATH}"));
+        url.query_pairs_mut()
+            .clear()
+            .append_pair(WS_VSN_KEY, WS_VSN)
+            .append_pair(WS_TOKEN_KEY, &self.api_token);
+        url
+    }
+
+    /// The `phx_join` payload.
+    ///
+    /// The resume token is the **secret** `host_resume_token` handed back in the
+    /// join reply — never the public share token, which is in the link and would
+    /// let anyone holding it hijack the host role.
+    fn join_payload(&self) -> Value {
+        let write = self.write.is_write_enabled();
+        match self.host_resume_token.as_deref() {
+            Some(t) => json!({ "write": write, "resume_token": t }),
+            None => json!({ "write": write }),
+        }
+    }
+
+    fn handle_text(
+        &mut self,
+        raw: &str,
+        in_tx: &UnboundedSender<Inbound>,
+    ) -> Result<(), TransportError> {
         // Malformed frames are ignored rather than fatal: a garbled message is
         // no reason to tear down a working session.
-        let Ok(msg) = decode(raw) else { return Ok(()) };
+        let Ok(msg) = Incoming::parse(raw) else {
+            return Ok(());
+        };
         match msg {
             Incoming::Reply { ref_, ok, response } if ref_ == JOIN_REF => {
                 if !ok {
@@ -256,7 +460,7 @@ impl Client {
             // Acks for our own pushes and for heartbeats; nothing to do.
             Incoming::Reply { .. } | Incoming::Other => {}
             Incoming::Event { event, payload } => {
-                if let Some(inbound) = to_inbound(&event, &payload) {
+                if let Some(inbound) = Inbound::from_event(&event, &payload) {
                     let _ = in_tx.send(inbound);
                 }
             }
@@ -265,7 +469,10 @@ impl Client {
         Ok(())
     }
 
-    fn on_joined(&mut self, response: &Value, in_tx: &Sender<Inbound>) {
+    fn on_joined(&mut self, response: &Value, in_tx: &UnboundedSender<Inbound>) {
+        // The public view token. Kept here to feed `is_fresh_session` across
+        // rejoins; deliberately NOT forwarded to the session, which only ever
+        // prints `join_url` — and that already embeds the token.
         let token = response["token"].as_str().unwrap_or_default().to_string();
         let join_url = response["join_url"]
             .as_str()
@@ -285,150 +492,198 @@ impl Client {
             let _ = tx.send(join_url.clone());
         }
 
-        // "The session we were using was replaced." True only when we had
-        // already advertised a public token and the hub handed back a different
-        // one — i.e. a resume was rejected or expired and the hub silently made
-        // a new session, leaving the old link dead.
-        //
-        // Deliberately FALSE on the first join. The hub always mints a session
-        // there, so a plain "did the token change?" test is true and the first
-        // thing a new user sees would be "Reconnected as a NEW session — the
-        // previous link is dead", which is both wrong and alarming.
-        let fresh_session = self
-            .last_public_token
-            .as_deref()
-            .is_some_and(|previous| previous != token);
-        self.last_public_token = Some(token.clone());
+        let fresh_session = is_fresh_session(self.last_public_token.as_deref(), &token);
+        self.last_public_token = Some(token);
 
         // A completed join is what "connected" means, so a later outage starts
         // retrying promptly again.
         self.backoff.reset();
 
         let _ = in_tx.send(Inbound::Connected {
-            token,
             join_url,
             fresh_session,
         });
     }
 }
 
-/// Send everything the queue holds, in `seq` order.
+/// "The session we were using was replaced." True only when we had already
+/// advertised a public token (`last`) and the hub handed back a different one —
+/// i.e. a resume was rejected or expired and the hub silently made a new
+/// session, leaving the old link dead.
 ///
-/// A no-op while a resync keyframe is outstanding: after an overflow the hub's
-/// replay buffer has a gap, and nothing may precede the keyframe that closes it
-/// — including the flushes done by the `host_size` and `end` paths.
-async fn flush_queue(queue: &mut OutboundQueue, wire: &mut Wire) -> Result<(), TransportError> {
-    if queue.awaiting_keyframe() {
-        return Ok(());
-    }
-    for (seq, data) in queue.drain_output() {
-        wire.push("output", json!({ "seq": seq, "data": b64_encode(&data) }))
-            .await?;
-    }
-    Ok(())
+/// Deliberately FALSE on the first join (`last` is `None`). The hub always
+/// mints a session there, so a plain "did the token change?" test is true and
+/// the first thing a new user sees would be "Reconnected as a NEW session — the
+/// previous link is dead", which is both wrong and alarming.
+fn is_fresh_session(last: Option<&str>, new: &str) -> bool {
+    last.is_some_and(|previous| previous != new)
 }
 
-/// Handle one item from the session. Returns `true` when the session is over.
-async fn handle_outbound(
-    item: Outbound,
-    queue: &mut OutboundQueue,
-    wire: &mut Wire,
-    in_tx: &Sender<Inbound>,
-) -> Result<bool, TransportError> {
-    match item {
-        Outbound::Output { seq, data } => {
-            queue.push_output(seq, data);
-            if queue.needs_keyframe() {
-                // The backlog was collapsed. Replaying it would desync every
-                // viewer, and synthesising a keyframe *here* would break the
-                // seq invariant (a keyframe's payload and `seq` must be minted
-                // together under the parser lock). So ask the session for one;
-                // it answers immediately, even if the child never writes again.
-                //
-                // `clear_keyframe_flag` only stops us re-asking: the queue stays
-                // in `awaiting_keyframe`, discarding output, until that keyframe
-                // is actually written — otherwise we would send frames sitting
-                // on the far side of the gap we just created.
-                queue.drain_output();
-                queue.clear_keyframe_flag();
-                let _ = in_tx.send(Inbound::RequestKeyframe);
-            }
-        }
-        Outbound::Keyframe { seq, data } => {
-            flush_queue(queue, wire).await?;
-            wire.push("keyframe", json!({ "seq": seq, "data": b64_encode(&data) }))
-                .await?;
-            // Ends any resync window opened by an overflow: output queued after
-            // this keyframe carries a greater `seq`, so the hub's buffer is
-            // contiguous again.
-            queue.on_keyframe_sent();
-        }
-        Outbound::HostSize { cols, rows } => {
-            flush_queue(queue, wire).await?;
-            wire.push("host_size", json!({ "cols": cols, "rows": rows }))
-                .await?;
-        }
-        Outbound::End => {
-            flush_queue(queue, wire).await?;
-            wire.push("end", json!({})).await?;
-            return Ok(true);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_transport(write: bool) -> Transport {
+        let (url_tx, _url_rx) = oneshot::channel();
+        Transport::new(
+            Url::parse("https://hub.example.com/some/base?stale=1").expect("valid URL"),
+            "api-token-123".to_string(),
+            WriteMode::from_flag(write),
+            url_tx,
+        )
+    }
+
+    #[test]
+    fn ws_url_appends_to_the_base_path_and_rebuilds_the_query() {
+        let url = test_transport(false).ws_url();
+        assert_eq!(url.scheme(), "https");
+        assert_eq!(url.host_str(), Some("hub.example.com"));
+        // A path-prefixed base (reverse-proxied hub) keeps its prefix.
+        assert_eq!(url.path(), "/some/base/sockets/share/websocket");
+        let pairs: Vec<(String, String)> = url
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                ("vsn".to_string(), "2.0.0".to_string()),
+                ("token".to_string(), "api-token-123".to_string()),
+            ]
+        );
+    }
+
+    /// A bare origin normalizes to path `/`; appending must not produce a
+    /// double slash. A trailing slash on a real prefix is trimmed the same
+    /// way (the pre-typed code did this in `lab.rs`).
+    #[test]
+    fn ws_url_handles_bare_origins_and_trailing_slashes() {
+        let base_to_path = [
+            ("wss://hub.example.com", "/sockets/share/websocket"),
+            ("wss://hub.example.com/hub/", "/hub/sockets/share/websocket"),
+        ];
+        for (base, want) in base_to_path {
+            let (url_tx, _url_rx) = oneshot::channel();
+            let t = Transport::new(
+                Url::parse(base).expect("valid URL"),
+                "tok".to_string(),
+                WriteMode::from_flag(false),
+                url_tx,
+            );
+            assert_eq!(t.ws_url().path(), want, "base: {base}");
         }
     }
-    Ok(false)
-}
 
-/// Start the hub transport.
-///
-/// Spawns an OS thread owning a current-thread tokio runtime that connects,
-/// joins `share:host`, heartbeats, relays events both ways, and reconnects with
-/// exponential backoff — resuming the same session with the secret
-/// `host_resume_token`. Returns immediately; the session keeps running (and the
-/// subshell keeps living) whether or not the hub is reachable.
-pub fn spawn_transport(
-    hub_url: String,
-    api_token: String,
-    write: bool,
-    out_rx: Receiver<Outbound>,
-    in_tx: Sender<Inbound>,
-    url_tx: Sender<String>,
-) {
-    std::thread::spawn(move || {
-        // The session speaks blocking `std::sync::mpsc`; bridge it onto an
-        // async channel so the client loop can select over it without blocking
-        // the runtime thread.
-        let (bridge_tx, mut bridge_rx) = unbounded_channel::<Outbound>();
-        std::thread::spawn(move || {
-            while let Ok(item) = out_rx.recv() {
-                if bridge_tx.send(item).is_err() {
-                    return;
-                }
+    #[test]
+    fn join_payload_has_no_resume_token_on_the_first_join() {
+        assert_eq!(
+            test_transport(false).join_payload(),
+            json!({ "write": false })
+        );
+    }
+
+    #[test]
+    fn join_payload_resumes_with_the_secret_token_never_the_public_one() {
+        let mut t = test_transport(true);
+        t.host_resume_token = Some("secret-resume".to_string());
+        t.last_public_token = Some("public-token".to_string());
+        assert_eq!(
+            t.join_payload(),
+            json!({ "write": true, "resume_token": "secret-resume" })
+        );
+    }
+
+    #[test]
+    fn from_event_decodes_input_from_base64() {
+        let payload = json!({ "data": b64_encode(b"ls\n") });
+        match Inbound::from_event("input", &payload) {
+            Some(Inbound::Input(bytes)) => assert_eq!(bytes, b"ls\n"),
+            other => panic!("expected Input, got {}", kind(&other)),
+        }
+    }
+
+    #[test]
+    fn from_event_drops_input_with_bad_base64() {
+        let payload = json!({ "data": "not base64!" });
+        assert!(Inbound::from_event("input", &payload).is_none());
+    }
+
+    #[test]
+    fn from_event_maps_set_size() {
+        let payload = json!({ "cols": 120, "rows": 40 });
+        match Inbound::from_event("set_size", &payload) {
+            Some(Inbound::SetSize { cols, rows }) => {
+                assert_eq!((cols, rows), (120, 40));
             }
-        });
+            other => panic!("expected SetSize, got {}", kind(&other)),
+        }
+    }
 
-        // rustls has no default crypto provider until one is installed; every
-        // other TLS user in the workspace goes through this helper.
-        atuin_common::tls::ensure_crypto_provider();
+    #[test]
+    fn from_event_drops_set_size_that_is_incomplete_or_out_of_range() {
+        assert!(Inbound::from_event("set_size", &json!({ "cols": 120 })).is_none());
+        assert!(Inbound::from_event("set_size", &json!({ "cols": 70_000, "rows": 40 })).is_none());
+    }
 
-        let runtime = match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(rt) => rt,
-            Err(e) => {
-                eprintln!("\r\n[atuin lab share] could not start the transport runtime: {e}\r");
-                return;
-            }
-        };
+    #[test]
+    fn from_event_maps_participants() {
+        match Inbound::from_event("participants", &json!({ "count": 7 })) {
+            Some(Inbound::Participants(n)) => assert_eq!(n, 7),
+            other => panic!("expected Participants, got {}", kind(&other)),
+        }
+    }
 
-        let mut client = Client {
-            hub_url,
-            api_token,
-            write,
-            host_resume_token: None,
-            last_public_token: None,
-            first_url_tx: Some(url_tx),
-            backoff: Backoff::new(),
-        };
-        runtime.block_on(client.run(&mut bridge_rx, &in_tx));
-    });
+    #[test]
+    fn from_event_maps_request_keyframe() {
+        assert!(matches!(
+            Inbound::from_event("request_keyframe", &json!({})),
+            Some(Inbound::RequestKeyframe)
+        ));
+    }
+
+    /// Unknown events are ignored, so the hub can add events without breaking
+    /// older clients.
+    #[test]
+    fn from_event_ignores_unknown_events() {
+        assert!(Inbound::from_event("brand_new_event", &json!({ "x": 1 })).is_none());
+    }
+
+    /// Deliberately FALSE on the first join: the hub always mints a session
+    /// there, and greeting a new user with "Reconnected as a NEW session" would
+    /// be both wrong and alarming.
+    #[test]
+    fn fresh_session_is_false_on_the_first_join() {
+        assert!(!is_fresh_session(None, "tok"));
+    }
+
+    #[test]
+    fn fresh_session_is_true_only_when_the_public_token_changed() {
+        assert!(is_fresh_session(Some("old"), "new"));
+        assert!(!is_fresh_session(Some("tok"), "tok"));
+    }
+
+    /// Every push after the join must carry a strictly greater ref than
+    /// [`JOIN_REF`] (`"1"`), so the join reply — matched by ref — stays
+    /// unambiguous for the whole connection.
+    #[test]
+    fn push_refs_start_past_the_join_ref_and_strictly_increase() {
+        let mut refs = RefSequence::new();
+        assert_eq!(refs.take(), "2");
+        assert_eq!(refs.take(), "3");
+        assert_eq!(refs.take(), "4");
+    }
+
+    /// `Inbound` carries no `Debug` impl (it holds raw terminal bytes); a
+    /// variant name is enough for a test failure message.
+    fn kind(v: &Option<Inbound>) -> &'static str {
+        match v {
+            None => "None",
+            Some(Inbound::Input(_)) => "Input",
+            Some(Inbound::SetSize { .. }) => "SetSize",
+            Some(Inbound::Participants(_)) => "Participants",
+            Some(Inbound::RequestKeyframe) => "RequestKeyframe",
+            Some(Inbound::Connected { .. }) => "Connected",
+            Some(Inbound::Disconnected) => "Disconnected",
+        }
+    }
 }

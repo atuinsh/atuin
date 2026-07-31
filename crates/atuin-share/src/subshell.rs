@@ -4,34 +4,75 @@
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
-use eyre::eyre;
-use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-use crate::Size;
+use crate::{Error, Size};
 
-/// The shared subshell: a child process attached to a PTY that the session
-/// loop reads from, writes to, and resizes.
+/// The shared subshell: a child process attached to a PTY.
 ///
-/// Dropping a `Subshell` drops the PTY master, which sends the child `SIGHUP` —
-/// relied upon during teardown.
-///
-/// `portable-pty` 0.9 declares `pub trait MasterPty: Downcast + Send` — it is
-/// `Send` but **not** `Sync`, and offers no general `clone`. The master is
-/// therefore held in an `Arc<Mutex<..>>`, which *is* `Send + Sync` (because
-/// `Mutex<T>: Sync` when `T: Send`) and can be shared with the SIGWINCH and
-/// inbound-event threads.
-pub struct Subshell {
+/// Lives only between [`Subshell::spawn`] and [`Subshell::into_parts`]:
+/// `run_share` spawns it, then the session splits it into the pieces its task
+/// topology needs.
+pub(crate) struct Subshell {
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
-    child: Box<dyn portable_pty::Child + Send + Sync>,
+    child: Box<dyn Child + Send + Sync>,
 }
 
 // `portable-pty` 0.9's `SlavePty::spawn_command` returns
 // `Box<dyn Child + Send + Sync>`, so this bound matches exactly and no
 // `Mutex` wrapper is needed around the child itself.
 
-/// Resizes the child PTY. Cloneable and thread-safe, so the SIGWINCH handler and
-/// the inbound-event thread can both resize without owning the `Subshell`.
-pub type ResizeHandle = Arc<dyn Fn(Size) + Send + Sync>;
+/// Resizes the child PTY without owning the [`Subshell`].
+///
+/// `portable-pty` 0.9 declares `pub trait MasterPty: Downcast + Send` — it is
+/// `Send` but **not** `Sync`, and offers no general `clone`. The master is
+/// therefore held in an `Arc<Mutex<..>>`, which *is* `Send + Sync` (because
+/// `Mutex<T>: Sync` when `T: Send`), so the session future holding the resizer
+/// stays freely movable across the runtime's worker threads.
+///
+/// After [`Subshell::into_parts`] the resizer holds the boxed master itself,
+/// but it is **not** the only master fd: the reader and writer split off there
+/// are dups of it (`portable-pty` 0.9 implements `try_clone_reader` /
+/// `take_writer` as fd clones), so dropping the resizer alone does not close
+/// the master side. Nothing relies on it doing so — the reader's EOF comes
+/// from the *slave* side, once the child and every descendant that inherited
+/// the tty have exited.
+#[derive(Clone)]
+pub(crate) struct PtyResizer(Arc<Mutex<Box<dyn MasterPty + Send>>>);
+
+impl PtyResizer {
+    /// Resize the child PTY. Best-effort: a failed `TIOCSWINSZ` (e.g. the
+    /// child already exited) is not worth tearing the session down for.
+    pub(crate) fn resize(&self, size: Size) {
+        if let Ok(master) = self.0.lock() {
+            let _ = master.resize(PtySize {
+                rows: size.rows,
+                cols: size.cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+        }
+    }
+}
+
+/// The session-facing pieces of a spawned subshell, split apart so each can go
+/// where the session's topology needs it: the reader to the pty-reader thread,
+/// the child to the blocking-pool wait, and the writer, resizer and killer to
+/// the central task.
+pub(crate) struct SubshellParts {
+    /// A blocking reader over the PTY master (child output).
+    pub(crate) reader: Box<dyn Read + Send>,
+    /// The sole PTY writer (child input).
+    pub(crate) writer: Box<dyn Write + Send>,
+    /// Child PTY resizer — holds the boxed master after the split (though the
+    /// reader and writer are fd dups of it); see [`PtyResizer`].
+    pub(crate) resizer: PtyResizer,
+    /// Terminates the child without owning it, so the session can kill while
+    /// `child.wait()` runs on the blocking pool.
+    pub(crate) killer: Box<dyn ChildKiller + Send + Sync>,
+    /// The child itself, kept only to be `wait()`ed on for its exit code.
+    pub(crate) child: Box<dyn Child + Send + Sync>,
+}
 
 impl Subshell {
     /// Open a PTY sized to `size` and spawn the user's default shell in it.
@@ -46,8 +87,10 @@ impl Subshell {
     /// `PATH`, `HOME`, etc. are preserved. Used to expose `ATUIN_SHARE_URL` (the
     /// join link) inside the shared shell so it can be retrieved after the
     /// printed link has scrolled away.
-    pub fn spawn(size: Size, env: &[(&str, &str)]) -> eyre::Result<Self> {
+    pub(crate) fn spawn(size: Size, env: &[(&str, &str)]) -> crate::Result<Self> {
         let pty = native_pty_system();
+        // `portable-pty` errors are `anyhow::Error`; stringify with `{:#}` (the
+        // cause chain) so the typed variants display exactly what `eyre` did.
         let pair = pty
             .openpty(PtySize {
                 rows: size.rows,
@@ -55,7 +98,7 @@ impl Subshell {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| eyre!("openpty: {e:#}"))?;
+            .map_err(|e| Error::OpenPty(format!("{e:#}")))?;
 
         let mut cmd = CommandBuilder::new_default_prog();
         for (key, value) in env {
@@ -64,7 +107,7 @@ impl Subshell {
         let child = pair
             .slave
             .spawn_command(cmd)
-            .map_err(|e| eyre!("spawn: {e:#}"))?;
+            .map_err(|e| Error::SpawnShell(format!("{e:#}")))?;
         drop(pair.slave);
 
         Ok(Self {
@@ -73,96 +116,30 @@ impl Subshell {
         })
     }
 
-    /// A fresh reader over the PTY master. Every call clones the underlying
-    /// descriptor, so this may be called more than once.
+    /// Split the subshell into the pieces the session's topology needs — see
+    /// [`SubshellParts`]. The boxed PTY master survives inside the resizer;
+    /// the reader and writer carry their own dups of the master fd.
     ///
     /// # Panics
     ///
-    /// Panics if the descriptor cannot be cloned, which would mean the process
-    /// is out of file descriptors, or if the master lock is poisoned.
+    /// Panics if the reader cannot be cloned (the process is out of file
+    /// descriptors) or the writer was already taken — impossible on a freshly
+    /// spawned subshell, which is the only caller.
     #[must_use]
-    pub fn reader(&self) -> Box<dyn Read + Send> {
-        self.master
-            .lock()
-            .expect("master lock")
-            .try_clone_reader()
-            .expect("clone pty reader")
-    }
-
-    /// The PTY master writer. **May only be called once** — the session takes
-    /// it at startup and shares it behind an `Arc<Mutex<..>>`, because two
-    /// paths write to the child: the host's own stdin, and inbound viewer
-    /// `input`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the writer has already been taken, or if the master lock is
-    /// poisoned.
-    #[must_use]
-    pub fn writer(&self) -> Box<dyn Write + Send> {
-        self.master
-            .lock()
-            .expect("master lock")
-            .take_writer()
-            .expect("take pty writer")
-    }
-
-    /// Resize the child PTY. Best-effort: a failed `TIOCSWINSZ` (e.g. the child
-    /// already exited) is not worth tearing the session down for.
-    ///
-    /// Part of the crate's declared `Subshell` surface. The session's threads
-    /// do not own the `Subshell`, so they resize through [`Self::resize_handle`]
-    /// instead — leaving this owned-receiver convenience with no in-crate caller.
-    #[allow(
-        dead_code,
-        reason = "declared Subshell surface; threads use resize_handle() instead"
-    )]
-    pub fn resize(&self, size: Size) {
-        (self.resize_handle())(size);
-    }
-
-    /// A cloneable resize closure, so threads can resize without owning the PTY.
-    #[must_use]
-    pub fn resize_handle(&self) -> ResizeHandle {
-        let master = Arc::clone(&self.master);
-        Arc::new(move |size: Size| {
-            if let Ok(m) = master.lock() {
-                let _ = m.resize(PtySize {
-                    rows: size.rows,
-                    cols: size.cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                });
-            }
-        })
-    }
-
-    /// Non-blocking exit check, so the run loop can also watch the kill switch.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying `waitpid` fails.
-    pub fn try_wait(&mut self) -> eyre::Result<Option<i32>> {
-        match self.child.try_wait() {
-            Ok(Some(status)) => Ok(Some(i32::try_from(status.exit_code()).unwrap_or(1))),
-            Ok(None) => Ok(None),
-            Err(e) => Err(eyre!("try_wait: {e:#}")),
+    pub(crate) fn into_parts(self) -> SubshellParts {
+        let (reader, writer) = {
+            let master = self.master.lock().expect("master lock");
+            (
+                master.try_clone_reader().expect("clone pty reader"),
+                master.take_writer().expect("take pty writer"),
+            )
+        };
+        SubshellParts {
+            reader,
+            writer,
+            resizer: PtyResizer(self.master),
+            killer: self.child.clone_killer(),
+            child: self.child,
         }
-    }
-
-    /// Terminate the child (kill switch / teardown). Best-effort: the child may
-    /// already have exited, in which case the error is not interesting.
-    pub fn kill(&mut self) {
-        let _ = self.child.kill();
-    }
-
-    /// Block until the child exits and return its exit code.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if waiting on the child fails.
-    pub fn wait(&mut self) -> eyre::Result<i32> {
-        let status = self.child.wait().map_err(|e| eyre!("wait: {e:#}"))?;
-        Ok(i32::try_from(status.exit_code()).unwrap_or(1))
     }
 }
