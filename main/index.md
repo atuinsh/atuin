@@ -7,7 +7,7 @@ It can also sync your history across all of your machines, end-to-end encrypted.
 ## Quickstart
 
 ```
-bash <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
+curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 ```
 
 Restart your shell, then press `Ctrl`+`R` or the `Up` arrow to search. Type a query, press enter to run the selected command, or tab to put it on your command line for editing.

@@ -14,7 +14,7 @@ Setup takes four steps, and only the first is required:
 The install script handles the binary and the shell plugin, and walks you through the rest:
 
 ```
-bash <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
+curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 ```
 
 Then restart your shell. Prefer a package manager, or want to install the pieces yourself? See [Installation](https://docs.atuin.sh/guide/installation/index.md).
