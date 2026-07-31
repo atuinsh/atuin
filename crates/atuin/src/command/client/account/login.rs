@@ -365,6 +365,10 @@ mod tests {
     use atuin_client::encryption::Key;
     use std::io;
 
+    use rstest::{fixture, rstest};
+
+    use super::confirm_password_loop;
+
     #[test]
     fn mnemonic_round_trip() {
         let key = Key::from([
@@ -382,49 +386,39 @@ mod tests {
         );
     }
 
-    #[test]
-    fn confirm_password_matches_first_try() {
-        let mut inputs = vec!["hunter2".to_string(), "hunter2".to_string()].into_iter();
-        let mut calls = 0;
-        let result = super::confirm_password_loop("enter: ", "confirm: ", |_prompt| {
-            calls += 1;
-            Ok(inputs.next().expect("ran out of scripted inputs"))
-        });
-        assert_eq!(result.unwrap(), "hunter2");
-        assert_eq!(calls, 2);
+    /// The (enter, confirm) prompt labels the register / change-password
+    /// flows pass to `read_and_confirm_password`.
+    #[fixture]
+    fn prompts() -> (&'static str, &'static str) {
+        ("Please enter password: ", "Please confirm password: ")
     }
 
-    #[test]
-    fn confirm_password_reprompts_on_mismatch() {
-        let mut inputs = vec!["hunter2", "typo", "hunter2", "hunter2"]
-            .into_iter()
-            .map(String::from);
-        let mut calls = 0;
-        let result = super::confirm_password_loop("enter: ", "confirm: ", |_prompt| {
-            calls += 1;
-            Ok(inputs.next().expect("ran out of scripted inputs"))
+    #[rstest]
+    #[case::matches_on_first_try(&["hunter2", "hunter2"], 2)]
+    #[case::reprompts_until_entries_match(&["hunter2", "typo", "hunter2", "hunter2"], 4)]
+    #[case::reprompts_past_empty_entry(&["", "hunter2", "hunter2"], 3)]
+    fn confirm_password_returns_matching_entry(
+        prompts: (&'static str, &'static str),
+        #[case] responses: &[&str],
+        #[case] expected_prompt_count: usize,
+    ) {
+        let mut remaining = responses.iter().copied().map(String::from);
+        let mut prompt_count = 0;
+        let result = confirm_password_loop(prompts.0, prompts.1, |_prompt| {
+            prompt_count += 1;
+            Ok(remaining.next().expect("ran out of scripted responses"))
         });
+
         assert_eq!(result.unwrap(), "hunter2");
-        assert_eq!(calls, 4);
+        assert_eq!(prompt_count, expected_prompt_count);
     }
 
-    #[test]
-    fn confirm_password_reprompts_on_empty() {
-        let mut inputs = vec!["", "hunter2", "hunter2"].into_iter().map(String::from);
-        let mut calls = 0;
-        let result = super::confirm_password_loop("enter: ", "confirm: ", |_prompt| {
-            calls += 1;
-            Ok(inputs.next().expect("ran out of scripted inputs"))
-        });
-        assert_eq!(result.unwrap(), "hunter2");
-        assert_eq!(calls, 3);
-    }
-
-    #[test]
-    fn confirm_password_propagates_read_error() {
-        let result = super::confirm_password_loop("enter: ", "confirm: ", |_prompt| {
+    #[rstest]
+    fn confirm_password_propagates_read_error(prompts: (&'static str, &'static str)) {
+        let result = confirm_password_loop(prompts.0, prompts.1, |_prompt| {
             Err(io::Error::new(io::ErrorKind::UnexpectedEof, "eof"))
         });
+
         assert!(result.is_err());
     }
 }
