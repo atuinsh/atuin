@@ -8,7 +8,7 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::CommandCaptureSink;
 use crate::capture::CommandCaptureTracker;
-use crate::compositor::{Compositor, OverlayFlags};
+use crate::compositor::{Compositor, OverlayFlags, lock_unpoisoned};
 use crate::debug::{Osc133DebugHighlighter, RESET};
 use crate::pty_proxy::RuntimeOptions;
 use crate::screen;
@@ -62,7 +62,7 @@ fn run(mut options: RuntimeOptions) -> eyre::Result<()> {
     // files it creates. The shell must not inherit it (#3695) — restore the
     // umask the user launched us with. Applied in the child between fork and
     // exec, so the proxy's own umask stays restrictive.
-    if let Some(mask) = options.child_umask {
+    if let Some(mask) = options.hooks.child_umask {
         cmd.umask(Some(mask as _));
     }
 
@@ -84,23 +84,22 @@ fn run(mut options: RuntimeOptions) -> eyre::Result<()> {
 
     let current_cols = Arc::new(AtomicU16::new(cols.max(1)));
 
-    // Every byte written to the real terminal goes through the compositor,
-    // which also maintains the vt100 screen model served over the socket.
-    // Partial-sequence splitting is only needed when a suggestion overlay
-    // may interleave paints with pty output.
+    // All terminal writes go through the compositor, which also maintains
+    // the socket-served screen model; splitting only matters when an
+    // overlay may paint.
     let flags = Arc::new(OverlayFlags::default());
     let compositor = Arc::new(Mutex::new(Compositor::new(
         rows,
         cols,
         std::io::stdout(),
         flags.clone(),
-        options.suggestion_provider.is_some(),
+        options.hooks.suggestion_provider.is_some(),
     )));
 
     screen::spawn_socket_server(sock_path.clone(), compositor.clone());
     spawn_resize_handler(pair.master, compositor.clone(), current_cols.clone())?;
 
-    let (mut input_tracker, key_filter) = match options.suggestion_provider.take() {
+    let (mut input_tracker, key_filter) = match options.hooks.suggestion_provider.take() {
         Some(provider) => {
             let handles =
                 crate::suggest::spawn(provider, compositor.clone(), flags, current_cols.clone());
@@ -115,6 +114,7 @@ fn run(mut options: RuntimeOptions) -> eyre::Result<()> {
     let stdout_thread = std::thread::spawn(move || {
         let mut highlighter = options.debug_osc133.then(Osc133DebugHighlighter::new);
         let mut capture_tracker = options
+            .hooks
             .command_capture_sink
             .as_ref()
             .map(|_| CommandCaptureTracker::new(current_cols));
@@ -124,19 +124,23 @@ fn run(mut options: RuntimeOptions) -> eyre::Result<()> {
             match pty_reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if let (Some(tracker), Some(sink)) =
-                        (capture_tracker.as_mut(), command_capture_sink.as_ref())
-                    {
+                    if let (Some(tracker), Some(sink)) = (
+                        capture_tracker.as_mut(),
+                        options.hooks.command_capture_sink.as_ref(),
+                    ) {
                         tracker.push(&buf[..n], sink);
                     }
 
-                    if let Ok(mut compositor) = pump_compositor.lock() {
-                        if let Some(highlighter) = highlighter.as_mut() {
-                            let rendered = highlighter.render(&buf[..n]);
-                            compositor.apply_pty(&rendered);
-                        } else {
-                            compositor.apply_pty(&buf[..n]);
-                        }
+                    let mut compositor = lock_unpoisoned(&pump_compositor);
+                    let written = if let Some(highlighter) = highlighter.as_mut() {
+                        let rendered = highlighter.render(&buf[..n]);
+                        compositor.apply_pty(&rendered)
+                    } else {
+                        compositor.apply_pty(&buf[..n])
+                    };
+                    drop(compositor);
+                    if written.is_err() {
+                        break;
                     }
 
                     // After the chunk is applied to screen and model alike,
@@ -148,11 +152,10 @@ fn run(mut options: RuntimeOptions) -> eyre::Result<()> {
             }
         }
 
-        if let Ok(mut compositor) = pump_compositor.lock() {
-            compositor.flush_pending();
-            if highlighter.is_some() {
-                compositor.apply_pty(RESET);
-            }
+        let mut compositor = lock_unpoisoned(&pump_compositor);
+        compositor.flush_pending();
+        if highlighter.is_some() {
+            let _ = compositor.apply_pty(RESET);
         }
     });
 }
@@ -204,9 +207,7 @@ fn spawn_resize_handler(
                     pixel_width: 0,
                     pixel_height: 0,
                 });
-                if let Ok(mut compositor) = compositor.lock() {
-                    compositor.resize(rows, cols);
-                }
+                lock_unpoisoned(&compositor).resize(rows, cols);
             }
         }
     });

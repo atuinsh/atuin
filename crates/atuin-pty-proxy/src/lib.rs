@@ -20,7 +20,7 @@ mod suggest;
 #[cfg(unix)]
 pub use capture::{CommandCapture, CommandCaptureSink};
 #[cfg(unix)]
-pub use pty_proxy::{PtyProxy, Shell, init_script};
+pub use pty_proxy::{PtyProxy, RunOptions, Shell, init_script};
 #[cfg(unix)]
 pub use suggest::SuggestionProvider;
 

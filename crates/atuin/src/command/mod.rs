@@ -92,47 +92,51 @@ fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
     #[allow(clippy::useless_conversion)]
     let child_umask = Some(u32::from(prev_umask.bits()));
 
-    #[cfg(feature = "client")]
-    let suggestions = history_suggestion_provider();
-    #[cfg(not(feature = "client"))]
-    let suggestions = None;
-
     #[cfg(feature = "daemon")]
-    proxy.run(semantic_command_capture_sink(), suggestions, child_umask);
-
+    let command_capture_sink = semantic_command_capture_sink();
     #[cfg(not(feature = "daemon"))]
-    proxy.run(None, suggestions, child_umask);
+    let command_capture_sink = None;
+
+    #[cfg(feature = "client")]
+    let suggestion_provider = history_suggestion_provider();
+    #[cfg(not(feature = "client"))]
+    let suggestion_provider = None;
+
+    proxy.run(atuin_pty_proxy::RunOptions {
+        command_capture_sink,
+        suggestion_provider,
+        child_umask,
+    });
 }
 
-/// Suggestion popup provider for `atuin pty-proxy`: prefix completions from
-/// history, best first. Experimental: only active with
-/// `pty_proxy.suggestions = true` in the config or `ATUIN_PTY_PROXY_SUGGEST=1`
-/// in the environment.
-///
-/// Served by the daemon's in-memory search index when the daemon is enabled
-/// (frecency-ranked, no database access per keystroke), falling back to a
-/// prefix search of the local sqlite database otherwise.
-///
-/// The backend lives on its own thread with a small runtime, mirroring
-/// [`semantic_command_capture_sink`]; the returned closure just does a
-/// bounded request/reply so a slow query can never wedge the proxy's UI.
+/// Timeout and queue depth for the popup's request/reply to the suggestion
+/// worker — bounded so a slow backend can never wedge the proxy's UI.
+#[cfg(all(feature = "client", feature = "pty-proxy", unix))]
+const SUGGEST_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
+#[cfg(all(feature = "client", feature = "pty-proxy", unix))]
+const SUGGEST_QUEUE_DEPTH: usize = 8;
+
+/// Prefix completions from history for the pty-proxy popup. Experimental:
+/// gated on `pty_proxy.suggestions` or `ATUIN_PTY_PROXY_SUGGEST=1`.
+/// Daemon index when enabled, sqlite prefix search otherwise; the backend
+/// lives on its own thread like [`semantic_command_capture_sink`].
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
 fn history_suggestion_provider() -> Option<atuin_pty_proxy::SuggestionProvider> {
     use std::sync::mpsc;
-    use std::time::Duration;
 
     let settings = atuin_client::settings::Settings::new().ok()?;
     if !settings.pty_proxy.suggestions && !is_truthy_env("ATUIN_PTY_PROXY_SUGGEST") {
         return None;
     }
 
-    let min_chars = usize::try_from(settings.pty_proxy.suggestions_min_chars).unwrap_or(1);
-    let (req_tx, req_rx) = mpsc::sync_channel::<(String, mpsc::Sender<Vec<String>>)>(8);
+    let min_chars = settings.pty_proxy.suggestions_min_chars.max(1);
+    let (req_tx, req_rx) =
+        mpsc::sync_channel::<(String, mpsc::Sender<Vec<String>>)>(SUGGEST_QUEUE_DEPTH);
 
-    std::thread::spawn(move || suggestion_worker(&settings, &req_rx));
+    std::thread::spawn(move || suggestion_worker(settings, req_rx));
 
     Some(Box::new(move |line: &str| {
-        if line.chars().count() < min_chars.max(1) {
+        if line.chars().count() < min_chars {
             return Vec::new();
         }
         let (reply_tx, reply_rx) = mpsc::channel();
@@ -140,15 +144,15 @@ fn history_suggestion_provider() -> Option<atuin_pty_proxy::SuggestionProvider> 
             return Vec::new();
         }
         reply_rx
-            .recv_timeout(Duration::from_millis(250))
+            .recv_timeout(SUGGEST_REPLY_TIMEOUT)
             .unwrap_or_default()
     }))
 }
 
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
 fn suggestion_worker(
-    settings: &atuin_client::settings::Settings,
-    req_rx: &std::sync::mpsc::Receiver<(String, std::sync::mpsc::Sender<Vec<String>>)>,
+    settings: atuin_client::settings::Settings,
+    req_rx: std::sync::mpsc::Receiver<(String, std::sync::mpsc::Sender<Vec<String>>)>,
 ) {
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -157,15 +161,13 @@ fn suggestion_worker(
         return;
     };
 
-    let limit = u32::try_from(settings.pty_proxy.suggestions_limit).unwrap_or(8);
-    let mut backend = SuggestionBackend::default();
+    let mut backend = SuggestionBackend::new(settings);
 
-    while let Ok((query, reply_tx)) = req_rx.recv() {
-        let results = runtime.block_on(backend.fetch(settings, &query, limit));
+    for (query, reply_tx) in req_rx {
+        let results = runtime.block_on(backend.fetch(&query));
 
-        // Multiline commands can't be typed into the pty safely — each
-        // newline would submit the line so far. The daemon filters them
-        // already; this also covers the sqlite fallback.
+        // Each newline typed into the pty would submit the line so far; the
+        // daemon filters multiline already, this covers the sqlite fallback.
         let commands = results
             .into_iter()
             .filter(|command| !command.contains('\n'))
@@ -177,8 +179,8 @@ fn suggestion_worker(
 /// Lazily connected suggestion backends: the daemon's search index first,
 /// the local sqlite database as fallback.
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
-#[derive(Default)]
 struct SuggestionBackend {
+    settings: atuin_client::settings::Settings,
     #[cfg(feature = "daemon")]
     daemon: Option<atuin_daemon::client::SearchClient>,
     local: Option<(
@@ -189,25 +191,31 @@ struct SuggestionBackend {
 
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
 impl SuggestionBackend {
-    async fn fetch(
-        &mut self,
-        settings: &atuin_client::settings::Settings,
-        query: &str,
-        limit: u32,
-    ) -> Vec<String> {
-        // Prefer the daemon: its in-memory index answers prefix queries
-        // without touching sqlite and ranks with the same frecency scores
-        // as interactive search.
+    fn new(settings: atuin_client::settings::Settings) -> Self {
+        Self {
+            settings,
+            #[cfg(feature = "daemon")]
+            daemon: None,
+            local: None,
+        }
+    }
+
+    async fn fetch(&mut self, query: &str) -> Vec<String> {
+        // Daemon first: in-memory, frecency-ranked, no sqlite per keystroke.
         #[cfg(feature = "daemon")]
-        if settings.daemon.enabled {
+        if self.settings.daemon.enabled {
             if self.daemon.is_none() {
-                self.daemon =
-                    atuin_daemon::client::SearchClient::new(settings.daemon.socket_path.clone())
-                        .await
-                        .ok();
+                self.daemon = atuin_daemon::client::SearchClient::new(
+                    self.settings.daemon.socket_path.clone(),
+                )
+                .await
+                .ok();
             }
             if let Some(client) = self.daemon.as_mut() {
-                match client.suggest(query, limit).await {
+                match client
+                    .suggest(query, self.settings.pty_proxy.suggestions_limit)
+                    .await
+                {
                     Ok(commands) => return commands,
                     // Drop the connection and fall through to sqlite for
                     // this query; the next one retries the daemon.
@@ -216,20 +224,16 @@ impl SuggestionBackend {
             }
         }
 
-        self.fetch_local(settings, query, limit).await
+        self.fetch_local(query).await
     }
 
-    async fn fetch_local(
-        &mut self,
-        settings: &atuin_client::settings::Settings,
-        query: &str,
-        limit: u32,
-    ) -> Vec<String> {
+    async fn fetch_local(&mut self, query: &str) -> Vec<String> {
         use atuin_client::database::{Database, DbSearchMode, OptFilters, Sqlite, query_context};
         use atuin_client::settings::FilterMode;
 
         if self.local.is_none() {
-            let Ok(db) = Sqlite::new(&settings.db_path, settings.local_timeout).await else {
+            let Ok(db) = Sqlite::new(&self.settings.db_path, self.settings.local_timeout).await
+            else {
                 return Vec::new();
             };
             // The proxy runs outside the hooked shell (no ATUIN_SESSION
@@ -249,7 +253,7 @@ impl SuggestionBackend {
             context,
             query,
             OptFilters {
-                limit: Some(i64::from(limit)),
+                limit: Some(i64::from(self.settings.pty_proxy.suggestions_limit)),
                 ..OptFilters::default()
             },
         )
@@ -302,7 +306,11 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
     }))
 }
 
-#[cfg(all(any(feature = "daemon", feature = "client"), feature = "pty-proxy", unix))]
+#[cfg(all(
+    any(feature = "daemon", feature = "client"),
+    feature = "pty-proxy",
+    unix
+))]
 #[inline]
 fn is_truthy_env(name: &str) -> bool {
     std::env::var(name)

@@ -179,11 +179,12 @@ impl CommandData {
         true
     }
 
-    /// Get the most recent history ID for this command.
+    /// Timestamp of the most recent invocation of this command.
     pub fn most_recent_timestamp(&self) -> i64 {
         self.most_recent_timestamp
     }
 
+    /// History ID of the most recent invocation of this command.
     pub fn most_recent_id(&self) -> [u8; 16] {
         self.most_recent_id
     }
@@ -542,18 +543,11 @@ impl SearchIndex {
         })
     }
 
-    /// Prefix completions for the suggestion UI: commands starting with
-    /// `query`, best first.
-    ///
-    /// Matching is literal (no fuzzy scoring — frizbee would admit mid-word
-    /// matches, which read as noise under an in-progress command line), but
-    /// smart-cased and diacritic-normalized like the fuzzy search. Ranking
-    /// reuses the same precomputed frecency map, with the most recent
-    /// invocation as a tiebreak — which also covers commands newer than the
-    /// last frecency rebuild.
-    ///
-    /// Multiline commands are excluded: the suggestion UI can neither render
-    /// nor safely type them.
+    /// Prefix completions, best first. Matching is literal — fuzzy would
+    /// admit mid-word hits, noise under an in-progress line — but smart-cased
+    /// and diacritic-normalized like search, and ranked by the same frecency
+    /// map (recency tiebreak covers commands newer than the last rebuild).
+    /// Multiline commands are excluded: the UI can't render or type them.
     #[instrument(skip_all, level = tracing::Level::TRACE, name = "index_suggest", fields(query = %query))]
     pub fn suggest(&self, query: &str, limit: usize) -> Vec<String> {
         if query.is_empty() || limit == 0 {
@@ -587,8 +581,15 @@ impl SearchIndex {
             })
             .collect();
 
-        matches.sort_unstable_by_key(|&(frecency, recency, _)| (Reverse(frecency), Reverse(recency)));
-        matches.truncate(limit);
+        // Partition the top `limit` out before sorting, like `search` above,
+        // so a one-character query doesn't sort thousands of matches.
+        let rank =
+            |&(frecency, recency, _): &(u32, i64, usize)| (Reverse(frecency), Reverse(recency));
+        if matches.len() > limit {
+            matches.select_nth_unstable_by_key(limit, rank);
+            matches.truncate(limit);
+        }
+        matches.sort_unstable_by_key(rank);
         matches
             .into_iter()
             .map(|(_, _, index)| haystack[index].original.to_string())
@@ -944,7 +945,10 @@ mod tests {
         for (command, ts) in [
             ("Git Status --Long", datetime!(2024-01-01 10:00 UTC)),
             ("git stash list", datetime!(2024-01-01 10:05 UTC)),
-            ("git status\necho multiline", datetime!(2024-01-01 10:10 UTC)),
+            (
+                "git status\necho multiline",
+                datetime!(2024-01-01 10:10 UTC),
+            ),
             ("git st", datetime!(2024-01-01 10:15 UTC)),
         ] {
             index.add_history(&make_history(command, "/home/user", ts));

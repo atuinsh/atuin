@@ -510,16 +510,15 @@ pub struct PtyProxy {
     #[serde(alias = "enable")]
     pub enabled: bool,
 
-    /// Enable the experimental inline suggestion popup (history-powered
-    /// autocomplete with fish-style ghost text) inside the pty proxy.
-    /// Can also be enabled with `ATUIN_PTY_PROXY_SUGGEST=1`.
+    /// Experimental inline suggestion popup in the pty proxy.
+    /// Also enabled by `ATUIN_PTY_PROXY_SUGGEST=1`.
     pub suggestions: bool,
 
     /// Maximum number of history entries fetched per keystroke.
-    pub suggestions_limit: u64,
+    pub suggestions_limit: u32,
 
     /// Minimum typed characters before suggestions appear.
-    pub suggestions_min_chars: u64,
+    pub suggestions_min_chars: usize,
 }
 
 impl Default for PtyProxy {

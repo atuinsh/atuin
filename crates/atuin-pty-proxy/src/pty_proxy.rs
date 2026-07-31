@@ -46,42 +46,24 @@ pub enum Shell {
     Nu,
 }
 
+/// Capabilities the embedding binary injects into the proxy runtime.
+#[derive(Default)]
+pub struct RunOptions {
+    pub command_capture_sink: Option<CommandCaptureSink>,
+    pub suggestion_provider: Option<SuggestionProvider>,
+    /// Umask to restore in the spawned shell — atuin tightens its own
+    /// process-wide umask early, which the shell must not inherit (#3695).
+    pub child_umask: Option<u32>,
+}
+
 pub(crate) struct RuntimeOptions {
     pub(crate) debug_osc133: bool,
     pub(crate) shell: Option<PathBuf>,
-    pub(crate) command_capture_sink: Option<CommandCaptureSink>,
-    pub(crate) suggestion_provider: Option<SuggestionProvider>,
-    pub(crate) child_umask: Option<u32>,
-}
-
-impl RuntimeOptions {
-    fn new(
-        debug_osc133: bool,
-        shell: Option<PathBuf>,
-        command_capture_sink: Option<CommandCaptureSink>,
-        suggestion_provider: Option<SuggestionProvider>,
-        child_umask: Option<u32>,
-    ) -> Self {
-        Self {
-            debug_osc133: debug_osc133 || env_flag("ATUIN_PTY_PROXY_DEBUG"),
-            shell,
-            command_capture_sink,
-            suggestion_provider,
-            child_umask,
-        }
-    }
+    pub(crate) hooks: RunOptions,
 }
 
 impl PtyProxy {
-    /// `child_umask` is the umask to restore in the spawned shell. Atuin sets
-    /// a restrictive process-wide umask early in startup, which the shell
-    /// would otherwise inherit (#3695).
-    pub fn run(
-        self,
-        command_capture_sink: Option<CommandCaptureSink>,
-        suggestion_provider: Option<SuggestionProvider>,
-        child_umask: Option<u32>,
-    ) {
+    pub fn run(self, hooks: RunOptions) {
         if self.cmd.is_some() && self.shell.is_some() {
             eprintln!("atuin pty-proxy: --shell only applies when no subcommand is given");
             std::process::exit(2);
@@ -93,13 +75,11 @@ impl PtyProxy {
                     std::process::exit(1);
                 }
             }
-            None => runtime::main(RuntimeOptions::new(
-                self.debug_osc133,
-                self.shell,
-                command_capture_sink,
-                suggestion_provider,
-                child_umask,
-            )),
+            None => runtime::main(RuntimeOptions {
+                debug_osc133: self.debug_osc133 || env_flag("ATUIN_PTY_PROXY_DEBUG"),
+                shell: self.shell,
+                hooks,
+            }),
         }
     }
 }

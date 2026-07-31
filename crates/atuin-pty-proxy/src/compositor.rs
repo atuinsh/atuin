@@ -1,33 +1,23 @@
 //! Single-writer compositor for the suggestion overlay.
 //!
-//! Every byte that reaches the real terminal goes through [`Compositor`],
-//! which owns the vt100 screen model, the output handle, and the overlay
-//! (popup + ghost text) under one lock. That single-writer discipline is
-//! what makes the overlay safe:
-//!
-//! * **No interleaving corruption.** Overlay bytes are only ever emitted at
-//!   escape-sequence boundaries: pty chunks that end mid-sequence (or mid
-//!   UTF-8 character) have the incomplete tail withheld until it completes.
-//! * **No scroll races.** The overlay is erased *before* each pty chunk is
-//!   applied and redrawn after, so the "restore covered rows from the model"
-//!   trick always runs while the physical screen matches the model exactly.
-//!   Erase, chunk, and redraw are emitted as one `write`.
-//!
-//! The model doubles as the compositing source: overlay bytes are never fed
-//! to the parser, so the model is always "the screen without the overlay",
-//! and erasing means repainting rows from it. Paints end with the model's
-//! cursor state and drawing attributes, handing the terminal back to the
-//! shell exactly as it left it.
+//! All terminal output flows through one lock, so overlay bytes only ever
+//! land at escape-sequence boundaries and erase/repaint always run while
+//! the physical screen matches the vt100 model. The model is "the screen
+//! without the overlay" — overlay bytes are never fed to the parser — so
+//! erasing means repainting covered rows from it.
 
 use std::io::Write;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-pub(crate) const MAX_POPUP_ROWS: usize = 5;
+const MAX_POPUP_ROWS: usize = 5;
 
-/// Withheld-tail cap. A malformed, never-terminated escape sequence flushes
+/// Below this there is no room to render anything useful.
+const MIN_POPUP_WIDTH: usize = 4;
+
+/// Withheld-tail cap: a malformed, never-terminated escape sequence flushes
 /// once it exceeds this rather than buffering forever.
 const MAX_TAIL_BYTES: usize = 8192;
 
@@ -58,12 +48,17 @@ struct DrawnRegion {
     count: u16,
 }
 
+/// Recover a poisoned lock: the compositor and popup state stay usable
+/// after a panic elsewhere, and eating output would freeze the terminal.
+pub(crate) fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 pub(crate) struct Compositor<W: Write> {
     parser: vt100::Parser,
     out: W,
-    /// Withhold chunk tails that end mid escape sequence / UTF-8 character,
-    /// so overlay bytes are never spliced into one. Only needed when an
-    /// overlay may actually paint.
+    /// Withhold tails ending mid escape sequence / UTF-8 character so a
+    /// later overlay paint can't splice into one; off when no overlay can paint.
     split_partials: bool,
     tail: Vec<u8>,
     content: Option<OverlayContent>,
@@ -98,36 +93,28 @@ impl<W: Write> Compositor<W> {
         self.parser.screen()
     }
 
-    /// Apply a chunk of pty output: erase the overlay (screen == model),
-    /// forward the chunk, then repaint the popup.
+    /// Apply a chunk of pty output: erase the overlay, forward the chunk,
+    /// repaint the popup. Write-first — the vt100 parse only feeds the
+    /// *next* paint, so it runs after the write, and with no overlay in
+    /// play this is a pure pass-through (no copy, no allocation, one write).
     ///
-    /// Latency discipline: the chunk reaches the terminal before any model
-    /// work. The vt100 parse only feeds the *next* erase/draw/snapshot, so
-    /// it runs after the write — and overlay repaints go out as a small
-    /// second write that lags the output instead of delaying it. With no
-    /// overlay in play this is a pure pass-through: no copy, no allocation,
-    /// one write.
-    ///
-    /// Ghost text is deliberately *not* repainted here: this chunk may have
-    /// changed the command line, and painting the stale suffix at the new
-    /// cursor would briefly duplicate the freshly echoed characters. The
-    /// suggestion pass that follows the echo repaints it.
-    pub(crate) fn apply_pty(&mut self, data: &[u8]) {
+    /// Ghost text is not repainted here: the chunk may have moved the line;
+    /// the suggestion pass after the echo redraws it.
+    pub(crate) fn apply_pty(&mut self, data: &[u8]) -> std::io::Result<()> {
         let overlay_idle =
             self.drawn.is_none() && self.ghost_row.is_none() && self.content.is_none();
 
-        // Fast path: nothing painted and nothing pending. The pre-write
-        // boundary scan only runs when an overlay could paint before the
-        // next chunk (a later paint must not splice into a sequence this
-        // chunk left unterminated).
+        // Fast path: nothing painted or pending. The boundary scan still
+        // runs pre-write so a later paint can't splice into a sequence
+        // this chunk left unterminated.
         if overlay_idle
             && self.tail.is_empty()
             && (!self.split_partials || complete_prefix_len(data) == data.len())
         {
-            let _ = self.out.write_all(data);
-            let _ = self.out.flush();
+            self.out.write_all(data)?;
+            self.out.flush()?;
             self.parser.process(data);
-            return;
+            return Ok(());
         }
 
         let mut buf = Vec::with_capacity(data.len() + 256);
@@ -145,13 +132,13 @@ impl<W: Write> Compositor<W> {
 
         // User-visible bytes first; the model catches up after the write.
         buf.extend_from_slice(ready);
-        let _ = self.out.write_all(&buf);
-        let _ = self.out.flush();
+        self.out.write_all(&buf)?;
+        self.out.flush()?;
         self.parser.process(ready);
 
         let mut repaint = Vec::new();
         self.draw_into(&mut repaint, false);
-        self.flush(repaint);
+        self.flush(repaint)
     }
 
     /// Flush any withheld partial-sequence tail (e.g. on shutdown).
@@ -161,7 +148,7 @@ impl<W: Write> Compositor<W> {
         }
         let tail = std::mem::take(&mut self.tail);
         self.parser.process(&tail);
-        self.flush(tail);
+        let _ = self.flush(tail);
     }
 
     /// Replace the overlay content and repaint.
@@ -173,12 +160,11 @@ impl<W: Write> Compositor<W> {
             self.window_offset = 0;
         }
         self.draw_into(&mut buf, true);
-        self.flush(buf);
+        let _ = self.flush(buf);
     }
 
-    /// The terminal reflows on resize, scrambling both the screen and the
-    /// model in terminal-specific ways; drop the overlay bookkeeping without
-    /// painting and let the next suggestion pass repaint cleanly.
+    /// Resize reflow scrambles screen and model unpredictably; drop the
+    /// bookkeeping without painting and let the next pass repaint cleanly.
     pub(crate) fn resize(&mut self, rows: u16, cols: u16) {
         self.content = None;
         self.drawn = None;
@@ -188,22 +174,27 @@ impl<W: Write> Compositor<W> {
         self.update_flags();
     }
 
-    fn flush(&mut self, buf: Vec<u8>) {
-        if !buf.is_empty() {
-            let _ = self.out.write_all(&buf);
-            let _ = self.out.flush();
-        }
+    fn flush(&mut self, buf: Vec<u8>) -> std::io::Result<()> {
+        let result = if buf.is_empty() {
+            Ok(())
+        } else {
+            self.out.write_all(&buf).and_then(|()| self.out.flush())
+        };
         self.update_flags();
+        result
     }
 
     fn update_flags(&self) {
-        self.flags.popup.store(self.drawn.is_some(), Ordering::Release);
-        self.flags.ghost.store(self.ghost_row.is_some(), Ordering::Release);
+        self.flags
+            .popup
+            .store(self.drawn.is_some(), Ordering::Release);
+        self.flags
+            .ghost
+            .store(self.ghost_row.is_some(), Ordering::Release);
     }
 
-    /// Restore every row the overlay covers from the model. Only valid while
-    /// screen == model + overlay, which the erase-before-apply cycle
-    /// guarantees. No-op (and never touches `buf`) when nothing is drawn.
+    /// Restore every row the overlay covers from the model; valid only
+    /// while screen == model + overlay, which erase-before-apply guarantees.
     fn erase_into(&mut self, buf: &mut Vec<u8>) {
         let drawn = self.drawn.take();
         let ghost_row = self.ghost_row.take();
@@ -212,17 +203,26 @@ impl<W: Write> Compositor<W> {
         }
 
         let screen = self.parser.screen();
+        let (_, cols) = screen.size();
         if let Some(region) = drawn {
-            for row in region.first_row..region.first_row.saturating_add(region.count) {
-                restore_row(buf, screen, row);
+            let first = region.first_row as usize;
+            // One rows_formatted pass: nth-per-row would re-format every
+            // preceding row for each covered row.
+            for (row, bytes) in screen
+                .rows_formatted(0, cols)
+                .enumerate()
+                .skip(first)
+                .take(region.count as usize)
+            {
+                restore_row(buf, row as u16, &bytes);
             }
         }
         if let Some(row) = ghost_row {
             let covered = drawn.is_some_and(|region| {
                 row >= region.first_row && row < region.first_row.saturating_add(region.count)
             });
-            if !covered {
-                restore_row(buf, screen, row);
+            if !covered && let Some(bytes) = screen.rows_formatted(0, cols).nth(row as usize) {
+                restore_row(buf, row, &bytes);
             }
         }
         hand_back(buf, screen);
@@ -241,7 +241,7 @@ impl<W: Write> Compositor<W> {
         }
         let (rows, cols) = screen.size();
         let (cursor_row, cursor_col) = screen.cursor_position();
-        if rows < 2 || cols < 4 {
+        if rows < 2 || (cols as usize) < MIN_POPUP_WIDTH {
             return;
         }
 
@@ -250,17 +250,15 @@ impl<W: Write> Compositor<W> {
             .strip_prefix(content.line.as_str())
             .filter(|suffix| !suffix.is_empty());
 
-        // A single suggestion that's already shown in full as ghost text
-        // doesn't need a dropdown too.
+        // A lone suggestion already shown in full as ghost text needs no dropdown.
         let solo_ghost = content.suggestions.len() == 1 && ghost_suffix.is_some();
 
         buf.extend_from_slice(b"\x1b[?25l");
         if !solo_ghost {
             let mut visible = content.suggestions.len().min(MAX_POPUP_ROWS);
 
-            // Below the cursor when the whole popup fits, above when that
-            // side fits, otherwise the roomier side — shrunk to fit so the
-            // popup never covers the command line itself.
+            // Below if it fits, else above, else the roomier side shrunk —
+            // never over the command line itself.
             let below = (rows - cursor_row - 1) as usize;
             let above = cursor_row as usize;
             let first_row = if below >= visible {
@@ -283,21 +281,17 @@ impl<W: Write> Compositor<W> {
                 if selected >= self.window_offset + visible {
                     self.window_offset = selected + 1 - visible;
                 }
-                self.window_offset =
-                    self.window_offset.min(content.suggestions.len() - visible);
-                let window =
-                    &content.suggestions[self.window_offset..self.window_offset + visible];
+                self.window_offset = self.window_offset.min(content.suggestions.len() - visible);
+                let window = &content.suggestions[self.window_offset..self.window_offset + visible];
 
-                // Left-align with the start of the typed line, sliding left
-                // to fit.
+                // Left-align with the start of the typed line, sliding left to fit.
                 let line_width = content.line.width().min(u16::MAX as usize) as u16;
                 let width = window
                     .iter()
                     .map(|s| s.width() + 2)
                     .max()
                     .unwrap_or(2)
-                    .min(cols as usize)
-                    .max(4);
+                    .clamp(MIN_POPUP_WIDTH, cols as usize);
                 let col = cursor_col
                     .saturating_sub(line_width)
                     .min(cols.saturating_sub(width as u16));
@@ -311,23 +305,12 @@ impl<W: Write> Compositor<W> {
                         UNSELECTED_STYLE
                     });
 
+                    let (fitted, fitted_width) = fit_to_width(suggestion, width - 2);
                     let mut text = String::with_capacity(width + 1);
-                    let mut used = 1;
                     text.push(' ');
-                    // Control characters would corrupt the popup row (a
-                    // stray \n in a suggestion breaks out of it entirely);
-                    // render them visibly.
-                    for ch in suggestion.chars().map(printable) {
-                        let ch_width = ch.width().unwrap_or(0);
-                        if used + ch_width > width - 1 {
-                            break;
-                        }
-                        text.push(ch);
-                        used += ch_width;
-                    }
-                    while used < width {
+                    text.push_str(&fitted);
+                    for _ in 1 + fitted_width..width {
                         text.push(' ');
-                        used += 1;
                     }
                     buf.extend_from_slice(text.as_bytes());
                 }
@@ -338,22 +321,11 @@ impl<W: Write> Compositor<W> {
             }
         }
 
-        // Fish-style ghost text: the selected suggestion's suffix, dim, at
-        // the cursor — but only into cells the model says are blank, so it
-        // never covers mid-line edits or a right-side prompt. Fuzzy matches
-        // that don't extend the typed line have no suffix to ghost.
+        // Ghost only into cells the model says are blank, so it never
+        // covers mid-line edits or a right-side prompt.
         if with_ghost && let Some(suffix) = ghost_suffix {
             let budget = blank_cells_after_cursor(screen) as usize;
-            let mut text = String::new();
-            let mut used = 0;
-            for ch in suffix.chars().map(printable) {
-                let ch_width = ch.width().unwrap_or(0);
-                if used + ch_width > budget {
-                    break;
-                }
-                text.push(ch);
-                used += ch_width;
-            }
+            let (text, _) = fit_to_width(suffix, budget);
             if !text.is_empty() {
                 move_to(buf, cursor_row, cursor_col);
                 buf.extend_from_slice(GHOST_STYLE);
@@ -366,21 +338,34 @@ impl<W: Write> Compositor<W> {
     }
 }
 
-/// Rewrite one screen row from the model. The pre-formatted row bytes skip
-/// default cells with cursor jumps, so clear the line first.
-fn restore_row(buf: &mut Vec<u8>, screen: &vt100::Screen, row: u16) {
-    let (_, cols) = screen.size();
+/// Longest printable prefix of `text` fitting `budget` display cells, and
+/// its width. Control characters render as placeholders — a stray `\n` in a
+/// suggestion would otherwise break out of the overlay entirely.
+fn fit_to_width(text: &str, budget: usize) -> (String, usize) {
+    let mut fitted = String::new();
+    let mut used = 0;
+    for ch in text.chars().map(printable) {
+        let ch_width = ch.width().unwrap_or(0);
+        if used + ch_width > budget {
+            break;
+        }
+        fitted.push(ch);
+        used += ch_width;
+    }
+    (fitted, used)
+}
+
+/// Rewrite one screen row from pre-formatted model bytes, which skip
+/// default cells with cursor jumps — hence the clear first.
+fn restore_row(buf: &mut Vec<u8>, row: u16, bytes: &[u8]) {
     buf.extend_from_slice(b"\x1b[0m");
     move_to(buf, row, 0);
     buf.extend_from_slice(b"\x1b[2K");
-    if let Some(bytes) = screen.rows_formatted(0, cols).nth(row as usize) {
-        buf.extend_from_slice(&bytes);
-    }
+    buf.extend_from_slice(bytes);
 }
 
-/// Return the terminal to the state the shell expects: the model's cursor
-/// position and visibility, then its active drawing attributes (attributes
-/// last — restoring the cursor may itself alter them).
+/// Restore the shell's cursor state, then its drawing attributes — in that
+/// order, since repositioning the cursor can itself alter attributes.
 fn hand_back(buf: &mut Vec<u8>, screen: &vt100::Screen) {
     buf.extend_from_slice(&screen.cursor_state_formatted());
     buf.extend_from_slice(&screen.attributes_formatted());
@@ -400,9 +385,9 @@ fn printable(ch: char) -> char {
     }
 }
 
-/// Count contiguous cells at and after the cursor whose contents are empty
-/// or whitespace, stopping at the first real glyph or the end of the row.
-pub(crate) fn blank_cells_after_cursor(screen: &vt100::Screen) -> u16 {
+/// Contiguous blank cells at and after the cursor — the room ghost text may
+/// draw into without covering real content.
+fn blank_cells_after_cursor(screen: &vt100::Screen) -> u16 {
     let (row, col) = screen.cursor_position();
     let (_, cols) = screen.size();
 
@@ -423,10 +408,8 @@ pub(crate) fn blank_cells_after_cursor(screen: &vt100::Screen) -> u16 {
 // Escape-sequence-safe chunk splitting
 // ---------------------------------------------------------------------------
 
-/// Length of the longest prefix of `data` that ends at an escape-sequence
-/// and UTF-8 character boundary. Bytes past it belong to an incomplete
-/// sequence and must be withheld until the rest arrives, so that overlay
-/// bytes emitted after the prefix can never be spliced into a sequence.
+/// Longest prefix ending on an escape-sequence / UTF-8 boundary; the rest
+/// must be withheld so later overlay bytes can't splice into a sequence.
 fn complete_prefix_len(data: &[u8]) -> usize {
     let mut end = 0;
     let mut i = 0;
@@ -543,13 +526,7 @@ mod tests {
     // -- Compositor behaviour ---------------------------------------------
 
     fn compositor() -> Compositor<Vec<u8>> {
-        Compositor::new(
-            10,
-            40,
-            Vec::new(),
-            Arc::new(OverlayFlags::default()),
-            true,
-        )
+        Compositor::new(10, 40, Vec::new(), Arc::new(OverlayFlags::default()), true)
     }
 
     fn content(line: &str, suggestions: &[&str], selected: usize) -> OverlayContent {
@@ -575,7 +552,7 @@ mod tests {
     #[rstest]
     fn passthrough_without_overlay_is_byte_identical() {
         let mut c = compositor();
-        c.apply_pty(b"plain \x1b[31mred\x1b[0m text\r\n");
+        c.apply_pty(b"plain \x1b[31mred\x1b[0m text\r\n").unwrap();
         assert_eq!(c.out, b"plain \x1b[31mred\x1b[0m text\r\n");
     }
 
@@ -584,7 +561,7 @@ mod tests {
     #[rstest]
     fn fast_path_still_feeds_the_model() {
         let mut c = compositor();
-        c.apply_pty(b"$ hello");
+        c.apply_pty(b"$ hello").unwrap();
         assert_eq!(c.out, b"$ hello");
         assert_eq!(c.parser.screen().contents().trim_end(), "$ hello");
         assert_eq!(c.parser.screen().cursor_position(), (0, 7));
@@ -593,18 +570,18 @@ mod tests {
     #[rstest]
     fn withholds_partial_escape_until_complete() {
         let mut c = compositor();
-        c.apply_pty(b"before\x1b[3");
+        c.apply_pty(b"before\x1b[3").unwrap();
         assert_eq!(c.out, b"before");
-        c.apply_pty(b"1mred");
+        c.apply_pty(b"1mred").unwrap();
         assert_eq!(c.out, b"before\x1b[31mred");
     }
 
     #[rstest]
     fn overlay_never_splits_an_escape_sequence() {
         let mut c = compositor();
-        c.apply_pty(b"$ g\x1b[3"); // chunk ends mid-SGR
+        c.apply_pty(b"$ g\x1b[3").unwrap(); // chunk ends mid-SGR
         c.set_overlay(Some(content("g", &["git status"], 0)));
-        c.apply_pty(b"1mX");
+        c.apply_pty(b"1mX").unwrap();
 
         // The checker terminal must see the SGR sequence intact: the X is
         // red, not preceded by stray popup bytes inside the sequence.
@@ -618,7 +595,7 @@ mod tests {
     #[rstest]
     fn popup_draws_below_cursor_and_erases_cleanly() {
         let mut c = compositor();
-        c.apply_pty(b"$ git st");
+        c.apply_pty(b"$ git st").unwrap();
         c.set_overlay(Some(content("git st", &["git status", "git stash"], 0)));
 
         let shown = screen_text(&displayed(&c));
@@ -635,7 +612,7 @@ mod tests {
     #[rstest]
     fn single_prefix_suggestion_shows_ghost_without_dropdown() {
         let mut c = compositor();
-        c.apply_pty(b"$ git st");
+        c.apply_pty(b"$ git st").unwrap();
         c.set_overlay(Some(content("git st", &["git status"], 0)));
 
         assert!(c.flags.ghost.load(Ordering::Acquire));
@@ -650,7 +627,7 @@ mod tests {
     #[rstest]
     fn single_fuzzy_suggestion_still_shows_dropdown() {
         let mut c = compositor();
-        c.apply_pty(b"$ stat");
+        c.apply_pty(b"$ stat").unwrap();
         // Not a prefix of the typed line: no ghost is possible, so the
         // dropdown is the only way to see the suggestion.
         c.set_overlay(Some(content("stat", &["git status"], 0)));
@@ -662,30 +639,52 @@ mod tests {
     #[rstest]
     fn tiny_screen_popup_never_covers_the_command_line() {
         let flags = Arc::new(OverlayFlags::default());
-        let mut c: Compositor<Vec<u8>> = Compositor::new(4, 40, Vec::new(), flags, true);
+        let mut c: Compositor<Vec<u8>> = Compositor::new(4, 40, Vec::new(), flags.clone(), true);
         // Cursor on row 1 of a 4-row screen: neither side fits 3 rows.
-        c.apply_pty(b"one\r\n$ g");
+        c.apply_pty(b"one\r\n$ g").unwrap();
         let all = ["git a", "git b", "git c"];
         c.set_overlay(Some(content("g", &all, 0)));
 
-        let region = c.drawn.expect("popup drawn");
-        let cursor_row = c.parser.screen().cursor_position().0;
-        for row in region.first_row..region.first_row + region.count {
-            assert_ne!(row, cursor_row, "popup row overlaps the command line");
-        }
+        assert!(
+            flags.popup.load(Ordering::Acquire),
+            "popup shrunk, not dropped"
+        );
+        let checker = vt100::Parser::new(4, 40, 0);
+        let mut checker = checker;
+        checker.process(&c.out);
+        let line: String = (0..40)
+            .filter_map(|col| {
+                checker
+                    .screen()
+                    .cell(1, col)
+                    .map(|c| c.contents().to_string())
+            })
+            .collect();
+        assert!(
+            line.starts_with("$ g"),
+            "command line row untouched: {line:?}"
+        );
     }
 
     #[rstest]
     fn ghost_text_draws_at_cursor() {
         let mut c = compositor();
-        c.apply_pty(b"$ git st");
+        c.apply_pty(b"$ git st").unwrap();
         c.set_overlay(Some(content("git st", &["git status"], 0)));
 
         let checker = displayed(&c);
         let row: String = (0..40)
-            .filter_map(|col| checker.screen().cell(0, col).map(|c| c.contents().to_string()))
+            .filter_map(|col| {
+                checker
+                    .screen()
+                    .cell(0, col)
+                    .map(|c| c.contents().to_string())
+            })
             .collect();
-        assert!(row.starts_with("$ git status"), "ghost completes the line: {row:?}");
+        assert!(
+            row.starts_with("$ git status"),
+            "ghost completes the line: {row:?}"
+        );
         assert!(c.flags.ghost.load(Ordering::Acquire));
         // Checker cursor must be parked back over the ghost, where the
         // shell's real cursor is.
@@ -695,13 +694,13 @@ mod tests {
     #[rstest]
     fn erase_survives_scrolling_output() {
         let mut c = compositor();
-        c.apply_pty(b"$ git st");
+        c.apply_pty(b"$ git st").unwrap();
         c.set_overlay(Some(content("git st", &["git status", "git stash"], 0)));
 
         // A burst of output that scrolls the screen several lines while the
         // popup is visible, then the overlay is dropped.
         let burst = "\r\n".to_string() + &"line\r\n".repeat(12);
-        c.apply_pty(burst.as_bytes());
+        c.apply_pty(burst.as_bytes()).unwrap();
         c.set_overlay(None);
 
         // The displayed screen must exactly match the model: no popup or
@@ -713,7 +712,7 @@ mod tests {
     #[rstest]
     fn popup_windows_follow_selection() {
         let mut c = compositor();
-        c.apply_pty(b"$ g");
+        c.apply_pty(b"$ g").unwrap();
         let all: Vec<String> = (0..9).map(|i| format!("git command-{i}")).collect();
         let all_refs: Vec<&str> = all.iter().map(String::as_str).collect();
 
@@ -726,18 +725,21 @@ mod tests {
     #[rstest]
     fn no_paint_on_alternate_screen() {
         let mut c = compositor();
-        c.apply_pty(b"$ vim\r\n\x1b[?1049h\x1b[2JEDITOR");
+        c.apply_pty(b"$ vim\r\n\x1b[?1049h\x1b[2JEDITOR").unwrap();
         c.set_overlay(Some(content("x", &["xyz", "xzz"], 0)));
 
         let shown = screen_text(&displayed(&c));
-        assert!(!shown.contains("xyz"), "no popup over alt screen: {shown:?}");
+        assert!(
+            !shown.contains("xyz"),
+            "no popup over alt screen: {shown:?}"
+        );
         assert!(!c.flags.popup.load(Ordering::Acquire));
     }
 
     #[rstest]
     fn wide_characters_truncate_by_display_width() {
         let mut c = compositor();
-        c.apply_pty(b"$ ");
+        c.apply_pty(b"$ ").unwrap();
         // 40-col screen; suggestion of 30 wide chars = 60 cells must clamp.
         // (Two suggestions so the dropdown actually renders.)
         let wide = "\u{6f22}".repeat(30);
@@ -747,7 +749,12 @@ mod tests {
         // Rows 1-2 hold the popup; the clamped wide row must not have
         // wrapped past it onto row 3.
         let row3: String = (0..40)
-            .filter_map(|col| checker.screen().cell(3, col).map(|c| c.contents().to_string()))
+            .filter_map(|col| {
+                checker
+                    .screen()
+                    .cell(3, col)
+                    .map(|c| c.contents().to_string())
+            })
             .collect();
         assert!(row3.trim().is_empty(), "no wrap past popup rows: {row3:?}");
     }
@@ -756,10 +763,10 @@ mod tests {
     fn restores_shell_colors_after_paint() {
         let mut c = compositor();
         // Shell leaves red as the active drawing attribute mid-stream.
-        c.apply_pty(b"$ \x1b[31m");
+        c.apply_pty(b"$ \x1b[31m").unwrap();
         c.set_overlay(Some(content("x", &["xyz"], 0)));
         c.set_overlay(None);
-        c.apply_pty(b"R");
+        c.apply_pty(b"R").unwrap();
 
         let checker = displayed(&c);
         let cell = checker.screen().cell(0, 2).expect("cell");
@@ -774,7 +781,7 @@ mod tests {
     #[rstest]
     fn resize_drops_overlay_bookkeeping() {
         let mut c = compositor();
-        c.apply_pty(b"$ git st");
+        c.apply_pty(b"$ git st").unwrap();
         c.set_overlay(Some(content("git st", &["git status"], 0)));
         c.resize(20, 60);
         assert!(!c.flags.popup.load(Ordering::Acquire));
@@ -784,7 +791,7 @@ mod tests {
     #[rstest]
     fn flush_pending_emits_withheld_tail() {
         let mut c = compositor();
-        c.apply_pty(b"abc\x1b[3");
+        c.apply_pty(b"abc\x1b[3").unwrap();
         c.flush_pending();
         assert_eq!(c.out, b"abc\x1b[3");
     }
