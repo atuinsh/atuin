@@ -66,6 +66,22 @@ ATUIN_DB_URI="sqlite:///config/atuin.db"
 
 These will create the database in the `/config` directory. Be sure to map a persistent volume to the `/config` directory that's writable by the Atuin server.
 
+### Testing the connection
+
+Once the server is running, check that it's reachable from a client machine with `curl`:
+
+```shell
+curl http://<server-address>:<port>
+```
+
+A healthy server responds with HTTP `200` and a small JSON body:
+
+```json
+{"homage":"\"Through the fathomless deeps of space swims the star turtle Great A'Tuin, bearing on its back the four giant elephants who carry on their shoulders the mass of the Discworld.\" -- Sir Terry Pratchett","version":"18.18.0"}
+```
+
+If that works, use the same address and port for the client's [`sync_address`](../configuration/config.md#sync_address). Use `http://` rather than `https://` unless you've put a reverse proxy with TLS in front of the server.
+
 ### TLS
 
 For TLS/HTTPS support, we recommend using a reverse proxy such as nginx, Caddy, or Traefik in front of the Atuin server. This is the standard approach for containerized applications and provides better flexibility for certificate management.

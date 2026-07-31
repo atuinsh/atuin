@@ -229,6 +229,9 @@ You should also change the password string in `ATUIN_DB_PASSWORD` and `ATUIN_DB_
 
 The Atuin service is exposed on port `30530` of the host system. That's configured by the `nodePort` property. Kubernetes has a strict rule that you aren't allowed to expose a port numbered lower than 30000. To make the clients work, set the port in your `config.toml` file, for example `sync_address = "http://192.168.1.10:30530"`.
 
+!!! note
+    If you sync from devices that aren't part of the cluster (laptops, Raspberry Pis, or other machines on your network), point `sync_address` at an IP those devices can actually reach — a node's external IP with the `NodePort` above, or a `LoadBalancer` service if your cluster provides one (for example via [MetalLB](https://metallb.io/) on bare-metal k3s). A `ClusterIP` is only reachable from inside the cluster.
+
 Deploy the Atuin server using `kubectl`:
 
 ```shell

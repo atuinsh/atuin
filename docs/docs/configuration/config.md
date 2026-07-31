@@ -90,6 +90,17 @@ The address of the server to sync with!
 sync_address = "https://api.atuin.sh"
 ```
 
+If you [self-host](../self-hosting/server-setup.md) without a reverse proxy
+terminating TLS, sync over plain `http://` using the server's address and port
+directly. `https://` will fail to connect unless you've set up your own
+certificate. For example:
+
+```toml
+sync_address = "http://192.168.1.10:8888"
+# or a hostname on your network
+sync_address = "http://atuin.homelab.lan:8888"
+```
+
 ### `sync_frequency`
 
 Default: `1h`
