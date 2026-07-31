@@ -1796,11 +1796,14 @@ mod test {
     }
 
     // Reproduces the trailing-space ranking bug (atuinsh/atuin#3603).
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_fuzzy_trailing_space() {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn test_search_fuzzy_trailing_space(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let mut db = db;
 
         let now = OffsetDateTime::now_utc();
         let irssi = "screen irssi";
