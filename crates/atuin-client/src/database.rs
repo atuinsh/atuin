@@ -806,8 +806,9 @@ impl Database for Sqlite {
             .fetch_all(&self.pool)
             .await?;
 
-        // Rank against the same characters SQL matched: drop spaces and operators.
+        // Rank against the same characters SQL matched: drop spaces, operators and negated terms.
         let reorder_query: String = QueryTokenizer::new(orig_query)
+            .filter(|token| !token.is_inverse())
             .filter_map(|token| match token {
                 QueryToken::Match(term, _)
                 | QueryToken::MatchStart(term, _)
