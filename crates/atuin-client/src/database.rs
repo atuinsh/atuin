@@ -1854,11 +1854,14 @@ mod test {
 
     // Isolates the whitespace fix: for "screen " both rows score None and fall back to recency,
     // so only stripping the trailing space ranks them by span and the tight match wins.
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_fuzzy_trailing_space_true_span() {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn test_search_fuzzy_trailing_space_true_span(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let mut db = db;
 
         let now = OffsetDateTime::now_utc();
         let exact = "screen";
@@ -1884,11 +1887,14 @@ mod test {
 
     // Queries the normalization does not alter must rank identically: a space-free and a two-word
     // query both rank by span, unchanged by stripping spaces from the ranking query.
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_fuzzy_plain_query_unchanged() {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn test_search_fuzzy_plain_query_unchanged(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let mut db = db;
 
         let now = OffsetDateTime::now_utc();
         new_history_item_at(&mut db, "screen", Some(now - time::Duration::days(5)))
