@@ -1032,6 +1032,25 @@ The port to use for client -> daemon communication. Only used on non-Unix system
 tcp_port = 8889
 ```
 
+### `sync_on_shutdown`
+
+Default: `false`
+
+Upload local history to the server when the daemon shuts down.
+
+By default the daemon exits immediately when asked to stop and syncs only on its
+periodic interval. Enable this when the daemon's lifetime is tied to your shell
+session — for example a systemd user service that stops on SSH disconnect — so
+commands recorded since the last periodic sync are uploaded before it exits,
+instead of waiting until the next time the daemon starts.
+
+The flush is upload-only and time-bounded (10s), so the daemon still exits
+promptly and an interrupted flush cannot corrupt the local store.
+
+```toml
+sync_on_shutdown = false
+```
+
 ## logs
 
 Behavior of log files.

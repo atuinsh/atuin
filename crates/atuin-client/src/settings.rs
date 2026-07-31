@@ -502,6 +502,15 @@ pub struct Daemon {
 
     /// The port that should be used for TCP on non unix systems
     pub tcp_port: u64,
+
+    /// Upload local history to the server when the daemon shuts down.
+    ///
+    /// Off by default: the daemon normally exits immediately when asked to
+    /// stop. Enable this when the daemon is tied to the shell session (e.g. a
+    /// systemd user service that stops on SSH disconnect) so commands recorded
+    /// since the last periodic sync are not left unsynced. The flush is
+    /// upload-only and time-bounded.
+    pub sync_on_shutdown: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -706,6 +715,7 @@ impl Default for Daemon {
             pidfile_path: "".to_string(),
             systemd_socket: false,
             tcp_port: 8889,
+            sync_on_shutdown: false,
         }
     }
 }
@@ -1474,6 +1484,7 @@ impl Settings {
             .set_default("daemon.pidfile_path", pidfile_path.to_str())?
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
+            .set_default("daemon.sync_on_shutdown", false)?
             .set_default("logs.enabled", true)?
             .set_default("logs.dir", logs_dir.to_str())?
             .set_default("logs.level", "info")?

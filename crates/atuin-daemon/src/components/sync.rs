@@ -22,6 +22,11 @@ use crate::{
     events::DaemonEvent,
 };
 
+/// Upper bound on the upload-only flush performed on shutdown when
+/// `daemon.sync_on_shutdown` is enabled. Kept well under systemd's default
+/// `TimeoutStopSec` (90s) so the flush finishes before a SIGKILL.
+const SHUTDOWN_FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Commands that can be sent to the sync task.
 enum SyncCommand {
     /// Trigger an immediate sync.
@@ -99,8 +104,10 @@ impl Component for SyncComponent {
             let _ = tx.send(SyncCommand::Stop).await;
         }
         if let Some(handle) = self.task_handle.take() {
-            // Give the task a moment to shut down gracefully
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+            // Wait for the loop to stop. This must outlast the on-shutdown flush
+            // (bounded by SHUTDOWN_FLUSH_TIMEOUT) so we don't cut it short.
+            let _ = tokio::time::timeout(SHUTDOWN_FLUSH_TIMEOUT + Duration::from_secs(5), handle)
+                .await;
         }
         tracing::info!("sync component stopped");
         Ok(())
@@ -180,6 +187,8 @@ async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>
                     }
                     Some(SyncCommand::Stop) | None => {
                         tracing::info!("sync loop stopping");
+                        let settings = handle.settings().await.clone();
+                        flush_on_shutdown(&handle, &settings).await;
                         break;
                     }
                 }
@@ -315,5 +324,45 @@ async fn do_sync_tick(
 
             SyncState::Idle
         }
+    }
+}
+
+/// Push local history to the server before the daemon exits.
+///
+/// Only runs when `daemon.sync_on_shutdown` is enabled and we're logged in. The
+/// flush is upload-only (no download, no index rebuild) and time-bounded, so an
+/// interrupted flush can't leave the local store half-written and the daemon
+/// still exits promptly. See issue #2230.
+async fn flush_on_shutdown(handle: &DaemonHandle, settings: &Settings) {
+    if !settings.daemon.sync_on_shutdown {
+        return;
+    }
+
+    match settings.logged_in().await {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::debug!("not logged in, skipping shutdown sync flush");
+            return;
+        }
+        Err(e) => {
+            tracing::warn!("failed to check login status, skipping shutdown sync flush: {e}");
+            return;
+        }
+    }
+
+    tracing::info!("flushing local history to server before shutdown");
+
+    match time::timeout(
+        SHUTDOWN_FLUSH_TIMEOUT,
+        sync::upload(settings, handle.store(), handle.encryption_key()),
+    )
+    .await
+    {
+        Ok(Ok(uploaded)) => tracing::info!(uploaded, "shutdown sync flush complete"),
+        Ok(Err(e)) => tracing::error!("shutdown sync flush failed: {e}"),
+        Err(_) => tracing::warn!(
+            "shutdown sync flush timed out after {}s, exiting anyway",
+            SHUTDOWN_FLUSH_TIMEOUT.as_secs()
+        ),
     }
 }

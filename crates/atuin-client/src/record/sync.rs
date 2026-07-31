@@ -371,6 +371,39 @@ pub async fn sync(
     Ok((uploaded, downloaded))
 }
 
+/// Keep only the upload operations from a resolved operation set.
+fn upload_operations(operations: Vec<Operation>) -> Vec<Operation> {
+    operations
+        .into_iter()
+        .filter(|op| matches!(op, Operation::Upload { .. }))
+        .collect()
+}
+
+/// Upload-only sync: push records the local store is ahead on, without
+/// downloading anything.
+///
+/// Cheaper and lower-risk than a full [`sync`] — it skips the download and the
+/// local history-index rebuild, so there is nothing local to leave half-written
+/// if it is interrupted. Used to flush recently-recorded history before the
+/// daemon exits (see issue #2230). Returns the number of records uploaded.
+pub async fn upload(
+    settings: &Settings,
+    store: &SqliteStore,
+    encryption_key: &[u8; 32],
+) -> Result<i64, SyncError> {
+    let client = build_client(settings).await?;
+    let (diff, remote_index) = diff(&client, store).await?;
+
+    // Bail before uploading if the local key can't read the remote: pushing
+    // records encrypted with a mismatched key would corrupt the remote store.
+    check_encryption_key(&client, &remote_index, encryption_key).await?;
+
+    let operations = upload_operations(operations(diff, store).await?);
+    let (uploaded, _downloaded) = sync_remote(&client, operations, store, 100).await?;
+
+    Ok(uploaded)
+}
+
 #[cfg(test)]
 mod tests {
     use atuin_domain::record::{Diff, EncryptedData, HostId, Record};
@@ -450,6 +483,37 @@ mod tests {
                 tag: record.tag,
                 local: record.idx,
                 remote: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_operations_keeps_only_uploads() {
+        // A two-way diff yields one upload (local ahead) and one download (remote
+        // ahead). The upload-only path must drop the download so we never pull.
+        let shared_record = test_record();
+        let remote_ahead = test_record();
+        let local_ahead = shared_record
+            .append(vec![1, 2, 3])
+            .encrypt::<PASETO_V4>(&[0; 32]);
+
+        let local = vec![shared_record.clone(), local_ahead.clone()];
+        let remote = vec![shared_record.clone(), remote_ahead.clone()];
+
+        let (store, diff) = build_test_diff(local, remote).await;
+        let operations = sync::operations(diff, &store).await.unwrap();
+        assert_eq!(operations.len(), 2);
+
+        let uploads = sync::upload_operations(operations);
+
+        assert_eq!(uploads.len(), 1);
+        assert_eq!(
+            uploads[0],
+            Operation::Upload {
+                host: local_ahead.host.id,
+                tag: local_ahead.tag,
+                local: 1,
+                remote: Some(0),
             }
         );
     }
