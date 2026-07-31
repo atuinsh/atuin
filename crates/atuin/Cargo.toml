@@ -40,7 +40,15 @@ buildflags = ["--release"]
 atuin = { path = "/usr/bin/atuin" }
 
 [features]
-default = ["client", "sync", "clipboard", "check-update", "daemon", "ai", "pty-proxy"]
+default = [
+    "client",
+    "sync",
+    "clipboard",
+    "check-update",
+    "daemon",
+    "ai",
+    "pty-proxy",
+]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
 daemon = ["atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
@@ -50,6 +58,13 @@ hex = ["pty-proxy"]
 clipboard = ["arboard"]
 check-update = ["atuin-client/check-update"]
 vendored-tls = ["atuin-client?/vendored-tls"]
+# `atuin update`: self-update via the cargo-dist install receipt. Not a
+# default feature: only the official installer artifacts can self-update
+# (dist enables it in dist-workspace.toml), so package-manager and
+# `cargo install` builds skip axoupdater and its dependency tree — notably
+# axoasset's rustls/aws-lc-rs reqwest backend, which is only avoided by the
+# [patch.crates-io] axoasset fork when building from this repo.
+self-update = ["dep:axoupdater"]
 
 [dependencies]
 atuin-ai = { path = "../atuin-ai", version = "18.19.0-beta.2", optional = true, default-features = false }
@@ -62,6 +77,7 @@ atuin-daemon = { path = "../atuin-daemon", version = "18.19.0-beta.2", optional 
 atuin-pty-proxy = { path = "../atuin-pty-proxy", version = "18.19.0-beta.2", optional = true, default-features = false }
 atuin-scripts = { workspace = true }
 atuin-kv = { workspace = true }
+axoupdater = { version = "0.10", optional = true }
 derive_more = { workspace = true }
 
 time = { workspace = true }

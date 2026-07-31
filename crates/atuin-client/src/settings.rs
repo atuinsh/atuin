@@ -168,6 +168,18 @@ pub enum Style {
     Compact,
 }
 
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, Serialize)]
+pub enum UpdateChannel {
+    /// Stable releases only.
+    #[serde(rename = "stable")]
+    Stable,
+
+    /// Prerelease builds, plus stable releases once they overtake the latest
+    /// prerelease.
+    #[serde(rename = "nightly")]
+    Nightly,
+}
+
 #[derive(Clone, Debug, Deserialize, Copy, Serialize)]
 pub enum WordJumpMode {
     #[serde(rename = "emacs")]
@@ -973,6 +985,7 @@ pub struct Settings {
     pub style: Style,
     pub auto_sync: bool,
     pub update_check: bool,
+    pub update_channel: UpdateChannel,
 
     /// The sync address for atuin.
     pub sync_address: Url,
@@ -1405,6 +1418,7 @@ impl Settings {
             .set_default("timezone", "local")?
             .set_default("auto_sync", true)?
             .set_default("update_check", cfg!(feature = "check-update"))?
+            .set_default("update_channel", "stable")?
             .set_default("sync_address", DEFAULT_SYNC_URL.as_str())?
             .set_default("sync_frequency", "5m")?
             .set_default("search_mode", "fuzzy")?

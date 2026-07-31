@@ -1,0 +1,58 @@
+[package]
+name = "axoasset"
+description = ">o_o<"
+version = "2.0.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/axodotdev/axoasset"
+
+[features]
+# Default enable remote support, using reqwest's default TLS backend
+default = ["remote-default-tls"]
+# Enable SourceFile support for deserializing using the "toml" crate
+toml-serde = ["toml", "serde"]
+# Enable SourceFile support for deserializing using the "serde_json" crate
+json-serde = ["serde_json", "serde"]
+# Enable SourceFile support for deserializing using the "toml_edit" crate
+toml-edit = ["toml_edit"]
+# Enable SourceFile support for deserializing using the "serde_yaml_bw" crate
+yaml-serde = ["serde_yaml_bw", "serde"]
+# Enable reqwest-based http file fetching. This does not enable a TLS backend
+# for reqwest: enable remote-default-tls (or one of reqwest's TLS features from
+# your own workspace) to fetch https URLs.
+remote = ["reqwest", "image"]
+# Use reqwest's default TLS backend for remote fetching
+remote-default-tls = ["remote", "reqwest/default-tls"]
+# Enable support for reading and writing zips and tarballs
+compression = ["compression-tar", "compression-zip"]
+# Enable support for reading and writing tarballs
+compression-tar = ["flate2", "tar", "xz2", "zstd"]
+# Enable support for reading and writing zips
+compression-zip = ["zip"]
+
+[dependencies]
+image = { version = "0.25.4", default-features = false, optional = true }
+mime = "0.3.16"
+reqwest = { version = ">=0.13.0", optional = true, default-features = false, features = ["json"] }
+thiserror = "2.0.0"
+url = "2.5.0"
+miette = "7.0.0"
+camino = "1.1.9"
+toml = { version = "1.0.0", optional = true }
+serde_json = { version = "1.0.132", optional = true }
+serde_yaml_bw = { version = "2.4.0", optional = true }
+serde = { version = "1.0.214", optional = true, features = ["derive"] }
+tar = { version = "0.4.42", optional = true }
+zip = { version = "8.0.0", optional = true, default-features = false, features = ["aes-crypto", "bzip2", "deflate", "time", "zstd"] }
+flate2 = { version = "1.0.34", optional = true }
+xz2 = { version = "0.1.7", optional = true, features = ["static"] }
+zstd = { version = "0.13.0", optional = true }
+toml_edit = { version = "0.25.0", optional = true }
+walkdir = "2.5.0"
+lazy_static = "1.5.0"
+
+[dev-dependencies]
+assert_fs = "1"
+tokio = { version = "1.49", features = ["macros"] }
+wiremock = "0.6"
+clap = { version = "4.5.60", features = ["derive"] }
