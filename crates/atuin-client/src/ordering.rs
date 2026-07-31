@@ -26,32 +26,47 @@ fn reorder<F, A>(terms: &[&str], f: F, res: Vec<A>) -> Vec<A>
 where
     F: Fn(&A) -> &String,
 {
+    let mut r = res;
+
+    // With nothing to rank on every key is equal, and the stable sort would return the input.
+    if terms.is_empty() || r.len() < 2 {
+        return r;
+    }
+
     // Paired with whether SQL matched the term case-sensitively.
     let terms: Vec<(Vec<char>, bool)> = terms
         .iter()
         .map(|term| (term.chars().collect(), term.contains(char::is_uppercase)))
         .collect();
 
-    let needs_folded = terms.iter().any(|(_, exact)| !*exact);
+    let any_folded = terms.iter().any(|(_, exact)| !*exact);
 
-    let mut r = res;
+    // Refilled per row rather than reallocated: this runs over every result on every keystroke.
+    let mut command: Vec<char> = Vec::new();
+    let mut folded: Vec<char> = Vec::new();
+
     r.sort_by_cached_key(|h| {
-        let command: Vec<char> = f(h).chars().collect();
+        // Whether the command carries case is known by the time it has been walked once.
+        command.clear();
+        let mut has_ascii_case = false;
+        for c in f(h).chars() {
+            has_ascii_case |= c.is_ascii_uppercase();
+            command.push(c);
+        }
+
         // Folding per character keeps offsets aligned with `command`, over the same ASCII-only range
         // LIKE folds. A command carrying no ASCII case folds to itself, so it needs no copy.
-        let folded: Option<Vec<char>> = (needs_folded
-            && command.iter().any(char::is_ascii_uppercase))
-        .then(|| command.iter().map(char::to_ascii_lowercase).collect());
+        let fold = any_folded && has_ascii_case;
+        if fold {
+            folded.clear();
+            folded.extend(command.iter().map(char::to_ascii_lowercase));
+        }
 
         let mut unfound = 0usize;
         let (mut lo, mut hi) = (usize::MAX, 0usize);
-        for (term, exact_term) in &terms {
-            let command = if *exact_term {
-                &command
-            } else {
-                folded.as_ref().unwrap_or(&command)
-            };
-            match minspan::span(term, command) {
+        for (term, exact) in &terms {
+            let haystack = if fold && !*exact { &folded } else { &command };
+            match minspan::span(term, haystack) {
                 Some((from, to)) => {
                     lo = lo.min(from);
                     hi = hi.max(to);
