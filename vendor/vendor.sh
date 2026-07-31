@@ -96,7 +96,7 @@ sync_repo() {
 
     local json
     json=$(jq_db -S --arg name "$name" --arg url "$url" \
-        --arg commit "$commit" '. + {$name: {url: $url, commit: $commit}}')
+        --arg commit "$commit" '. + {($name): {url: $url, commit: $commit}}')
 
     printf '%s\n' "$json" > "$root_dir/$db_path"
     git add -A -- "$dir" "$db_path"
