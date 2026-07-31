@@ -11,14 +11,12 @@ use super::cursor::Cursor;
 #[cfg(feature = "daemon")]
 pub mod daemon;
 pub mod db;
-pub mod skim;
 
 #[allow(unused)] // settings is only used if daemon feature is enabled
 pub fn engine(search_mode: SearchMode, settings: &Settings) -> AnySearchEngine {
     match search_mode {
-        SearchMode::Skim => skim::Search::new().into(),
         #[cfg(feature = "daemon")]
-        SearchMode::DaemonFuzzy => daemon::Search::new(settings).into(),
+        SearchMode::DaemonFuzzy => Box::new(daemon::Search::new(settings)).into(),
         #[cfg(not(feature = "daemon"))]
         SearchMode::DaemonFuzzy => {
             // Fall back to fuzzy mode if daemon feature is not enabled
@@ -100,11 +98,28 @@ pub trait SearchEngine: Send + Sync + 'static {
     fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize>;
 }
 
+impl<T: SearchEngine> SearchEngine for Box<T> {
+    async fn full_query(
+        &mut self,
+        state: &SearchState,
+        db: &mut dyn Database,
+    ) -> Result<Vec<History>> {
+        T::full_query(self, state, db).await
+    }
+
+    async fn query(&mut self, state: &SearchState, db: &mut dyn Database) -> Result<Vec<History>> {
+        T::query(self, state, db).await
+    }
+
+    fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
+        T::get_highlight_indices(self, command, search_input)
+    }
+}
+
 /// Static-dispatch enum over the search-engine backends.
 #[enum_dispatch(SearchEngine)]
 pub enum AnySearchEngine {
     Db(db::Search),
-    Skim(skim::Search),
     #[cfg(feature = "daemon")]
-    Daemon(daemon::Search),
+    Daemon(Box<daemon::Search>),
 }

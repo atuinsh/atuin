@@ -37,8 +37,7 @@ modes by pressing **ctrl-s** inside the TUI.
 | fuzzy (default) | Fuzzily, using the [fzf syntax](https://github.com/junegunn/fzf#search-syntax) — see [fuzzy search syntax](../configuration/config.md#fuzzy-search-syntax) |
 | prefix          | Commands that start with your query                                                                            |
 | fulltext        | Commands that contain your query anywhere                                                                      |
-| skim            | Using the [skim syntax](https://github.com/lotabout/skim#search-syntax)                                         |
-| daemon-fuzzy    | Like `fuzzy`, but served from the [daemon's](../reference/daemon.md) in-memory index, with tunable scoring      |
+| daemon-fuzzy    | Like `fuzzy`, but served from the [daemon's](../reference/daemon.md) in-memory index, with tunable scoring     |
 
 To change the default, set [`search_mode`](../configuration/config.md#search_mode).
 

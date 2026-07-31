@@ -12,7 +12,7 @@ use atuin_client::{
     encryption,
     history::{AuthorPattern, History, store::HistoryStore},
     record::sqlite_store::SqliteStore,
-    settings::{FilterMode, KeymapMode, SearchMode, Settings},
+    settings::{FilterMode, KeymapMode, RequestedSearchMode, Settings},
     theme::Theme,
 };
 
@@ -73,9 +73,11 @@ pub struct Cmd {
 
     /// Allow overriding search mode over config
     ///
-    /// Note: for non-interactive searches, the "daemon-fuzzy" and "skim" modes behave like "fuzzy".
+    /// Note: for non-interactive searches, "daemon-fuzzy" behaves like "fuzzy". "skim" used to
+    /// behave like "fuzzy" in non-interactive searches too; it has since been removed but is still
+    /// accepted here as an alias of "fuzzy".
     #[arg(long)]
-    search_mode: Option<SearchMode>,
+    search_mode: Option<RequestedSearchMode>,
 
     /// Marker argument used to inform atuin that it was invoked from a shell up-key binding (hidden from help to avoid confusion)
     #[arg(long, hide = true)]
@@ -218,7 +220,7 @@ impl Cmd {
         }
 
         if let Some(search_mode) = self.search_mode {
-            settings.search_mode = search_mode;
+            settings.requested_search_mode = search_mode;
         }
         if let Some(filter_mode) = self.filter_mode {
             settings.filter_mode = Some(filter_mode);
@@ -348,7 +350,7 @@ async fn run_non_interactive(
 
     let results = db
         .search(
-            settings.search_mode.closest_db_mode(),
+            settings.search_mode().closest_db_mode(),
             filter_mode,
             &context,
             query.join(" ").as_str(),

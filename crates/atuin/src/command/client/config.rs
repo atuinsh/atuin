@@ -498,8 +498,8 @@ mod tests {
     #[case::a_valid_value(
         "search_mode = \"fuzzy\"\n",
         "search_mode",
-        "skim",
-        "search_mode = \"skim\"\n"
+        "prefix",
+        "search_mode = \"prefix\"\n"
     )]
     #[case::replacing_an_invalid_value_with_a_valid_one(
         "search_mode = \"invalid\"\n",

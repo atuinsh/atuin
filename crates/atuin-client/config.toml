@@ -47,7 +47,7 @@
 # sync_frequency = "5m"
 
 ## which search mode to use for interactive search
-## possible values: prefix, fulltext, fuzzy, skim
+## possible values: prefix, fulltext, fuzzy, daemon-fuzzy
 # search_mode = "fuzzy"
 
 ## which search mode to use when atuin is invoked from a shell up-key binding
