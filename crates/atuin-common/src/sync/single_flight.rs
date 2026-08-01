@@ -46,29 +46,15 @@ impl<T> SingleFlight<T> {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<T, E>>,
     {
-        // Snapshot the generation before we queue for the lock.
+        // Snapshot the generation before we queue, then fetch only if nothing landed while we
+        // waited for the lead -- so a burst of concurrent callers coalesces onto a single fetch.
         let seen = self.generation.load(Ordering::Acquire);
-
-        let _lead = self.refreshing.lock().await;
-
-        // If a refresh landed while we waited, take its result instead of fetching again. The
-        // generation only moves after a value is stored, so the value is guaranteed present.
-        if self.generation.load(Ordering::Acquire) != seen {
-            return Ok(self
-                .value
-                .read()
-                .clone()
-                .expect("generation moved, so a value was stored"));
-        }
-
-        // We are the leader: run the fetch with no data lock held, so reads stay concurrent.
-        let fresh = Arc::new(fetch().await?);
-
-        // Brief critical section, no `.await` inside -- never hold a parking_lot guard across one.
-        *self.value.write() = Some(fresh.clone());
-        self.generation.fetch_add(1, Ordering::Release);
-
-        Ok(fresh)
+        let value = self
+            .refresh_if(|| self.generation.load(Ordering::Acquire) == seen, fetch)
+            .await?;
+        // The fetch is skipped only once the generation has moved, which happens after a value is
+        // stored -- so a skip always leaves a value to return.
+        Ok(value.expect("generation moved, so a value was stored"))
     }
 
     /// Like [`refresh`](Self::refresh), but only runs `fetch` when `needed` still holds once this

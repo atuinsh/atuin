@@ -73,10 +73,7 @@ impl Middleware for CapMiddleware {
 
         let response = next.run(req, ext).await?;
 
-        // If the server advertised a token differing from ours, our capabilities are stale. In
-        // `Continue` mode it served the request anyway, so refresh in the background -- never
-        // resending the request -- to keep later requests current. In `Error` mode the caller
-        // receives the `412` and decides what to do.
+        // If the server advertised a token differing from ours, our capabilities are stale.
         if self.on_mismatch == CapMismatch::Continue {
             let advertised = response
                 .headers()
@@ -85,14 +82,15 @@ impl Middleware for CapMiddleware {
                 .filter(|available| Some(*available) != known.as_deref())
                 .map(str::to_owned);
             if let Some(available) = advertised {
-                // `refresh_if_stale` is coalesced and idempotent, so a burst of stale responses
-                // drives exactly one fetch. Best-effort: a refresh failure must not fail the
-                // request the server already served.
-                let caps = self.caps.clone();
-                let http = self.http.clone();
-                tokio::spawn(async move {
-                    let _ = caps.refresh_if_stale(&http, &available).await;
-                });
+                if self.caps.known_token().as_deref() != Some(available.as_str()) {
+                    // Coalesced and idempotent, so a burst drives exactly one fetch. Best-effort: a
+                    // refresh failure must not fail the request the server already served.
+                    let caps = self.caps.clone();
+                    let http = self.http.clone();
+                    tokio::spawn(async move {
+                        let _ = caps.refresh_if_stale(&http, &available).await;
+                    });
+                }
             }
         }
 
