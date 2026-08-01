@@ -524,6 +524,16 @@ pub struct Daemon {
     pub tcp_port: u64,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct PtyProxy {
+    /// If enabled, `atuin init` emits shell code that re-execs the shell
+    /// inside `atuin pty-proxy`, so no separate `atuin pty-proxy init` line
+    /// is needed in shell config. Supported for bash, zsh, fish and nu on
+    /// unix platforms.
+    #[serde(alias = "enable")]
+    pub enabled: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Search {
     /// The list of enabled filter modes, in order of priority.
@@ -1091,6 +1101,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub daemon: Daemon,
+
+    #[serde(default)]
+    pub pty_proxy: PtyProxy,
 
     #[serde(default)]
     pub search: Search,

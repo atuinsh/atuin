@@ -128,6 +128,43 @@ impl Cmd {
         }
     }
 
+    /// When `pty_proxy.enabled` is set, prepend the pty-proxy exec preamble
+    /// to the init script so the shell re-execs itself inside
+    /// `atuin pty-proxy` — no separate `atuin pty-proxy init` line needed in
+    /// shell config. The preamble is guarded by `ATUIN_PTY_PROXY_ACTIVE`, so
+    /// users who still have the standalone line keep working: whichever copy
+    /// runs first wins and the other no-ops.
+    #[cfg(all(feature = "pty-proxy", unix))]
+    fn pty_proxy_init(&self, settings: &Settings) {
+        if !settings.pty_proxy.enabled {
+            return;
+        }
+
+        let shell = match self.shell {
+            Shell::Zsh => atuin_pty_proxy::Shell::Zsh,
+            Shell::Bash => atuin_pty_proxy::Shell::Bash,
+            Shell::Fish => atuin_pty_proxy::Shell::Fish,
+            Shell::Nu => atuin_pty_proxy::Shell::Nu,
+            Shell::Xonsh | Shell::PowerShell => {
+                eprintln!(
+                    "atuin: pty_proxy.enabled is set, but atuin pty-proxy does not support this shell"
+                );
+                return;
+            }
+        };
+
+        print!("{}", atuin_pty_proxy::init_script(shell));
+    }
+
+    #[cfg(not(all(feature = "pty-proxy", unix)))]
+    fn pty_proxy_init(&self, settings: &Settings) {
+        if settings.pty_proxy.enabled {
+            eprintln!(
+                "atuin: pty_proxy.enabled is set, but this build of atuin does not include pty-proxy support"
+            );
+        }
+    }
+
     pub async fn run(self, settings: &Settings) -> Result<()> {
         if !settings.paths_ok() {
             eprintln!(
@@ -135,6 +172,8 @@ impl Cmd {
             );
             return Ok(());
         }
+
+        self.pty_proxy_init(settings);
 
         if settings.dotfiles.enabled {
             self.dotfiles_init(settings).await?;

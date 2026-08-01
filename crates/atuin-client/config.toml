@@ -298,6 +298,16 @@ enter_accept = true
 ## The port that should be used for TCP on non unix systems
 # tcp_port = 8889
 
+# [pty_proxy]
+## If enabled, `atuin init` will first re-exec your shell inside `atuin pty-proxy`,
+## so you don't need a separate `eval "$(atuin pty-proxy init)"` line in your shell
+## config. Supported for bash, zsh, fish and nu on unix platforms.
+## For the fastest startup, keep your `atuin init` line near the top of your shell
+## config: everything sourced before it runs again inside the proxy.
+## Safe to combine with an existing `atuin pty-proxy init` line — the proxy only
+## starts once.
+# enabled = false
+
 # [theme]
 ## Color theme to use for rendering in the terminal.
 ## There are some built-in themes, including the base theme ("default"),
