@@ -1,6 +1,7 @@
 //! Shell syntax highlighting for the interactive history list, via
-//! tree-sitter. On platforms where tree-sitter's bundled C doesn't
-//! build (see the note in Cargo.toml), commands are left unhighlighted.
+//! `atuin_common::shell`'s classifier. On platforms where tree-sitter's
+//! bundled C doesn't build (see the note in Cargo.toml), commands are left
+//! unhighlighted.
 
 use atuin_client::theme::Meaning;
 
@@ -33,22 +34,22 @@ pub fn classify(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn parse(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
+    use atuin_common::shell::{ShellKind, TokenKind};
+
+    let kind = shell.map_or(ShellKind::Bash, |s| ShellKind::from_string(s.to_string()));
     let mut meanings = vec![Meaning::Base; cmd.len()];
-
-    let language: tree_sitter::Language = match shell {
-        Some("fish") => tree_sitter_fish::language(),
-        // POSIX-ish shells; entries from before the shell was recorded
-        // get bash as the best guess
-        None | Some("bash" | "zsh" | "sh") => tree_sitter_bash::LANGUAGE.into(),
-        // nu, xonsh, powershell, ...: no grammar available
-        Some(_) => return meanings,
-    };
-
-    let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&language).is_ok()
-        && let Some(tree) = parser.parse(cmd, None)
-    {
-        walk(tree.root_node(), cmd.as_bytes(), &mut meanings);
+    for t in kind.parser().classify(cmd) {
+        let m = match t.kind {
+            TokenKind::Command => Meaning::SyntaxCommand,
+            TokenKind::Flag => Meaning::SyntaxFlag,
+            TokenKind::String => Meaning::SyntaxString,
+            TokenKind::Variable => Meaning::SyntaxVariable,
+            TokenKind::Operator => Meaning::SyntaxOperator,
+            TokenKind::Comment => Meaning::SyntaxComment,
+        };
+        if let Some(range) = meanings.get_mut(t.range) {
+            range.fill(m);
+        }
     }
     meanings
 }
@@ -56,62 +57,6 @@ fn parse(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn classify(cmd: &str, _shell: Option<&str>) -> Vec<Meaning> {
     vec![Meaning::Base; cmd.len()]
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn walk(node: tree_sitter::Node, src: &[u8], meanings: &mut [Meaning]) {
-    let meaning = match node.kind() {
-        "comment" => Some(Meaning::SyntaxComment),
-        "command_name" => Some(Meaning::SyntaxCommand),
-        "string"
-        | "raw_string"
-        | "ansi_c_string"
-        | "heredoc_body"
-        | "single_quote_string"
-        | "double_quote_string" => Some(Meaning::SyntaxString),
-        "simple_expansion" | "expansion" | "variable_assignment" | "variable_expansion" => {
-            Some(Meaning::SyntaxVariable)
-        }
-        "word" if src.get(node.start_byte()) == Some(&b'-') => Some(Meaning::SyntaxFlag),
-        // Anonymous tokens made of operator characters: `|`, `&&`, `;`, `$(`, ...
-        k if !node.is_named()
-            && !k.is_empty()
-            && k.bytes().all(|b| b"|&;<>(){}$`".contains(&b)) =>
-        {
-            Some(Meaning::SyntaxOperator)
-        }
-        _ => None,
-    };
-    if let Some(meaning) = meaning
-        && let Some(range) = meanings.get_mut(node.byte_range())
-    {
-        range.fill(meaning);
-    }
-
-    // Fish has no command_name node kind; the command's `name` field points at
-    // a plain word (in bash it points at the command_name, filled above too).
-    if node.kind() == "command"
-        && let Some(name) = node.child_by_field_name("name")
-        && let Some(range) = meanings.get_mut(name.byte_range())
-    {
-        range.fill(Meaning::SyntaxCommand);
-    }
-
-    // An expansion is uniformly a variable; don't let its `$`/`${`/`}` child
-    // tokens overwrite it as operators.
-    if matches!(
-        node.kind(),
-        "simple_expansion" | "expansion" | "variable_expansion"
-    ) {
-        return;
-    }
-
-    // Descend so nested nodes refine their parent's color, e.g. `$var` inside
-    // a double-quoted string, or the string value in `FOO="bar"`.
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk(child, src, meanings);
-    }
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
@@ -148,8 +93,8 @@ mod tests {
     #[case::fish_subshell("echo (date) | grep foo", Some("fish"), "ccccaoccccoaoaccccaaaa")]
     #[case::fish_string(r#"echo "hi $name""#, Some("fish"), "ccccassssvvvvvs")]
     #[case::zsh_uses_bash("ls -la", Some("zsh"), "ccafff")]
-    #[case::nu_plain("ls -la", Some("nu"), "aaaaaa")]
-    #[case::powershell_plain("ls -la", Some("powershell"), "aaaaaa")]
+    #[case::nu_plain("ls -la", Some("nu"), "ccaaaa")]
+    #[case::powershell_plain("ls -la", Some("powershell"), "ccaaaa")]
     fn classify_renders(#[case] cmd: &str, #[case] shell: Option<&str>, #[case] expected: &str) {
         assert_eq!(render_shell(cmd, shell), expected);
     }
