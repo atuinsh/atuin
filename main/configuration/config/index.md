@@ -842,6 +842,10 @@ Requirements
 - tmux >= 3.2, which is where `display-popup` gained the behavior Atuin needs
 - zsh, bash, or fish — nushell, xonsh, and PowerShell don't support the popup yet
 
+iTerm2's native tmux integration
+
+iTerm2's native tmux integration (control mode, `tmux -CC`) can't display `tmux display-popup` popups, and Atuin can't detect this to fall back automatically. If you rely on it, keep `[tmux] enabled = false` (the default) so the search UI renders inline.
+
 These settings are read by `atuin init` and passed to the shell plugin through environment variables, so **restart your shell after changing them**. To disable the popup for a single session without touching your config, set `ATUIN_TMUX_POPUP=false` before Atuin's key bindings run.
 
 ### `enabled`

@@ -67,4 +67,4 @@ If you use tmux, Atuin can open the search UI in a popup floating above your cur
 enabled = true
 ```
 
-See the [`tmux` config reference](https://docs.atuin.sh/configuration/config/#tmux) for sizing and requirements.
+See the [`tmux` config reference](https://docs.atuin.sh/configuration/config/#tmux) for sizing and requirements. If you use iTerm2's native tmux integration, keep the popup off — it can't display tmux popups.
