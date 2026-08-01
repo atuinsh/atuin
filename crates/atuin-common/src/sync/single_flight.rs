@@ -70,6 +70,41 @@ impl<T> SingleFlight<T> {
 
         Ok(fresh)
     }
+
+    /// Like [`refresh`](Self::refresh), but only runs `fetch` when `needed` still holds once this
+    /// caller holds the lead.
+    ///
+    /// `needed` is evaluated inside the single-flight critical section, so as soon as one caller's
+    /// fetch lands, every later caller whose condition it satisfied skips the fetch. A burst of
+    /// conditional refreshes therefore collapses to a single fetch no matter how it is spaced in
+    /// time -- unlike [`refresh`](Self::refresh), which re-fetches for any call that starts after
+    /// the previous one has finished. This is what makes it safe to fire refreshes in the
+    /// background.
+    ///
+    /// Returns the stored value: the freshly fetched one, or the existing one when the fetch was
+    /// skipped (`None` only if `needed` was false and nothing had ever been stored).
+    pub async fn refresh_if<C, F, Fut, E>(&self, needed: C, fetch: F) -> Result<Option<Arc<T>>, E>
+    where
+        C: FnOnce() -> bool,
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+    {
+        let _lead = self.refreshing.lock().await;
+
+        // Re-checked under the lead, so a fetch that landed while we queued is observed here.
+        if !needed() {
+            return Ok(self.value.read().clone());
+        }
+
+        // We lead and are still stale: run the fetch with no data lock held.
+        let fresh = Arc::new(fetch().await?);
+
+        // Brief critical section, no `.await` inside -- never hold a parking_lot guard across one.
+        *self.value.write() = Some(fresh.clone());
+        self.generation.fetch_add(1, Ordering::Release);
+
+        Ok(Some(fresh))
+    }
 }
 
 impl<T> Default for SingleFlight<T> {
@@ -170,6 +205,38 @@ mod tests {
             1,
             "the herd should collapse to a single fetch"
         );
+        assert_eq!(cell.get().map(|v| *v), Some(42));
+    }
+
+    #[tokio::test]
+    async fn refresh_if_does_not_refetch_once_the_condition_is_satisfied() {
+        let cell: SingleFlight<u64> = SingleFlight::default();
+        let fetches = AtomicUsize::new(0);
+
+        // First call: condition holds (empty) -> fetch.
+        cell.refresh_if(
+            || cell.get().map(|v| *v) != Some(42),
+            || async {
+                fetches.fetch_add(1, Ordering::SeqCst);
+                Ok::<u64, Infallible>(42)
+            },
+        )
+        .await
+        .unwrap();
+
+        // A later, *sequential* call: the condition no longer holds -> no fetch. A plain `refresh`
+        // would re-fetch here, which is the coalescing gap this method closes.
+        cell.refresh_if(
+            || cell.get().map(|v| *v) != Some(42),
+            || async {
+                fetches.fetch_add(1, Ordering::SeqCst);
+                Ok::<u64, Infallible>(42)
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
         assert_eq!(cell.get().map(|v| *v), Some(42));
     }
 

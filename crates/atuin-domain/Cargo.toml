@@ -31,6 +31,7 @@ parking_lot = { workspace = true }
 reqwest-middleware = { workspace = true }
 http = { workspace = true }
 xxhash-rust = { workspace = true }
+tokio = { workspace = true }
 axum = { version = "0.8", optional = true }
 
 [features]
@@ -42,5 +43,4 @@ pretty_assertions = { workspace = true }
 rstest = { workspace = true }
 proptest = { workspace = true }
 wiremock = { workspace = true }
-tokio = { workspace = true }
 tower = { workspace = true, features = ["util"] }

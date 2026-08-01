@@ -1,36 +1,50 @@
 //! Client-side reqwest middleware for HTTP capability negotiation.
 //!
-//! The middleware stamps the client's last-known capability token onto each request and, when the
-//! server rejects with `412` plus a differing available token, refreshes capabilities (and, if so
-//! configured, retries the request once).
+//! The middleware stamps the client's last-known capability token onto each request. When that
+//! token is stale, [`CapMismatch`] decides what happens: `Continue` lets the server serve the
+//! request and refreshes capabilities in the background; `Error` asks the server to reject with
+//! `412`. The original request is never resent.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use http::Extensions;
 use reqwest::header::{HeaderName, HeaderValue};
-use reqwest::{Client, Request, Response, StatusCode};
+use reqwest::{Client, Request, Response};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware, Middleware, Next, Result};
 use typed_builder::TypedBuilder;
 
 use crate::caps::CapClient;
-use crate::caps::http::{AVAILABLE_HEADER, KNOWN_HEADER};
+use crate::caps::http::{AVAILABLE_HEADER, ENFORCE_HEADER, KNOWN_HEADER};
+
+/// How the client reacts when its capability token is out of date with the server's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapMismatch {
+    /// Let the server serve the request despite the mismatch, then refresh capabilities in the
+    /// background so later requests are current. The original request is never resent.
+    Continue,
+    /// Ask the server (via `X-Atuin-Capabilities-Enforce`) to reject the request with `412` on a
+    /// mismatch, surfacing it to the caller.
+    Error,
+}
 
 /// Reqwest middleware that negotiates capability versions with the server.
 ///
-/// Stamps `CapClient::known_token` onto each request as `X-Atuin-Capabilities-Known`. When the
-/// server answers `412` with a differing `X-Atuin-Capabilities-Available`, it refreshes
-/// capabilities over its own plain [`reqwest::Client`] (concurrent refreshes coalesce) and, when
-/// built with `refresh(true)`, retries the original request once with the fresh token.
+/// Stamps `CapClient::known_token` onto each request as `X-Atuin-Capabilities-Known`. In
+/// [`CapMismatch::Error`] mode it also sends `X-Atuin-Capabilities-Enforce`, so the server answers
+/// `412` on a stale token. In [`CapMismatch::Continue`] mode (the default) the server serves the
+/// request and returns `X-Atuin-Capabilities-Available`; the middleware then refreshes capabilities
+/// over its own plain [`reqwest::Client`] in the background (concurrent refreshes coalesce) without
+/// resending the request.
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct CapMiddleware {
     /// Source of the known token and the `/api/v0/capabilities` refresh.
     caps: Arc<CapClient>,
     /// Client used to request the capabilities from the server.
     http: Client,
-    /// Whether to retry the original request once after a successful refresh.
-    #[builder(default = true)]
-    refresh: bool,
+    /// How to react to a capability-token mismatch with the server.
+    #[builder(default = CapMismatch::Continue)]
+    on_mismatch: CapMismatch,
 }
 
 #[async_trait]
@@ -49,50 +63,64 @@ impl Middleware for CapMiddleware {
                 .insert(HeaderName::from_static(KNOWN_HEADER), value);
         }
 
-        let retry_req = if self.refresh { req.try_clone() } else { None };
+        // In `Error` mode, ask the server to reject a stale token rather than serve the request.
+        if self.on_mismatch == CapMismatch::Error {
+            req.headers_mut().insert(
+                HeaderName::from_static(ENFORCE_HEADER),
+                HeaderValue::from_static("1"),
+            );
+        }
 
-        let response = next.clone().run(req, ext).await?;
+        let response = next.run(req, ext).await?;
 
-        let is_mismatch = response.status() == StatusCode::PRECONDITION_FAILED
-            && response
+        // If the server advertised a token differing from ours, our capabilities are stale. In
+        // `Continue` mode it served the request anyway, so refresh in the background -- never
+        // resending the request -- to keep later requests current. In `Error` mode the caller
+        // receives the `412` and decides what to do.
+        if self.on_mismatch == CapMismatch::Continue {
+            let advertised = response
                 .headers()
                 .get(AVAILABLE_HEADER)
                 .and_then(|value| value.to_str().ok())
-                .is_some_and(|available| Some(available) != known.as_deref());
-        if !is_mismatch {
-            return Ok(response);
+                .filter(|available| Some(*available) != known.as_deref())
+                .map(str::to_owned);
+            if let Some(available) = advertised {
+                // `refresh_if_stale` is coalesced and idempotent, so a burst of stale responses
+                // drives exactly one fetch. Best-effort: a refresh failure must not fail the
+                // request the server already served.
+                let caps = self.caps.clone();
+                let http = self.http.clone();
+                tokio::spawn(async move {
+                    let _ = caps.refresh_if_stale(&http, &available).await;
+                });
+            }
         }
 
-        // Mismatch, but we cannot (or were told not to) retry -> surface the 412 untouched.
-        let Some(mut retry_req) = retry_req else {
-            return Ok(response);
-        };
-
-        // Refresh (coalesced across concurrent callers) and retry exactly once with the new token.
-        self.caps.refresh(&self.http).await?;
-        let fresh = self.caps.known_token();
-        if let Some(value) = fresh.as_deref().and_then(|t| HeaderValue::from_str(t).ok()) {
-            retry_req
-                .headers_mut()
-                .insert(HeaderName::from_static(KNOWN_HEADER), value);
-        }
-
-        next.run(retry_req, ext).await
+        Ok(response)
     }
 }
 
 /// Install capability negotiation onto a [`reqwest::Client`].
 pub trait CapabilitiesExt {
-    /// Wrap this client so it negotiates capabilities.
-    fn with_capabilities(self, caps: Arc<CapClient>, refresh: bool) -> ClientWithMiddleware;
+    /// Wrap this client so it negotiates capabilities, reacting to a token mismatch per
+    /// `on_mismatch`.
+    fn with_capabilities(
+        self,
+        caps: Arc<CapClient>,
+        on_mismatch: CapMismatch,
+    ) -> ClientWithMiddleware;
 }
 
 impl CapabilitiesExt for Client {
-    fn with_capabilities(self, caps: Arc<CapClient>, refresh: bool) -> ClientWithMiddleware {
+    fn with_capabilities(
+        self,
+        caps: Arc<CapClient>,
+        on_mismatch: CapMismatch,
+    ) -> ClientWithMiddleware {
         let middleware = CapMiddleware::builder()
             .caps(caps)
             .http(self.clone())
-            .refresh(refresh)
+            .on_mismatch(on_mismatch)
             .build();
         ClientBuilder::new(self).with(middleware).build()
     }
@@ -103,7 +131,7 @@ mod tests {
     use super::*;
     use crate::caps::CapClient;
     use rstest::{fixture, rstest};
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{header, header_exists, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     /// A plain reqwest client for the network tests.
@@ -112,8 +140,10 @@ mod tests {
         reqwest::Client::new()
     }
 
-    /// Mount a caps endpoint (returns version 5) plus a `/protected` route that 200s only when the
-    /// client presents `x-atuin-capabilities-known: 5`, and otherwise 412s with the available token.
+    /// Mount a caps endpoint (version 5) plus a `/protected` route modelling the new server:
+    /// a matching `x-atuin-capabilities-known: 5` -> `200`; a stale token *with*
+    /// `x-atuin-capabilities-enforce` -> `412` + available token; a stale token *without* enforce
+    /// -> `200` + available token (served anyway).
     #[fixture]
     async fn negotiating_server() -> MockServer {
         let server = MockServer::start().await;
@@ -125,6 +155,7 @@ mod tests {
             })))
             .mount(&server)
             .await;
+        // Current: the client's token matches.
         Mock::given(method("GET"))
             .and(path("/protected"))
             .and(header("x-atuin-capabilities-known", "5"))
@@ -132,15 +163,49 @@ mod tests {
             .with_priority(1)
             .mount(&server)
             .await;
+        // Stale + enforce: reject.
+        Mock::given(method("GET"))
+            .and(path("/protected"))
+            .and(header_exists("x-atuin-capabilities-enforce"))
+            .respond_with(
+                ResponseTemplate::new(412).append_header("x-atuin-capabilities-available", "5"),
+            )
+            .with_priority(2)
+            .mount(&server)
+            .await;
+        // Stale, no enforce: serve anyway, but advertise our token.
         Mock::given(method("GET"))
             .and(path("/protected"))
             .respond_with(
-                ResponseTemplate::new(412).append_header("x-atuin-capabilities-available", "5"),
+                ResponseTemplate::new(200)
+                    .set_body_string("ok")
+                    .append_header("x-atuin-capabilities-available", "5"),
             )
             .with_priority(5)
             .mount(&server)
             .await;
         server
+    }
+
+    async fn caps_hits(server: &MockServer) -> usize {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.url.path() == "/api/v0/capabilities")
+            .count()
+    }
+
+    /// Wait (bounded) for the background refresh to reach the capabilities endpoint. Coalescing is
+    /// guaranteed by `refresh_if_stale`, so the count never exceeds one afterwards.
+    async fn await_caps_hit(server: &MockServer) {
+        for _ in 0..200 {
+            if caps_hits(server).await > 0 {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
     }
 
     fn cap_client(server: &MockServer) -> Arc<CapClient> {
@@ -151,40 +216,46 @@ mod tests {
     }
 
     #[rstest]
-    #[case(true, 200, 1)]
-    #[case(false, 412, 0)]
     #[tokio::test]
-    async fn refresh_controls_whether_the_412_is_retried(
+    async fn continue_serves_the_request_and_refreshes_in_the_background(
         http_client: reqwest::Client,
         #[future] negotiating_server: MockServer,
-        #[case] refresh: bool,
-        #[case] expected_status: u16,
-        #[case] expected_caps_hits: usize,
     ) {
         let server = negotiating_server.await;
-        let middleware = CapMiddleware::builder()
-            .caps(cap_client(&server))
-            .http(http_client.clone())
-            .refresh(refresh)
-            .build();
-        let client = ClientBuilder::new(http_client).with(middleware).build();
+        let client = http_client.with_capabilities(cap_client(&server), CapMismatch::Continue);
+
+        // Our token is unknown -> stale, but the server serves the request anyway.
+        let response = client
+            .get(format!("{}/protected", server.uri()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.text().await.unwrap(), "ok");
+
+        // The advertised token drives a single background refresh -- the request is never resent.
+        await_caps_hit(&server).await;
+        assert_eq!(caps_hits(&server).await, 1);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn error_surfaces_the_412_and_does_not_refresh(
+        http_client: reqwest::Client,
+        #[future] negotiating_server: MockServer,
+    ) {
+        let server = negotiating_server.await;
+        let client = http_client.with_capabilities(cap_client(&server), CapMismatch::Error);
 
         let response = client
             .get(format!("{}/protected", server.uri()))
             .send()
             .await
             .unwrap();
+        assert_eq!(response.status(), 412);
 
-        assert_eq!(response.status(), expected_status);
-
-        let caps_hits = server
-            .received_requests()
-            .await
-            .unwrap()
-            .iter()
-            .filter(|r| r.url.path() == "/api/v0/capabilities")
-            .count();
-        assert_eq!(caps_hits, expected_caps_hits);
+        // `Error` mode never refreshes; the caller handles the 412.
+        assert_eq!(caps_hits(&server).await, 0);
     }
 
     #[rstest]
@@ -203,7 +274,7 @@ mod tests {
         let middleware = CapMiddleware::builder()
             .caps(CapClient::new(caps_url))
             .http(http_client.clone())
-            .refresh(true)
+            .on_mismatch(CapMismatch::Continue)
             .build();
         let client = ClientBuilder::new(http_client).with(middleware).build();
 
@@ -242,7 +313,7 @@ mod tests {
         let middleware = CapMiddleware::builder()
             .caps(CapClient::new(caps_url))
             .http(http_client.clone())
-            .refresh(true)
+            .on_mismatch(CapMismatch::Continue)
             .build();
         let client = ClientBuilder::new(http_client).with(middleware).build();
 
@@ -273,7 +344,7 @@ mod tests {
         #[future] negotiating_server: MockServer,
     ) {
         let server = negotiating_server.await;
-        let client = http_client.with_capabilities(cap_client(&server), true);
+        let client = http_client.with_capabilities(cap_client(&server), CapMismatch::Continue);
 
         let response = client
             .get(format!("{}/protected", server.uri()))
@@ -292,7 +363,7 @@ mod tests {
         #[future] negotiating_server: MockServer,
     ) {
         let server = negotiating_server.await;
-        let client = http_client.with_capabilities(cap_client(&server), true);
+        let client = http_client.with_capabilities(cap_client(&server), CapMismatch::Continue);
 
         let mut handles = Vec::new();
         for _ in 0..20 {
@@ -306,15 +377,11 @@ mod tests {
             assert_eq!(handle.await.unwrap(), 200);
         }
 
-        let caps_hits = server
-            .received_requests()
-            .await
-            .unwrap()
-            .iter()
-            .filter(|r| r.url.path() == "/api/v0/capabilities")
-            .count();
+        // The background refreshes coalesce into a single capabilities fetch.
+        await_caps_hit(&server).await;
         assert_eq!(
-            caps_hits, 1,
+            caps_hits(&server).await,
+            1,
             "a burst must coalesce into one capabilities fetch"
         );
     }

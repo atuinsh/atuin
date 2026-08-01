@@ -90,18 +90,39 @@ impl CapClient {
     /// It is safe to call this in parallel, even under high load.
     pub async fn refresh(&self, client: &reqwest::Client) -> reqwest::Result<()> {
         self.server
-            .refresh(|| async {
-                let resp: CapabilitiesResponse = client
-                    .get(self.capabilities_url.clone())
-                    .send()
-                    .await?
-                    .json()
-                    .await?;
-                Ok(ServerCaps::from(resp))
-            })
+            .refresh(|| self.fetch_server_caps(client))
             .await?;
-
         Ok(())
+    }
+
+    /// Refresh the server's capabilities only if our known token differs from `available`.
+    ///
+    /// Concurrent callers coalesce onto a single fetch, and a caller whose token already matches
+    /// `available` does no work -- so a burst of stale responses triggers exactly one fetch, even
+    /// when the refreshes are fired in the background rather than awaited.
+    pub async fn refresh_if_stale(
+        &self,
+        client: &reqwest::Client,
+        available: &str,
+    ) -> reqwest::Result<()> {
+        self.server
+            .refresh_if(
+                || self.known_token().as_deref() != Some(available),
+                || self.fetch_server_caps(client),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Fetch and decode the server's capabilities document.
+    async fn fetch_server_caps(&self, client: &reqwest::Client) -> reqwest::Result<ServerCaps> {
+        let resp: CapabilitiesResponse = client
+            .get(self.capabilities_url.clone())
+            .send()
+            .await?
+            .json()
+            .await?;
+        Ok(ServerCaps::from(resp))
     }
 
     /// Read whether the server supports the given capability, from the last [`CapClient::refresh`].

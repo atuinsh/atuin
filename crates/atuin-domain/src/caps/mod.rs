@@ -54,7 +54,7 @@ mod server;
 
 pub use all::CapabilitiesCap;
 pub use client::{CapClient, ServerSupportError};
-pub use middleware::{CapMiddleware, CapabilitiesExt};
+pub use middleware::{CapMiddleware, CapMismatch, CapabilitiesExt};
 pub use server::{CapServer, Negotiation};
 
 /// A capability is always indexed by a String key.
