@@ -1,5 +1,5 @@
 [package]
-name = "atuin-share"
+name = "atuin-lab-share"
 edition = "2024"
 description = "Experimental terminal sharing for atuin (atuin lab share)"
 
@@ -31,3 +31,8 @@ portable-pty = "0.9"                                                            
 unicode-width = "0.2"                                                           # status-bar display-width math
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] } # hub WebSocket
 futures-util = "0.3"                                                            # stream/sink split of the WebSocket
+aes-gcm = "0.10"                                                                # E2EE frame sealing (aead 0.5 line; 0.11-pre would fork the stack)
+zeroize = { version = "1", features = ["derive"] }                              # session key wiped on drop
+
+[dev-dependencies]
+hex = "0.4" # frozen interop-vector literals in crypto tests

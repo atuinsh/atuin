@@ -23,9 +23,9 @@ impl Cmd {
             Self::Share { write } => {
                 let hub_url = lab_ws_url(settings)?;
                 let api_token = lab_api_token(settings).await?;
-                // `atuin_share::Error` converts to `eyre::Report` via the
+                // `atuin_lab_share::Error` converts to `eyre::Report` via the
                 // blanket `From<E: std::error::Error>`.
-                Ok(atuin_share::run_share(atuin_share::ShareOptions {
+                Ok(atuin_lab_share::run_share(atuin_lab_share::ShareOptions {
                     write,
                     hub_url,
                     api_token,

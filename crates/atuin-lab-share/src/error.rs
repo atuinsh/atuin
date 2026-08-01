@@ -32,7 +32,7 @@ pub enum Error {
 
     /// The first hub connection did not complete within the connect timeout.
     #[error(
-        "couldn't reach the hub at {url} within {timeout_secs}s — is it running, and is \
+        "couldn't reach the hub at {url} within {timeout_secs}s -- is it running, and is \
          ATUIN_LAB_HUB_URL correct?"
     )]
     HubUnreachable { url: Url, timeout_secs: u64 },

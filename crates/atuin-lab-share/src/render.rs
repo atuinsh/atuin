@@ -51,7 +51,7 @@ impl WriteMode {
 }
 
 /// What the bar's chunks are joined with.
-const SEPARATOR: &str = " · ";
+const SEPARATOR: &str = " | ";
 
 /// Tier `0` segments are mandatory — the fact that the session is shared, and
 /// whether viewers can type. They are never dropped voluntarily; on a terminal
@@ -92,7 +92,7 @@ impl StatusBar {
     /// Render the warning bar as a full row: reverse-video, fitted to exactly
     /// `cols` display columns.
     ///
-    /// The bar is assembled from `·`-joined segments carrying a drop-tier. The
+    /// The bar is assembled from `|`-joined segments carrying a drop-tier. The
     /// richest tier that fits in `cols` wins, so the two things the host must
     /// always see — that the session is shared, and whether viewers can type —
     /// survive on a narrow terminal, while the explanatory prose and the viewer
@@ -102,10 +102,10 @@ impl StatusBar {
     ///
     /// The final fit is done in display columns via `atuin-common`'s
     /// `pad_ellipsize` (the same helper the search UI uses), which both
-    /// truncates over-long text with `…` and pads short text with spaces. A
-    /// naive `chars().take(cols)` would overflow the row whenever a wide glyph
-    /// is present — the text opens with `⚠`, which some terminals render 2
-    /// columns wide — and the overflow would wrap onto the child's first row.
+    /// truncates over-long text with `...` and pads short text with spaces.
+    /// The bar text is pure ASCII today, but the fit stays column-based so a
+    /// future wide glyph cannot overflow the row and wrap onto the child's
+    /// first row.
     #[must_use]
     pub(crate) fn render(&self, cols: u16) -> Vec<u8> {
         let write_state = if self.write.is_write_enabled() {
@@ -114,7 +114,7 @@ impl StatusBar {
             "WRITE OFF"
         };
         let segments: [(u8, Cow<'static, str>); 5] = [
-            (MANDATORY, Cow::Borrowed("⚠ SHARED SESSION")),
+            (MANDATORY, Cow::Borrowed("! SHARED SESSION")),
             (TIER_PROSE, Cow::Borrowed("anything you type is visible")),
             (
                 TIER_VIEWERS,
@@ -136,7 +136,7 @@ impl StatusBar {
         let fitted = text.pad_ellipsize(
             Measure::Columns(cols as usize),
             Pos::End,
-            Indicator::UNICODE,
+            Indicator::ASCII,
             Alignment::Start,
         );
 
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn full_bar_shows_all_segments_when_wide_enough() {
         let text = bar_text(&bar(100, 3, false));
-        assert!(text.contains("⚠ SHARED SESSION"));
+        assert!(text.contains("! SHARED SESSION"));
         assert!(text.contains("anything you type is visible"));
         assert!(text.contains("3 viewers"));
         assert!(text.contains("WRITE OFF"));
@@ -287,8 +287,8 @@ mod tests {
     #[test]
     fn below_mandatory_width_the_text_is_hard_truncated_with_ellipsis() {
         let text = bar_text(&bar(20, 0, false));
-        assert!(text.starts_with('⚠'), "shared-session marker survives");
-        assert!(text.ends_with('…'), "truncation is marked, not silent");
+        assert!(text.starts_with('!'), "shared-session marker survives");
+        assert!(text.ends_with("..."), "truncation is marked, not silent");
         assert_eq!(UnicodeWidthStr::width(text.as_str()), 20);
     }
 
@@ -298,9 +298,10 @@ mod tests {
         assert!(bar_text(&bar(100, 0, false)).contains("WRITE OFF"));
     }
 
-    /// The fit is measured in **display columns**, not `char`s: the text opens
-    /// with `⚠` (up to 2 columns wide), so a chars-based fit would overflow the
-    /// row and wrap onto the child's first row.
+    /// The fit is measured in **display columns**, not `char`s. The bar text
+    /// is pure ASCII today, so the two agree — this pins the column-based fit
+    /// so a future wide glyph cannot overflow the row and wrap onto the
+    /// child's first row.
     #[test]
     fn bar_is_fitted_to_exactly_cols_display_columns() {
         for cols in [20u16, 30, 50, 60, 100] {

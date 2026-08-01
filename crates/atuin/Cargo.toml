@@ -39,7 +39,7 @@ atuin = { path = "/usr/bin/atuin" }
 
 [features]
 default = ["client", "sync", "clipboard", "check-update", "daemon", "ai", "pty-proxy"]
-client = ["atuin-client", "dep:atuin-share"]
+client = ["atuin-client", "dep:atuin-lab-share"]
 sync = ["atuin-client/sync"]
 daemon = ["atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
 ai = ["atuin-ai"]
@@ -56,7 +56,7 @@ atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }
 atuin-daemon = { path = "../atuin-daemon", version = "18.18.0-beta.3", optional = true, default-features = false }
 atuin-pty-proxy = { path = "../atuin-pty-proxy", version = "18.18.0-beta.3", optional = true, default-features = false }
-atuin-share = { path = "../atuin-share", version = "18.18.0-beta.3", optional = true }
+atuin-lab-share = { path = "../atuin-lab-share", version = "18.18.0-beta.3", optional = true }
 atuin-scripts = { workspace = true }
 atuin-kv = { workspace = true }
 derive_more = { workspace = true }

@@ -9,7 +9,14 @@
 //! A transport drop never kills the subshell: a lost socket only produces
 //! `Inbound::Disconnected` and a backoff-ed reconnect that resumes the *same*
 //! hub session via the secret `host_resume_token`.
+//!
+//! The transport is also the E2EE seam ([`crate::crypto`]): it owns the
+//! per-session key, seals every outbound `output`/`keyframe` payload, opens
+//! (and replay-checks) inbound `input` blobs before the session sees them, and
+//! appends the key fragment to the join URL at the single point that URL
+//! enters the program. The session and `ScreenState` stay key-free.
 
+use std::collections::{HashSet, VecDeque};
 use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
@@ -19,7 +26,8 @@ use tokio::sync::oneshot;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 
-use crate::backpressure::{Backoff, OutboundQueue};
+use crate::backpressure::{Backoff, Frame, OutboundQueue};
+use crate::crypto::{self, FrameKind, NONCE_LEN, SessionKey};
 use crate::protocol::{Incoming, PhoenixPush, b64_encode, encode_heartbeat};
 use crate::render::WriteMode;
 use crate::session::{Inbound, Outbound};
@@ -35,6 +43,9 @@ const HEARTBEAT: Duration = Duration::from_secs(30);
 /// How many `output` frames may pile up before the backlog is collapsed into a
 /// keyframe request. ~8 KiB per frame, so a couple of MiB at most.
 const OUTBOUND_CAP: usize = 256;
+/// How many recently accepted viewer-input nonces to remember for replay
+/// dedup — see [`NonceWindow`]. 12 KiB of nonces plus the set: negligible.
+const INPUT_NONCE_CAP: usize = 1024;
 
 /// The hub's share WebSocket endpoint path, appended to any path already on
 /// the base URL (a hub behind a reverse-proxy path prefix keeps working).
@@ -96,6 +107,75 @@ impl RefSequence {
         self.next = self.next.saturating_add(1);
         r.to_string()
     }
+}
+
+/// A bounded sliding window of the nonces of recently accepted viewer-input
+/// blobs.
+///
+/// Viewers are anonymous and multiple write-mode viewers interleave, so no
+/// per-sender monotonic-seq rule is possible for the input direction (input
+/// AAD uses the constant seq 0). Instead: an **exact** hub replay re-delivers
+/// the same 12-byte nonce, and this window drops it. Only nonces of blobs that
+/// *authenticated* are recorded — garbage blobs must not be able to evict real
+/// nonces and reopen a replay. Forgery is impossible regardless (every blob is
+/// AEAD-authenticated); reordering/delay by the hub remains an availability
+/// attack, as for all frames.
+struct NonceWindow {
+    /// Insertion order, for evicting the oldest once full.
+    order: VecDeque<[u8; NONCE_LEN]>,
+    /// Membership, for the O(1) replay check.
+    seen: HashSet<[u8; NONCE_LEN]>,
+}
+
+impl NonceWindow {
+    fn new() -> Self {
+        Self {
+            order: VecDeque::with_capacity(INPUT_NONCE_CAP),
+            seen: HashSet::with_capacity(INPUT_NONCE_CAP),
+        }
+    }
+
+    /// Whether `nonce` was already recorded (i.e. this blob is a replay).
+    fn contains(&self, nonce: &[u8; NONCE_LEN]) -> bool {
+        self.seen.contains(nonce)
+    }
+
+    /// Record an accepted nonce, evicting the oldest once the window holds
+    /// [`INPUT_NONCE_CAP`] of them.
+    fn record(&mut self, nonce: [u8; NONCE_LEN]) {
+        if self.order.len() == INPUT_NONCE_CAP
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.seen.remove(&oldest);
+        }
+        if self.seen.insert(nonce) {
+            self.order.push_back(nonce);
+        }
+    }
+}
+
+/// The `output` push payload: envelope `seq` in the clear (the hub orders,
+/// buffers, and replays on it), `data` = b64(nonce || ciphertext || tag)
+/// sealed under the session key with the seq-bound Output AAD — so a hub that
+/// renumbers or splices frames causes an authentication failure on the viewer
+/// instead of corrupted content.
+fn output_payload(key: &SessionKey, frame: &Frame) -> Value {
+    let blob = key.encrypt(
+        &frame.data,
+        &crypto::frame_aad(FrameKind::Output, frame.seq),
+    );
+    json!({ "seq": frame.seq, "data": b64_encode(&blob) })
+}
+
+/// The `keyframe` push payload; same shape as [`output_payload`] with the
+/// Keyframe AAD, so a keyframe blob can never be reflected as output (or vice
+/// versa).
+fn keyframe_payload(key: &SessionKey, frame: &Frame) -> Value {
+    let blob = key.encrypt(
+        &frame.data,
+        &crypto::frame_aad(FrameKind::Keyframe, frame.seq),
+    );
+    json!({ "seq": frame.seq, "data": b64_encode(&blob) })
 }
 
 /// The write half of a joined channel, plus its Phoenix `ref` counter.
@@ -195,37 +275,36 @@ impl Connection {
         first: Outbound,
         out_rx: &mut UnboundedReceiver<Outbound>,
         in_tx: &UnboundedSender<Inbound>,
+        key: &SessionKey,
     ) -> Result<bool, TransportError> {
         let mut batch = vec![first];
         while let Ok(more) = out_rx.try_recv() {
             batch.push(more);
         }
         for item in batch {
-            if self.handle_outbound(item, in_tx).await? {
+            if self.handle_outbound(item, in_tx, key).await? {
                 self.wire.flush().await?;
                 return Ok(true);
             }
         }
-        self.flush().await?;
+        self.flush(key).await?;
         Ok(false)
     }
 
-    /// Send everything the queue holds, in `seq` order.
+    /// Send everything the queue holds, in `seq` order, sealing each frame's
+    /// `data` under the session key on its way out ([`output_payload`]).
     ///
     /// A no-op while a resync keyframe is outstanding: after an overflow the
     /// hub's replay buffer has a gap, and nothing may precede the keyframe that
     /// closes it — including the flushes done by the `host_size` and `end`
     /// paths.
-    async fn flush(&mut self) -> Result<(), TransportError> {
+    async fn flush(&mut self, key: &SessionKey) -> Result<(), TransportError> {
         if self.queue.awaiting_keyframe() {
             return Ok(());
         }
         for frame in self.queue.drain_output() {
             self.wire
-                .push(
-                    EVENT_OUTPUT,
-                    json!({ "seq": frame.seq, "data": b64_encode(&frame.data) }),
-                )
+                .push(EVENT_OUTPUT, output_payload(key, &frame))
                 .await?;
         }
         Ok(())
@@ -237,6 +316,7 @@ impl Connection {
         &mut self,
         item: Outbound,
         in_tx: &UnboundedSender<Inbound>,
+        key: &SessionKey,
     ) -> Result<bool, TransportError> {
         match item {
             Outbound::Output(frame) => {
@@ -259,12 +339,14 @@ impl Connection {
                 }
             }
             Outbound::Keyframe(frame) => {
-                self.flush().await?;
+                self.flush(key).await?;
+                // A re-sent keyframe (hub request, rejoin repaint, overflow
+                // resync) reaches this arm as a fresh `Frame` minted by the
+                // session — it is re-encrypted here, never cached as
+                // ciphertext, so a fresh `seq` and a fresh random nonce always
+                // travel together.
                 self.wire
-                    .push(
-                        EVENT_KEYFRAME,
-                        json!({ "seq": frame.seq, "data": b64_encode(&frame.data) }),
-                    )
+                    .push(EVENT_KEYFRAME, keyframe_payload(key, &frame))
                     .await?;
                 // Ends any resync window opened by an overflow: output queued
                 // after this keyframe carries a greater `seq`, so the hub's
@@ -272,13 +354,13 @@ impl Connection {
                 self.queue.on_keyframe_sent();
             }
             Outbound::HostSize { cols, rows } => {
-                self.flush().await?;
+                self.flush(key).await?;
                 self.wire
                     .push(EVENT_HOST_SIZE, json!({ "cols": cols, "rows": rows }))
                     .await?;
             }
             Outbound::End => {
-                self.flush().await?;
+                self.flush(key).await?;
                 self.wire.push(EVENT_END, json!({})).await?;
                 return Ok(true);
             }
@@ -296,6 +378,18 @@ pub(crate) struct Transport {
     hub_url: Url,
     api_token: String,
     write: WriteMode,
+    /// The per-session E2EE key, owned (and zeroized on drop) here: the
+    /// transport is the only place plaintext meets the wire. On a
+    /// reconnect-as-new-session the same key is reused under the new token —
+    /// same process, `seq` continues monotonically, and random nonces make
+    /// reuse safe.
+    key: SessionKey,
+    /// `key`'s URL-fragment encoding, computed once in [`Transport::new`] so
+    /// [`Transport::on_joined`] does not re-encode on every (re)join.
+    key_fragment: String,
+    /// Replay dedup for viewer input. Lives here — not on the per-connection
+    /// state — so a hub replay across a reconnect is still caught.
+    input_nonces: NonceWindow,
     /// The **secret** host credential from the join reply. Never the public
     /// token.
     host_resume_token: Option<String>,
@@ -311,18 +405,25 @@ pub(crate) struct Transport {
 }
 
 impl Transport {
-    /// Build a transport. `first_url_tx` receives the join URL on the first
-    /// successful join; the reconnect state starts empty.
+    /// Build a transport. It takes ownership of the session `key` (there is
+    /// exactly one owner, so zeroize-on-drop means something); `first_url_tx`
+    /// receives the join URL — key fragment included — on the first successful
+    /// join; the reconnect state starts empty.
     pub(crate) fn new(
         hub_url: Url,
         api_token: String,
         write: WriteMode,
+        key: SessionKey,
         first_url_tx: oneshot::Sender<String>,
     ) -> Self {
+        let key_fragment = key.to_fragment();
         Self {
             hub_url,
             api_token,
             write,
+            key,
+            key_fragment,
+            input_nonces: NonceWindow::new(),
             host_resume_token: None,
             last_public_token: None,
             first_url_tx: Some(first_url_tx),
@@ -404,7 +505,7 @@ impl Transport {
                 item = out_rx.recv() => {
                     // The session dropped its sender: nothing left to send.
                     let Some(item) = item else { return Ok(()) };
-                    if conn.relay_batch(item, out_rx, in_tx).await? {
+                    if conn.relay_batch(item, out_rx, in_tx, &self.key).await? {
                         return Ok(());
                     }
                 }
@@ -461,6 +562,18 @@ impl Transport {
             Incoming::Reply { .. } | Incoming::Other => {}
             Incoming::Event { event, payload } => {
                 if let Some(inbound) = Inbound::from_event(&event, &payload) {
+                    // `from_event` stays keyless: for `input` it hands back
+                    // the sealed blob, opened (and replay-checked) here before
+                    // the session ever sees it. A blob that fails to open is
+                    // dropped silently — nothing unauthenticated may ever
+                    // travel toward the PTY.
+                    let inbound = match inbound {
+                        Inbound::Input(blob) => match self.decrypt_input(&blob) {
+                            Some(plaintext) => Inbound::Input(plaintext),
+                            None => return Ok(()),
+                        },
+                        other => other,
+                    };
                     let _ = in_tx.send(inbound);
                 }
             }
@@ -469,15 +582,43 @@ impl Transport {
         Ok(())
     }
 
+    /// Open a sealed viewer-input blob: replay-check its nonce, authenticate
+    /// and decrypt it (input AAD is `frame_aad(Input, 0)` — viewers are
+    /// anonymous, so there is no per-sender seq to bind), and record the nonce
+    /// only once the blob proved genuine, so garbage cannot evict real nonces
+    /// from the window.
+    ///
+    /// `None` — a silent drop, with nothing forwarded — for replays, blobs too
+    /// short to carry a nonce, and every authentication failure.
+    fn decrypt_input(&mut self, blob: &[u8]) -> Option<Vec<u8>> {
+        let nonce: [u8; NONCE_LEN] = blob.get(..NONCE_LEN)?.try_into().ok()?;
+        if self.input_nonces.contains(&nonce) {
+            return None;
+        }
+        let plaintext = self
+            .key
+            .decrypt(blob, &crypto::frame_aad(FrameKind::Input, 0))
+            .ok()?;
+        self.input_nonces.record(nonce);
+        Some(plaintext)
+    }
+
     fn on_joined(&mut self, response: &Value, in_tx: &UnboundedSender<Inbound>) {
         // The public view token. Kept here to feed `is_fresh_session` across
         // rejoins; deliberately NOT forwarded to the session, which only ever
         // prints `join_url` — and that already embeds the token.
         let token = response["token"].as_str().unwrap_or_default().to_string();
-        let join_url = response["join_url"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
+        // The single point the hub-minted URL enters the program: append the
+        // key as a URL fragment HERE, so the printed link, the frozen
+        // `ATUIN_SHARE_URL`, and every other consumer only ever see the full
+        // fragmented URL. Browsers never send fragments in HTTP requests, so
+        // the hub never sees the key; a reconnect-as-new-session re-appends
+        // the same (cached) fragment to the new link.
+        let join_url = format!(
+            "{}#{}",
+            response["join_url"].as_str().unwrap_or_default(),
+            self.key_fragment
+        );
 
         // Store the SECRET resume credential. Never send the public `token` as
         // `resume_token`: it is in the share link, so anyone holding the link
@@ -523,14 +664,29 @@ fn is_fresh_session(last: Option<&str>, new: &str) -> bool {
 mod tests {
     use super::*;
 
+    use crate::protocol::b64_decode;
+
+    /// A fixed key so encrypt/decrypt assertions are reproducible across the
+    /// helper and the expectations built inside each test.
+    fn test_key() -> SessionKey {
+        SessionKey::from_bytes([0x42; crypto::KEY_LEN])
+    }
+
     fn test_transport(write: bool) -> Transport {
         let (url_tx, _url_rx) = oneshot::channel();
         Transport::new(
             Url::parse("https://hub.example.com/some/base?stale=1").expect("valid URL"),
             "api-token-123".to_string(),
             WriteMode::from_flag(write),
+            test_key(),
             url_tx,
         )
+    }
+
+    /// Seal `plaintext` exactly as a viewer's `encryptBlob` would for the
+    /// input channel: Input AAD, constant seq 0.
+    fn sealed_input(plaintext: &[u8]) -> Vec<u8> {
+        test_key().encrypt(plaintext, &crypto::frame_aad(FrameKind::Input, 0))
     }
 
     #[test]
@@ -568,6 +724,7 @@ mod tests {
                 Url::parse(base).expect("valid URL"),
                 "tok".to_string(),
                 WriteMode::from_flag(false),
+                test_key(),
                 url_tx,
             );
             assert_eq!(t.ws_url().path(), want, "base: {base}");
@@ -593,11 +750,14 @@ mod tests {
         );
     }
 
+    /// `from_event` is keyless: it b64-decodes the sealed blob and passes it
+    /// through untouched — decryption happens in `Transport::decrypt_input`.
     #[test]
-    fn from_event_decodes_input_from_base64() {
-        let payload = json!({ "data": b64_encode(b"ls\n") });
+    fn from_event_passes_the_sealed_input_blob_through_undecrypted() {
+        let blob = sealed_input(b"ls\n");
+        let payload = json!({ "data": b64_encode(&blob) });
         match Inbound::from_event("input", &payload) {
-            Some(Inbound::Input(bytes)) => assert_eq!(bytes, b"ls\n"),
+            Some(Inbound::Input(bytes)) => assert_eq!(bytes, blob),
             other => panic!("expected Input, got {}", kind(&other)),
         }
     }
@@ -606,6 +766,202 @@ mod tests {
     fn from_event_drops_input_with_bad_base64() {
         let payload = json!({ "data": "not base64!" });
         assert!(Inbound::from_event("input", &payload).is_none());
+    }
+
+    #[test]
+    fn decrypt_input_yields_the_plaintext_of_a_genuine_blob() {
+        let mut t = test_transport(true);
+        let blob = sealed_input(b"echo hi\n");
+        assert_eq!(t.decrypt_input(&blob).as_deref(), Some(&b"echo hi\n"[..]));
+    }
+
+    /// An exact hub replay re-delivers the same nonce: one delivery only.
+    #[test]
+    fn replayed_input_blob_is_delivered_exactly_once() {
+        let mut t = test_transport(true);
+        let blob = sealed_input(b"echo hi\n");
+        assert!(t.decrypt_input(&blob).is_some());
+        assert_eq!(t.decrypt_input(&blob), None);
+        // A *different* encryption of the same keystrokes (fresh nonce) is a
+        // new input, not a replay.
+        assert!(t.decrypt_input(&sealed_input(b"echo hi\n")).is_some());
+    }
+
+    #[test]
+    fn garbage_input_blobs_are_dropped_without_panic_or_delivery() {
+        let mut t = test_transport(true);
+        assert_eq!(t.decrypt_input(b""), None);
+        assert_eq!(t.decrypt_input(&[0u8; 5]), None); // shorter than a nonce
+        assert_eq!(t.decrypt_input(&[0u8; 27]), None); // nonce, but no room for a tag
+        assert_eq!(t.decrypt_input(&[0u8; 64]), None); // right shape, wrong everything
+
+        // A tampered blob is dropped WITHOUT burning its nonce: the genuine
+        // blob it was forged from must still deliver afterwards.
+        let mut blob = sealed_input(b"x");
+        let last = blob.len() - 1;
+        blob[last] ^= 0x01;
+        assert_eq!(t.decrypt_input(&blob), None);
+        blob[last] ^= 0x01;
+        assert_eq!(t.decrypt_input(&blob).as_deref(), Some(&b"x"[..]));
+    }
+
+    /// Cross-channel reflection: a blob the host sealed as *output* must never
+    /// open on the input path, even under the same key.
+    #[test]
+    fn output_sealed_blob_is_rejected_as_input() {
+        let mut t = test_transport(true);
+        let blob = test_key().encrypt(b"x", &crypto::frame_aad(FrameKind::Output, 0));
+        assert_eq!(t.decrypt_input(&blob), None);
+    }
+
+    #[test]
+    fn nonce_window_is_bounded_and_evicts_oldest_first() {
+        let nonce_of = |i: u32| {
+            let mut n = [0u8; NONCE_LEN];
+            n[..4].copy_from_slice(&i.to_be_bytes());
+            n
+        };
+        let mut w = NonceWindow::new();
+        let cap = u32::try_from(INPUT_NONCE_CAP).expect("cap fits u32");
+        for i in 0..cap {
+            w.record(nonce_of(i));
+        }
+        assert!(w.contains(&nonce_of(0)));
+        w.record(nonce_of(cap));
+        assert!(!w.contains(&nonce_of(0)), "oldest nonce is evicted");
+        assert!(w.contains(&nonce_of(1)));
+        assert!(w.contains(&nonce_of(cap)));
+    }
+
+    #[test]
+    fn output_payload_seals_data_under_the_seq_bound_output_aad() {
+        let key = test_key();
+        let frame = Frame {
+            seq: 42,
+            data: b"hello viewer".to_vec(),
+        };
+        let payload = output_payload(&key, &frame);
+        // Envelope `seq` stays plaintext — the hub orders and replays on it.
+        assert_eq!(payload["seq"], 42);
+        let blob = b64_decode(payload["data"].as_str().expect("data is a string"))
+            .expect("data is valid base64");
+        assert_eq!(
+            key.decrypt(&blob, &crypto::frame_aad(FrameKind::Output, 42))
+                .expect("genuine output blob decrypts"),
+            b"hello viewer"
+        );
+        // Wrong kind (reflection) and wrong seq (renumbering) must both fail.
+        assert!(
+            key.decrypt(&blob, &crypto::frame_aad(FrameKind::Keyframe, 42))
+                .is_err()
+        );
+        assert!(
+            key.decrypt(&blob, &crypto::frame_aad(FrameKind::Output, 43))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn keyframe_payload_seals_data_under_the_seq_bound_keyframe_aad() {
+        let key = test_key();
+        let frame = Frame {
+            seq: 7,
+            data: b"\x1b[2Jrepaint".to_vec(),
+        };
+        let payload = keyframe_payload(&key, &frame);
+        assert_eq!(payload["seq"], 7);
+        let blob = b64_decode(payload["data"].as_str().expect("data is a string"))
+            .expect("data is valid base64");
+        assert_eq!(
+            key.decrypt(&blob, &crypto::frame_aad(FrameKind::Keyframe, 7))
+                .expect("genuine keyframe blob decrypts"),
+            b"\x1b[2Jrepaint"
+        );
+        assert!(
+            key.decrypt(&blob, &crypto::frame_aad(FrameKind::Output, 7))
+                .is_err()
+        );
+    }
+
+    /// Each encryption draws a fresh random nonce, so equal plaintext under
+    /// the same AAD still yields distinct wire blobs.
+    #[test]
+    fn identical_frames_seal_to_distinct_blobs() {
+        let key = test_key();
+        let frame = Frame {
+            seq: 1,
+            data: b"same bytes".to_vec(),
+        };
+        assert_ne!(
+            output_payload(&key, &frame)["data"],
+            output_payload(&key, &frame)["data"]
+        );
+    }
+
+    #[test]
+    fn on_joined_appends_exactly_one_key_fragment_to_the_join_url() {
+        let (url_tx, mut url_rx) = oneshot::channel();
+        let mut t = Transport::new(
+            Url::parse("https://hub.example.com").expect("valid URL"),
+            "tok".to_string(),
+            WriteMode::from_flag(false),
+            test_key(),
+            url_tx,
+        );
+        let (in_tx, mut in_rx) = tokio::sync::mpsc::unbounded_channel();
+        t.on_joined(
+            &json!({
+                "token": "pub-token",
+                "join_url": "https://hub.example.com/lab/share/pub-token",
+                "host_resume_token": "secret",
+            }),
+            &in_tx,
+        );
+
+        let fragment = test_key().to_fragment();
+        assert_eq!(fragment.len(), 43);
+        let want = format!("https://hub.example.com/lab/share/pub-token#{fragment}");
+        assert_eq!(want.matches('#').count(), 1);
+
+        // Both consumers see the SAME fragmented URL: the first-join oneshot
+        // (feeds `ATUIN_SHARE_URL`) and the session's `Connected`.
+        assert_eq!(
+            url_rx.try_recv().expect("first join fires the oneshot"),
+            want
+        );
+        match in_rx.try_recv().expect("Connected was sent") {
+            Inbound::Connected {
+                join_url,
+                fresh_session,
+            } => {
+                assert_eq!(join_url, want);
+                assert!(!fresh_session);
+            }
+            _ => panic!("expected Connected"),
+        }
+
+        // A rejoin appends the same cached fragment to the new link — and only
+        // once.
+        t.on_joined(
+            &json!({
+                "token": "new-token",
+                "join_url": "https://hub.example.com/lab/share/new-token",
+            }),
+            &in_tx,
+        );
+        match in_rx.try_recv().expect("second Connected was sent") {
+            Inbound::Connected {
+                join_url,
+                fresh_session,
+            } => {
+                assert_eq!(
+                    join_url,
+                    format!("https://hub.example.com/lab/share/new-token#{fragment}")
+                );
+                assert!(fresh_session);
+            }
+            _ => panic!("expected Connected"),
+        }
     }
 
     #[test]

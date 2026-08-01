@@ -50,8 +50,13 @@ pub(crate) enum Outbound {
 
 /// Hub → session events.
 pub(crate) enum Inbound {
-    /// Viewer keystrokes. Only forwarded to the child in write mode — enforced
-    /// here as well as on the hub (defence in depth, spec §8).
+    /// Viewer keystrokes. As minted by [`Inbound::from_event`] this still
+    /// holds the sealed wire blob (`nonce || ciphertext || tag`); the
+    /// transport authenticates, replay-checks, and decrypts it before
+    /// forwarding, so by the time the session receives this variant the bytes
+    /// are plaintext. Only forwarded to the child in write mode — enforced
+    /// here as well as on the hub (defence in depth, spec §8), gating the
+    /// already-decrypted bytes.
     Input(Vec<u8>),
     /// The hub's negotiated child size (smallest connected viewer).
     SetSize {
@@ -81,6 +86,9 @@ impl Inbound {
     /// Map a hub → CLI channel event onto an `Inbound`. Unknown events yield
     /// `None` and are ignored, so the hub can add events without breaking older
     /// clients.
+    ///
+    /// Deliberately keyless: for `input` the b64 decode yields the sealed
+    /// E2EE blob, which the transport opens before dispatching to the session.
     pub(crate) fn from_event(event: &str, payload: &Value) -> Option<Self> {
         match event {
             "input" => b64_decode(payload["data"].as_str().unwrap_or_default())
@@ -236,7 +244,7 @@ impl SessionTask {
         // token changed.
         if fresh_session {
             println!(
-                "\r\n  Reconnected as a NEW session — the previous link is dead.\r\n  New link: {join_url}\r"
+                "\r\n  Reconnected as a NEW session -- the previous link is dead.\r\n  New link: {join_url}\r"
             );
         } else {
             println!("\r\n  Share this link: {join_url}\r");
@@ -458,11 +466,11 @@ fn resize_notice(previous: Size, applied: Size, viewers: u32) -> Option<String> 
     if applied == previous {
         return None;
     }
-    let dims = format!("{}×{}", applied.cols, applied.rows);
+    let dims = format!("{}x{}", applied.cols, applied.rows);
     Some(if viewers == 0 {
         format!("resized to {dims}")
     } else {
-        format!("resized to {dims} — a viewer's screen is smaller")
+        format!("resized to {dims} -- a viewer's screen is smaller")
     })
 }
 
@@ -700,7 +708,7 @@ mod tests {
     fn resize_notice_does_not_blame_a_viewer_when_nobody_is_watching() {
         assert_eq!(
             resize_notice(OLD, NEW, 0),
-            Some("resized to 100×30".to_string())
+            Some("resized to 100x30".to_string())
         );
     }
 
@@ -708,11 +716,11 @@ mod tests {
     fn resize_notice_blames_a_viewer_only_when_one_is_connected() {
         assert_eq!(
             resize_notice(OLD, NEW, 1),
-            Some("resized to 100×30 — a viewer's screen is smaller".to_string())
+            Some("resized to 100x30 -- a viewer's screen is smaller".to_string())
         );
         assert_eq!(
             resize_notice(OLD, NEW, 7),
-            Some("resized to 100×30 — a viewer's screen is smaller".to_string())
+            Some("resized to 100x30 -- a viewer's screen is smaller".to_string())
         );
     }
 }

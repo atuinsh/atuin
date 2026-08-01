@@ -13,6 +13,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "aes"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b169f7a6d4742236a0a00c541b845991d0ac43e546831af1249753ab4c3aa3a0"
+dependencies = [
+ "cfg-if",
+ "cipher",
+ "cpufeatures 0.2.17",
+]
+
+[[package]]
+name = "aes-gcm"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "831010a0f742e1209b3bcea8fab6a8e149051ba6099432c8cb2cc117dec3ead1"
+dependencies = [
+ "aead",
+ "aes",
+ "cipher",
+ "ctr",
+ "ghash",
+ "subtle",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -225,13 +250,13 @@ dependencies = [
  "atuin-dotfiles",
  "atuin-history",
  "atuin-kv",
+ "atuin-lab-share",
  "atuin-nucleo-matcher",
  "atuin-pty-proxy",
  "atuin-scripts",
  "atuin-server",
  "atuin-server-database",
  "atuin-server-postgres",
- "atuin-share",
  "clap",
  "clap_complete",
  "clap_complete_nushell",
@@ -509,6 +534,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "atuin-lab-share"
+version = "18.18.0-beta.3"
+dependencies = [
+ "aes-gcm",
+ "atuin-common",
+ "base64",
+ "crossterm",
+ "futures-util",
+ "hex",
+ "portable-pty",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
+ "unicode-width 0.2.2",
+ "url",
+ "vt100",
+ "zeroize",
+]
+
+[[package]]
 name = "atuin-nucleo"
 version = "0.6.0"
 dependencies = [
@@ -647,24 +693,6 @@ dependencies = [
  "time",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "atuin-share"
-version = "18.18.0-beta.3"
-dependencies = [
- "atuin-common",
- "base64",
- "crossterm",
- "futures-util",
- "portable-pty",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite",
- "unicode-width 0.2.2",
- "url",
- "vt100",
 ]
 
 [[package]]
@@ -1291,6 +1319,15 @@ checksum = "eb2a7d3066da2de787b7f032c736763eb7ae5d355f81a68bab2675a96008b0bf"
 dependencies = [
  "lab",
  "phf",
+]
+
+[[package]]
+name = "ctr"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0369ee1ad671834580515889b80f2ea915f23b8be8d0daa4bbaf2ac5c7590835"
+dependencies = [
+ "cipher",
 ]
 
 [[package]]
@@ -2061,6 +2098,16 @@ dependencies = [
  "libc",
  "r-efi 6.0.0",
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "ghash"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0d8a4362ccb29cb0b265253fb0a2728f592895ee6854fd9bc13f2ffda266ff1"
+dependencies = [
+ "opaque-debug",
+ "polyval",
 ]
 
 [[package]]
@@ -3555,6 +3602,18 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8159bd90725d2df49889a078b54f4f79e87f1f8a8444194cdca81d38f5393abf"
 dependencies = [
+ "cpufeatures 0.2.17",
+ "opaque-debug",
+ "universal-hash",
+]
+
+[[package]]
+name = "polyval"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d1fe60d06143b2430aa532c94cfe9e29783047f06c0d7fd359a9a51b729fa25"
+dependencies = [
+ "cfg-if",
  "cpufeatures 0.2.17",
  "opaque-debug",
  "universal-hash",

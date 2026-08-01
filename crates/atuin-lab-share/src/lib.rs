@@ -19,9 +19,12 @@
 //!
 //! # Module map
 //!
-//! Everything below [`run_share`] is crate-private; the modules split along the
-//! session's data flow:
+//! Everything below [`run_share`] except [`crypto`] is crate-private; the
+//! modules split along the session's data flow:
 //!
+//! * [`crypto`] — end-to-end encryption: the per-session AES-256-GCM key, the
+//!   sealed-blob wire format, and the URL-fragment key encoding (public: it
+//!   pins the wire format the viewer implements too).
 //! * `subshell` — the child shell on its PTY (`portable-pty`), split into the
 //!   parts the session's task topology needs.
 //! * `session` — the heart of the crate: one central `select!` task owning all
@@ -33,7 +36,9 @@
 //! * `query` — synthetic answers to the terminal probes (CPR / DA) that the
 //!   compositing model would otherwise swallow.
 //! * `transport` — the hub client: Phoenix channel over WebSocket, reconnect
-//!   with backoff, session resume via the secret host token.
+//!   with backoff, session resume via the secret host token. Also the E2EE
+//!   seam: it owns the session key, seals outbound frames, opens viewer input,
+//!   and appends the key fragment to the join URL.
 //! * `protocol` — the minimal Phoenix v2 JSON codec and the base64 helpers.
 //! * `backpressure` — the latest-wins outbound queue and the reconnect backoff,
 //!   both pure state machines.
@@ -47,6 +52,8 @@ use url::Url;
 
 #[cfg(unix)]
 mod backpressure;
+#[cfg(unix)]
+pub mod crypto;
 mod error;
 #[cfg(unix)]
 mod protocol;
@@ -133,10 +140,10 @@ pub async fn run_share(opts: ShareOptions) -> Result<()> {
 
     // One-time warning (spec §8): output and typed secrets are visible.
     eprintln!(
-        "⚠  Terminal sharing is experimental. Everything shown here — including \
-         secrets you type — is visible to anyone with the link.{}",
+        "!! Terminal sharing is experimental.\n  Everything shown here -- including \
+         secrets you type -- is visible to anyone with the link.{}",
         if write.is_write_enabled() {
-            " WRITE MODE: they can run commands on your machine."
+            "\n  WRITE MODE: they can run commands on your machine."
         } else {
             ""
         }
@@ -144,13 +151,19 @@ pub async fn run_share(opts: ShareOptions) -> Result<()> {
 
     let host_size = read_host_size()?;
 
+    // The per-session E2EE key, minted before the hub ever hears from us. It
+    // moves into the transport — the only place plaintext meets the wire — and
+    // reaches viewers solely as the URL fragment on the join URL, which never
+    // appears in an HTTP request. The session and screen model stay key-free.
+    let key = crypto::SessionKey::generate();
+
     // session -> transport: unbounded, so the session's `send` is synchronous
     // and never blocks its select loop.
     let (out_tx, out_rx) = tokio::sync::mpsc::unbounded_channel::<session::Outbound>();
     // transport -> session: the same shape in the other direction.
     let (in_tx, in_rx) = tokio::sync::mpsc::unbounded_channel::<session::Inbound>();
 
-    let join_url = connect_to_hub(&opts, write, out_rx, in_tx).await?;
+    let join_url = connect_to_hub(&opts, write, key, out_rx, in_tx).await?;
     let sh = spawn_subshell(host_size, &join_url, write)?;
 
     // Raw mode is enabled here (not in `Session::run`) so the session stays
@@ -216,12 +229,17 @@ fn read_host_size() -> Result<Size> {
 /// scrolls away. It also means an unreachable hub fails with a clear message
 /// instead of a shared shell that has no link.
 ///
+/// The session `key` moves into the transport here; the URL delivered back
+/// already carries the `#key` fragment the transport appends, so the printed
+/// link and `ATUIN_SHARE_URL` need no further handling.
+///
 /// The transport is a task on our runtime; the session is awaited directly by
 /// `run_share`. Neither needs a thread or runtime of its own.
 #[cfg(unix)]
 async fn connect_to_hub(
     opts: &ShareOptions,
     write: render::WriteMode,
+    key: crypto::SessionKey,
     out_rx: tokio::sync::mpsc::UnboundedReceiver<session::Outbound>,
     in_tx: tokio::sync::mpsc::UnboundedSender<session::Inbound>,
 ) -> Result<String> {
@@ -237,10 +255,16 @@ async fn connect_to_hub(
     // on our runtime, so we do it here.
     atuin_common::tls::ensure_crypto_provider();
 
-    eprintln!("Connecting to {} …", opts.hub_url);
+    eprintln!("Connecting to {} ...", opts.hub_url);
     tokio::spawn(
-        transport::Transport::new(opts.hub_url.clone(), opts.api_token.clone(), write, url_tx)
-            .run(out_rx, in_tx),
+        transport::Transport::new(
+            opts.hub_url.clone(),
+            opts.api_token.clone(),
+            write,
+            key,
+            url_tx,
+        )
+        .run(out_rx, in_tx),
     );
 
     match tokio::time::timeout(CONNECT_TIMEOUT, url_rx).await {
