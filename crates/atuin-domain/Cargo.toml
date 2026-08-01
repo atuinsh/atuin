@@ -14,6 +14,7 @@ repository = { workspace = true }
 
 [dependencies]
 serde = { workspace = true }
+atuin-common = { workspace = true }
 uuid = { workspace = true }
 time = { workspace = true }
 semver = { workspace = true }
@@ -21,7 +22,25 @@ typed-builder = { workspace = true }
 derive_more = { workspace = true }
 eyre = { workspace = true }
 sqlx = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+async-trait = { workspace = true }
+parking_lot = { workspace = true }
+reqwest-middleware = { workspace = true }
+http = { workspace = true }
+xxhash-rust = { workspace = true }
+tokio = { workspace = true }
+axum = { version = "0.8", optional = true }
+
+[features]
+# Feature-gated axum integration for the server-side capability handlers (`caps::axum`).
+axum = ["dep:axum"]
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 rstest = { workspace = true }
+proptest = { workspace = true }
+wiremock = { workspace = true }
+tower = { workspace = true, features = ["util"] }
