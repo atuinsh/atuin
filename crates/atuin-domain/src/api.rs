@@ -1,6 +1,7 @@
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 // the usage of X- has been deprecated for quite along time, it turns out
@@ -72,6 +73,16 @@ pub struct IndexResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MeResponse {
     pub username: String,
+}
+
+/// The capabilities a server advertises, as returned from its capabilities endpoint.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CapabilitiesResponse {
+    /// An opaque capability token issued by the server.
+    pub version: String,
+
+    /// The list of capabilities this server supports, as a map of capability name to its value.
+    pub capabilities: HashMap<String, serde_json::Value>,
 }
 
 // Hub CLI authentication types

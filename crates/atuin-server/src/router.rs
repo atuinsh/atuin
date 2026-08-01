@@ -1,4 +1,8 @@
+use std::sync::Arc;
+
 use atuin_domain::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ErrorResponse};
+use atuin_domain::caps::axum::{CapabilitiesRouterExt, get as capabilities_endpoint};
+use atuin_domain::caps::{CapServer, CapabilitiesCap};
 use axum::{
     Router,
     extract::{FromRequestParts, Request},
@@ -117,11 +121,12 @@ pub struct AppState<DB: Database> {
 }
 
 pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
-    let routes = Router::new()
-        .route("/", get(handlers::index))
-        .route("/healthz", get(handlers::health::health_check));
+    // Advertise the self-referential capabilities capability, so every server that speaks the
+    // protocol carries at least one concrete capability a client can observe.
+    let caps = Arc::new(CapServer::new().add(CapabilitiesCap { version: 1 }));
 
-    let routes = routes
+    let negotiated = Router::new()
+        .route("/", get(handlers::index))
         .route("/user/{username}", get(handlers::user::get))
         .route("/account", delete(handlers::user::delete))
         .route("/account/password", patch(handlers::user::change_password))
@@ -131,21 +136,31 @@ pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
         .route("/api/v0/record", post(handlers::v0::record::post))
         .route("/api/v0/record", get(handlers::v0::record::index))
         .route("/api/v0/record/next", get(handlers::v0::record::next))
-        .route("/api/v0/store", delete(handlers::v0::store::delete));
+        .route("/api/v0/store", delete(handlers::v0::store::delete))
+        .negotiate_capabilities(caps.clone());
+
+    let unnegotiated = Router::new()
+        .route("/api/v0/capabilities", get(capabilities_endpoint))
+        .route("/healthz", get(handlers::health::health_check))
+        .with_state(caps);
+
+    let routes = unnegotiated.merge(negotiated);
 
     let path = settings.path.as_str();
-    if path.is_empty() {
+    let routes = if path.is_empty() {
         routes
     } else {
         Router::new().nest(path, routes)
-    }
-    .fallback(teapot)
-    .with_state(AppState { database, settings })
-    .layer(
-        ServiceBuilder::new()
-            .layer(axum::middleware::from_fn(clacks_overhead))
-            .layer(TraceLayer::new_for_http().make_span_with(crate::trace::make_request_span))
-            .layer(axum::middleware::from_fn(metrics::track_metrics))
-            .layer(axum::middleware::from_fn(semver)),
-    )
+    };
+
+    routes
+        .fallback(teapot)
+        .with_state(AppState { database, settings })
+        .layer(
+            ServiceBuilder::new()
+                .layer(axum::middleware::from_fn(clacks_overhead))
+                .layer(TraceLayer::new_for_http().make_span_with(crate::trace::make_request_span))
+                .layer(axum::middleware::from_fn(metrics::track_metrics))
+                .layer(axum::middleware::from_fn(semver)),
+        )
 }

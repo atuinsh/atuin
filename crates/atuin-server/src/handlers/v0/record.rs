@@ -17,7 +17,9 @@ pub async fn post<DB: Database>(
     state: State<AppState<DB>>,
     Json(records): Json<Vec<Record<EncryptedData>>>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
-    let State(AppState { database, settings }) = state;
+    let State(AppState {
+        database, settings, ..
+    }) = state;
 
     tracing::debug!(
         count = records.len(),
@@ -55,10 +57,7 @@ pub async fn index<DB: Database>(
     UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
 ) -> Result<Json<RecordStatus>, ErrorResponseStatus<'static>> {
-    let State(AppState {
-        database,
-        settings: _,
-    }) = state;
+    let State(AppState { database, .. }) = state;
 
     let record_index = match database.status(&user).await {
         Ok(index) => index,
@@ -89,10 +88,7 @@ pub async fn next<DB: Database>(
     UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
 ) -> Result<Json<Vec<Record<EncryptedData>>>, ErrorResponseStatus<'static>> {
-    let State(AppState {
-        database,
-        settings: _,
-    }) = state;
+    let State(AppState { database, .. }) = state;
     let params = params.0;
 
     let records = match database
