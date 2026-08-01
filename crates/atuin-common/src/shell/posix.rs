@@ -12,6 +12,21 @@ use super::{Alias, AliasValue, AliasesError, Rendered, RunError, Skipped, Var};
 
 pub(super) type Aliases = HashMap<BString, AliasValue>;
 
+#[cfg(feature = "shell-syntax")]
+use super::parse::{Token, ShellParser, classify_with};
+
+/// Classifies POSIX-family shells (bash/sh/zsh/dash/ksh) via the bash grammar.
+#[cfg(feature = "shell-syntax")]
+#[allow(dead_code)]
+pub struct PosixParser;
+
+#[cfg(feature = "shell-syntax")]
+impl ShellParser for PosixParser {
+    fn classify(&self, code: &str) -> Vec<Token> {
+        classify_with(tree_sitter_bash::LANGUAGE.into(), code)
+    }
+}
+
 /// A POSIX-ish shell sources the user's rc files before running our command, and anything they
 /// print lands on the same stdout. Bracket the real output with these NUL-delimited markers so it
 /// can be sliced back out; NUL cannot occur in a command's arguments or output.
@@ -306,6 +321,49 @@ mod var_render_tests {
         let r = render_vars(&[var("1BAD", "x", true)]);
         assert!(r.script.is_empty());
         assert_eq!(r.skipped.len(), 1);
+    }
+}
+
+#[cfg(all(test, feature = "shell-syntax"))]
+mod posix_parse_tests {
+    use crate::shell::{ShellParser, TokenKind, commands};
+    use super::PosixParser;
+    use rstest::rstest;
+    use pretty_assertions::assert_eq;
+
+    // Exact extraction — mirrors the atuin-ai permission tests.
+    #[rstest]
+    #[case::simple("ls -la /tmp", &[("ls", "ls -la /tmp")])]
+    #[case::chaining("git add . && git commit -m 'hi'", &[("git", "git add ."), ("git", "git commit -m 'hi'")])]
+    #[case::pipeline("cat file.txt | grep foo | wc -l", &[("cat", "cat file.txt"), ("grep", "grep foo"), ("wc", "wc -l")])]
+    #[case::assignment_stripped("FOO=bar ls -la /tmp", &[("ls", "ls -la /tmp")])]
+    #[case::redirect_stripped("ls > out.txt", &[("ls", "ls")])]
+    #[case::subshell("(cd /tmp && ls)", &[("cd", "cd /tmp"), ("ls", "ls")])]
+    fn extracts(#[case] code: &str, #[case] want: &[(&str, &str)]) {
+        let got: Vec<(&str, &str)> =
+            commands(&PosixParser, code).iter().map(|c| (c.name, c.full)).collect();
+        assert_eq!(got, want);
+    }
+
+    // Commands hidden in substitutions surface as their own entries.
+    #[rstest]
+    #[case::dollar_sub("echo $(git rev-parse HEAD)", &["echo", "git"])]
+    #[case::backtick("echo `date`", &["echo", "date"])]
+    #[case::nested("echo \"Result: $(git log | head -1)\"", &["echo", "git", "head"])]
+    fn extracts_nested(#[case] code: &str, #[case] want_names: &[&str]) {
+        let names: Vec<&str> = commands(&PosixParser, code).iter().map(|c| c.name).collect();
+        for n in want_names {
+            assert!(names.contains(n), "expected {n:?} in {names:?}");
+        }
+    }
+
+    #[test]
+    fn classifies_flags_and_strings() {
+        let kinds: Vec<TokenKind> =
+            PosixParser.classify("git commit -m 'hi'").iter().map(|t| t.kind).collect();
+        assert!(kinds.contains(&TokenKind::Command));
+        assert!(kinds.contains(&TokenKind::Flag));   // -m
+        assert!(kinds.contains(&TokenKind::String));  // 'hi'
     }
 }
 

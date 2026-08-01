@@ -121,6 +121,68 @@ fn close<'a>(code: &'a str, open: Option<Range<usize>>, end: usize, out: &mut Ve
     }
 }
 
+#[cfg(feature = "shell-syntax")]
+#[allow(dead_code)]
+pub(super) fn classify_with(language: tree_sitter::Language, code: &str) -> Vec<Token> {
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&language).is_ok()
+        && let Some(tree) = parser.parse(code, None)
+    {
+        let mut out = Vec::new();
+        walk_tokens(tree.root_node(), code.as_bytes(), &mut out);
+        out
+    } else {
+        // Rare: tree-sitter normally returns a tree with ERROR nodes, not None.
+        // Preserve the historical word-split fallback.
+        Fallback.classify(code)
+    }
+}
+
+#[cfg(feature = "shell-syntax")]
+#[allow(dead_code)]
+fn walk_tokens(node: tree_sitter::Node, src: &[u8], out: &mut Vec<Token>) {
+    let kind = match node.kind() {
+        "comment" => Some(TokenKind::Comment),
+        "command_name" => Some(TokenKind::Command),
+        "string" | "raw_string" | "ansi_c_string" | "heredoc_body"
+        | "single_quote_string" | "double_quote_string" => Some(TokenKind::String),
+        "simple_expansion" | "expansion" | "variable_assignment" | "variable_expansion" => {
+            Some(TokenKind::Variable)
+        }
+        "word" if src.get(node.start_byte()) == Some(&b'-') => Some(TokenKind::Flag),
+        k if !node.is_named()
+            && !k.is_empty()
+            && k.bytes().all(|b| b"|&;<>(){}$`".contains(&b)) =>
+        {
+            Some(TokenKind::Operator)
+        }
+        _ => None,
+    };
+    if let Some(kind) = kind {
+        out.push(Token { range: node.byte_range(), kind });
+    }
+    // Fish has no `command_name` node; the command's `name` field points at a
+    // plain `word`, which the match above never tags. Bash's `command` node
+    // also has a `name` field, but it points at a `command_name` node that
+    // *is* tagged above, so only synthesize the token when the field's target
+    // wouldn't otherwise self-classify (skip for bash, fire for fish).
+    if node.kind() == "command"
+        && let Some(name) = node.child_by_field_name("name")
+        && name.kind() != "command_name"
+    {
+        out.push(Token { range: name.byte_range(), kind: TokenKind::Command });
+    }
+    // An expansion is uniformly a variable; don't let its `$`/`{`/`}` children
+    // overwrite it as operators.
+    if matches!(node.kind(), "simple_expansion" | "expansion" | "variable_expansion") {
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        walk_tokens(child, src, out);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
