@@ -482,7 +482,6 @@ mod tests {
     use crate::compositor::OverlayFlags;
     use rstest::rstest;
     use std::os::unix::net::UnixStream;
-    use std::sync::mpsc::TryRecvError;
 
     // -- InputTracker -------------------------------------------------------
 
