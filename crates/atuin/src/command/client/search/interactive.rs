@@ -1301,7 +1301,7 @@ impl State {
                 let mut start = 0;
                 for (idx, ch) in line.char_indices() {
                     let w = ch.width().unwrap_or(0); // None for control chars which should not happen
-                    if width + w > preview_width.into() {
+                    if width + w > usize::from(preview_width) {
                         lines.push(line[start..idx].to_owned());
                         start = idx;
                         width = w;

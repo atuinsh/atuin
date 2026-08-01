@@ -820,7 +820,7 @@ const PREVIEW_WIDTH: u16 = 120;
 /// would always return that many lines, and downstream components that use
 /// tail-mode display (like the Viewport) would show the blank padding rows
 /// instead of the real output.
-fn vt100_screen_lines(screen: &vt100::Screen) -> Vec<String> {
+fn vt100_screen_lines(screen: &atuin_common::vt::Screen) -> Vec<String> {
     let (rows, cols) = screen.size();
     let mut lines = Vec::with_capacity(rows as usize);
     for row in 0..rows {
@@ -840,7 +840,7 @@ fn vt100_screen_lines(screen: &vt100::Screen) -> Vec<String> {
 
 /// Execute a shell command with VT100 emulation and streaming output.
 ///
-/// Feeds stdout+stderr into a `vt100::Parser` so that ANSI escape sequences,
+/// Feeds stdout+stderr into a terminal emulator so that ANSI escape sequences,
 /// progress bars (`\r`), and cursor movement are handled correctly. Periodically
 /// sends the current screen state as `Vec<String>` through `output_tx` for the
 /// live preview.
@@ -875,7 +875,7 @@ pub(crate) async fn execute_shell_command_streaming(
     let stderr = child.stderr.take().expect("stderr was piped");
 
     // VT100 emulator for the live preview (viewport-sized)
-    let mut parser = vt100::Parser::new(PREVIEW_HEIGHT, PREVIEW_WIDTH, 0);
+    let mut parser = atuin_common::vt::Parser::new(PREVIEW_HEIGHT, PREVIEW_WIDTH, 0);
 
     let mut stdout_reader = tokio::io::BufReader::new(stdout);
     let mut stderr_reader = tokio::io::BufReader::new(stderr);
@@ -892,7 +892,7 @@ pub(crate) async fn execute_shell_command_streaming(
     let mut interval = tokio::time::interval(Duration::from_millis(50));
 
     // Send initial empty screen
-    let initial_lines = vt100_screen_lines(parser.screen());
+    let initial_lines = vt100_screen_lines(&parser.screen());
     let _ = output_tx.send(initial_lines).await;
 
     let mut interrupted = false;
@@ -936,7 +936,7 @@ pub(crate) async fn execute_shell_command_streaming(
 
             // Periodic screen snapshot for preview
             _ = interval.tick() => {
-                let lines = vt100_screen_lines(parser.screen());
+                let lines = vt100_screen_lines(&parser.screen());
                 let _ = output_tx.send(lines).await;
             }
         }
@@ -962,7 +962,7 @@ pub(crate) async fn execute_shell_command_streaming(
     let duration = start.elapsed();
 
     // Send final screen state
-    let final_lines = vt100_screen_lines(parser.screen());
+    let final_lines = vt100_screen_lines(&parser.screen());
     let _ = output_tx.send(final_lines).await;
 
     // Strip ANSI escape sequences for clean LLM output by running
