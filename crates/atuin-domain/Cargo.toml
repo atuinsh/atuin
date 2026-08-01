@@ -31,7 +31,6 @@ parking_lot = { workspace = true }
 reqwest-middleware = { workspace = true }
 http = { workspace = true }
 xxhash-rust = { workspace = true }
-bstr = "1"
 axum = { version = "0.8", optional = true }
 
 [features]

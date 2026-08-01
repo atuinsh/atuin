@@ -33,7 +33,7 @@ pub async fn get(State(caps): State<Arc<CapServer>>) -> Response {
 /// `X-Atuin-Capabilities-Known` with a token differing from ours. Absent or matching tokens pass
 /// straight through, so pre-capabilities clients are never affected. A non-UTF-8 known header is
 /// treated as absent.
-pub async fn negotiate(
+async fn negotiate(
     State(caps): State<Arc<CapServer>>,
     request: Request,
     next: Next,
@@ -61,7 +61,8 @@ pub async fn negotiate(
 
 /// Install capability negotiation onto an axum [`Router`].
 pub trait CapabilitiesRouterExt {
-    /// Layer [`negotiate`] onto this router, rejecting requests whose capability token is stale.
+    /// Layer the capability-negotiation middleware onto this router, rejecting requests whose
+    /// capability token is stale.
     fn negotiate_capabilities(self, caps: Arc<CapServer>) -> Self;
 }
 

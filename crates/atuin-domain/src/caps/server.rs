@@ -1,4 +1,3 @@
-use bstr::{BString, ByteSlice};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -20,9 +19,9 @@ pub enum Negotiation {
 #[derive(Debug)]
 pub struct CapServer {
     /// Opaque version token (xxh3 of the canonical capability set), rebaked on every mutation.
-    token: BString,
+    token: String,
     /// Pre-serialized capabilities document (a `CapabilitiesResponse` as JSON), rebaked with it.
-    body: BString,
+    body: String,
     /// The advertised capabilities, exposed for typed introspection via `caps`.
     caps: CapsBundle,
 }
@@ -32,8 +31,8 @@ impl CapServer {
     /// but still carries a stable token for the empty set.
     pub fn new() -> Self {
         let mut server = CapServer {
-            token: BString::default(),
-            body: BString::default(),
+            token: String::new(),
+            body: String::new(),
             caps: CapsBundle::default(),
         };
         server.bake();
@@ -78,22 +77,20 @@ impl CapServer {
         })
         .expect("capabilities document serializes");
 
-        self.token = token.into();
-        self.body = body.into();
+        self.token = token;
+        self.body = body;
     }
 
     /// The opaque version token this server advertises. Stable for a given capability set; the
     /// client echoes it back verbatim and never interprets it.
     pub fn token(&self) -> &str {
-        // `bake` writes ASCII hex, so this is always valid UTF-8.
-        self.token.to_str().expect("token is valid UTF-8")
+        &self.token
     }
 
     /// The pre-serialized capabilities document, served verbatim by the capabilities endpoint.
     /// Deserializes into a [`crate::api::CapabilitiesResponse`].
     pub fn body(&self) -> &str {
-        // `bake` writes JSON from `serde_json`, so this is always valid UTF-8.
-        self.body.to_str().expect("body is valid UTF-8")
+        &self.body
     }
 
     /// The capabilities this server advertises, for typed introspection.

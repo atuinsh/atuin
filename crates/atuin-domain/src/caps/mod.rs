@@ -40,7 +40,7 @@
 //! change on its next rejected request rather than preemptively from an earlier response.
 
 use parking_lot::RwLock;
-use std::{any::Any, borrow::Borrow, collections::BTreeMap, fmt};
+use std::{any::Any, borrow::Borrow, cmp::Ordering, collections::BTreeSet, fmt};
 
 pub mod http;
 
@@ -95,10 +95,50 @@ fn downcast<C: Capability>(cap: &dyn Capability) -> Option<&C> {
     cap.downcast_ref::<C>()
 }
 
+/// A capability stored in a [`CapsBundle`], ordered and de-duplicated by its
+/// [`name`](Capability::name).
+///
+/// `Box<dyn Capability>` is not `Ord`, so it cannot live in a `BTreeSet` directly. This newtype
+/// compares purely by name -- the wire identifier, which is the set's real key -- and its
+/// `Borrow<str>` lets the set be looked up by a bare name.
+struct CapEntry(Box<dyn Capability>);
+
+impl CapEntry {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+}
+
+impl Borrow<str> for CapEntry {
+    fn borrow(&self) -> &str {
+        self.0.name()
+    }
+}
+
+impl PartialEq for CapEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.name() == other.name()
+    }
+}
+
+impl Eq for CapEntry {}
+
+impl PartialOrd for CapEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CapEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.name().cmp(other.name())
+    }
+}
+
 /// The capabilities a node advertises about itself.
 #[derive(Default)]
 pub struct CapsBundle {
-    caps: RwLock<BTreeMap<CapKey, Box<dyn Capability>>>,
+    caps: RwLock<BTreeSet<CapEntry>>,
 }
 
 impl CapsBundle {
@@ -107,11 +147,12 @@ impl CapsBundle {
         self.add_dyn(Box::new(cap));
     }
 
-    /// Register an already type-erased capability this node advertises.
+    /// Register an already type-erased capability this node advertises. A later capability with the
+    /// same name replaces the earlier one.
     fn add_dyn(&self, cap: Box<dyn Capability>) {
-        self.caps
-            .write()
-            .insert(CapKey(cap.name().to_string()), cap);
+        // `replace`, not `insert`: `BTreeSet::insert` keeps the *existing* equal element, but we
+        // want the latest registration to win.
+        self.caps.write().replace(CapEntry(cap));
     }
 
     /// Check whether this node advertises the given capability.
@@ -119,24 +160,26 @@ impl CapsBundle {
         self.caps
             .read()
             .get(C::static_name())
-            .and_then(|cap| downcast::<C>(cap.as_ref()))
+            .and_then(|entry| downcast::<C>(entry.0.as_ref()))
             .cloned()
     }
 
     /// Serialize every advertised capability into a JSON object of name -> value.
     ///
-    /// Keys are emitted in sorted order: the source is a `BTreeMap`, so the object is byte-identical
-    /// on every node running the same capability set -- which is what makes the server token stable.
+    /// Keys are emitted in sorted order: the source is a `BTreeSet` ordered by name, so the object
+    /// is byte-identical on every node running the same capability set -- which is what makes the
+    /// server token stable.
     fn to_wire(&self) -> serde_json::Value {
         let object: serde_json::Map<String, serde_json::Value> = self
             .caps
             .read()
             .iter()
-            .map(|(name, cap)| {
-                let value = cap
+            .map(|entry| {
+                let value = entry
+                    .0
                     .json()
                     .expect("a capability value must be JSON-serializable");
-                (name.0.clone(), value)
+                (entry.name().to_string(), value)
             })
             .collect();
         serde_json::Value::Object(object)
@@ -146,6 +189,8 @@ impl CapsBundle {
 impl fmt::Debug for CapsBundle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // `dyn Any` is not `Debug`; show which capabilities are present, not their contents.
-        f.debug_set().entries(self.caps.read().keys()).finish()
+        f.debug_set()
+            .entries(self.caps.read().iter().map(CapEntry::name))
+            .finish()
     }
 }
