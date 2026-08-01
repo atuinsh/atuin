@@ -86,6 +86,15 @@ pub trait Capability: Any + Send + Sync {
     fn json(&self) -> Result<serde_json::Value, serde_json::Error>;
 }
 
+/// Recover the concrete type behind a stored capability.
+///
+/// `Capability: Any`, so a `&dyn Capability` upcasts to `&dyn Any`, which then downcasts to the
+/// requested type -- yielding `None` if the stored capability is a different type.
+fn downcast<C: Capability>(cap: &dyn Capability) -> Option<&C> {
+    let cap: &dyn Any = cap;
+    cap.downcast_ref::<C>()
+}
+
 /// The capabilities a node advertises about itself.
 #[derive(Default)]
 pub struct CapsBundle {
@@ -110,10 +119,7 @@ impl CapsBundle {
         self.caps
             .read()
             .get(C::static_name())
-            .and_then(|cap| {
-                let cap: &dyn Any = &**cap;
-                cap.downcast_ref::<C>()
-            })
+            .and_then(|cap| downcast::<C>(cap.as_ref()))
             .cloned()
     }
 
