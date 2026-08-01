@@ -82,7 +82,7 @@ fn tl_with_selector_parameter() {
     let _result = i18n_embed::select(
         &language_loader,
         &Localizations,
-        &vec!["en-GB".parse().unwrap()],
+        &["en-GB".parse().unwrap()],
     );
 
     assert_eq!(
@@ -103,7 +103,7 @@ fn tl_with_selector_parameter() {
     let _result = i18n_embed::select(
         &language_loader,
         &Localizations,
-        &vec!["ga-IE".parse().unwrap()],
+        &["ga-IE".parse().unwrap()],
     );
 
     assert_eq!(
