@@ -19,7 +19,9 @@ mod var;
 #[cfg(feature = "shell-syntax")]
 mod parse;
 #[cfg(feature = "shell-syntax")]
-pub use parse::{Command, Fallback, ShellParser, Token, TokenKind, commands};
+pub use parse::{Command, ShellParser, Token, TokenKind, commands};
+#[cfg(feature = "shell-syntax")]
+use parse::Fallback;
 
 pub mod bash;
 pub mod fish;

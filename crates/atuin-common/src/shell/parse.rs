@@ -36,6 +36,10 @@ pub struct Command<'a> {
 pub trait ShellParser: Send + Sync {
     /// Classify every span of `code`, in paint order (a later span refines an
     /// earlier overlapping one). Empty means "no highlighting".
+    ///
+    /// Implementations MUST return tokens in non-decreasing byte-start order
+    /// (in particular `Command` and `Operator` tokens): [`commands`] relies on
+    /// this ordering to compute each command's `full` span.
     fn classify(&self, code: &str) -> Vec<Token>;
 }
 
@@ -93,6 +97,11 @@ fn push_first_word(code: &str, start: usize, end: usize, out: &mut Vec<Token>) {
 /// name to that boundary (trimmed), so plain-word args are covered without tokens
 /// of their own; assignments and redirects fall out because the command opens at
 /// its name and a redirect operator is a boundary.
+///
+/// Note the bash/fish asymmetry this produces: fish redirects aren't anonymous
+/// operator-char tokens (unlike bash's `>`), so a fish command's `full` includes
+/// a trailing redirect (`"ls > out.txt"`) while the posix/bash parser truncates
+/// at `>` (`"ls"`); both are fail-safe.
 pub fn commands<'a>(parser: &dyn ShellParser, code: &'a str) -> Vec<Command<'a>> {
     let mut cmds = Vec::new();
     let mut open: Option<Range<usize>> = None;
@@ -119,7 +128,6 @@ fn close<'a>(code: &'a str, open: Option<Range<usize>>, end: usize, out: &mut Ve
     }
 }
 
-#[cfg(feature = "shell-syntax")]
 pub(super) fn classify_with(language: tree_sitter::Language, code: &str) -> Vec<Token> {
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&language).is_ok()
@@ -135,7 +143,6 @@ pub(super) fn classify_with(language: tree_sitter::Language, code: &str) -> Vec<
     }
 }
 
-#[cfg(feature = "shell-syntax")]
 fn walk_tokens(node: tree_sitter::Node, src: &[u8], out: &mut Vec<Token>) {
     let kind = match node.kind() {
         "comment" => Some(TokenKind::Comment),
