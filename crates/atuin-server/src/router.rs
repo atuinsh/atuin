@@ -123,7 +123,11 @@ pub struct AppState<DB: Database> {
 pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
     // Advertise the self-referential capabilities capability, so every server that speaks the
     // protocol carries at least one concrete capability a client can observe.
-    let caps = Arc::new(CapServer::new().add(CapabilitiesCap { version: 1 }));
+    let caps = Arc::new(
+        CapServer::new()
+            .add(CapabilitiesCap { version: 1 })
+            .expect("the capabilities capability is the only one registered"),
+    );
 
     let negotiated = Router::new()
         .route("/", get(handlers::index))

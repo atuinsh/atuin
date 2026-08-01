@@ -135,6 +135,14 @@ impl Ord for CapEntry {
     }
 }
 
+/// Error from registering a capability whose name is already present in a [`CapsBundle`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("a capability named {name:?} is already registered")]
+pub struct DuplicateCapability {
+    /// The name that was already registered.
+    pub name: &'static str,
+}
+
 /// The capabilities a node advertises about itself.
 #[derive(Default)]
 pub struct CapsBundle {
@@ -143,16 +151,22 @@ pub struct CapsBundle {
 
 impl CapsBundle {
     /// Register a capability this node advertises.
-    fn add<C: Capability>(&self, cap: C) {
-        self.add_dyn(Box::new(cap));
+    fn add<C: Capability>(&self, cap: C) -> Result<(), DuplicateCapability> {
+        self.add_dyn(Box::new(cap))
     }
 
-    /// Register an already type-erased capability this node advertises. A later capability with the
-    /// same name replaces the earlier one.
-    fn add_dyn(&self, cap: Box<dyn Capability>) {
-        // `replace`, not `insert`: `BTreeSet::insert` keeps the *existing* equal element, but we
-        // want the latest registration to win.
-        self.caps.write().replace(CapEntry(cap));
+    /// Register an already type-erased capability this node advertises.
+    ///
+    /// Errors with [`DuplicateCapability`] if a capability with the same name is already present,
+    /// leaving the existing one untouched.
+    fn add_dyn(&self, cap: Box<dyn Capability>) -> Result<(), DuplicateCapability> {
+        let name = cap.name();
+        // `insert` reports whether the name was new; on a clash it keeps the existing entry.
+        if self.caps.write().insert(CapEntry(cap)) {
+            Ok(())
+        } else {
+            Err(DuplicateCapability { name })
+        }
     }
 
     /// Check whether this node advertises the given capability.

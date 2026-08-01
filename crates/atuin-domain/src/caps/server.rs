@@ -1,7 +1,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{Capability, CapsBundle};
+use super::{Capability, CapsBundle, DuplicateCapability};
 
 /// The result of comparing a client's echoed capability token against the server's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,23 +39,29 @@ impl CapServer {
         server
     }
 
-    /// Advertise a capability, then re-bake. A later add with the same name overwrites the earlier
-    /// value.
+    /// Advertise a capability, then re-bake.
+    ///
+    /// Errors with [`DuplicateCapability`] if a capability with the same name is already advertised.
     #[allow(clippy::should_implement_trait)]
-    pub fn add<C: Capability>(mut self, cap: C) -> Self {
-        self.caps.add(cap);
+    pub fn add<C: Capability>(mut self, cap: C) -> Result<Self, DuplicateCapability> {
+        self.caps.add(cap)?;
         self.bake();
-        self
+        Ok(self)
     }
 
-    /// Advertise every capability the iterator yields, re-baking once for the whole batch. Later
-    /// entries overwrite earlier ones that share a name.
-    pub fn add_many(mut self, caps: impl IntoIterator<Item = Box<dyn Capability>>) -> Self {
+    /// Advertise every capability the iterator yields, re-baking once for the whole batch.
+    ///
+    /// Errors with [`DuplicateCapability`] on the first name that is already advertised -- whether
+    /// from an earlier call or earlier in the same batch.
+    pub fn add_many(
+        mut self,
+        caps: impl IntoIterator<Item = Box<dyn Capability>>,
+    ) -> Result<Self, DuplicateCapability> {
         for cap in caps {
-            self.caps.add_dyn(cap);
+            self.caps.add_dyn(cap)?;
         }
         self.bake();
-        self
+        Ok(self)
     }
 
     /// Recompute the version token and pre-serialized document from the current capability set.
@@ -187,7 +193,7 @@ mod tests {
     fn token_is_stable_for_the_same_set_and_changes_when_it_changes(empty: CapServer) {
         assert_eq!(empty.token(), CapServer::new().token());
 
-        let with_cap = CapServer::new().add(TestCap { n: 1 });
+        let with_cap = CapServer::new().add(TestCap { n: 1 }).unwrap();
         assert_ne!(empty.token(), with_cap.token());
         assert!(with_cap.caps().get::<TestCap>().is_some());
     }
@@ -204,7 +210,7 @@ mod tests {
     #[case::small(7)]
     #[case::max(u32::MAX)]
     fn body_with_a_capability_round_trips_into_the_client_response_shape(#[case] n: u32) {
-        let caps = CapServer::new().add(TestCap { n });
+        let caps = CapServer::new().add(TestCap { n }).unwrap();
         let resp: CapabilitiesResponse = serde_json::from_str(caps.body()).unwrap();
         assert_eq!(resp.version, caps.token());
         assert_eq!(
@@ -217,7 +223,7 @@ mod tests {
     fn add_many_advertises_every_capability_and_matches_chained_adds() {
         let batch: Vec<Box<dyn Capability>> =
             vec![Box::new(TestCap { n: 1 }), Box::new(OtherCap { m: 2 })];
-        let many = CapServer::new().add_many(batch);
+        let many = CapServer::new().add_many(batch).unwrap();
 
         // Every distinct capability in the batch is advertised.
         assert_eq!(many.caps().get::<TestCap>().unwrap().n, 1);
@@ -226,7 +232,9 @@ mod tests {
         // A batch bakes to the same set -- and therefore the same token -- as chained `add`s.
         let chained = CapServer::new()
             .add(TestCap { n: 1 })
-            .add(OtherCap { m: 2 });
+            .unwrap()
+            .add(OtherCap { m: 2 })
+            .unwrap();
         assert_eq!(many.token(), chained.token());
         assert_eq!(many.body(), chained.body());
 
@@ -235,11 +243,21 @@ mod tests {
     }
 
     #[rstest]
-    fn add_many_last_write_wins_on_a_repeated_name() {
+    fn add_many_rejects_a_repeated_name() {
         let batch: Vec<Box<dyn Capability>> =
             vec![Box::new(TestCap { n: 1 }), Box::new(TestCap { n: 9 })];
-        let caps = CapServer::new().add_many(batch);
-        assert_eq!(caps.caps().get::<TestCap>().unwrap().n, 9);
+        let err = CapServer::new().add_many(batch).unwrap_err();
+        assert_eq!(err.name, "test/cap");
+    }
+
+    #[rstest]
+    fn add_rejects_a_duplicate_name() {
+        let err = CapServer::new()
+            .add(TestCap { n: 1 })
+            .unwrap()
+            .add(TestCap { n: 2 })
+            .unwrap_err();
+        assert_eq!(err.name, "test/cap");
     }
 
     /// How the client's echoed token relates to the server's. The matching token is only known

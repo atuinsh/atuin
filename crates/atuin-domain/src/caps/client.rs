@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use serde::de::DeserializeOwned;
 use url::Url;
 
-use super::{CapKey, Capability, CapsBundle};
+use super::{CapKey, Capability, CapsBundle, DuplicateCapability};
 use crate::api::CapabilitiesResponse;
 use atuin_common::sync::SingleFlight;
 
@@ -74,8 +74,10 @@ impl CapClient {
     }
 
     /// Register a capability this client advertises.
-    pub fn add<C: Capability>(&self, cap: C) {
-        self.own.add(cap);
+    ///
+    /// Errors with [`DuplicateCapability`] if a capability with the same name is already advertised.
+    pub fn add<C: Capability>(&self, cap: C) -> Result<(), DuplicateCapability> {
+        self.own.add(cap)
     }
 
     /// Check whether this client advertises the given capability.
@@ -181,7 +183,9 @@ mod tests {
     #[tokio::test]
     async fn client_observes_the_capability_the_server_advertises(http_client: reqwest::Client) {
         // Serve the exact wire body a real server would produce for the capabilities capability.
-        let advertised = CapServer::new().add(CapabilitiesCap { version: 1 });
+        let advertised = CapServer::new()
+            .add(CapabilitiesCap { version: 1 })
+            .unwrap();
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/v0/capabilities"))
