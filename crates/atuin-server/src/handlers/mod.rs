@@ -3,6 +3,7 @@ use std::fmt;
 use atuin_domain::api::{ErrorResponse, IndexResponse};
 use atuin_server_database::Database;
 use axum::{Json, extract::State, http, response::IntoResponse};
+use tracing::instrument;
 
 use crate::router::AppState;
 
@@ -12,6 +13,7 @@ pub mod v0;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[instrument(skip_all)]
 pub async fn index<DB: Database>(state: State<AppState<DB>>) -> Json<IndexResponse> {
     let homage = r#""Through the fathomless deeps of space swims the star turtle Great A'Tuin, bearing on its back the four giant elephants who carry on their shoulders the mass of the Discworld." -- Sir Terry Pratchett"#;
 
@@ -29,7 +31,7 @@ pub async fn index<DB: Database>(state: State<AppState<DB>>) -> Json<IndexRespon
 
 impl fmt::Display for ErrorResponseStatus<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "status={}", self.status)
+        write!(f, "status={} reason={}", self.status, self.error.reason)
     }
 }
 

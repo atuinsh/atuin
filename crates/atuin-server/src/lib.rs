@@ -10,6 +10,7 @@ use eyre::{Context, Result};
 mod handlers;
 mod metrics;
 mod router;
+mod trace;
 
 pub use settings::Settings;
 pub use settings::example_config;
