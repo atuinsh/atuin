@@ -21,6 +21,11 @@ enum_dispatch = { workspace = true }
 async-trait = { workspace = true }
 atuin-client = { workspace = true }
 derive_more = { workspace = true }
+# Unconditionally enables shell-syntax, so atuin-ai (and atuin's `ai` feature)
+# require tree-sitter on every target. tree-sitter 0.26's bundled C does not
+# build on illumos, Windows cross-compiles, and other exotic targets. This is
+# a known, accepted limitation pending an upstream tree-sitter portability
+# fix — until then, AI is effectively linux/macos-only.
 atuin-common = { workspace = true, features = ["unicode", "ansi", "shell-syntax"] }
 atuin-daemon = { workspace = true }
 tokio = { workspace = true }

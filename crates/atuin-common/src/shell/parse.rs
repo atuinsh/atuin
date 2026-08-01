@@ -74,7 +74,6 @@ impl ShellParser for Fallback {
 }
 
 /// Emit a `Command` token for the first whitespace-delimited word of `code[start..end]`.
-#[allow(dead_code)]
 fn push_first_word(code: &str, start: usize, end: usize, out: &mut Vec<Token>) {
     let seg = &code[start..end];
     let lead = seg.len() - seg.trim_start().len();

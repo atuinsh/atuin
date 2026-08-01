@@ -221,7 +221,7 @@ impl ShellKind {
         match self {
             Self::Bash | Self::Sh | Self::Zsh | Self::Dash | Self::Ksh => &posix::PosixParser,
             Self::Fish => &fish::FishParser,
-            _ => &parse::Fallback,
+            _ => &Fallback,
         }
     }
 
