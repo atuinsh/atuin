@@ -110,7 +110,7 @@ fn run(mut options: RuntimeOptions) -> eyre::Result<()> {
 
     terminal::enable_raw_mode()?;
 
-    let pump_compositor = compositor.clone();
+    let pump_compositor = compositor;
     let stdout_thread = std::thread::spawn(move || {
         let mut highlighter = options.debug_osc133.then(Osc133DebugHighlighter::new);
         let mut capture_tracker = options
