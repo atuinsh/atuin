@@ -18,6 +18,20 @@ use super::{Alias, AliasValue, AliasesError, Rendered, RunError, Shell, Var};
 mod alias;
 mod var;
 
+#[cfg(feature = "shell-syntax")]
+use crate::shell::parse::{Token, ShellParser, classify_with};
+
+/// Classifies fish via the fish grammar.
+#[cfg(feature = "shell-syntax")]
+pub struct FishParser;
+
+#[cfg(feature = "shell-syntax")]
+impl ShellParser for FishParser {
+    fn classify(&self, code: &str) -> Vec<Token> {
+        classify_with(tree_sitter_fish::language(), code)
+    }
+}
+
 pub(super) type Aliases = HashMap<BString, AliasValue>;
 
 /// Append `bytes` to `out`, single-quoted with fish's escaping (`\` → `\\`,
@@ -189,5 +203,46 @@ impl Shell for Fish {
 
     fn render_vars(&self, vars: &[Var]) -> Rendered {
         var::render_vars(vars)
+    }
+}
+
+#[cfg(all(test, feature = "shell-syntax"))]
+mod fish_parse_tests {
+    use crate::shell::commands;
+    use super::FishParser;
+    use rstest::rstest;
+    use pretty_assertions::assert_eq;
+
+    #[rstest]
+    #[case::simple("ls -la /tmp", &["ls"])]
+    #[case::conditional("git add .; and git commit -m hi", &["git", "git"])]
+    #[case::substitution("echo (date)", &["echo", "date"])]
+    fn extracts_names(#[case] code: &str, #[case] want: &[&str]) {
+        let names: Vec<&str> = commands(&FishParser, code).iter().map(|c| c.name).collect();
+        assert_eq!(names, want);
+    }
+
+    // Carry-forward from the Task 2 review: `walk_tokens` synthesizes a
+    // `Command` token for a fish `command` node's `name` field *before*
+    // recursing into the node's other children (redirects, arguments). That
+    // is only safe if `name` is always the leftmost child of `command` --
+    // otherwise the synthetic token could land out of byte-start order,
+    // which `commands()` assumes never happens.
+    //
+    // Verified against the fish grammar (tree-sitter-fish 3.6.0):
+    // `command: seq(field('name', expr), repeat(choice(field('redirect', ..), field('argument', ..))))`
+    // -- `name` is grammatically required to precede any redirect/argument,
+    // so no in-grammar parse can produce a `command` node whose child starts
+    // before `name`. A dumped parse tree for `ls > out.txt` confirms this:
+    // `command` node's first child is the `word` "ls" (0..2), then
+    // `file_redirect` (3..12) strictly after it. These tests assert
+    // `commands()` does not panic and returns names/fulls in source order.
+    #[rstest]
+    #[case::redirect_after_name("ls > out.txt", &[("ls", "ls > out.txt")])]
+    #[case::substitution_then_redirect("echo (date) > out.txt", &[("echo", "echo"), ("date", "date")])]
+    fn ordering_survives_redirects(#[case] code: &str, #[case] want: &[(&str, &str)]) {
+        let got: Vec<(&str, &str)> =
+            commands(&FishParser, code).iter().map(|c| (c.name, c.full)).collect();
+        assert_eq!(got, want);
     }
 }
