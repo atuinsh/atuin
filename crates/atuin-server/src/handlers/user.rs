@@ -1,5 +1,6 @@
 use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use argon2::{
@@ -8,13 +9,13 @@ use argon2::{
 };
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::StatusCode,
 };
 use metrics::counter;
 
 use rand::rngs::OsRng;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::router::{AppState, UserAuth};
@@ -60,7 +61,7 @@ async fn send_register_hook(url: &url::Url, username: String, registered: String
     }
 }
 
-#[instrument(skip_all, fields(user.username = username.as_str()))]
+#[instrument(skip_all, err(level = "warn"), fields(user.username = username.as_str()))]
 pub async fn get<DB: Database>(
     Path(username): Path<String>,
     state: State<AppState<DB>>,
@@ -84,7 +85,7 @@ pub async fn get<DB: Database>(
     }))
 }
 
-#[instrument(skip_all)]
+#[instrument(skip_all, err(level = "warn"), fields(user.username = register.username.as_str()))]
 pub async fn register<DB: Database>(
     state: State<AppState<DB>>,
     Json(register): Json<RegisterRequest>,
@@ -127,6 +128,8 @@ pub async fn register<DB: Database>(
         }
     };
 
+    info!(user.id = user_id, "registered new user");
+
     // 24 bytes encoded as base64
     let token = crypto_random_string::<24>();
 
@@ -160,7 +163,7 @@ pub async fn register<DB: Database>(
     }
 }
 
-#[instrument(skip_all, fields(user.id = user.id))]
+#[instrument(skip_all, err(level = "warn"), fields(user.id = user.id, user.username = user.username.as_str()))]
 pub async fn delete<DB: Database>(
     UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
@@ -177,10 +180,12 @@ pub async fn delete<DB: Database>(
 
     counter!("atuin_users_deleted").increment(1);
 
+    info!(user.id = user.id, "deleted user account");
+
     Ok(Json(DeleteUserResponse {}))
 }
 
-#[instrument(skip_all, fields(user.id = user.id, change_password))]
+#[instrument(skip_all, err(level = "warn"), fields(user.id = user.id))]
 pub async fn change_password<DB: Database>(
     UserAuth(mut user): UserAuth,
     state: State<AppState<DB>>,
@@ -207,11 +212,15 @@ pub async fn change_password<DB: Database>(
         return Err(ErrorResponse::reply("failed to change user password")
             .with_status(StatusCode::INTERNAL_SERVER_ERROR));
     };
+
+    info!(user.id = user.id, "changed user password");
+
     Ok(Json(ChangePasswordResponse {}))
 }
 
-#[instrument(skip_all, fields(user.username = login.username.as_str()))]
+#[instrument(skip_all, err(level = "warn"), fields(client.ip = %addr.ip(), user.username = login.username.as_str()))]
 pub async fn login<DB: Database>(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     state: State<AppState<DB>>,
     login: Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, ErrorResponseStatus<'static>> {
@@ -245,13 +254,13 @@ pub async fn login<DB: Database>(
     let verified = verify_str(user.password.as_str(), login.password.borrow());
 
     if !verified {
-        debug!(user = user.username, "login failed");
+        warn!(user.id = user.id, "login failed: incorrect password");
         return Err(
             ErrorResponse::reply("password is not correct").with_status(StatusCode::UNAUTHORIZED)
         );
     }
 
-    debug!(user = user.username, "login success");
+    info!(user.id = user.id, "login succeeded");
 
     Ok(Json(LoginResponse {
         session: session.token,

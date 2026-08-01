@@ -27,6 +27,7 @@ where
 {
     type Rejection = ErrorResponseStatus<'static>;
 
+    #[tracing::instrument(name = "auth", skip_all)]
     async fn from_request_parts(
         req: &mut Parts,
         state: &AppState<DB>,
@@ -35,19 +36,23 @@ where
             .headers
             .get(http::header::AUTHORIZATION)
             .ok_or_else(|| {
+                tracing::debug!("request is missing the authorization header");
                 ErrorResponse::reply("missing authorization header")
                     .with_status(http::StatusCode::BAD_REQUEST)
             })?;
         let auth_header = auth_header.to_str().map_err(|_| {
+            tracing::debug!("authorization header is not valid ascii");
             ErrorResponse::reply("invalid authorization header encoding")
                 .with_status(http::StatusCode::BAD_REQUEST)
         })?;
         let (typ, token) = auth_header.split_once(' ').ok_or_else(|| {
+            tracing::debug!("authorization header is not a space-separated pair");
             ErrorResponse::reply("invalid authorization header encoding")
                 .with_status(http::StatusCode::BAD_REQUEST)
         })?;
 
         if typ != "Token" {
+            tracing::debug!(scheme = typ, "unsupported authorization scheme");
             return Err(
                 ErrorResponse::reply("invalid authorization header encoding")
                     .with_status(http::StatusCode::BAD_REQUEST),
@@ -59,14 +64,19 @@ where
             .get_session_user(token)
             .await
             .map_err(|e| match e {
-                DbError::NotFound => ErrorResponse::reply("session not found")
-                    .with_status(http::StatusCode::FORBIDDEN),
+                DbError::NotFound => {
+                    tracing::warn!("presented session token was not recognised");
+                    ErrorResponse::reply("session not found")
+                        .with_status(http::StatusCode::FORBIDDEN)
+                }
                 DbError::Other(e) => {
                     tracing::error!(error = ?e, "could not query user session");
                     ErrorResponse::reply("could not query user session")
                         .with_status(http::StatusCode::INTERNAL_SERVER_ERROR)
                 }
             })?;
+
+        tracing::debug!(user.id = user.id, user.username = %user.username, "request authenticated");
 
         Ok(UserAuth(user))
     }
@@ -134,7 +144,7 @@ pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
     .layer(
         ServiceBuilder::new()
             .layer(axum::middleware::from_fn(clacks_overhead))
-            .layer(TraceLayer::new_for_http())
+            .layer(TraceLayer::new_for_http().make_span_with(crate::trace::make_request_span))
             .layer(axum::middleware::from_fn(metrics::track_metrics))
             .layer(axum::middleware::from_fn(semver)),
     )
