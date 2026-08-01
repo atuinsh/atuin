@@ -20,7 +20,7 @@ use crate::{
     events::DaemonEvent,
     search::{
         FilterMode, IndexFilterMode, PrepareIndexRequest, PrepareIndexResponse, SearchIndex,
-        SearchRequest, SearchResponse, SuggestReply, SuggestRequest,
+        SearchRequest, SearchResponse, SuggestReply, SuggestRequest, Suggestion,
         search_server::{Search as SearchSvc, SearchServer},
     },
 };
@@ -439,8 +439,15 @@ impl SearchSvc for SearchGrpcService {
     ) -> Result<Response<SuggestReply>, Status> {
         let request = request.into_inner();
         let limit = request.limit.min(SUGGEST_LIMIT) as usize;
-        let commands = self.index.read().await.suggest(&request.query, limit);
-        Ok(Response::new(SuggestReply { commands }))
+        let suggestions = self
+            .index
+            .read()
+            .await
+            .suggest(&request.query, limit)
+            .into_iter()
+            .map(|command| Suggestion { command })
+            .collect();
+        Ok(Response::new(SuggestReply { suggestions }))
     }
 }
 

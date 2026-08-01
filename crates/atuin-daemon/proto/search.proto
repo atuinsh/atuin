@@ -47,8 +47,12 @@ message SuggestRequest {
   uint32 limit = 2;
 }
 
+message Suggestion {
+  string command = 1;
+}
+
 message SuggestReply {
-  repeated string commands = 1;
+  repeated Suggestion suggestions = 1;
 }
 
 service Search {
