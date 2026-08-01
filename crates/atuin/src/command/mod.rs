@@ -217,7 +217,12 @@ impl SuggestionBackend {
             }
             if let Some(client) = self.daemon.as_mut() {
                 match client.suggest(query, self.settings.suggest.limit).await {
-                    Ok(commands) => return commands,
+                    Ok(suggestions) => {
+                        return suggestions
+                            .into_iter()
+                            .map(|suggestion| suggestion.command)
+                            .collect();
+                    }
                     // Drop the connection and fall through to sqlite for
                     // this query; the next one retries the daemon.
                     Err(_) => self.daemon = None,
