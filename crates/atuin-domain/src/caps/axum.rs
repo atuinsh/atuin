@@ -37,11 +37,7 @@ pub async fn get(State(caps): State<Arc<CapServer>>) -> Response {
 ///
 /// Absent or matching tokens pass straight through, so pre-capabilities clients are never affected.
 /// A non-UTF-8 known header is treated as absent.
-async fn check_token(
-    State(caps): State<Arc<CapServer>>,
-    request: Request,
-    next: Next,
-) -> Response {
+async fn check_token(State(caps): State<Arc<CapServer>>, request: Request, next: Next) -> Response {
     let enforce = request.headers().contains_key(ENFORCE_HEADER);
     let negotiation = {
         let known = request
