@@ -109,17 +109,13 @@ impl CapClient {
         client: &reqwest::Client,
         available: &str,
     ) -> reqwest::Result<()> {
-        // 1. Are our capabilities stale?
         if !self.is_stale(available) {
             return Ok(());
         }
-        // 2. Acquire the fetch mutex.
         let _fetching = self.fetching.lock().await;
-        // 3. Re-check: a concurrent fetch may have caught us up while we waited for the lock.
         if !self.is_stale(available) {
             return Ok(());
         }
-        // 4. Still stale -- fetch and store.
         let caps = self.fetch_server_caps(client).await?;
         *self.server.write() = Some(caps);
         Ok(())
