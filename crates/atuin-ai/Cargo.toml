@@ -15,14 +15,13 @@ repository = { workspace = true }
 [features]
 default = []
 daemon = []
-tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
 
 [dependencies]
 enum_dispatch = { workspace = true }
 async-trait = { workspace = true }
 atuin-client = { workspace = true }
 derive_more = { workspace = true }
-atuin-common = { workspace = true, features = ["unicode", "ansi"] }
+atuin-common = { workspace = true, features = ["unicode", "ansi", "shell-syntax"] }
 atuin-daemon = { workspace = true }
 tokio = { workspace = true }
 eyre = { workspace = true }
@@ -60,9 +59,6 @@ regex = { workspace = true }
 time = { workspace = true }
 toml = "1.1"
 toml_edit = { workspace = true }
-tree-sitter = { workspace = true, optional = true }
-tree-sitter-bash = { workspace = true, optional = true }
-tree-sitter-fish = { workspace = true, optional = true }
 sqlx = { workspace = true, features = ["sqlite"] }
 typed-builder = { workspace = true }
 shellexpand = { workspace = true }

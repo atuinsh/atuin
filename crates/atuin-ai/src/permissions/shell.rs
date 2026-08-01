@@ -1,307 +1,4 @@
-use atuin_common::shell::ShellKind;
-
-/// Extracted command info from a shell command string.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ShellCommand {
-    /// The command name (first word), e.g. "git"
-    pub name: String,
-    /// The full invocation including arguments, e.g. "git commit -m msg"
-    pub full: String,
-}
-
-/// A parsed shell command with all subcommands extracted.
-#[derive(Debug)]
-pub(crate) struct ParsedShellCommand {
-    pub subcommands: Vec<ShellCommand>,
-}
-
-/// Parse a shell command string and extract all subcommands.
-pub(crate) fn parse_shell_command(code: &str, shell: ShellKind) -> ParsedShellCommand {
-    #[cfg(feature = "tree-sitter")]
-    match shell {
-        ShellKind::Bash | ShellKind::Sh | ShellKind::Zsh | ShellKind::Dash | ShellKind::Ksh => {
-            ts::parse_posix(code)
-        }
-        ShellKind::Fish => ts::parse_fish(code),
-        _ => parse_fallback(code),
-    }
-
-    #[cfg(not(feature = "tree-sitter"))]
-    {
-        let _ = shell;
-        parse_fallback(code)
-    }
-}
-
-// ────────────────────────────────────────────────────────────────
-// Tree-sitter parsers (POSIX + Fish)
-// Disabled on platforms where tree-sitter doesn't cross-compile
-// (e.g. Windows); falls back to word-level extraction.
-// ────────────────────────────────────────────────────────────────
-
-#[cfg(feature = "tree-sitter")]
-mod ts {
-    use super::{ParsedShellCommand, ShellCommand, parse_fallback};
-    use tree_sitter::{Parser, Tree};
-
-    fn bash_parser() -> Parser {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_bash::LANGUAGE.into())
-            .expect("failed to set bash language");
-        parser
-    }
-
-    pub(super) fn parse_posix(code: &str) -> ParsedShellCommand {
-        let mut parser = bash_parser();
-        let Some(tree) = parser.parse(code, None) else {
-            return parse_fallback(code);
-        };
-
-        let mut commands = Vec::new();
-        walk_bash_tree(&tree, code.as_bytes(), &mut commands);
-        ParsedShellCommand {
-            subcommands: commands,
-        }
-    }
-
-    /// Leaf node kinds that never contain nested commands.
-    const BASH_LEAVES: &[&str] = &[
-        "command_name",
-        "word",
-        "number",
-        "simple_expansion",
-        "expansion",
-        "arithmetic_expansion",
-        "ansi_c_string",
-        "special_variable_name",
-        "variable_name",
-        "file_descriptor",
-        "heredoc_body",
-        "heredoc_start",
-        "regex",
-        "heredoc_redirect",
-    ];
-
-    fn walk_bash_tree(tree: &Tree, source: &[u8], commands: &mut Vec<ShellCommand>) {
-        walk_bash_node(tree.root_node(), source, commands);
-    }
-
-    fn walk_bash_node(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<ShellCommand>) {
-        match node.kind() {
-            "command" => {
-                if let Some(cmd) = extract_bash_command(node, source) {
-                    commands.push(cmd);
-                }
-                // Descend into all non-leaf children to find nested commands
-                // (e.g. command_substitution inside a string inside a command)
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    if !BASH_LEAVES.contains(&child.kind()) {
-                        walk_bash_node(child, source, commands);
-                    }
-                }
-            }
-            // Other nodes: descend into all children
-            _ => {
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    walk_bash_node(child, source, commands);
-                }
-            }
-        }
-    }
-
-    /// Extract the full command string and name from a bash `command` node.
-    fn extract_bash_command(node: tree_sitter::Node, source: &[u8]) -> Option<ShellCommand> {
-        // A `command` node has children like:
-        //   variable_assignment* command_name argument* redirect*
-        // We want the command_name and all arguments (skipping assignments and redirects).
-        let mut name = None;
-        let mut name_start = None;
-        let mut arg_end = None;
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            match child.kind() {
-                "command_name" => {
-                    name = child.utf8_text(source).ok().map(|s| s.to_string());
-                    name_start = Some(child.start_byte());
-                }
-                "word"
-                | "string"
-                | "raw_string"
-                | "concatenation"
-                | "number"
-                | "simple_expansion"
-                | "expansion"
-                | "arithmetic_expansion"
-                | "ansi_c_string"
-                | "process_substitution" => {
-                    arg_end = Some(child.end_byte());
-                }
-                _ => {}
-            }
-        }
-
-        let name = name?;
-        let full = if let (Some(start), Some(end)) = (name_start, arg_end) {
-            std::str::from_utf8(&source[start..end]).ok()?.to_string()
-        } else {
-            name.clone()
-        };
-
-        Some(ShellCommand { name, full })
-    }
-
-    // ────────────────────────────────────────────────────────────────
-    // Fish parser
-    // ────────────────────────────────────────────────────────────────
-
-    fn fish_parser() -> Parser {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_fish::language())
-            .expect("failed to set fish language");
-        parser
-    }
-
-    pub(super) fn parse_fish(code: &str) -> ParsedShellCommand {
-        let mut parser = fish_parser();
-        let Some(tree) = parser.parse(code, None) else {
-            return parse_fallback(code);
-        };
-
-        let mut commands = Vec::new();
-        walk_fish_tree(&tree, code.as_bytes(), &mut commands);
-        ParsedShellCommand {
-            subcommands: commands,
-        }
-    }
-
-    const FISH_COMPOUND: &[&str] = &[
-        "conditional_execution",
-        "pipe",
-        "job",
-        "command_substitution",
-        "block",
-        "for_statement",
-        "while_statement",
-        "if_statement",
-        "switch_statement",
-        "function_definition",
-        "begin_statement",
-        "redirected_statement",
-    ];
-
-    fn walk_fish_tree(tree: &Tree, source: &[u8], commands: &mut Vec<ShellCommand>) {
-        walk_fish_node(tree.root_node(), source, commands);
-    }
-
-    fn walk_fish_node(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<ShellCommand>) {
-        match node.kind() {
-            "command" => {
-                if let Some(cmd) = extract_fish_command(node, source) {
-                    commands.push(cmd);
-                }
-                // Still descend into compound children (e.g. command_substitution inside a command)
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    if FISH_COMPOUND.contains(&child.kind()) {
-                        walk_fish_node(child, source, commands);
-                    }
-                }
-            }
-            // Other nodes: descend into all children
-            _ => {
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    walk_fish_node(child, source, commands);
-                }
-            }
-        }
-    }
-
-    fn extract_fish_command(node: tree_sitter::Node, source: &[u8]) -> Option<ShellCommand> {
-        // In fish, a `command` node has:
-        //   name (command_name or word) followed by arguments (word, string, etc.)
-        let mut name = None;
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            match child.kind() {
-                "command_name" | "word" => {
-                    let text = child.utf8_text(source).ok()?.to_string();
-                    if name.is_none() {
-                        name = Some(text);
-                    }
-                }
-                "string"
-                | "concatenation"
-                | "command_substitution"
-                | "escape_sequence"
-                | "double_quote_string"
-                | "single_quote_string" => {}
-                _ => {}
-            }
-        }
-
-        let name = name?;
-        // Get the full text of the command node
-        let full = node.utf8_text(source).ok()?.trim().to_string();
-
-        Some(ShellCommand { name, full })
-    }
-} // mod ts
-
-// ────────────────────────────────────────────────────────────────
-// Fallback (word-level extraction for nushell / unknown shells)
-// ────────────────────────────────────────────────────────────────
-
-fn parse_fallback(code: &str) -> ParsedShellCommand {
-    // Simple heuristic: split by &&, ||, ;, | and take the first word of each segment.
-    // This is intentionally simple — for unknown shells we can't do better.
-    let mut commands = Vec::new();
-    let mut segment = String::new();
-    let mut chars = code.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        match c {
-            ';' => {
-                push_segment(&mut segment, &mut commands);
-            }
-            '|' => {
-                if chars.peek() == Some(&'|') {
-                    chars.next();
-                }
-                push_segment(&mut segment, &mut commands);
-            }
-            '&' if chars.peek() == Some(&'&') => {
-                chars.next();
-                push_segment(&mut segment, &mut commands);
-            }
-            _ => segment.push(c),
-        }
-    }
-    push_segment(&mut segment, &mut commands);
-
-    ParsedShellCommand {
-        subcommands: commands,
-    }
-}
-
-fn push_segment(segment: &mut String, commands: &mut Vec<ShellCommand>) {
-    let trimmed = segment.trim();
-    if !trimmed.is_empty()
-        && let Some(name) = trimmed.split_whitespace().next()
-    {
-        commands.push(ShellCommand {
-            name: name.to_string(),
-            full: trimmed.to_string(),
-        });
-    }
-    segment.clear();
-}
+use atuin_common::shell::Command;
 
 // ────────────────────────────────────────────────────────────────
 // Scope matching
@@ -325,7 +22,7 @@ fn push_segment(segment: &mut String, commands: &mut Vec<ShellCommand>) {
 /// should pass `prefix_bare: true` (broad) so that denying `rm` also blocks
 /// `rm -rf /`.
 pub(crate) fn any_subcommand_matches(
-    subcommands: &[ShellCommand],
+    subcommands: &[Command],
     prefix_bare: bool,
     scope: &str,
 ) -> bool {
@@ -440,14 +137,11 @@ fn find_subslice(haystack: &[&str], needle: &[&str]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atuin_common::shell::ShellKind;
     use rstest::rstest;
 
-    fn names(cmds: &[ShellCommand]) -> Vec<&str> {
-        cmds.iter().map(|c| c.name.as_str()).collect()
-    }
-
-    fn fulls(cmds: &[ShellCommand]) -> Vec<&str> {
-        cmds.iter().map(|c| c.full.as_str()).collect()
+    fn cmd<'a>(name: &'a str, full: &'a str) -> Command<'a> {
+        Command { name, full }
     }
 
     // Parses that pin the exact extracted subcommands. `expected_fulls` is only
@@ -475,38 +169,6 @@ mod tests {
         &["ls", "grep"],
         Some(&["ls", "grep foo"][..])
     )]
-    fn parse_exact(
-        #[case] kind: ShellKind,
-        #[case] code: &str,
-        #[case] expected_names: &[&str],
-        #[case] expected_fulls: Option<&[&str]>,
-    ) {
-        let result = parse_shell_command(code, kind);
-        assert_eq!(names(&result.subcommands), expected_names);
-        if let Some(f) = expected_fulls {
-            assert_eq!(fulls(&result.subcommands), f);
-        }
-    }
-
-    // Parses that only require certain subcommands to be present (subset match).
-    #[rstest]
-    #[case::fallback_splits_correctly(ShellKind::Unknown, "ls && cat foo || echo fail", &["ls", "cat", "echo"])]
-    #[case::fish_conditional(ShellKind::Fish, "git add .; and git commit -m hi", &["git"])]
-    fn parse_contains_names(
-        #[case] kind: ShellKind,
-        #[case] code: &str,
-        #[case] expected: &[&str],
-    ) {
-        let result = parse_shell_command(code, kind);
-        let n = names(&result.subcommands);
-        for name in expected {
-            assert!(n.contains(name), "should contain {name}: {n:?}");
-        }
-    }
-
-    // Exact parses that only the tree-sitter grammars can extract.
-    #[cfg(feature = "tree-sitter")]
-    #[rstest]
     #[case::subshell(ShellKind::Bash, "(cd /tmp && ls)", &["cd", "ls"], None)]
     #[case::variable_assignment_excluded(
         ShellKind::Bash,
@@ -520,26 +182,28 @@ mod tests {
         &["git"],
         Some(&["git status"][..])
     )]
-    fn parse_exact_tree_sitter(
+    fn parse_exact(
         #[case] kind: ShellKind,
         #[case] code: &str,
         #[case] expected_names: &[&str],
         #[case] expected_fulls: Option<&[&str]>,
     ) {
-        let result = parse_shell_command(code, kind);
-        assert_eq!(names(&result.subcommands), expected_names);
+        let cmds = kind.commands(code);
+        let names: Vec<&str> = cmds.iter().map(|c| c.name).collect();
+        assert_eq!(names, expected_names);
         if let Some(f) = expected_fulls {
-            assert_eq!(fulls(&result.subcommands), f);
+            let fulls: Vec<&str> = cmds.iter().map(|c| c.full).collect();
+            assert_eq!(fulls, f);
         }
     }
 
-    // Subset parses that only the tree-sitter grammars can extract (command and
-    // backtick substitution, control flow, nested substitution, ...).
-    #[cfg(feature = "tree-sitter")]
+    // Parses that only require certain subcommands to be present (subset match).
     #[rstest]
+    #[case::fallback_splits_correctly(ShellKind::Unknown, "ls && cat foo || echo fail", &["ls", "cat", "echo"])]
+    #[case::fish_conditional(ShellKind::Fish, "git add .; and git commit -m hi", &["git"])]
     // `dash_is_parsed_as_posix`: only the posix grammar extracts the inner `git`
-    // from `$(...)` -- parse_fallback cannot see past it -- so this proves Dash
-    // routes to posix rather than to the fallback path.
+    // from `$(...)` -- the fallback parser cannot see past it -- so this proves
+    // Dash routes to the posix parser rather than to the fallback path.
     #[case::dash_is_parsed_as_posix(ShellKind::Dash, "echo $(git rev-parse HEAD)", &["echo", "git"])]
     #[case::command_substitution(ShellKind::Bash, "echo $(git rev-parse HEAD)", &["echo", "git"])]
     #[case::backtick_substitution(ShellKind::Bash, "echo `date`", &["echo", "date"])]
@@ -555,20 +219,20 @@ mod tests {
         &["echo", "git", "head"]
     )]
     #[case::fish_command_substitution(ShellKind::Fish, "echo (date)", &["echo", "date"])]
-    fn parse_contains_tree_sitter(
+    fn parse_contains_names(
         #[case] kind: ShellKind,
         #[case] code: &str,
         #[case] expected: &[&str],
     ) {
-        let result = parse_shell_command(code, kind);
-        let n = names(&result.subcommands);
+        let cmds = kind.commands(code);
+        let n: Vec<&str> = cmds.iter().map(|c| c.name).collect();
         for name in expected {
             assert!(n.contains(name), "should contain {name}: {n:?}");
         }
     }
 
     // Scope matching (`any_subcommand_matches`). Pure string matching -- no
-    // tree-sitter -- so these run in every feature configuration. The `s0x` cases
+    // parser involved -- so these run in every configuration. The `s0x` cases
     // were folded in from the previously separate `adversarial` scope tests.
     #[rstest]
     #[case::wildcard_star(&[("git", "git commit -m msg"), ("npm", "npm test")], true, "*", true)]
@@ -611,25 +275,15 @@ mod tests {
         #[case] scope: &str,
         #[case] expected: bool,
     ) {
-        let cmds: Vec<ShellCommand> = commands
-            .iter()
-            .map(|(n, f)| ShellCommand {
-                name: (*n).into(),
-                full: (*f).into(),
-            })
-            .collect();
+        let cmds: Vec<Command> = commands.iter().map(|(n, f)| cmd(n, f)).collect();
         assert_eq!(any_subcommand_matches(&cmds, prefix_bare, scope), expected);
     }
 }
 
-#[cfg(all(test, feature = "tree-sitter"))]
+#[cfg(test)]
 mod adversarial {
-    use super::*;
+    use atuin_common::shell::ShellKind;
     use rstest::rstest;
-
-    fn cmd_names(cmds: &[ShellCommand]) -> Vec<&str> {
-        cmds.iter().map(|c| c.name.as_str()).collect()
-    }
 
     #[rstest]
     // Level 1: Basic compounds
@@ -719,8 +373,8 @@ mod adversarial {
         #[case] code: &str,
         #[case] expected: &[&str],
     ) {
-        let result = parse_shell_command(code, kind);
-        let mut got: Vec<&str> = result.subcommands.iter().map(|c| c.name.as_str()).collect();
+        let cmds = kind.commands(code);
+        let mut got: Vec<&str> = cmds.iter().map(|c| c.name).collect();
         got.sort();
         let mut want: Vec<&str> = expected.to_vec();
         want.sort();
@@ -739,8 +393,9 @@ mod adversarial {
         #[case] expected_name: &str,
         #[case] expected_full: &str,
     ) {
-        let result = parse_shell_command(code, ShellKind::Bash);
-        assert_eq!(cmd_names(&result.subcommands), &[expected_name]);
-        assert_eq!(result.subcommands[0].full, expected_full);
+        let cmds = ShellKind::Bash.commands(code);
+        let names: Vec<&str> = cmds.iter().map(|c| c.name).collect();
+        assert_eq!(names, &[expected_name]);
+        assert_eq!(cmds[0].full, expected_full);
     }
 }

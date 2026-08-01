@@ -136,7 +136,7 @@ daemonize = "0.5.0"
 # compiles cleanly. tree-sitter 0.26's portable/endian.h fails on illumos,
 # Windows cross-compiles, and potentially other exotic targets.
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
-atuin-ai = { path = "../atuin-ai", version = "18.19.0-beta.3", optional = true, default-features = false, features = ["tree-sitter"] }
+atuin-ai = { path = "../atuin-ai", version = "18.19.0-beta.3", optional = true, default-features = false }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
 tree-sitter-fish = { workspace = true }
