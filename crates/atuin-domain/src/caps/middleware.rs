@@ -81,16 +81,16 @@ impl Middleware for CapMiddleware {
                 .and_then(|value| value.to_str().ok())
                 .filter(|available| Some(*available) != known.as_deref())
                 .map(str::to_owned);
-            if let Some(available) = advertised {
-                if self.caps.known_token().as_deref() != Some(available.as_str()) {
-                    // Coalesced and idempotent, so a burst drives exactly one fetch. Best-effort: a
-                    // refresh failure must not fail the request the server already served.
-                    let caps = self.caps.clone();
-                    let http = self.http.clone();
-                    tokio::spawn(async move {
-                        let _ = caps.refresh_if_stale(&http, &available).await;
-                    });
-                }
+            if let Some(available) = advertised
+                && self.caps.known_token().as_deref() != Some(available.as_str())
+            {
+                // Coalesced and idempotent, so a burst drives exactly one fetch. Best-effort: a
+                // refresh failure must not fail the request the server already served.
+                let caps = self.caps.clone();
+                let http = self.http.clone();
+                tokio::spawn(async move {
+                    let _ = caps.refresh_if_stale(&http, &available).await;
+                });
             }
         }
 
