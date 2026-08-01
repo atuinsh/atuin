@@ -214,6 +214,24 @@ impl ShellKind {
         Some(shell)
     }
 
+    /// This dialect's syntax parser. Total — always returns one (the word-level
+    /// fallback for shells without a grammar).
+    #[cfg(feature = "shell-syntax")]
+    pub fn parser(&self) -> &'static dyn ShellParser {
+        match self {
+            Self::Bash | Self::Sh | Self::Zsh | Self::Dash | Self::Ksh => &posix::PosixParser,
+            Self::Fish => &fish::FishParser,
+            _ => &parse::Fallback,
+        }
+    }
+
+    /// Every command that will run in `code`, per this dialect. Convenience for
+    /// `shell::commands(self.parser(), code)`.
+    #[cfg(feature = "shell-syntax")]
+    pub fn commands<'a>(&self, code: &'a str) -> Vec<Command<'a>> {
+        commands(self.parser(), code)
+    }
+
     fn run_interactive<I, S>(&self, args: I) -> Result<String, ShellError>
     where
         I: IntoIterator<Item = S>,
@@ -234,6 +252,35 @@ impl ShellKind {
         };
 
         Ok(String::from_utf8(output.stdout).unwrap())
+    }
+}
+
+#[cfg(all(test, feature = "shell-syntax"))]
+mod parser_selection {
+    use super::*;
+    use rstest::rstest;
+    use pretty_assertions::assert_eq;
+
+    // dash/ksh route to the posix grammar (not the word fallback): only the
+    // grammar sees the command inside `$(...)`.
+    #[rstest]
+    #[case::bash(ShellKind::Bash)]
+    #[case::dash(ShellKind::Dash)]
+    #[case::ksh(ShellKind::Ksh)]
+    fn posix_family_sees_into_substitution(#[case] kind: ShellKind) {
+        let names: Vec<&str> =
+            kind.commands("echo $(git rev-parse HEAD)").iter().map(|c| c.name).collect();
+        assert!(names.contains(&"git"), "{kind} did not descend into $(...): {names:?}");
+    }
+
+    #[test]
+    fn unknown_shell_uses_word_fallback() {
+        let got: Vec<(&str, &str)> = ShellKind::Nu
+            .commands("ls && cat foo")
+            .iter()
+            .map(|c| (c.name, c.full))
+            .collect();
+        assert_eq!(got, vec![("ls", "ls"), ("cat", "cat foo")]);
     }
 }
 

@@ -17,7 +17,6 @@ use super::parse::{Token, ShellParser, classify_with};
 
 /// Classifies POSIX-family shells (bash/sh/zsh/dash/ksh) via the bash grammar.
 #[cfg(feature = "shell-syntax")]
-#[allow(dead_code)]
 pub struct PosixParser;
 
 #[cfg(feature = "shell-syntax")]

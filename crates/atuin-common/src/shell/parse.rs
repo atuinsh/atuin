@@ -45,7 +45,6 @@ const _: fn(&dyn ShellParser) = |_p| {};
 /// Word-level parser for shells with no grammar (nu, xonsh, unknown). Emits a
 /// `Command` token for each `; | || &&`-delimited segment's first word and an
 /// `Operator` token for each separator — enough for [`commands`] to work.
-#[allow(dead_code)]
 pub struct Fallback;
 
 impl ShellParser for Fallback {
@@ -122,7 +121,6 @@ fn close<'a>(code: &'a str, open: Option<Range<usize>>, end: usize, out: &mut Ve
 }
 
 #[cfg(feature = "shell-syntax")]
-#[allow(dead_code)]
 pub(super) fn classify_with(language: tree_sitter::Language, code: &str) -> Vec<Token> {
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&language).is_ok()
@@ -139,7 +137,6 @@ pub(super) fn classify_with(language: tree_sitter::Language, code: &str) -> Vec<
 }
 
 #[cfg(feature = "shell-syntax")]
-#[allow(dead_code)]
 fn walk_tokens(node: tree_sitter::Node, src: &[u8], out: &mut Vec<Token>) {
     let kind = match node.kind() {
         "comment" => Some(TokenKind::Comment),
@@ -223,5 +220,51 @@ mod tests {
         for c in commands(&Fallback, "git commit -m hi") {
             assert!(c.full.starts_with(c.name), "{:?} not a prefix of {:?}", c.name, c.full);
         }
+    }
+}
+
+#[cfg(all(test, feature = "shell-syntax"))]
+mod classify_tests {
+    use crate::shell::{ShellKind, TokenKind};
+    use rstest::rstest;
+    use pretty_assertions::assert_eq;
+
+    // One char per byte: c=command f=flag s=string v=variable o=operator #=comment a=base.
+    fn render(cmd: &str, shell: ShellKind) -> String {
+        let mut out = vec!['a'; cmd.len()];
+        for t in shell.parser().classify(cmd) {
+            let ch = match t.kind {
+                TokenKind::Command => 'c',
+                TokenKind::Flag => 'f',
+                TokenKind::String => 's',
+                TokenKind::Variable => 'v',
+                TokenKind::Operator => 'o',
+                TokenKind::Comment => '#',
+            };
+            for slot in &mut out[t.range] {
+                *slot = ch;
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    #[rstest]
+    #[case::simple_command("git commit -m 'hi'", ShellKind::Bash, "cccaaaaaaaaffassss")]
+    #[case::pipe("cat foo | grep bar", ShellKind::Bash, "cccaaaaaoaccccaaaa")]
+    #[case::env_assignment("FOO=bar make", ShellKind::Bash, "vvvvvvvacccc")]
+    #[case::variables("echo $HOME ${USER}x", ShellKind::Bash, "ccccavvvvvavvvvvvva")]
+    #[case::comment("ls # list", ShellKind::Bash, "cca######")]
+    #[case::fish_set("set -x PATH $PATH", ShellKind::Fish, "cccaffaaaaaavvvvv")]
+    #[case::nu_plain("ls -la", ShellKind::Nu, "ccaaaa")]
+    fn classify_renders(#[case] cmd: &str, #[case] shell: ShellKind, #[case] expected: &str) {
+        assert_eq!(render(cmd, shell), expected);
+    }
+
+    #[rstest]
+    fn odd_inputs_do_not_panic(
+        #[values("echo 'oops", "if (= 1 2) { }", "", "echo héllo")] cmd: &str,
+        #[values(ShellKind::Bash, ShellKind::Fish, ShellKind::Nu)] shell: ShellKind,
+    ) {
+        assert_eq!(shell.parser().classify(cmd).iter().all(|t| t.range.end <= cmd.len()), true);
     }
 }
