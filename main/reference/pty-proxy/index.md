@@ -29,7 +29,20 @@ Output capture needs **both** pty-proxy and the daemon running. Nothing is captu
 
 ## Initialization
 
-Atuin pty-proxy needs to be initialized separately from your existing Atuin config. Place the init line shown below in your shell's init script, as high in the document as possible, *before* your normal `atuin init` call.
+The simplest way to enable pty-proxy is via your Atuin config (`~/.config/atuin/config.toml`) — no extra shell config needed:
+
+```
+[pty_proxy]
+enabled = true
+```
+
+With this set, your existing `atuin init` line starts the proxy automatically.
+
+Startup performance
+
+When enabled this way, the proxy starts wherever your `atuin init` line sits, and everything sourced *before* that line runs a second time inside the proxy. This is harmless, but for the fastest startup keep your `atuin init` line as high in your shell config as possible.
+
+Alternatively, you can initialize pty-proxy explicitly in your shell config. Place the init line shown below as high in the document as possible, *before* your normal `atuin init` call. Both methods can coexist safely — the proxy only starts once.
 
 ```
 eval "$(atuin pty-proxy init zsh)"
