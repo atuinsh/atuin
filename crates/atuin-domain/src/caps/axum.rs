@@ -52,19 +52,13 @@ async fn check_token(State(caps): State<Arc<CapServer>>, request: Request, next:
 
     match negotiation {
         Negotiation::Current => next.run(request).await,
-        Negotiation::Stale if enforce => {
-            let mut response =
-                (StatusCode::PRECONDITION_FAILED, "capabilities out of date").into_response();
-            if let Some(value) = available {
-                response
-                    .headers_mut()
-                    .insert(HeaderName::from_static(AVAILABLE_HEADER), value);
-            }
-            response
-        }
         Negotiation::Stale => {
-            // The client did not ask us to enforce, so serve the request and tell it our token.
-            let mut response = next.run(request).await;
+            let mut response = if enforce {
+                (StatusCode::PRECONDITION_FAILED, "capabilities out of date").into_response()
+            } else {
+                // The client did not ask us to enforce, so serve the request and tell it our token.
+                next.run(request).await
+            };
             if let Some(value) = available {
                 response
                     .headers_mut()
