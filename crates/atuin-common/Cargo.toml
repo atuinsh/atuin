@@ -42,8 +42,6 @@ unicode-width = { version = "0.2", optional = true }
 unicode-segmentation = { version = "1.11.0", optional = true }
 vt100 = { workspace = true, optional = true }
 itertools = { workspace = true }
-parking_lot = { workspace = true }
-tokio = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

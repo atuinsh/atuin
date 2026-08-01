@@ -9,7 +9,6 @@ pub mod path;
 pub mod shell;
 pub mod slice;
 pub mod string;
-pub mod sync;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
 pub mod time;

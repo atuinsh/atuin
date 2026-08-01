@@ -1,11 +1,12 @@
 use std::{collections::HashMap, sync::Arc};
 
+use parking_lot::RwLock;
 use serde::de::DeserializeOwned;
+use tokio::sync::Mutex;
 use url::Url;
 
 use super::{CapKey, Capability, CapsBundle, DuplicateCapability};
 use crate::api::CapabilitiesResponse;
-use atuin_common::sync::SingleFlight;
 
 /// Client-side capability set: advertises its own capabilities and can read the server's.
 ///
@@ -17,8 +18,11 @@ use atuin_common::sync::SingleFlight;
 pub struct CapClient {
     /// This client's own capabilities.
     own: CapsBundle,
-    /// The server's capabilities. Concurrent `refresh` calls coalesce into a single network hop.
-    server: SingleFlight<ServerCaps>,
+    /// The server's capabilities as last fetched; `None` until the first refresh. Cheap concurrent
+    /// reads; writes are serialized by `fetching`.
+    server: RwLock<Option<ServerCaps>>,
+    /// Serializes capability fetches so a burst of stale callers makes a single network hop.
+    fetching: Mutex<()>,
     /// The server's capabilities endpoint. Passed in by the caller so this crate stays agnostic of
     /// the route (eg `/api/v0/capabilities`).
     capabilities_url: Url,
@@ -68,7 +72,8 @@ impl CapClient {
     pub fn new(capabilities_url: Url) -> Arc<Self> {
         Arc::new(Self {
             own: CapsBundle::default(),
-            server: SingleFlight::default(),
+            server: RwLock::new(None),
+            fetching: Mutex::new(()),
             capabilities_url,
         })
     }
@@ -87,31 +92,46 @@ impl CapClient {
 
     /// Fetch the server's capabilities over the caller's client and patch the local cache.
     ///
-    /// It is safe to call this in parallel, even under high load.
+    /// Fetches are serialized so parallel callers never overlap; this one always fetches.
     pub async fn refresh(&self, client: &reqwest::Client) -> reqwest::Result<()> {
-        self.server
-            .refresh(|| self.fetch_server_caps(client))
-            .await?;
+        let _fetching = self.fetching.lock().await;
+        let caps = self.fetch_server_caps(client).await?;
+        *self.server.write() = Some(caps);
         Ok(())
     }
 
     /// Refresh the server's capabilities only if our known token differs from `available`.
     ///
-    /// Concurrent callers coalesce onto a single fetch, and a caller whose token already matches
-    /// `available` does no work -- so a burst of stale responses triggers exactly one fetch, even
-    /// when the refreshes are fired in the background rather than awaited.
+    /// Double-checked so a burst of stale callers makes a single fetch, and a caller whose token
+    /// already matches `available` does no work.
     pub async fn refresh_if_stale(
         &self,
         client: &reqwest::Client,
         available: &str,
     ) -> reqwest::Result<()> {
-        self.server
-            .refresh_if(
-                || self.known_token().as_deref() != Some(available),
-                || self.fetch_server_caps(client),
-            )
-            .await?;
+        // 1. Are our capabilities stale?
+        if !self.is_stale(available) {
+            return Ok(());
+        }
+        // 2. Acquire the fetch mutex.
+        let _fetching = self.fetching.lock().await;
+        // 3. Re-check: a concurrent fetch may have caught us up while we waited for the lock.
+        if !self.is_stale(available) {
+            return Ok(());
+        }
+        // 4. Still stale -- fetch and store.
+        let caps = self.fetch_server_caps(client).await?;
+        *self.server.write() = Some(caps);
         Ok(())
+    }
+
+    /// Whether our cached server token differs from `available` (or we have not fetched yet).
+    fn is_stale(&self, available: &str) -> bool {
+        self.server
+            .read()
+            .as_ref()
+            .map(|caps| caps.version.as_str())
+            != Some(available)
     }
 
     /// Fetch and decode the server's capabilities document.
@@ -135,7 +155,8 @@ impl CapClient {
     pub fn get_server<C: Capability + DeserializeOwned>(
         &self,
     ) -> Result<Option<C>, ServerSupportError> {
-        let Some(server) = self.server.get() else {
+        let server = self.server.read();
+        let Some(server) = server.as_ref() else {
             return Err(ServerSupportError::NotFetched);
         };
         let Some(raw) = server.caps.get(C::static_name()) else {
@@ -155,7 +176,7 @@ impl CapClient {
     /// The token is opaque: it is the server's [`ServerCaps::version`], echoed back to the server
     /// verbatim. The client never interprets it.
     pub(crate) fn known_token(&self) -> Option<String> {
-        self.server.get().map(|caps| caps.version.clone())
+        self.server.read().as_ref().map(|caps| caps.version.clone())
     }
 }
 
