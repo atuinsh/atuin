@@ -5,6 +5,8 @@ mod debug;
 #[cfg(unix)]
 mod osc133;
 #[cfg(unix)]
+mod osc7;
+#[cfg(unix)]
 mod pty_proxy;
 #[cfg(unix)]
 mod runtime;
