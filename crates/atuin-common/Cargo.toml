@@ -25,6 +25,9 @@ unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
 # sequences, backspaces, carriage returns, cursor motion) into clean plain text
 # via a `vt100` terminal emulator. Compiled only when enabled.
 ansi = ["dep:vt100"]
+# The `shell::parse` module: tree-sitter-based shell command classification and
+# extraction. Compiled only when enabled (keeps tree-sitter out of the server).
+shell-syntax = ["dep:tree-sitter", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
 
 [dependencies]
 derive_more = { workspace = true }
@@ -45,6 +48,9 @@ tracing-subscriber = { workspace = true, optional = true }
 unicode-width = { version = "0.2", optional = true }
 unicode-segmentation = { version = "1.11.0", optional = true }
 vt100 = { workspace = true, optional = true }
+tree-sitter = { workspace = true, optional = true }
+tree-sitter-bash = { workspace = true, optional = true }
+tree-sitter-fish = { workspace = true, optional = true }
 itertools = { workspace = true }
 tokio = { workspace = true }
 futures = "0.3"

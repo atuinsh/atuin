@@ -3,7 +3,7 @@ use std::{
     ffi::OsStr,
     io,
     path::Path,
-    process::{self, Command, ExitStatus},
+    process::{self, ExitStatus},
     sync::Arc,
 };
 
@@ -16,6 +16,10 @@ mod alias;
 mod posix;
 mod render;
 mod var;
+#[cfg(feature = "shell-syntax")]
+mod parse;
+#[cfg(feature = "shell-syntax")]
+pub use parse::{Command, Fallback, ShellParser, Token, TokenKind, commands};
 
 pub mod bash;
 pub mod fish;
@@ -217,12 +221,12 @@ impl ShellKind {
     {
         let shell = self.to_string();
         let output = if self == &Self::Powershell {
-            Command::new(shell)
+            process::Command::new(shell)
                 .args(args)
                 .output()
                 .map_err(|e| ShellError::ExecError(e.to_string()))?
         } else {
-            Command::new(shell)
+            process::Command::new(shell)
                 .arg("-ic")
                 .args(args)
                 .output()
