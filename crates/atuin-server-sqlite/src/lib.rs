@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
+use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 use atuin_server_database::{
     Database, DbError, DbResult, DbSettings,
     models::{NewSession, NewUser, Session, User},

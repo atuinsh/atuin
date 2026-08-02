@@ -68,7 +68,6 @@ impl Default for SyncComponent {
     }
 }
 
-#[tonic::async_trait]
 impl Component for SyncComponent {
     fn name(&self) -> &'static str {
         "sync"

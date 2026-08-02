@@ -1,9 +1,9 @@
-use async_trait::async_trait;
 use atuin_client::{
     database::{Context, Database, DbSearchMode, OptFilters},
-    history::{AUTHOR_FILTER_ALL_USER, History, HistoryId},
+    history::{History, HistoryId, all_user_author_filter},
     settings::{FilterMode, SearchMode, Settings, Shells},
 };
+use enum_dispatch::enum_dispatch;
 use eyre::Result;
 
 use super::cursor::Cursor;
@@ -11,22 +11,20 @@ use super::cursor::Cursor;
 #[cfg(feature = "daemon")]
 pub mod daemon;
 pub mod db;
-pub mod skim;
 
 #[allow(unused)] // settings is only used if daemon feature is enabled
-pub fn engine(search_mode: SearchMode, settings: &Settings) -> Box<dyn SearchEngine> {
+pub fn engine(search_mode: SearchMode, settings: &Settings) -> AnySearchEngine {
     match search_mode {
-        SearchMode::Skim => Box::new(skim::Search::new()),
         #[cfg(feature = "daemon")]
-        SearchMode::DaemonFuzzy => Box::new(daemon::Search::new(settings)),
+        SearchMode::DaemonFuzzy => Box::new(daemon::Search::new(settings)).into(),
         #[cfg(not(feature = "daemon"))]
         SearchMode::DaemonFuzzy => {
             // Fall back to fuzzy mode if daemon feature is not enabled
-            Box::new(db::Search(DbSearchMode::Fuzzy))
+            db::Search(DbSearchMode::Fuzzy).into()
         }
-        SearchMode::Prefix => Box::new(db::Search(DbSearchMode::Prefix)),
-        SearchMode::FullText => Box::new(db::Search(DbSearchMode::FullText)),
-        SearchMode::Fuzzy => Box::new(db::Search(DbSearchMode::Fuzzy)),
+        SearchMode::Prefix => db::Search(DbSearchMode::Prefix).into(),
+        SearchMode::FullText => db::Search(DbSearchMode::FullText).into(),
+        SearchMode::Fuzzy => db::Search(DbSearchMode::Fuzzy).into(),
     }
 }
 
@@ -65,7 +63,7 @@ impl SearchState {
     }
 }
 
-#[async_trait]
+#[enum_dispatch]
 pub trait SearchEngine: Send + Sync + 'static {
     async fn full_query(
         &mut self,
@@ -75,6 +73,7 @@ pub trait SearchEngine: Send + Sync + 'static {
 
     async fn query(&mut self, state: &SearchState, db: &mut dyn Database) -> Result<Vec<History>> {
         if state.input.as_str().is_empty() {
+            let shells = state.shells.to_filter();
             Ok(db
                 .search(
                     DbSearchMode::FullText,
@@ -83,8 +82,8 @@ pub trait SearchEngine: Send + Sync + 'static {
                     "",
                     OptFilters {
                         limit: Some(200),
-                        authors: &[AUTHOR_FILTER_ALL_USER.to_owned()],
-                        shells: state.shells.to_list().as_slice(),
+                        authors: all_user_author_filter(),
+                        shells: shells.as_filter(),
                         ..Default::default()
                     },
                 )
@@ -97,4 +96,30 @@ pub trait SearchEngine: Send + Sync + 'static {
     }
 
     fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize>;
+}
+
+impl<T: SearchEngine> SearchEngine for Box<T> {
+    async fn full_query(
+        &mut self,
+        state: &SearchState,
+        db: &mut dyn Database,
+    ) -> Result<Vec<History>> {
+        T::full_query(self, state, db).await
+    }
+
+    async fn query(&mut self, state: &SearchState, db: &mut dyn Database) -> Result<Vec<History>> {
+        T::query(self, state, db).await
+    }
+
+    fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
+        T::get_highlight_indices(self, command, search_input)
+    }
+}
+
+/// Static-dispatch enum over the search-engine backends.
+#[enum_dispatch(SearchEngine)]
+pub enum AnySearchEngine {
+    Db(db::Search),
+    #[cfg(feature = "daemon")]
+    Daemon(Box<daemon::Search>),
 }

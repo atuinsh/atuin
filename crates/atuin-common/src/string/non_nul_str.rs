@@ -104,18 +104,13 @@ mod tests {
         assert_eq!(c.as_str(), "echo hi");
     }
 
-    #[test]
-    fn deserialize_rejects_nul() {
-        // A JSON string carrying a NUL fails to deserialize — it is not trimmed.
-        let json = serde_json::to_string("echo hi\0rm -rf /").unwrap();
+    #[rstest]
+    // A JSON string carrying a NUL fails to deserialize — it is not trimmed.
+    #[case::embedded_nul(serde_json::to_string("echo hi\0rm -rf /").unwrap())]
+    // A number is not a command; serde surfaces a data-category error.
+    #[case::non_string("42".to_string())]
+    fn deserialize_rejects(#[case] json: String) {
         let err = serde_json::from_str::<NonNulStr<String>>(&json).unwrap_err();
-        assert!(err.is_data());
-    }
-
-    #[test]
-    fn deserialize_rejects_non_string() {
-        // A number is not a command; serde surfaces a data-category error.
-        let err = serde_json::from_str::<NonNulStr<String>>("42").unwrap_err();
         assert!(err.is_data());
     }
 

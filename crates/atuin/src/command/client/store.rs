@@ -2,11 +2,7 @@ use atuin_common::time::{OffsetDateTimeExt, UtcOffsetExt};
 use clap::Subcommand;
 use eyre::Result;
 
-use atuin_client::{
-    database::Database,
-    record::{sqlite_store::SqliteStore, store::Store},
-    settings::Settings,
-};
+use atuin_client::{database::Database, record::sqlite_store::SqliteStore, settings::Settings};
 use itertools::Itertools;
 use time::OffsetDateTime;
 

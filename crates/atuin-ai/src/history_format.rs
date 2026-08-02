@@ -77,6 +77,7 @@ fn format_duration(nanos: i64) -> String {
 #[cfg(test)]
 mod tests {
     use atuin_client::history::{History, HistoryId};
+    use rstest::rstest;
     use time::{OffsetDateTime, UtcOffset};
 
     use super::*;
@@ -114,23 +115,24 @@ mod tests {
         );
     }
 
-    #[test]
-    fn formats_agent_attribution_with_intent() {
+    #[rstest]
+    #[case::known_with_intent(
+        "claude-code",
+        Some("Run the test suite"),
+        " — claude-code: Run the test suite"
+    )]
+    #[case::known_no_intent("codex", None, " — codex")]
+    #[case::unknown_author_with_intent("deploy-bot", Some("ship it"), " — deploy-bot: ship it")]
+    #[case::empty_author_with_intent("", Some("mystery"), " — intent: mystery")]
+    #[case::user_no_intent("ellie", None, "")]
+    fn attribution_matrix(
+        #[case] author: &str,
+        #[case] intent: Option<&str>,
+        #[case] expected: &str,
+    ) {
         let mut h = history(0);
-        h.author = "claude-code".to_string();
-        h.intent = Some("Run the test suite".to_string());
-
-        assert_eq!(
-            format_history_search_result(1, &h, UtcOffset::UTC),
-            "## #1. (History ID: 018f011c-9a0a-7000-8000-000000000001):\n`cargo test`\n[1970-01-01 00:00:00] (in `/repo`, exit 2) — claude-code: Run the test suite\n"
-        );
-    }
-
-    #[test]
-    fn user_commands_have_no_attribution() {
-        let mut h = history(0);
-        h.author = "ellie".to_string();
-
-        assert!(!format_history_search_result(1, &h, UtcOffset::UTC).contains('—'));
+        h.author = author.to_string();
+        h.intent = intent.map(String::from);
+        assert_eq!(format_attribution(&h), expected);
     }
 }

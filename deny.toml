@@ -1,75 +1,49 @@
-# This template contains all of the possible sections and their default values
-
-# Note that all fields that take a lint level have these possible values:
-# * deny - An error will be produced and the check will fail
-# * warn - A warning will be produced, but the check will not fail
-# * allow - No warning or error will be produced, though in some cases a note
-# will be
-
-# The values provided in this template are the default values that will be used
-# when any section or field is not specified in your own configuration
-
-# Root options
-
+[graph]
 targets = []
 all-features = true
 no-default-features = false
 
-# This section is considered when running `cargo deny check advisories`
-# More documentation for the advisories section can be found here:
-# https://embarkstudios.github.io/cargo-deny/checks/advisories/cfg.html
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-vulnerability = "deny"
-unmaintained = "warn"
-yanked = "warn"
-notice = "warn"
+unmaintained = "workspace"
+yanked = "deny"
 ignore = [
-    # potential to misuse ed25519-dalek 1.0
-    # used by rusty-paseto. not in a vulnerable way
-    # and we don't even use paseto public key crypto so we don't use this
-    "RUSTSEC-2022-0093",
-    # DoS with untrusted input. Only runs on the client so not a concern
-    "RUSTSEC-2021-0041",
+    # Pulled in through
+    #   arboard ->
+    #     wl-clipboard-rs ->
+    #       wayland-client ->
+    #         wayland-scanner ->
+    #           quick-xml 0.39.4 <-- problematic
+    #
+    # No upstream patch. Runs only on client, no severe concern.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+    # daemonize (RUSTSEC-2025-0069): unmaintained, no maintained replacement.
+    "RUSTSEC-2025-0069",
 ]
 
-# This section is considered when running `cargo deny check licenses`
-# More documentation for the licenses section can be found here:
-# https://embarkstudios.github.io/cargo-deny/checks/licenses/cfg.html
 [licenses]
-unlicensed = "deny"
 allow = [
     "Apache-2.0",
+    "BSL-1.0",
     "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
     "MPL-2.0",
-    "OpenSSL",
-    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
 ]
-deny = []
-copyleft = "warn"
-allow-osi-fsf-free = "neither"
-default = "deny"
 confidence-threshold = 0.8
-exceptions = []
+exceptions = [
+    # CC0-1.0 waives copyright but not patents; allow it only for notify.
+    { crate = "notify", allow = ["CC0-1.0"] },
+]
 
-# Some crates don't have (easily) machine readable licensing information,
-# adding a clarification entry for it allows you to manually specify the
-# licensing information
-[[licenses.clarify]]
-name = "ring"
-version = "*"
-expression = "MIT AND ISC AND OpenSSL"
-license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
-
-# This section is considered when running `cargo deny check bans`.
-# More documentation about the 'bans' section can be found here:
-# https://embarkstudios.github.io/cargo-deny/checks/bans/cfg.html
 [bans]
-multiple-versions = "allow"
-wildcards = "warn"
+multiple-versions = "warn"
+wildcards = "deny"
 highlight = "all"
 workspace-default-features = "allow"
 external-default-features = "allow"
@@ -78,26 +52,7 @@ deny = []
 skip = []
 skip-tree = []
 
-# This section is considered when running `cargo deny check sources`.
-# More documentation about the 'sources' section can be found here:
-# https://embarkstudios.github.io/cargo-deny/checks/sources/cfg.html
 [sources]
-# Lint level for what to happen when a crate from a crate registry that is not
-# in the allow list is encountered
-unknown-registry = "warn"
-# Lint level for what to happen when a crate from a git repository that is not
-# in the allow list is encountered
-unknown-git = "warn"
-# List of URLs for allowed crate registries. Defaults to the crates.io index
-# if not specified. If it is specified but empty, no registries are allowed.
+unknown-registry = "deny"
+unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# List of URLs for allowed Git repositories
-allow-git = []
-
-[sources.allow-org]
-# 1 or more github.com organizations to allow git sources for
-github = []
-# 1 or more gitlab.com organizations to allow git sources for
-gitlab = []
-# 1 or more bitbucket.org organizations to allow git sources for
-bitbucket = []

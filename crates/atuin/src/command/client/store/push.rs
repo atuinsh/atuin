@@ -1,4 +1,4 @@
-use atuin_common::record::HostId;
+use atuin_domain::record::HostId;
 use clap::Args;
 use eyre::Result;
 use uuid::Uuid;

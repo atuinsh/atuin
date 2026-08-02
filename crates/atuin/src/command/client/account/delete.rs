@@ -1,5 +1,5 @@
 use atuin_client::{
-    auth::{self, MutateResponse},
+    auth::{self, AuthClient, MutateResponse},
     settings::Settings,
 };
 use clap::Parser;

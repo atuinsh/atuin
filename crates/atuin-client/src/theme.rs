@@ -522,11 +522,22 @@ impl ThemeManager {
 mod theme_tests {
     use super::*;
     use atuin_common::test_utils::capture_logs;
-    use rstest::rstest;
+    use rstest::*;
 
-    #[test]
-    fn test_can_load_builtin_theme() {
-        let mut manager = ThemeManager::new(Some(false), Some("".to_string()));
+    #[fixture]
+    fn manager(#[default(false)] debug: bool) -> ThemeManager {
+        ThemeManager::new(Some(debug), Some("".to_string()))
+    }
+
+    fn theme_config(toml: &str) -> Config {
+        Config::builder()
+            .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+            .build()
+            .unwrap()
+    }
+
+    #[rstest]
+    fn test_can_load_builtin_theme(mut manager: ThemeManager) {
         let theme = manager.load_theme("autumn", None);
         assert_eq!(
             theme.as_style(Meaning::Guidance).foreground_color,
@@ -534,9 +545,8 @@ mod theme_tests {
         );
     }
 
-    #[test]
-    fn test_can_create_theme() {
-        let mut manager = ThemeManager::new(Some(false), Some("".to_string()));
+    #[rstest]
+    fn test_can_create_theme(mut manager: ThemeManager) {
         let mytheme = Theme::new(
             "mytheme".to_string(),
             None,
@@ -553,17 +563,14 @@ mod theme_tests {
         );
     }
 
-    #[test]
-    fn test_can_fallback_when_meaning_missing() {
-        let mut manager = ThemeManager::new(Some(false), Some("".to_string()));
-
+    #[rstest]
+    fn test_can_fallback_when_meaning_missing(mut manager: ThemeManager) {
         // We use title as an example of a meaning that is not defined
         // even in the base theme.
         assert!(!DEFAULT_THEME.styles.contains_key(&Meaning::Title));
 
-        let config = Config::builder()
-            .add_source(ConfigFile::from_str(
-                "
+        let config = theme_config(
+            "
         [theme]
         name = \"title_theme\"
 
@@ -571,10 +578,7 @@ mod theme_tests {
         Guidance = \"white\"
         AlertInfo = \"zomp\"
         ",
-                FileFormat::Toml,
-            ))
-            .build()
-            .unwrap();
+        );
         let theme = manager
             .load_theme_from_config("config_theme", config, 1)
             .unwrap();
@@ -603,9 +607,8 @@ mod theme_tests {
             theme.as_style(Meaning::Important).foreground_color,
         );
 
-        let title_config = Config::builder()
-            .add_source(ConfigFile::from_str(
-                "
+        let title_config = theme_config(
+            "
         [theme]
         name = \"title_theme\"
 
@@ -613,10 +616,7 @@ mod theme_tests {
         Title = \"white\"
         AlertInfo = \"zomp\"
         ",
-                FileFormat::Toml,
-            ))
-            .build()
-            .unwrap();
+        );
         let title_theme = manager
             .load_theme_from_config("title_theme", title_config, 1)
             .unwrap();
@@ -635,9 +635,8 @@ mod theme_tests {
             .for_each(|pair| assert_eq!(mytheme.closest_meaning(pair.0), &Meaning::Base))
     }
 
-    #[test]
-    fn test_can_get_colors_via_convenience_functions() {
-        let mut manager = ThemeManager::new(Some(true), Some("".to_string()));
+    #[rstest]
+    fn test_can_get_colors_via_convenience_functions(#[with(true)] mut manager: ThemeManager) {
         let theme = manager.load_theme("default", None);
         assert_eq!(theme.get_error().foreground_color.unwrap(), Color::DarkRed);
         assert_eq!(
@@ -655,16 +654,13 @@ mod theme_tests {
         )
     }
 
-    #[test]
-    fn test_can_use_parent_theme_for_fallbacks() {
+    #[rstest]
+    fn test_can_use_parent_theme_for_fallbacks(mut manager: ThemeManager) {
         let logs = capture_logs();
 
-        let mut manager = ThemeManager::new(Some(false), Some("".to_string()));
-
         // First, we introduce a base theme
-        let solarized = Config::builder()
-            .add_source(ConfigFile::from_str(
-                "
+        let solarized = theme_config(
+            "
         [theme]
         name = \"solarized\"
 
@@ -672,10 +668,7 @@ mod theme_tests {
         Guidance = \"white\"
         AlertInfo = \"pink\"
         ",
-                FileFormat::Toml,
-            ))
-            .build()
-            .unwrap();
+        );
         let solarized_theme = manager
             .load_theme_from_config("solarized", solarized, 1)
             .unwrap();
@@ -688,9 +681,8 @@ mod theme_tests {
         );
 
         // Then we introduce a derived theme
-        let unsolarized = Config::builder()
-            .add_source(ConfigFile::from_str(
-                "
+        let unsolarized = theme_config(
+            "
         [theme]
         name = \"unsolarized\"
         parent = \"solarized\"
@@ -698,10 +690,7 @@ mod theme_tests {
         [colors]
         AlertInfo = \"red\"
         ",
-                FileFormat::Toml,
-            ))
-            .build()
-            .unwrap();
+        );
         let unsolarized_theme = manager
             .load_theme_from_config("unsolarized", unsolarized, 1)
             .unwrap();
@@ -726,9 +715,8 @@ mod theme_tests {
 
         // If the parent is not found, we end up with the no theme colors or styling
         // as this is considered a (soft) error state.
-        let nunsolarized = Config::builder()
-            .add_source(ConfigFile::from_str(
-                "
+        let nunsolarized = theme_config(
+            "
         [theme]
         name = \"nunsolarized\"
         parent = \"nonsolarized\"
@@ -736,10 +724,7 @@ mod theme_tests {
         [colors]
         AlertInfo = \"red\"
         ",
-                FileFormat::Toml,
-            ))
-            .build()
-            .unwrap();
+        );
         let nunsolarized_theme = manager
             .load_theme_from_config("nunsolarized", nunsolarized, 1)
             .unwrap();
@@ -760,46 +745,40 @@ mod theme_tests {
         assert_eq!(captured_logs[0].level, tracing::Level::WARN)
     }
 
-    #[test]
-    fn test_can_debug_theme() {
-        [true, false].iter().for_each(|debug| {
-            let logs = capture_logs();
+    #[rstest]
+    fn debug_theme_logs(#[values(true, false)] debug: bool) {
+        let logs = capture_logs();
 
-            let mut manager = ThemeManager::new(Some(*debug), Some("".to_string()));
-            let config = Config::builder()
-                .add_source(ConfigFile::from_str(
-                    "
-            [theme]
-            name = \"mytheme\"
+        let mut manager = ThemeManager::new(Some(debug), Some("".to_string()));
+        let config = theme_config(
+            "
+        [theme]
+        name = \"mytheme\"
 
-            [colors]
-            Guidance = \"white\"
-            AlertInfo = \"xinetic\"
-            ",
-                    FileFormat::Toml,
-                ))
-                .build()
-                .unwrap();
-            manager
-                .load_theme_from_config("config_theme", config, 1)
-                .unwrap();
-            let captured_logs = logs.get();
-            if *debug {
-                assert_eq!(captured_logs.len(), 2);
-                assert_eq!(
-                    captured_logs[0].message,
-                    "Your theme config name is not the name of your loaded theme config_theme != mytheme"
-                );
-                assert_eq!(captured_logs[0].level, tracing::Level::WARN);
-                assert_eq!(
-                    captured_logs[1].message,
-                    "Tried to load string as a color unsuccessfully: (AlertInfo=xinetic) No such color in palette"
-                );
-                assert_eq!(captured_logs[1].level, tracing::Level::WARN)
-            } else {
-                assert_eq!(captured_logs.len(), 0)
-            }
-        })
+        [colors]
+        Guidance = \"white\"
+        AlertInfo = \"xinetic\"
+        ",
+        );
+        manager
+            .load_theme_from_config("config_theme", config, 1)
+            .unwrap();
+        let captured_logs = logs.get();
+        if debug {
+            assert_eq!(captured_logs.len(), 2);
+            assert_eq!(
+                captured_logs[0].message,
+                "Your theme config name is not the name of your loaded theme config_theme != mytheme"
+            );
+            assert_eq!(captured_logs[0].level, tracing::Level::WARN);
+            assert_eq!(
+                captured_logs[1].message,
+                "Tried to load string as a color unsuccessfully: (AlertInfo=xinetic) No such color in palette"
+            );
+            assert_eq!(captured_logs[1].level, tracing::Level::WARN);
+        } else {
+            assert_eq!(captured_logs.len(), 0);
+        }
     }
 
     #[rstest]

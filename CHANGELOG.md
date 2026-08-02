@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [unreleased]
+
+### Bug Fixes
+
+- Copy vendored axoasset into docker builder stage ([#3816](https://github.com/atuinsh/atuin/issues/3816))
+
+
+### Features
+
+- Migrate TLS backend from rustls to native-tls ([#3807](https://github.com/atuinsh/atuin/issues/3807))
+- Make `update` a real subcommand ([#3813](https://github.com/atuinsh/atuin/issues/3813))
+
+
+### Miscellaneous Tasks
+
+- Fix deny.toml and get it to run in CI ([#3808](https://github.com/atuinsh/atuin/issues/3808))
+- Remove codspeed workflow ([#3812](https://github.com/atuinsh/atuin/issues/3812))
+
+
+### Refactor
+
+- Adopt enum_dispatch for enum trait delegation ([#3806](https://github.com/atuinsh/atuin/issues/3806))
+
+
+
 ## 18.18.1
 
 ### Bug Fixes

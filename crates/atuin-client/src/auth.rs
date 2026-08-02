@@ -1,17 +1,14 @@
 use std::collections::HashMap;
 
-use async_trait::async_trait;
+use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result, bail};
 use reqwest::{StatusCode, Url, header::USER_AGENT};
 use serde::Deserialize;
 
-use atuin_common::{
-    api::{
-        ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ChangePasswordRequest, LoginRequest,
-        LoginResponse, RegisterResponse,
-    },
-    tls::ensure_crypto_provider,
-    url::UrlAppendExt,
+use atuin_common::url::UrlAppendExt;
+use atuin_domain::api::{
+    ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ChangePasswordRequest, LoginRequest, LoginResponse,
+    RegisterResponse,
 };
 
 use crate::settings::Settings;
@@ -46,7 +43,11 @@ pub enum MutateResponse {
 ///
 /// CLI commands use this trait so they don't need to know which backend is
 /// active — they just prompt for input and call these methods.
-#[async_trait]
+#[enum_dispatch]
+#[allow(
+    async_fn_in_trait,
+    reason = "only used within our code and we don't need it to be Send"
+)]
 pub trait AuthClient: Send + Sync {
     /// Log in with username + password, optionally providing a TOTP code.
     async fn login(
@@ -75,22 +76,29 @@ pub trait AuthClient: Send + Sync {
     ) -> Result<MutateResponse>;
 }
 
+/// Static-dispatch enum over the two auth backends.
+#[enum_dispatch(AuthClient)]
+pub enum AnyAuthClient {
+    Legacy(LegacyAuthClient),
+    Hub(HubAuthClient),
+}
+
 /// Resolve the appropriate [`AuthClient`] for the current settings.
-pub async fn auth_client(settings: &Settings) -> Box<dyn AuthClient> {
+pub async fn auth_client(settings: &Settings) -> AnyAuthClient {
     if settings.is_hub_sync() {
         let endpoint = settings.hub_endpoint();
-        Box::new(HubAuthClient::new(
+        AnyAuthClient::Hub(HubAuthClient::new(
             &endpoint,
             settings.hub_session_token().await.ok(),
-        )) as Box<dyn AuthClient>
+        ))
     } else {
-        Box::new(LegacyAuthClient::new(
+        AnyAuthClient::Legacy(LegacyAuthClient::new(
             &settings.sync_address,
             settings.session_token().await.ok(),
             settings.network_connect_timeout,
             settings.network_timeout,
             settings.extra_headers.clone(),
-        )) as Box<dyn AuthClient>
+        ))
     }
 }
 
@@ -129,7 +137,6 @@ impl LegacyAuthClient {
             .as_deref()
             .ok_or_else(|| eyre::eyre!("Not logged in"))?;
 
-        ensure_crypto_provider();
         let mut headers = crate::api_client::extra_headers_map(&self.extra_headers)?;
         headers.insert(
             reqwest::header::AUTHORIZATION,
@@ -146,7 +153,6 @@ impl LegacyAuthClient {
     }
 }
 
-#[async_trait]
 impl AuthClient for LegacyAuthClient {
     async fn login(
         &self,
@@ -273,7 +279,6 @@ struct HubErrorResponse {
     code: Option<String>,
 }
 
-#[async_trait]
 impl AuthClient for HubAuthClient {
     async fn login(
         &self,
@@ -281,7 +286,6 @@ impl AuthClient for HubAuthClient {
         password: &str,
         totp_code: Option<&str>,
     ) -> Result<AuthResponse> {
-        ensure_crypto_provider();
         let url = self.address.append_path("api/v0/login")?;
         let client = reqwest::Client::new();
 
@@ -329,7 +333,6 @@ impl AuthClient for HubAuthClient {
     }
 
     async fn register(&self, username: &str, email: &str, password: &str) -> Result<AuthResponse> {
-        ensure_crypto_provider();
         let url = self.address.append_path("api/v0/register")?;
         let client = reqwest::Client::new();
 
@@ -383,7 +386,6 @@ impl AuthClient for HubAuthClient {
             );
         }
 
-        ensure_crypto_provider();
         let url = self.address.append_path("api/v0/account/password")?;
         let client = reqwest::Client::new();
 
@@ -455,7 +457,6 @@ impl AuthClient for HubAuthClient {
             );
         }
 
-        ensure_crypto_provider();
         let url = self.address.append_path("api/v0/account")?;
         let client = reqwest::Client::new();
 

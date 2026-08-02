@@ -301,7 +301,7 @@ pub fn compute(
 mod tests {
     use atuin_client::history::History;
     use atuin_client::settings::Settings;
-    use rstest::rstest;
+    use rstest::*;
     use time::OffsetDateTime;
 
     use super::compute;
@@ -345,103 +345,76 @@ mod tests {
         assert_eq!(stats.unique_commands, 1);
     }
 
-    #[test]
-    fn interesting_commands() {
-        let settings = Settings::utc();
+    #[fixture]
+    fn settings(
+        #[default(&[][..])] prefix: &[&str],
+        #[default(&[][..])] subcommand: &[&str],
+    ) -> Settings {
+        let mut s = Settings::utc();
+        s.stats
+            .common_prefix
+            .extend(prefix.iter().map(|p| p.to_string()));
+        s.stats
+            .common_subcommands
+            .extend(subcommand.iter().map(|p| p.to_string()));
+        s
+    }
 
-        assert_eq!(interesting_command(&settings, "cargo"), "cargo");
-        assert_eq!(
-            interesting_command(&settings, "cargo build foo bar"),
-            "cargo build"
-        );
-        assert_eq!(
-            interesting_command(&settings, "sudo   cargo build foo bar"),
-            "cargo build"
-        );
-        assert_eq!(interesting_command(&settings, "sudo"), "sudo");
+    #[rstest]
+    #[case::bare("cargo", "cargo")]
+    #[case::with_subcommand("cargo build foo bar", "cargo build")]
+    #[case::with_prefix("sudo   cargo build foo bar", "cargo build")]
+    #[case::prefix_only("sudo", "sudo")]
+    fn interesting_commands(#[case] input: &str, #[case] expected: &str) {
+        let settings = Settings::utc();
+        assert_eq!(interesting_command(&settings, input), expected);
     }
 
     // Test with spaces in the common_prefix
-    #[test]
-    fn interesting_commands_spaces() {
-        let mut settings = Settings::utc();
-        settings.stats.common_prefix.push("sudo test".to_string());
-
-        assert_eq!(interesting_command(&settings, "sudo test"), "sudo test");
-        assert_eq!(interesting_command(&settings, "sudo test  "), "sudo test");
-        assert_eq!(interesting_command(&settings, "sudo test foo bar"), "foo");
-        assert_eq!(
-            interesting_command(&settings, "sudo test    foo bar"),
-            "foo"
-        );
-
-        // Works with a common_subcommand as well
-        assert_eq!(
-            interesting_command(&settings, "sudo test cargo build foo bar"),
-            "cargo build"
-        );
-
-        // We still match on just the sudo prefix
-        assert_eq!(interesting_command(&settings, "sudo"), "sudo");
-        assert_eq!(interesting_command(&settings, "sudo foo"), "foo");
+    #[rstest]
+    #[case::exact("sudo test", "sudo test")]
+    #[case::trailing_spaces("sudo test  ", "sudo test")]
+    #[case::following_word("sudo test foo bar", "foo")]
+    #[case::following_word_extra_spaces("sudo test    foo bar", "foo")]
+    #[case::with_subcommand("sudo test cargo build foo bar", "cargo build")]
+    #[case::prefix_alone("sudo", "sudo")]
+    #[case::prefix_word("sudo foo", "foo")]
+    fn interesting_commands_spaces(
+        #[with(&["sudo test"][..])] settings: Settings,
+        #[case] input: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(interesting_command(&settings, input), expected);
     }
 
     // Test with spaces in the common_subcommand
-    #[test]
-    fn interesting_commands_spaces_subcommand() {
-        let mut settings = Settings::utc();
-        settings
-            .stats
-            .common_subcommands
-            .push("cargo build".to_string());
-
-        assert_eq!(interesting_command(&settings, "cargo build"), "cargo build");
-        assert_eq!(
-            interesting_command(&settings, "cargo build   "),
-            "cargo build"
-        );
-        assert_eq!(
-            interesting_command(&settings, "cargo build foo bar"),
-            "cargo build foo"
-        );
-
-        // Works with a common_prefix as well
-        assert_eq!(
-            interesting_command(&settings, "sudo cargo build foo bar"),
-            "cargo build foo"
-        );
-
-        // We still match on just cargo as a subcommand
-        assert_eq!(interesting_command(&settings, "cargo"), "cargo");
-        assert_eq!(interesting_command(&settings, "cargo foo"), "cargo foo");
+    #[rstest]
+    #[case::exact("cargo build", "cargo build")]
+    #[case::trailing_spaces("cargo build   ", "cargo build")]
+    #[case::following_word("cargo build foo bar", "cargo build foo")]
+    #[case::with_prefix("sudo cargo build foo bar", "cargo build foo")]
+    #[case::subcommand_alone("cargo", "cargo")]
+    #[case::subcommand_word("cargo foo", "cargo foo")]
+    fn interesting_commands_spaces_subcommand(
+        #[with(&[][..], &["cargo build"][..])] settings: Settings,
+        #[case] input: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(interesting_command(&settings, input), expected);
     }
 
     // Test with spaces in the common_prefix and common_subcommand
-    #[test]
-    fn interesting_commands_spaces_both() {
-        let mut settings = Settings::utc();
-        settings.stats.common_prefix.push("sudo test".to_string());
-        settings
-            .stats
-            .common_subcommands
-            .push("cargo build".to_string());
-
-        assert_eq!(
-            interesting_command(&settings, "sudo test cargo build"),
-            "cargo build"
-        );
-        assert_eq!(
-            interesting_command(&settings, "sudo test   cargo build"),
-            "cargo build"
-        );
-        assert_eq!(
-            interesting_command(&settings, "sudo test cargo build   "),
-            "cargo build"
-        );
-        assert_eq!(
-            interesting_command(&settings, "sudo test cargo build foo bar"),
-            "cargo build foo"
-        );
+    #[rstest]
+    #[case::exact("sudo test cargo build", "cargo build")]
+    #[case::prefix_extra_spaces("sudo test   cargo build", "cargo build")]
+    #[case::trailing_spaces("sudo test cargo build   ", "cargo build")]
+    #[case::following_word("sudo test cargo build foo bar", "cargo build foo")]
+    fn interesting_commands_spaces_both(
+        #[with(&["sudo test"][..], &["cargo build"][..])] settings: Settings,
+        #[case] input: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(interesting_command(&settings, input), expected);
     }
 
     #[rstest]

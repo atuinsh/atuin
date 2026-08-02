@@ -80,6 +80,8 @@ pub fn decode_key(key: String) -> Result<Key> {
     match <[u8; 32]>::try_from(&*buf) {
         Ok(key) => Ok(key.into()),
         Err(_) => {
+            ensure!(!buf.is_empty(), "encryption key is empty");
+
             let mut bytes = rmp::decode::Bytes::new(&buf);
 
             match Marker::from_u8(buf[0]) {
@@ -146,5 +148,15 @@ mod test {
         for k in valid_encodings {
             assert_eq!(decode_key(k.to_owned()).expect(k), key);
         }
+    }
+
+    #[test]
+    fn decode_empty_key_is_error_not_panic() {
+        use super::decode_key;
+
+        // an empty (or whitespace-only) key decodes to an empty buffer;
+        // decoding must return an error rather than panic indexing buf[0]
+        assert!(decode_key(String::new()).is_err());
+        assert!(decode_key("\n".to_owned()).is_err());
     }
 }

@@ -16,12 +16,11 @@
   <a href="https://crates.io/crates/atuin"><img src="https://img.shields.io/crates/v/atuin.svg?style=flat-square" /></a>
   <a href="https://crates.io/crates/atuin"><img src="https://img.shields.io/crates/d/atuin.svg?style=flat-square" /></a>
   <a href="https://github.com/atuinsh/atuin/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/atuin.svg?style=flat-square" /></a>
+  <a href="https://app.codspeed.io/atuinsh/atuin?utm_source=badge"><img src="https://img.shields.io/endpoint?url=https://codspeed.io/badge.json" alt="CodSpeed"/></a>
   <a href="https://discord.gg/Fq8bJSKPHh"><img src="https://img.shields.io/discord/954121165239115808" /></a>
   <a rel="me" href="https://hachyderm.io/@atuin"><img src="https://img.shields.io/mastodon/follow/109944632283122560?domain=https%3A%2F%2Fhachyderm.io&style=social"/></a>
   <a href="https://twitter.com/atuinsh"><img src="https://img.shields.io/twitter/follow/atuinsh?style=social" /></a>
 </p>
-
-[English] | [简体中文]
 
 Atuin replaces your existing shell history with a SQLite database, and records
 additional context for your commands. Additionally, it provides optional and
@@ -111,9 +110,6 @@ Then restart your shell!
 > [Bash](https://docs.atuin.sh/latest/guide/installation/#installing-the-shell-plugin)
 > section of the shell plugin documentation.
 
-# Security
-
-If you find any security issues, we'd appreciate it if you could alert <ellie@atuin.sh>
 
 # Related projects
 - [Catpuccin for Atuin](https://github.com/catppuccin/atuin)
@@ -129,6 +125,3 @@ Please open a PR for any others!
 </a>
 
 Made with [contrib.rocks](https://contrib.rocks).
-
-[English]: ./README.md
-[简体中文]: ./docs-i18n/zh-CN/README.md

@@ -1232,52 +1232,43 @@ mod tests {
     use time::macros::datetime;
 
     use super::*;
+    use rstest::{fixture, rstest};
 
-    #[test]
-    fn normalize_command_strips_trailing_spaces_and_tabs() {
-        let settings = Settings::utc();
-
-        assert!(settings.strip_trailing_whitespace);
-        assert_eq!(normalize_command_for_storage("ls   \t", &settings), "ls");
+    #[fixture]
+    async fn db() -> Sqlite {
+        Sqlite::new("sqlite::memory:", 2.0).await.unwrap()
     }
 
-    #[test]
-    fn normalize_command_preserves_escaped_trailing_space() {
-        let settings = Settings::utc();
-
-        assert_eq!(
-            normalize_command_for_storage("printf foo\\ ", &settings),
-            "printf foo\\ "
-        );
-        assert_eq!(
-            normalize_command_for_storage("printf foo\\\\ ", &settings),
-            "printf foo\\\\"
-        );
+    #[fixture]
+    fn settings() -> Settings {
+        Settings::utc()
     }
 
+    #[rstest]
+    fn utc_settings_strip_trailing_whitespace_by_default() {
+        assert!(Settings::utc().strip_trailing_whitespace);
+    }
+
+    #[rstest]
+    #[case::strips_spaces_and_tabs("ls   \t", "ls")]
+    #[case::preserves_single_escaped_trailing_space("printf foo\\ ", "printf foo\\ ")]
+    #[case::even_backslashes_still_trim("printf foo\\\\ ", "printf foo\\\\")]
+    fn normalize_command_cases(settings: Settings, #[case] input: &str, #[case] expected: &str) {
+        assert_eq!(normalize_command_for_storage(input, &settings), expected);
+    }
+
+    #[rstest]
+    #[case::strips_by_default(true, "ls")]
+    #[case::keeps_when_disabled(false, "ls   \t")]
     #[tokio::test]
-    async fn handle_start_saves_trimmed_command() {
-        let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
-        let settings = Settings::utc();
-
-        handle_start(&db, &settings, "ls   \t", None, None)
-            .await
-            .unwrap();
-
-        let history = db
-            .before(OffsetDateTime::now_utc() + time::Duration::SECOND, 1)
-            .await
-            .unwrap()
-            .pop()
-            .unwrap();
-        assert_eq!(history.command, "ls");
-    }
-
-    #[tokio::test]
-    async fn handle_start_can_keep_trailing_whitespace() {
-        let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
+    async fn handle_start_respects_strip_setting(
+        #[future] db: Sqlite,
+        #[case] strip: bool,
+        #[case] expected: &str,
+    ) {
+        let db = db.await;
         let settings = Settings {
-            strip_trailing_whitespace: false,
+            strip_trailing_whitespace: strip,
             ..Settings::utc()
         };
 
@@ -1291,13 +1282,13 @@ mod tests {
             .unwrap()
             .pop()
             .unwrap();
-        assert_eq!(history.command, "ls   \t");
+        assert_eq!(history.command, expected);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn handle_start_drops_command_with_nul_byte() {
-        let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
-        let settings = Settings::utc();
+    async fn handle_start_drops_command_with_nul_byte(#[future] db: Sqlite, settings: Settings) {
+        let db = db.await;
 
         // A command containing a NUL byte can never have been executed by a shell;
         // it should be dropped rather than committed to history.
@@ -1313,24 +1304,18 @@ mod tests {
         assert!(stored.is_empty());
     }
 
-    #[test]
-    fn test_format_string_no_panic() {
+    #[rstest]
+    #[case::malformed_named_placeholder(r#"{"command":"{command}","key":"value"}"#)]
+    #[case::single_command("{command}")]
+    #[case::time_and_command("{time} - {command}")]
+    fn parse_fmt_never_panics(#[case] fmt: &str) {
         // Don't panic but provide helpful output (issue #2776)
-        let malformed_json = r#"{"command":"{command}","key":"value"}"#;
-
-        let result = std::panic::catch_unwind(|| parse_fmt(malformed_json));
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_valid_formats_still_work() {
-        assert!(std::panic::catch_unwind(|| parse_fmt("{command}")).is_ok());
-        assert!(std::panic::catch_unwind(|| parse_fmt("{time} - {command}")).is_ok());
+        assert!(std::panic::catch_unwind(|| parse_fmt(fmt)).is_ok());
     }
 
     #[cfg(feature = "daemon")]
-    fn sample_tail_event(kind: TailKind) -> TailEvent {
+    #[fixture]
+    fn tail_event(#[default(TailKind::Ended)] kind: TailKind) -> TailEvent {
         TailEvent {
             kind,
             history: History {
@@ -1351,9 +1336,9 @@ mod tests {
     }
 
     #[cfg(feature = "daemon")]
-    #[test]
-    fn test_tail_json_output_contains_history_fields() {
-        let json = sample_tail_event(TailKind::Ended)
+    #[rstest]
+    fn test_tail_json_output_contains_history_fields(tail_event: TailEvent) {
+        let json = tail_event
             .render(false, UtcOffsetSpec(time::UtcOffset::UTC))
             .unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1366,9 +1351,11 @@ mod tests {
     }
 
     #[cfg(feature = "daemon")]
-    #[test]
-    fn test_tail_pretty_output_shows_pending_fields_for_started_events() {
-        let rendered = sample_tail_event(TailKind::Started)
+    #[rstest]
+    fn test_tail_pretty_output_shows_pending_fields_for_started_events(
+        #[with(TailKind::Started)] tail_event: TailEvent,
+    ) {
+        let rendered = tail_event
             .render(true, UtcOffsetSpec(time::UtcOffset::UTC))
             .unwrap();
         let plain = regex::Regex::new(r"\x1b\[[0-9;]*m")

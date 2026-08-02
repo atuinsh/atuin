@@ -23,6 +23,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -76,14 +80,14 @@ jobs:
         run: cross build -p atuin-common --locked --target ${{ matrix.target }}
 
       - name: Run cross build client
-        run: cross build -p atuin-client --locked --target ${{ matrix.target }}
+        run: cross build -p atuin-client --locked --target ${{ matrix.target }} --features vendored-tls
 
       - name: Run cross build server
-        run: cross build -p atuin-server --locked --target ${{ matrix.target }}
+        run: cross build -p atuin-server --locked --target ${{ matrix.target }} --features vendored-tls
 
       - name: Run cross build main
         run: |
-          cross build --all --locked --target ${{ matrix.target }}
+          cross build --all --locked --target ${{ matrix.target }} --features vendored-tls
 
   unit-test:
     strategy:
@@ -93,6 +97,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
@@ -123,6 +131,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
@@ -168,6 +180,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -197,6 +213,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
       - name: Install latest rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -222,6 +242,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
@@ -255,6 +279,16 @@ jobs:
 
       - name: Format
         run: cargo fmt -- --check
+
+  deny:
+    runs-on: depot-ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
 
   package:
     runs-on: depot-ubuntu-24.04

@@ -4,7 +4,6 @@ use eyre::Result;
 use atuin_client::{
     database::Database,
     encryption::load_key,
-    record::store::Store,
     record::sync::Operation,
     record::{sqlite_store::SqliteStore, sync},
     settings::Settings,

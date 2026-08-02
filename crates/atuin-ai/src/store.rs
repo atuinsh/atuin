@@ -378,14 +378,27 @@ impl AiSessionStore {
 mod tests {
     use super::*;
     use crate::usage::UsageSnapshot;
+    use rstest::*;
 
-    async fn new_test_store() -> AiSessionStore {
+    #[fixture]
+    async fn store() -> AiSessionStore {
         AiSessionStore::new("sqlite::memory:", 2.0).await.unwrap()
     }
 
+    #[fixture]
+    async fn store_with_s1(#[future] store: AiSessionStore) -> AiSessionStore {
+        let store = store.await;
+        store
+            .create_session("s1", Some("/tmp"), None)
+            .await
+            .unwrap();
+        store
+    }
+
+    #[rstest]
     #[tokio::test]
-    async fn test_create_and_get_session() {
-        let store = new_test_store().await;
+    async fn test_create_and_get_session(#[future] store: AiSessionStore) {
+        let store = store.await;
 
         let session = store
             .create_session("s1", Some("/home/user/project"), Some("/home/user/project"))
@@ -400,19 +413,17 @@ mod tests {
         assert_eq!(loaded.directory.as_deref(), Some("/home/user/project"));
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_get_nonexistent_session() {
-        let store = new_test_store().await;
+    async fn test_get_nonexistent_session(#[future] store: AiSessionStore) {
+        let store = store.await;
         assert!(store.get_session("nope").await.unwrap().is_none());
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_append_and_load_events() {
-        let store = new_test_store().await;
-        store
-            .create_session("s1", Some("/tmp"), None)
-            .await
-            .unwrap();
+    async fn test_append_and_load_events(#[future] store_with_s1: AiSessionStore) {
+        let store = store_with_s1.await;
 
         store
             .append_event(
@@ -449,9 +460,10 @@ mod tests {
         assert_eq!(session.head_id.as_deref(), Some("e2"));
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_find_resumable_session() {
-        let store = new_test_store().await;
+    async fn test_find_resumable_session(#[future] store: AiSessionStore) {
+        let store = store.await;
         store
             .create_session("s1", Some("/home/user/project"), None)
             .await
@@ -465,9 +477,10 @@ mod tests {
         assert_eq!(found.unwrap().id, "s1");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_find_resumable_by_git_root() {
-        let store = new_test_store().await;
+    async fn test_find_resumable_by_git_root(#[future] store: AiSessionStore) {
+        let store = store.await;
         store
             .create_session(
                 "s1",
@@ -485,9 +498,10 @@ mod tests {
         assert_eq!(found.unwrap().id, "s1");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_find_resumable_skips_archived() {
-        let store = new_test_store().await;
+    async fn test_find_resumable_skips_archived(#[future] store: AiSessionStore) {
+        let store = store.await;
         store
             .create_session("s1", Some("/tmp"), None)
             .await
@@ -501,9 +515,10 @@ mod tests {
         assert!(found.is_none());
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_find_resumable_no_match_different_dir() {
-        let store = new_test_store().await;
+    async fn test_find_resumable_no_match_different_dir(#[future] store: AiSessionStore) {
+        let store = store.await;
         store
             .create_session("s1", Some("/home/user/project"), None)
             .await
@@ -516,13 +531,10 @@ mod tests {
         assert!(found.is_none());
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_archive_session() {
-        let store = new_test_store().await;
-        store
-            .create_session("s1", Some("/tmp"), None)
-            .await
-            .unwrap();
+    async fn test_archive_session(#[future] store_with_s1: AiSessionStore) {
+        let store = store_with_s1.await;
 
         store.archive_session("s1").await.unwrap();
 
@@ -530,13 +542,10 @@ mod tests {
         assert!(session.archived_at.is_some());
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_update_server_session_id() {
-        let store = new_test_store().await;
-        store
-            .create_session("s1", Some("/tmp"), None)
-            .await
-            .unwrap();
+    async fn test_update_server_session_id(#[future] store_with_s1: AiSessionStore) {
+        let store = store_with_s1.await;
 
         store
             .update_server_session_id("s1", "server-abc")
@@ -547,13 +556,10 @@ mod tests {
         assert_eq!(session.server_session_id.as_deref(), Some("server-abc"));
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_find_resumable_does_not_mutate() {
-        let store = new_test_store().await;
-        store
-            .create_session("s1", Some("/tmp"), None)
-            .await
-            .unwrap();
+    async fn test_find_resumable_does_not_mutate(#[future] store_with_s1: AiSessionStore) {
+        let store = store_with_s1.await;
 
         let before = store.get_session("s1").await.unwrap().unwrap();
         store
@@ -566,11 +572,12 @@ mod tests {
         assert_eq!(before.updated_at, after.updated_at);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_usage_cache_roundtrip() {
+    async fn test_usage_cache_roundtrip(#[future] store: AiSessionStore) {
         use crate::usage::UsageBucket;
 
-        let store = new_test_store().await;
+        let store = store.await;
 
         assert!(store.get_usage("key-a").await.unwrap().is_none());
 
@@ -601,13 +608,10 @@ mod tests {
         assert!(store.get_usage("key-b").await.unwrap().is_none());
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_events_ordered_chronologically() {
-        let store = new_test_store().await;
-        store
-            .create_session("s1", Some("/tmp"), None)
-            .await
-            .unwrap();
+    async fn test_events_ordered_chronologically(#[future] store_with_s1: AiSessionStore) {
+        let store = store_with_s1.await;
 
         store
             .append_event("s1", "e1", None, "inv1", "user_message", "{}")

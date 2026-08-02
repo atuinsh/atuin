@@ -40,7 +40,7 @@
             default = atuin;
           };
 
-          formatter = pkgs.nixfmt;
+          formatter = pkgs.nixfmt-tree;
 
           devShells.default = pkgs.mkShell {
             inputsFrom = [ atuin ];

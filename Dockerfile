@@ -8,9 +8,12 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 
 # Ensure working C compile setup (not installed by default in arm64 images)
-RUN apt update && apt install build-essential -y
+RUN apt update && apt install build-essential libssl-dev pkg-config -y
 
 COPY --from=planner /app/recipe.json recipe.json
+# The recipe references the [patch.crates-io] axoasset path dependency, but
+# cargo-chef does not skeleton patched crates, so the real sources are needed
+COPY vendor vendor
 RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY . .
@@ -23,7 +26,7 @@ LABEL org.opencontainers.image.source="https://github.com/atuinsh/atuin" \
 
 RUN useradd -c 'atuin user' atuin && mkdir /config && chown atuin:atuin /config
 # ca-certificates for webhooks to work, curl for the healthcheck
-RUN apt update && apt install --no-install-recommends ca-certificates curl -y && rm -rf /var/lib/apt/lists/*
+RUN apt update && apt install --no-install-recommends ca-certificates curl libssl3 -y && rm -rf /var/lib/apt/lists/*
 WORKDIR app
 
 USER atuin

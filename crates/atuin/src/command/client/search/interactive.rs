@@ -15,15 +15,15 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{
     cursor::Cursor,
-    engines::{SearchEngine, SearchState},
+    engines::{AnySearchEngine, SearchEngine, SearchState},
     history_list::{HistoryList, ListState},
 };
 use atuin_client::{
     database::{Context, Database, current_context},
     history::{History, HistoryId, HistoryStats, store::HistoryStore},
     settings::{
-        CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, SearchMode, Settings,
-        UiColumn,
+        CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, RequestedSearchMode,
+        SearchMode, Settings, UiColumn,
     },
 };
 
@@ -168,11 +168,11 @@ pub struct State {
 
     keymaps: KeymapSet,
     search: SearchState,
-    engine: Box<dyn SearchEngine>,
+    engine: AnySearchEngine,
     now: Box<dyn Fn() -> OffsetDateTime + Send>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub enum Compactness {
     Ultracompact,
     Compact,
@@ -889,8 +889,11 @@ impl State {
             border_size,
             preview_width,
         );
-        let show_help =
-            settings.show_help && (matches!(compactness, Compactness::Full) || area.height > 1);
+
+        let show_help = settings.show_help && (compactness == Compactness::Full || area.height > 1);
+        let warnings = Self::build_warnings(settings, theme);
+        let warning_height = u16::try_from(warnings.height()).unwrap_or(u16::MAX);
+
         // This is an OR, as it seems more likely for someone to wish to override
         // tabs unexpectedly being missed, than unexpectedly present.
         let show_tabs = settings.show_tabs && !matches!(compactness, Compactness::Ultracompact);
@@ -906,6 +909,7 @@ impl State {
                         Constraint::Length(preview_height),                // preview
                         Constraint::Length(if show_tabs { 1 } else { 0 }), // tabs
                         Constraint::Length(if show_help { 1 } else { 0 }), // header (sic)
+                        Constraint::Length(warning_height),                // skim warning
                     ]
                 } else {
                     match compactness {
@@ -913,8 +917,9 @@ impl State {
                             Constraint::Length(if show_help { 1 } else { 0 }), // header
                             Constraint::Length(0),                             // tabs
                             Constraint::Min(1),                                // results list
-                            Constraint::Length(0),
-                            Constraint::Length(0),
+                            Constraint::Length(0),                             // no input
+                            Constraint::Length(0),                             // no preview
+                            Constraint::Length(warning_height),                // skim warning
                         ],
                         _ => [
                             Constraint::Length(if show_help { 1 } else { 0 }), // header
@@ -922,6 +927,7 @@ impl State {
                             Constraint::Min(1),                                // results list
                             Constraint::Length(1 + border_size),               // input
                             Constraint::Length(preview_height),                // preview
+                            Constraint::Length(warning_height),                // skim warning
                         ],
                     }
                 }
@@ -934,6 +940,8 @@ impl State {
         let preview_chunk = if invert { chunks[2] } else { chunks[4] };
         let tabs_chunk = if invert { chunks[3] } else { chunks[1] };
         let header_chunk = if invert { chunks[4] } else { chunks[0] };
+        // Always last, so it is the bottom row whichever way the layout is stacked.
+        let warning_chunk = chunks[5];
 
         // TODO: this should be split so that we have one interactive search container that is
         // EITHER a search box or an inspector. But I'm not doing that now, way too much atm.
@@ -977,6 +985,10 @@ impl State {
         let stats_tab = self.build_stats(theme);
         f.render_widget(stats_tab, header_chunks[2]);
 
+        if warning_height > 0 {
+            f.render_widget(warnings, warning_chunk);
+        }
+
         let indicator: String = match compactness {
             Compactness::Ultracompact => {
                 if self.switched_search_mode {
@@ -999,7 +1011,7 @@ impl State {
         match self.tab_index {
             0 => {
                 let history_highlighter = HistoryHighlighter {
-                    engine: self.engine.as_ref(),
+                    engine: &self.engine,
                     search_input: self.search.input.as_str(),
                 };
                 let results_list = Self::build_results_list(
@@ -1179,6 +1191,32 @@ impl State {
         }
         .style(Style::from_crossterm(theme.as_style(Meaning::Annotation)))
         .alignment(Alignment::Center)
+    }
+
+    fn build_warnings(settings: &Settings, theme: &Theme) -> Text<'static> {
+        if settings.requested_search_mode != RequestedSearchMode::Skim {
+            return Text::default();
+        }
+
+        let style =
+            Style::from_crossterm(theme.as_style(Meaning::AlertWarn)).add_modifier(Modifier::BOLD);
+        let code_style = Style::from_crossterm(theme.as_style(Meaning::SyntaxCommand))
+            .add_modifier(Modifier::BOLD);
+
+        Text::from(vec![
+            Span::styled(
+                "Warning: \"skim\" mode was removed; falling back to \"fuzzy\"",
+                style,
+            )
+            .into(),
+            vec![
+                Span::styled("Set ", style),
+                Span::styled("search_mode = \"daemon-fuzzy\"", code_style),
+                Span::styled(" for a similar experience", style),
+            ]
+            .into(),
+        ])
+        .left_aligned()
     }
 
     fn build_stats(&self, theme: &Theme) -> Paragraph<'_> {
@@ -1823,10 +1861,10 @@ pub async fn history(
 
     let search_mode = if settings.shell_up_key_binding {
         settings
-            .search_mode_shell_up_key_binding
-            .unwrap_or(settings.search_mode)
+            .search_mode_shell_up_key_binding()
+            .unwrap_or_else(|| settings.search_mode())
     } else {
-        settings.search_mode
+        settings.search_mode()
     };
     let default_filter_mode = settings
         .filter_mode_shell_up_key_binding
@@ -2172,6 +2210,8 @@ fn set_clipboard(_s: String) -> Result<(), std::convert::Infallible> {
 
 #[cfg(test)]
 mod tests {
+    use rstest::{fixture, rstest};
+
     use atuin_client::database::Context;
     use atuin_client::history::History;
     use atuin_client::settings::{
@@ -2181,8 +2221,9 @@ mod tests {
 
     use crate::command::client::search::engines::{self, SearchState};
     use crate::command::client::search::history_list::ListState;
+    use crate::command::client::search::keybindings::Action;
 
-    use super::{Compactness, InspectingState, KeymapSet, State};
+    use super::{Compactness, InputAction, InspectingState, KeymapSet, State};
 
     #[cfg(not(target_os = "windows"))]
     use super::KeyboardEnhancementState;
@@ -2213,44 +2254,66 @@ mod tests {
         assert!(!disabled.should_pop());
     }
 
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn calc_preview_height_test() {
-        let settings_preview_auto = Settings {
-            preview: Preview {
-                strategy: PreviewStrategy::Auto,
-            },
-            show_preview: true,
-            ..Settings::utc()
-        };
+    #[fixture]
+    fn settings() -> Settings {
+        Settings::utc()
+    }
 
-        let settings_preview_auto_h2 = Settings {
-            preview: Preview {
-                strategy: PreviewStrategy::Auto,
+    /// Build a full `State` for tests. Override the leading params via `#[with(..)]`
+    /// (positional/left-anchored: `keymap_mode`, `results_len`, `selected`, `filter_mode`, `input`).
+    #[fixture]
+    fn state(
+        #[default(KeymapMode::Emacs)] keymap_mode: KeymapMode,
+        #[default(100usize)] results_len: usize,
+        #[default(0usize)] selected: usize,
+        #[default(FilterMode::Global)] filter_mode: FilterMode,
+        #[default("")] input: &str,
+    ) -> State {
+        let mut state = State {
+            history_count: Some(i64::try_from(results_len).unwrap()),
+            update_needed: None,
+            results_state: ListState::default(),
+            switched_search_mode: false,
+            search_mode: SearchMode::Fuzzy,
+            results_len,
+            accept: false,
+            keymap_mode,
+            prefix: false,
+            current_cursor: None,
+            tab_index: 0,
+            pending_vim_key: None,
+            original_input_empty: false,
+            inspecting_state: InspectingState {
+                current: None,
+                next: None,
+                previous: None,
             },
-            show_preview: true,
-            max_preview_height: 2,
-            ..Settings::utc()
-        };
-
-        let settings_preview_h4 = Settings {
-            preview: Preview {
-                strategy: PreviewStrategy::Static,
+            keymaps: KeymapSet::defaults(&Settings::utc()),
+            search: SearchState {
+                input: input.to_string().into(),
+                filter_mode,
+                context: Context {
+                    session: String::new(),
+                    cwd: String::new(),
+                    hostname: String::new(),
+                    host_id: String::new(),
+                    git_root: None,
+                },
+                custom_context: None,
+                shells: Shells::all(),
             },
-            show_preview: true,
-            max_preview_height: 4,
-            ..Settings::utc()
+            engine: engines::engine(SearchMode::Fuzzy, &Settings::utc()),
+            now: Box::new(OffsetDateTime::now_utc),
         };
+        state.results_state.select(selected);
+        state
+    }
 
-        let settings_preview_fixed = Settings {
-            preview: Preview {
-                strategy: PreviewStrategy::Fixed,
-            },
-            show_preview: true,
-            max_preview_height: 15,
-            ..Settings::utc()
-        };
-
+    /// Build a read-only history corpus (60, 124 and 200 character commands) for
+    /// the preview-height cases. Shared across all cases via `#[once]`.
+    #[fixture]
+    #[once]
+    fn preview_corpus() -> Vec<History> {
         let cmd_60: History = History::capture()
             .timestamp(time::OffsetDateTime::now_utc())
             .command("for i in $(seq -w 10); do echo \"item number $i - abcd\"; done")
@@ -2272,153 +2335,70 @@ mod tests {
             .build()
             .into();
 
-        let results: Vec<History> = vec![cmd_60, cmd_124, cmd_200];
+        vec![cmd_60, cmd_124, cmd_200]
+    }
 
-        // the selected command does not require a preview
-        let no_preview = State::calc_preview_height(
-            &settings_preview_auto,
-            &results,
-            0_usize,
-            0_usize,
-            Compactness::Full,
-            1,
-            80,
-        );
-        // the selected command requires 2 lines
-        let preview_h2 = State::calc_preview_height(
-            &settings_preview_auto,
-            &results,
-            1_usize,
-            0_usize,
-            Compactness::Full,
-            1,
-            80,
-        );
-        // the selected command requires 3 lines
-        let preview_h3 = State::calc_preview_height(
-            &settings_preview_auto,
-            &results,
-            2_usize,
-            0_usize,
-            Compactness::Full,
-            1,
-            80,
-        );
-        // the selected command requires a preview of 1 line (happens when the command is between preview_width-19 and preview_width)
-        let preview_one_line = State::calc_preview_height(
-            &settings_preview_auto,
-            &results,
-            0_usize,
-            0_usize,
-            Compactness::Full,
-            1,
-            66,
-        );
-        // the selected command requires 3 lines, but we have a max preview height limit of 2
-        let preview_limit_at_2 = State::calc_preview_height(
-            &settings_preview_auto_h2,
-            &results,
-            2_usize,
-            0_usize,
-            Compactness::Full,
-            1,
-            80,
-        );
-        // the longest command requires 3 lines
-        let preview_static_h3 = State::calc_preview_height(
-            &settings_preview_h4,
-            &results,
-            1_usize,
-            0_usize,
-            Compactness::Full,
-            1,
-            80,
-        );
-        // the longest command requires 10 lines, but we have a max preview height limit of 4
-        let preview_static_limit_at_4 = State::calc_preview_height(
-            &settings_preview_h4,
-            &results,
-            1_usize,
-            0_usize,
-            Compactness::Full,
-            1,
-            20,
-        );
-        // the longest command requires 10 lines, but we have a max preview height of 15 and a fixed preview strategy
-        let settings_preview_fixed = State::calc_preview_height(
-            &settings_preview_fixed,
-            &results,
-            1_usize,
-            0_usize,
-            Compactness::Full,
-            1,
-            20,
-        );
+    /// Build `Settings` for a preview strategy, optionally overriding the max height.
+    fn preview_settings(strategy: PreviewStrategy, max: Option<u16>) -> Settings {
+        let mut s = Settings::utc();
+        s.show_preview = true;
+        s.preview = Preview { strategy };
+        if let Some(m) = max {
+            s.max_preview_height = m;
+        }
+        s
+    }
 
-        assert_eq!(no_preview, 1);
-        // 1 * 2 is the space for the border
-        let border_space = 2;
-        assert_eq!(preview_h2, 2 + border_space);
-        assert_eq!(preview_h3, 3 + border_space);
-        assert_eq!(preview_one_line, 1 + border_space);
-        assert_eq!(preview_limit_at_2, 2 + border_space);
-        assert_eq!(preview_static_h3, 3 + border_space);
-        assert_eq!(preview_static_limit_at_4, 4 + border_space);
-        assert_eq!(settings_preview_fixed, 15 + border_space);
+    // The border space (`border_size * 2`) is 2 in every case below.
+    #[rstest]
+    #[case::no_preview(PreviewStrategy::Auto, None, 0, 80, 1)]
+    #[case::auto_h2(PreviewStrategy::Auto, None, 1, 80, 4)]
+    #[case::auto_h3(PreviewStrategy::Auto, None, 2, 80, 5)]
+    #[case::auto_one_line(PreviewStrategy::Auto, None, 0, 66, 3)]
+    #[case::auto_limit_2(PreviewStrategy::Auto, Some(2), 2, 80, 4)]
+    #[case::static_h3(PreviewStrategy::Static, Some(4), 1, 80, 5)]
+    #[case::static_limit_4(PreviewStrategy::Static, Some(4), 1, 20, 6)]
+    #[case::fixed(PreviewStrategy::Fixed, Some(15), 1, 20, 17)]
+    fn calc_preview_height_cases(
+        #[from(preview_corpus)] results: &[History],
+        #[case] strategy: PreviewStrategy,
+        #[case] max: Option<u16>,
+        #[case] selected: usize,
+        #[case] preview_width: u16,
+        #[case] expected: u16,
+    ) {
+        assert_eq!(
+            State::calc_preview_height(
+                &preview_settings(strategy, max),
+                results,
+                selected,
+                0,
+                Compactness::Full,
+                1,
+                preview_width,
+            ),
+            expected
+        );
     }
 
     // Test when there's no results, scrolling up or down doesn't underflow
-    #[test]
-    fn state_scroll_up_underflow() {
-        let settings = Settings::utc();
-        let mut state = State {
-            history_count: Some(0),
-            update_needed: None,
-            results_state: ListState::default(),
-            switched_search_mode: false,
-            search_mode: SearchMode::Fuzzy,
-            results_len: 0,
-            accept: false,
-            keymap_mode: KeymapMode::Auto,
-            prefix: false,
-            current_cursor: None,
-            tab_index: 0,
-            pending_vim_key: None,
-            original_input_empty: false,
-            inspecting_state: InspectingState {
-                current: None,
-                next: None,
-                previous: None,
-            },
-            keymaps: KeymapSet::defaults(&settings),
-            search: SearchState {
-                input: String::new().into(),
-                filter_mode: FilterMode::Directory,
-                context: Context {
-                    session: String::new(),
-                    cwd: String::new(),
-                    hostname: String::new(),
-                    host_id: String::new(),
-                    git_root: None,
-                },
-                custom_context: None,
-                shells: Shells::All,
-            },
-            engine: engines::engine(SearchMode::Fuzzy, &settings),
-            now: Box::new(OffsetDateTime::now_utc),
-        };
-
+    #[rstest]
+    fn state_scroll_up_underflow(
+        #[with(KeymapMode::Auto, 0, 0, FilterMode::Directory)] mut state: State,
+    ) {
         state.scroll_up(1);
         state.scroll_down(1);
     }
 
     #[allow(clippy::too_many_lines)]
-    #[test]
-    fn test_accept_keybindings() {
+    #[rstest]
+    fn test_accept_keybindings(
+        #[with(KeymapMode::Emacs, 1)] mut state: State,
+        mut settings: Settings,
+    ) {
         use atuin_client::settings::Keys;
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-        let mut settings = Settings::utc();
         settings.keys = Keys {
             scroll_exits: true,
             exit_past_line_start: false,
@@ -2427,43 +2407,7 @@ mod tests {
             accept_with_backspace: false,
             prefix: "a".to_string(),
         };
-
-        let mut state = State {
-            history_count: Some(1),
-            update_needed: None,
-            results_state: ListState::default(),
-            switched_search_mode: false,
-            search_mode: SearchMode::Fuzzy,
-            results_len: 1,
-            accept: false,
-            keymap_mode: KeymapMode::Emacs,
-            prefix: false,
-            current_cursor: None,
-            tab_index: 0,
-            pending_vim_key: None,
-            original_input_empty: false,
-            inspecting_state: InspectingState {
-                current: None,
-                next: None,
-                previous: None,
-            },
-            keymaps: KeymapSet::defaults(&settings),
-            search: SearchState {
-                input: String::new().into(),
-                filter_mode: FilterMode::Global,
-                context: Context {
-                    session: String::new(),
-                    cwd: String::new(),
-                    hostname: String::new(),
-                    host_id: String::new(),
-                    git_root: None,
-                },
-                custom_context: None,
-                shells: Shells::All,
-            },
-            engine: engines::engine(SearchMode::Fuzzy, &settings),
-            now: Box::new(OffsetDateTime::now_utc),
-        };
+        state.keymaps = KeymapSet::defaults(&settings);
 
         let tab_event = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
         let result = state.handle_key_input(&settings, &tab_event);
@@ -2542,48 +2486,12 @@ mod tests {
         state.keymaps = KeymapSet::defaults(&settings);
     }
 
-    #[test]
-    fn test_vim_gg_multikey_sequence() {
+    #[rstest]
+    fn test_vim_gg_multikey_sequence(
+        #[with(KeymapMode::VimNormal)] mut state: State,
+        settings: Settings,
+    ) {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-        let settings = Settings::utc();
-
-        let mut state = State {
-            history_count: Some(100),
-            update_needed: None,
-            results_state: ListState::default(),
-            switched_search_mode: false,
-            search_mode: SearchMode::Fuzzy,
-            results_len: 100,
-            accept: false,
-            keymap_mode: KeymapMode::VimNormal,
-            prefix: false,
-            current_cursor: None,
-            tab_index: 0,
-            pending_vim_key: None,
-            original_input_empty: false,
-            inspecting_state: InspectingState {
-                current: None,
-                next: None,
-                previous: None,
-            },
-            keymaps: KeymapSet::defaults(&settings),
-            search: SearchState {
-                input: String::new().into(),
-                filter_mode: FilterMode::Global,
-                context: Context {
-                    session: String::new(),
-                    cwd: String::new(),
-                    hostname: String::new(),
-                    host_id: String::new(),
-                    git_root: None,
-                },
-                custom_context: None,
-                shells: Shells::All,
-            },
-            engine: engines::engine(SearchMode::Fuzzy, &settings),
-            now: Box::new(OffsetDateTime::now_utc),
-        };
 
         // Start in the middle of the list
         state.results_state.select(50);
@@ -2602,48 +2510,12 @@ mod tests {
         assert_eq!(state.results_state.selected(), 99); // Jumped to last index (visual top)
     }
 
-    #[test]
-    fn test_vim_g_key_clears_on_other_input() {
+    #[rstest]
+    fn test_vim_g_key_clears_on_other_input(
+        #[with(KeymapMode::VimNormal)] mut state: State,
+        settings: Settings,
+    ) {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-        let settings = Settings::utc();
-
-        let mut state = State {
-            history_count: Some(100),
-            update_needed: None,
-            results_state: ListState::default(),
-            switched_search_mode: false,
-            search_mode: SearchMode::Fuzzy,
-            results_len: 100,
-            accept: false,
-            keymap_mode: KeymapMode::VimNormal,
-            prefix: false,
-            current_cursor: None,
-            tab_index: 0,
-            pending_vim_key: None,
-            original_input_empty: false,
-            inspecting_state: InspectingState {
-                current: None,
-                next: None,
-                previous: None,
-            },
-            keymaps: KeymapSet::defaults(&settings),
-            search: SearchState {
-                input: String::new().into(),
-                filter_mode: FilterMode::Global,
-                context: Context {
-                    session: String::new(),
-                    cwd: String::new(),
-                    hostname: String::new(),
-                    host_id: String::new(),
-                    git_root: None,
-                },
-                custom_context: None,
-                shells: Shells::All,
-            },
-            engine: engines::engine(SearchMode::Fuzzy, &settings),
-            now: Box::new(OffsetDateTime::now_utc),
-        };
 
         state.results_state.select(50);
 
@@ -2658,48 +2530,12 @@ mod tests {
         assert_eq!(state.pending_vim_key, None);
     }
 
-    #[test]
-    fn test_vim_big_g_jump_to_bottom() {
+    #[rstest]
+    fn test_vim_big_g_jump_to_bottom(
+        #[with(KeymapMode::VimNormal)] mut state: State,
+        settings: Settings,
+    ) {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-        let settings = Settings::utc();
-
-        let mut state = State {
-            history_count: Some(100),
-            update_needed: None,
-            results_state: ListState::default(),
-            switched_search_mode: false,
-            search_mode: SearchMode::Fuzzy,
-            results_len: 100,
-            accept: false,
-            keymap_mode: KeymapMode::VimNormal,
-            prefix: false,
-            current_cursor: None,
-            tab_index: 0,
-            pending_vim_key: None,
-            original_input_empty: false,
-            inspecting_state: InspectingState {
-                current: None,
-                next: None,
-                previous: None,
-            },
-            keymaps: KeymapSet::defaults(&settings),
-            search: SearchState {
-                input: String::new().into(),
-                filter_mode: FilterMode::Global,
-                context: Context {
-                    session: String::new(),
-                    cwd: String::new(),
-                    hostname: String::new(),
-                    host_id: String::new(),
-                    git_root: None,
-                },
-                custom_context: None,
-                shells: Shells::All,
-            },
-            engine: engines::engine(SearchMode::Fuzzy, &settings),
-            now: Box::new(OffsetDateTime::now_utc),
-        };
 
         state.results_state.select(50);
 
@@ -2710,133 +2546,23 @@ mod tests {
         assert_eq!(state.results_state.selected(), 0);
     }
 
-    #[test]
-    fn test_vim_ctrl_u_d_half_page_scroll() {
+    // Ctrl+{d,u,f,b} in vim-normal mode should return Continue and clear any
+    // pending vim key. (Scroll amount depends on max_entries, which is 0 in tests.)
+    #[rstest]
+    fn test_vim_ctrl_scroll_clears_pending(
+        #[with(KeymapMode::VimNormal)] mut state: State,
+        settings: Settings,
+        #[values('d', 'u', 'f', 'b')] c: char,
+    ) {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-        let settings = Settings::utc();
-
-        let mut state = State {
-            history_count: Some(100),
-            update_needed: None,
-            results_state: ListState::default(),
-            switched_search_mode: false,
-            search_mode: SearchMode::Fuzzy,
-            results_len: 100,
-            accept: false,
-            keymap_mode: KeymapMode::VimNormal,
-            prefix: false,
-            current_cursor: None,
-            tab_index: 0,
-            pending_vim_key: None,
-            original_input_empty: false,
-            inspecting_state: InspectingState {
-                current: None,
-                next: None,
-                previous: None,
-            },
-            keymaps: KeymapSet::defaults(&settings),
-            search: SearchState {
-                input: String::new().into(),
-                filter_mode: FilterMode::Global,
-                context: Context {
-                    session: String::new(),
-                    cwd: String::new(),
-                    hostname: String::new(),
-                    host_id: String::new(),
-                    git_root: None,
-                },
-                custom_context: None,
-                shells: Shells::All,
-            },
-            engine: engines::engine(SearchMode::Fuzzy, &settings),
-            now: Box::new(OffsetDateTime::now_utc),
-        };
-
         state.results_state.select(50);
-
-        // Ctrl+d should return Continue and clear pending key
-        // (scroll amount depends on max_entries which is 0 in tests)
         state.pending_vim_key = Some('g');
-        let result = state.handle_key_input(
+        let r = state.handle_key_input(
             &settings,
-            &KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            &KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL),
         );
-        assert!(matches!(result, super::InputAction::Continue));
-        assert_eq!(state.pending_vim_key, None);
-
-        // Ctrl+u should return Continue and clear pending key
-        state.pending_vim_key = Some('g');
-        let result = state.handle_key_input(
-            &settings,
-            &KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
-        );
-        assert!(matches!(result, super::InputAction::Continue));
-        assert_eq!(state.pending_vim_key, None);
-    }
-
-    #[test]
-    fn test_vim_ctrl_f_b_full_page_scroll() {
-        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-        let settings = Settings::utc();
-
-        let mut state = State {
-            history_count: Some(100),
-            update_needed: None,
-            results_state: ListState::default(),
-            switched_search_mode: false,
-            search_mode: SearchMode::Fuzzy,
-            results_len: 100,
-            accept: false,
-            keymap_mode: KeymapMode::VimNormal,
-            prefix: false,
-            current_cursor: None,
-            tab_index: 0,
-            pending_vim_key: None,
-            original_input_empty: false,
-            inspecting_state: InspectingState {
-                current: None,
-                next: None,
-                previous: None,
-            },
-            keymaps: KeymapSet::defaults(&settings),
-            search: SearchState {
-                input: String::new().into(),
-                filter_mode: FilterMode::Global,
-                context: Context {
-                    session: String::new(),
-                    cwd: String::new(),
-                    hostname: String::new(),
-                    host_id: String::new(),
-                    git_root: None,
-                },
-                custom_context: None,
-                shells: Shells::All,
-            },
-            engine: engines::engine(SearchMode::Fuzzy, &settings),
-            now: Box::new(OffsetDateTime::now_utc),
-        };
-
-        state.results_state.select(50);
-
-        // Ctrl+f should return Continue and clear pending key
-        // (scroll amount depends on max_entries which is 0 in tests)
-        state.pending_vim_key = Some('g');
-        let result = state.handle_key_input(
-            &settings,
-            &KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
-        );
-        assert!(matches!(result, super::InputAction::Continue));
-        assert_eq!(state.pending_vim_key, None);
-
-        // Ctrl+b should return Continue and clear pending key
-        state.pending_vim_key = Some('g');
-        let result = state.handle_key_input(
-            &settings,
-            &KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
-        );
-        assert!(matches!(result, super::InputAction::Continue));
+        assert!(matches!(r, InputAction::Continue));
         assert_eq!(state.pending_vim_key, None);
     }
 
@@ -2844,185 +2570,83 @@ mod tests {
     // Executor tests (execute_action)
     // -----------------------------------------------------------------------
 
-    /// Helper to build a State for executor tests.
-    fn make_executor_state(results_len: usize, selected: usize) -> State {
-        let settings = Settings::utc();
-        let mut state = State {
-            history_count: Some(i64::try_from(results_len).unwrap()),
-            update_needed: None,
-            results_state: ListState::default(),
-            switched_search_mode: false,
-            search_mode: SearchMode::Fuzzy,
-            results_len,
-            accept: false,
-            keymap_mode: KeymapMode::Emacs,
-            prefix: false,
-            current_cursor: None,
-            tab_index: 0,
-            pending_vim_key: None,
-            original_input_empty: false,
-            inspecting_state: InspectingState {
-                current: None,
-                next: None,
-                previous: None,
-            },
-            keymaps: KeymapSet::defaults(&settings),
-            search: SearchState {
-                input: String::new().into(),
-                filter_mode: FilterMode::Global,
-                context: Context {
-                    session: String::new(),
-                    cwd: String::new(),
-                    hostname: String::new(),
-                    host_id: String::new(),
-                    git_root: None,
-                },
-                custom_context: None,
-                shells: Shells::All,
-            },
-            engine: engines::engine(SearchMode::Fuzzy, &settings),
-            now: Box::new(OffsetDateTime::now_utc),
-        };
-        state.results_state.select(selected);
-        state
+    // Selection/scroll actions, invert-aware. `state` starts at selected index 50
+    // in a 100-result list.
+    #[rstest]
+    #[case::select_next_no_invert(false, Action::SelectNext, 49)]
+    #[case::select_next_with_invert(true, Action::SelectNext, 51)]
+    #[case::select_previous_no_invert(false, Action::SelectPrevious, 51)]
+    #[case::scroll_to_top_no_invert(false, Action::ScrollToTop, 99)]
+    #[case::scroll_to_top_with_invert(true, Action::ScrollToTop, 0)]
+    #[case::scroll_to_bottom_no_invert(false, Action::ScrollToBottom, 0)]
+    fn execute_scroll_selection(
+        #[with(KeymapMode::Emacs, 100, 50)] mut state: State,
+        mut settings: Settings,
+        #[case] invert: bool,
+        #[case] action: Action,
+        #[case] expected_selected: usize,
+    ) {
+        settings.invert = invert;
+        let r = state.execute_action(&action, &settings);
+        assert!(matches!(r, InputAction::Continue));
+        assert_eq!(state.results_state.selected(), expected_selected);
     }
 
-    #[test]
-    fn execute_select_next_no_invert() {
-        use crate::command::client::search::keybindings::Action;
-
-        let mut state = make_executor_state(100, 50);
-        let settings = Settings::utc();
-        let result = state.execute_action(&Action::SelectNext, &settings);
-        assert!(matches!(result, super::InputAction::Continue));
-        // Non-inverted: SelectNext = scroll_down = selected - 1
-        assert_eq!(state.results_state.selected(), 49);
+    // Vim mode-change actions. `start` is applied in the body because `#[with]`
+    // cannot receive a `#[case]` value.
+    #[rstest]
+    #[case::enter_normal(KeymapMode::Emacs, Action::VimEnterNormal, KeymapMode::VimNormal)]
+    #[case::enter_insert(KeymapMode::VimNormal, Action::VimEnterInsert, KeymapMode::VimInsert)]
+    fn execute_vim_mode_change(
+        mut state: State,
+        settings: Settings,
+        #[case] start: KeymapMode,
+        #[case] action: Action,
+        #[case] expected: KeymapMode,
+    ) {
+        state.keymap_mode = start;
+        let r = state.execute_action(&action, &settings);
+        assert!(matches!(r, InputAction::Continue));
+        assert_eq!(state.keymap_mode, expected);
     }
 
-    #[test]
-    fn execute_select_next_with_invert() {
+    #[rstest]
+    fn execute_accept_sets_accept_flag(
+        #[with(KeymapMode::Emacs, 100, 5)] mut state: State,
+        mut settings: Settings,
+    ) {
         use crate::command::client::search::keybindings::Action;
 
-        let mut state = make_executor_state(100, 50);
-        let mut settings = Settings::utc();
-        settings.invert = true;
-        let result = state.execute_action(&Action::SelectNext, &settings);
-        assert!(matches!(result, super::InputAction::Continue));
-        // Inverted: SelectNext = scroll_up = selected + 1
-        assert_eq!(state.results_state.selected(), 51);
-    }
-
-    #[test]
-    fn execute_select_previous_no_invert() {
-        use crate::command::client::search::keybindings::Action;
-
-        let mut state = make_executor_state(100, 50);
-        let settings = Settings::utc();
-        let result = state.execute_action(&Action::SelectPrevious, &settings);
-        assert!(matches!(result, super::InputAction::Continue));
-        // Non-inverted: SelectPrevious = scroll_up = selected + 1
-        assert_eq!(state.results_state.selected(), 51);
-    }
-
-    #[test]
-    fn execute_vim_enter_normal() {
-        use crate::command::client::search::keybindings::Action;
-
-        let mut state = make_executor_state(100, 0);
-        let settings = Settings::utc();
-        let result = state.execute_action(&Action::VimEnterNormal, &settings);
-        assert!(matches!(result, super::InputAction::Continue));
-        assert_eq!(state.keymap_mode, KeymapMode::VimNormal);
-    }
-
-    #[test]
-    fn execute_vim_enter_insert() {
-        use crate::command::client::search::keybindings::Action;
-
-        let mut state = make_executor_state(100, 0);
-        state.keymap_mode = KeymapMode::VimNormal;
-        let settings = Settings::utc();
-        let result = state.execute_action(&Action::VimEnterInsert, &settings);
-        assert!(matches!(result, super::InputAction::Continue));
-        assert_eq!(state.keymap_mode, KeymapMode::VimInsert);
-    }
-
-    #[test]
-    fn execute_accept_sets_accept_flag() {
-        use crate::command::client::search::keybindings::Action;
-
-        let mut state = make_executor_state(100, 5);
-        let mut settings = Settings::utc();
         settings.enter_accept = true;
         let result = state.execute_action(&Action::Accept, &settings);
         assert!(matches!(result, super::InputAction::Accept(5)));
         assert!(state.accept);
     }
 
-    #[test]
-    fn execute_return_selection_does_not_set_accept() {
+    #[rstest]
+    fn execute_return_selection_does_not_set_accept(
+        #[with(KeymapMode::Emacs, 100, 5)] mut state: State,
+        settings: Settings,
+    ) {
         use crate::command::client::search::keybindings::Action;
 
-        let mut state = make_executor_state(100, 5);
-        let settings = Settings::utc();
         let result = state.execute_action(&Action::ReturnSelection, &settings);
         assert!(matches!(result, super::InputAction::Accept(5)));
         assert!(!state.accept);
     }
 
-    #[test]
-    fn execute_accept_nth() {
+    #[rstest]
+    fn execute_accept_nth(#[with(KeymapMode::Emacs, 100, 5)] mut state: State, settings: Settings) {
         use crate::command::client::search::keybindings::Action;
 
-        let mut state = make_executor_state(100, 5);
-        let settings = Settings::utc();
         let result = state.execute_action(&Action::AcceptNth(3), &settings);
         assert!(matches!(result, super::InputAction::Accept(8)));
     }
 
-    #[test]
-    fn execute_scroll_to_top_no_invert() {
+    #[rstest]
+    fn execute_toggle_tab(#[with(KeymapMode::Emacs, 100, 0)] mut state: State, settings: Settings) {
         use crate::command::client::search::keybindings::Action;
 
-        let mut state = make_executor_state(100, 50);
-        let settings = Settings::utc();
-        let result = state.execute_action(&Action::ScrollToTop, &settings);
-        assert!(matches!(result, super::InputAction::Continue));
-        // Non-inverted: visual top = highest index
-        assert_eq!(state.results_state.selected(), 99);
-    }
-
-    #[test]
-    fn execute_scroll_to_top_with_invert() {
-        use crate::command::client::search::keybindings::Action;
-
-        let mut state = make_executor_state(100, 50);
-        let mut settings = Settings::utc();
-        settings.invert = true;
-        let result = state.execute_action(&Action::ScrollToTop, &settings);
-        assert!(matches!(result, super::InputAction::Continue));
-        // Inverted: visual top = index 0
-        assert_eq!(state.results_state.selected(), 0);
-    }
-
-    #[test]
-    fn execute_scroll_to_bottom_no_invert() {
-        use crate::command::client::search::keybindings::Action;
-
-        let mut state = make_executor_state(100, 50);
-        let settings = Settings::utc();
-        let result = state.execute_action(&Action::ScrollToBottom, &settings);
-        assert!(matches!(result, super::InputAction::Continue));
-        // Non-inverted: visual bottom = index 0
-        assert_eq!(state.results_state.selected(), 0);
-    }
-
-    #[test]
-    fn execute_toggle_tab() {
-        use crate::command::client::search::keybindings::Action;
-
-        let mut state = make_executor_state(100, 0);
-        let settings = Settings::utc();
         assert_eq!(state.tab_index, 0);
         state.execute_action(&Action::ToggleTab, &settings);
         assert_eq!(state.tab_index, 1);
@@ -3030,23 +2654,24 @@ mod tests {
         assert_eq!(state.tab_index, 0);
     }
 
-    #[test]
-    fn execute_enter_prefix_mode() {
+    #[rstest]
+    fn execute_enter_prefix_mode(
+        #[with(KeymapMode::Emacs, 100, 0)] mut state: State,
+        settings: Settings,
+    ) {
         use crate::command::client::search::keybindings::Action;
 
-        let mut state = make_executor_state(100, 0);
-        let settings = Settings::utc();
         assert!(!state.prefix);
         state.execute_action(&Action::EnterPrefixMode, &settings);
         assert!(state.prefix);
     }
 
-    #[test]
-    fn prefix_chord_ctrl_a_c_switches_context() {
+    #[rstest]
+    fn prefix_chord_ctrl_a_c_switches_context(
+        #[with(KeymapMode::Emacs, 100, 7)] mut state: State,
+        settings: Settings,
+    ) {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-        let mut state = make_executor_state(100, 7);
-        let settings = Settings::utc();
 
         let ctrl_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
         let result = state.handle_key_input(&settings, &ctrl_a);
@@ -3062,13 +2687,14 @@ mod tests {
         assert_eq!(state.search.input.as_str(), "", "c should not be inserted");
     }
 
-    #[test]
-    fn inspector_prefix_chord_switches_context() {
+    #[rstest]
+    fn inspector_prefix_chord_switches_context(
+        #[with(KeymapMode::Emacs, 100, 7)] mut state: State,
+        settings: Settings,
+    ) {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-        let mut state = make_executor_state(100, 7);
         state.tab_index = 1;
-        let settings = Settings::utc();
 
         let ctrl_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
         state.handle_key_input(&settings, &ctrl_a);
@@ -3082,13 +2708,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn inspector_unmatched_key_does_not_edit_search_input() {
+    #[rstest]
+    fn inspector_unmatched_key_does_not_edit_search_input(
+        #[with(KeymapMode::Emacs, 100, 7)] mut state: State,
+        settings: Settings,
+    ) {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-        let mut state = make_executor_state(100, 7);
         state.tab_index = 1;
-        let settings = Settings::utc();
 
         let x = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
         let result = state.handle_key_input(&settings, &x);
@@ -3100,13 +2727,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn execute_exit_returns_based_on_exit_mode() {
+    #[rstest]
+    fn execute_exit_returns_based_on_exit_mode(
+        #[with(KeymapMode::Emacs, 100, 0)] mut state: State,
+        mut settings: Settings,
+    ) {
         use crate::command::client::search::keybindings::Action;
         use atuin_client::settings::ExitMode;
-
-        let mut state = make_executor_state(100, 0);
-        let mut settings = Settings::utc();
 
         settings.exit_mode = ExitMode::ReturnOriginal;
         let result = state.execute_action(&Action::Exit, &settings);
@@ -3117,84 +2744,83 @@ mod tests {
         assert!(matches!(result, super::InputAction::ReturnQuery));
     }
 
-    #[test]
-    fn execute_return_original() {
+    #[rstest]
+    fn execute_return_original(
+        #[with(KeymapMode::Emacs, 100, 0)] mut state: State,
+        settings: Settings,
+    ) {
         use crate::command::client::search::keybindings::Action;
 
-        let mut state = make_executor_state(100, 0);
-        let settings = Settings::utc();
         let result = state.execute_action(&Action::ReturnOriginal, &settings);
         assert!(matches!(result, super::InputAction::ReturnOriginal));
     }
 
-    #[test]
-    fn execute_copy() {
+    #[rstest]
+    fn execute_copy(#[with(KeymapMode::Emacs, 100, 7)] mut state: State, settings: Settings) {
         use crate::command::client::search::keybindings::Action;
 
-        let mut state = make_executor_state(100, 7);
-        let settings = Settings::utc();
         let result = state.execute_action(&Action::Copy, &settings);
         assert!(matches!(result, super::InputAction::Copy(7)));
     }
 
-    #[test]
-    fn execute_delete() {
+    #[rstest]
+    fn execute_delete(#[with(KeymapMode::Emacs, 100, 7)] mut state: State, settings: Settings) {
         use crate::command::client::search::keybindings::Action;
 
-        let mut state = make_executor_state(100, 7);
-        let settings = Settings::utc();
         let result = state.execute_action(&Action::Delete, &settings);
         assert!(matches!(result, super::InputAction::Delete(7)));
     }
 
-    #[test]
-    fn execute_switch_context() {
+    #[rstest]
+    fn execute_switch_context(
+        #[with(KeymapMode::Emacs, 100, 7)] mut state: State,
+        settings: Settings,
+    ) {
         use crate::command::client::search::keybindings::Action;
 
-        let mut state = make_executor_state(100, 7);
-        let settings = Settings::utc();
         let result = state.execute_action(&Action::SwitchContext, &settings);
         assert!(matches!(result, super::InputAction::SwitchContext(Some(7))));
     }
 
-    #[test]
-    fn execute_clear_context() {
+    #[rstest]
+    fn execute_clear_context(
+        #[with(KeymapMode::Emacs, 100, 7)] mut state: State,
+        settings: Settings,
+    ) {
         use crate::command::client::search::keybindings::Action;
 
-        let mut state = make_executor_state(100, 7);
-        let settings = Settings::utc();
         let result = state.execute_action(&Action::ClearContext, &settings);
         assert!(matches!(result, super::InputAction::SwitchContext(None)));
     }
 
-    #[test]
-    fn execute_noop() {
+    #[rstest]
+    fn execute_noop(#[with(KeymapMode::Emacs, 100, 50)] mut state: State, settings: Settings) {
         use crate::command::client::search::keybindings::Action;
 
-        let mut state = make_executor_state(100, 50);
-        let settings = Settings::utc();
         let result = state.execute_action(&Action::Noop, &settings);
         assert!(matches!(result, super::InputAction::Continue));
         assert_eq!(state.results_state.selected(), 50);
     }
 
-    #[test]
-    fn execute_accept_in_inspector_tab() {
+    #[rstest]
+    fn execute_accept_in_inspector_tab(
+        #[with(KeymapMode::Emacs, 100, 5)] mut state: State,
+        settings: Settings,
+    ) {
         use crate::command::client::search::keybindings::Action;
 
-        let mut state = make_executor_state(100, 5);
         state.tab_index = 1;
-        let settings = Settings::utc();
         let result = state.execute_action(&Action::Accept, &settings);
         assert!(matches!(result, super::InputAction::AcceptInspecting));
     }
 
-    #[test]
-    fn execute_cycle_search_mode() {
+    #[rstest]
+    fn execute_cycle_search_mode(
+        #[with(KeymapMode::Emacs, 100, 0)] mut state: State,
+        settings: Settings,
+    ) {
         use crate::command::client::search::keybindings::Action;
 
-        let mut state = make_executor_state(100, 0);
-        let settings = Settings::utc();
         let original_mode = state.search_mode;
         let result = state.execute_action(&Action::CycleSearchMode, &settings);
         assert!(matches!(result, super::InputAction::Continue));
@@ -3202,15 +2828,16 @@ mod tests {
         assert_ne!(state.search_mode, original_mode);
     }
 
-    #[test]
-    fn execute_vim_search_insert() {
+    #[rstest]
+    fn execute_vim_search_insert(
+        #[with(KeymapMode::Emacs, 100, 0)] mut state: State,
+        settings: Settings,
+    ) {
         use crate::command::client::search::keybindings::Action;
 
-        let mut state = make_executor_state(100, 0);
         state.search.input.insert('h');
         state.search.input.insert('i');
         state.keymap_mode = KeymapMode::VimNormal;
-        let settings = Settings::utc();
         let result = state.execute_action(&Action::VimSearchInsert, &settings);
         assert!(matches!(result, super::InputAction::Continue));
         // Should clear input and switch to insert mode
@@ -3218,12 +2845,12 @@ mod tests {
         assert_eq!(state.keymap_mode, KeymapMode::VimInsert);
     }
 
-    #[test]
-    fn execute_cursor_movement() {
+    #[rstest]
+    fn execute_cursor_movement(
+        #[with(KeymapMode::Emacs, 100, 0)] mut state: State,
+        settings: Settings,
+    ) {
         use crate::command::client::search::keybindings::Action;
-
-        let mut state = make_executor_state(100, 0);
-        let settings = Settings::utc();
 
         // Insert some text
         state.search.input.insert('h');
@@ -3250,12 +2877,9 @@ mod tests {
         assert_eq!(state.search.input.position(), 5);
     }
 
-    #[test]
-    fn execute_editing() {
+    #[rstest]
+    fn execute_editing(#[with(KeymapMode::Emacs, 100, 0)] mut state: State, settings: Settings) {
         use crate::command::client::search::keybindings::Action;
-
-        let mut state = make_executor_state(100, 0);
-        let settings = Settings::utc();
 
         // Insert "hello"
         state.search.input.insert('h');
@@ -3273,55 +2897,21 @@ mod tests {
         assert_eq!(state.search.input.as_str(), "");
     }
 
-    #[test]
-    fn keymap_config_return_query() {
+    #[rstest]
+    fn keymap_config_return_query(
+        #[with(KeymapMode::Emacs, 100, 0, FilterMode::Global, "test query")] mut state: State,
+        mut settings: Settings,
+    ) {
         use atuin_client::settings::KeyBindingConfig;
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use std::collections::HashMap;
 
-        let mut settings = Settings::utc();
         // Configure tab to return-query
         settings.keymap.emacs = HashMap::from([(
             "tab".to_string(),
             KeyBindingConfig::Simple("return-query".to_string()),
         )]);
-
-        let mut state = State {
-            history_count: Some(100),
-            update_needed: None,
-            results_state: ListState::default(),
-            switched_search_mode: false,
-            search_mode: SearchMode::Fuzzy,
-            results_len: 100,
-            accept: false,
-            keymap_mode: KeymapMode::Emacs,
-            prefix: false,
-            current_cursor: None,
-            tab_index: 0,
-            pending_vim_key: None,
-            original_input_empty: false,
-            inspecting_state: InspectingState {
-                current: None,
-                next: None,
-                previous: None,
-            },
-            keymaps: KeymapSet::from_settings(&settings),
-            search: SearchState {
-                input: "test query".to_string().into(),
-                filter_mode: FilterMode::Global,
-                context: Context {
-                    session: String::new(),
-                    cwd: String::new(),
-                    hostname: String::new(),
-                    host_id: String::new(),
-                    git_root: None,
-                },
-                custom_context: None,
-                shells: Shells::All,
-            },
-            engine: engines::engine(SearchMode::Fuzzy, &settings),
-            now: Box::new(OffsetDateTime::now_utc),
-        };
+        state.keymaps = KeymapSet::from_settings(&settings);
 
         let tab_event = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
         let result = state.handle_key_input(&settings, &tab_event);

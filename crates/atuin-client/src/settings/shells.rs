@@ -1,83 +1,78 @@
+use atuin_common::filter::{self, OrFilter};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Controls which shells' commands are included in interactive search.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub enum Shells {
-    /// Include all commands.
-    All,
-
     #[default]
     /// Include commands run from the current shell, or commands that have no recorded shell.
+    ///
+    /// If the current shell cannot be detected or is blank, all commands will be shown.
     Auto,
 
-    /// Include commands run by any shell in a list. The empty string will include commands that
-    /// have no recorded shell.
-    ///
-    /// An empty list is treated the same as [`Self::All`], but [`Self::All`] should be preferred.
-    List(Vec<String>),
+    /// Include commands run by any shell in the filter. The empty string will include commands
+    /// that have no recorded shell.
+    Fixed(OrFilter<Vec<String>>),
 }
 
 impl Shells {
-    /// Turn this setting into a concrete list of shells.
-    ///
-    /// The returned list is suitable for passing to [`Database::search`] via
-    /// [`OptFilters::shells`].
-    ///
-    /// Instead of returning a [`Vec`], this method returns a helper type that can be viewed as a
-    /// slice without allocating, or turned into a [`Vec`].
-    ///
-    /// [`Database::search`]: crate::database::Database::search
-    /// [`OptFilters::shells`]: crate::database::OptFilters::shells
-    pub fn to_list(&self) -> ShellList<'_> {
-        self.to_list_with(|| std::env::var("ATUIN_SHELL").ok())
+    /// Include commands from every shell.
+    pub const fn all() -> Self {
+        Self::Fixed(OrFilter::all())
     }
 
-    /// Like [`Self::to_list`], but takes the current shell as a parameter.
-    pub fn to_list_with<F>(&self, current_shell: F) -> ShellList<'_>
+    /// Turn this setting into a concrete shell filter.
+    ///
+    /// This method returns a helper type that allows you to obtain a [`OrFilter`] without
+    /// allocating; see [`ShellFilter::as_filter`].
+    pub fn to_filter(&self) -> ShellFilter<'_> {
+        self.to_filter_with(|| std::env::var("ATUIN_SHELL").ok())
+    }
+
+    /// Like [`Self::to_filter`], but takes the current shell as a parameter.
+    pub fn to_filter_with<F>(&self, current_shell: F) -> ShellFilter<'_>
     where
         F: FnOnce() -> Option<String>,
     {
-        let inner = match self {
-            Self::All => ShellListInner::Reference(&[]),
+        ShellFilter(match self {
             Self::Auto => match current_shell() {
-                // Show results from the current shell, plus entries that have no shell recorded.
-                Some(shell) => ShellListInner::Inline([shell, "".into()]),
-                // Show all results if no shell is detected.
-                None => ShellListInner::Reference(&[]),
+                Some(shell) if !shell.is_empty() => {
+                    // This array upholds the "sorted and deduped" invariant: `shell` is not empty,
+                    // and an empty string always compares earlier.
+                    ShellFilterInner::Inline([String::new(), shell])
+                }
+                _ => ShellFilterInner::Borrowed(OrFilter::all()),
             },
-            Self::List(shells) => ShellListInner::Reference(shells),
-        };
-        ShellList(inner)
+            Self::Fixed(filter) => ShellFilterInner::Borrowed(filter.as_slice_filter()),
+        })
     }
 }
 
-/// Helper type for [`ShellList`] to avoid exposing the enum variants directly.
-enum ShellListInner<'a> {
+/// A concrete shell filter, returned by [`Shells::to_filter`].
+///
+/// This is a helper type to allow you to obtain a [`OrFilter`] from a [`Shells`] object
+/// without allocating. See [`ShellFilter::as_filter`].
+pub struct ShellFilter<'a>(ShellFilterInner<'a>);
+
+/// Helper type to hide enum variants from the public API.
+enum ShellFilterInner<'a> {
+    Borrowed(OrFilter<&'a [String]>),
+    /// Always sorted and deduped.
     Inline([String; 2]),
-    Reference(&'a [String]),
 }
 
-/// Helper type that allows [`Shells`] to be viewed as a slice without allocating.
-///
-/// Returned by [`Shells::to_list`].
-pub struct ShellList<'a>(ShellListInner<'a>);
-
-impl ShellList<'_> {
-    pub fn as_slice(&self) -> &[String] {
+impl ShellFilter<'_> {
+    /// View this filter as a [`OrFilter`].
+    pub fn as_filter(&self) -> OrFilter<&[String]> {
         match &self.0 {
-            ShellListInner::Inline(array) => array.as_slice(),
-            ShellListInner::Reference(slice) => slice,
+            ShellFilterInner::Borrowed(filter) => *filter,
+            ShellFilterInner::Inline(items) => OrFilter::new_unchecked(items),
         }
     }
 
-    pub fn to_vec(&self) -> Vec<String> {
-        self.as_slice().into()
-    }
-}
-
-impl AsRef<[String]> for ShellList<'_> {
-    fn as_ref(&self) -> &[String] {
-        self.as_slice()
+    /// Convert this filter into an owned [`OrFilter<Vec<String>>`].
+    pub fn to_vec_filter(&self) -> OrFilter<Vec<String>> {
+        self.as_filter().to_vec_filter()
     }
 }
 
@@ -101,9 +96,10 @@ impl<'a> Deserialize<'a> for Shells {
         }
 
         Ok(match Repr::deserialize(deserializer)? {
-            Repr::Keyword(Keyword::All) => Self::All,
+            Repr::Keyword(Keyword::All) => Self::all(),
             Repr::Keyword(Keyword::Auto) => Self::Auto,
-            Repr::List(shells) => Self::List(shells),
+            // Empty array is the same as "all", but "all" is preferred.
+            Repr::List(shells) => Self::Fixed(OrFilter::from_list(shells).unwrap_or_default()),
         })
     }
 }
@@ -114,9 +110,11 @@ impl Serialize for Shells {
         S: Serializer,
     {
         match self {
-            Shells::All => serializer.serialize_str("all"),
             Shells::Auto => serializer.serialize_str("auto"),
-            Shells::List(shells) => shells.serialize(serializer),
+            Shells::Fixed(filter) => match filter.items() {
+                filter::Items::All => serializer.serialize_str("all"),
+                filter::Items::Some(items) => items.serialize(serializer),
+            },
         }
     }
 }
@@ -124,47 +122,74 @@ impl Serialize for Shells {
 #[cfg(test)]
 mod tests {
     use super::Shells;
+    use atuin_common::filter::{self, OrFilter};
     use rstest::rstest;
     use serde::Deserialize;
 
-    #[rstest]
-    #[case::all(r#""all""#, Some(Shells::All))]
-    #[case::auto(r#""auto""#, Some(Shells::Auto))]
-    #[case::array(
-        r#"["bash", "", "zsh"]"#,
-        Some(Shells::List(vec!["bash".to_owned(), "".to_owned(), "zsh".to_owned()])),
-    )]
-    #[case::invalid_string(r#""hello""#, None)]
-    fn deserialize(#[case] toml: &str, #[case] expected: Option<Shells>) {
-        let deserializer = toml::de::ValueDeserializer::parse(toml).unwrap();
-        let result = Shells::deserialize(deserializer);
-        assert_eq!(result.as_ref().ok(), expected.as_ref(), "{result:?}");
+    fn parse(toml: &str) -> Result<Shells, toml::de::Error> {
+        Shells::deserialize(toml::de::ValueDeserializer::parse(toml).unwrap())
     }
 
     #[rstest]
-    #[case::all_bash(Shells::All, Some("bash"), &[])]
-    #[case::all_none(Shells::All, None, &[])]
-    #[case::auto_bash(Shells::Auto, Some("bash"), &["bash", ""])]
+    #[case::all(r#""all""#, Some(Shells::all()))]
+    #[case::auto(r#""auto""#, Some(Shells::Auto))]
+    #[case::array(r#"["bash", "", "zsh"]"#, Some(fixed(&["bash", "", "zsh"])))]
+    #[case::array_with_duplicates(r#"["zsh", "bash", "zsh"]"#, Some(fixed(&["bash", "zsh"])))]
+    #[case::empty_array(r#"[]"#, Some(Shells::all()))]
+    #[case::invalid_string(r#""hello""#, None)]
+    fn deserialize(#[case] toml: &str, #[case] expected: Option<Shells>) {
+        let result = parse(toml);
+        assert_eq!(result.as_ref().ok(), expected.as_ref(), "{result:?}");
+    }
+
+    #[test]
+    fn all_and_the_empty_array_are_the_same_value() {
+        assert_eq!(parse(r#""all""#).unwrap(), parse("[]").unwrap());
+        assert_eq!(parse(r#""all""#).unwrap(), Shells::all());
+    }
+
+    #[rstest]
+    #[case::auto(Shells::Auto, r#""auto""#)]
+    #[case::all(Shells::all(), r#""all""#)]
+    #[case::empty_array(fixed(&[]), r#""all""#)]
+    #[case::array(fixed(&["zsh", "bash"]), r#"["bash", "zsh"]"#)]
+    fn serialize(#[case] shells: Shells, #[case] expected: &str) {
+        let toml = toml::Value::try_from(&shells).unwrap().to_string();
+        assert_eq!(toml, expected);
+    }
+
+    #[rstest]
+    #[case::all_bash(Shells::all(), Some("bash"), &[])]
+    #[case::all_none(Shells::all(), None, &[])]
+    #[case::auto_bash(Shells::Auto, Some("bash"), &["", "bash"])]
     #[case::auto_none(Shells::Auto, None, &[])]
-    #[case::list_bash_zsh(Shells::List(vec!["bash".into()]), Some("zsh"), &["bash"])]
-    #[case::list_bash_unknown_zsh(
-        Shells::List(["bash", ""].map(str::to_owned).into()),
-        Some("zsh"),
-        &["bash", ""],
-    )]
-    #[case::list_bash_zsh_none(
-        Shells::List(["bash", "zsh"].map(str::to_owned).into()),
-        None,
-        &["bash", "zsh"],
-    )]
-    #[case::list_empty_bash(Shells::List(vec![]), Some("bash"), &[])]
-    fn to_list(
+    #[case::fixed_bash_zsh(fixed(&["bash"]), Some("zsh"), &["bash"])]
+    #[case::fixed_bash_unknown_zsh(fixed(&["bash", ""]), Some("zsh"), &["", "bash"])]
+    #[case::fixed_bash_zsh_none(fixed(&["bash", "zsh"]), None, &["bash", "zsh"])]
+    #[case::fixed_empty_bash(fixed(&[]), Some("bash"), &[])]
+    #[case::fixed_empty_none(fixed(&[]), None, &[])]
+    #[case::auto_empty(Shells::Auto, Some(""), &[])]
+    fn to_filter(
         #[case] settings: Shells,
         #[case] current_shell: Option<&str>,
         #[case] expected: &[&str],
     ) {
-        let list = settings.to_list_with(|| current_shell.map(Into::into));
-        let slice = list.as_slice();
-        assert!(slice.iter().eq(expected), "{slice:?} != {expected:?}");
+        let shell_filter = settings.to_filter_with(|| current_shell.map(Into::into));
+        let filter = shell_filter.as_filter();
+        let items = match filter.items() {
+            filter::Items::All => &[],
+            filter::Items::Some(items) => items,
+        };
+        assert!(items.iter().eq(expected), "{items:?} != {expected:?}");
+        assert_eq!(filter.is_all(), expected.is_empty());
+        assert_eq!(shell_filter.to_vec_filter(), filter);
+    }
+
+    /// Helper for creating a [`Shells::Fixed`].
+    fn fixed(items: &[&str]) -> Shells {
+        Shells::Fixed(
+            OrFilter::from_list(items.iter().copied().map(str::to_owned).collect::<Vec<_>>())
+                .unwrap_or_default(),
+        )
     }
 }

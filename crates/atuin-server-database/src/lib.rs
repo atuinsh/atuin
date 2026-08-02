@@ -6,7 +6,7 @@ use std::fmt::Debug;
 
 use self::models::{NewSession, NewUser, Session, User};
 use async_trait::async_trait;
-use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
+use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, derive_more::Display, derive_more::Error, derive_more::From)]

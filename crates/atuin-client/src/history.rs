@@ -2,9 +2,11 @@ use rmp::decode::{self, Bytes};
 use rmp::encode;
 use std::env;
 
-use atuin_common::record::DecryptedData;
+use atuin_common::filter::OrFilter;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::{normalize_optional_string, uuid_v7};
+use atuin_domain::record::DecryptedData;
+use std::sync::LazyLock;
 
 use eyre::{Result, bail};
 
@@ -17,22 +19,62 @@ use time::OffsetDateTime;
 pub(crate) mod builder;
 pub mod store;
 
-/// Known AI agent author values. Used to expand `$all-agent` and `$all-user` filters.
+/// Known AI agent author values. Used when matching against [`AuthorPattern::AllAgent`] and
+/// [`AuthorPattern::AllUser`].
 pub const KNOWN_AGENTS: &[&str] = &["claude-code", "codex", "copilot", "opencode", "pi"];
+
+/// The spelling of [`AuthorPattern::AllUser`] on the command line and in the MCP tool schema.
 pub const AUTHOR_FILTER_ALL_USER: &str = "$all-user";
+
+/// The spelling of [`AuthorPattern::AllAgent`] on the command line and in the MCP tool schema.
 pub const AUTHOR_FILTER_ALL_AGENT: &str = "$all-agent";
 
 pub fn is_known_agent(author: &str) -> bool {
     KNOWN_AGENTS.contains(&author)
 }
 
-pub fn author_matches_filters(author: &str, filters: &[String]) -> bool {
-    filters.is_empty()
-        || filters.iter().any(|filter| match filter.as_str() {
-            AUTHOR_FILTER_ALL_USER => !is_known_agent(author),
-            AUTHOR_FILTER_ALL_AGENT => is_known_agent(author),
-            literal => author == literal,
-        })
+/// An element of an author filter.
+///
+/// In addition to a plain string, this type can also be the special pattern `AllUser` or
+/// `AllAgent`, which matches known agents or all authors than are not a known agent.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum AuthorPattern {
+    /// Matches every author that is not a known agent.
+    AllUser,
+    /// Matches every author that is a known agent (see [`KNOWN_AGENTS`]).
+    AllAgent,
+    /// Matches exactly one author name.
+    Name(String),
+}
+
+impl From<String> for AuthorPattern {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            AUTHOR_FILTER_ALL_USER => Self::AllUser,
+            AUTHOR_FILTER_ALL_AGENT => Self::AllAgent,
+            _ => Self::Name(value),
+        }
+    }
+}
+
+impl From<&str> for AuthorPattern {
+    fn from(value: &str) -> Self {
+        match value {
+            AUTHOR_FILTER_ALL_USER => Self::AllUser,
+            AUTHOR_FILTER_ALL_AGENT => Self::AllAgent,
+            _ => Self::Name(value.to_owned()),
+        }
+    }
+}
+
+/// An author filter that only allows non-agent commands (i.e., [`AuthorPattern::AllUser`]).
+///
+/// This function uses a [`LazyLock`] to avoid building the filter every time.
+pub fn all_user_author_filter() -> OrFilter<&'static [AuthorPattern]> {
+    static FILTER: LazyLock<OrFilter<Vec<AuthorPattern>>> = LazyLock::new(|| {
+        OrFilter::from_list(vec![AuthorPattern::AllUser]).expect("the vector is not empty")
+    });
+    FILTER.as_slice_filter()
 }
 
 pub const HISTORY_TAG: &str = "history";
@@ -477,88 +519,86 @@ impl History {
 #[cfg(test)]
 mod tests {
     use regex::RegexSet;
+    use rstest::*;
     use time::macros::datetime;
 
-    use crate::{
-        history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, Version},
-        settings::Settings,
-    };
+    use crate::{history::Version, settings::Settings};
 
-    use super::{History, author_matches_filters, is_known_agent};
+    use super::{AuthorPattern, History, all_user_author_filter, is_known_agent};
+    use atuin_common::filter::OrFilter;
 
-    // Test that we don't save history where necessary
-    #[test]
-    fn privacy_test() {
-        let settings = Settings {
+    /// Whether an author filter permits `author`, mirroring the SQL that
+    /// [`apply_author_filter`](crate::database::OptFilters::authors) builds.
+    ///
+    /// There are only three ways a filter can admit an author, so each is one binary search rather
+    /// than a scan that reinterprets every element in turn. No guard against an author *named*
+    /// `$all-agent` is needed: such an author is an [`AuthorPattern::Name`], a different value from
+    /// [`AuthorPattern::AllAgent`].
+    fn author_matches_filters(author: &str, filters: OrFilter<&[AuthorPattern]>) -> bool {
+        // `contains` is true for an "all" filter, so that case needs no separate check.
+        filters.contains(&AuthorPattern::Name(author.to_owned()))
+            || (filters.contains(&AuthorPattern::AllUser) && !is_known_agent(author))
+            || (filters.contains(&AuthorPattern::AllAgent) && is_known_agent(author))
+    }
+
+    #[fixture]
+    fn privacy_settings() -> Settings {
+        Settings {
             cwd_filter: RegexSet::new(["^/supasecret"]).unwrap(),
             history_filter: RegexSet::new(["^psql"]).unwrap(),
             ..Settings::utc()
-        };
-
-        let normal_command: History = History::capture()
-            .timestamp(time::OffsetDateTime::now_utc())
-            .command("echo foo")
-            .cwd("/")
-            .build()
-            .into();
-
-        let with_space: History = History::capture()
-            .timestamp(time::OffsetDateTime::now_utc())
-            .command(" echo bar")
-            .cwd("/")
-            .build()
-            .into();
-
-        let empty: History = History::capture()
-            .timestamp(time::OffsetDateTime::now_utc())
-            .command("")
-            .cwd("/")
-            .build()
-            .into();
-
-        let stripe_key: History = History::capture()
-            .timestamp(time::OffsetDateTime::now_utc())
-            .command("curl foo.com/bar?key=sk_test_1234567890abcdefghijklmnop")
-            .cwd("/")
-            .build()
-            .into();
-
-        let secret_dir: History = History::capture()
-            .timestamp(time::OffsetDateTime::now_utc())
-            .command("echo ohno")
-            .cwd("/supasecret")
-            .build()
-            .into();
-
-        let with_psql: History = History::capture()
-            .timestamp(time::OffsetDateTime::now_utc())
-            .command("psql")
-            .cwd("/supasecret")
-            .build()
-            .into();
-
-        assert!(normal_command.should_save(&settings));
-        assert!(!with_space.should_save(&settings));
-        assert!(!empty.should_save(&settings));
-        assert!(!stripe_key.should_save(&settings));
-        assert!(!secret_dir.should_save(&settings));
-        assert!(!with_psql.should_save(&settings));
+        }
     }
 
-    #[test]
+    // Test that we don't save history where necessary
+    #[rstest]
+    #[case::normal("echo foo", "/", true)]
+    #[case::leading_space(" echo bar", "/", false)]
+    #[case::empty("", "/", false)]
+    #[case::stripe_key("curl foo.com/bar?key=sk_test_1234567890abcdefghijklmnop", "/", false)]
+    #[case::secret_dir("echo ohno", "/supasecret", false)]
+    #[case::psql("psql", "/supasecret", false)]
+    fn should_save_respects_privacy(
+        #[from(privacy_settings)] settings: Settings,
+        #[case] command: &str,
+        #[case] cwd: &str,
+        #[case] expected: bool,
+    ) {
+        let history: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command(command)
+            .cwd(cwd)
+            .build()
+            .into();
+        assert_eq!(history.should_save(&settings), expected);
+    }
+
+    #[rstest]
     fn known_agents_include_pi() {
+        let agents = OrFilter::from_list(vec![AuthorPattern::AllAgent]).unwrap();
+        let users = OrFilter::from_list(vec![AuthorPattern::AllUser]).unwrap();
+
         assert!(is_known_agent("pi"));
-        assert!(author_matches_filters(
-            "pi",
-            &[AUTHOR_FILTER_ALL_AGENT.to_string()]
-        ));
-        assert!(!author_matches_filters(
-            "pi",
-            &[AUTHOR_FILTER_ALL_USER.to_string()]
-        ));
+        assert!(author_matches_filters("pi", agents.as_slice_filter()));
+        assert!(!author_matches_filters("pi", users.as_slice_filter()));
+        assert!(!author_matches_filters("ellie", agents.as_slice_filter()));
+        assert!(author_matches_filters("ellie", users.as_slice_filter()));
     }
 
     #[test]
+    fn an_all_author_filter_matches_everyone() {
+        let all = OrFilter::all();
+        assert!(author_matches_filters("pi", all));
+        assert!(author_matches_filters("ellie", all));
+    }
+
+    #[test]
+    fn the_all_user_filter_excludes_agents() {
+        assert!(!author_matches_filters("pi", all_user_author_filter()));
+        assert!(author_matches_filters("ellie", all_user_author_filter()));
+    }
+
+    #[rstest]
     fn disable_secrets() {
         let settings = Settings {
             secrets_filter: false,
@@ -575,23 +615,50 @@ mod tests {
         assert!(stripe_key.should_save(&settings));
     }
 
-    #[test]
-    fn test_serialize_deserialize() {
-        let history = History {
-            id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
-            timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
-            duration: 49206000,
-            exit: 0,
-            command: "git status".to_owned(),
-            cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
-            session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
-            hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
-            author: "conrad.ludgate".to_owned(),
-            intent: None,
-            deleted_at: None,
-            shell: None,
-        };
-
+    #[rstest]
+    #[case::basic(History {
+        id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
+        timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
+        duration: 49206000,
+        exit: 0,
+        command: "git status".to_owned(),
+        cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
+        session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
+        hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
+        author: "conrad.ludgate".to_owned(),
+        intent: None,
+        deleted_at: None,
+        shell: None,
+    })]
+    #[case::deleted(History {
+        id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
+        timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
+        duration: 49206000,
+        exit: 0,
+        command: "git status".to_owned(),
+        cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
+        session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
+        hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
+        author: "conrad.ludgate".to_owned(),
+        intent: None,
+        deleted_at: Some(datetime!(2023-11-19 20:18 +00:00)),
+        shell: Some("bash".into()),
+    })]
+    #[case::with_author_and_intent(History {
+        id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
+        timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
+        duration: 49206000,
+        exit: 0,
+        command: "git status".to_owned(),
+        cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
+        session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
+        hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
+        author: "claude".to_owned(),
+        intent: Some("check repository status".to_owned()),
+        deleted_at: None,
+        shell: Some("fish".into()),
+    })]
+    fn serialize_deserialize_roundtrip(#[case] history: History) {
         let serialized = history.serialize().expect("failed to serialize history");
         assert_eq!(
             &serialized.0[0..3],
@@ -604,84 +671,34 @@ mod tests {
         assert_eq!(history, deserialized);
     }
 
-    #[test]
-    fn test_serialize_deserialize_deleted() {
-        let history = History {
-            id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
-            timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
-            duration: 49206000,
-            exit: 0,
-            command: "git status".to_owned(),
-            cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
-            session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
-            hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
-            author: "conrad.ludgate".to_owned(),
-            intent: None,
-            deleted_at: Some(datetime!(2023-11-19 20:18 +00:00)),
-            shell: Some("bash".into()),
-        };
+    const BYTES_V0: &[u8] = &[
+        205, 0, 0, 153, 217, 32, 54, 54, 100, 49, 54, 99, 98, 101, 101, 55, 99, 100, 52, 55, 53,
+        51, 56, 101, 53, 99, 53, 98, 56, 98, 52, 52, 101, 57, 48, 48, 54, 101, 207, 23, 99, 98,
+        117, 24, 210, 246, 128, 206, 2, 238, 210, 240, 0, 170, 103, 105, 116, 32, 115, 116, 97,
+        116, 117, 115, 217, 42, 47, 85, 115, 101, 114, 115, 47, 99, 111, 110, 114, 97, 100, 46,
+        108, 117, 100, 103, 97, 116, 101, 47, 68, 111, 99, 117, 109, 101, 110, 116, 115, 47, 99,
+        111, 100, 101, 47, 97, 116, 117, 105, 110, 217, 32, 98, 57, 55, 100, 57, 97, 51, 48, 54,
+        102, 50, 55, 52, 52, 55, 51, 97, 50, 48, 51, 100, 50, 101, 98, 97, 52, 49, 102, 57, 52, 53,
+        55, 187, 102, 118, 102, 103, 57, 51, 54, 99, 48, 107, 112, 102, 58, 99, 111, 110, 114, 97,
+        100, 46, 108, 117, 100, 103, 97, 116, 101, 192,
+    ];
 
-        let serialized = history.serialize().expect("failed to serialize history");
+    const BYTES_V1: &[u8] = &[
+        205, 0, 1, 155, 217, 32, 54, 54, 100, 49, 54, 99, 98, 101, 101, 55, 99, 100, 52, 55, 53,
+        51, 56, 101, 53, 99, 53, 98, 56, 98, 52, 52, 101, 57, 48, 48, 54, 101, 207, 23, 99, 98,
+        117, 24, 210, 246, 128, 206, 2, 238, 210, 240, 0, 170, 103, 105, 116, 32, 115, 116, 97,
+        116, 117, 115, 217, 42, 47, 85, 115, 101, 114, 115, 47, 99, 111, 110, 114, 97, 100, 46,
+        108, 117, 100, 103, 97, 116, 101, 47, 68, 111, 99, 117, 109, 101, 110, 116, 115, 47, 99,
+        111, 100, 101, 47, 97, 116, 117, 105, 110, 217, 32, 98, 57, 55, 100, 57, 97, 51, 48, 54,
+        102, 50, 55, 52, 52, 55, 51, 97, 50, 48, 51, 100, 50, 101, 98, 97, 52, 49, 102, 57, 52, 53,
+        55, 187, 102, 118, 102, 103, 57, 51, 54, 99, 48, 107, 112, 102, 58, 99, 111, 110, 114, 97,
+        100, 46, 108, 117, 100, 103, 97, 116, 101, 207, 24, 194, 83, 235, 108, 206, 10, 0, 174, 99,
+        111, 110, 114, 97, 100, 46, 108, 117, 100, 103, 97, 116, 101, 173, 115, 97, 109, 112, 108,
+        101, 32, 105, 110, 116, 101, 110, 116,
+    ];
 
-        let deserialized = History::deserialize(&serialized.0, Version::LATEST.name())
-            .expect("failed to deserialize history");
-
-        assert_eq!(history, deserialized);
-    }
-
-    #[test]
-    fn test_serialize_deserialize_with_author_and_intent() {
-        let history = History {
-            id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
-            timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
-            duration: 49206000,
-            exit: 0,
-            command: "git status".to_owned(),
-            cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
-            session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
-            hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
-            author: "claude".to_owned(),
-            intent: Some("check repository status".to_owned()),
-            deleted_at: None,
-            shell: Some("fish".into()),
-        };
-
-        let serialized = history.serialize().expect("failed to serialize history");
-        let deserialized = History::deserialize(&serialized.0, Version::LATEST.name())
-            .expect("failed to deserialize history");
-
-        assert_eq!(history, deserialized);
-    }
-
-    #[test]
-    fn test_serialize_deserialize_version() {
-        let bytes_v0 = [
-            205, 0, 0, 153, 217, 32, 54, 54, 100, 49, 54, 99, 98, 101, 101, 55, 99, 100, 52, 55,
-            53, 51, 56, 101, 53, 99, 53, 98, 56, 98, 52, 52, 101, 57, 48, 48, 54, 101, 207, 23, 99,
-            98, 117, 24, 210, 246, 128, 206, 2, 238, 210, 240, 0, 170, 103, 105, 116, 32, 115, 116,
-            97, 116, 117, 115, 217, 42, 47, 85, 115, 101, 114, 115, 47, 99, 111, 110, 114, 97, 100,
-            46, 108, 117, 100, 103, 97, 116, 101, 47, 68, 111, 99, 117, 109, 101, 110, 116, 115,
-            47, 99, 111, 100, 101, 47, 97, 116, 117, 105, 110, 217, 32, 98, 57, 55, 100, 57, 97,
-            51, 48, 54, 102, 50, 55, 52, 52, 55, 51, 97, 50, 48, 51, 100, 50, 101, 98, 97, 52, 49,
-            102, 57, 52, 53, 55, 187, 102, 118, 102, 103, 57, 51, 54, 99, 48, 107, 112, 102, 58,
-            99, 111, 110, 114, 97, 100, 46, 108, 117, 100, 103, 97, 116, 101, 192,
-        ];
-
-        let bytes_v1 = [
-            205, 0, 1, 155, 217, 32, 54, 54, 100, 49, 54, 99, 98, 101, 101, 55, 99, 100, 52, 55,
-            53, 51, 56, 101, 53, 99, 53, 98, 56, 98, 52, 52, 101, 57, 48, 48, 54, 101, 207, 23, 99,
-            98, 117, 24, 210, 246, 128, 206, 2, 238, 210, 240, 0, 170, 103, 105, 116, 32, 115, 116,
-            97, 116, 117, 115, 217, 42, 47, 85, 115, 101, 114, 115, 47, 99, 111, 110, 114, 97, 100,
-            46, 108, 117, 100, 103, 97, 116, 101, 47, 68, 111, 99, 117, 109, 101, 110, 116, 115,
-            47, 99, 111, 100, 101, 47, 97, 116, 117, 105, 110, 217, 32, 98, 57, 55, 100, 57, 97,
-            51, 48, 54, 102, 50, 55, 52, 52, 55, 51, 97, 50, 48, 51, 100, 50, 101, 98, 97, 52, 49,
-            102, 57, 52, 53, 55, 187, 102, 118, 102, 103, 57, 51, 54, 99, 48, 107, 112, 102, 58,
-            99, 111, 110, 114, 97, 100, 46, 108, 117, 100, 103, 97, 116, 101, 207, 24, 194, 83,
-            235, 108, 206, 10, 0, 174, 99, 111, 110, 114, 97, 100, 46, 108, 117, 100, 103, 97, 116,
-            101, 173, 115, 97, 109, 112, 108, 101, 32, 105, 110, 116, 101, 110, 116,
-        ];
-
-        let expected_v2 = History {
+    fn expected_v2() -> History {
+        History {
             id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
             timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
             duration: 49206000,
@@ -694,39 +711,42 @@ mod tests {
             intent: Some("sample intent".to_owned()),
             deleted_at: Some(time::OffsetDateTime::from_unix_timestamp(1784080673).unwrap()),
             shell: Some("zsh".into()),
-        };
-        let bytes_v2 = expected_v2
-            .serialize()
-            .expect("failed to serialize history");
+        }
+    }
 
-        let mut expected_v1 = expected_v2.clone();
-        expected_v1.shell = None;
+    fn expected_v1() -> History {
+        History {
+            shell: None,
+            ..expected_v2()
+        }
+    }
 
-        let mut expected_v0 = expected_v1.clone();
-        expected_v0.intent = None;
-        expected_v0.deleted_at = None;
+    fn expected_v0() -> History {
+        History {
+            intent: None,
+            deleted_at: None,
+            ..expected_v1()
+        }
+    }
 
-        let cases = [
-            (bytes_v0.as_slice(), expected_v0),
-            (&bytes_v1, expected_v1),
-            (&bytes_v2, expected_v2),
-        ];
-
-        for (i, (bytes, expected)) in cases.into_iter().enumerate() {
-            for version in Version::VARIANTS {
-                let deserialized = History::deserialize(bytes, version.name());
-                if usize::from(version.as_int()) == i {
-                    let Ok(deserialized) = deserialized else {
-                        panic!("failed to deserialize {version}");
-                    };
-                    assert_eq!(deserialized, expected, "{version}");
-                } else {
-                    assert!(
-                        deserialized.is_err(),
-                        "unexpected success deserializing as {version}"
-                    );
-                }
-            }
+    #[rstest]
+    #[case::from_v0(Version::Zero, BYTES_V0, expected_v0())]
+    #[case::from_v1(Version::One, BYTES_V1, expected_v1())]
+    #[case::from_v2(Version::Two, &expected_v2().serialize().unwrap(), expected_v2())]
+    fn deserialize_across_versions(
+        #[case] source: Version,
+        #[case] bytes: &[u8],
+        #[case] expected: History,
+        #[values(Version::Zero, Version::One, Version::Two)] decode_as: Version,
+    ) {
+        let got = History::deserialize(bytes, decode_as.name());
+        if decode_as == source {
+            assert_eq!(got.unwrap(), expected, "{decode_as}");
+        } else {
+            assert!(
+                got.is_err(),
+                "unexpected success deserializing as {decode_as}"
+            );
         }
     }
 }
