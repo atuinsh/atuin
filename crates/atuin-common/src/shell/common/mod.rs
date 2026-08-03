@@ -1,4 +1,4 @@
-use std::{collections::HashMap, process};
+use std::{borrow::Cow, collections::HashMap, process};
 
 use winnow::{
     ModalResult, Parser,
@@ -6,14 +6,16 @@ use winnow::{
     token::{literal, take_while},
 };
 
-use bstr::BString;
+use bstr::{BStr, BString, ByteSlice};
 
-use super::{Alias, AliasValue, AliasesError, Rendered, RunError, Skipped, Var};
+use super::{
+    Alias, AliasValue, AliasesError, Rendered, RunError, Skipped, Var, VarName, VarParsingError,
+};
 
 pub(super) type Aliases = HashMap<BString, AliasValue>;
 
 #[cfg(feature = "shell-syntax")]
-use super::parse::{Token, ShellParser, classify_with};
+use super::parse::{ShellParser, Token, classify_with};
 
 /// Classifies POSIX-family shells (bash/sh/zsh/dash/ksh) via the bash grammar.
 #[cfg(feature = "shell-syntax")]
@@ -176,39 +178,50 @@ fn single_quote(bytes: &[u8], out: &mut BString) {
     out.push(b'\'');
 }
 
+/// Validate `name` as a POSIX-family variable name: non-empty, an ASCII letter
+/// or `_` first, then ASCII alphanumerics or `_`.
+#[allow(unsafe_code)]
+pub(super) fn validate_var_name(
+    name: BString,
+    shell: &'static str,
+) -> Result<VarName, VarParsingError> {
+    let first_ok = matches!(name.first(), Some(&b) if b == b'_' || b.is_ascii_alphabetic());
+    let rest_ok = name.iter().all(|&b| b == b'_' || b.is_ascii_alphanumeric());
+    if first_ok && rest_ok {
+        // SAFETY: validated as a POSIX variable name just above.
+        Ok(unsafe { VarName::new_unchecked(name) })
+    } else {
+        Err(VarParsingError::InvalidName { shell, name })
+    }
+}
+
 /// Render vars as POSIX assignments: `export NAME=value` for exported vars,
 /// `NAME=value` for shell vars. Non-bareword values are double-quoted.
-pub(super) fn render_vars(vars: &[Var]) -> Rendered {
+pub(super) fn render_vars(vars: &[Var]) -> BString {
     let mut script = BString::default();
-    let mut skipped = Vec::new();
-
     for var in vars {
-        if !super::var::is_valid_var_name(&var.name) {
-            skipped.push(Skipped {
-                name: var.name.clone(),
-                reason: "not a valid variable name for a POSIX shell".to_owned(),
-            });
-            continue;
-        }
         if var.export {
             script.extend_from_slice(b"export ");
         }
         script.extend_from_slice(&var.name);
         script.push(b'=');
-        posix_value(&var.value, &mut script);
+        script.extend_from_slice(&quote_value(&var.value));
         script.push(b'\n');
     }
-
-    Rendered { script, skipped }
+    script
 }
 
-/// Append `value`: bare if safe, else double-quoted with `\`, `"`, `$` and
+/// The value as a POSIX literal: borrowed when bareword-safe (only alphanumerics
+/// and `_ - / .`), else an owned double-quoted string with `\`, `"`, `$` and
 /// backtick escaped so the shell does not expand or re-interpret it.
-fn posix_value(value: &[u8], out: &mut BString) {
-    if super::var::is_bareword(value) {
-        out.extend_from_slice(value);
-        return;
+pub(super) fn quote_value(value: &[u8]) -> Cow<'_, BStr> {
+    if value
+        .chars()
+        .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '/' | '.'))
+    {
+        return Cow::Borrowed(value.as_bstr());
     }
+    let mut out = BString::default();
     out.push(b'"');
     for &b in value {
         match b {
@@ -220,6 +233,7 @@ fn posix_value(value: &[u8], out: &mut BString) {
         }
     }
     out.push(b'"');
+    Cow::Owned(out)
 }
 
 #[cfg(test)]
@@ -282,14 +296,19 @@ mod render_tests {
 #[cfg(test)]
 mod var_render_tests {
     use super::*;
+    use crate::shell::{VarName, VarValue};
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
+    #[allow(unsafe_code)]
     fn var(name: &str, value: &str, export: bool) -> Var {
-        Var {
-            name: BString::from(name),
-            value: BString::from(value),
-            export,
+        // SAFETY: test fixtures use valid names/values.
+        unsafe {
+            Var {
+                name: VarName::new_unchecked(name),
+                value: VarValue::new_unchecked(value),
+                export,
+            }
         }
     }
 
@@ -310,25 +329,41 @@ mod var_render_tests {
         #[case] export: bool,
         #[case] expected: &str,
     ) {
-        let r = render_vars(&[var(name, value, export)]);
-        assert_eq!(r.script, BString::from(expected));
-        assert!(r.skipped.is_empty());
+        let script = render_vars(&[var(name, value, export)]);
+        assert_eq!(script, BString::from(expected));
     }
 
-    #[test]
-    fn skips_invalid_names() {
-        let r = render_vars(&[var("1BAD", "x", true)]);
-        assert!(r.script.is_empty());
-        assert_eq!(r.skipped.len(), 1);
+    #[rstest]
+    #[case::letter("FOO")]
+    #[case::leading_underscore("_x")]
+    #[case::digit_after_letter("A1")]
+    fn accepts_valid_names(#[case] name: &str) {
+        let valid = validate_var_name(BString::from(name), "sh").unwrap();
+        assert_eq!(BString::from(valid), BString::from(name));
+    }
+
+    #[rstest]
+    #[case::leading_digit("1BAD")]
+    #[case::empty("")]
+    #[case::hyphen("a-b")]
+    fn rejects_invalid_names(#[case] name: &str) {
+        let err = validate_var_name(BString::from(name), "sh").unwrap_err();
+        assert_eq!(
+            err,
+            VarParsingError::InvalidName {
+                shell: "sh",
+                name: BString::from(name)
+            }
+        );
     }
 }
 
 #[cfg(all(test, feature = "shell-syntax"))]
 mod posix_parse_tests {
-    use crate::shell::{ShellParser, TokenKind, commands};
     use super::PosixParser;
-    use rstest::rstest;
+    use crate::shell::{ShellParser, TokenKind, commands};
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     // Exact extraction — mirrors the atuin-ai permission tests.
     #[rstest]
@@ -339,8 +374,10 @@ mod posix_parse_tests {
     #[case::redirect_stripped("ls > out.txt", &[("ls", "ls")])]
     #[case::subshell("(cd /tmp && ls)", &[("cd", "cd /tmp"), ("ls", "ls")])]
     fn extracts(#[case] code: &str, #[case] want: &[(&str, &str)]) {
-        let got: Vec<(&str, &str)> =
-            commands(&PosixParser, code).iter().map(|c| (c.name, c.full)).collect();
+        let got: Vec<(&str, &str)> = commands(&PosixParser, code)
+            .iter()
+            .map(|c| (c.name, c.full))
+            .collect();
         assert_eq!(got, want);
     }
 
@@ -350,7 +387,10 @@ mod posix_parse_tests {
     #[case::backtick("echo `date`", &["echo", "date"])]
     #[case::nested("echo \"Result: $(git log | head -1)\"", &["echo", "git", "head"])]
     fn extracts_nested(#[case] code: &str, #[case] want_names: &[&str]) {
-        let names: Vec<&str> = commands(&PosixParser, code).iter().map(|c| c.name).collect();
+        let names: Vec<&str> = commands(&PosixParser, code)
+            .iter()
+            .map(|c| c.name)
+            .collect();
         for n in want_names {
             assert!(names.contains(n), "expected {n:?} in {names:?}");
         }
@@ -358,11 +398,14 @@ mod posix_parse_tests {
 
     #[test]
     fn classifies_flags_and_strings() {
-        let kinds: Vec<TokenKind> =
-            PosixParser.classify("git commit -m 'hi'").iter().map(|t| t.kind).collect();
+        let kinds: Vec<TokenKind> = PosixParser
+            .classify("git commit -m 'hi'")
+            .iter()
+            .map(|t| t.kind)
+            .collect();
         assert!(kinds.contains(&TokenKind::Command));
-        assert!(kinds.contains(&TokenKind::Flag));   // -m
-        assert!(kinds.contains(&TokenKind::String));  // 'hi'
+        assert!(kinds.contains(&TokenKind::Flag)); // -m
+        assert!(kinds.contains(&TokenKind::String)); // 'hi'
     }
 }
 

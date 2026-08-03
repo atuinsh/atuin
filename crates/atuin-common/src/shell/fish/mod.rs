@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
     path::{Path, PathBuf},
     process,
@@ -11,15 +12,20 @@ use futures::{
 };
 use tracing::instrument;
 
-use bstr::BString;
+use bstr::{BStr, BString};
 
-use super::{Alias, AliasValue, AliasesError, Rendered, RunError, Shell, Var};
+use super::{
+    Alias, AliasValue, AliasesError, Rendered, RunError, Shell, Var, VarName, VarParsingError,
+};
 
 mod alias;
+mod exe;
 mod var;
 
+use exe::FishExe;
+
 #[cfg(feature = "shell-syntax")]
-use crate::shell::parse::{Token, ShellParser, classify_with};
+use crate::shell::parse::{ShellParser, Token, classify_with};
 
 /// Classifies fish via the fish grammar.
 #[cfg(feature = "shell-syntax")]
@@ -49,77 +55,6 @@ pub(super) fn fish_single_quote(bytes: &[u8], out: &mut BString) {
 }
 
 type Probe<T, E> = Shared<BoxFuture<'static, Result<T, E>>>;
-
-/// The `fish` executable itself, and the ability to invoke it.
-#[derive(Debug)]
-struct FishExe {
-    path: PathBuf,
-}
-
-impl FishExe {
-    /// `fish -i` sources the user's config files before running our command, and anything they
-    /// print lands on the same stdout. Bracket the real output with these NUL-delimited markers so
-    /// it can be sliced back out; NUL cannot occur in a command's arguments or output.
-    const OUTPUT_BEGIN: &[u8] = b"\0atuin\0";
-    const OUTPUT_END: &[u8] = b"\0nituA\0";
-
-    fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// Wrap `command` so its output is delimited by [`Self::OUTPUT_BEGIN`] and
-    /// [`Self::OUTPUT_END`]. `$status` is captured and re-raised so that framing does not mask the
-    /// command's own exit status.
-    fn frame(command: &str) -> String {
-        format!(
-            r"printf '\000atuin\000'; {command}; set __atuin_status $status; printf '\000nituA\000'; exit $__atuin_status"
-        )
-    }
-
-    #[instrument(skip(command))]
-    async fn run(&self, command: &str) -> Result<process::Output, RunError> {
-        let mut output = tokio::process::Command::new(&self.path)
-            .args(["-ic", &Self::frame(command)])
-            .output()
-            .await
-            .map_err(|error| RunError::Io {
-                command: command.to_owned(),
-                error: Arc::new(error),
-            })?;
-
-        let delimiter = || RunError::Delimiter {
-            command: command.to_owned(),
-        };
-        let start = output
-            .stdout
-            .windows(Self::OUTPUT_BEGIN.len())
-            .position(|window| window == Self::OUTPUT_BEGIN)
-            .map(|at| at + Self::OUTPUT_BEGIN.len())
-            .ok_or_else(delimiter)?;
-        let end = output.stdout[start..]
-            .windows(Self::OUTPUT_END.len())
-            .position(|window| window == Self::OUTPUT_END)
-            .map(|at| at + start)
-            .ok_or_else(delimiter)?;
-
-        output.stdout = output.stdout[start..end].to_vec();
-
-        if output.status.success() {
-            Ok(output)
-        } else {
-            Err(RunError::Exec {
-                command: command.to_owned(),
-                status: output.status,
-                stdout: output.stdout.into(),
-                stderr: output.stderr.into(),
-            })
-        }
-    }
-}
 
 #[derive(Debug)]
 struct Inner {
@@ -201,17 +136,25 @@ impl Shell for Fish {
         alias::render_aliases(aliases)
     }
 
-    fn render_vars(&self, vars: &[Var]) -> Rendered {
+    fn quote_value<'a>(&self, value: &'a [u8]) -> Cow<'a, BStr> {
+        var::quote_value(value)
+    }
+
+    fn validate_var_name(&self, name: BString) -> Result<VarName, VarParsingError> {
+        var::validate_var_name(name, self.canonical_name())
+    }
+
+    fn render_vars(&self, vars: &[Var]) -> BString {
         var::render_vars(vars)
     }
 }
 
 #[cfg(all(test, feature = "shell-syntax"))]
 mod fish_parse_tests {
-    use crate::shell::commands;
     use super::FishParser;
-    use rstest::rstest;
+    use crate::shell::commands;
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     #[rstest]
     #[case::simple("ls -la /tmp", &["ls"])]
@@ -222,27 +165,14 @@ mod fish_parse_tests {
         assert_eq!(names, want);
     }
 
-    // Carry-forward from the Task 2 review: `walk_tokens` synthesizes a
-    // `Command` token for a fish `command` node's `name` field *before*
-    // recursing into the node's other children (redirects, arguments). That
-    // is only safe if `name` is always the leftmost child of `command` --
-    // otherwise the synthetic token could land out of byte-start order,
-    // which `commands()` assumes never happens.
-    //
-    // Verified against the fish grammar (tree-sitter-fish 3.6.0):
-    // `command: seq(field('name', expr), repeat(choice(field('redirect', ..), field('argument', ..))))`
-    // -- `name` is grammatically required to precede any redirect/argument,
-    // so no in-grammar parse can produce a `command` node whose child starts
-    // before `name`. A dumped parse tree for `ls > out.txt` confirms this:
-    // `command` node's first child is the `word` "ls" (0..2), then
-    // `file_redirect` (3..12) strictly after it. These tests assert
-    // `commands()` does not panic and returns names/fulls in source order.
     #[rstest]
     #[case::redirect_after_name("ls > out.txt", &[("ls", "ls > out.txt")])]
     #[case::substitution_then_redirect("echo (date) > out.txt", &[("echo", "echo"), ("date", "date")])]
     fn ordering_survives_redirects(#[case] code: &str, #[case] want: &[(&str, &str)]) {
-        let got: Vec<(&str, &str)> =
-            commands(&FishParser, code).iter().map(|c| (c.name, c.full)).collect();
+        let got: Vec<(&str, &str)> = commands(&FishParser, code)
+            .iter()
+            .map(|c| (c.name, c.full))
+            .collect();
         assert_eq!(got, want);
     }
 }

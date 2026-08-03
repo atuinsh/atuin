@@ -138,25 +138,31 @@ impl VarStore {
     /// Render `env` into `shell`'s config syntax via the shared shell library,
     /// logging any variable the shell cannot represent.
     fn render(shell: ShellKind, env: &[Var]) -> String {
-        let shell_vars: Vec<ShellVar> = env
-            .iter()
-            .map(|var| ShellVar {
-                name: var.name.clone().into(),
-                value: var.value.clone().into(),
-                export: var.export,
-            })
-            .collect();
-
-        let rendered = shell
+        let interface = shell
             .interface()
-            .expect("a built-in shell always has an interface")
-            .render_vars(&shell_vars);
+            .expect("a built-in shell always has an interface");
 
-        for skipped in &rendered.skipped {
-            tracing::warn!("skipping var {:?}: {}", skipped.name, skipped.reason);
+        let mut shell_vars = Vec::with_capacity(env.len());
+        for var in env {
+            let name = match interface.validate_var_name(var.name.clone().into()) {
+                Ok(name) => name,
+                Err(err) => {
+                    tracing::warn!("skipping var: {err}");
+                    continue;
+                }
+            };
+            let value = interface
+                .validate_var_value(var.value.clone().into())
+                .unwrap_or_else(|e| match e {});
+            shell_vars.push(ShellVar {
+                name,
+                value,
+                export: var.export,
+            });
         }
 
-        String::from_utf8_lossy(rendered.script.as_slice()).into_owned()
+        let script = interface.render_vars(&shell_vars);
+        String::from_utf8_lossy(script.as_slice()).into_owned()
     }
 
     fn format_powershell(env: &[Var]) -> String {

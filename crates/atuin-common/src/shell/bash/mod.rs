@@ -1,11 +1,12 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
     path::{Path, PathBuf},
     process,
     sync::Arc,
 };
 
-use bstr::BString;
+use bstr::{BStr, BString};
 use futures::{
     FutureExt,
     future::{BoxFuture, Shared},
@@ -13,52 +14,15 @@ use futures::{
 use tracing::instrument;
 
 use super::{
-    Alias, AliasValue, AliasesError, Rendered, RunError, Shell, Var,
-    posix::{self, Aliases},
+    Alias, AliasValue, AliasesError, Rendered, RunError, Shell, Var, VarName, VarParsingError,
+    common::{self, Aliases},
 };
 
+mod exe;
+
+use exe::BashExe;
+
 type Probe<T, E> = Shared<BoxFuture<'static, Result<T, E>>>;
-
-/// The `bash` executable itself, and the ability to invoke it.
-#[derive(Debug)]
-struct BashExe {
-    path: PathBuf,
-}
-
-impl BashExe {
-    fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-
-    #[instrument(skip(command))]
-    async fn run(&self, command: &str) -> Result<process::Output, RunError> {
-        let mut output = tokio::process::Command::new(&self.path)
-            .args(["-ic", &posix::frame(command)])
-            .output()
-            .await
-            .map_err(|error| RunError::Io {
-                command: command.to_owned(),
-                error: Arc::new(error),
-            })?;
-
-        posix::unframe(&mut output, command)?;
-
-        if output.status.success() {
-            Ok(output)
-        } else {
-            Err(RunError::Exec {
-                command: command.to_owned(),
-                status: output.status,
-                stdout: output.stdout.into(),
-                stderr: output.stderr.into(),
-            })
-        }
-    }
-}
 
 #[derive(Debug)]
 struct Inner {
@@ -92,7 +56,7 @@ impl Bash {
             let exe = exe.clone();
             async move {
                 let output = exe.run("alias -p").await?;
-                posix::parse_aliases(&output.stdout)
+                common::parse_aliases(&output.stdout)
             }
             .boxed()
             .shared()
@@ -137,10 +101,18 @@ impl Shell for Bash {
     }
 
     fn render_aliases(&self, aliases: &[Alias]) -> Rendered {
-        posix::render_aliases(aliases)
+        common::render_aliases(aliases)
     }
 
-    fn render_vars(&self, vars: &[Var]) -> Rendered {
-        posix::render_vars(vars)
+    fn render_vars(&self, vars: &[Var]) -> BString {
+        common::render_vars(vars)
+    }
+
+    fn quote_value<'a>(&self, value: &'a [u8]) -> Cow<'a, BStr> {
+        common::quote_value(value)
+    }
+
+    fn validate_var_name(&self, name: BString) -> Result<VarName, VarParsingError> {
+        common::validate_var_name(name, self.canonical_name())
     }
 }

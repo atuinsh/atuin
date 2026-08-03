@@ -1,37 +1,53 @@
-use bstr::BString;
+use std::borrow::Cow;
 
-use crate::shell::{
-    Rendered, Skipped, Var,
-    var::{is_bareword, is_valid_var_name},
-};
+use bstr::{BStr, BString, ByteSlice};
+
+use crate::shell::{Var, VarName, VarParsingError};
+
+/// Validate `name` as a xonsh variable name: non-empty, an ASCII letter or `_`
+/// first, then ASCII alphanumerics or `_`.
+#[allow(unsafe_code)]
+pub(super) fn validate_var_name(
+    name: BString,
+    shell: &'static str,
+) -> Result<VarName, VarParsingError> {
+    let first_ok = matches!(name.first(), Some(&b) if b == b'_' || b.is_ascii_alphabetic());
+    let rest_ok = name.iter().all(|&b| b == b'_' || b.is_ascii_alphanumeric());
+    if first_ok && rest_ok {
+        // SAFETY: validated as a xonsh variable name just above.
+        Ok(unsafe { VarName::new_unchecked(name) })
+    } else {
+        Err(VarParsingError::InvalidName { shell, name })
+    }
+}
 
 /// Render vars as xonsh environment assignments: `$NAME=value`. xonsh has only
 /// environment variables, so the `export` flag is not represented. Non-bareword
 /// values become Python double-quoted strings.
-pub(super) fn render_vars(vars: &[Var]) -> Rendered {
+pub(super) fn render_vars(vars: &[Var]) -> BString {
     let mut script = BString::default();
-    let mut skipped = Vec::new();
-
     for var in vars {
-        if !is_valid_var_name(&var.name) {
-            skipped.push(Skipped {
-                name: var.name.clone(),
-                reason: "not a valid variable name for xonsh".to_owned(),
-            });
-            continue;
-        }
         script.push(b'$');
         script.extend_from_slice(&var.name);
         script.push(b'=');
-        if is_bareword(&var.value) {
-            script.extend_from_slice(&var.value);
-        } else {
-            py_str(&var.value, &mut script);
-        }
+        script.extend_from_slice(&quote_value(&var.value));
         script.push(b'\n');
     }
+    script
+}
 
-    Rendered { script, skipped }
+/// The value as a xonsh literal: borrowed when bareword-safe (only alphanumerics
+/// and `_ - / .`), else an owned Python double-quoted string.
+pub(super) fn quote_value(value: &[u8]) -> Cow<'_, BStr> {
+    if value
+        .chars()
+        .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '/' | '.'))
+    {
+        return Cow::Borrowed(value.as_bstr());
+    }
+    let mut out = BString::default();
+    py_str(value, &mut out);
+    Cow::Owned(out)
 }
 
 /// Append `value` as a Python double-quoted string literal (`\` and `"`
@@ -51,14 +67,19 @@ fn py_str(value: &[u8], out: &mut BString) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shell::{VarName, VarValue};
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
+    #[allow(unsafe_code)]
     fn var(name: &str, value: &str, export: bool) -> Var {
-        Var {
-            name: BString::from(name),
-            value: BString::from(value),
-            export,
+        // SAFETY: test fixtures use valid names/values.
+        unsafe {
+            Var {
+                name: VarName::new_unchecked(name),
+                value: VarValue::new_unchecked(value),
+                export,
+            }
         }
     }
 
@@ -76,9 +97,8 @@ mod tests {
         #[case] export: bool,
         #[case] expected: &str,
     ) {
-        let r = render_vars(&[var(name, value, export)]);
-        assert_eq!(r.script, BString::from(expected));
-        assert!(r.skipped.is_empty());
+        let script = render_vars(&[var(name, value, export)]);
+        assert_eq!(script, BString::from(expected));
     }
 
     #[rstest]
@@ -95,7 +115,7 @@ mod tests {
         #[case] export: bool,
         #[case] expected: &str,
     ) {
-        let r = render_vars(&[var(name, value, export)]);
-        assert_eq!(r.script, BString::from(expected));
+        let script = render_vars(&[var(name, value, export)]);
+        assert_eq!(script, BString::from(expected));
     }
 }

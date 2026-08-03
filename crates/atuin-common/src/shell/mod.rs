@@ -1,5 +1,7 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
+    convert::Infallible,
     ffi::OsStr,
     io,
     path::Path,
@@ -7,21 +9,21 @@ use std::{
     sync::Arc,
 };
 
-use bstr::BString;
+use bstr::{BStr, BString};
 use serde::Serialize;
 use sysinfo::{Process, System, get_current_pid};
 use thiserror::Error;
 
 mod alias;
-mod posix;
+mod common;
+#[cfg(feature = "shell-syntax")]
+mod parse;
 mod render;
 mod var;
 #[cfg(feature = "shell-syntax")]
-mod parse;
+use parse::Fallback;
 #[cfg(feature = "shell-syntax")]
 pub use parse::{Command, ShellParser, Token, TokenKind, commands};
-#[cfg(feature = "shell-syntax")]
-use parse::Fallback;
 
 pub mod bash;
 pub mod fish;
@@ -31,7 +33,7 @@ pub mod zsh;
 
 pub use alias::{Alias, AliasValue, AliasesError};
 pub use render::{Rendered, Skipped};
-pub use var::Var;
+pub use var::{Var, VarName, VarParsingError, VarValue};
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum RunError {
@@ -79,11 +81,28 @@ pub trait Shell: Send + Sync {
     /// [`Rendered::skipped`] rather than failing the whole render.
     fn render_aliases(&self, aliases: &[Alias]) -> Rendered;
 
-    /// Render the given variables into this shell's config syntax.
-    ///
-    /// Best-effort: variables this shell cannot represent are reported in
-    /// [`Rendered::skipped`] rather than failing the whole render.
-    fn render_vars(&self, vars: &[Var]) -> Rendered;
+    /// Render the given (already-validated) variables into this shell's config
+    /// syntax. Total: names and values are validated when the [`Var`] is built,
+    /// so nothing can be skipped here.
+    fn render_vars(&self, vars: &[Var]) -> BString;
+
+    /// Quote `value` as a literal in this shell's syntax: borrowed when it needs
+    /// no quoting, owned (escaped) otherwise.
+    fn quote_value<'a>(&self, value: &'a [u8]) -> Cow<'a, BStr>;
+
+    /// Validate `name` as a variable name in this shell, producing a [`VarName`]
+    /// or explaining why it was rejected. Each shell defines validity for
+    /// itself; this is the only way to build a [`VarName`].
+    fn validate_var_name(&self, name: BString) -> Result<VarName, VarParsingError>;
+
+    /// Wrap `value` as a [`VarValue`] for this shell. Infallible today — any
+    /// bytes can be quoted — but a shell may add constraints. The only safe way
+    /// to build a [`VarValue`].
+    #[allow(unsafe_code)]
+    fn validate_var_value(&self, value: BString) -> Result<VarValue, Infallible> {
+        // SAFETY: no value is rejected; any bytes are representable once quoted.
+        Ok(unsafe { VarValue::new_unchecked(value) })
+    }
 }
 
 /// Compile-time proof that `Shell` is object-safe. If a method signature ever
@@ -221,7 +240,7 @@ impl ShellKind {
     #[cfg(feature = "shell-syntax")]
     pub fn parser(&self) -> &'static dyn ShellParser {
         match self {
-            Self::Bash | Self::Sh | Self::Zsh | Self::Dash | Self::Ksh => &posix::PosixParser,
+            Self::Bash | Self::Sh | Self::Zsh | Self::Dash | Self::Ksh => &common::PosixParser,
             Self::Fish => &fish::FishParser,
             _ => &Fallback,
         }
@@ -260,8 +279,8 @@ impl ShellKind {
 #[cfg(all(test, feature = "shell-syntax"))]
 mod parser_selection {
     use super::*;
-    use rstest::rstest;
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     // dash/ksh route to the posix grammar (not the word fallback): only the
     // grammar sees the command inside `$(...)`.
@@ -270,9 +289,15 @@ mod parser_selection {
     #[case::dash(ShellKind::Dash)]
     #[case::ksh(ShellKind::Ksh)]
     fn posix_family_sees_into_substitution(#[case] kind: ShellKind) {
-        let names: Vec<&str> =
-            kind.commands("echo $(git rev-parse HEAD)").iter().map(|c| c.name).collect();
-        assert!(names.contains(&"git"), "{kind} did not descend into $(...): {names:?}");
+        let names: Vec<&str> = kind
+            .commands("echo $(git rev-parse HEAD)")
+            .iter()
+            .map(|c| c.name)
+            .collect();
+        assert!(
+            names.contains(&"git"),
+            "{kind} did not descend into $(...): {names:?}"
+        );
     }
 
     #[test]
