@@ -25,7 +25,7 @@ pub enum Cmd {
 
         /// Share the session already running in this terminal (requires an
         /// atuin pty-proxy owning it; see `atuin pty-proxy init`)
-        #[arg(long)]
+        #[arg(long, hide = true)]
         active: bool,
 
         /// Run --active attached to this terminal instead of in the
