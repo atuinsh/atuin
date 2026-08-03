@@ -2,7 +2,7 @@
 
 ## Why isn't Atuin recording commands in my IDE's terminal?
 
-IDEs like PyCharm, VS Code, and others often start non-interactive shells that don't source your shell configuration. This means Atuin's hooks never get installed.
+IDEs like RustRover, PyCharm, VS Code, and others often start non-interactive shells that don't source your shell configuration. This means Atuin's hooks never get installed.
 
 To fix this, configure your IDE to start an interactive shell (for example, `/bin/bash -i` instead of `/bin/bash`).
 

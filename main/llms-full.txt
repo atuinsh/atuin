@@ -644,7 +644,7 @@ Atuin uses these variables internally to track command execution and associate c
 
 Many development tools include embedded terminals:
 
-- **IDEs**: PyCharm, IntelliJ, VS Code, Cursor, Zed
+- **IDEs**: JetBrains' RustRover and PyCharm, IntelliJ, VS Code, Cursor, Zed
 - **AI coding assistants**: Claude Code, GitHub Copilot CLI, Aider
 - **Container environments**: Docker, Podman, devcontainers
 
@@ -674,7 +674,7 @@ If you want Atuin to record commands from an embedded terminal, you'll need to m
 
 Most IDEs let you customize the shell command used for their integrated terminal:
 
-**PyCharm / IntelliJ:**
+**JetBrains IDEs (RustRover, PyCharm, IntelliJ):**
 
 1. Go to Settings → Tools → Terminal
 1. Change "Shell path" to include the `-i` flag:
@@ -5528,7 +5528,7 @@ ble/util/import/eval-after-load core-complete '
 
 ## Embedded Terminals and IDEs
 
-Atuin may not work out of the box in embedded terminals found in IDEs (PyCharm, VS Code, etc.) or AI coding assistants (Claude Code, etc.). This is because these tools often start non-interactive shells that don't source your shell configuration.
+Atuin may not work out of the box in embedded terminals found in IDEs (JetBrains' RustRover or PyCharm, VS Code, etc.) or AI coding assistants (Claude Code, etc.). This is because these tools often start non-interactive shells that don't source your shell configuration.
 
 For solutions and workarounds, see [Shell Integration and Interoperability](https://docs.atuin.sh/guide/shell-integration/index.md).
 
@@ -5536,7 +5536,7 @@ For solutions and workarounds, see [Shell Integration and Interoperability](http
 
 ## Why isn't Atuin recording commands in my IDE's terminal?
 
-IDEs like PyCharm, VS Code, and others often start non-interactive shells that don't source your shell configuration. This means Atuin's hooks never get installed.
+IDEs like RustRover, PyCharm, VS Code, and others often start non-interactive shells that don't source your shell configuration. This means Atuin's hooks never get installed.
 
 To fix this, configure your IDE to start an interactive shell (for example, `/bin/bash -i` instead of `/bin/bash`).
 
