@@ -73,10 +73,6 @@ impl Iterator for PidAncestors<'_> {
             return None;
         };
 
-        // A real parent cannot postdate its child. `start_time` has second granularity,
-        // so this must be a strict comparison: a shell forking a wrapper forking this
-        // process routinely lands inside a single second, and `>=` would reject it.
-        // Same-second pid reuse is therefore undetectable here.
         if parent.start_time() > child.start_time() {
             self.stop = Some(Err(PidAncestorStopError::StaleParent {
                 claimed: parent_pid,
