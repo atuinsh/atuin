@@ -185,21 +185,23 @@ fn suggestion_worker(
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
 const COMPLETION_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150);
 
-/// The engine answering shell-completion queries. Both run headless: zsh as
-/// a captive interactive process under a pty (behind its own thread so a
-/// missed latency budget never desyncs it), fish via `complete -C`.
+/// The engine answering shell-completion queries. All run headless: zsh and
+/// bash as captive interactive processes (behind their own thread so a
+/// missed latency budget never desyncs them), fish via `complete -C`.
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
 enum CompletionOracle {
-    Zsh(atuin_pty_proxy::ZshOracleHandle),
+    Captive(atuin_pty_proxy::CompletionOracleHandle),
     Fish(std::path::PathBuf),
     None,
 }
 
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
 impl CompletionOracle {
-    /// Match the user's shell where we can (zsh gets real compsys answers,
-    /// fish its own engine); otherwise any engine beats none.
+    /// Match the user's shell where we can, so their own configuration and
+    /// completion system answer; otherwise any engine beats none.
     fn detect() -> Self {
+        use atuin_pty_proxy::{CompletionOracleHandle, OracleShell};
+
         let find = |name: &str| {
             std::env::var_os("PATH").and_then(|path| {
                 std::env::split_paths(&path)
@@ -210,16 +212,19 @@ impl CompletionOracle {
         let user_shell = std::env::var("SHELL").unwrap_or_default();
         let user_shell = user_shell.rsplit('/').next().unwrap_or_default();
 
-        let zsh = || {
-            find("zsh").map(|zsh| {
-                CompletionOracle::Zsh(atuin_pty_proxy::ZshOracleHandle::spawn(zsh, true))
+        let captive = |shell: OracleShell, name: &str| {
+            find(name).map(|bin| {
+                CompletionOracle::Captive(CompletionOracleHandle::spawn(shell, bin, true))
             })
         };
         let fish = || find("fish").map(CompletionOracle::Fish);
 
         match user_shell {
-            "zsh" => zsh().or_else(fish),
-            _ => fish().or_else(zsh),
+            "zsh" => captive(OracleShell::Zsh, "zsh").or_else(fish),
+            "bash" => captive(OracleShell::Bash, "bash").or_else(fish),
+            _ => fish()
+                .or_else(|| captive(OracleShell::Zsh, "zsh"))
+                .or_else(|| captive(OracleShell::Bash, "bash")),
         }
         .unwrap_or(CompletionOracle::None)
     }
@@ -297,7 +302,7 @@ impl SuggestionBackend {
     /// and accept treat them exactly like history suggestions.
     async fn fetch_completions(&mut self, line: &str) -> Vec<String> {
         let candidates = match &mut self.oracle {
-            CompletionOracle::Zsh(oracle) => oracle.complete(line, COMPLETION_TIMEOUT),
+            CompletionOracle::Captive(oracle) => oracle.complete(line, COMPLETION_TIMEOUT),
             CompletionOracle::Fish(fish) => fish_complete(fish, line).await,
             CompletionOracle::None => return Vec::new(),
         };
