@@ -42,4 +42,4 @@ jobs:
 
       # Run `nix fmt` to fix any failures here
       - name: Check nix formatting
-        run: nix fmt -- --check $(git ls-files '*.nix')
+        run: nix fmt -- --ci

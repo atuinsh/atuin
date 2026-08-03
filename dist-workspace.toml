@@ -15,12 +15,18 @@ installers = ["shell", "powershell"]
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
 # Which actions to run on pull requests
 pr-run-mode = "plan"
-# Whether to install an updater program
-install-updater = true
+# Don't ship the standalone axoupdater binary (atuin-update); `atuin update`
+# embeds axoupdater and uses the same install receipt.
+install-updater = false
 # The archive format to use for non-windows builds (defaults .tar.xz)
 unix-archive = ".tar.gz"
 # Whether to enable GitHub Attestations
 github-attestations = true
+# Vendor (statically link) OpenSSL so the downloadable binaries are portable and
+# don't depend on the host's libssl version. No-op on macOS/Windows.
+# self-update: only installer-installed binaries can self-update, so the
+# `atuin update` machinery is compiled into release artifacts only.
+features = ["vendored-tls", "self-update"]
 
 [dist.github-custom-runners]
 aarch64-unknown-linux-gnu = "depot-ubuntu-24.04-arm-8"

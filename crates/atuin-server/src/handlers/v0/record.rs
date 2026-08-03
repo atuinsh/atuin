@@ -9,15 +9,17 @@ use crate::{
 };
 use atuin_server_database::Database;
 
-use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
+use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 
-#[instrument(skip_all, fields(user.id = user.id))]
+#[instrument(skip_all, err(level = "warn"), fields(user.id = user.id, record.count = records.len()))]
 pub async fn post<DB: Database>(
     UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
     Json(records): Json<Vec<Record<EncryptedData>>>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
-    let State(AppState { database, settings }) = state;
+    let State(AppState {
+        database, settings, ..
+    }) = state;
 
     tracing::debug!(
         count = records.len(),
@@ -50,15 +52,12 @@ pub async fn post<DB: Database>(
     Ok(())
 }
 
-#[instrument(skip_all, fields(user.id = user.id))]
+#[instrument(skip_all, err(level = "warn"), fields(user.id = user.id))]
 pub async fn index<DB: Database>(
     UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
 ) -> Result<Json<RecordStatus>, ErrorResponseStatus<'static>> {
-    let State(AppState {
-        database,
-        settings: _,
-    }) = state;
+    let State(AppState { database, .. }) = state;
 
     let record_index = match database.status(&user).await {
         Ok(index) => index,
@@ -83,16 +82,13 @@ pub struct NextParams {
     count: u64,
 }
 
-#[instrument(skip_all, fields(user.id = user.id))]
+#[instrument(skip_all, err(level = "warn"), fields(user.id = user.id, host.id = %params.host, tag = params.tag.as_str(), count = params.count))]
 pub async fn next<DB: Database>(
     params: Query<NextParams>,
     UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
 ) -> Result<Json<Vec<Record<EncryptedData>>>, ErrorResponseStatus<'static>> {
-    let State(AppState {
-        database,
-        settings: _,
-    }) = state;
+    let State(AppState { database, .. }) = state;
     let params = params.0;
 
     let records = match database

@@ -69,7 +69,12 @@ auto_sync = true/false
 
 Default: `true`
 
-Configures whether to automatically check for updates.
+Configures whether to automatically check for updates. When enabled, Atuin
+checks `https://api.atuin.sh` for the latest release at most once per hour,
+and prints a notice if you're out of date.
+
+Set to `false` to disable. With the update check disabled and sync not set
+up, Atuin makes no network requests of its own.
 
 ```toml
 update_check = true/false
@@ -103,13 +108,12 @@ sync_frequency = "1h"
 
 Default: `fuzzy`
 
-Which search mode to use. Atuin supports `prefix`, `fulltext`, `fuzzy`, `daemon-fuzzy`, and
-`skim` search modes.
+Which search mode to use. Atuin supports `prefix`, `fulltext`, `fuzzy`, and
+`daemon-fuzzy` search modes.
 
 - `prefix` mode searches for "query\*".
 - `fulltext` mode searches for "\*query\*".
 - `fuzzy` applies the [fuzzy search syntax](#fuzzy-search-syntax).
-- `skim` applies the [skim search syntax](https://github.com/lotabout/skim#search-syntax).
 
 ```toml
 search_mode = "fuzzy"
@@ -130,6 +134,8 @@ search_mode = "fuzzy"
     ```
 
     You can customize the priority given to frequency, recency, and frecency scores in this mode. See [the score multipliers section](#score-multipliers) for more information.
+
+    Note: in non-interactive searches (manually running `atuin search` from the command line), `daemon-fuzzy` behaves like `fuzzy`.
 
 #### `fuzzy` search syntax
 
@@ -904,6 +910,13 @@ support it.
 
     - tmux >= 3.2, which is where `display-popup` gained the behavior Atuin needs
     - zsh, bash, or fish — nushell, xonsh, and PowerShell don't support the popup yet
+
+!!! warning "iTerm2's native tmux integration"
+
+    iTerm2's native tmux integration (control mode, `tmux -CC`) can't display
+    `tmux display-popup` popups, and Atuin can't detect this to fall back
+    automatically. If you rely on it, keep `[tmux] enabled = false` (the
+    default) so the search UI renders inline.
 
 These settings are read by `atuin init` and passed to the shell plugin through
 environment variables, so **restart your shell after changing them**. To disable

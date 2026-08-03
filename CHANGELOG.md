@@ -6,6 +6,42 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- Copy vendored axoasset into docker builder stage ([#3816](https://github.com/atuinsh/atuin/issues/3816))
+
+
+### Features
+
+- Migrate TLS backend from rustls to native-tls ([#3807](https://github.com/atuinsh/atuin/issues/3807))
+- Make `update` a real subcommand ([#3813](https://github.com/atuinsh/atuin/issues/3813))
+
+
+### Miscellaneous Tasks
+
+- Fix deny.toml and get it to run in CI ([#3808](https://github.com/atuinsh/atuin/issues/3808))
+- Remove codspeed workflow ([#3812](https://github.com/atuinsh/atuin/issues/3812))
+
+
+### Refactor
+
+- Adopt enum_dispatch for enum trait delegation ([#3806](https://github.com/atuinsh/atuin/issues/3806))
+
+
+
+## 18.18.1
+
+### Bug Fixes
+
+- *(crates.io)* Fix installation from crates.io ([#3764](https://github.com/atuinsh/atuin/issues/3764))
+
+
+### Refactor
+
+- *(daemon)* Drop fs4, use std::fs file locking ([#3753](https://github.com/atuinsh/atuin/issues/3753))
+
+## 18.18.0
+
+### Bug Fixes
+
 - *(daemon)* Index synced history directly instead of malformed SQL ([#3627](https://github.com/atuinsh/atuin/issues/3627)) ([#3641](https://github.com/atuinsh/atuin/issues/3641))
 - *(deps)* Update unsound/vulnerable dependencies in Cargo.lock ([#3632](https://github.com/atuinsh/atuin/issues/3632))
 - *(docs)* Repair every stale link in the repo ([#3727](https://github.com/atuinsh/atuin/issues/3727))
@@ -14,6 +50,7 @@ All notable changes to this project will be documented in this file.
 - *(import)* Survive corrupt entries instead of aborting the import ([#3721](https://github.com/atuinsh/atuin/issues/3721))
 - *(init)* Fix include guard in Bash init script; chore(init): improve inclusion of shell init scripts in Rust ([#3645](https://github.com/atuinsh/atuin/issues/3645))
 - *(install)* Make /dev/tty authoritative for interactivity detection ([#3691](https://github.com/atuinsh/atuin/issues/3691))
+- *(search)* Add `DbSearchMode`; correctly fall back to "fuzzy" in non-interactive searches ([#3744](https://github.com/atuinsh/atuin/issues/3744))
 - *(ui)* Calculate preview height based on command display width instead of byte count ([#3678](https://github.com/atuinsh/atuin/issues/3678))
 - *(win32)* Cargo-binstall package metadata ([#3673](https://github.com/atuinsh/atuin/issues/3673))
 - Search functionality to respect character offsets and non-ASCII ([#3659](https://github.com/atuinsh/atuin/issues/3659))
@@ -45,6 +82,8 @@ All notable changes to this project will be documented in this file.
 - Slightly nicer default config.toml order ([#2485](https://github.com/atuinsh/atuin/issues/2485))
 - Kubernetes self-hosting documentation ([#3238](https://github.com/atuinsh/atuin/issues/3238))
 - Add canonical Supported platforms page ([#3736](https://github.com/atuinsh/atuin/issues/3736))
+- Add friendly hover tips for new terms ([#3740](https://github.com/atuinsh/atuin/issues/3740))
+- Clarify how to uninstall shell integration ([#3741](https://github.com/atuinsh/atuin/issues/3741))
 
 ### Features
 
@@ -66,6 +105,7 @@ All notable changes to this project will be documented in this file.
 
 - *(atuin-common)* Add ellipsize_or_pad for unicode pad ([#3663](https://github.com/atuinsh/atuin/issues/3663))
 - *(ci)* Bump GitHub Actions to latest versions ([#3689](https://github.com/atuinsh/atuin/issues/3689))
+- *(ci)* Lint tests & docs in CI ([#3746](https://github.com/atuinsh/atuin/issues/3746))
 - *(clap)* Simplify clap field types and fix help message formatting ([#3640](https://github.com/atuinsh/atuin/issues/3640))
 - *(logging)* Refactor logging ([#3622](https://github.com/atuinsh/atuin/issues/3622))
 - *(release-skill)* Time label-gated PR merges around the release ([#3654](https://github.com/atuinsh/atuin/issues/3654))
@@ -85,6 +125,8 @@ All notable changes to this project will be documented in this file.
 - Hotfix script ([#3714](https://github.com/atuinsh/atuin/issues/3714))
 - Update flake.nix ([#3509](https://github.com/atuinsh/atuin/issues/3509))
 - Add Timezone and restart policy for postgres backup docker ([#3083](https://github.com/atuinsh/atuin/issues/3083))
+- Add riscv64 to release targets ([#3339](https://github.com/atuinsh/atuin/issues/3339))
+- Build x86_64-apple-darwin on Depot M4 macs; move all macOS CI to Depot ([#3742](https://github.com/atuinsh/atuin/issues/3742))
 
 ### Performance
 

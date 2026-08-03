@@ -138,6 +138,7 @@ mod test {
     use super::*;
     use crate::import::tests::TestLoader;
     use itertools::assert_equal;
+    use rstest::rstest;
 
     const INPUT: &str = r#"cargo install atuin
 cargo update
@@ -160,19 +161,11 @@ echo baz
         "echo baz",
     ];
 
+    #[rstest]
+    #[case::lf(INPUT.to_string())]
+    #[case::crlf(INPUT.replace("\n", "\r\n"))]
     #[tokio::test]
-    async fn test_import() {
-        let loader = import(INPUT).await;
-
-        let actual = loader.buf.iter().map(|h| h.command.clone());
-        let expected = EXPECTED.iter().map(|s| s.to_string());
-
-        assert_equal(actual, expected);
-    }
-
-    #[tokio::test]
-    async fn test_crlf() {
-        let input = INPUT.replace("\n", "\r\n");
+    async fn imports_commands(#[case] input: String) {
         let loader = import(input.as_str()).await;
 
         let actual = loader.buf.iter().map(|h| h.command.clone());
@@ -181,6 +174,7 @@ echo baz
         assert_equal(actual, expected);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn test_timestamps() {
         let loader = import(INPUT).await;

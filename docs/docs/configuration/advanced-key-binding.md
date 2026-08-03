@@ -205,7 +205,7 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `exit` | Exit the TUI (behavior depends on the `exit_mode` setting) |
 | `redraw` | Redraw the screen |
 | `cycle-filter-mode` | Cycle through the enabled [filter modes](config.md#filter_mode) |
-| `cycle-search-mode` | Cycle through [search modes](config.md#search_mode) (fuzzy, prefix, fulltext, skim) |
+| `cycle-search-mode` | Cycle through [search modes](config.md#search_mode) (prefix, fulltext, (daemon-)fuzzy) |
 | `toggle-tab` | Toggle between the search tab and inspector tab |
 | `switch-context` | Switch to the [context](../guide/advanced-usage.md#context-switch) of the currently selected command |
 | `clear-context` | Return to the initial [context](../guide/advanced-usage.md#context-switch) |

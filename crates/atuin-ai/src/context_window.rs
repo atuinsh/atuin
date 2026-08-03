@@ -155,6 +155,7 @@ fn estimate_chars(messages: &[serde_json::Value]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     fn user(content: &str) -> ConversationEvent {
         ConversationEvent::UserMessage {
@@ -202,77 +203,54 @@ mod tests {
 
     // --- group_into_turns ---
 
-    #[test]
-    fn empty_events_produce_no_turns() {
-        assert!(group_into_turns(&[]).is_empty());
-    }
-
-    #[test]
-    fn single_user_message_is_one_turn() {
-        let events = vec![user("hello")];
-        let turns = group_into_turns(&events);
-        assert_eq!(turns, vec![0..1]);
-    }
-
-    #[test]
-    fn user_assistant_is_one_turn() {
-        let events = vec![user("hello"), text("hi there")];
-        let turns = group_into_turns(&events);
-        assert_eq!(turns, vec![0..2]);
-    }
-
-    #[test]
-    fn two_turns_split_at_user_message() {
-        let events = vec![
+    #[rstest]
+    #[case::empty(vec![], vec![])]
+    #[case::single_user(vec![user("hello")], vec![0..1])]
+    #[case::user_assistant(vec![user("hello"), text("hi there")], vec![0..2])]
+    #[case::two_turns(
+        vec![
             user("first"),
             text("response 1"),
             user("second"),
             text("response 2"),
-        ];
-        let turns = group_into_turns(&events);
-        assert_eq!(turns, vec![0..2, 2..4]);
-    }
-
-    #[test]
-    fn tool_calls_and_results_stay_in_same_turn() {
-        let events = vec![
+        ],
+        vec![0..2, 2..4]
+    )]
+    #[case::tool_calls_same_turn(
+        vec![
             user("list files"),
             text("Let me check"),
             tool_call("tc1", "suggest_command"),
             tool_result("tc1", "file1\nfile2"),
             text("Here are your files"),
-        ];
-        let turns = group_into_turns(&events);
-        assert_eq!(turns, vec![0..5]);
-    }
-
-    #[test]
-    fn system_context_starts_new_turn() {
-        let events = vec![
+        ],
+        vec![0..5]
+    )]
+    #[case::system_context_new_turn(
+        vec![
             user("hello"),
             text("hi"),
             system_context("invocation boundary"),
             user("next question"),
             text("answer"),
-        ];
-        let turns = group_into_turns(&events);
-        assert_eq!(turns, vec![0..2, 2..3, 3..5]);
-    }
-
-    #[test]
-    fn oob_events_stay_in_current_turn() {
-        let events = vec![user("hello"), oob("some output"), text("response")];
-        let turns = group_into_turns(&events);
-        assert_eq!(turns, vec![0..3]);
-    }
-
-    #[test]
-    fn leading_text_without_user_message() {
-        // Edge case: events start with assistant text (shouldn't happen
-        // normally but handle gracefully)
-        let events = vec![text("orphaned"), user("hello"), text("hi")];
-        let turns = group_into_turns(&events);
-        assert_eq!(turns, vec![0..1, 1..3]);
+        ],
+        vec![0..2, 2..3, 3..5]
+    )]
+    #[case::oob_same_turn(
+        vec![user("hello"), oob("some output"), text("response")],
+        vec![0..3]
+    )]
+    // Edge case: events start with assistant text (shouldn't happen normally
+    // but handle gracefully)
+    #[case::leading_text(
+        vec![text("orphaned"), user("hello"), text("hi")],
+        vec![0..1, 1..3]
+    )]
+    fn group_into_turns_cases(
+        #[case] events: Vec<ConversationEvent>,
+        #[case] expected: Vec<Range<usize>>,
+    ) {
+        assert_eq!(group_into_turns(&events), expected);
     }
 
     // --- ContextWindowBuilder ---

@@ -76,22 +76,20 @@ mod tests {
         assert_eq!(input.pad_to(budget, align).as_ref(), expected);
     }
 
-    #[test]
-    fn borrows_only_when_no_padding_needed() {
-        // Exact fit: no padding -> borrowed.
-        assert!(matches!(
-            "hello".pad_to(Measure::Columns(5), Alignment::Start),
-            std::borrow::Cow::Borrowed(_)
-        ));
-        // Too wide: not truncated, no padding -> borrowed.
-        assert!(matches!(
-            "hello world".pad_to(Measure::Columns(3), Alignment::Start),
-            std::borrow::Cow::Borrowed(_)
-        ));
-        // Padding needed -> owned.
-        assert!(matches!(
-            "hi".pad_to(Measure::Columns(5), Alignment::Start),
-            std::borrow::Cow::Owned(_)
-        ));
+    #[rstest]
+    #[case::borrowed_exact_fit("hello", Measure::Columns(5), Alignment::Start, true)]
+    #[case::borrowed_too_wide("hello world", Measure::Columns(3), Alignment::Start, true)]
+    #[case::owned_padding_needed("hi", Measure::Columns(5), Alignment::Start, false)]
+    fn borrows_only_when_no_padding_needed(
+        #[case] input: &str,
+        #[case] budget: Measure,
+        #[case] align: Alignment,
+        #[case] expected_borrowed: bool,
+    ) {
+        let result = input.pad_to(budget, align);
+        assert_eq!(
+            matches!(result, std::borrow::Cow::Borrowed(_)),
+            expected_borrowed
+        );
     }
 }

@@ -5,12 +5,11 @@ use atuin_client::record::sqlite_store::SqliteStore;
 // This will be noticeable similar to the kv store, though I expect the two shall diverge
 // While we will support a range of shell config, I'd rather have a larger number of small records
 // + stores, rather than one mega config store.
-use atuin_common::record::{DecryptedData, Host, HostId};
 use atuin_common::utils::unquote;
+use atuin_domain::record::{DecryptedData, Host, HostId};
 use eyre::{Result, bail, ensure, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;
-use atuin_client::record::store::Store;
 
 use crate::shell::Alias;
 
@@ -239,7 +238,7 @@ impl AliasStore {
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
-        let record = atuin_common::record::Record::builder()
+        let record = atuin_domain::record::Record::builder()
             .host(Host::new(self.host_id))
             .version(CONFIG_SHELL_ALIAS_VERSION.to_string())
             .tag(CONFIG_SHELL_ALIAS_TAG.to_string())
@@ -275,7 +274,7 @@ impl AliasStore {
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
-        let record = atuin_common::record::Record::builder()
+        let record = atuin_domain::record::Record::builder()
             .host(Host::new(self.host_id))
             .version(CONFIG_SHELL_ALIAS_VERSION.to_string())
             .tag(CONFIG_SHELL_ALIAS_TAG.to_string())
@@ -356,6 +355,7 @@ pub(crate) fn test_local_timeout() -> f64 {
 #[cfg(test)]
 mod tests {
     use rand::rngs::OsRng;
+    use rstest::*;
 
     use atuin_client::record::sqlite_store::SqliteStore;
 
@@ -363,6 +363,17 @@ mod tests {
 
     use super::{AliasRecord, AliasStore, CONFIG_SHELL_ALIAS_VERSION, test_local_timeout};
     use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
+
+    #[fixture]
+    async fn alias_store() -> (AliasStore, SqliteStore) {
+        let store = SqliteStore::new(":memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
+        let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
+
+        (AliasStore::new(store.clone(), host_id, key), store)
+    }
 
     #[test]
     fn encode_decode() {
@@ -381,15 +392,10 @@ mod tests {
         assert_eq!(decoded, record);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn build_aliases() {
-        let store = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
-        let host_id = atuin_common::record::HostId(atuin_common::utils::uuid_v7());
-
-        let alias = AliasStore::new(store, host_id, key);
+    async fn build_aliases(#[future] alias_store: (AliasStore, SqliteStore)) {
+        let (alias, _store) = alias_store.await;
 
         alias.set("k", "kubectl").await.unwrap();
         alias.set("gp", "git push").await.unwrap();
@@ -439,28 +445,23 @@ alias kgap='kubectl get pods --all-namespaces'
         )
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn build_aliases_skips_corrupt_records() {
-        use atuin_client::record::{encryption::PASETO_V4, store::Store};
-        use atuin_common::record::{DecryptedData, Host};
+    async fn build_aliases_skips_corrupt_records(#[future] alias_store: (AliasStore, SqliteStore)) {
+        use atuin_client::record::encryption::PASETO_V4;
+        use atuin_domain::record::{DecryptedData, Host};
 
         use super::CONFIG_SHELL_ALIAS_TAG;
 
-        let store = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
-        let host_id = atuin_common::record::HostId(atuin_common::utils::uuid_v7());
-
-        let alias = AliasStore::new(store.clone(), host_id, key);
+        let (alias, store) = alias_store.await;
 
         alias.set("k", "kubectl").await.unwrap();
 
         // a record in the alias tag encrypted with a different key - the store is corrupt,
         // or "mixed". it should be skipped, rather than breaking the build entirely.
         let corrupt_key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
-        let corrupt = atuin_common::record::Record::builder()
-            .host(Host::new(host_id))
+        let corrupt = atuin_domain::record::Record::builder()
+            .host(Host::new(alias.host_id))
             .version(CONFIG_SHELL_ALIAS_VERSION.to_string())
             .tag(CONFIG_SHELL_ALIAS_TAG.to_string())
             .idx(1)

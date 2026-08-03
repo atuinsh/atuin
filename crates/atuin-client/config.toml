@@ -34,6 +34,10 @@
 ## enable or disable automatic update checks
 # update_check = true
 
+## which release channel to follow with `atuin update` and update checks
+## "stable" for stable releases only, "nightly" to also receive prereleases
+# update_channel = "stable"
+
 ## address of the sync server
 # sync_address = "https://api.atuin.sh"
 
@@ -43,7 +47,7 @@
 # sync_frequency = "5m"
 
 ## which search mode to use for interactive search
-## possible values: prefix, fulltext, fuzzy, skim
+## possible values: prefix, fulltext, fuzzy, daemon-fuzzy
 # search_mode = "fuzzy"
 
 ## which search mode to use when atuin is invoked from a shell up-key binding
@@ -293,6 +297,16 @@ enter_accept = true
 
 ## The port that should be used for TCP on non unix systems
 # tcp_port = 8889
+
+# [pty_proxy]
+## If enabled, `atuin init` will first re-exec your shell inside `atuin pty-proxy`,
+## so you don't need a separate `eval "$(atuin pty-proxy init)"` line in your shell
+## config. Supported for bash, zsh, fish and nu on unix platforms.
+## For the fastest startup, keep your `atuin init` line near the top of your shell
+## config: everything sourced before it runs again inside the proxy.
+## Safe to combine with an existing `atuin pty-proxy init` line — the proxy only
+## starts once.
+# enabled = false
 
 # [theme]
 ## Color theme to use for rendering in the terminal.

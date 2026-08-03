@@ -12,16 +12,13 @@ use atuin_server_database::Database;
 #[derive(Deserialize)]
 pub struct DeleteParams {}
 
-#[instrument(skip_all, fields(user.id = user.id))]
+#[instrument(skip_all, err(level = "warn"), fields(user.id = user.id))]
 pub async fn delete<DB: Database>(
     _params: Query<DeleteParams>,
     UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
-    let State(AppState {
-        database,
-        settings: _,
-    }) = state;
+    let State(AppState { database, .. }) = state;
 
     if let Err(e) = database.delete_store(&user).await {
         counter!("atuin_store_delete_failed").increment(1);

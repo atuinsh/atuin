@@ -1,11 +1,11 @@
 use atuin_common::logs::LogLevel;
-use atuin_common::record::HostId;
 use atuin_common::utils;
+use atuin_domain::record::HostId;
 use clap::ValueEnum;
 use config::{
     Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat, builder::DefaultState,
 };
-use eyre::{Context, Result, bail, eyre};
+use eyre::{Context, Result, eyre};
 use fs_err::{File, create_dir_all};
 use humantime::parse_duration;
 use regex::RegexSet;
@@ -17,6 +17,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{LazyLock, OnceLock},
 };
+use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::sync::OnceCell;
 use url::Url;
@@ -31,7 +32,7 @@ mod dotfiles;
 mod kv;
 pub(crate) mod meta;
 mod scripts;
-mod shells;
+pub mod shells;
 pub mod watcher;
 
 pub use shells::Shells;
@@ -44,24 +45,46 @@ pub static DEFAULT_SYNC_URL: LazyLock<Url> =
 pub static DEFAULT_HUB_URL: LazyLock<Url> =
     LazyLock::new(|| Url::parse("https://hub.atuin.sh").expect("default hub endpoint is valid"));
 
-#[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SearchMode {
-    #[serde(rename = "prefix")]
     Prefix,
-
-    #[serde(rename = "fulltext")]
-    #[clap(aliases = &["fulltext"])]
     FullText,
-
-    #[serde(rename = "fuzzy")]
     Fuzzy,
-
-    #[serde(rename = "skim")]
-    Skim,
-
-    #[serde(rename = "daemon-fuzzy")]
-    #[clap(aliases = &["daemon-fuzzy"])]
     DaemonFuzzy,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum RequestedSearchMode {
+    Prefix,
+    #[clap(alias("full-text"))]
+    Fulltext,
+    Fuzzy,
+    DaemonFuzzy,
+    /// Removed: falls back to [`Self::Fuzzy`] but shows a warning.
+    #[clap(hide = true)]
+    Skim,
+}
+
+impl RequestedSearchMode {
+    /// Return the actual search mode that will be used.
+    ///
+    /// Not all requested modes are supported; this method returns the closest supported mode for
+    /// the given requested mode.
+    pub fn effective_mode(self) -> SearchMode {
+        match self {
+            Self::Prefix => SearchMode::Prefix,
+            Self::Fulltext => SearchMode::FullText,
+            Self::Fuzzy | Self::Skim => SearchMode::Fuzzy,
+            Self::DaemonFuzzy => SearchMode::DaemonFuzzy,
+        }
+    }
+}
+
+impl From<RequestedSearchMode> for SearchMode {
+    fn from(requested: RequestedSearchMode) -> Self {
+        requested.effective_mode()
+    }
 }
 
 impl SearchMode {
@@ -70,22 +93,20 @@ impl SearchMode {
             SearchMode::Prefix => "PREFIX",
             SearchMode::FullText => "FULLTXT",
             SearchMode::Fuzzy => "FUZZY",
-            SearchMode::Skim => "SKIM",
             SearchMode::DaemonFuzzy => "DAEMON",
         }
     }
+
     pub fn next(&self, settings: &Settings) -> Self {
         match self {
             SearchMode::Prefix => SearchMode::FullText,
-            // if the user is using skim, we go to skim
-            SearchMode::FullText if settings.search_mode == SearchMode::Skim => SearchMode::Skim,
             // if the user is using daemon-fuzzy, we go to daemon-fuzzy
-            SearchMode::FullText if settings.search_mode == SearchMode::DaemonFuzzy => {
+            SearchMode::FullText if settings.search_mode() == SearchMode::DaemonFuzzy => {
                 SearchMode::DaemonFuzzy
             }
             // otherwise fuzzy.
             SearchMode::FullText => SearchMode::Fuzzy,
-            SearchMode::Fuzzy | SearchMode::Skim | SearchMode::DaemonFuzzy => SearchMode::Prefix,
+            SearchMode::Fuzzy | SearchMode::DaemonFuzzy => SearchMode::Prefix,
         }
     }
 }
@@ -165,6 +186,18 @@ pub enum Style {
 
     #[serde(rename = "compact")]
     Compact,
+}
+
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, Serialize)]
+pub enum UpdateChannel {
+    /// Stable releases only.
+    #[serde(rename = "stable")]
+    Stable,
+
+    /// Prerelease builds, plus stable releases once they overtake the latest
+    /// prerelease.
+    #[serde(rename = "nightly")]
+    Nightly,
 }
 
 #[derive(Clone, Debug, Deserialize, Copy, Serialize)]
@@ -489,6 +522,16 @@ pub struct Daemon {
 
     /// The port that should be used for TCP on non unix systems
     pub tcp_port: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct PtyProxy {
+    /// If enabled, `atuin init` emits shell code that re-execs the shell
+    /// inside `atuin pty-proxy`, so no separate `atuin pty-proxy init` line
+    /// is needed in shell config. Supported for bash, zsh, fish and nu on
+    /// unix platforms.
+    #[serde(alias = "enable")]
+    pub enabled: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -939,16 +982,20 @@ impl Ui {
 
     /// Validate the UI configuration.
     /// Returns an error if more than one column has expand = true.
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), UiValidationError> {
         let expand_count = self.columns.iter().filter(|c| c.expand).count();
         if expand_count > 1 {
-            bail!(
-                "Only one column can have expand = true, but {} columns are set to expand",
-                expand_count
-            );
+            return Err(UiValidationError::MultipleExpandingColumns(expand_count));
         }
         Ok(())
     }
+}
+
+/// A [`Ui`] configuration that cannot be used as written.
+#[derive(Debug, Error)]
+pub enum UiValidationError {
+    #[error("Only one column can have expand = true, but {0} columns are set to expand")]
+    MultipleExpandingColumns(usize),
 }
 
 impl Default for Ui {
@@ -968,6 +1015,7 @@ pub struct Settings {
     pub style: Style,
     pub auto_sync: bool,
     pub update_check: bool,
+    pub update_channel: UpdateChannel,
 
     /// The sync address for atuin.
     pub sync_address: Url,
@@ -982,10 +1030,12 @@ pub struct Settings {
     pub db_path: PathBuf,
     pub record_store_path: PathBuf,
     pub key_path: PathBuf,
-    pub search_mode: SearchMode,
+    #[serde(rename = "search_mode")]
+    pub requested_search_mode: RequestedSearchMode,
     pub filter_mode: Option<FilterMode>,
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
-    pub search_mode_shell_up_key_binding: Option<SearchMode>,
+    #[serde(rename = "search_mode_shell_up_key_binding")]
+    pub requested_search_mode_shell_up_key_binding: Option<RequestedSearchMode>,
     pub shell_up_key_binding: bool,
     pub inline_height: u16,
     pub inline_height_shell_up_key_binding: Option<u16>,
@@ -1053,6 +1103,9 @@ pub struct Settings {
     pub daemon: Daemon,
 
     #[serde(default)]
+    pub pty_proxy: PtyProxy,
+
+    #[serde(default)]
     pub search: Search,
 
     #[serde(default)]
@@ -1090,6 +1143,15 @@ impl Settings {
             .expect("Could not build config")
             .try_deserialize()
             .expect("Could not deserialize config")
+    }
+
+    pub fn search_mode(&self) -> SearchMode {
+        self.requested_search_mode.into()
+    }
+
+    pub fn search_mode_shell_up_key_binding(&self) -> Option<SearchMode> {
+        self.requested_search_mode_shell_up_key_binding
+            .map(Into::into)
     }
 
     pub(crate) fn effective_data_dir() -> PathBuf {
@@ -1371,10 +1433,14 @@ impl Settings {
     }
 
     pub fn builder() -> Result<ConfigBuilder<DefaultState>> {
-        Self::builder_with_data_dir(&atuin_common::utils::data_dir())
+        Ok(Self::builder_with_data_dir(
+            &atuin_common::utils::data_dir(),
+        )?)
     }
 
-    fn builder_with_data_dir(data_dir: &std::path::Path) -> Result<ConfigBuilder<DefaultState>> {
+    fn builder_with_data_dir(
+        data_dir: &std::path::Path,
+    ) -> Result<ConfigBuilder<DefaultState>, config::ConfigError> {
         let db_path = data_dir.join("history.db");
         let record_store_path = data_dir.join("records.db");
         let kv_path = data_dir.join("kv.db");
@@ -1396,6 +1462,7 @@ impl Settings {
             .set_default("timezone", "local")?
             .set_default("auto_sync", true)?
             .set_default("update_check", cfg!(feature = "check-update"))?
+            .set_default("update_channel", "stable")?
             .set_default("sync_address", DEFAULT_SYNC_URL.as_str())?
             .set_default("sync_frequency", "5m")?
             .set_default("search_mode", "fuzzy")?
@@ -1587,6 +1654,7 @@ impl Settings {
 
         // all paths should be expanded
         let built = config_builder.build_cloned()?;
+
         config_builder = [
             "db_path",
             "record_store_path",
@@ -1715,6 +1783,21 @@ impl Settings {
         ];
         paths.iter().all(|p| !utils::broken_symlink(*p))
     }
+
+    /// Check that a TOML string can be successfully deserialized into a [`Settings`] object.
+    pub fn validate_str(toml: &str) -> Result<(), ValidationError> {
+        let config = Self::builder_with_data_dir(&atuin_common::utils::data_dir())?
+            .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+            .build()?;
+
+        let settings: Settings = config.try_deserialize()?;
+        if let Some(dir) = &settings.data_dir {
+            shellexpand::full(dir).map_err(ValidationError::DataDir)?;
+        }
+
+        settings.ui.validate()?;
+        Ok(())
+    }
 }
 
 impl Default for Settings {
@@ -1728,6 +1811,19 @@ impl Default for Settings {
             .try_deserialize()
             .expect("Could not deserialize config")
     }
+}
+
+/// Error returned by [`Settings::validate_str`] when validation fails.
+#[derive(Debug, Error)]
+pub enum ValidationError {
+    #[error(transparent)]
+    Config(#[from] config::ConfigError),
+
+    #[error(transparent)]
+    Ui(#[from] UiValidationError),
+
+    #[error("failed to expand `data_dir`: {0}")]
+    DataDir(shellexpand::LookupError<std::env::VarError>),
 }
 
 /// Initialize the meta store configuration for testing.
@@ -1761,7 +1857,10 @@ mod tests {
     use eyre::Result;
     use rstest::rstest;
 
-    use super::{AiEndpointProtocol, Settings, UtcOffsetSpec};
+    use super::{
+        AiEndpointProtocol, ConfigFile, FileFormat, FilterMode, RequestedSearchMode, SearchMode,
+        Settings, UtcOffsetSpec,
+    };
     use url::Url;
 
     #[rstest]
@@ -1829,8 +1928,15 @@ mod tests {
         assert_eq!(super::DEFAULT_HUB_URL.host_str(), Some("hub.atuin.sh"));
     }
 
-    #[test]
-    fn can_choose_workspace_filters_when_in_git_context() -> Result<()> {
+    #[rstest]
+    #[case::in_git_context(true, true, FilterMode::Workspace)]
+    #[case::not_in_git_context(true, false, FilterMode::Host)]
+    #[case::workspaces_disabled(false, true, FilterMode::Host)]
+    fn workspace_filter_selection(
+        #[case] workspaces: bool,
+        #[case] git_root: bool,
+        #[case] expected: FilterMode,
+    ) {
         let mut settings = super::Settings::default();
         settings.search.filters = vec![
             super::FilterMode::Workspace,
@@ -1839,48 +1945,9 @@ mod tests {
             super::FilterMode::Session,
             super::FilterMode::Global,
         ];
-        settings.workspaces = true;
+        settings.workspaces = workspaces;
 
-        assert_eq!(
-            settings.default_filter_mode(true),
-            super::FilterMode::Workspace,
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn wont_choose_workspace_filters_when_not_in_git_context() -> Result<()> {
-        let mut settings = super::Settings::default();
-        settings.search.filters = vec![
-            super::FilterMode::Workspace,
-            super::FilterMode::Host,
-            super::FilterMode::Directory,
-            super::FilterMode::Session,
-            super::FilterMode::Global,
-        ];
-        settings.workspaces = true;
-
-        assert_eq!(settings.default_filter_mode(false), super::FilterMode::Host,);
-
-        Ok(())
-    }
-
-    #[test]
-    fn wont_choose_workspace_filters_when_workspaces_disabled() -> Result<()> {
-        let mut settings = super::Settings::default();
-        settings.search.filters = vec![
-            super::FilterMode::Workspace,
-            super::FilterMode::Host,
-            super::FilterMode::Directory,
-            super::FilterMode::Session,
-            super::FilterMode::Global,
-        ];
-        settings.workspaces = false;
-
-        assert_eq!(settings.default_filter_mode(true), super::FilterMode::Host,);
-
-        Ok(())
+        assert_eq!(settings.default_filter_mode(git_root), expected);
     }
 
     #[test]
@@ -1927,6 +1994,38 @@ mod tests {
         assert!(!daemon_autostart);
 
         Ok(())
+    }
+
+    #[rstest]
+    #[case::valid_config("search_mode = \"fuzzy\"\n")]
+    #[case::empty_config("")]
+    #[case::plain_data_dir("data_dir = \"/tmp/atuin-test\"\n")]
+    fn validate_accepts(#[case] toml: &str) {
+        assert!(Settings::validate_str(toml).is_ok());
+    }
+
+    /// The error should always name the offending key.
+    #[rstest]
+    #[case::invalid_enum_variant("search_mode = \"invalid\"\n", "search_mode")]
+    #[case::value_of_the_wrong_type("auto_sync = \"banana\"\n", "auto_sync")]
+    #[case::invalid_nested_value("[search]\nfilters = [\"nope\"]\n", "search.filters")]
+    #[case::data_dir_with_an_unexpandable_variable(
+        "data_dir = \"${DEFINITELY_UNSET_VAR_XYZ}/atuin\"\n",
+        "data_dir"
+    )]
+    #[case::more_than_one_expanding_column(
+        "[ui]\ncolumns = [{ type = \"duration\", expand = true }, { type = \"command\", expand = true }]\n",
+        "expand"
+    )]
+    fn validate_rejects(#[case] toml: &str, #[case] expected_err: &str) {
+        let err = Settings::validate_str(toml)
+            .expect_err("config should not validate")
+            .to_string();
+
+        assert!(
+            err.contains(expected_err),
+            "error should mention `{expected_err}`, got: {err}"
+        );
     }
 
     #[test]
@@ -2000,5 +2099,67 @@ mod tests {
         assert_eq!(config.inspector.len(), 1);
         assert!(config.vim_insert.is_empty());
         assert!(config.prefix.is_empty());
+    }
+
+    /// Deserialize a TOML string into a [`Settings`] object.
+    fn parse_settings(toml: &str) -> Settings {
+        Settings::builder_with_data_dir(&atuin_common::utils::data_dir())
+            .expect("could not build settings builder")
+            .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+            .build()
+            .expect("could not build config")
+            .try_deserialize()
+            .expect("could not deserialize config")
+    }
+
+    #[test]
+    fn skim_is_requested_but_resolves_to_fuzzy() {
+        let settings = parse_settings("search_mode = \"skim\"\n");
+
+        assert_eq!(settings.requested_search_mode, RequestedSearchMode::Skim);
+        assert_eq!(settings.search_mode(), SearchMode::Fuzzy);
+    }
+
+    #[test]
+    fn skim_shell_up_key_binding_resolves_to_fuzzy() {
+        let settings = parse_settings("search_mode_shell_up_key_binding = \"skim\"\n");
+
+        assert_eq!(
+            settings.requested_search_mode_shell_up_key_binding,
+            Some(RequestedSearchMode::Skim)
+        );
+        assert_eq!(
+            settings.search_mode_shell_up_key_binding(),
+            Some(SearchMode::Fuzzy)
+        );
+    }
+
+    #[rstest]
+    #[case("prefix", RequestedSearchMode::Prefix)]
+    #[case("fulltext", RequestedSearchMode::Fulltext)]
+    #[case("fuzzy", RequestedSearchMode::Fuzzy)]
+    #[case("daemon-fuzzy", RequestedSearchMode::DaemonFuzzy)]
+    #[case("skim", RequestedSearchMode::Skim)]
+    fn requested_search_mode_parses_correctly(
+        #[case] value: &str,
+        #[case] expected: RequestedSearchMode,
+    ) {
+        let settings = parse_settings(&format!("search_mode = \"{value}\"\n"));
+        assert_eq!(settings.requested_search_mode, expected);
+    }
+
+    #[rstest]
+    #[case(RequestedSearchMode::Prefix, SearchMode::Prefix)]
+    #[case(RequestedSearchMode::Fulltext, SearchMode::FullText)]
+    #[case(RequestedSearchMode::Fuzzy, SearchMode::Fuzzy)]
+    #[case(RequestedSearchMode::DaemonFuzzy, SearchMode::DaemonFuzzy)]
+    // "skim" was removed -- maps to "fuzzy"
+    #[case(RequestedSearchMode::Skim, SearchMode::Fuzzy)]
+    fn effective_search_mode_matches_requested(
+        #[case] requested: RequestedSearchMode,
+        #[case] expected: SearchMode,
+    ) {
+        assert_eq!(requested.effective_mode(), expected);
+        assert_eq!(SearchMode::from(requested), expected);
     }
 }

@@ -1,4 +1,8 @@
-use atuin_common::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ErrorResponse};
+use std::sync::Arc;
+
+use atuin_domain::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ErrorResponse};
+use atuin_domain::caps::axum::{CapabilitiesRouterExt, get as capabilities_endpoint};
+use atuin_domain::caps::{CapServer, CapabilitiesCap};
 use axum::{
     Router,
     extract::{FromRequestParts, Request},
@@ -27,6 +31,7 @@ where
 {
     type Rejection = ErrorResponseStatus<'static>;
 
+    #[tracing::instrument(name = "auth", skip_all)]
     async fn from_request_parts(
         req: &mut Parts,
         state: &AppState<DB>,
@@ -35,19 +40,23 @@ where
             .headers
             .get(http::header::AUTHORIZATION)
             .ok_or_else(|| {
+                tracing::debug!("request is missing the authorization header");
                 ErrorResponse::reply("missing authorization header")
                     .with_status(http::StatusCode::BAD_REQUEST)
             })?;
         let auth_header = auth_header.to_str().map_err(|_| {
+            tracing::debug!("authorization header is not valid ascii");
             ErrorResponse::reply("invalid authorization header encoding")
                 .with_status(http::StatusCode::BAD_REQUEST)
         })?;
         let (typ, token) = auth_header.split_once(' ').ok_or_else(|| {
+            tracing::debug!("authorization header is not a space-separated pair");
             ErrorResponse::reply("invalid authorization header encoding")
                 .with_status(http::StatusCode::BAD_REQUEST)
         })?;
 
         if typ != "Token" {
+            tracing::debug!(scheme = typ, "unsupported authorization scheme");
             return Err(
                 ErrorResponse::reply("invalid authorization header encoding")
                     .with_status(http::StatusCode::BAD_REQUEST),
@@ -59,14 +68,19 @@ where
             .get_session_user(token)
             .await
             .map_err(|e| match e {
-                DbError::NotFound => ErrorResponse::reply("session not found")
-                    .with_status(http::StatusCode::FORBIDDEN),
+                DbError::NotFound => {
+                    tracing::warn!("presented session token was not recognised");
+                    ErrorResponse::reply("session not found")
+                        .with_status(http::StatusCode::FORBIDDEN)
+                }
                 DbError::Other(e) => {
                     tracing::error!(error = ?e, "could not query user session");
                     ErrorResponse::reply("could not query user session")
                         .with_status(http::StatusCode::INTERNAL_SERVER_ERROR)
                 }
             })?;
+
+        tracing::debug!(user.id = user.id, user.username = %user.username, "request authenticated");
 
         Ok(UserAuth(user))
     }
@@ -107,11 +121,16 @@ pub struct AppState<DB: Database> {
 }
 
 pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
-    let routes = Router::new()
-        .route("/", get(handlers::index))
-        .route("/healthz", get(handlers::health::health_check));
+    // Advertise the self-referential capabilities capability, so every server that speaks the
+    // protocol carries at least one concrete capability a client can observe.
+    let caps = Arc::new(
+        CapServer::new()
+            .add(CapabilitiesCap { version: 1 })
+            .expect("the capabilities capability is the only one registered"),
+    );
 
-    let routes = routes
+    let negotiated = Router::new()
+        .route("/", get(handlers::index))
         .route("/user/{username}", get(handlers::user::get))
         .route("/account", delete(handlers::user::delete))
         .route("/account/password", patch(handlers::user::change_password))
@@ -121,21 +140,31 @@ pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
         .route("/api/v0/record", post(handlers::v0::record::post))
         .route("/api/v0/record", get(handlers::v0::record::index))
         .route("/api/v0/record/next", get(handlers::v0::record::next))
-        .route("/api/v0/store", delete(handlers::v0::store::delete));
+        .route("/api/v0/store", delete(handlers::v0::store::delete))
+        .negotiate_capabilities(caps.clone());
+
+    let unnegotiated = Router::new()
+        .route("/api/v0/capabilities", get(capabilities_endpoint))
+        .route("/healthz", get(handlers::health::health_check))
+        .with_state(caps);
+
+    let routes = unnegotiated.merge(negotiated);
 
     let path = settings.path.as_str();
-    if path.is_empty() {
+    let routes = if path.is_empty() {
         routes
     } else {
         Router::new().nest(path, routes)
-    }
-    .fallback(teapot)
-    .with_state(AppState { database, settings })
-    .layer(
-        ServiceBuilder::new()
-            .layer(axum::middleware::from_fn(clacks_overhead))
-            .layer(TraceLayer::new_for_http())
-            .layer(axum::middleware::from_fn(metrics::track_metrics))
-            .layer(axum::middleware::from_fn(semver)),
-    )
+    };
+
+    routes
+        .fallback(teapot)
+        .with_state(AppState { database, settings })
+        .layer(
+            ServiceBuilder::new()
+                .layer(axum::middleware::from_fn(clacks_overhead))
+                .layer(TraceLayer::new_for_http().make_span_with(crate::trace::make_request_span))
+                .layer(axum::middleware::from_fn(metrics::track_metrics))
+                .layer(axum::middleware::from_fn(semver)),
+        )
 }

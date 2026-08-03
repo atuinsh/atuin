@@ -52,7 +52,11 @@ If you don't wish to use the installer, the manual installation steps are as fol
 
 === "Cargo"
 
-    It's best to use [rustup](https://rustup.rs/) to set up a Rust
+    Atuin requires a recent Rust toolchain. The minimum supported version is
+    set by `rust-version` in the workspace
+    [`Cargo.toml`](https://github.com/atuinsh/atuin/blob/main/Cargo.toml)
+    (currently {{ msrv }}). Distribution package managers often ship an older Rust,
+    so it's best to use [rustup](https://rustup.rs/) to set up an up-to-date
     toolchain, then you can run:
 
     ```shell
@@ -144,7 +148,10 @@ If you don't wish to use the installer, the manual installation steps are as fol
 === "Source"
 
     Atuin builds on the latest stable version of Rust, and we make no
-    promises regarding older versions. We recommend using [rustup](https://rustup.rs/).
+    promises regarding older versions. The minimum supported version is set by
+    `rust-version` in the workspace
+    [`Cargo.toml`](https://github.com/atuinsh/atuin/blob/main/Cargo.toml)
+    (currently {{ msrv }}). We recommend using [rustup](https://rustup.rs/).
 
     ```shell
     git clone https://github.com/atuinsh/atuin.git

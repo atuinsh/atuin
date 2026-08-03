@@ -10,6 +10,7 @@ use eyre::{Context, Result};
 mod handlers;
 mod metrics;
 mod router;
+mod trace;
 
 pub use settings::Settings;
 pub use settings::example_config;
@@ -60,9 +61,12 @@ pub async fn launch_with_tcp_listener<Db: Database>(
 ) -> Result<()> {
     let r = make_router::<Db>(settings).await?;
 
-    serve(listener, r.into_make_service())
-        .with_graceful_shutdown(shutdown)
-        .await?;
+    serve(
+        listener,
+        r.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await?;
 
     Ok(())
 }

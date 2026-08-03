@@ -4,10 +4,10 @@ use std::{cmp::Ordering, fmt::Write};
 use eyre::Result;
 use thiserror::Error;
 
-use super::{encryption::PASETO_V4, store::Store};
+use super::{encryption::PASETO_V4, sqlite_store::SqliteStore};
 use crate::{api_client::Client, settings::Settings};
 
-use atuin_common::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus};
+use atuin_domain::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 
 #[derive(Error, Debug)]
@@ -73,7 +73,7 @@ pub async fn build_client(settings: &Settings) -> Result<Client<'_>, SyncError> 
 
 pub async fn diff(
     client: &Client<'_>,
-    store: &impl Store,
+    store: &SqliteStore,
 ) -> Result<(Vec<Diff>, RecordStatus), SyncError> {
     let local_index = store
         .status()
@@ -96,7 +96,7 @@ pub async fn diff(
 // about and test this way
 pub async fn operations(
     diffs: Vec<Diff>,
-    _store: &impl Store,
+    _store: &SqliteStore,
 ) -> Result<Vec<Operation>, SyncError> {
     let mut operations = Vec::with_capacity(diffs.len());
 
@@ -168,7 +168,7 @@ pub async fn operations(
 }
 
 async fn sync_upload(
-    store: &impl Store,
+    store: &SqliteStore,
     client: &Client<'_>,
     host: HostId,
     tag: String,
@@ -227,7 +227,7 @@ async fn sync_upload(
 }
 
 async fn sync_download(
-    store: &impl Store,
+    store: &SqliteStore,
     client: &Client<'_>,
     host: HostId,
     tag: String,
@@ -286,7 +286,7 @@ async fn sync_download(
 pub async fn sync_remote(
     client: &Client<'_>,
     operations: Vec<Operation>,
-    local_store: &impl Store,
+    local_store: &SqliteStore,
     page_size: u64,
 ) -> Result<(i64, Vec<RecordId>), SyncError> {
     let mut uploaded = 0;
@@ -356,7 +356,7 @@ pub async fn check_encryption_key(
 
 pub async fn sync(
     settings: &Settings,
-    store: &impl Store,
+    store: &SqliteStore,
     encryption_key: &[u8; 32],
 ) -> Result<(i64, Vec<RecordId>), SyncError> {
     let client = build_client(settings).await?;
@@ -373,14 +373,13 @@ pub async fn sync(
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::record::{Diff, EncryptedData, HostId, Record};
+    use atuin_domain::record::{Diff, EncryptedData, HostId, Record};
     use pretty_assertions::assert_eq;
 
     use crate::{
         record::{
             encryption::PASETO_V4,
             sqlite_store::SqliteStore,
-            store::Store,
             sync::{self, Operation},
         },
         settings::test_local_timeout,
@@ -388,7 +387,7 @@ mod tests {
 
     fn test_record() -> Record<EncryptedData> {
         Record::builder()
-            .host(atuin_common::record::Host::new(HostId(
+            .host(atuin_domain::record::Host::new(HostId(
                 atuin_common::utils::uuid_v7(),
             )))
             .version("v1".into())

@@ -200,6 +200,7 @@ fn token_text(input: &InternedInput<&str>, is_before: bool, idx: u32) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn no_changes_produces_empty_preview() {
@@ -248,24 +249,17 @@ mod tests {
         assert!(hunk.lines.contains(&DiffLine::Removed("remove_me".into())));
     }
 
-    #[test]
-    fn distant_changes_produce_separate_hunks() {
-        // Two changes separated by more than 2*CONTEXT_LINES (6) lines
-        let old = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n";
-        let new = "1\nX\n3\n4\n5\n6\n7\n8\n9\n10\n11\nY\n";
-        let preview = EditPreview::compute(old, new);
-
-        assert_eq!(preview.hunks.len(), 2);
-    }
-
-    #[test]
-    fn close_changes_merge_into_one_hunk() {
-        // Two changes separated by fewer than 2*CONTEXT_LINES lines
-        let old = "1\n2\n3\n4\n5\n";
-        let new = "X\n2\n3\n4\nY\n";
-        let preview = EditPreview::compute(old, new);
-
-        assert_eq!(preview.hunks.len(), 1);
+    #[rstest]
+    // Two changes separated by more than 2*CONTEXT_LINES (6) lines
+    #[case::distant_separate(
+        "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n",
+        "1\nX\n3\n4\n5\n6\n7\n8\n9\n10\n11\nY\n",
+        2
+    )]
+    // Two changes separated by fewer than 2*CONTEXT_LINES lines
+    #[case::close_merge("1\n2\n3\n4\n5\n", "X\n2\n3\n4\nY\n", 1)]
+    fn hunk_grouping(#[case] old: &str, #[case] new: &str, #[case] expected_hunks: usize) {
+        assert_eq!(EditPreview::compute(old, new).hunks.len(), expected_hunks);
     }
 
     #[test]

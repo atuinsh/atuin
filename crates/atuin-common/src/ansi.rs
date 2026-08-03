@@ -112,11 +112,11 @@ mod tests {
         assert_no_terminal_controls(&to_plain_text(input.as_bytes(), nz(80)));
     }
 
-    #[test]
-    fn empty_input_is_empty_regardless_of_cols() {
-        assert_eq!(to_plain_text(b"", nz(1)), "");
-        assert_eq!(to_plain_text(b"", nz(80)), "");
-        assert_eq!(to_plain_text(b"", nz(u16::MAX)), "");
+    #[rstest]
+    fn empty_input_is_empty_regardless_of_cols(
+        #[values(nz(1), nz(80), nz(u16::MAX))] cols: NonZeroU16,
+    ) {
+        assert_eq!(to_plain_text(b"", cols), "");
     }
 
     #[test]

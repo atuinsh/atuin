@@ -212,9 +212,11 @@ pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
 
     // --- Editing ---
     km.bind(key("ctrl-backspace"), Action::DeleteWordBefore);
+    km.bind(key("alt-backspace"), Action::DeleteWordBefore);
     km.bind(key("ctrl-h"), Action::DeleteCharBefore);
     km.bind(key("ctrl-?"), Action::DeleteCharBefore);
     km.bind(key("ctrl-delete"), Action::DeleteWordAfter);
+    km.bind(key("alt-d"), Action::DeleteWordAfter);
     km.bind(key("delete"), Action::DeleteCharAfter);
     // ctrl-d: if input empty → return original, otherwise delete char
     km.bind_conditional(
@@ -578,6 +580,16 @@ mod tests {
     #[case::ctrl_n_selects_next_no_exit_condition("ctrl-n", 0, 0, 0, 10, Action::SelectNext)]
     #[case::prefix_key_enters_prefix("ctrl-a", 0, 0, 0, 10, Action::EnterPrefixMode)]
     #[case::home_cursor_start("home", 5, 10, 0, 10, Action::CursorStart)]
+    // readline-style meta word deletion (alongside ctrl-backspace / ctrl-delete)
+    #[case::alt_backspace_deletes_word_before(
+        "alt-backspace",
+        2,
+        5,
+        0,
+        10,
+        Action::DeleteWordBefore
+    )]
+    #[case::alt_d_deletes_word_after("alt-d", 2, 5, 0, 10, Action::DeleteWordAfter)]
     fn emacs_keymap_resolves(
         #[case] k: &str,
         #[case] cursor: usize,

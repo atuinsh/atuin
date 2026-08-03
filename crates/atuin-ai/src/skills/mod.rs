@@ -250,82 +250,75 @@ fn first_paragraph(body: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn sanitize_name_basic() {
-        assert_eq!(sanitize_name("My Skill"), "my-skill");
-        assert_eq!(sanitize_name("deploy_prod"), "deploy-prod");
-        assert_eq!(sanitize_name("code-review"), "code-review");
+    /// Build a `SkillDescriptor` from its distinguishing fields, deriving the
+    /// source path from the name.
+    fn descriptor(name: &str, description: &str, disabled: bool) -> SkillDescriptor {
+        SkillDescriptor {
+            name: name.to_string(),
+            description: description.to_string(),
+            source_path: format!("{name}/SKILL.md").into(),
+            disable_model_invocation: disabled,
+        }
     }
 
-    #[test]
-    fn first_paragraph_extraction() {
-        assert_eq!(
-            first_paragraph("Hello world\nSecond line\n\nNew paragraph"),
-            Some("Hello world Second line".to_string())
-        );
-        assert_eq!(first_paragraph(""), None);
-        assert_eq!(first_paragraph("\n\n"), None);
-        assert_eq!(
-            first_paragraph("Single line"),
-            Some("Single line".to_string())
-        );
+    #[rstest]
+    #[case("My Skill", "my-skill")]
+    #[case("deploy_prod", "deploy-prod")]
+    #[case("code-review", "code-review")]
+    fn sanitize_name_cases(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(sanitize_name(input), expected);
     }
 
-    #[test]
-    fn substitute_arguments_replaces_placeholder() {
-        let body = "Deploy $ARGUMENTS to production.";
-        assert_eq!(
-            substitute_arguments(body, Some("patch")),
-            "Deploy patch to production."
-        );
+    #[rstest]
+    #[case(
+        "Hello world\nSecond line\n\nNew paragraph",
+        Some("Hello world Second line")
+    )]
+    #[case("", None)]
+    #[case("\n\n", None)]
+    #[case("Single line", Some("Single line"))]
+    fn first_paragraph_cases(#[case] input: &str, #[case] expected: Option<&str>) {
+        assert_eq!(first_paragraph(input), expected.map(String::from));
     }
 
-    #[test]
-    fn substitute_arguments_multiple_occurrences() {
-        let body = "Run $ARGUMENTS then verify $ARGUMENTS worked.";
-        assert_eq!(
-            substitute_arguments(body, Some("migrate")),
-            "Run migrate then verify migrate worked."
-        );
-    }
-
-    #[test]
-    fn substitute_arguments_appends_when_no_placeholder() {
-        let body = "Do the thing.";
-        let result = substitute_arguments(body, Some("extra context"));
-        assert!(result.starts_with("Do the thing."));
-        assert!(result.contains("ARGUMENTS: extra context"));
-    }
-
-    #[test]
-    fn substitute_arguments_no_args_no_placeholder() {
-        let body = "Just a body.";
-        assert_eq!(substitute_arguments(body, None), "Just a body.");
-    }
-
-    #[test]
-    fn substitute_arguments_no_args_clears_placeholder() {
-        let body = "Deploy $ARGUMENTS to production.";
-        assert_eq!(substitute_arguments(body, None), "Deploy  to production.");
+    #[rstest]
+    #[case::replaces_placeholder(
+        "Deploy $ARGUMENTS to production.",
+        Some("patch"),
+        "Deploy patch to production."
+    )]
+    #[case::multiple_occurrences(
+        "Run $ARGUMENTS then verify $ARGUMENTS worked.",
+        Some("migrate"),
+        "Run migrate then verify migrate worked."
+    )]
+    #[case::appends_when_no_placeholder(
+        "Do the thing.",
+        Some("extra context"),
+        "Do the thing.\n\nARGUMENTS: extra context"
+    )]
+    #[case::no_args_no_placeholder("Just a body.", None, "Just a body.")]
+    #[case::no_args_clears_placeholder(
+        "Deploy $ARGUMENTS to production.",
+        None,
+        "Deploy  to production."
+    )]
+    fn substitute_arguments_cases(
+        #[case] body: &str,
+        #[case] args: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(substitute_arguments(body, args), expected);
     }
 
     #[test]
     fn budget_packing() {
         let registry = SkillRegistry {
             skills: vec![
-                SkillDescriptor {
-                    name: "a".to_string(),
-                    description: "Short desc".to_string(),
-                    source_path: "a/SKILL.md".into(),
-                    disable_model_invocation: false,
-                },
-                SkillDescriptor {
-                    name: "b".to_string(),
-                    description: "Another desc".to_string(),
-                    source_path: "b/SKILL.md".into(),
-                    disable_model_invocation: false,
-                },
+                descriptor("a", "Short desc", false),
+                descriptor("b", "Another desc", false),
             ],
         };
 
@@ -338,18 +331,8 @@ mod tests {
     fn budget_overflow() {
         let registry = SkillRegistry {
             skills: vec![
-                SkillDescriptor {
-                    name: "first".to_string(),
-                    description: "x".repeat(200),
-                    source_path: "a/SKILL.md".into(),
-                    disable_model_invocation: false,
-                },
-                SkillDescriptor {
-                    name: "second".to_string(),
-                    description: "y".repeat(200),
-                    source_path: "b/SKILL.md".into(),
-                    disable_model_invocation: false,
-                },
+                descriptor("first", &"x".repeat(200), false),
+                descriptor("second", &"y".repeat(200), false),
             ],
         };
 
@@ -366,18 +349,8 @@ mod tests {
     fn disabled_skills_excluded_from_server() {
         let registry = SkillRegistry {
             skills: vec![
-                SkillDescriptor {
-                    name: "visible".to_string(),
-                    description: "I show up".to_string(),
-                    source_path: "a/SKILL.md".into(),
-                    disable_model_invocation: false,
-                },
-                SkillDescriptor {
-                    name: "hidden".to_string(),
-                    description: "I don't".to_string(),
-                    source_path: "b/SKILL.md".into(),
-                    disable_model_invocation: true,
-                },
+                descriptor("visible", "I show up", false),
+                descriptor("hidden", "I don't", true),
             ],
         };
 
@@ -395,22 +368,12 @@ mod tests {
         assert!(!empty.has_server_visible_skills());
 
         let all_disabled = SkillRegistry {
-            skills: vec![SkillDescriptor {
-                name: "hidden".to_string(),
-                description: String::new(),
-                source_path: "a/SKILL.md".into(),
-                disable_model_invocation: true,
-            }],
+            skills: vec![descriptor("hidden", "", true)],
         };
         assert!(!all_disabled.has_server_visible_skills());
 
         let some_visible = SkillRegistry {
-            skills: vec![SkillDescriptor {
-                name: "visible".to_string(),
-                description: String::new(),
-                source_path: "a/SKILL.md".into(),
-                disable_model_invocation: false,
-            }],
+            skills: vec![descriptor("visible", "", false)],
         };
         assert!(some_visible.has_server_visible_skills());
     }

@@ -8,19 +8,12 @@ use reqwest::{
     header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT},
 };
 
-use atuin_common::{
-    api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION},
-    record::{EncryptedData, HostId, Record, RecordIdx},
-    tls::ensure_crypto_provider,
-    url::UrlAppendExt,
+use atuin_common::url::UrlAppendExt;
+use atuin_domain::api::{
+    ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION, ChangePasswordRequest, ErrorResponse,
+    LoginRequest, LoginResponse, MeResponse, RegisterResponse,
 };
-use atuin_common::{
-    api::{
-        ChangePasswordRequest, ErrorResponse, LoginRequest, LoginResponse, MeResponse,
-        RegisterResponse,
-    },
-    record::RecordStatus,
-};
+use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 
 use semver::Version;
 
@@ -112,7 +105,6 @@ pub async fn register(
     password: &str,
     extra_headers: &HashMap<String, String>,
 ) -> Result<RegisterResponse> {
-    ensure_crypto_provider();
     let mut map = HashMap::new();
     map.insert("username", username);
     map.insert("email", email);
@@ -148,7 +140,6 @@ pub async fn login(
     req: LoginRequest,
     extra_headers: &HashMap<String, String>,
 ) -> Result<LoginResponse> {
-    ensure_crypto_provider();
     let url = address.append(["login"])?;
     let client = client_builder(extra_headers).build()?;
 
@@ -168,9 +159,8 @@ pub async fn login(
 
 #[cfg(feature = "check-update")]
 pub async fn latest_version() -> Result<Version> {
-    use atuin_common::api::IndexResponse;
+    use atuin_domain::api::IndexResponse;
 
-    ensure_crypto_provider();
     let url = crate::settings::DEFAULT_SYNC_URL.clone();
     let client = reqwest::Client::new();
 
@@ -258,7 +248,6 @@ impl<'a> Client<'a> {
         timeout: u64,
         extra_headers: &HashMap<String, String>,
     ) -> Result<Self> {
-        ensure_crypto_provider();
         let mut headers = extra_headers_map(extra_headers)?;
         headers.insert(AUTHORIZATION, auth.to_header_value().parse()?);
         headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
@@ -395,16 +384,22 @@ impl<'a> Client<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::*;
 
-    #[test]
-    fn extra_headers_map_parses_headers() {
+    #[fixture]
+    fn extra_headers() -> HashMap<String, String> {
         let mut extra = HashMap::new();
         extra.insert("X-Auth-Token".to_string(), "secret".to_string());
-        let headers = extra_headers_map(&extra).unwrap();
+        extra
+    }
+
+    #[rstest]
+    fn extra_headers_map_parses_headers(extra_headers: HashMap<String, String>) {
+        let headers = extra_headers_map(&extra_headers).unwrap();
         assert_eq!(headers.get("x-auth-token").unwrap(), "secret");
     }
 
-    #[test]
+    #[rstest]
     fn atuin_headers_override_extra_headers() {
         let mut extra = HashMap::new();
         extra.insert("Authorization".to_string(), "Token user-value".to_string());
@@ -416,7 +411,7 @@ mod tests {
         assert_eq!(headers.get_all(AUTHORIZATION).iter().count(), 1);
     }
 
-    #[test]
+    #[rstest]
     fn extra_headers_map_rejects_invalid_names() {
         let mut extra = HashMap::new();
         extra.insert("bad header".to_string(), "value".to_string());
@@ -433,8 +428,11 @@ mod tests {
         sock.write_all(response.as_bytes()).await.unwrap();
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn cross_origin_redirects_refused_with_extra_headers() {
+    async fn cross_origin_redirects_refused_with_extra_headers(
+        extra_headers: HashMap<String, String>,
+    ) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
 
@@ -450,11 +448,7 @@ mod tests {
             .await;
         });
 
-        let mut extra = HashMap::new();
-        extra.insert("X-Auth-Token".to_string(), "secret".to_string());
-
-        ensure_crypto_provider();
-        let client = client_builder(&extra).build().unwrap();
+        let client = client_builder(&extra_headers).build().unwrap();
         let err = client
             .get(format!("http://127.0.0.1:{port}/"))
             .send()
@@ -467,8 +461,11 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn same_origin_redirects_followed_with_extra_headers() {
+    async fn same_origin_redirects_followed_with_extra_headers(
+        extra_headers: HashMap<String, String>,
+    ) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
 
@@ -487,11 +484,7 @@ mod tests {
             .await;
         });
 
-        let mut extra = HashMap::new();
-        extra.insert("X-Auth-Token".to_string(), "secret".to_string());
-
-        ensure_crypto_provider();
-        let client = client_builder(&extra).build().unwrap();
+        let client = client_builder(&extra_headers).build().unwrap();
         let resp = client
             .get(format!("http://127.0.0.1:{port}/"))
             .send()

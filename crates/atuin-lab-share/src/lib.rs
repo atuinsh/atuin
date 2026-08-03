@@ -668,11 +668,6 @@ async fn connect_to_hub(
     // transport -> here: the first join URL, delivered exactly once.
     let (url_tx, url_rx) = tokio::sync::oneshot::channel::<String>();
 
-    // Install the rustls provider before the transport connects (process-global,
-    // idempotent). The transport used to do this on its own thread; it now runs
-    // on our runtime, so we do it here.
-    atuin_common::tls::ensure_crypto_provider();
-
     eprintln!("Connecting to {} ...", opts.hub_url);
     let transport = tokio::spawn(
         transport::Transport::new(

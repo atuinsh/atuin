@@ -5,7 +5,6 @@ use tokio::{fs::File, io::AsyncWriteExt};
 use atuin_client::{
     encryption::{Key, decode_key, encode_key, generate_encoded_key, load_key},
     record::sqlite_store::SqliteStore,
-    record::store::Store,
     settings::Settings,
 };
 

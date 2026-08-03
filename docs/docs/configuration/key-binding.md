@@ -1,5 +1,14 @@
 # Key Binding
 
+!!! note
+
+    The snippets on this page must go in your shell's startup file (`~/.bashrc`,
+    `~/.zshrc`, `~/.config/fish/config.fish`, etc.) — the same file where you run
+    `atuin init`. Custom bindings that set `ATUIN_NOBIND` and bind keys afterwards
+    only take effect if they run at shell startup. Running them once in an
+    interactive session, or placing them in a file your shell does not source, has
+    no lasting effect.
+
 ## Custom up arrow filter mode
 
 It can be useful to use a different filter or search mode on the up arrow. For example, you could use ctrl-r for searching globally, but the up arrow for searching history from the current directory only.
@@ -216,8 +225,8 @@ $env.config = (
 | Ctrl + f / →                              | Move the cursor to the right                                                  |
 | Ctrl + a / Home                           | Move the cursor to the start of the line                                      |
 | Ctrl + e / End                            | Move the cursor to the end of the line                                        |
-| Ctrl + Backspace / Ctrl + Alt + Backspace | Remove the previous word / remove the word just before the cursor             |
-| Ctrl + Delete / Ctrl + Alt + Delete       | Remove the next word or the word just after the cursor                        |
+| Ctrl + Backspace / Alt + Backspace        | Remove the previous word / remove the word just before the cursor             |
+| Ctrl + Delete / Alt + d                   | Remove the next word or the word just after the cursor                        |
 | Ctrl + w                                  | Remove the word before the cursor even if it spans across the word boundaries |
 | Ctrl + u                                  | Clear the current line                                                        |
 | Ctrl + n / Ctrl + j / ↓                   | Select the next item on the list                                              |

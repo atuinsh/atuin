@@ -23,6 +23,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -76,14 +80,14 @@ jobs:
         run: cross build -p atuin-common --locked --target ${{ matrix.target }}
 
       - name: Run cross build client
-        run: cross build -p atuin-client --locked --target ${{ matrix.target }}
+        run: cross build -p atuin-client --locked --target ${{ matrix.target }} --features vendored-tls
 
       - name: Run cross build server
-        run: cross build -p atuin-server --locked --target ${{ matrix.target }}
+        run: cross build -p atuin-server --locked --target ${{ matrix.target }} --features vendored-tls
 
       - name: Run cross build main
         run: |
-          cross build --all --locked --target ${{ matrix.target }}
+          cross build --all --locked --target ${{ matrix.target }} --features vendored-tls
 
   unit-test:
     strategy:
@@ -93,6 +97,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
@@ -123,6 +131,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
@@ -168,6 +180,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -197,6 +213,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
       - name: Install latest rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -214,6 +234,37 @@ jobs:
       - name: Run clippy
         run: cargo clippy -- -D warnings -D clippy::redundant_clone
 
+      - name: Run clippy (tests)
+        run: cargo clippy --tests -- -D warnings -D clippy::redundant_clone
+
+  docs:
+    runs-on: depot-ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install OpenSSL dev libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-doc-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run cargo doc
+        run: cargo doc --document-private-items --no-deps --workspace
+        env:
+          RUSTDOCFLAGS: -D warnings
+
   format:
     runs-on: depot-ubuntu-24.04
 
@@ -228,3 +279,41 @@ jobs:
 
       - name: Format
         run: cargo fmt -- --check
+
+  deny:
+    runs-on: depot-ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  package:
+    runs-on: depot-ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-package-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build packaged tarballs
+        run: |
+          rm -rf ~/.cargo/registry/{cache,src}/*/atuin*
+          rm -rf target/package
+          rm -rf target/{debug,release}/libatuin*.rlib
+          rm -rf target/{debug,release}/deps/libatuin*
+          rm -rf target/{debug,release}/.fingerprint/atuin*
+          cargo package --workspace

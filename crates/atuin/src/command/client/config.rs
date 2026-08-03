@@ -144,13 +144,20 @@ pub enum ValueType {
 
 impl SetCmd {
     pub async fn run(self, _settings: &Settings) -> Result<()> {
+        let config_file = Settings::get_config_path()?;
+        let config_str = tokio::fs::read_to_string(&config_file).await?;
+
+        let updated = self.get_updated_config(&config_str)?;
+        tokio::fs::write(&config_file, &updated).await?;
+        Ok(())
+    }
+
+    fn get_updated_config(&self, config_str: &str) -> Result<String> {
         let key = self.key.trim();
         if key.is_empty() || key.contains(char::is_whitespace) {
             eyre::bail!("Config key must be non-empty and must not contain whitespace");
         }
 
-        let config_file = Settings::get_config_path()?;
-        let config_str = tokio::fs::read_to_string(&config_file).await?;
         let mut doc: DocumentMut = config_str.parse()?;
 
         // When using auto type detection, try to match the existing value's type
@@ -159,9 +166,15 @@ impl SetCmd {
         let value = self.parse_value(existing_type.as_ref())?;
         set_deep_key(&mut doc, key, value)?;
 
-        tokio::fs::write(&config_file, doc.to_string()).await?;
-
-        Ok(())
+        let updated = doc.to_string();
+        Settings::validate_str(&updated).map_err(|e| {
+            eyre::eyre!(
+                "cannot update config: setting '{key}' to '{}' would make your configuration \
+                invalid\n\n{e}",
+                self.value,
+            )
+        })?;
+        Ok(updated)
     }
 
     fn parse_value(&self, existing_type: Option<&ValueType>) -> Result<Value> {
@@ -346,7 +359,206 @@ fn set_deep_key(doc: &mut DocumentMut, key: &str, value: Value) -> Result<()> {
         );
     }
 
-    current.insert(last, Item::Value(value));
+    if let Some(item) = current.get_mut(last) {
+        let mut value = value;
+        if let Some(old_value) = item.as_value_mut() {
+            // Preserve any commands attached to the old value.
+            std::mem::swap(value.decor_mut(), old_value.decor_mut());
+        }
+        *item = Item::Value(value);
+    } else {
+        current.insert(last, Item::Value(value));
+    }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    /// Call [`set_deep_key`] and reserialize.
+    fn set(input: &str, key: &str, value: Value) -> String {
+        let mut doc: DocumentMut = input.parse().expect("test input should parse as TOML");
+        set_deep_key(&mut doc, key, value).expect("set_deep_key should succeed");
+        doc.to_string()
+    }
+
+    #[rstest]
+    #[case::comment_above_the_key(
+        "[sync]\n# how often to sync\nfrequency = \"5m\"\nrecords = true\n",
+        "sync.frequency",
+        Value::from("10m"),
+        "[sync]\n# how often to sync\nfrequency = \"10m\"\nrecords = true\n"
+    )]
+    #[case::multiline_comment_and_blank_lines_above_the_key(
+        "# top of file\n\n[sync]\n\n# line one\n# line two\nfrequency = \"5m\"\nrecords = true\n",
+        "sync.frequency",
+        Value::from("10m"),
+        "# top of file\n\n[sync]\n\n# line one\n# line two\nfrequency = \"10m\"\nrecords = true\n"
+    )]
+    #[case::comment_above_a_root_level_key(
+        "# why we sync\nauto_sync = true\n\n[sync]\nrecords = true\n",
+        "auto_sync",
+        Value::from(false),
+        "# why we sync\nauto_sync = false\n\n[sync]\nrecords = true\n"
+    )]
+    #[case::trailing_comment_on_the_value(
+        "[sync]\nfrequency = \"5m\" # sync interval\n",
+        "sync.frequency",
+        Value::from("10m"),
+        "[sync]\nfrequency = \"10m\" # sync interval\n"
+    )]
+    #[case::compact_spacing_around_equals(
+        "[sync]\nfrequency=\"5m\"\n",
+        "sync.frequency",
+        Value::from("10m"),
+        "[sync]\nfrequency=\"10m\"\n"
+    )]
+    #[case::comments_on_a_dotted_key(
+        "# note about records\nsync.records = true # enabled\n",
+        "sync.records",
+        Value::from(false),
+        "# note about records\nsync.records = false # enabled\n"
+    )]
+    #[case::comments_around_an_inline_table(
+        "# above\nkeys = { scroll_exits = true } # after\n",
+        "keys.scroll_exits",
+        Value::from(false),
+        "# above\nkeys = { scroll_exits = false } # after\n"
+    )]
+    fn set_preserves_formatting_when_overwriting(
+        #[case] input: &str,
+        #[case] key: &str,
+        #[case] value: Value,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(set(input, key, value), expected);
+    }
+
+    #[rstest]
+    #[case::appends_without_disturbing_an_existing_comment(
+        "[sync]\n# existing note\nrecords = true\n",
+        "sync.frequency",
+        Value::from("10m"),
+        "[sync]\n# existing note\nrecords = true\nfrequency = \"10m\"\n"
+    )]
+    #[case::creates_a_missing_table(
+        "[sync]\nrecords = true\n",
+        "keys.scroll_exits",
+        Value::from(true),
+        "[sync]\nrecords = true\n\n[keys]\nscroll_exits = true\n"
+    )]
+    #[case::lands_above_a_commented_out_block_in_a_table(
+        "[sync]\n## how often\n# frequency = \"5m\"\n",
+        "sync.frequency",
+        Value::from("10m"),
+        "[sync]\nfrequency = \"10m\"\n## how often\n# frequency = \"5m\"\n"
+    )]
+    #[case::root_key_leaves_commented_out_settings_alone(
+        "# atuin config\n\n## enable sync\n# auto_sync = true\n\nenter_accept = true\n",
+        "auto_sync",
+        Value::from(false),
+        "# atuin config\n\n## enable sync\n# auto_sync = true\n\nenter_accept = true\nauto_sync = false\n"
+    )]
+    fn set_adds_a_missing_key_without_touching_existing_content(
+        #[case] input: &str,
+        #[case] key: &str,
+        #[case] value: Value,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(set(input, key, value), expected);
+    }
+
+    #[test]
+    fn setting_the_same_key_twice_keeps_its_comment() {
+        let once = set(
+            "[sync]\n# how often to sync\nfrequency = \"5m\" # unit is flexible\n",
+            "sync.frequency",
+            Value::from("10m"),
+        );
+        let twice = set(&once, "sync.frequency", Value::from("30m"));
+        assert_eq!(
+            twice,
+            "[sync]\n# how often to sync\nfrequency = \"30m\" # unit is flexible\n"
+        );
+    }
+
+    /// Helper for building a [`SetCmd`].
+    fn set_cmd(key: &str, value: &str) -> SetCmd {
+        SetCmd {
+            key: key.to_string(),
+            value: value.to_string(),
+            the_type: ValueType::Auto,
+        }
+    }
+
+    #[rstest]
+    #[case::a_valid_value(
+        "search_mode = \"fuzzy\"\n",
+        "search_mode",
+        "prefix",
+        "search_mode = \"prefix\"\n"
+    )]
+    #[case::replacing_an_invalid_value_with_a_valid_one(
+        "search_mode = \"invalid\"\n",
+        "search_mode",
+        "fuzzy",
+        "search_mode = \"fuzzy\"\n"
+    )]
+    #[case::preserving_comments_and_unrelated_keys(
+        "# my config\nauto_sync = true\n\n[daemon]\nenabled = false\n",
+        "daemon.enabled",
+        "true",
+        "# my config\nauto_sync = true\n\n[daemon]\nenabled = true\n"
+    )]
+    fn set_writes(
+        #[case] input: &str,
+        #[case] key: &str,
+        #[case] value: &str,
+        #[case] expected: &str,
+    ) {
+        let updated = set_cmd(key, value)
+            .get_updated_config(input)
+            .expect("the update should be accepted");
+
+        assert_eq!(updated, expected);
+    }
+
+    /// The error should always mention every listed fragment.
+    #[rstest]
+    #[case::an_invalid_value(
+        "search_mode = \"fuzzy\"\n",
+        "search_mode",
+        "invalid",
+        &["search_mode", "invalid"]
+    )]
+    // auto_sync is absent, so type detection falls back to string
+    #[case::a_value_of_the_wrong_type_for_a_new_key("", "auto_sync", "banana", &["auto_sync"])]
+    #[case::another_key_in_the_file_being_invalid(
+        "style = \"nope\"\n",
+        "auto_sync",
+        "false",
+        &["style"]
+    )]
+    #[case::an_empty_key("", "  ", "fuzzy", &["non-empty"])]
+    fn set_rejects(
+        #[case] input: &str,
+        #[case] key: &str,
+        #[case] value: &str,
+        #[case] expected_err: &[&str],
+    ) {
+        let err = set_cmd(key, value)
+            .get_updated_config(input)
+            .expect_err("the update should be rejected")
+            .to_string();
+
+        for fragment in expected_err {
+            assert!(
+                err.contains(fragment),
+                "error should mention `{fragment}`, got: {err}"
+            );
+        }
+    }
 }

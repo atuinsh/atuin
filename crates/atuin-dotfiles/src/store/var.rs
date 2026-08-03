@@ -5,11 +5,10 @@
 use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_common::record::{DecryptedData, Host, HostId};
+use atuin_domain::record::{DecryptedData, Host, HostId};
 use eyre::{Result, bail, ensure, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;
-use atuin_client::record::store::Store;
 
 use crate::shell::Var;
 
@@ -286,7 +285,7 @@ impl VarStore {
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
-        let record = atuin_common::record::Record::builder()
+        let record = atuin_domain::record::Record::builder()
             .host(Host::new(self.host_id))
             .version(DOTFILES_VAR_VERSION.to_string())
             .tag(DOTFILES_VAR_TAG.to_string())
@@ -322,7 +321,7 @@ impl VarStore {
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
-        let record = atuin_common::record::Record::builder()
+        let record = atuin_domain::record::Record::builder()
             .host(Host::new(self.host_id))
             .version(DOTFILES_VAR_VERSION.to_string())
             .tag(DOTFILES_VAR_TAG.to_string())
@@ -399,7 +398,18 @@ mod tests {
 
     use super::{DOTFILES_VAR_VERSION, VarRecord, VarStore};
     use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
-    use rstest::rstest;
+    use rstest::*;
+
+    #[fixture]
+    async fn var_store() -> VarStore {
+        let store = SqliteStore::new(":memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
+        let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
+
+        VarStore::new(store, host_id, key)
+    }
 
     #[test]
     fn encode_decode() {
@@ -465,15 +475,10 @@ mod tests {
         assert_eq!(VarStore::escape_xonsh_value(input), expected);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn build_vars() {
-        let store = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
-        let host_id = atuin_common::record::HostId(atuin_common::utils::uuid_v7());
-
-        let env = VarStore::new(store, host_id, key);
+    async fn build_vars(#[future] var_store: VarStore) {
+        let env = var_store.await;
 
         env.set("BEEP", "boop", false).await.unwrap();
         env.set("HOMEBREW_NO_AUTO_UPDATE", "1", true).await.unwrap();
@@ -503,15 +508,10 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_var_generation_with_spaces() {
-        let store = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
-        let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
-        let host_id = atuin_common::record::HostId(atuin_common::utils::uuid_v7());
-
-        let env = VarStore::new(store, host_id, key);
+    async fn test_var_generation_with_spaces(#[future] var_store: VarStore) {
+        let env = var_store.await;
 
         // Test the exact scenario from the bug report
         env.set("FOO", "bar baz", true).await.unwrap();

@@ -174,6 +174,7 @@ async fn run_command(shell: &str, body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn parse_inline_command() {
@@ -187,40 +188,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parse_inline_double_backtick() {
-        let source = r#"Host: !``echo `hostname` ``"#;
-        let cmds = parse_commands(source);
-        assert_eq!(cmds.len(), 1);
-        assert_eq!(cmds[0].body, "echo `hostname` ");
-    }
-
-    #[test]
-    fn parse_block_command() {
-        let source = "Before\n\n```!\necho hello\npython3 --version\n```\n\nAfter";
-        let cmds = parse_commands(source);
-        assert_eq!(cmds.len(), 1);
-        assert_eq!(cmds[0].body, "echo hello\npython3 --version");
-    }
-
-    #[test]
-    fn regular_code_not_matched() {
-        let source = "Normal `code span` and ```bash\necho hi\n```";
-        let cmds = parse_commands(source);
-        assert_eq!(cmds.len(), 0);
-    }
-
-    #[test]
-    fn bang_not_adjacent_not_matched() {
-        let source = "Exclaim! Then `code` here.";
-        let cmds = parse_commands(source);
-        // The `!` and backtick are separated by " Then ", not adjacent.
-        assert_eq!(cmds.len(), 0);
-    }
-
-    #[test]
-    fn mixed_content() {
-        let source = "\
+    #[rstest]
+    #[case::double_backtick(r#"Host: !``echo `hostname` ``"#, &["echo `hostname` "])]
+    #[case::block(
+        "Before\n\n```!\necho hello\npython3 --version\n```\n\nAfter",
+        &["echo hello\npython3 --version"]
+    )]
+    #[case::regular_ignored("Normal `code span` and ```bash\necho hi\n```", &[])]
+    #[case::bang_not_adjacent("Exclaim! Then `code` here.", &[])]
+    #[case::mixed(
+        "\
 # Project Context
 
 Branch: !`git branch --show-current`
@@ -235,32 +212,31 @@ echo $VIRTUAL_ENV
 echo not interpolated
 ```
 
-End.";
+End.",
+        &["git branch --show-current", "echo $VIRTUAL_ENV"]
+    )]
+    fn parse_commands_cases(#[case] source: &str, #[case] expected_bodies: &[&str]) {
         let cmds = parse_commands(source);
-        assert_eq!(cmds.len(), 2);
-        assert_eq!(cmds[0].body, "git branch --show-current");
-        assert_eq!(cmds[1].body, "echo $VIRTUAL_ENV");
+        assert_eq!(cmds.len(), expected_bodies.len());
+        for (cmd, b) in cmds.iter().zip(expected_bodies) {
+            assert_eq!(&cmd.body, b);
+        }
     }
 
+    #[rstest]
+    #[case::inline("Branch: !`echo main`", "Branch: main")]
+    #[case::block(
+        "Before\n\n```!\necho hello world\n```\n\nAfter",
+        "Before\n\nhello world\n\nAfter"
+    )]
+    #[case::preserves_plain(
+        "Just plain markdown with `code` and no bangs.",
+        "Just plain markdown with `code` and no bangs."
+    )]
+    #[case::multiple("A: !`echo one` B: !`echo two`", "A: one B: two")]
     #[tokio::test]
-    async fn interpolate_replaces_inline_command() {
-        let source = "Branch: !`echo main`";
-        let result = interpolate(source, "sh").await;
-        assert_eq!(result, "Branch: main");
-    }
-
-    #[tokio::test]
-    async fn interpolate_replaces_block_command() {
-        let source = "Before\n\n```!\necho hello world\n```\n\nAfter";
-        let result = interpolate(source, "sh").await;
-        assert_eq!(result, "Before\n\nhello world\n\nAfter");
-    }
-
-    #[tokio::test]
-    async fn interpolate_preserves_non_command_content() {
-        let source = "Just plain markdown with `code` and no bangs.";
-        let result = interpolate(source, "sh").await;
-        assert_eq!(result, source);
+    async fn interpolate_cases(#[case] source: &str, #[case] expected: &str) {
+        assert_eq!(interpolate(source, "sh").await, expected);
     }
 
     #[tokio::test]
@@ -268,12 +244,5 @@ End.";
         let source = "Result: !`exit 1`";
         let result = interpolate(source, "sh").await;
         assert!(result.starts_with("Result: [error:"));
-    }
-
-    #[tokio::test]
-    async fn interpolate_multiple_commands() {
-        let source = "A: !`echo one` B: !`echo two`";
-        let result = interpolate(source, "sh").await;
-        assert_eq!(result, "A: one B: two");
     }
 }

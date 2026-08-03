@@ -84,40 +84,25 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::wrap_text;
+    use rstest::rstest;
 
-    #[test]
-    fn wraps_long_text() {
-        let lines = wrap_text("the quick brown fox jumps over the lazy dog", 20);
+    #[rstest]
+    #[case::width_20(20)]
+    fn wraps_long_text(#[case] width: usize) {
+        let text = "the quick brown fox jumps over the lazy dog";
+        let lines = wrap_text(text, width);
         for line in &lines {
-            assert!(line.chars().count() <= 20, "line too long: {line:?}");
+            assert!(line.chars().count() <= width, "line too long: {line:?}");
         }
-        assert_eq!(
-            lines.join(" "),
-            "the quick brown fox jumps over the lazy dog"
-        );
+        assert_eq!(lines.join(" "), text);
     }
 
-    #[test]
-    fn preserves_explicit_newlines() {
-        let lines = wrap_text("first line\nsecond line", 80);
-        assert_eq!(lines, vec!["first line", "second line"]);
-    }
-
-    #[test]
-    fn handles_word_longer_than_width() {
-        let lines = wrap_text("short superlongword more", 5);
-        assert_eq!(lines, vec!["short", "superlongword", "more"]);
-    }
-
-    #[test]
-    fn preserves_blank_lines_between_paragraphs() {
-        let lines = wrap_text("first paragraph\n\nsecond paragraph", 80);
-        assert_eq!(lines, vec!["first paragraph", "", "second paragraph"]);
-    }
-
-    #[test]
-    fn trims_leading_and_trailing_blank_lines() {
-        let lines = wrap_text("\n\nbody\n\n", 80);
-        assert_eq!(lines, vec!["body"]);
+    #[rstest]
+    #[case::preserves_explicit_newlines("first line\nsecond line", 80, vec!["first line", "second line"])]
+    #[case::word_longer_than_width("short superlongword more", 5, vec!["short", "superlongword", "more"])]
+    #[case::blank_lines_between_paragraphs("first paragraph\n\nsecond paragraph", 80, vec!["first paragraph", "", "second paragraph"])]
+    #[case::trims_leading_and_trailing_blank_lines("\n\nbody\n\n", 80, vec!["body"])]
+    fn wraps_text(#[case] input: &str, #[case] width: usize, #[case] expected: Vec<&str>) {
+        assert_eq!(wrap_text(input, width), expected);
     }
 }

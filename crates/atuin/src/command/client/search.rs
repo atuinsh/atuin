@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{IsTerminal as _, Write, stderr, stdout};
 
+use atuin_common::filter::OrFilter;
 use atuin_common::{string::EscapeNonPrintablePosixExt as _, utils};
 use clap::Parser;
 use eyre::Result;
@@ -9,9 +10,9 @@ use atuin_client::{
     database::Database,
     database::{OptFilters, current_context},
     encryption,
-    history::{History, store::HistoryStore},
+    history::{AuthorPattern, History, store::HistoryStore},
     record::sqlite_store::SqliteStore,
-    settings::{FilterMode, KeymapMode, SearchMode, Settings},
+    settings::{FilterMode, KeymapMode, RequestedSearchMode, Settings},
     theme::Theme,
 };
 
@@ -71,8 +72,12 @@ pub struct Cmd {
     filter_mode: Option<FilterMode>,
 
     /// Allow overriding search mode over config
+    ///
+    /// Note: for non-interactive searches, "daemon-fuzzy" behaves like "fuzzy". "skim" used to
+    /// behave like "fuzzy" in non-interactive searches too; it has since been removed but is still
+    /// accepted here as an alias of "fuzzy".
     #[arg(long)]
-    search_mode: Option<SearchMode>,
+    search_mode: Option<RequestedSearchMode>,
 
     /// Marker argument used to inform atuin that it was invoked from a shell up-key binding (hidden from help to avoid confusion)
     #[arg(long, hide = true)]
@@ -138,7 +143,7 @@ pub struct Cmd {
     ///
     /// Can be specified multiple times.
     #[arg(long)]
-    author: Vec<String>,
+    author: Vec<AuthorPattern>,
 
     /// Include duplicate commands in the output (non-interactive only)
     #[arg(long)]
@@ -215,7 +220,7 @@ impl Cmd {
         }
 
         if let Some(search_mode) = self.search_mode {
-            settings.search_mode = search_mode;
+            settings.requested_search_mode = search_mode;
         }
         if let Some(filter_mode) = self.filter_mode {
             settings.filter_mode = Some(filter_mode);
@@ -256,6 +261,10 @@ impl Cmd {
                 eprintln!("{item}");
             }
         } else {
+            // An empty `--author` / `--shell` list means no filtering on that field.
+            let authors = OrFilter::from_list(self.author).unwrap_or_default();
+            let shells = OrFilter::from_list(self.shell).unwrap_or_default();
+
             let opt_filter = OptFilters {
                 exit: self.exit,
                 exclude_exit: self.exclude_exit,
@@ -268,8 +277,8 @@ impl Cmd {
                 offset: self.offset,
                 reverse: self.reverse,
                 include_duplicates: self.include_duplicates,
-                authors: &self.author,
-                shells: &self.shell,
+                authors: authors.as_slice_filter(),
+                shells: shells.as_slice_filter(),
             };
 
             let mut entries = run_non_interactive(settings, opt_filter, &query, &db).await?;
@@ -341,7 +350,7 @@ async fn run_non_interactive(
 
     let results = db
         .search(
-            settings.search_mode,
+            settings.search_mode().closest_db_mode(),
             filter_mode,
             &context,
             query.join(" ").as_str(),
@@ -354,31 +363,53 @@ async fn run_non_interactive(
 
 #[cfg(test)]
 mod tests {
-    use super::Cmd;
+    use super::{AuthorPattern, Cmd};
     use clap::Parser;
+    use rstest::rstest;
 
-    #[test]
-    fn search_for_triple_dash() {
-        // Issue #3028: searching for `---` should not be treated as a CLI flag
-        let cmd = Cmd::try_parse_from(["search", "---"]);
-        assert!(cmd.is_ok(), "Failed to parse '---' as a query: {cmd:?}");
-        let cmd = cmd.unwrap();
-        assert_eq!(cmd.query, vec!["---".to_string()]);
+    #[rstest]
+    // triple_dash: Issue #3028 - searching for `---` should not be treated as a CLI flag
+    #[case::triple_dash(vec!["search", "---"], vec!["---"])]
+    // double_dash_value: searching for strings starting with -- should also work
+    #[case::double_dash_value(vec!["search", "--", "--foo"], vec!["--foo"])]
+    fn parses_query_args(#[case] args: Vec<&str>, #[case] expected: Vec<&str>) {
+        let cmd = Cmd::try_parse_from(args).expect("should parse as query");
+        assert_eq!(cmd.query, expected);
     }
 
-    #[test]
-    fn search_for_double_dash_value() {
-        // Searching for strings starting with -- should also work
-        let cmd = Cmd::try_parse_from(["search", "--", "--foo"]);
-        assert!(cmd.is_ok());
-        let cmd = cmd.unwrap();
-        assert_eq!(cmd.query, vec!["--foo".to_string()]);
-    }
-
-    #[test]
+    #[rstest]
     fn search_author_cli_flag() {
         let cmd =
             Cmd::try_parse_from(["search", "--author", "codex", "--author", "ellie"]).unwrap();
-        assert_eq!(cmd.author, vec!["codex".to_string(), "ellie".to_string()]);
+        assert_eq!(
+            cmd.author,
+            vec![
+                AuthorPattern::Name("codex".to_owned()),
+                AuthorPattern::Name("ellie".to_owned()),
+            ],
+        );
+    }
+
+    #[test]
+    fn search_author_cli_flag_parses_the_special_values() {
+        let cmd = Cmd::try_parse_from([
+            "search",
+            "--author",
+            "$all-user",
+            "--author",
+            "$all-agent",
+            "--author",
+            "$all-users",
+        ])
+        .unwrap();
+        assert_eq!(
+            cmd.author,
+            vec![
+                AuthorPattern::AllUser,
+                AuthorPattern::AllAgent,
+                // Not a special value; a typo'd one is an author name, as it was before.
+                AuthorPattern::Name("$all-users".to_owned()),
+            ],
+        );
     }
 }

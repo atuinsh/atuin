@@ -1,5 +1,6 @@
 use atuin_client::database::Context;
 use atuin_client::settings::{FilterMode, Settings};
+use atuin_common::filter::{self, OrFilter};
 use eyre::{Context as EyreContext, Result};
 #[cfg(windows)]
 use tokio::net::TcpStream;
@@ -172,7 +173,7 @@ pub struct SearchParams {
     pub query_id: u64,
     pub filter_mode: FilterMode,
     pub context: Option<Context>,
-    pub shells: Vec<String>,
+    pub shells: OrFilter<Vec<String>>,
 }
 
 impl From<SearchParams> for SearchRequest {
@@ -182,7 +183,11 @@ impl From<SearchParams> for SearchRequest {
             query_id: params.query_id,
             filter_mode: RpcFilterMode::from(params.filter_mode).into(),
             context: params.context.map(RpcSearchContext::from),
-            shells: params.shells,
+            // An empty list in `SearchRequest::shells` means "all".
+            shells: match params.shells.into_list() {
+                filter::Items::All => vec![],
+                filter::Items::Some(vec) => vec,
+            },
         }
     }
 }

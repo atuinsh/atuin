@@ -14,11 +14,11 @@ pub struct DurationOverflow {
     pub nsecs: u64,
 }
 
-/// Extensions to the Duration classes.
+/// Extensions to the `Duration` types.
 pub trait DurationExt<D> {
     /// Create a `Duration` from whole seconds plus a nanosecond offset.
     ///
-    /// [`Duration::new`], but returns [`DurationOverflow`] instead of panicking on overflow.
+    /// Like `Duration::new`, but returns [`DurationOverflow`] instead of panicking on overflow.
     fn try_new(secs: u64, nsecs: u64) -> Result<D, DurationOverflow>;
 
     /// Create a `Duration` from a count of nanoseconds, clamping negatives to zero.

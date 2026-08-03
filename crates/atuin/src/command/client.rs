@@ -32,6 +32,8 @@ mod search;
 mod setup;
 mod stats;
 mod store;
+#[cfg(feature = "self-update")]
+mod update;
 mod wrapped;
 
 #[derive(Subcommand, Debug)]
@@ -93,6 +95,11 @@ pub enum Cmd {
     /// Run the doctor to check for common issues
     #[command()]
     Doctor,
+
+    /// Update atuin to the latest version on your release channel
+    #[cfg(feature = "self-update")]
+    #[command()]
+    Update(update::Cmd),
 
     #[command()]
     Wrapped { year: Option<i32> },
@@ -188,6 +195,8 @@ impl Cmd {
             Self::Hook(hook) => return hook.run(&settings).await,
             Self::Init(init) => return init.run(&settings).await,
             Self::Doctor => return doctor::run(&settings).await,
+            #[cfg(feature = "self-update")]
+            Self::Update(update) => return update.run(&settings).await,
             Self::Config(config) => return config.run(&settings).await,
             Self::Lab(cmd) => return cmd.run(&settings).await,
             _ => {}
@@ -245,6 +254,9 @@ impl Cmd {
             | Self::Lab(_) => {
                 unreachable!()
             }
+
+            #[cfg(feature = "self-update")]
+            Self::Update(_) => unreachable!(),
 
             #[cfg(feature = "ai")]
             Self::Ai(cli) => atuin_ai::commands::run(cli, &settings).await,

@@ -5,8 +5,9 @@ use std::{
     time::Duration,
 };
 
-use crate::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNOWN_AGENTS};
+use crate::history::{AuthorPattern, KNOWN_AGENTS};
 use async_trait::async_trait;
+use atuin_common::filter::{self, OrFilter};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils;
 use fs_err as fs;
@@ -42,7 +43,7 @@ pub struct Context {
     pub git_root: Option<PathBuf>,
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct OptFilters<'a> {
     pub exit: Option<i64>,
     pub exclude_exit: Option<i64>,
@@ -58,11 +59,10 @@ pub struct OptFilters<'a> {
     pub offset: Option<i64>,
     pub reverse: bool,
     pub include_duplicates: bool,
-    /// Author filter. Supports special values `$all-user` and `$all-agent`.
-    pub authors: &'a [String],
-    /// Shell filter. If empty, show commands from all shells. Empty string includes commands that
-    /// have no recorded shell.
-    pub shells: &'a [String],
+    /// Author filter.
+    pub authors: OrFilter<&'a [AuthorPattern]>,
+    /// Shell filter. The empty string matches commands that have no recorded shell.
+    pub shells: OrFilter<&'a [String]>,
 }
 
 /// Build a query [`Context`] without requiring a live shell session.
@@ -108,11 +108,14 @@ impl Context {
     }
 }
 
-/// Each entry is OR'd: `$all-user` → NOT IN agents, `$all-agent` → IN agents, literal → exact match.
-fn apply_author_filter<A>(sql: &mut SqlBuilder, authors: A)
-where
-    A: IntoIterator<Item: AsRef<str>>,
-{
+/// Each entry is OR'd: [`AuthorPattern::AllUser`] → NOT IN agents, [`AuthorPattern::AllAgent`] →
+/// IN agents, [`AuthorPattern::Name`] → exact match.
+fn apply_author_filter(sql: &mut SqlBuilder, authors: OrFilter<&[AuthorPattern]>) {
+    let authors = match authors.items() {
+        filter::Items::All => return,
+        filter::Items::Some(a) => a,
+    };
+
     let author_expr = "CASE \
         WHEN author IS NULL OR trim(author) = '' THEN \
             CASE \
@@ -125,44 +128,44 @@ where
     let mut agent_list: Option<String> = None;
     let get_agent_list = || KNOWN_AGENTS.iter().map(quote).join(", ");
 
-    let mut conditions = authors.into_iter().map(|author| match author.as_ref() {
-        AUTHOR_FILTER_ALL_USER => {
+    let mut conditions = authors.iter().map(|author| match author {
+        AuthorPattern::AllUser => {
             format!(
                 "{author_expr} NOT IN ({})",
                 agent_list.get_or_insert_with(get_agent_list)
             )
         }
-        AUTHOR_FILTER_ALL_AGENT => {
+        AuthorPattern::AllAgent => {
             format!(
                 "{author_expr} IN ({})",
                 agent_list.get_or_insert_with(get_agent_list)
             )
         }
-        literal => {
-            format!("{author_expr} = {}", quote(literal))
+        AuthorPattern::Name(name) => {
+            format!("{author_expr} = {}", quote(name))
         }
     });
 
-    let conditions_expr = conditions.join(" OR ");
-    if !conditions_expr.is_empty() {
-        sql.and_where(format!("({})", conditions_expr));
-    }
+    // Note: `conditions` cannot be empty; `OrFilter::items` is always non-empty.
+    sql.and_where(format!("({})", conditions.join(" OR ")));
 }
 
-fn apply_shell_filter<S>(sql: &mut SqlBuilder, shells: S)
-where
-    S: IntoIterator<Item: AsRef<str>>,
-{
+fn apply_shell_filter(sql: &mut SqlBuilder, shells: OrFilter<&[String]>) {
+    let shells = match shells.items() {
+        filter::Items::All => return,
+        filter::Items::Some(s) => s,
+    };
+
     let mut include_null = false;
-    let nonempty_shells = shells.into_iter().filter(|s| {
-        let is_empty = s.as_ref().is_empty();
+    let nonempty_shells = shells.iter().filter(|s| {
+        let is_empty = s.is_empty();
         if is_empty {
             include_null = true;
         }
         !is_empty
     });
 
-    let shell_list = nonempty_shells.map(|s| quote(s.as_ref())).join(", ");
+    let shell_list = nonempty_shells.map(quote).join(", ");
     let mut cond = (!shell_list.is_empty()).then(|| format!("shell in ({shell_list})"));
 
     if include_null {
@@ -170,9 +173,9 @@ where
         // them here.
         cond = Some(cond.map_or_else(String::new, |s| s + " OR ") + "shell IS NULL");
     }
-    if let Some(cond) = cond {
-        sql.and_where(cond);
-    }
+
+    // `OrFilter::items` is always non-empty.
+    sql.and_where(cond.expect("nonempty list of shells must result in at least one condition"));
 }
 
 fn get_session_start_time(session_id: &str) -> Option<i64> {
@@ -183,6 +186,43 @@ fn get_session_start_time(session_id: &str) -> Option<i64> {
         return Some(seconds as i64 * 1_000_000_000 + nanos as i64);
     }
     None
+}
+
+/// Controls the type of search [`Database::search`] performs.
+///
+/// This is a narrower set of modes than [`SearchMode`], which also contains modes that apply only
+/// to interactive searches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DbSearchMode {
+    Prefix,
+    FullText,
+    Fuzzy,
+}
+
+impl From<DbSearchMode> for SearchMode {
+    fn from(mode: DbSearchMode) -> Self {
+        match mode {
+            DbSearchMode::Prefix => Self::Prefix,
+            DbSearchMode::FullText => Self::FullText,
+            DbSearchMode::Fuzzy => Self::Fuzzy,
+        }
+    }
+}
+
+// This impl is here rather than in settings.rs where `SearchMode` is defined to avoid having
+// modules that cyclicly import each other, which isn't strictly disallowed but could be confusing.
+impl SearchMode {
+    /// Get the [`DbSearchMode`] that most closely matches this [`SearchMode`].
+    ///
+    /// This maps [`SearchMode::DaemonFuzzy`], which is interactive-only, to
+    /// [`DbSearchMode::Fuzzy`].
+    pub fn closest_db_mode(self) -> DbSearchMode {
+        match self {
+            SearchMode::Prefix => DbSearchMode::Prefix,
+            SearchMode::FullText => DbSearchMode::FullText,
+            SearchMode::Fuzzy | SearchMode::DaemonFuzzy => DbSearchMode::Fuzzy,
+        }
+    }
 }
 
 #[async_trait]
@@ -225,7 +265,7 @@ pub trait Database: Send + Sync + 'static {
     #[allow(clippy::too_many_arguments)]
     async fn search(
         &self,
-        search_mode: SearchMode,
+        search_mode: DbSearchMode,
         filter: FilterMode,
         context: &Context,
         query: &str,
@@ -582,7 +622,7 @@ impl Database for Sqlite {
 
     async fn search(
         &self,
-        search_mode: SearchMode,
+        search_mode: DbSearchMode,
         filter: FilterMode,
         context: &Context,
         query: &str,
@@ -623,8 +663,8 @@ impl Database for Sqlite {
 
         let mut regexes = Vec::new();
         match search_mode {
-            SearchMode::Prefix => sql.and_where_like_left("command", query.replace('*', "%")),
-            _ => {
+            DbSearchMode::Prefix => sql.and_where_like_left("command", query.replace('*', "%")),
+            DbSearchMode::FullText | DbSearchMode::Fuzzy => {
                 let mut is_or = false;
                 for token in QueryTokenizer::new(query) {
                     // TODO smart case mode could be made configurable like in fzf
@@ -656,7 +696,7 @@ impl Database for Sqlite {
                             format!("{glob}{term}{glob}")
                         }
                         QueryToken::Match(term, _) => {
-                            if search_mode == SearchMode::FullText {
+                            if search_mode == DbSearchMode::FullText {
                                 format!("{glob}{term}{glob}")
                             } else {
                                 term.split("").join(glob)
@@ -766,7 +806,18 @@ impl Database for Sqlite {
             .fetch_all(&self.pool)
             .await?;
 
-        Ok(ordering::reorder_fuzzy(search_mode, orig_query, res))
+        // Rank against the same characters SQL matched: drop spaces, operators and negated terms.
+        let reorder_query: String = QueryTokenizer::new(orig_query)
+            .filter(|token| !token.is_inverse())
+            .filter_map(|token| match token {
+                QueryToken::Match(term, _)
+                | QueryToken::MatchStart(term, _)
+                | QueryToken::MatchEnd(term, _)
+                | QueryToken::MatchFull(term, _) => Some(term),
+                QueryToken::Or | QueryToken::Regex(_) => None,
+            })
+            .collect();
+        Ok(ordering::reorder_fuzzy(search_mode, &reorder_query, res))
     }
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>> {
@@ -1180,7 +1231,7 @@ impl<'a> Iterator for QueryTokenizer<'a> {
 mod test {
     use super::*;
     use crate::settings::test_local_timeout;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::time::{Duration, Instant};
     use time::format_description::well_known::Rfc3339;
 
@@ -1194,9 +1245,16 @@ mod test {
         }
     }
 
+    #[fixture]
+    async fn empty_db() -> Sqlite {
+        Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap()
+    }
+
     async fn assert_search_eq(
         db: &impl Database,
-        mode: SearchMode,
+        mode: DbSearchMode,
         filter_mode: FilterMode,
         query: &str,
         expected: usize,
@@ -1227,7 +1285,7 @@ mod test {
 
     async fn assert_search_commands(
         db: &impl Database,
-        mode: SearchMode,
+        mode: DbSearchMode,
         filter_mode: FilterMode,
         query: &str,
         expected_commands: Vec<&str>,
@@ -1283,11 +1341,13 @@ mod test {
     // `stats --filter-mode` scopes over a period by handing `list` an inclusive
     // `(from, to)` range. The bounds must be inclusive on both ends so a command
     // recorded exactly on a period boundary (e.g. at midnight) is still counted.
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_list_range_is_inclusive() {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn test_list_range_is_inclusive(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
         let context = Context {
             hostname: "booop".to_string(),
             session: "beep boop".to_string(),
@@ -1326,11 +1386,13 @@ mod test {
         assert_eq!(hits[0].command, "ls /home/ellie");
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_active_returns_only_requested_rows() {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn test_load_active_returns_only_requested_rows(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
         let alpha = save_history_item(&db, "echo alpha").await;
         let bravo = save_history_item(&db, "echo bravo").await;
         let _charlie = save_history_item(&db, "echo charlie").await;
@@ -1345,11 +1407,13 @@ mod test {
         assert_eq!(commands, vec!["echo alpha", "echo bravo"]);
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_active_empty_never_reaches_sqlite() {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn test_load_active_empty_never_reaches_sqlite(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
         save_history_item(&db, "echo alpha").await;
 
         // `select ... where id in ()` is a syntax error, so the empty case must
@@ -1359,11 +1423,13 @@ mod test {
         assert!(loaded.is_empty());
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_active_skips_soft_deleted() {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn test_load_active_skips_soft_deleted(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
         let mut alpha = save_history_item(&db, "echo alpha").await;
         let bravo = save_history_item(&db, "echo bravo").await;
 
@@ -1380,11 +1446,13 @@ mod test {
         assert_eq!(loaded[0].command, "echo bravo");
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_active_missing_ids_are_omitted() {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn test_load_active_missing_ids_are_omitted(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
         let alpha = save_history_item(&db, "echo alpha").await;
 
         let loaded = db
@@ -1396,12 +1464,13 @@ mod test {
         assert_eq!(loaded[0].command, "echo alpha");
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_active_chunks_past_sqlite_param_limit() {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
-
+    async fn test_load_active_chunks_past_sqlite_param_limit(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
         // Comfortably over SQLITE_MAX_VARIABLE_NUMBER's 999 floor: a single
         // `in (...)` with one placeholder per id would fail here.
         let mut ids = Vec::new();
@@ -1465,7 +1534,7 @@ mod test {
 
         let results = db
             .search(
-                SearchMode::FullText,
+                DbSearchMode::FullText,
                 FilterMode::Global,
                 &context,
                 "",
@@ -1499,7 +1568,7 @@ mod test {
 
         let hits = db
             .search(
-                SearchMode::FullText,
+                DbSearchMode::FullText,
                 FilterMode::Global,
                 &context,
                 "",
@@ -1531,7 +1600,7 @@ mod test {
 
         let result = db
             .search(
-                SearchMode::FullText,
+                DbSearchMode::FullText,
                 FilterMode::Global,
                 &context,
                 "",
@@ -1550,9 +1619,15 @@ mod test {
     async fn test_search_prefix(#[case] query: &str, #[case] expected: usize) {
         let db = db_with(&["ls /home/ellie"]).await;
 
-        assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, query, expected)
-            .await
-            .unwrap();
+        assert_search_eq(
+            &db,
+            DbSearchMode::Prefix,
+            FilterMode::Global,
+            query,
+            expected,
+        )
+        .await
+        .unwrap();
     }
 
     #[rstest]
@@ -1576,7 +1651,7 @@ mod test {
 
         assert_search_eq(
             &db,
-            SearchMode::FullText,
+            DbSearchMode::FullText,
             FilterMode::Global,
             query,
             expected,
@@ -1619,16 +1694,25 @@ mod test {
         ])
         .await;
 
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, query, expected)
-            .await
-            .unwrap();
+        assert_search_eq(
+            &db,
+            DbSearchMode::Fuzzy,
+            FilterMode::Global,
+            query,
+            expected,
+        )
+        .await
+        .unwrap();
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_reordered_fuzzy() {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+    async fn test_search_reordered_fuzzy(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let mut db = db;
         // test ordering of results: we should choose the first, even though it happened longer ago.
 
         new_history_item(&mut db, "curl").await.unwrap();
@@ -1637,27 +1721,186 @@ mod test {
         // if fuzzy reordering is on, it should come back in a more sensible order
         assert_search_commands(
             &db,
-            SearchMode::Fuzzy,
+            DbSearchMode::Fuzzy,
             FilterMode::Global,
             "curl",
             vec!["curl", "corburl"],
         )
         .await;
 
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "xxxx", 0)
+        assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, "xxxx", 0)
             .await
             .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "", 2)
+        assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, "", 2)
             .await
             .unwrap();
     }
 
+    #[rstest]
+    // The three modes the database implements map exactly.
+    #[case::prefix(SearchMode::Prefix, DbSearchMode::Prefix)]
+    #[case::full_text(SearchMode::FullText, DbSearchMode::FullText)]
+    #[case::fuzzy(SearchMode::Fuzzy, DbSearchMode::Fuzzy)]
+    // `DaemonFuzzy` never reaches the database in the interactive path: `engines::engine` routes it
+    // to the daemon index. When it does arrive via `atuin search --search-mode daemon-fuzzy`, the
+    // closest database behaviour is a plain fuzzy query. See issue #3670.
+    #[case::daemon_fuzzy_degrades_to_fuzzy(SearchMode::DaemonFuzzy, DbSearchMode::Fuzzy)]
+    fn closest_db_mode_maps_every_search_mode(
+        #[case] mode: SearchMode,
+        #[case] expected: DbSearchMode,
+    ) {
+        assert_eq!(mode.closest_db_mode(), expected);
+    }
+
+    #[rstest]
+    #[case::prefix(DbSearchMode::Prefix)]
+    #[case::full_text(DbSearchMode::FullText)]
+    #[case::fuzzy(DbSearchMode::Fuzzy)]
+    fn db_search_mode_round_trips_through_search_mode(#[case] mode: DbSearchMode) {
+        assert_eq!(SearchMode::from(mode).closest_db_mode(), mode);
+    }
+
+    /// Issue #3670: `atuin search --search-mode daemon-fuzzy` reached the database as an
+    /// unrecognised mode. It took the fuzzy SQL path but skipped the fuzzy relevance reordering, so
+    /// results came back in raw timestamp order while plain `--search-mode fuzzy` ranked them by
+    /// minimum matching span. `daemon-fuzzy` must behave exactly like `fuzzy` once it reaches the
+    /// database.
+    #[rstest]
+    #[case::daemon_fuzzy(SearchMode::DaemonFuzzy)]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_paged_basic() {
+    async fn test_search_interactive_only_modes_rank_like_fuzzy(#[case] mode: SearchMode) {
         let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
             .await
             .unwrap();
 
+        // "corburl" is strictly newer, so an unranked query would return it first and the assertion
+        // below would fail.
+        let now = OffsetDateTime::now_utc();
+        new_history_item_at(&mut db, "curl", Some(now - time::Duration::seconds(10)))
+            .await
+            .unwrap();
+        new_history_item_at(&mut db, "corburl", Some(now))
+            .await
+            .unwrap();
+
+        assert_search_commands(
+            &db,
+            mode.closest_db_mode(),
+            FilterMode::Global,
+            "curl",
+            vec!["curl", "corburl"],
+        )
+        .await;
+    }
+
+    // Reproduces the trailing-space ranking bug (atuinsh/atuin#3603): "screen" ranked the results
+    // containing `screen` first, but "screen " prioritized an unrelated `ls` command.
+    #[rstest]
+    #[case::no_trailing_space("screen")]
+    #[case::trailing_space("screen ")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fuzzy_trailing_space(#[case] query: &str) {
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        let now = OffsetDateTime::now_utc();
+        let irssi = "screen irssi";
+        let ls_l = "ls -l secrets/rendered";
+        let ls_ld = "ls -ld secrets/rendered";
+        let screen_r = "screen -r";
+
+        new_history_item_at(&mut db, irssi, Some(now - time::Duration::days(5)))
+            .await
+            .unwrap();
+        new_history_item_at(&mut db, ls_l, Some(now - time::Duration::days(4)))
+            .await
+            .unwrap();
+        new_history_item_at(
+            &mut db,
+            ls_ld,
+            Some(now - time::Duration::days(4) + time::Duration::seconds(1)),
+        )
+        .await
+        .unwrap();
+        new_history_item_at(&mut db, screen_r, Some(now - time::Duration::hours(1)))
+            .await
+            .unwrap();
+
+        let results = assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, 4)
+            .await
+            .unwrap();
+        assert_eq!(
+            results[0].command,
+            screen_r,
+            "\"{query}\" should rank the screen command first, got: {:?}",
+            results.iter().map(|h| &h.command).collect::<Vec<_>>()
+        );
+    }
+
+    // Make sure fuzzy search prioritizes results that contain the query as a contiguous substring,
+    // but ignoring query operators, inverse terms, and whitespace. Each test case has a "close"
+    // result that should rank higher by fuzzy score but is less recent, and a "far" result that is
+    // more recent.
+    #[rstest]
+    #[case::plain_single_term("screen", "screen", "search green")]
+    #[case::plain_two_terms("foo bar", "foo bar", "foo qux bar")]
+    #[case::trailing_space("screen ", "screen", "search green")]
+    #[case::extra_middle_space("foo   bar", "foo bar", "foo qux bar")]
+    #[case::end_anchor("foo screen$", "foo screen", "foo x screen")]
+    #[case::negated_term("foo screen !zzz", "foo screen", "foo x screen")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fuzzy_prioritizes_contiguous_match(
+        #[case] query: &str,
+        #[case] close: &str,
+        #[case] far: &str,
+    ) {
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        let now = OffsetDateTime::now_utc();
+        new_history_item_at(&mut db, close, Some(now - time::Duration::days(5)))
+            .await
+            .unwrap();
+        new_history_item_at(&mut db, far, Some(now - time::Duration::hours(1)))
+            .await
+            .unwrap();
+
+        assert_search_commands(
+            &db,
+            DbSearchMode::Fuzzy,
+            FilterMode::Global,
+            query,
+            vec![close, far],
+        )
+        .await;
+    }
+
+    // SQL operators are stripped when performing fuzzy reordering, but this must not affect the
+    // initial SQL matching.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fuzzy_operator() {
+        let db = db_with(&["use screen", "screenshot tool"]).await;
+
+        assert_search_commands(
+            &db,
+            DbSearchMode::Fuzzy,
+            FilterMode::Global,
+            "screen$",
+            vec!["use screen"],
+        )
+        .await;
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_paged_basic(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let mut db = db;
         // Add 5 history items
         for i in 0..5 {
             new_history_item(&mut db, &format!("command{}", i))
@@ -1688,12 +1931,13 @@ mod test {
         assert!(page4.is_none());
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_paged_empty() {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
-
+    async fn test_paged_empty(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
         // Create a paged iterator on empty database
         let mut paged = db.all_paged(10, false, false);
 
@@ -1702,12 +1946,14 @@ mod test {
         assert!(page.is_none());
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_paged_unique() {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
-
+    async fn test_paged_unique(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let mut db = db;
         // Add duplicate commands
         new_history_item(&mut db, "duplicate").await.unwrap();
         new_history_item(&mut db, "duplicate").await.unwrap();
@@ -1725,12 +1971,14 @@ mod test {
         assert_eq!(page_unique.len(), 3);
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_paged_include_deleted() {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
-
+    async fn test_paged_include_deleted(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let mut db = db;
         // Add items
         new_history_item(&mut db, "keep1").await.unwrap();
         new_history_item(&mut db, "keep2").await.unwrap();
@@ -1785,19 +2033,16 @@ mod test {
         assert_eq!(page_deleted.len(), 2);
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_bench_dupes() {
-        let context = Context {
-            hostname: "test:host".to_string(),
-            session: "beepboopiamasession".to_string(),
-            cwd: "/home/ellie".to_string(),
-            host_id: "test-host".to_string(),
-            git_root: None,
-        };
+    async fn test_search_bench_dupes(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let mut db = db;
+        let context = new_context();
 
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
         for _i in 1..10000 {
             new_history_item(&mut db, "i am a duplicated command")
                 .await
@@ -1806,7 +2051,7 @@ mod test {
         let start = Instant::now();
         let _results = db
             .search(
-                SearchMode::Fuzzy,
+                DbSearchMode::Fuzzy,
                 FilterMode::Global,
                 &context,
                 "",
@@ -1823,7 +2068,7 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     #[rstest]
-    #[case::empty_filter([], 7)]
+    #[case::all([], 7)]
     #[case::bash(["bash"], 1)]
     #[case::bash_unknown(["bash", ""], 5)]
     #[case::bash_zsh(["bash", "zsh"], 3)]
@@ -1865,14 +2110,76 @@ mod test {
             git_root: None,
         };
 
+        let shells = OrFilter::from_list(shells.map(str::to_owned).to_vec()).unwrap_or_default();
         let filters = OptFilters {
-            shells: &shells.map(str::to_owned),
+            shells: shells.as_slice_filter(),
             ..Default::default()
         };
 
         let results = db
             .search(
-                SearchMode::FullText,
+                DbSearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "echo",
+                filters,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), expected_count, "{results:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[rstest]
+    #[case::all([], 4)]
+    #[case::all_user(["$all-user"], 2)]
+    #[case::all_agent(["$all-agent"], 2)]
+    #[case::claude_code(["claude-code"], 1)]
+    #[case::claude_code_or_codex(["claude-code", "codex"], 2)]
+    #[case::unknown_author(["nobody"], 0)]
+    async fn test_search_authors<const N: usize>(
+        #[case] authors: [&str; N],
+        #[case] expected_count: usize,
+    ) {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        for (command, author) in [
+            ("echo alice1", "alice"),
+            ("echo claude1", "claude-code"),
+            ("echo codex1", "codex"),
+            ("echo bob1", "bob"),
+        ] {
+            let history = History::capture()
+                .timestamp(OffsetDateTime::now_utc())
+                .command(command)
+                .cwd("/tmp")
+                .author(author)
+                .build()
+                .into();
+            db.save(&history).await.unwrap();
+        }
+
+        let context = Context {
+            hostname: "hostname".into(),
+            session: "session".into(),
+            cwd: "/tmp".into(),
+            host_id: "host".into(),
+            git_root: None,
+        };
+
+        let authors =
+            OrFilter::from_list(authors.map(AuthorPattern::from).to_vec()).unwrap_or_default();
+        let filters = OptFilters {
+            authors: authors.as_slice_filter(),
+            ..Default::default()
+        };
+
+        let results = db
+            .search(
+                DbSearchMode::FullText,
                 FilterMode::Global,
                 &context,
                 "echo",

@@ -62,45 +62,28 @@ impl TryFrom<&str> for Rule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn test_rule_try_from() {
+    #[rstest]
+    #[case::bare_tool("Read", "Read", None)]
+    #[case::wildcard_scope("Read(*)", "Read", Some("*"))]
+    #[case::glob_scope("Write(*.md)", "Write", Some("*.md"))]
+    #[case::shell_with_space("Shell(git commit *)", "Shell", Some("git commit *"))]
+    #[case::nested_parens("Shell(echo ())", "Shell", Some("echo ()"))]
+    fn parses_valid_rule(#[case] input: &str, #[case] tool: &str, #[case] scope: Option<&str>) {
         assert_eq!(
-            Rule::try_from("Read").unwrap(),
+            Rule::try_from(input).unwrap(),
             Rule {
-                tool: "Read".to_string(),
-                scope: None
+                tool: tool.to_string(),
+                scope: scope.map(String::from),
             }
         );
-        assert_eq!(
-            Rule::try_from("Read(*)").unwrap(),
-            Rule {
-                tool: "Read".to_string(),
-                scope: Some("*".to_string())
-            }
-        );
-        assert_eq!(
-            Rule::try_from("Write(*.md)").unwrap(),
-            Rule {
-                tool: "Write".to_string(),
-                scope: Some("*.md".to_string())
-            }
-        );
-        assert_eq!(
-            Rule::try_from("Shell(git commit *)").unwrap(),
-            Rule {
-                tool: "Shell".to_string(),
-                scope: Some("git commit *".to_string())
-            }
-        );
-        assert_eq!(
-            Rule::try_from("Shell(echo ())").unwrap(),
-            Rule {
-                tool: "Shell".to_string(),
-                scope: Some("echo ()".to_string())
-            }
-        );
-        assert!(Rule::try_from("Shell(git commit *").is_err());
-        assert!(Rule::try_from("Shell(git commit *)!").is_err());
+    }
+
+    #[rstest]
+    #[case::unclosed_paren("Shell(git commit *")]
+    #[case::trailing_junk("Shell(git commit *)!")]
+    fn rejects_invalid_rule(#[case] input: &str) {
+        assert!(Rule::try_from(input).is_err());
     }
 }

@@ -194,43 +194,42 @@ mod test {
 
     use super::*;
 
-    #[test]
-    fn test_parse_extended_simple() {
-        let parsed = Entry::parse(": 1613322469:0;cargo install atuin");
+    #[rstest]
+    #[case::zero_duration(
+        ": 1613322469:0;cargo install atuin",
+        "cargo install atuin",
+        Some(1_613_322_469),
+        Some(0)
+    )]
+    #[case::multi_semicolon(
+        ": 1613322469:10;cargo install atuin;cargo update",
+        "cargo install atuin;cargo update",
+        Some(1_613_322_469),
+        Some(10_000_000_000)
+    )]
+    #[case::unicode_command(
+        ": 1613322469:10;cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
+        "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
+        Some(1_613_322_469),
+        Some(10_000_000_000)
+    )]
+    #[case::trailing_newline_escape(
+        ": 1613322469:10;cargo install \\n atuin\n",
+        "cargo install \\n atuin",
+        Some(1_613_322_469),
+        Some(10_000_000_000)
+    )]
+    fn parse_extended_simple(
+        #[case] line: &str,
+        #[case] command: &str,
+        #[case] timestamp: Option<i64>,
+        #[case] duration: Option<i64>,
+    ) {
+        let parsed = Entry::parse(line);
 
-        assert_eq!(parsed.command, "cargo install atuin");
-        assert_eq!(parsed.duration, Some(0));
-        assert_eq!(
-            parsed.timestamp.unwrap(),
-            OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
-        );
-
-        let parsed = Entry::parse(": 1613322469:10;cargo install atuin;cargo update");
-
-        assert_eq!(parsed.command, "cargo install atuin;cargo update");
-        assert_eq!(parsed.duration, Some(10_000_000_000));
-        assert_eq!(
-            parsed.timestamp.unwrap(),
-            OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
-        );
-
-        let parsed = Entry::parse(": 1613322469:10;cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷");
-
-        assert_eq!(parsed.command, "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷");
-        assert_eq!(parsed.duration, Some(10_000_000_000));
-        assert_eq!(
-            parsed.timestamp.unwrap(),
-            OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
-        );
-
-        let parsed = Entry::parse(": 1613322469:10;cargo install \\n atuin\n");
-
-        assert_eq!(parsed.command, "cargo install \\n atuin");
-        assert_eq!(parsed.duration, Some(10_000_000_000));
-        assert_eq!(
-            parsed.timestamp.unwrap(),
-            OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
-        );
+        assert_eq!(parsed.command, command);
+        assert_eq!(parsed.duration, duration);
+        assert_eq!(parsed.timestamp.map(|t| t.unix_timestamp()), timestamp);
     }
 
     /// Lines that are not valid extended history must not panic. Anything that
