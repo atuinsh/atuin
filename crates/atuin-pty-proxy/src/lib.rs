@@ -22,7 +22,7 @@ mod suggest;
 #[cfg(unix)]
 pub use capture::{CommandCapture, CommandCaptureSink};
 #[cfg(unix)]
-pub use oracle::{ZshOracle, ZshOracleHandle};
+pub use oracle::{BashOracle, CompletionOracleHandle, OracleShell, ZshOracle};
 #[cfg(unix)]
 pub use pty_proxy::{PtyProxy, RunOptions, Shell, init_script};
 #[cfg(unix)]
