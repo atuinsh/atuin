@@ -185,20 +185,12 @@ fn suggestion_worker(
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
 const COMPLETION_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150);
 
-/// A wedged zsh oracle is killed and respawned this many times before
-/// completions are given up on for the session.
-#[cfg(all(feature = "client", feature = "pty-proxy", unix))]
-const ORACLE_RESPAWN_LIMIT: u32 = 3;
-
 /// The engine answering shell-completion queries. Both run headless: zsh as
-/// a captive interactive process under a pty, fish via `complete -C`.
+/// a captive interactive process under a pty (behind its own thread so a
+/// missed latency budget never desyncs it), fish via `complete -C`.
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
 enum CompletionOracle {
-    Zsh {
-        zsh: std::path::PathBuf,
-        proc: Option<atuin_pty_proxy::ZshOracle>,
-        spawns: u32,
-    },
+    Zsh(atuin_pty_proxy::ZshOracleHandle),
     Fish(std::path::PathBuf),
     None,
 }
@@ -219,10 +211,8 @@ impl CompletionOracle {
         let user_shell = user_shell.rsplit('/').next().unwrap_or_default();
 
         let zsh = || {
-            find("zsh").map(|zsh| CompletionOracle::Zsh {
-                zsh,
-                proc: None,
-                spawns: 0,
+            find("zsh").map(|zsh| {
+                CompletionOracle::Zsh(atuin_pty_proxy::ZshOracleHandle::spawn(zsh, true))
             })
         };
         let fish = || find("fish").map(CompletionOracle::Fish);
@@ -307,21 +297,7 @@ impl SuggestionBackend {
     /// and accept treat them exactly like history suggestions.
     async fn fetch_completions(&mut self, line: &str) -> Vec<String> {
         let candidates = match &mut self.oracle {
-            CompletionOracle::Zsh { zsh, proc, spawns } => {
-                if proc.is_none() && *spawns < ORACLE_RESPAWN_LIMIT {
-                    *spawns += 1;
-                    *proc = atuin_pty_proxy::ZshOracle::spawn(zsh);
-                }
-                let Some(oracle) = proc.as_mut() else {
-                    return Vec::new();
-                };
-                let Some(candidates) = oracle.complete(line, COMPLETION_TIMEOUT) else {
-                    // Desynced or dead; a fresh oracle answers next query.
-                    *proc = None;
-                    return Vec::new();
-                };
-                candidates
-            }
+            CompletionOracle::Zsh(oracle) => oracle.complete(line, COMPLETION_TIMEOUT),
             CompletionOracle::Fish(fish) => fish_complete(fish, line).await,
             CompletionOracle::None => return Vec::new(),
         };
