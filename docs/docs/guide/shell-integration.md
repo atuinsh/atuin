@@ -38,7 +38,7 @@ If `ATUIN_HISTORY_AUTHOR` isn't set, Atuin defaults to the local shell username.
 
 Many development tools include embedded terminals:
 
-- **IDEs**: PyCharm, IntelliJ, VS Code, Cursor, Zed
+- **IDEs**: JetBrains' RustRover and PyCharm, IntelliJ, VS Code, Cursor, Zed
 - **AI coding assistants**: Claude Code, GitHub Copilot CLI, Aider
 - **Container environments**: Docker, Podman, devcontainers
 
@@ -68,7 +68,7 @@ If you want Atuin to record commands from an embedded terminal, you'll need to m
 
 Most IDEs let you customize the shell command used for their integrated terminal:
 
-**PyCharm / IntelliJ:**
+**JetBrains IDEs (RustRover, PyCharm, IntelliJ):**
 
 1. Go to Settings → Tools → Terminal
 2. Change "Shell path" to include the `-i` flag:
