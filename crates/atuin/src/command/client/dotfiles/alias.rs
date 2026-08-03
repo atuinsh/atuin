@@ -44,8 +44,9 @@ pub enum Cmd {
 
     /// Delete all aliases
     Clear,
-    // There are too many edge cases to parse at the moment. Disable for now.
-    // Import,
+
+    /// Import aliases from the current shell
+    Import,
 }
 
 impl Cmd {
@@ -135,7 +136,6 @@ impl Cmd {
         Ok(())
     }
 
-    /*
     async fn import(&self, store: &AliasStore) -> Result<()> {
         let aliases = atuin_dotfiles::shell::import_aliases(store).await?;
 
@@ -145,7 +145,6 @@ impl Cmd {
 
         Ok(())
     }
-    */
 
     pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
         if !settings.dotfiles.enabled {
@@ -182,6 +181,7 @@ impl Cmd {
                 .await
             }
             Self::Clear => self.clear(&alias_store).await,
+            Self::Import => self.import(&alias_store).await,
         }
     }
 }

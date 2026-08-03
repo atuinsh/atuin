@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_common::shell::{ShellKind, Var as ShellVar};
 use atuin_domain::record::{DecryptedData, Host, HostId};
 use eyre::{Result, bail, ensure, eyre};
 
@@ -114,71 +115,19 @@ impl VarStore {
         }
     }
 
-    /// Escape a value for use in POSIX shells (bash, zsh)
-    /// This adds double quotes around the value and escapes any embedded double quotes
-    fn escape_posix_value(value: &str) -> String {
-        // If the value contains no special characters, we can use it unquoted
-        if value
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '/' || c == '.')
-        {
-            value.to_string()
-        } else {
-            // Otherwise, wrap in double quotes and escape any special characters
-            format!(
-                "\"{}\"",
-                value
-                    .replace('\\', "\\\\")
-                    .replace('"', "\\\"")
-                    .replace('$', "\\$")
-                    .replace('`', "\\`")
-            )
-        }
-    }
-
-    /// Escape a value for use in fish shell
-    /// Fish uses single quotes for literal strings, but we need to handle embedded single quotes
-    fn escape_fish_value(value: &str) -> String {
-        // If the value contains no special characters, we can use it unquoted
-        if value
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '/' || c == '.')
-        {
-            value.to_string()
-        } else {
-            // Use single quotes and escape any embedded single quotes
-            format!("'{}'", value.replace('\'', "\\'"))
-        }
-    }
-
-    /// Escape a value for use in xonsh
-    /// Xonsh uses Python-style string literals
-    fn escape_xonsh_value(value: &str) -> String {
-        // If the value contains no special characters, we can use it unquoted
-        if value
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '/' || c == '.')
-        {
-            value.to_string()
-        } else {
-            // Use double quotes and escape appropriately for Python strings
-            format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
-        }
-    }
-
     pub async fn xonsh(&self) -> Result<String> {
         let env = self.vars().await?;
-        Ok(Self::format_xonsh(&env))
+        Ok(Self::render(ShellKind::Xonsh, &env))
     }
 
     pub async fn fish(&self) -> Result<String> {
         let env = self.vars().await?;
-        Ok(Self::format_fish(&env))
+        Ok(Self::render(ShellKind::Fish, &env))
     }
 
     pub async fn posix(&self) -> Result<String> {
         let env = self.vars().await?;
-        Ok(Self::format_posix(&env))
+        Ok(Self::render(ShellKind::Sh, &env))
     }
 
     pub async fn powershell(&self) -> Result<String> {
@@ -186,41 +135,34 @@ impl VarStore {
         Ok(Self::format_powershell(&env))
     }
 
-    fn format_xonsh(env: &[Var]) -> String {
-        let mut config = String::new();
+    /// Render `env` into `shell`'s config syntax via the shared shell library,
+    /// logging any variable the shell cannot represent.
+    fn render(shell: ShellKind, env: &[Var]) -> String {
+        let interface = shell
+            .interface()
+            .expect("a built-in shell always has an interface");
 
-        for env in env {
-            let escaped_value = Self::escape_xonsh_value(&env.value);
-            config.push_str(&format!("${}={}\n", env.name, escaped_value));
+        let mut shell_vars = Vec::with_capacity(env.len());
+        for var in env {
+            let name = match interface.validate_var_name(var.name.clone().into()) {
+                Ok(name) => name,
+                Err(err) => {
+                    tracing::warn!("skipping var: {err}");
+                    continue;
+                }
+            };
+            let value = interface
+                .validate_var_value(var.value.clone().into())
+                .unwrap_or_else(|e| match e {});
+            shell_vars.push(ShellVar {
+                name,
+                value,
+                export: var.export,
+            });
         }
 
-        config
-    }
-
-    fn format_fish(env: &[Var]) -> String {
-        let mut config = String::new();
-
-        for env in env {
-            let escaped_value = Self::escape_fish_value(&env.value);
-            config.push_str(&format!("set -gx {} {}\n", env.name, escaped_value));
-        }
-
-        config
-    }
-
-    fn format_posix(env: &[Var]) -> String {
-        let mut config = String::new();
-
-        for env in env {
-            let escaped_value = Self::escape_posix_value(&env.value);
-            if env.export {
-                config.push_str(&format!("export {}={}\n", env.name, escaped_value));
-            } else {
-                config.push_str(&format!("{}={}\n", env.name, escaped_value));
-            }
-        }
-
-        config
+        let script = interface.render_vars(&shell_vars);
+        String::from_utf8_lossy(script.as_slice()).into_owned()
     }
 
     fn format_powershell(env: &[Var]) -> String {
@@ -239,26 +181,23 @@ impl VarStore {
 
         let env = self.vars().await?;
 
-        // Build for all supported shells
-        let posix = Self::format_posix(&env);
-        let xonsh = Self::format_xonsh(&env);
-        let fsh = Self::format_fish(&env);
+        // Build for all supported shells.
+        let posix = Self::render(ShellKind::Sh, &env);
+        let fish = Self::render(ShellKind::Fish, &env);
+        let xonsh = Self::render(ShellKind::Xonsh, &env);
         let powershell = Self::format_powershell(&env);
 
-        // All the same contents, maybe optimize in the future or perhaps there will be quirks
-        // per-shell
-        // I'd prefer separation atm
-        let zsh = dir.join("vars.zsh");
-        let bash = dir.join("vars.bash");
-        let fish = dir.join("vars.fish");
-        let xsh = dir.join("vars.xsh");
-        let ps1 = dir.join("vars.ps1");
+        let zsh_path = dir.join("vars.zsh");
+        let bash_path = dir.join("vars.bash");
+        let fish_path = dir.join("vars.fish");
+        let xsh_path = dir.join("vars.xsh");
+        let ps1_path = dir.join("vars.ps1");
 
-        tokio::fs::write(zsh, &posix).await?;
-        tokio::fs::write(bash, &posix).await?;
-        tokio::fs::write(fish, &fsh).await?;
-        tokio::fs::write(xsh, &xonsh).await?;
-        tokio::fs::write(ps1, &powershell).await?;
+        tokio::fs::write(zsh_path, &posix).await?;
+        tokio::fs::write(bash_path, &posix).await?;
+        tokio::fs::write(fish_path, &fish).await?;
+        tokio::fs::write(xsh_path, &xonsh).await?;
+        tokio::fs::write(ps1_path, &powershell).await?;
 
         Ok(())
     }
@@ -429,50 +368,6 @@ mod tests {
 
         assert_eq!(encoded.0, &snapshot);
         assert_eq!(decoded, record);
-    }
-
-    #[rstest]
-    // Simple values should not be quoted
-    #[case::simple("simple", "simple")]
-    #[case::path("path/to/file", "path/to/file")]
-    #[case::underscores("value_with_underscores", "value_with_underscores")]
-    // Values with spaces should be quoted
-    #[case::spaces("hello world", "\"hello world\"")]
-    #[case::spaces_short("bar baz", "\"bar baz\"")]
-    // Values with special characters should be quoted and escaped
-    #[case::double_quotes("say \"hello\"", "\"say \\\"hello\\\"\"")]
-    #[case::backslashes("path\\with\\backslashes", "\"path\\\\with\\\\backslashes\"")]
-    #[case::dollar("say $hello", "\"say \\$hello\"")]
-    #[case::backticks("see `example.md`", "\"see \\`example.md\\`\"")]
-    fn escapes_posix_value(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(VarStore::escape_posix_value(input), expected);
-    }
-
-    #[rstest]
-    // Simple values should not be quoted
-    #[case::simple("simple", "simple")]
-    #[case::path("path/to/file", "path/to/file")]
-    // Values with spaces should be single-quoted
-    #[case::spaces("hello world", "'hello world'")]
-    #[case::spaces_short("bar baz", "'bar baz'")]
-    // Values with single quotes should be escaped
-    #[case::single_quote("don't", "'don\\'t'")]
-    fn escapes_fish_value(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(VarStore::escape_fish_value(input), expected);
-    }
-
-    #[rstest]
-    // Simple values should not be quoted
-    #[case::simple("simple", "simple")]
-    #[case::path("path/to/file", "path/to/file")]
-    // Values with spaces should be quoted
-    #[case::spaces("hello world", "\"hello world\"")]
-    #[case::spaces_short("bar baz", "\"bar baz\"")]
-    // Values with special characters should be quoted and escaped
-    #[case::double_quotes("say \"hello\"", "\"say \\\"hello\\\"\"")]
-    #[case::backslashes("path\\with\\backslashes", "\"path\\\\with\\\\backslashes\"")]
-    fn escapes_xonsh_value(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(VarStore::escape_xonsh_value(input), expected);
     }
 
     #[rstest]

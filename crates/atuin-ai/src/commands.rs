@@ -1,7 +1,6 @@
 use atuin_client::logs::FromSettings;
 use atuin_client::settings::Settings;
 use atuin_common::logs::{FileConfig, LogConfig, StderrConfig};
-use atuin_common::shell::Shell;
 use clap::{Args, Subcommand};
 pub mod init;
 pub(crate) mod inline;
@@ -70,5 +69,5 @@ pub async fn run(command: Command, settings: &Settings) -> eyre::Result<()> {
 }
 
 pub(crate) fn detect_shell() -> Option<String> {
-    Some(Shell::current().to_string())
+    Some(atuin_common::shell::ShellKind::current().to_string())
 }

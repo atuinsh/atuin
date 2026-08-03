@@ -2,7 +2,7 @@ use eyre::{Result, ensure, eyre};
 use rmp::{decode, encode};
 use serde::Serialize;
 
-use atuin_common::shell::{Shell, ShellError};
+use atuin_common::shell::ShellKind;
 
 use crate::store::AliasStore;
 
@@ -76,149 +76,41 @@ impl Var {
     }
 }
 
-pub fn parse_alias(line: &str) -> Option<Alias> {
-    // consider the fact we might be importing a fish alias
-    // 'alias' output
-    // fish: alias foo bar
-    // posix: foo=bar
-
-    let is_fish = line.split(' ').next().unwrap_or("") == "alias";
-
-    let parts: Vec<&str> = if is_fish {
-        line.split(' ')
-            .enumerate()
-            .filter_map(|(n, i)| if n == 0 { None } else { Some(i) })
-            .collect()
-    } else {
-        line.split('=').collect()
-    };
-
-    if parts.len() <= 1 {
-        return None;
-    }
-
-    let mut parts = parts.iter().map(|s| s.to_string());
-
-    let name = parts.next().unwrap();
-
-    let remaining = if is_fish {
-        parts.collect::<Vec<String>>().join(" ")
-    } else {
-        parts.collect::<Vec<String>>().join("=")
-    };
-
-    Some(Alias {
-        name,
-        value: remaining.trim().to_string(),
-    })
-}
-
-pub fn existing_aliases(shell: Option<Shell>) -> Result<Vec<Alias>, ShellError> {
-    let shell = if let Some(shell) = shell {
-        shell
-    } else {
-        Shell::current()
-    };
-
-    // this only supports posix-y shells atm
-    if !shell.is_posixish() {
-        return Err(ShellError::NotSupported);
-    }
-
-    // This will return a list of aliases, each on its own line
-    // They will be in the form foo=bar
-    let aliases = shell.run_interactive(["alias"])?;
-
-    let aliases: Vec<Alias> = aliases.lines().filter_map(parse_alias).collect();
-
-    Ok(aliases)
-}
-
-/// Import aliases from the current shell
-/// This will not import aliases already in the store
-/// Returns aliases that were set
+/// Import aliases from the current shell.
+///
+/// Aliases already present in the store are skipped. Returns the aliases that
+/// were newly set.
 pub async fn import_aliases(store: &AliasStore) -> Result<Vec<Alias>> {
-    let shell_aliases = existing_aliases(None)?;
+    let shell = ShellKind::current()
+        .interface()
+        .ok_or_else(|| eyre!("importing aliases is not supported for the current shell"))?;
+
+    let shell_aliases = shell.aliases().await?;
     let store_aliases = store.aliases().await?;
 
     let mut res = Vec::new();
 
-    for alias in shell_aliases {
-        // O(n), but n is small, and imports infrequent
-        // can always make a map
+    for (name, value) in shell_aliases {
+        // Aliases are arbitrary bytes in the shell, but the store speaks UTF-8
+        // strings. Skip anything that isn't valid UTF-8 rather than failing the
+        // whole import.
+        let (Ok(name), Ok(value)) = (
+            String::from_utf8(name.into()),
+            String::from_utf8(value.shcmd().into()),
+        ) else {
+            continue;
+        };
+
+        let alias = Alias { name, value };
+
+        // O(n), but n is small and imports are infrequent.
         if store_aliases.contains(&alias) {
             continue;
         }
 
-        res.push(alias.clone());
         store.set(&alias.name, &alias.value).await?;
+        res.push(alias);
     }
 
     Ok(res)
-}
-
-#[cfg(test)]
-mod tests {
-    use rstest::rstest;
-
-    use crate::shell::{Alias, parse_alias};
-
-    #[rstest]
-    #[case::simple("foo=bar", "foo", "bar")]
-    #[case::quoted(
-        "emacs='TERM=xterm-24bits emacs -nw'",
-        "emacs",
-        "'TERM=xterm-24bits emacs -nw'"
-    )]
-    #[case::quoted_git(
-        "gwip='git add -A; git rm $(git ls-files --deleted) 2> /dev/null; git commit --no-verify --no-gpg-sign --message \"--wip-- [skip ci]\"'",
-        "gwip",
-        "'git add -A; git rm $(git ls-files --deleted) 2> /dev/null; git commit --no-verify --no-gpg-sign --message \"--wip-- [skip ci]\"'"
-    )]
-    #[case::quoted_equals(
-        "emacs='TERM=xterm-24bits emacs -nw --foo=bar'",
-        "emacs",
-        "'TERM=xterm-24bits emacs -nw --foo=bar'"
-    )]
-    #[case::fish("alias foo bar", "foo", "bar")]
-    #[case::fish_quoted(
-        "alias x 'exa --icons --git --classify --group-directories-first'",
-        "x",
-        "'exa --icons --git --classify --group-directories-first'"
-    )]
-    fn parse_alias_cases(#[case] input: &str, #[case] name: &str, #[case] value: &str) {
-        let alias = super::parse_alias(input).expect("failed to parse alias");
-        assert_eq!(alias.name, name);
-        assert_eq!(alias.value, value);
-    }
-
-    #[test]
-    fn test_parse_with_fortune() {
-        // Because we run the alias command in an interactive subshell
-        // there may be other output.
-        // Ensure that the parser can handle it
-        // Annoyingly not all aliases are picked up all the time if we use
-        // a non-interactive subshell. Boo.
-        let shell = "
-/ In a consumer society there are     \\
-| inevitably two kinds of slaves: the |
-| prisoners of addiction and the      |
-\\ prisoners of envy.                  /
- -------------------------------------
-        \\   ^__^
-         \\  (oo)\\_______
-            (__)\\       )\\/\\
-                ||----w |
-                ||     ||
-emacs='TERM=xterm-24bits emacs -nw --foo=bar'
-k=kubectl
-";
-
-        let aliases: Vec<Alias> = shell.lines().filter_map(parse_alias).collect();
-        assert_eq!(aliases[0].name, "emacs");
-        assert_eq!(aliases[0].value, "'TERM=xterm-24bits emacs -nw --foo=bar'");
-
-        assert_eq!(aliases[1].name, "k");
-        assert_eq!(aliases[1].value, "kubectl");
-    }
 }

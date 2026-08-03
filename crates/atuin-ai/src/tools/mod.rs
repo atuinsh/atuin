@@ -770,10 +770,10 @@ impl PermissibleToolCall for ShellToolCall {
             return true;
         };
 
-        let shell_kind = crate::permissions::shell::ShellKind::from_shell_name(&self.shell);
-        let parsed = crate::permissions::shell::parse_shell_command(&self.command, shell_kind);
+        let shell_kind = atuin_common::shell::ShellKind::from_string(self.shell.clone());
+        let cmds = shell_kind.commands(&self.command);
         // Deny/ask path: prefix_bare = true so `deny = ["Shell(rm)"]` blocks `rm -rf /`
-        crate::permissions::shell::any_subcommand_matches(&parsed.subcommands, true, scope)
+        crate::permissions::shell::any_subcommand_matches(&cmds, true, scope)
     }
 
     /// For compound shell commands, every subcommand must be individually
@@ -782,12 +782,12 @@ impl PermissibleToolCall for ShellToolCall {
     fn all_covered_by(&self, rules: &[Rule]) -> bool {
         use crate::permissions::shell;
 
-        let shell_kind = shell::ShellKind::from_shell_name(&self.shell);
-        let parsed = shell::parse_shell_command(&self.command, shell_kind);
+        let shell_kind = atuin_common::shell::ShellKind::from_string(self.shell.clone());
+        let cmds = shell_kind.commands(&self.command);
 
         // If parsing yields nothing, don't vacuously allow — fall through to ask.
-        !parsed.subcommands.is_empty()
-            && parsed.subcommands.iter().all(|subcmd| {
+        !cmds.is_empty()
+            && cmds.iter().all(|subcmd| {
                 rules.iter().any(|rule| {
                     if rule.tool != "Shell" {
                         return false;

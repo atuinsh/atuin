@@ -1,324 +1,4 @@
-/// Extracted command info from a shell command string.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ShellCommand {
-    /// The command name (first word), e.g. "git"
-    pub name: String,
-    /// The full invocation including arguments, e.g. "git commit -m msg"
-    pub full: String,
-}
-
-/// A parsed shell command with all subcommands extracted.
-#[derive(Debug)]
-pub(crate) struct ParsedShellCommand {
-    pub subcommands: Vec<ShellCommand>,
-}
-
-/// Supported shell families for parsing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ShellKind {
-    /// POSIX sh, bash, zsh — all share similar syntax
-    Posix,
-    /// fish shell
-    Fish,
-    /// nushell or unknown — fallback to word-level extraction
-    Other,
-}
-
-impl ShellKind {
-    pub(crate) fn from_shell_name(name: &str) -> Self {
-        match name {
-            "bash" | "sh" | "zsh" | "dash" | "ksh" => Self::Posix,
-            "fish" => Self::Fish,
-            _ => Self::Other,
-        }
-    }
-}
-
-/// Parse a shell command string and extract all subcommands.
-pub(crate) fn parse_shell_command(code: &str, shell: ShellKind) -> ParsedShellCommand {
-    #[cfg(feature = "tree-sitter")]
-    match shell {
-        ShellKind::Posix => ts::parse_posix(code),
-        ShellKind::Fish => ts::parse_fish(code),
-        ShellKind::Other => parse_fallback(code),
-    }
-
-    #[cfg(not(feature = "tree-sitter"))]
-    {
-        let _ = shell;
-        parse_fallback(code)
-    }
-}
-
-// ────────────────────────────────────────────────────────────────
-// Tree-sitter parsers (POSIX + Fish)
-// Disabled on platforms where tree-sitter doesn't cross-compile
-// (e.g. Windows); falls back to word-level extraction.
-// ────────────────────────────────────────────────────────────────
-
-#[cfg(feature = "tree-sitter")]
-mod ts {
-    use super::{ParsedShellCommand, ShellCommand, parse_fallback};
-    use tree_sitter::{Parser, Tree};
-
-    fn bash_parser() -> Parser {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_bash::LANGUAGE.into())
-            .expect("failed to set bash language");
-        parser
-    }
-
-    pub(super) fn parse_posix(code: &str) -> ParsedShellCommand {
-        let mut parser = bash_parser();
-        let Some(tree) = parser.parse(code, None) else {
-            return parse_fallback(code);
-        };
-
-        let mut commands = Vec::new();
-        walk_bash_tree(&tree, code.as_bytes(), &mut commands);
-        ParsedShellCommand {
-            subcommands: commands,
-        }
-    }
-
-    /// Leaf node kinds that never contain nested commands.
-    const BASH_LEAVES: &[&str] = &[
-        "command_name",
-        "word",
-        "number",
-        "simple_expansion",
-        "expansion",
-        "arithmetic_expansion",
-        "ansi_c_string",
-        "special_variable_name",
-        "variable_name",
-        "file_descriptor",
-        "heredoc_body",
-        "heredoc_start",
-        "regex",
-        "heredoc_redirect",
-    ];
-
-    fn walk_bash_tree(tree: &Tree, source: &[u8], commands: &mut Vec<ShellCommand>) {
-        walk_bash_node(tree.root_node(), source, commands);
-    }
-
-    fn walk_bash_node(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<ShellCommand>) {
-        match node.kind() {
-            "command" => {
-                if let Some(cmd) = extract_bash_command(node, source) {
-                    commands.push(cmd);
-                }
-                // Descend into all non-leaf children to find nested commands
-                // (e.g. command_substitution inside a string inside a command)
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    if !BASH_LEAVES.contains(&child.kind()) {
-                        walk_bash_node(child, source, commands);
-                    }
-                }
-            }
-            // Other nodes: descend into all children
-            _ => {
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    walk_bash_node(child, source, commands);
-                }
-            }
-        }
-    }
-
-    /// Extract the full command string and name from a bash `command` node.
-    fn extract_bash_command(node: tree_sitter::Node, source: &[u8]) -> Option<ShellCommand> {
-        // A `command` node has children like:
-        //   variable_assignment* command_name argument* redirect*
-        // We want the command_name and all arguments (skipping assignments and redirects).
-        let mut name = None;
-        let mut name_start = None;
-        let mut arg_end = None;
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            match child.kind() {
-                "command_name" => {
-                    name = child.utf8_text(source).ok().map(|s| s.to_string());
-                    name_start = Some(child.start_byte());
-                }
-                "word"
-                | "string"
-                | "raw_string"
-                | "concatenation"
-                | "number"
-                | "simple_expansion"
-                | "expansion"
-                | "arithmetic_expansion"
-                | "ansi_c_string"
-                | "process_substitution" => {
-                    arg_end = Some(child.end_byte());
-                }
-                _ => {}
-            }
-        }
-
-        let name = name?;
-        let full = if let (Some(start), Some(end)) = (name_start, arg_end) {
-            std::str::from_utf8(&source[start..end]).ok()?.to_string()
-        } else {
-            name.clone()
-        };
-
-        Some(ShellCommand { name, full })
-    }
-
-    // ────────────────────────────────────────────────────────────────
-    // Fish parser
-    // ────────────────────────────────────────────────────────────────
-
-    fn fish_parser() -> Parser {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_fish::language())
-            .expect("failed to set fish language");
-        parser
-    }
-
-    pub(super) fn parse_fish(code: &str) -> ParsedShellCommand {
-        let mut parser = fish_parser();
-        let Some(tree) = parser.parse(code, None) else {
-            return parse_fallback(code);
-        };
-
-        let mut commands = Vec::new();
-        walk_fish_tree(&tree, code.as_bytes(), &mut commands);
-        ParsedShellCommand {
-            subcommands: commands,
-        }
-    }
-
-    const FISH_COMPOUND: &[&str] = &[
-        "conditional_execution",
-        "pipe",
-        "job",
-        "command_substitution",
-        "block",
-        "for_statement",
-        "while_statement",
-        "if_statement",
-        "switch_statement",
-        "function_definition",
-        "begin_statement",
-        "redirected_statement",
-    ];
-
-    fn walk_fish_tree(tree: &Tree, source: &[u8], commands: &mut Vec<ShellCommand>) {
-        walk_fish_node(tree.root_node(), source, commands);
-    }
-
-    fn walk_fish_node(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<ShellCommand>) {
-        match node.kind() {
-            "command" => {
-                if let Some(cmd) = extract_fish_command(node, source) {
-                    commands.push(cmd);
-                }
-                // Still descend into compound children (e.g. command_substitution inside a command)
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    if FISH_COMPOUND.contains(&child.kind()) {
-                        walk_fish_node(child, source, commands);
-                    }
-                }
-            }
-            // Other nodes: descend into all children
-            _ => {
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    walk_fish_node(child, source, commands);
-                }
-            }
-        }
-    }
-
-    fn extract_fish_command(node: tree_sitter::Node, source: &[u8]) -> Option<ShellCommand> {
-        // In fish, a `command` node has:
-        //   name (command_name or word) followed by arguments (word, string, etc.)
-        let mut name = None;
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            match child.kind() {
-                "command_name" | "word" => {
-                    let text = child.utf8_text(source).ok()?.to_string();
-                    if name.is_none() {
-                        name = Some(text);
-                    }
-                }
-                "string"
-                | "concatenation"
-                | "command_substitution"
-                | "escape_sequence"
-                | "double_quote_string"
-                | "single_quote_string" => {}
-                _ => {}
-            }
-        }
-
-        let name = name?;
-        // Get the full text of the command node
-        let full = node.utf8_text(source).ok()?.trim().to_string();
-
-        Some(ShellCommand { name, full })
-    }
-} // mod ts
-
-// ────────────────────────────────────────────────────────────────
-// Fallback (word-level extraction for nushell / unknown shells)
-// ────────────────────────────────────────────────────────────────
-
-fn parse_fallback(code: &str) -> ParsedShellCommand {
-    // Simple heuristic: split by &&, ||, ;, | and take the first word of each segment.
-    // This is intentionally simple — for unknown shells we can't do better.
-    let mut commands = Vec::new();
-    let mut segment = String::new();
-    let mut chars = code.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        match c {
-            ';' => {
-                push_segment(&mut segment, &mut commands);
-            }
-            '|' => {
-                if chars.peek() == Some(&'|') {
-                    chars.next();
-                }
-                push_segment(&mut segment, &mut commands);
-            }
-            '&' if chars.peek() == Some(&'&') => {
-                chars.next();
-                push_segment(&mut segment, &mut commands);
-            }
-            _ => segment.push(c),
-        }
-    }
-    push_segment(&mut segment, &mut commands);
-
-    ParsedShellCommand {
-        subcommands: commands,
-    }
-}
-
-fn push_segment(segment: &mut String, commands: &mut Vec<ShellCommand>) {
-    let trimmed = segment.trim();
-    if !trimmed.is_empty()
-        && let Some(name) = trimmed.split_whitespace().next()
-    {
-        commands.push(ShellCommand {
-            name: name.to_string(),
-            full: trimmed.to_string(),
-        });
-    }
-    segment.clear();
-}
+use atuin_common::shell::Command;
 
 // ────────────────────────────────────────────────────────────────
 // Scope matching
@@ -342,7 +22,7 @@ fn push_segment(segment: &mut String, commands: &mut Vec<ShellCommand>) {
 /// should pass `prefix_bare: true` (broad) so that denying `rm` also blocks
 /// `rm -rf /`.
 pub(crate) fn any_subcommand_matches(
-    subcommands: &[ShellCommand],
+    subcommands: &[Command],
     prefix_bare: bool,
     scope: &str,
 ) -> bool {
@@ -457,59 +137,103 @@ fn find_subslice(haystack: &[&str], needle: &[&str]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atuin_common::shell::ShellKind;
     use rstest::rstest;
 
-    fn names(cmds: &[ShellCommand]) -> Vec<&str> {
-        cmds.iter().map(|c| c.name.as_str()).collect()
+    fn cmd<'a>(name: &'a str, full: &'a str) -> Command<'a> {
+        Command { name, full }
     }
 
-    fn fulls(cmds: &[ShellCommand]) -> Vec<&str> {
-        cmds.iter().map(|c| c.full.as_str()).collect()
-    }
-
-    // Non-gated parse cases. These inputs yield identical extractions under
-    // the tree-sitter parsers and the word-level fallback, so they run in both
-    // feature configurations. Order-preserving (do NOT sort).
+    // Parses that pin the exact extracted subcommands. `expected_fulls` is only
+    // asserted when the original test did (`None` skips that check).
     #[rstest]
-    #[case::simple(ShellKind::Posix, "ls -la /tmp", &["ls"], Some(&["ls -la /tmp"][..]))]
-    #[case::pipeline(ShellKind::Posix, "cat file.txt | grep foo | wc -l", &["cat", "grep", "wc"], None)]
-    #[case::chaining(ShellKind::Posix, "git add . && git commit -m 'hi'", &["git", "git"], Some(&["git add .", "git commit -m 'hi'"][..]))]
-    #[case::semicolon(ShellKind::Posix, "echo hello; echo world", &["echo", "echo"], None)]
-    #[case::fish_simple(ShellKind::Fish, "ls -la /tmp", &["ls"], None)]
-    #[case::fallback_amp_pipe(ShellKind::Other, "ls && cat foo || echo fail", &["ls", "cat", "echo"], Some(&["ls", "cat foo", "echo fail"][..]))]
-    #[case::fallback_pipe(ShellKind::Other, "ls | grep foo", &["ls", "grep"], Some(&["ls", "grep foo"][..]))]
+    #[case::simple_command(ShellKind::Bash, "ls -la /tmp", &["ls"], Some(&["ls -la /tmp"][..]))]
+    #[case::pipeline(ShellKind::Bash, "cat file.txt | grep foo | wc -l", &["cat", "grep", "wc"], None)]
+    #[case::command_chaining(
+        ShellKind::Bash,
+        "git add . && git commit -m 'hi'",
+        &["git", "git"],
+        Some(&["git add .", "git commit -m 'hi'"][..])
+    )]
+    #[case::semicolon_separated(ShellKind::Bash, "echo hello; echo world", &["echo", "echo"], None)]
+    #[case::fish_simple_command(ShellKind::Fish, "ls -la /tmp", &["ls"], None)]
+    #[case::fallback_double_ampersand_and_pipe_pipe(
+        ShellKind::Unknown,
+        "ls && cat foo || echo fail",
+        &["ls", "cat", "echo"],
+        Some(&["ls", "cat foo", "echo fail"][..])
+    )]
+    #[case::fallback_pipe_without_double(
+        ShellKind::Unknown,
+        "ls | grep foo",
+        &["ls", "grep"],
+        Some(&["ls", "grep foo"][..])
+    )]
+    #[case::subshell(ShellKind::Bash, "(cd /tmp && ls)", &["cd", "ls"], None)]
+    #[case::variable_assignment_excluded(
+        ShellKind::Bash,
+        "FOO=bar ls -la /tmp",
+        &["ls"],
+        Some(&["ls -la /tmp"][..])
+    )]
+    #[case::variable_assignment_multiple(
+        ShellKind::Bash,
+        "A=1 B=2 git status",
+        &["git"],
+        Some(&["git status"][..])
+    )]
     fn parse_exact(
         #[case] kind: ShellKind,
         #[case] code: &str,
-        #[case] names_expected: &[&str],
-        #[case] fulls_expected: Option<&[&str]>,
+        #[case] expected_names: &[&str],
+        #[case] expected_fulls: Option<&[&str]>,
     ) {
-        let r = parse_shell_command(code, kind);
-        assert_eq!(names(&r.subcommands), names_expected);
-        if let Some(f) = fulls_expected {
-            assert_eq!(fulls(&r.subcommands), f);
+        let cmds = kind.commands(code);
+        let names: Vec<&str> = cmds.iter().map(|c| c.name).collect();
+        assert_eq!(names, expected_names);
+        if let Some(f) = expected_fulls {
+            let fulls: Vec<&str> = cmds.iter().map(|c| c.full).collect();
+            assert_eq!(fulls, f);
         }
     }
 
-    // Contains-style (subset) parse checks.
+    // Parses that only require certain subcommands to be present (subset match).
     #[rstest]
+    #[case::fallback_splits_correctly(ShellKind::Unknown, "ls && cat foo || echo fail", &["ls", "cat", "echo"])]
     #[case::fish_conditional(ShellKind::Fish, "git add .; and git commit -m hi", &["git"])]
-    #[case::fallback_or(ShellKind::Other, "ls && cat foo || echo fail", &["ls", "cat", "echo"])]
+    // `dash_is_parsed_as_posix`: only the posix grammar extracts the inner `git`
+    // from `$(...)` -- the fallback parser cannot see past it -- so this proves
+    // Dash routes to the posix parser rather than to the fallback path.
+    #[case::dash_is_parsed_as_posix(ShellKind::Dash, "echo $(git rev-parse HEAD)", &["echo", "git"])]
+    #[case::command_substitution(ShellKind::Bash, "echo $(git rev-parse HEAD)", &["echo", "git"])]
+    #[case::backtick_substitution(ShellKind::Bash, "echo `date`", &["echo", "date"])]
+    #[case::for_loop(ShellKind::Bash, "for f in *.txt; do cat $f; done", &["cat"])]
+    #[case::if_statement(
+        ShellKind::Bash,
+        "if [ -f foo ]; then cat foo; else echo nope; fi",
+        &["cat", "echo"]
+    )]
+    #[case::nested_substitution(
+        ShellKind::Bash,
+        "echo \"Result: $(git log --oneline | head -1)\"",
+        &["echo", "git", "head"]
+    )]
+    #[case::fish_command_substitution(ShellKind::Fish, "echo (date)", &["echo", "date"])]
     fn parse_contains_names(
         #[case] kind: ShellKind,
         #[case] code: &str,
         #[case] expected: &[&str],
     ) {
-        let result = parse_shell_command(code, kind);
-        let n = names(&result.subcommands);
+        let cmds = kind.commands(code);
+        let n: Vec<&str> = cmds.iter().map(|c| c.name).collect();
         for name in expected {
             assert!(n.contains(name), "should contain {name}: {n:?}");
         }
     }
 
-    // Scope matching table. `any_subcommand_matches` does not use tree-sitter,
-    // so these run in both feature configurations (the s0x cases were folded in
-    // from the previously gated `adversarial` module).
+    // Scope matching (`any_subcommand_matches`). Pure string matching -- no
+    // parser involved -- so these run in every configuration. The `s0x` cases
+    // were folded in from the previously separate `adversarial` scope tests.
     #[rstest]
     #[case::wildcard_star(&[("git", "git commit -m msg"), ("npm", "npm test")], true, "*", true)]
     #[case::git_commit_prefix(&[("git", "git commit -m msg"), ("npm", "npm test")], true, "git commit *", true)]
@@ -551,87 +275,77 @@ mod tests {
         #[case] scope: &str,
         #[case] expected: bool,
     ) {
-        let cmds: Vec<ShellCommand> = commands
-            .iter()
-            .map(|(n, f)| ShellCommand {
-                name: (*n).into(),
-                full: (*f).into(),
-            })
-            .collect();
+        let cmds: Vec<Command> = commands.iter().map(|(n, f)| cmd(n, f)).collect();
         assert_eq!(any_subcommand_matches(&cmds, prefix_bare, scope), expected);
     }
 }
 
-#[cfg(all(test, feature = "tree-sitter"))]
+#[cfg(test)]
 mod adversarial {
-    use super::*;
+    use atuin_common::shell::ShellKind;
     use rstest::rstest;
-
-    fn cmd_names(cmds: &[ShellCommand]) -> Vec<&str> {
-        cmds.iter().map(|c| c.name.as_str()).collect()
-    }
 
     #[rstest]
     // Level 1: Basic compounds
-    #[case::triple_chain(ShellKind::Posix, "a && b && c", &["a", "b", "c"])]
-    #[case::or_chain(ShellKind::Posix, "a || b || c", &["a", "b", "c"])]
-    #[case::mixed_chain(ShellKind::Posix, "a && b || c && d", &["a", "b", "c", "d"])]
+    #[case::triple_chain(ShellKind::Bash, "a && b && c", &["a", "b", "c"])]
+    #[case::or_chain(ShellKind::Bash, "a || b || c", &["a", "b", "c"])]
+    #[case::mixed_chain(ShellKind::Bash, "a && b || c && d", &["a", "b", "c", "d"])]
     #[case::long_pipeline(
-        ShellKind::Posix,
+        ShellKind::Bash,
         "cat foo | grep bar | awk '{print $1}' | sort | uniq -c",
         &["cat", "grep", "awk", "sort", "uniq"]
     )]
-    #[case::semicolons(ShellKind::Posix, "a; b; c; d", &["a", "b", "c", "d"])]
+    #[case::semicolons(ShellKind::Bash, "a; b; c; d", &["a", "b", "c", "d"])]
     // Command substitution
-    #[case::nested_dollar(ShellKind::Posix, "echo $(basename $(dirname /foo/bar))", &["echo", "basename", "dirname"])]
-    #[case::deeply_nested(ShellKind::Posix, "echo $(echo $(echo $(echo deep)))", &["echo", "echo", "echo", "echo"])]
-    #[case::backtick_in_echo(ShellKind::Posix, "echo `hostname`", &["echo", "hostname"])]
-    #[case::mixed_substitutions(ShellKind::Posix, "echo $(date) `uname`", &["echo", "date", "uname"])]
+    #[case::nested_dollar(ShellKind::Bash, "echo $(basename $(dirname /foo/bar))", &["echo", "basename", "dirname"])]
+    #[case::deeply_nested(ShellKind::Bash, "echo $(echo $(echo $(echo deep)))", &["echo", "echo", "echo", "echo"])]
+    #[case::backtick_in_echo(ShellKind::Bash, "echo `hostname`", &["echo", "hostname"])]
+    #[case::mixed_substitutions(ShellKind::Bash, "echo $(date) `uname`", &["echo", "date", "uname"])]
     // Subshells and groups
-    #[case::subshell_chain(ShellKind::Posix, "(cd /tmp && ls -la)", &["cd", "ls"])]
-    #[case::nested_subshells(ShellKind::Posix, "( (inner_cmd) )", &["inner_cmd"])]
-    #[case::brace_group(ShellKind::Posix, "{ cd /tmp; ls; }", &["cd", "ls"])]
+    #[case::subshell_chain(ShellKind::Bash, "(cd /tmp && ls -la)", &["cd", "ls"])]
+    #[case::nested_subshells(ShellKind::Bash, "( (inner_cmd) )", &["inner_cmd"])]
+    #[case::brace_group(ShellKind::Bash, "{ cd /tmp; ls; }", &["cd", "ls"])]
     // Variable assignments
-    #[case::var_assignment_no_command(ShellKind::Posix, "FOO=bar", &[])]
-    #[case::var_assignment_in_pipeline(ShellKind::Posix, "FOO=bar ls | BAZ=qux grep foo", &["ls", "grep"])]
+    #[case::var_assignment_no_command(ShellKind::Bash, "FOO=bar", &[])]
+    #[case::var_assignment_in_pipeline(ShellKind::Bash, "FOO=bar ls | BAZ=qux grep foo", &["ls", "grep"])]
     // Control flow
-    #[case::if_then_else(ShellKind::Posix, "if [ -f foo ]; then cat foo; else echo missing; fi", &["cat", "echo"])]
-    #[case::elif_chain(ShellKind::Posix, "if [ -f a ]; then cat a; elif [ -f b ]; then cat b; else echo none; fi", &["cat", "cat", "echo"])]
-    #[case::for_loop(ShellKind::Posix, "for f in *.txt; do cat \"$f\"; done", &["cat"])]
-    #[case::while_loop(ShellKind::Posix, "while read line; do echo \"$line\"; done < input.txt", &["echo", "read"])]
-    #[case::case_statement(ShellKind::Posix, "case $x in foo) echo foo;; bar) echo bar;; esac", &["echo", "echo"])]
+    #[case::if_then_else(ShellKind::Bash, "if [ -f foo ]; then cat foo; else echo missing; fi", &["cat", "echo"])]
+    #[case::elif_chain(ShellKind::Bash, "if [ -f a ]; then cat a; elif [ -f b ]; then cat b; else echo none; fi", &["cat", "cat", "echo"])]
+    #[case::for_loop(ShellKind::Bash, "for f in *.txt; do cat \"$f\"; done", &["cat"])]
+    #[case::while_loop(ShellKind::Bash, "while read line; do echo \"$line\"; done < input.txt", &["echo", "read"])]
+    #[case::case_statement(ShellKind::Bash, "case $x in foo) echo foo;; bar) echo bar;; esac", &["echo", "echo"])]
     // Redirection
-    #[case::redirect_out(ShellKind::Posix, "ls > output.txt", &["ls"])]
-    #[case::redirect_append(ShellKind::Posix, "ls >> output.txt 2>&1", &["ls"])]
-    #[case::here_string(ShellKind::Posix, "grep foo <<< \"hello world\"", &["grep"])]
-    #[case::redirect_in_pipeline(ShellKind::Posix, "cat < input.txt | sort | uniq", &["cat", "sort", "uniq"])]
-    #[case::process_substitution(ShellKind::Posix, "diff <(sort a.txt) <(sort b.txt)", &["diff", "sort", "sort"])]
+    #[case::redirect_out(ShellKind::Bash, "ls > output.txt", &["ls"])]
+    #[case::redirect_append(ShellKind::Bash, "ls >> output.txt 2>&1", &["ls"])]
+    #[case::here_string(ShellKind::Bash, "grep foo <<< \"hello world\"", &["grep"])]
+    #[case::redirect_in_pipeline(ShellKind::Bash, "cat < input.txt | sort | uniq", &["cat", "sort", "uniq"])]
+    #[case::process_substitution(ShellKind::Bash, "diff <(sort a.txt) <(sort b.txt)", &["diff", "sort", "sort"])]
     // Functions
-    #[case::function_def(ShellKind::Posix, "foo() { echo hello; }", &["echo"])]
-    #[case::function_with_subshell(ShellKind::Posix, "build() { cargo build && cargo test; }", &["cargo", "cargo"])]
+    #[case::function_def(ShellKind::Bash, "foo() { echo hello; }", &["echo"])]
+    #[case::function_with_subshell(ShellKind::Bash, "build() { cargo build && cargo test; }", &["cargo", "cargo"])]
     // Edge cases
-    #[case::empty_string(ShellKind::Posix, "", &[])]
-    #[case::whitespace_only(ShellKind::Posix, "   \t  \n  ", &[])]
-    #[case::single_command_no_args(ShellKind::Posix, "ls", &["ls"])]
-    #[case::single_quotes(ShellKind::Posix, "echo 'hello world'", &["echo"])]
-    #[case::double_quotes(ShellKind::Posix, "echo \"hello world\"", &["echo"])]
-    #[case::escaped_spaces(ShellKind::Posix, "ls\\ -la", &["ls\\ -la"])]
-    #[case::dollar_var(ShellKind::Posix, "echo $HOME/.bashrc", &["echo"])]
-    #[case::background_job(ShellKind::Posix, "sleep 10 &", &["sleep"])]
-    #[case::background_chain(ShellKind::Posix, "sleep 10 && echo done &", &["sleep", "echo"])]
+    #[case::empty_string(ShellKind::Bash, "", &[])]
+    #[case::whitespace_only(ShellKind::Bash, "   \t  \n  ", &[])]
+    #[case::single_command_no_args(ShellKind::Bash, "ls", &["ls"])]
+    #[case::single_quotes(ShellKind::Bash, "echo 'hello world'", &["echo"])]
+    #[case::double_quotes(ShellKind::Bash, "echo \"hello world\"", &["echo"])]
+    #[case::escaped_spaces(ShellKind::Bash, "ls\\ -la", &["ls\\ -la"])]
+    #[case::dollar_var(ShellKind::Bash, "echo $HOME/.bashrc", &["echo"])]
+    #[case::background_job(ShellKind::Bash, "sleep 10 &", &["sleep"])]
+    #[case::background_chain(ShellKind::Bash, "sleep 10 && echo done &", &["sleep", "echo"])]
     // Real-world
-    #[case::docker_build_and_run(ShellKind::Posix, "docker build -t app . && docker run --rm app npm test", &["docker", "docker"])]
-    #[case::git_rebase_interactive(ShellKind::Posix, "GIT_SEQUENCE_EDITOR=\"sed -i 's/pick/reword/'\" git rebase -i HEAD~5", &["git"])]
-    #[case::find_with_exec(ShellKind::Posix, "find . -name '*.rs' -exec grep -l 'unsafe' {} +", &["find"])]
-    #[case::curl_pipe_sh(ShellKind::Posix, "curl -sSL https://example.com/install.sh | bash", &["curl", "bash"])]
-    #[case::xargs(ShellKind::Posix, "find . -name '*.tmp' | xargs rm -f", &["find", "xargs"])]
-    #[case::npm_script_chain(ShellKind::Posix, "npm run build && npm run test && npm run lint", &["npm", "npm", "npm"])]
-    #[case::make_with_redirect(ShellKind::Posix, "make -j$(nproc) 2>&1 | tee build.log", &["make", "nproc", "tee"])]
-    #[case::sudo_chain(ShellKind::Posix, "sudo apt update && sudo apt upgrade -y", &["sudo", "sudo"])]
-    #[case::here_doc_with_subcommand(ShellKind::Posix, "cat <<EOF\nhello $(whoami)\nEOF", &["cat", "whoami"])]
-    #[case::eval_with_command(ShellKind::Posix, "eval \"echo hello\"", &["eval"])]
-    #[case::exec_replace(ShellKind::Posix, "exec ls", &["exec"])]
-    #[case::source_script(ShellKind::Posix, "source ~/.bashrc", &["source"])]
+    #[case::docker_build_and_run(ShellKind::Bash, "docker build -t app . && docker run --rm app npm test", &["docker", "docker"])]
+    #[case::git_rebase_interactive(ShellKind::Bash, "GIT_SEQUENCE_EDITOR=\"sed -i 's/pick/reword/'\" git rebase -i HEAD~5", &["git"])]
+    #[case::find_with_exec(ShellKind::Bash, "find . -name '*.rs' -exec grep -l 'unsafe' {} +", &["find"])]
+    #[case::curl_pipe_sh(ShellKind::Bash, "curl -sSL https://example.com/install.sh | bash", &["curl", "bash"])]
+    #[case::xargs(ShellKind::Bash, "find . -name '*.tmp' | xargs rm -f", &["find", "xargs"])]
+    #[case::npm_script_chain(ShellKind::Bash, "npm run build && npm run test && npm run lint", &["npm", "npm", "npm"])]
+    #[case::make_with_redirect(ShellKind::Bash, "make -j$(nproc) 2>&1 | tee build.log", &["make", "nproc", "tee"])]
+    #[case::sudo_chain(ShellKind::Bash, "sudo apt update && sudo apt upgrade -y", &["sudo", "sudo"])]
+    #[case::here_doc_with_subcommand(ShellKind::Bash, "cat <<EOF\nhello $(whoami)\nEOF", &["cat", "whoami"])]
+    #[case::eval_with_command(ShellKind::Bash, "eval \"echo hello\"", &["eval"])]
+    #[case::exec_replace(ShellKind::Bash, "exec ls", &["exec"])]
+    #[case::source_script(ShellKind::Bash, "source ~/.bashrc", &["source"])]
     // Fish
     #[case::fish_simple(ShellKind::Fish, "ls -la /tmp", &["ls"])]
     #[case::fish_pipe(ShellKind::Fish, "cat foo | grep bar | sort", &["cat", "grep", "sort"])]
@@ -654,23 +368,13 @@ mod adversarial {
     #[case::fish_double_pipe(ShellKind::Fish, "test -f foo || echo missing", &["test", "echo"])]
     #[case::fish_empty(ShellKind::Fish, "", &[])]
     #[case::fish_whitespace(ShellKind::Fish, "   ", &[])]
-    // Folded in from the (previously #[cfg(feature = "tree-sitter")]) tests
-    // module. Original tests asserted subset membership; this table asserts
-    // exact (sorted) name-set equality, strengthening them.
-    #[case::command_substitution(ShellKind::Posix, "echo $(git rev-parse HEAD)", &["echo", "git"])]
-    #[case::backtick_substitution(ShellKind::Posix, "echo `date`", &["echo", "date"])]
-    #[case::subshell(ShellKind::Posix, "(cd /tmp && ls)", &["cd", "ls"])]
-    #[case::for_loop_unquoted(ShellKind::Posix, "for f in *.txt; do cat $f; done", &["cat"])]
-    #[case::if_statement(ShellKind::Posix, "if [ -f foo ]; then cat foo; else echo nope; fi", &["cat", "echo"])]
-    #[case::nested_substitution(ShellKind::Posix, "echo \"Result: $(git log --oneline | head -1)\"", &["echo", "git", "head"])]
-    #[case::fish_command_substitution_date(ShellKind::Fish, "echo (date)", &["echo", "date"])]
     fn extracts_subcommand_names(
         #[case] kind: ShellKind,
         #[case] code: &str,
         #[case] expected: &[&str],
     ) {
-        let result = parse_shell_command(code, kind);
-        let mut got: Vec<&str> = result.subcommands.iter().map(|c| c.name.as_str()).collect();
+        let cmds = kind.commands(code);
+        let mut got: Vec<&str> = cmds.iter().map(|c| c.name).collect();
         got.sort();
         let mut want: Vec<&str> = expected.to_vec();
         want.sort();
@@ -684,16 +388,14 @@ mod adversarial {
     #[rstest]
     #[case::single_var_assignment("FOO=bar ls", "ls", "ls")]
     #[case::multiple_var_assignments("A=1 B=2 C=3 git status", "git", "git status")]
-    // Folded in from the (previously #[cfg(feature = "tree-sitter")]) tests module.
-    #[case::variable_assignment_excluded("FOO=bar ls -la /tmp", "ls", "ls -la /tmp")]
-    #[case::variable_assignment_multiple("A=1 B=2 git status", "git", "git status")]
     fn strips_var_assignments_keeping_full_command(
         #[case] code: &str,
         #[case] expected_name: &str,
         #[case] expected_full: &str,
     ) {
-        let result = parse_shell_command(code, ShellKind::Posix);
-        assert_eq!(cmd_names(&result.subcommands), &[expected_name]);
-        assert_eq!(result.subcommands[0].full, expected_full);
+        let cmds = ShellKind::Bash.commands(code);
+        let names: Vec<&str> = cmds.iter().map(|c| c.name).collect();
+        assert_eq!(names, &[expected_name]);
+        assert_eq!(cmds[0].full, expected_full);
     }
 }

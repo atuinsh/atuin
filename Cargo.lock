@@ -303,9 +303,6 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
- "tree-sitter",
- "tree-sitter-bash",
- "tree-sitter-fish",
  "unicode-width 0.2.2",
  "url",
  "uuid",
@@ -358,9 +355,6 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
- "tree-sitter",
- "tree-sitter-bash",
- "tree-sitter-fish",
  "tui-textarea-2",
  "typed-builder",
  "unicode-width 0.2.2",
@@ -432,10 +426,13 @@ dependencies = [
 name = "atuin-common"
 version = "18.19.0-beta.3"
 dependencies = [
+ "async-trait",
  "base64",
+ "bstr",
  "derive_more",
  "directories",
  "eyre",
+ "futures",
  "getrandom 0.4.3",
  "itertools 0.15.0",
  "pretty_assertions",
@@ -447,13 +444,18 @@ dependencies = [
  "sysinfo",
  "thiserror 2.0.19",
  "time",
+ "tokio",
  "tracing",
  "tracing-subscriber",
+ "tree-sitter",
+ "tree-sitter-bash",
+ "tree-sitter-fish",
  "unicode-segmentation",
  "unicode-width 0.2.2",
  "url",
  "uuid",
  "vt100",
+ "winnow",
 ]
 
 [[package]]
@@ -970,6 +972,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf88ba1141d185c399bee5288d850d63b8369520c1eafc32a0430b5b6c287bf4"
 dependencies = [
  "tinyvec",
+]
+
+[[package]]
+name = "bstr"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f7dc094d718f2e1c1559ad110e27eeaae14a5465d3d56dd6dbd793079fbd530"
+dependencies = [
+ "memchr",
+ "regex-automata",
+ "serde_core",
 ]
 
 [[package]]
@@ -7106,9 +7119,9 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 
 [[package]]
 name = "winnow"
-version = "1.0.3"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
+checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 dependencies = [
  "memchr",
 ]

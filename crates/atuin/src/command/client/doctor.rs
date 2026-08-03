@@ -4,7 +4,7 @@ use std::{env, str::FromStr};
 
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
-use atuin_common::shell::{Shell, shell_name};
+use atuin_common::shell::{ShellKind, shell_name};
 use atuin_common::utils;
 use colored::Colorize;
 use eyre::Result;
@@ -169,8 +169,10 @@ impl ShellInfo {
     }
 
     fn unknown() -> Self {
-        let name = Shell::Unknown.to_string();
-        let default = Shell::default_shell().unwrap_or(Shell::Unknown).to_string();
+        let name = ShellKind::Unknown.to_string();
+        let default = ShellKind::default_shell()
+            .unwrap_or(ShellKind::Unknown)
+            .to_string();
         let preexec = Self::detect_preexec_framework(name.as_str());
 
         Self {
@@ -182,7 +184,7 @@ impl ShellInfo {
     }
 
     pub fn new() -> Self {
-        // TODO: rework to use atuin_common::Shell
+        // TODO: rework to use atuin_common::ShellKind
 
         let sys = System::new_all();
 
@@ -198,7 +200,9 @@ impl ShellInfo {
 
         let plugins = ShellInfo::plugins(name.as_str(), parent);
 
-        let default = Shell::default_shell().unwrap_or(Shell::Unknown).to_string();
+        let default = ShellKind::default_shell()
+            .unwrap_or(ShellKind::Unknown)
+            .to_string();
 
         let preexec = Self::detect_preexec_framework(name.as_str());
 

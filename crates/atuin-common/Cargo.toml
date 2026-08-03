@@ -13,6 +13,9 @@ repository = { workspace = true }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
+# `tracing` is now an unconditional dependency, but the feature is kept so that
+# `#[cfg(feature = "tracing")]` gating and dependents that enable it still work.
+tracing = []
 # Enables the `test_utils` module.
 test-utils = ["dep:tracing-subscriber"]
 # The `string::ellipsis` module: budget-aware, grapheme/display-width-correct
@@ -22,12 +25,16 @@ unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
 # sequences, backspaces, carriage returns, cursor motion) into clean plain text
 # via a `vt100` terminal emulator. Compiled only when enabled.
 ansi = ["dep:vt100"]
+# The `shell::parse` module: tree-sitter-based shell command classification and
+# extraction. Compiled only when enabled (keeps tree-sitter out of the server).
+shell-syntax = ["dep:tree-sitter", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
 
 [dependencies]
 derive_more = { workspace = true }
 time = { workspace = true, features = ["formatting", "parsing"] }
 serde = { workspace = true }
 serde_with = "3.8.1"
+serde_json = { workspace = true }
 uuid = { workspace = true }
 eyre = { workspace = true }
 url = { workspace = true }
@@ -41,7 +48,15 @@ tracing-subscriber = { workspace = true, optional = true }
 unicode-width = { version = "0.2", optional = true }
 unicode-segmentation = { version = "1.11.0", optional = true }
 vt100 = { workspace = true, optional = true }
+tree-sitter = { workspace = true, optional = true }
+tree-sitter-bash = { workspace = true, optional = true }
+tree-sitter-fish = { workspace = true, optional = true }
 itertools = { workspace = true }
+tokio = { workspace = true }
+futures = "0.3"
+winnow = "1.0.4"
+bstr = "1"
+async-trait = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
