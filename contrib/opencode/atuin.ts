@@ -1,0 +1,1 @@
+../../crates/atuin/contrib/opencode/atuin.ts

@@ -101,6 +101,7 @@ __atuin_install_agent_hook(){
 
 __atuin_install_agent_hook "claude-code" "Claude Code" "$HOME/.claude" claude
 __atuin_install_agent_hook "codex" "Codex" "$HOME/.codex" codex
+__atuin_install_agent_hook "opencode" "opencode" "${XDG_CONFIG_HOME:-$HOME/.config}/opencode" opencode
 __atuin_install_agent_hook "pi" "pi" "$HOME/.config/pi" pi
 
 echo ""
