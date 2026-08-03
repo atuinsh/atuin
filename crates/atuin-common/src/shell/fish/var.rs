@@ -4,16 +4,18 @@ use bstr::{BStr, BString, ByteSlice};
 
 use crate::shell::{Var, VarName, VarParsingError};
 
-/// Validate `name` as a fish variable name: non-empty, an ASCII letter or `_`
-/// first, then ASCII alphanumerics or `_`.
+/// Validate `name` as a fish variable name.
+///
+/// fish's `valid_var_name` accepts any non-empty name whose characters are all
+/// `_` or Unicode alphanumeric (`fish_iswalnum`): there is no leading-digit or
+/// ASCII-only restriction, so `9to5` and `café` are valid. We mirror that.
 #[allow(unsafe_code)]
 pub(super) fn validate_var_name(
     name: BString,
     shell: &'static str,
 ) -> Result<VarName, VarParsingError> {
-    let first_ok = matches!(name.first(), Some(&b) if b == b'_' || b.is_ascii_alphabetic());
-    let rest_ok = name.iter().all(|&b| b == b'_' || b.is_ascii_alphanumeric());
-    if first_ok && rest_ok {
+    let ok = !name.is_empty() && name.chars().all(|c| c == '_' || c.is_alphanumeric());
+    if ok {
         // SAFETY: validated as a fish variable name just above.
         Ok(unsafe { VarName::new_unchecked(name) })
     } else {
@@ -98,5 +100,24 @@ mod tests {
     ) {
         let script = render_vars(&[var(name, value, export)]);
         assert_eq!(script, BString::from(expected));
+    }
+
+    #[rstest]
+    #[case::letter("FOO")]
+    #[case::leading_underscore("_x")]
+    // fish has no leading-digit or ASCII-only restriction.
+    #[case::leading_digit("9to5")]
+    #[case::non_ascii("café")]
+    fn accepts_valid_names(#[case] name: &str) {
+        let valid = validate_var_name(BString::from(name), "fish").unwrap();
+        assert_eq!(BString::from(valid), BString::from(name));
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::space("a b")]
+    #[case::hyphen("a-b")]
+    fn rejects_invalid_names(#[case] name: &str) {
+        assert!(validate_var_name(BString::from(name), "fish").is_err());
     }
 }

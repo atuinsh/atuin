@@ -86,7 +86,11 @@ pub(super) fn parse_aliases(input: &[u8]) -> Result<Aliases, AliasesError> {
     fn piece<'a>(input: &mut &'a [u8]) -> ModalResult<&'a [u8]> {
         alt((
             preceded(b'\\', literal(b"'".as_slice())),
-            delimited(b'"', literal(b"'".as_slice()), b'"'),
+            // dash's `single_quote()` wraps a maximal *run* of consecutive single
+            // quotes in one double-quoted segment (`"''"`, `"'''"`), so accept
+            // one-or-more quotes here, not just one. bash emits the single-quote
+            // form, for which this matches exactly one quote — identical to before.
+            delimited(b'"', take_while(1.., |b: u8| b == b'\''), b'"'),
             delimited(b'\'', take_while(0.., |b: u8| b != b'\''), b'\''),
         ))
         .parse_next(input)
@@ -104,11 +108,16 @@ pub(super) fn parse_aliases(input: &[u8]) -> Result<Aliases, AliasesError> {
     fn alias_line(input: &mut &[u8]) -> ModalResult<(Vec<u8>, Vec<u8>)> {
         (
             opt(literal(b"alias ".as_slice())),
+            // bash's `alias -p` prints a `-- ` guard before any name that starts
+            // with `-` (a legal alias name), so strip it. A real alias name never
+            // contains a space, so `-- ` here can only be that guard; dash never
+            // emits it, so the `opt` is a harmless no-op there.
+            opt(literal(b"-- ".as_slice())),
             take_while(1.., |b: u8| b != b'=' && b != b'\n'),
             literal(b"=".as_slice()),
             alias_value,
         )
-            .map(|(_, name, _, value): (_, &[u8], _, Vec<u8>)| (name.to_vec(), value))
+            .map(|(_, _, name, _, value): (_, _, &[u8], _, Vec<u8>)| (name.to_vec(), value))
             .parse_next(input)
     }
 
@@ -147,6 +156,12 @@ pub(super) fn render_aliases(aliases: &[Alias]) -> Rendered {
         }
 
         script.extend_from_slice(b"alias ");
+        // A name starting with `-` would be read as an option by the `alias`
+        // builtin (`alias: -x: invalid option`); guard it with `-- ` exactly as
+        // bash's and zsh's own reusable `alias -p`/`alias -L` output does.
+        if alias.name.first() == Some(&b'-') {
+            script.extend_from_slice(b"-- ");
+        }
         script.extend_from_slice(&alias.name);
         script.push(b'=');
         single_quote(&alias.value.shcmd(), &mut script);
@@ -156,13 +171,19 @@ pub(super) fn render_aliases(aliases: &[Alias]) -> Rendered {
     Rendered { script, skipped }
 }
 
-/// A POSIX alias name must be non-empty and free of whitespace, `=`, single
-/// quotes and control characters.
+/// A POSIX alias name must be non-empty and free of the characters bash's
+/// `valid_alias_name` rejects — shell metacharacters (`( ) < > ; & |`), the
+/// expansion/quoting characters (`$ " ' \` and backtick), globs (`* ?`) and
+/// `/` — plus `=` (the name/value separator) and whitespace/control bytes.
+///
+/// A leading `-` is *allowed* (it is a legal alias name); [`render_aliases`]
+/// guards it with the `-- ` prefix so the sourced line is not read as an option.
 fn is_valid_alias_name(name: &[u8]) -> bool {
+    const META: &[u8] = b"=\"'\\$()<>;&|/`*?";
     !name.is_empty()
         && !name
             .iter()
-            .any(|&b| b == b'=' || b == b'\'' || b.is_ascii_whitespace() || b.is_ascii_control())
+            .any(|&b| META.contains(&b) || b.is_ascii_whitespace() || b.is_ascii_control())
 }
 
 /// Append `bytes` to `out`, single-quoted, each embedded `'` written `'\''`.
@@ -266,10 +287,34 @@ mod render_tests {
         AliasValue::Argv(vec![BString::from("git"), BString::from("st")]),
         concat!(r"alias g=''\''git'\'' '\''st'\'''", "\n")
     )]
+    // A leading `-` is a legal alias name; it must be emitted with the `-- ` guard
+    // so the sourced line is not parsed as an option (`alias: -x: invalid option`).
+    #[case::guards_leading_hyphen_name(
+        "-x",
+        AliasValue::Command(BString::from("y")),
+        "alias -- -x='y'\n"
+    )]
     fn renders_alias(#[case] name: &str, #[case] value: AliasValue, #[case] expected: &str) {
         let r = render_aliases(&[alias(name, value)]);
         assert_eq!(r.script, BString::from(expected));
         assert!(r.skipped.is_empty());
+    }
+
+    #[rstest]
+    #[case::slash("a/b")]
+    #[case::semicolon("g;rm")]
+    #[case::pipe("a|b")]
+    #[case::ampersand("a&b")]
+    #[case::backtick("a`b`")]
+    #[case::dollar("a$b")]
+    #[case::double_quote("a\"b")]
+    #[case::glob_star("a*")]
+    #[case::glob_question("a?")]
+    fn skips_names_with_shell_metacharacters(#[case] name: &str) {
+        let r = render_aliases(&[alias(name, AliasValue::Command(BString::from("x")))]);
+        assert!(r.script.is_empty(), "expected {name:?} to be skipped");
+        assert_eq!(r.skipped.len(), 1);
+        assert_eq!(r.skipped[0].name, BString::from(name));
     }
 
     #[test]
@@ -430,6 +475,26 @@ mod tests {
     #[case::dash_double_quoted_quote(
         br#"whoops='echo it'"'"'s fine'"#,
         &[(b"whoops".as_slice(), b"echo it's fine".as_slice())]
+    )]
+    // dash groups a *run* of consecutive quotes into one double-quoted segment:
+    // the empty-string idiom `echo ''` prints as `'echo '"''"`, two quotes as `"''"`.
+    #[case::dash_grouped_two_quotes(
+        br#"e='echo '"''""#,
+        &[(b"e".as_slice(), b"echo ''".as_slice())]
+    )]
+    #[case::dash_grouped_bare_quote_run(
+        br#"x=''"''""#,
+        &[(b"x".as_slice(), b"''".as_slice())]
+    )]
+    // bash `alias -p` prints a `-- ` guard before a name starting with `-`.
+    #[case::bash_reusable_dash_guard(
+        b"alias -- -x='y'\n",
+        &[(b"-x".as_slice(), b"y".as_slice())]
+    )]
+    // dash prints a leading-`-` name with no `alias ` prefix and no guard.
+    #[case::dash_leading_hyphen_name(
+        b"-x='y'\n",
+        &[(b"-x".as_slice(), b"y".as_slice())]
     )]
     #[case::dash_missing_alias_prefix(b"ll='ls -l'\n", &[(b"ll".as_slice(), b"ls -l".as_slice())])]
     #[case::embedded_newline(

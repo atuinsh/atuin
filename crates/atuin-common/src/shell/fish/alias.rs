@@ -4,7 +4,7 @@ use bstr::BString;
 use winnow::{
     ModalResult, Parser,
     combinator::{alt, delimited, opt, preceded, repeat, terminated},
-    token::{literal, take_while},
+    token::{any, literal, take_while},
 };
 
 use crate::shell::{Alias, AliasValue, AliasesError, Rendered, Skipped};
@@ -12,8 +12,59 @@ use crate::shell::{Alias, AliasValue, AliasesError, Rendered, Skipped};
 use super::Aliases;
 
 /// Parse the output of `alias` into a name → value map.
+///
+/// The value is whatever `string escape` produced, in one of three forms
+/// depending on the fish version and the body's contents:
+///   - single-quoted (`'...'`), honouring fish's `\'` and `\\` escapes;
+///   - double-quoted (`"..."`), used by fish 4.x when the body has an apostrophe
+///     but no offsetting `"`/`$`, honouring `\\`, `\"`, `\$`;
+///   - unquoted, script-escaped (fish 3.x, and any version for control chars),
+///     honouring `\'` `\\` `\<space>` `\"` `\$`, the named escapes `\t \n \r \b
+///     \e \f \v \a`, `\cX`, and the hex byte escapes `\xHH`/`\XHH`.
 pub(super) fn parse_aliases(input: &[u8]) -> Result<Aliases, AliasesError> {
-    fn piece<'a>(input: &mut &'a [u8]) -> ModalResult<&'a [u8]> {
+    /// Decode the control byte fish writes as `\cX`.
+    fn control(byte: u8) -> u8 {
+        if byte == b'?' {
+            0x7f
+        } else {
+            byte.to_ascii_uppercase() & 0x1f
+        }
+    }
+
+    fn radix(digits: &[u8], base: u32) -> u8 {
+        digits.iter().fold(0u8, |acc, digit| {
+            let value = (*digit as char).to_digit(base).unwrap_or(0) as u8;
+            acc.wrapping_mul(base as u8).wrapping_add(value)
+        })
+    }
+
+    /// Decode one fish script-style escape, the leading `\` already consumed.
+    fn escape(input: &mut &[u8]) -> ModalResult<u8> {
+        alt((
+            preceded(b'c', any).map(control),
+            preceded(
+                alt((b'x', b'X')),
+                take_while(1..=2, |b: u8| b.is_ascii_hexdigit()),
+            )
+            .map(|digits: &[u8]| radix(digits, 16)),
+            any.map(|byte: u8| match byte {
+                b'n' => b'\n',
+                b't' => b'\t',
+                b'r' => b'\r',
+                b'b' => 0x08,
+                b'e' => 0x1b,
+                b'f' => 0x0c,
+                b'v' => 0x0b,
+                b'a' => 0x07,
+                // `\'`, `\\`, `\<space>`, `\"`, `\$`, `\;`, ... decode to the byte.
+                other => other,
+            }),
+        ))
+        .parse_next(input)
+    }
+
+    /// A piece of a single-quoted body: fish honours only `\'` and `\\` here.
+    fn single_piece<'a>(input: &mut &'a [u8]) -> ModalResult<&'a [u8]> {
         alt((
             preceded(
                 b'\\',
@@ -25,10 +76,10 @@ pub(super) fn parse_aliases(input: &[u8]) -> Result<Aliases, AliasesError> {
         .parse_next(input)
     }
 
-    fn quoted_value(input: &mut &[u8]) -> ModalResult<Vec<u8>> {
+    fn single_quoted(input: &mut &[u8]) -> ModalResult<Vec<u8>> {
         delimited(
             b'\'',
-            repeat(0.., piece).fold(Vec::new, |mut acc: Vec<u8>, seg: &[u8]| {
+            repeat(0.., single_piece).fold(Vec::new, |mut acc: Vec<u8>, seg: &[u8]| {
                 acc.extend_from_slice(seg);
                 acc
             }),
@@ -37,9 +88,50 @@ pub(super) fn parse_aliases(input: &[u8]) -> Result<Aliases, AliasesError> {
         .parse_next(input)
     }
 
+    /// A piece of a double-quoted body: fish honours only `\\`, `\"`, `\$` and a
+    /// line-continuation `\<newline>`; any other `\x` keeps the backslash.
+    fn double_piece(input: &mut &[u8]) -> ModalResult<Vec<u8>> {
+        alt((
+            preceded(b'\\', any).map(|byte: u8| match byte {
+                b'\\' => vec![b'\\'],
+                b'"' => vec![b'"'],
+                b'$' => vec![b'$'],
+                b'\n' => vec![],
+                other => vec![b'\\', other],
+            }),
+            take_while(1.., |b: u8| b != b'"' && b != b'\\').map(<[u8]>::to_vec),
+        ))
+        .parse_next(input)
+    }
+
+    fn double_quoted(input: &mut &[u8]) -> ModalResult<Vec<u8>> {
+        delimited(
+            b'"',
+            repeat(0.., double_piece).fold(Vec::new, |mut acc: Vec<u8>, seg: Vec<u8>| {
+                acc.extend_from_slice(&seg);
+                acc
+            }),
+            b'"',
+        )
+        .parse_next(input)
+    }
+
+    /// A piece of an unquoted, script-escaped body: an escape, or a run of bytes
+    /// that are neither a delimiter (space/newline) nor the start of an escape.
+    fn bare_piece(input: &mut &[u8]) -> ModalResult<Vec<u8>> {
+        alt((
+            preceded(b'\\', escape).map(|byte| vec![byte]),
+            take_while(1.., |b: u8| b != b' ' && b != b'\n' && b != b'\\').map(<[u8]>::to_vec),
+        ))
+        .parse_next(input)
+    }
+
     fn bare_value(input: &mut &[u8]) -> ModalResult<Vec<u8>> {
-        take_while(1.., |b: u8| b != b' ' && b != b'\n')
-            .map(<[u8]>::to_vec)
+        repeat(1.., bare_piece)
+            .fold(Vec::new, |mut acc: Vec<u8>, seg: Vec<u8>| {
+                acc.extend_from_slice(&seg);
+                acc
+            })
             .parse_next(input)
     }
 
@@ -48,7 +140,7 @@ pub(super) fn parse_aliases(input: &[u8]) -> Result<Aliases, AliasesError> {
             literal(b"alias ".as_slice()),
             take_while(1.., |b: u8| b != b' ' && b != b'\n'),
             literal(b" ".as_slice()),
-            alt((quoted_value, bare_value)),
+            alt((single_quoted, double_quoted, bare_value)),
         )
             .map(|(_, name, _, value): (_, &[u8], _, Vec<u8>)| (name.to_vec(), value))
             .parse_next(input)
@@ -201,6 +293,31 @@ mod tests {
         b"k".as_slice(),
         b"a=b".as_slice()
     )]
+    // fish 4.x wraps an apostrophe body in double quotes; decode `"..."`.
+    #[case::decodes_double_quoted_body(
+        b"alias x \"echo it's\"\n".as_slice(),
+        b"x".as_slice(),
+        b"echo it's".as_slice()
+    )]
+    #[case::decodes_double_quoted_escapes(
+        b"alias v \"a\\\\b\\\"c\\$d\"\n".as_slice(),
+        b"v".as_slice(),
+        br#"a\b"c$d"#.as_slice()
+    )]
+    // fish 3.x emits an unquoted, backslash-escaped body: escaped space + quote.
+    #[case::decodes_unquoted_escaped_space_and_quote(
+        br"alias z echo\ it\'s".as_slice(),
+        b"z".as_slice(),
+        b"echo it's".as_slice()
+    )]
+    // Control chars are always emitted unquoted with ANSI-C escapes.
+    #[case::decodes_unquoted_tab(
+        br"alias t echo\tx".as_slice(),
+        b"t".as_slice(),
+        b"echo\tx".as_slice()
+    )]
+    #[case::decodes_unquoted_control(br"alias g \cg".as_slice(), b"g".as_slice(), b"\x07".as_slice())]
+    #[case::decodes_unquoted_hex(br"alias h \x41".as_slice(), b"h".as_slice(), b"A".as_slice())]
     fn parses_values(#[case] input: &[u8], #[case] name: &[u8], #[case] expected: &[u8]) {
         assert_eq!(parse(input)[&BString::from(name)], BString::from(expected));
     }
