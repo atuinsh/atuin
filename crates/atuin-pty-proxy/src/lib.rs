@@ -5,6 +5,8 @@ mod debug;
 #[cfg(unix)]
 mod osc133;
 #[cfg(unix)]
+pub mod protocol;
+#[cfg(unix)]
 mod pty_proxy;
 #[cfg(unix)]
 mod runtime;
@@ -15,6 +17,8 @@ mod screen;
 pub use capture::{CommandCapture, CommandCaptureSink};
 #[cfg(unix)]
 pub use pty_proxy::{PtyProxy, Shell, init_script};
+#[cfg(unix)]
+pub use runtime::{ProxyCore, ProxyCoreConfig, ProxyHandle};
 
 #[cfg(not(unix))]
 #[allow(dead_code)]

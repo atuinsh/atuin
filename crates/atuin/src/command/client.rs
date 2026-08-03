@@ -26,6 +26,7 @@ mod import;
 mod info;
 mod init;
 mod kv;
+mod lab;
 mod scripts;
 mod search;
 mod setup;
@@ -124,6 +125,10 @@ pub enum Cmd {
     #[cfg(feature = "ai")]
     #[command()]
     Mcp,
+
+    /// Experimental laboratory features
+    #[command(subcommand, hide = true)]
+    Lab(lab::Cmd),
 }
 
 impl Cmd {
@@ -135,6 +140,18 @@ impl Cmd {
             && cmd.should_daemonize()
         {
             daemon::daemonize_current_process()?;
+        }
+
+        // Same rule for the re-exec'd `atuin lab share --active
+        // --internal-daemon` child: it must fork before the runtime exists.
+        // (`daemon::daemonize_current_process` lives behind the `daemon`
+        // feature and lab share ships in `client`-only builds, so the share's
+        // daemonize step lives in atuin-lab-share's `lifecycle`.)
+        #[cfg(unix)]
+        if let Self::Lab(ref cmd) = self
+            && cmd.should_daemonize()
+        {
+            atuin_lab_share::lifecycle::daemonize_current_process()?;
         }
 
         #[cfg(feature = "ai")]
@@ -181,6 +198,7 @@ impl Cmd {
             #[cfg(feature = "self-update")]
             Self::Update(update) => return update.run(&settings).await,
             Self::Config(config) => return config.run(&settings).await,
+            Self::Lab(cmd) => return cmd.run(&settings).await,
             _ => {}
         }
 
@@ -228,7 +246,12 @@ impl Cmd {
             #[cfg(feature = "daemon")]
             Self::Daemon(cmd) => cmd.run(settings, sqlite_store, db).await,
 
-            Self::History(_) | Self::Hook(_) | Self::Init(_) | Self::Doctor | Self::Config(_) => {
+            Self::History(_)
+            | Self::Hook(_)
+            | Self::Init(_)
+            | Self::Doctor
+            | Self::Config(_)
+            | Self::Lab(_) => {
                 unreachable!()
             }
 

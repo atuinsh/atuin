@@ -49,7 +49,7 @@ default = [
     "ai",
     "pty-proxy",
 ]
-client = ["atuin-client"]
+client = ["atuin-client", "dep:atuin-lab-share"]
 sync = ["atuin-client/sync"]
 daemon = ["atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
 ai = ["atuin-ai"]
@@ -57,7 +57,7 @@ pty-proxy = ["dep:atuin-pty-proxy"]
 hex = ["pty-proxy"]
 clipboard = ["arboard"]
 check-update = ["atuin-client/check-update"]
-vendored-tls = ["atuin-client?/vendored-tls"]
+vendored-tls = ["atuin-client?/vendored-tls", "atuin-lab-share?/vendored-tls"]
 # `atuin update`: self-update via the cargo-dist install receipt. Not a
 # default feature: only the official installer artifacts can self-update
 # (dist enables it in dist-workspace.toml), so package-manager and
@@ -75,6 +75,7 @@ atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }
 atuin-daemon = { path = "../atuin-daemon", version = "18.19.0-beta.3", optional = true, default-features = false }
 atuin-pty-proxy = { path = "../atuin-pty-proxy", version = "18.19.0-beta.3", optional = true, default-features = false }
+atuin-lab-share = { path = "../atuin-lab-share", version = "18.19.0-beta.3", optional = true }
 atuin-scripts = { workspace = true }
 atuin-kv = { workspace = true }
 axoupdater = { version = "0.10", optional = true }

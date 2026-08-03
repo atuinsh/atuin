@@ -1,0 +1,56 @@
+[package]
+name = "atuin-lab-share"
+edition = "2024"
+description = "Experimental terminal sharing for atuin (atuin lab share)"
+
+version = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+[features]
+# Statically link (vendor) OpenSSL for native-tls instead of using the system
+# copy, mirroring `atuin-client`'s feature of the same name.
+vendored-tls = ["tokio-tungstenite/native-tls-vendored"]
+
+# Only what the unconditional modules (`error`, the `run_share` stubs) need;
+# everything else is unix-only, matching the `cfg(unix)` module tree.
+[dependencies]
+thiserror = { workspace = true }
+url = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+serde_json = { workspace = true }
+base64 = { workspace = true }
+# The backgrounded `--active` lifecycle (`lifecycle` module): the pidfile
+# lock that means "a share is running", and the fork step of the re-exec'd
+# child. Both follow the atuin daemon's precedent, which pins these versions.
+fs4 = "0.13.1"
+daemonize = "0.5.0"
+atuin-common = { workspace = true, features = ["unicode"] }
+# The `--active` tap speaks the proxy's subscriber protocol; no cycle —
+# atuin-pty-proxy depends only on atuin-common.
+atuin-pty-proxy = { path = "../atuin-pty-proxy", version = "18.19.0-beta.3" }
+vt100 = { workspace = true }
+crossterm = { workspace = true }
+# `features = ["full"]` at the workspace level includes `signal` and `time`;
+# trimming to just what this crate needs would be a workspace change.
+tokio = { workspace = true }
+# Crate-local pins below: the workspace manifest is out of scope for this
+# refactor, so they cannot move to [workspace.dependencies] yet.
+portable-pty = "0.9"                                                            # PTY + child process
+unicode-width = "0.2"                                                           # status-bar display-width math
+# native-tls, not rustls: the workspace migrated off rustls in #3807, and a
+# second TLS stack in one binary is exactly what that removed.
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }             # hub WebSocket
+futures-util = "0.3"                                                            # stream/sink split of the WebSocket
+aes-gcm = "0.10"                                                                # E2EE frame sealing (aead 0.5 line; 0.11-pre would fork the stack)
+zeroize = { version = "1", features = ["derive"] }                              # session key wiped on drop
+
+[dev-dependencies]
+hex = "0.4" # frozen interop-vector literals in crypto tests
+
+[target.'cfg(unix)'.dev-dependencies]
+tempfile = { workspace = true } # a real socket path for the tap resync test
