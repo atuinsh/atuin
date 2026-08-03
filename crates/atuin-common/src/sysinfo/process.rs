@@ -106,26 +106,11 @@ pub trait SystemExt {
     ///   - a parent absent from the snapshot,
     ///   - a repeat of the starting pid,
     ///   - or `MAX_DEPTH` hops.
-    ///
-    /// A returned chain is well-formed but not necessarily true. The following are note-worthy:
-    ///
-    /// - **Re-parenting.** When a parent exits, its children are adopted by pid 1 (or the nearest
-    ///   subreaper on Linux). The reported chain is correct but perhaps misleading: it answers
-    ///   "who is my parent now", not "what spawned me."
-    ///
-    /// - **Stale parent ids.** The recorded parent id is never invalidated when the parent dies. If
-    ///   that number is later reassigned by the OS, this walk reports an unrelated process *and
-    ///   continues into its ancestors*, yielding a finite, plausible, entirely fictional lineage.
-    ///
-    /// - **Silent truncation.** A process that cannot be inspected (permissions,
-    ///   or exit between refresh and read) is absent from the snapshot and simply
-    ///   ends the iteration. This is indistinguishable from reaching the root, so
-    ///   an empty result means "no ancestor found," never "no ancestor exists."
-    fn proc_parents(&self, proc: &Process) -> PidAncestors<'_>;
+    fn walk_parents(&self, proc: &Process) -> PidAncestors<'_>;
 }
 
 impl SystemExt for System {
-    fn proc_parents(&self, proc: &Process) -> PidAncestors<'_> {
+    fn walk_parents(&self, proc: &Process) -> PidAncestors<'_> {
         PidAncestors {
             system: self,
             start: proc.pid(),
