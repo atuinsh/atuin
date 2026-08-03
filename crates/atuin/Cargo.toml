@@ -121,6 +121,11 @@ thiserror = { workspace = true }
 # settings editor with comment and relative ordering preservation
 toml_edit = { workspace = true }
 
+# internationalization (Project Fluent)
+i18n-embed = { version = "0.15.3", features = ["fluent", "fluent-system", "tr", "locale_config", "walkdir", "filesystem-assets"] }
+rust-embed = "8"
+i18n-embed-fl = "0.9.3"
+
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 arboard = { version = "3.4", optional = true, default-features = false }
 
