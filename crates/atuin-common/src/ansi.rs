@@ -8,8 +8,8 @@ const MAX_ROWS: usize = 16_384;
 
 /// Render ANSI-encoded terminal output to plain text, as it would appear on a `cols`-wide terminal.
 ///
-/// Uses [`vt100::Parser`] under the hood meaning that backspaces, ANSI codes, etc. are gracefully
-/// handled.
+/// Uses [`crate::vt::Parser`] under the hood meaning that backspaces, ANSI codes, etc. are
+/// gracefully handled.
 ///
 /// **Note** that this function is not cheap. It drives a full terminal emulator.
 pub fn to_plain_text(input: impl AsRef<[u8]>, cols: NonZeroU16) -> String {
@@ -41,7 +41,7 @@ pub fn to_plain_text(input: impl AsRef<[u8]>, cols: NonZeroU16) -> String {
         .saturating_add(1)
         .clamp(1, MAX_ROWS.min(u16::MAX as usize)) as u16;
 
-    let mut parser = vt100::Parser::new(rows, cols, 0);
+    let mut parser = crate::vt::Parser::new(rows, cols, 0);
     parser.process(&normalized);
 
     // The emulator renders onto a fixed grid, so `contents()` comes back with each row right-padded

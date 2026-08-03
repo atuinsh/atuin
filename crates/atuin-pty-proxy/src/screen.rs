@@ -1,3 +1,4 @@
+use atuin_common::vt::Parser;
 use std::io::Write;
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
@@ -16,7 +17,7 @@ pub(crate) fn socket_path() -> PathBuf {
 
 pub(crate) fn spawn_parser_thread(rows: u16, cols: u16, msg_rx: Receiver<Msg>) {
     std::thread::spawn(move || {
-        let mut parser = vt100::Parser::new(rows, cols, 0);
+        let mut parser = Parser::new(rows, cols, 0);
 
         loop {
             let first = match msg_rx.recv() {
@@ -73,7 +74,7 @@ pub(crate) fn spawn_socket_server(sock_path: PathBuf, screen_tx: SyncSender<Msg>
 /// Each row's bytes come from `screen.rows_formatted(0, cols)` and contain
 /// pre-built ANSI escape sequences. The client can write them directly to
 /// stdout without needing its own vt100 parser.
-fn encode_screen(parser: &vt100::Parser) -> Vec<u8> {
+fn encode_screen(parser: &Parser) -> Vec<u8> {
     let screen = parser.screen();
     let (rows, cols) = screen.size();
     let (cursor_row, cursor_col) = screen.cursor_position();
@@ -93,10 +94,10 @@ fn encode_screen(parser: &vt100::Parser) -> Vec<u8> {
     buf
 }
 
-fn handle_parser_msg(parser: &mut vt100::Parser, msg: Msg) {
+fn handle_parser_msg(parser: &mut Parser, msg: Msg) {
     match msg {
         Msg::Data(data) => parser.process(&data),
-        Msg::Resize { rows, cols } => parser.screen_mut().set_size(rows, cols),
+        Msg::Resize { rows, cols } => parser.set_size(rows, cols),
         Msg::ScreenRequest(reply_tx) => {
             let _ = reply_tx.send(encode_screen(parser));
         }

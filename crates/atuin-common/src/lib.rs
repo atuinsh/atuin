@@ -2,6 +2,8 @@
 
 #[cfg(feature = "ansi")]
 pub mod ansi;
+#[cfg(feature = "ansi")]
+pub mod vt;
 pub mod docs;
 pub mod filter;
 pub mod logs;

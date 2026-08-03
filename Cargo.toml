@@ -79,7 +79,7 @@ minijinja = "2.9.0"
 glob-match = "0.2.1"
 imara-diff = "0.2"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
-vt100 = "0.16"
+rio-vt = "0.5.4"
 regex = "1.10.5"
 toml_edit = "0.25.4"
 url = { version = "2.5", features = ["serde"] }
