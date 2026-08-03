@@ -2,30 +2,79 @@
 
 All notable changes to this project will be documented in this file.
 
-## [unreleased]
+## 18.19.0
 
 ### Bug Fixes
 
+- *(client)* Avoid panic decoding an empty encryption key ([#3803](https://github.com/atuinsh/atuin/issues/3803))
+- *(client)* Keep sqlx-postgres out of the client crate ([#2884](https://github.com/atuinsh/atuin/issues/2884)) ([#3823](https://github.com/atuinsh/atuin/issues/3823))
+- *(config)* Preserve comments in `atuin config set` ([#3766](https://github.com/atuinsh/atuin/issues/3766))
+- *(search)* Correct fuzzy result ranking ([#3603](https://github.com/atuinsh/atuin/issues/3603)) ([#3624](https://github.com/atuinsh/atuin/issues/3624))
+- Fix atuin-search-bench/benches/search.rs ([#3788](https://github.com/atuinsh/atuin/issues/3788))
+- Close OSC133 C when launching Atuin AI to prevent content erasure ([#3794](https://github.com/atuinsh/atuin/issues/3794))
+- Authenticate beta release push as atuin-bot ([#3809](https://github.com/atuinsh/atuin/issues/3809))
 - Copy vendored axoasset into docker builder stage ([#3816](https://github.com/atuinsh/atuin/issues/3816))
+
+
+### Documentation
+
+- Clarify update check network, provide build command ([#3767](https://github.com/atuinsh/atuin/issues/3767))
+- Remove old i18n docs ([#3787](https://github.com/atuinsh/atuin/issues/3787))
+- Use shell-agnostic install command in quickstart pages ([#3820](https://github.com/atuinsh/atuin/issues/3820))
+- Document named stats periods (today/week/month/year) ([#3821](https://github.com/atuinsh/atuin/issues/3821))
+- State minimum supported Rust version in install guide ([#3822](https://github.com/atuinsh/atuin/issues/3822))
+- Document iTerm2 tmux popup incompatibility ([#3826](https://github.com/atuinsh/atuin/issues/3826))
+- Clarify key binding snippets belong in shell startup file ([#3837](https://github.com/atuinsh/atuin/issues/3837))
+- Mention RustRover in IDE integration guidance ([#3834](https://github.com/atuinsh/atuin/issues/3834))
 
 
 ### Features
 
+- *(client)* Show intent in inspector ([#3804](https://github.com/atuinsh/atuin/issues/3804))
+- *(client)* Enable pty-proxy via config ([#3828](https://github.com/atuinsh/atuin/issues/3828))
+- *(config)* Validate new settings in `atuin config set` before writing them to disk ([#3769](https://github.com/atuinsh/atuin/issues/3769))
+- *(lab)* Experimental `atuin lab share`
+- *(search)* Remove the "skim" engine ([#3825](https://github.com/atuinsh/atuin/issues/3825))
+- Remove word with ALT-Backspace ALT-D ([#2457](https://github.com/atuinsh/atuin/issues/2457))
+- Add scheduled beta release workflow ([#3805](https://github.com/atuinsh/atuin/issues/3805))
 - Migrate TLS backend from rustls to native-tls ([#3807](https://github.com/atuinsh/atuin/issues/3807))
 - Make `update` a real subcommand ([#3813](https://github.com/atuinsh/atuin/issues/3813))
+- Capability negotiation protocol (client + server) ([#3797](https://github.com/atuinsh/atuin/issues/3797))
 
 
 ### Miscellaneous Tasks
 
+- *(ci)* Fix `package` step ([#3770](https://github.com/atuinsh/atuin/issues/3770))
+- Remove Store trait ([#3779](https://github.com/atuinsh/atuin/issues/3779))
+- Daemon search benchmark (divan + CodSpeed) ([#3763](https://github.com/atuinsh/atuin/issues/3763))
+- Run CodSpeed benchmarks on macro runners in walltime mode ([#3786](https://github.com/atuinsh/atuin/issues/3786))
+- Add `OrFilter` as a replacement for `Vec`s as filter lists ([#3768](https://github.com/atuinsh/atuin/issues/3768))
+- Add `atuin-domain` crate for shared domain types ([#3790](https://github.com/atuinsh/atuin/issues/3790))
+- Run CodSpeed walltime benchmarks on depot-macos-26 ([#3791](https://github.com/atuinsh/atuin/issues/3791))
 - Fix deny.toml and get it to run in CI ([#3808](https://github.com/atuinsh/atuin/issues/3808))
 - Remove codspeed workflow ([#3812](https://github.com/atuinsh/atuin/issues/3812))
+- Richer logging for atuin-server ([#2564](https://github.com/atuinsh/atuin/issues/2564))
+- Hide --active sharing ([#3846](https://github.com/atuinsh/atuin/issues/3846))
 
 
 ### Refactor
 
+- *(deps)* Bump thiserror from 2.0.18 to 2.0.19 ([#3839](https://github.com/atuinsh/atuin/issues/3839))
+- *(deps)* Bump strum_macros from 0.27.2 to 0.28.0 ([#3841](https://github.com/atuinsh/atuin/issues/3841))
+- *(deps)* Bump tonic-types from 0.14.5 to 0.14.6 ([#3842](https://github.com/atuinsh/atuin/issues/3842))
+- *(deps)* Bump pulldown-cmark from 0.13.3 to 0.13.4 ([#3840](https://github.com/atuinsh/atuin/issues/3840))
+- *(deps)* Bump itertools from 0.14.0 to 0.15.0 ([#3838](https://github.com/atuinsh/atuin/issues/3838))
 - Adopt enum_dispatch for enum trait delegation ([#3806](https://github.com/atuinsh/atuin/issues/3806))
 
 
+### Testing
+
+- Adopt rstest across the workspace test suite ([#3785](https://github.com/atuinsh/atuin/issues/3785))
+
+
+### Daemon
+
+- Replace nucleo with frizbee, rank by match quality with frecency tiebreak ([#3782](https://github.com/atuinsh/atuin/issues/3782))
 
 ## 18.18.1
 
