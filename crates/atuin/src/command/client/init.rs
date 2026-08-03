@@ -19,11 +19,11 @@ pub struct Cmd {
     shell: Shell,
 
     /// Disable the binding of CTRL-R to atuin
-    #[clap(long)]
+    #[clap(long, alias = "no-ctrl-r")]
     disable_ctrl_r: bool,
 
-    /// Disable the binding of the Up Arrow key to atuin
-    #[clap(long)]
+    /// Disable the binding of the ↑ Up Arrow key to atuin
+    #[clap(long, alias = "no-up-arrow")]
     disable_up_arrow: bool,
 
     /// Disable the binding of ? to Atuin AI
@@ -120,9 +120,10 @@ impl Cmd {
     }
 
     fn to_options<'a>(&self, settings: &'a Settings) -> StaticInitOptions<'a> {
+        // CLI --disable-* always wins; config.toml [keys] bind_* defaults true.
         StaticInitOptions {
-            enable_up_arrow: !self.disable_up_arrow,
-            enable_ctrl_r: !self.disable_ctrl_r,
+            enable_up_arrow: !self.disable_up_arrow && settings.keys.bind_up_arrow,
+            enable_ctrl_r: !self.disable_ctrl_r && settings.keys.bind_ctrl_r,
             enable_ai: !self.disable_ai && settings.ai.enabled.unwrap_or(true),
             tmux: &settings.tmux,
         }

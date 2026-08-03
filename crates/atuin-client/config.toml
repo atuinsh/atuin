@@ -262,6 +262,14 @@ enter_accept = true
 # Defaults to false. The backspace key performs the same functionality as Tab and copies the selected line to the command line to be modified when at the start of the line.
 # accept_with_backspace = false
 
+# Defaults to true. When false, `atuin init` does not bind ↑ (native shell history remains).
+# Same effect as: atuin init <shell> --disable-up-arrow
+# bind_up_arrow = true
+
+# Defaults to true. When false, `atuin init` does not bind Ctrl-R.
+# Same effect as: atuin init <shell> --disable-ctrl-r
+# bind_ctrl_r = true
+
 [preview]
 ## which preview strategy to use to calculate the preview height (respects max_preview_height).
 ## possible values: auto, static
