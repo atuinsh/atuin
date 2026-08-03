@@ -58,6 +58,19 @@ zstyle ':completion:*' insert-tab false
 zstyle ':completion:*' list-separator ''
 zstyle ':completion:*' menu no
 
+# The user's rc may have loaded atuin's own integration (or plugins that
+# invoke it per keystroke, like zsh-autosuggestions). The oracle must stay
+# inert: no history hooks recording completion queries, no daemon
+# autostart, no per-keystroke atuin invocations, no history file writes.
+if (( ${+functions[add-zsh-hook]} )); then
+    add-zsh-hook -d preexec _atuin_preexec 2>/dev/null
+    add-zsh-hook -d precmd _atuin_precmd 2>/dev/null
+    add-zsh-hook -d zshaddhistory _atuin_zshaddhistory 2>/dev/null
+fi
+unset ATUIN_HISTORY_ID HISTFILE
+typeset -g _ZSH_AUTOSUGGEST_DISABLED=1
+ZSH_AUTOSUGGEST_STRATEGY=()
+
 zmodload zsh/zutil
 
 # Divert candidates into __hits/__dscr instead of the completion set, so
