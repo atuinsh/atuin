@@ -76,7 +76,7 @@ tiny-bip39 = "2.0.0"
 # theme
 crossterm = { workspace = true, features = ["serde"] }
 palette = { version = "0.7.5", features = ["serializing"] }
-strum_macros = "0.27"
+strum_macros = "0.28"
 strum = { version = "0.27", features = ["strum_macros"] }
 
 [dependencies.atuin-common]
