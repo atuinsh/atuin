@@ -51,7 +51,7 @@ http = "1.5"
 reqwest-middleware = "0.5"
 wiremock = "0.6"
 interim = { version = "0.2.0", features = ["time_0_3"] }
-itertools = "0.14.0"
+itertools = "0.15.0"
 rand = { version = "0.8.5", features = ["std"] }
 semver = "1.0.20"
 serde = { version = "1.0.202", features = ["derive"] }
