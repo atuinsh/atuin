@@ -147,11 +147,16 @@ pub(super) fn parse_aliases(input: &[u8]) -> Result<Aliases, AliasesError> {
     fn alias_line(input: &mut &[u8]) -> ModalResult<(Vec<u8>, Vec<u8>)> {
         (
             literal(b"alias ".as_slice()),
+            // `alias -L` prints a `-s `/`-g ` flag for suffix/global aliases and a
+            // `-- ` guard before a name that starts with `-` or `+`, so the name is
+            // not read as an option. Consume them; the real name follows.
+            opt(alt((literal(b"-g ".as_slice()), literal(b"-s ".as_slice())))),
+            opt(literal(b"-- ".as_slice())),
             alias_name,
             literal(b"=".as_slice()),
             alias_value,
         )
-            .map(|(_, name, _, value): (_, Vec<u8>, _, Vec<u8>)| (name, value))
+            .map(|(_, _, _, name, _, value): (_, _, _, Vec<u8>, _, Vec<u8>)| (name, value))
             .parse_next(input)
     }
 
@@ -209,6 +214,10 @@ mod tests {
     #[case::decodes_ansi_c_octal(b"alias a=$'\\101'\n", b"a", b"A")]
     #[case::decodes_ansi_c_hex(b"alias b=$'\\x41'\n", b"b", b"A")]
     #[case::decodes_ansi_c_backslash(b"alias c=$'\\\\'\n", b"c", b"\\")]
+    #[case::global_alias_prefix(b"alias -g gf='| grep'\n", b"gf", b"| grep")]
+    #[case::suffix_alias_prefix(b"alias -s gz=gunzip\n", b"gz", b"gunzip")]
+    #[case::dashed_name_guard(b"alias -- -l='ls -l'\n", b"-l", b"ls -l")]
+    #[case::global_and_dashed(b"alias -g -- -x='y'\n", b"-x", b"y")]
     fn parses_value(#[case] input: &[u8], #[case] key: &[u8], #[case] expected: &[u8]) {
         assert_eq!(parse(input)[&BString::from(key)], BString::from(expected));
     }

@@ -173,13 +173,14 @@ pub(super) fn render_aliases(aliases: &[Alias]) -> Rendered {
 
 /// A POSIX alias name must be non-empty and free of the characters bash's
 /// `valid_alias_name` rejects — shell metacharacters (`( ) < > ; & |`), the
-/// expansion/quoting characters (`$ " ' \` and backtick), globs (`* ?`) and
-/// `/` — plus `=` (the name/value separator) and whitespace/control bytes.
+/// expansion/quoting characters (`$ " ' \` and backtick) and `/` — plus `=`
+/// (the name/value separator) and whitespace/control bytes. Globs (`* ?`) are
+/// *not* rejected: bash's `valid_alias_name` accepts them.
 ///
 /// A leading `-` is *allowed* (it is a legal alias name); [`render_aliases`]
 /// guards it with the `-- ` prefix so the sourced line is not read as an option.
 fn is_valid_alias_name(name: &[u8]) -> bool {
-    const META: &[u8] = b"=\"'\\$()<>;&|/`*?";
+    const META: &[u8] = b"=\"'\\$()<>;&|/`";
     !name.is_empty()
         && !name
             .iter()
@@ -308,8 +309,6 @@ mod render_tests {
     #[case::backtick("a`b`")]
     #[case::dollar("a$b")]
     #[case::double_quote("a\"b")]
-    #[case::glob_star("a*")]
-    #[case::glob_question("a?")]
     fn skips_names_with_shell_metacharacters(#[case] name: &str) {
         let r = render_aliases(&[alias(name, AliasValue::Command(BString::from("x")))]);
         assert!(r.script.is_empty(), "expected {name:?} to be skipped");

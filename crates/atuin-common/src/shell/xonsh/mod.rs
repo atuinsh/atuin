@@ -28,7 +28,12 @@ pub(super) type Aliases = HashMap<BString, AliasValue>;
 
 type Probe<T, E> = Shared<BoxFuture<'static, Result<T, E>>>;
 
-const ALIAS_PROBE: &str = "import json; print(json.dumps({k: v for k, v in aliases.items() if isinstance(v, (str, list))}))";
+// str/list aliases map directly onto our command/argv model. A string alias
+// xonsh stored as an `ExecAlias` (it had exec markers, or was not a Python
+// expression) keeps its original source on `.src`, so capture that too. A
+// `FuncAlias`/callable has no source string and cannot be represented, so it is
+// omitted.
+const ALIAS_PROBE: &str = "import json; print(json.dumps({k: (v if isinstance(v, (str, list)) else v.src) for k, v in aliases.items() if isinstance(v, (str, list)) or isinstance(getattr(v, 'src', None), str)}))";
 
 #[derive(Debug)]
 struct Inner {

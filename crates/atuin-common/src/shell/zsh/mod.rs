@@ -59,7 +59,10 @@ impl Zsh {
         let aliases = {
             let exe = exe.clone();
             async move {
-                let output = exe.run("alias -L").await?;
+                // `unsetopt rcquotes` normalises the listing: with `rcquotes` set,
+                // `alias -L` renders an embedded single quote as `''` inside the
+                // single-quoted value, which the parser does not decode.
+                let output = exe.run("unsetopt rcquotes; alias -L").await?;
                 alias::parse_aliases(&output.stdout)
             }
             .boxed()
