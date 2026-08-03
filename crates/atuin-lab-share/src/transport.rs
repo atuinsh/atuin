@@ -139,7 +139,7 @@ enum TransportError {
     #[error("hub rejected the channel join: {0}")]
     JoinRejected(String),
     /// The hub answered a successful join with a `join_url` that is missing,
-    /// unparseable, or on an origin other than the configured hub's.
+    /// unparsable, or on an origin other than the configured hub's.
     ///
     /// **Fatal, never retried** — see [`Transport::run`]. Every other variant
     /// here means "reconnect"; this one means the hub is asking us to publish
@@ -992,7 +992,7 @@ impl Transport {
     ///
     /// # Errors
     ///
-    /// [`TransportError::JoinUrlOrigin`] if `join_url` is absent, unparseable,
+    /// [`TransportError::JoinUrlOrigin`] if `join_url` is absent, unparsable,
     /// relative, or on a foreign origin. On that path **nothing** is reported:
     /// no `first_url_tx`, no [`Inbound::Connected`], no cached tokens — so no
     /// consumer ever sees a link carrying the key fragment off the configured

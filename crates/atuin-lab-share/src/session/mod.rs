@@ -722,7 +722,7 @@ impl Session {
             rows: physical.rows,
         });
 
-        // The bridged threads; each one's raison d'être is on its loop. The
+        // The bridged threads; why each one exists is on its loop. The
         // PTY pair always exists; the stdin-reader and terminal-writer exist
         // only with a host terminal — headless mode leaves them ABSENT, not
         // idle: there is no tty behind them, and a parked thread on a
