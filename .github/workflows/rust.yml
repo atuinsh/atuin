@@ -64,7 +64,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install cross
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.85.5
         with:
           tool: cross
 
@@ -107,7 +107,7 @@ jobs:
         with:
           toolchain: 1.97.0
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.85.5
         name: Install nextest
         with:
           tool: cargo-nextest
@@ -189,7 +189,7 @@ jobs:
         with:
           toolchain: 1.97.0
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.85.5
         name: Install nextest
         with:
           tool: cargo-nextest
