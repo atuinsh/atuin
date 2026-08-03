@@ -13,10 +13,11 @@
 //! The transport is also the E2EE seam ([`crate::crypto`]): it owns the
 //! per-session key, seals every outbound `output`/`keyframe` payload, opens
 //! (and replay-checks) inbound `input` blobs before the session sees them, and
-//! appends the key fragment to the join URL at the single point that URL
-//! enters the program. The session and `ScreenState` stay key-free.
+//! — after checking the hub minted it on its own origin — appends the key
+//! fragment to the join URL at the single point that URL enters the program.
+//! The session and `ScreenState` stay key-free.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
@@ -43,9 +44,73 @@ const HEARTBEAT: Duration = Duration::from_secs(30);
 /// How many `output` frames may pile up before the backlog is collapsed into a
 /// keyframe request. ~8 KiB per frame, so a couple of MiB at most.
 const OUTBOUND_CAP: usize = 256;
-/// How many recently accepted viewer-input nonces to remember for replay
-/// dedup — see [`NonceWindow`]. 12 KiB of nonces plus the set: negligible.
-const INPUT_NONCE_CAP: usize = 1024;
+/// How many distinct viewer-input frames one host PROCESS will ever accept.
+///
+/// This is a *budget*, not a window: nothing is ever evicted (see
+/// [`AcceptedNonces`]). Reaching it disables viewer input for the rest of the
+/// process — fail closed, never forget.
+///
+/// 2^20 entries is ~26 MiB steady (hashbrown: 2^21 buckets x 13 B/bucket, ~39
+/// MiB peak while the final grow holds both tables). One `term.onData` event
+/// is one entry, and a whole paste is one `onData` event, so pastes cost 1,
+/// not their length.
+///
+/// Two reachability figures, because they differ by ~70x and only the second
+/// one bounds the risk:
+///
+/// * **Human typing**: ~36 h of sustained 8 events/s. Nobody types a session
+///   into the fail-closed state.
+/// * **A key-holding viewer typing at machine speed**: ~30 min. Nothing rate
+///   limits viewer input — `ShareViewerChannel.handle_in("input", ...)` checks
+///   only `byte_size(data) <= @max_input_bytes` and `Session.viewer_input/2`
+///   forwards immediately, and ~570 authenticated inputs/s was measured
+///   end-to-end through the real stack. After that, viewer input is dead for
+///   the remaining lifetime of this host process, for *every* viewer.
+///
+/// That is a denial of viewer input by someone who already holds the session
+/// key — i.e. someone who already has a shell on a `--write` share — so the
+/// blast radius is bounded, but the second figure is the one to reason from.
+/// The missing control, if that is ever unacceptable, is a per-viewer input
+/// rate limit on the hub channel, **not** a bigger number here: raising the
+/// cap only moves the fail-closed point, and lowering it only moves it nearer.
+/// Neither ever weakens the security property, which is the never-forget rule
+/// below, not the size of the budget.
+const INPUT_NONCE_CAP: usize = 1 << 20;
+
+/// The hub's cap on an `input` event's base64 `data` field, in base64
+/// characters (`@max_input_bytes`, `share_viewer_channel.ex:10`).
+///
+/// Quoted here so [`MAX_INPUT_BLOB_BYTES`] is *derived* from it rather than
+/// coincidentally equal to it: the two must not drift apart silently.
+const HUB_MAX_INPUT_B64_CHARS: usize = 4096;
+
+/// Largest viewer-input blob the host will look at, in bytes: 3072, the
+/// decoded size of the hub's own cap.
+///
+/// Enforced here as well, so the bound does not *depend* on the hub —
+/// `Inbound::from_event` (`session/mod.rs`) b64-decodes input with no length
+/// bound at all, and a hostile hub would otherwise choose the size of the
+/// buffer we hand to AES.
+///
+/// Set **equal** to the hub's decoded cap on purpose: the host must never
+/// reject something the hub would forward. That equality, not the size of a
+/// keystroke, is why this bound drops no legitimate input — `term.onData`
+/// fires once with an entire paste (`lab_share_viewer.js` seals `data` whole
+/// and never batches), so a paste over ~3 KB does exceed this. Such a paste
+/// simply never gets here: the hub's `handle_in("input", ...)` guard rejects
+/// it first and it falls through to the catch-all clause, silently, with no
+/// feedback to the viewer. That silent large-paste drop is a pre-existing
+/// viewer-facing gap in the hub, not something this bound introduces — and if
+/// the hub ever raises `@max_input_bytes`, [`HUB_MAX_INPUT_B64_CHARS`] must
+/// move with it or the host becomes the stricter of the two.
+const MAX_INPUT_BLOB_BYTES: usize = HUB_MAX_INPUT_B64_CHARS / 4 * 3;
+
+// Standard base64 with padding is exactly 4 characters per 3 bytes, so the
+// hub's character cap has an exact byte value only for a multiple of 4 — and
+// that value is 3072. Pinned at compile time so neither constant can drift
+// (or be "tidied" into a bare literal) without a build failure.
+const _: () = assert!(HUB_MAX_INPUT_B64_CHARS.is_multiple_of(4));
+const _: () = assert!(MAX_INPUT_BLOB_BYTES == 3072);
 
 /// The hub's share WebSocket endpoint path, appended to any path already on
 /// the base URL (a hub behind a reverse-proxy path prefix keeps working).
@@ -73,6 +138,20 @@ enum TransportError {
     Ws(Box<tokio_tungstenite::tungstenite::Error>),
     #[error("hub rejected the channel join: {0}")]
     JoinRejected(String),
+    /// The hub answered a successful join with a `join_url` that is missing,
+    /// unparseable, or on an origin other than the configured hub's.
+    ///
+    /// **Fatal, never retried** — see [`Transport::run`]. Every other variant
+    /// here means "reconnect"; this one means the hub is asking us to publish
+    /// a link that hands the session key fragment to an origin the user never
+    /// configured, and retrying a hub that keeps answering that way is an
+    /// infinite loop. The offending URL is quoted back because the whole point
+    /// is to let the user see where the hub tried to send them.
+    #[error(
+        "the hub returned a join url on a different origin than the configured hub: got {got:?}, \
+         expected a url on {want} -- refusing to hand out the session key"
+    )]
+    JoinUrlOrigin { got: String, want: String },
     #[error("connection closed by the hub")]
     Closed,
 }
@@ -109,49 +188,118 @@ impl RefSequence {
     }
 }
 
-/// A bounded sliding window of the nonces of recently accepted viewer-input
-/// blobs.
+/// Every viewer-input nonce this host PROCESS has accepted. Nothing is ever
+/// removed.
 ///
-/// Viewers are anonymous and multiple write-mode viewers interleave, so no
-/// per-sender monotonic-seq rule is possible for the input direction (input
-/// AAD uses the constant seq 0). Instead: an **exact** hub replay re-delivers
-/// the same 12-byte nonce, and this window drops it. Only nonces of blobs that
-/// *authenticated* are recorded — garbage blobs must not be able to evict real
-/// nonces and reopen a replay. Forgery is impossible regardless (every blob is
-/// AEAD-authenticated); reordering/delay by the hub remains an availability
-/// attack, as for all frames.
-struct NonceWindow {
-    /// Insertion order, for evicting the oldest once full.
-    order: VecDeque<[u8; NONCE_LEN]>,
-    /// Membership, for the O(1) replay check.
+/// Input AAD is the constant `frame_aad(Input, 0)` — viewers are anonymous and
+/// multiple write-mode viewers interleave, so there is no per-sender counter to
+/// bind — which makes a blob's 12-byte nonce the ONLY field distinguishing it
+/// from any other input blob: no order, no time, no sender. Exact-duplicate
+/// detection over nonces is therefore the only replay defence the host can
+/// implement alone, and it only works if nothing is ever forgotten. **A window
+/// that evicts is a perpetual-motion machine once it has rolled over once:**
+/// the hub replays the evicted batch, each frame is accepted and re-recorded,
+/// which evicts the next batch, and so on forever. A bigger window moves the
+/// bootstrap cost, not the outcome.
+///
+/// So this never evicts. It is capped at [`INPUT_NONCE_CAP`], and reaching the
+/// cap FAILS CLOSED: viewer input is refused for the rest of the process.
+/// Only blobs that authenticated AND carried a non-empty plaintext consume
+/// budget, so a keyless hub cannot grow this set by a single entry.
+///
+/// What this does and does not buy, precisely, so nobody re-overstates it the
+/// way the type this replaced did:
+///
+/// * Hub **delay** of an input frame is now genuinely availability-only — a
+///   blob held back for hours still authenticates, is still absent from the
+///   ledger, and is still accepted. Acceptance is deliberately not
+///   time-bounded: the host cannot date a blob (there is no timestamp and the
+///   AAD is constant), so only *forgetting* could be time-bounded, and
+///   forgetting is the defect.
+/// * Hub **reordering** (R-1) is NOT. Every blob is delivered at most once, so
+///   no dedup scheme sees it, yet reordering keystrokes changes what the shell
+///   executes: a viewer types `rm -rf ~/scratch`, thinks better of it, sends
+///   backspaces, then types `ls\r`; a hub that drops the backspaces and
+///   delivers the captured `\r` after the `rm` text runs a command the user
+///   composed but deliberately never submitted.
+/// * Selective **omission** (R-2) is the same class: the viewer types `# `
+///   then `dangerous-command\r`, the hub drops the `# `, and a comment becomes
+///   a live command. Pure omission is invisible to dedup.
+///
+/// R-1 and R-2 stay open and need ordering plus gap detection, which needs a
+/// per-viewer counter in the input AAD's currently-constant `seq` field — a
+/// wire change, deliberately not made here. **The input channel is replay-free
+/// after this fix; it is not integrity-sound.**
+struct AcceptedNonces {
+    /// Membership, for the O(1) replay check. There is no insertion order
+    /// because there is no eviction.
     seen: HashSet<[u8; NONCE_LEN]>,
+    cap: usize,
 }
 
-impl NonceWindow {
+impl AcceptedNonces {
+    /// NOT pre-allocated: a read-only or short session pays nothing, and the
+    /// table grows only with real accepted input. (The window this replaced
+    /// pre-allocated ~26 KiB for every session, including read-only ones that
+    /// can never record an entry at all.)
     fn new() -> Self {
         Self {
-            order: VecDeque::with_capacity(INPUT_NONCE_CAP),
-            seen: HashSet::with_capacity(INPUT_NONCE_CAP),
+            seen: HashSet::new(),
+            cap: INPUT_NONCE_CAP,
         }
     }
 
-    /// Whether `nonce` was already recorded (i.e. this blob is a replay).
+    #[cfg(test)]
+    fn with_cap(cap: usize) -> Self {
+        Self {
+            seen: HashSet::new(),
+            cap,
+        }
+    }
+
+    /// Whether `nonce` was already accepted (i.e. this blob is a replay).
     fn contains(&self, nonce: &[u8; NONCE_LEN]) -> bool {
         self.seen.contains(nonce)
     }
 
-    /// Record an accepted nonce, evicting the oldest once the window holds
-    /// [`INPUT_NONCE_CAP`] of them.
-    fn record(&mut self, nonce: [u8; NONCE_LEN]) {
-        if self.order.len() == INPUT_NONCE_CAP
-            && let Some(oldest) = self.order.pop_front()
-        {
-            self.seen.remove(&oldest);
-        }
-        if self.seen.insert(nonce) {
-            self.order.push_back(nonce);
-        }
+    fn is_full(&self) -> bool {
+        self.seen.len() >= self.cap
     }
+
+    /// Record an accepted nonce.
+    ///
+    /// Precondition: `!contains(nonce) && !is_full()` — both are checked by
+    /// [`Transport::decrypt_input`], the only caller, in that order.
+    fn record(&mut self, nonce: [u8; NONCE_LEN]) {
+        self.seen.insert(nonce);
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.seen.len()
+    }
+}
+
+/// Silent-drop tallies for the viewer-input path, reported once at teardown
+/// under `ATUIN_LAB_SHARE_DEBUG`.
+///
+/// Every drop in [`Transport::decrypt_input`] is silent by design (nothing
+/// unauthenticated may travel toward the PTY), which makes this the only way to
+/// tell "the hub is replaying you" from "my keyboard is broken".
+#[derive(Default)]
+struct InputDrops {
+    /// Nonce already accepted — an exact replay.
+    replay: u64,
+    /// Refused because the budget is exhausted (fail closed).
+    exhausted: u64,
+    /// Wrong length, or AEAD authentication failure.
+    rejected: u64,
+    /// Authenticated but empty plaintext.
+    empty: u64,
+    /// Arrived on a read-only share.
+    read_only: u64,
+    /// Accepted and forwarded to the child.
+    accepted: u64,
 }
 
 /// The `output` push payload: envelope `seq` in the clear (the hub orders,
@@ -387,9 +535,29 @@ pub(crate) struct Transport {
     /// `key`'s URL-fragment encoding, computed once in [`Transport::new`] so
     /// [`Transport::on_joined`] does not re-encode on every (re)join.
     key_fragment: String,
-    /// Replay dedup for viewer input. Lives here — not on the per-connection
-    /// state — so a hub replay across a reconnect is still caught.
-    input_nonces: NonceWindow,
+    /// Replay dedup for viewer input. Lives here — NOT on the per-connection
+    /// state — so a hub replay across a reconnect is still caught, and it is
+    /// cleared by nothing: not a WebSocket reconnect ([`Transport::connect_once`]
+    /// builds a fresh `Connection`, never a fresh `Transport`), not a Phoenix
+    /// rejoin, not [`Transport::on_joined`], and specifically **not** a
+    /// hub-forced fresh session (`is_fresh_session == true`, where the hub
+    /// rejected the resume token and minted a new public token while the SAME
+    /// key is reused). If the ledger were rebuilt on a fresh session, a hub
+    /// could force a resume rejection on demand and then replay every blob it
+    /// had ever captured. See [`AcceptedNonces`].
+    input_nonces: AcceptedNonces,
+    /// Latches the one-shot "input disabled" notice, so an exhausted budget
+    /// does not re-announce itself once per refused frame.
+    input_exhausted_notified: bool,
+    /// The armed half of that latch: set together with it, drained by
+    /// [`Transport::take_input_disabled_notice`] at the one call site that
+    /// holds the session channel. Two flags rather than one because "has ever
+    /// fired" (never cleared) and "not yet handed to the session" (cleared on
+    /// delivery) are different facts, and [`Transport::decrypt_input`] — where
+    /// the condition is detected — has no `in_tx` to send on.
+    input_disabled_pending: bool,
+    /// Silent-drop tallies for the input path. See [`InputDrops`].
+    input_drops: InputDrops,
     /// The **secret** host credential from the join reply. Never the public
     /// token.
     host_resume_token: Option<String>,
@@ -423,7 +591,10 @@ impl Transport {
             write,
             key,
             key_fragment,
-            input_nonces: NonceWindow::new(),
+            input_nonces: AcceptedNonces::new(),
+            input_exhausted_notified: false,
+            input_disabled_pending: false,
+            input_drops: InputDrops::default(),
             host_resume_token: None,
             last_public_token: None,
             first_url_tx: Some(first_url_tx),
@@ -436,17 +607,76 @@ impl Transport {
     /// Runs as a task on the caller's tokio runtime (`tokio::spawn`) — it needs
     /// no thread or runtime of its own. The session keeps running (and the
     /// subshell keeps living) whether or not the hub is reachable.
+    ///
+    /// Returning is a meaningful teardown signal: `run_share` awaits this
+    /// task's handle (bounded) after the session ends, so the final
+    /// `Outbound::End` has genuinely been pushed to the hub — link
+    /// invalidated now, not after the hub's disconnect grace period — before
+    /// the process exits.
     pub(crate) async fn run(
         mut self,
+        out_rx: UnboundedReceiver<Outbound>,
+        in_tx: UnboundedSender<Inbound>,
+    ) {
+        // The relay body has several `return` points (session over, fatal
+        // join-URL origin, session gone); the input tallies must be reported on
+        // every one of them, so the loop lives in a helper and the report
+        // happens exactly once, here, after it comes back.
+        self.relay(out_rx, in_tx).await;
+        self.report_input_drops();
+    }
+
+    /// One-line teardown summary of the viewer-input path, under
+    /// `ATUIN_LAB_SHARE_DEBUG`.
+    ///
+    /// Nothing security-relevant depends on it: every decision in
+    /// [`Transport::decrypt_input`] is a silent drop by design, and this is the
+    /// only observability into which kind of drop happened.
+    fn report_input_drops(&self) {
+        if std::env::var_os("ATUIN_LAB_SHARE_DEBUG").is_none() {
+            return;
+        }
+        let d = &self.input_drops;
+        eprintln!(
+            "\r\n[atuin lab share] input: accepted={} replay={} exhausted={} rejected={} \
+             empty={} read_only={}\r",
+            d.accepted, d.replay, d.exhausted, d.rejected, d.empty, d.read_only
+        );
+    }
+
+    /// The reconnecting relay loop itself; see [`Transport::run`].
+    async fn relay(
+        &mut self,
         mut out_rx: UnboundedReceiver<Outbound>,
         in_tx: UnboundedSender<Inbound>,
     ) {
         let mut reported = false;
+        // Items picked up while disconnected (the backoff select below),
+        // relayed as soon as the next connection joins — most importantly a
+        // queued `End`, which cuts the backoff short.
+        let mut stashed: Vec<Outbound> = Vec::new();
         loop {
-            match self.connect_once(&mut out_rx, &in_tx).await {
+            match self.connect_once(&mut stashed, &mut out_rx, &in_tx).await {
                 // The session is over (`end`, or the session dropped its
                 // sender). Do not reconnect — the link is meant to die.
                 Ok(()) => return,
+                // FATAL, and the one error that is never retried: a hub that
+                // answers the join with a foreign-origin URL will keep doing
+                // it, so backoff would be an infinite loop that publishes
+                // nothing and explains nothing. Printed UNCONDITIONALLY,
+                // bypassing the `reported` latch below, because this is the
+                // only time the user hears the real reason: returning drops
+                // `self` and with it `first_url_tx`, so `connect_to_hub` sees
+                // a closed oneshot and reports the vague
+                // `Error::TransportStopped`. (The fully typed alternative —
+                // making the oneshot carry `Result<String, Error>` so the
+                // crate-level error is precise — touches `Transport::new`,
+                // `connect_to_hub` and both test constructors; deliberately
+                // deferred, not overlooked.)
+                Err(e @ TransportError::JoinUrlOrigin { .. }) => {
+                    eprintln!("\r\n[atuin lab share] {e}\r");
+                    return;
+                }
                 Err(e) => {
                     // Report the first failure only: a misconfigured hub URL or
                     // token would otherwise fail silently forever. Later
@@ -460,17 +690,44 @@ impl Transport {
                     if in_tx.send(Inbound::Disconnected).is_err() {
                         return; // session gone
                     }
-                    tokio::time::sleep(self.backoff.next_delay()).await;
+                    // The backoff sleep — cut short the moment the session
+                    // queues `End` (stashed for the immediate reconnect
+                    // attempt) or drops its sender: `--stop` and clean exits
+                    // must not sit out a reconnect delay before the hub
+                    // hears the session is over. One failed attempt at
+                    // delivering a stashed `End` is the limit — after it the
+                    // session is gone, the `Disconnected` send above fails,
+                    // and we return; the hub's grace period is the fallback.
+                    let delay = tokio::time::sleep(self.backoff.next_delay());
+                    tokio::pin!(delay);
+                    loop {
+                        tokio::select! {
+                            () = &mut delay => break,
+                            item = out_rx.recv() => match item {
+                                Some(item) => {
+                                    let ends = matches!(item, Outbound::End);
+                                    stashed.push(item);
+                                    if ends {
+                                        break;
+                                    }
+                                }
+                                // Session gone with nothing more queued.
+                                None => return,
+                            },
+                        }
+                    }
                 }
             }
         }
     }
 
-    /// One connection: join, then relay until the socket or the session ends.
+    /// One connection: join, relay anything stashed during the backoff
+    /// window, then relay until the socket or the session ends.
     ///
     /// `Ok(())` means the session finished for good; `Err` means reconnect.
     async fn connect_once(
         &mut self,
+        stashed: &mut Vec<Outbound>,
         out_rx: &mut UnboundedReceiver<Outbound>,
         in_tx: &UnboundedSender<Inbound>,
     ) -> Result<(), TransportError> {
@@ -480,6 +737,17 @@ impl Transport {
         // Per-connection write state (wire + fresh queue), joined immediately.
         let mut conn = Connection::new(sink);
         conn.join(&self.join_payload()).await?;
+
+        // The backoff window's pickups go first — the same order the session
+        // produced them in — so a stashed `End` ends the session here and
+        // now, exactly as if it had arrived over `out_rx`.
+        for item in stashed.drain(..) {
+            if conn.handle_outbound(item, in_tx, &self.key).await? {
+                conn.wire.flush().await?;
+                return Ok(());
+            }
+        }
+        conn.flush(&self.key).await?;
 
         let mut heartbeat = tokio::time::interval(HEARTBEAT);
         heartbeat.tick().await; // the first tick completes immediately
@@ -556,7 +824,7 @@ impl Transport {
                 if !ok {
                     return Err(TransportError::JoinRejected(response.to_string()));
                 }
-                self.on_joined(&response, in_tx);
+                self.on_joined(&response, in_tx)?;
             }
             // Acks for our own pushes and for heartbeats; nothing to do.
             Incoming::Reply { .. } | Incoming::Other => {}
@@ -570,7 +838,18 @@ impl Transport {
                     let inbound = match inbound {
                         Inbound::Input(blob) => match self.decrypt_input(&blob) {
                             Some(plaintext) => Inbound::Input(plaintext),
-                            None => return Ok(()),
+                            // Every drop is silent toward the PTY, but exactly
+                            // one of them is a permanent state change the host
+                            // must see: the budget running out. This is the
+                            // only place that owns both the detection (above)
+                            // and the session channel, so the hand-off happens
+                            // here rather than inside `decrypt_input`.
+                            None => {
+                                if self.take_input_disabled_notice() {
+                                    let _ = in_tx.send(Inbound::InputDisabled);
+                                }
+                                return Ok(());
+                            }
                         },
                         other => other,
                     };
@@ -582,43 +861,186 @@ impl Transport {
         Ok(())
     }
 
-    /// Open a sealed viewer-input blob: replay-check its nonce, authenticate
-    /// and decrypt it (input AAD is `frame_aad(Input, 0)` — viewers are
-    /// anonymous, so there is no per-sender seq to bind), and record the nonce
-    /// only once the blob proved genuine, so garbage cannot evict real nonces
-    /// from the window.
+    /// Open a sealed viewer-input blob: bound its size, replay-check its nonce,
+    /// spend one unit of the never-forget budget, authenticate, and deliver.
+    /// (Input AAD is `frame_aad(Input, 0)` — viewers are anonymous, so there is
+    /// no per-sender seq to bind.)
     ///
-    /// `None` — a silent drop, with nothing forwarded — for replays, blobs too
-    /// short to carry a nonce, and every authentication failure.
+    /// `None` — a silent drop, with nothing forwarded toward the PTY — for
+    /// input on a read-only share, oversized or truncated blobs, exact replays,
+    /// an exhausted budget, every authentication failure, and empty plaintexts.
+    ///
+    /// The order of the steps is load-bearing; see the comments on each.
     fn decrypt_input(&mut self, blob: &[u8]) -> Option<Vec<u8>> {
-        let nonce: [u8; NONCE_LEN] = blob.get(..NONCE_LEN)?.try_into().ok()?;
-        if self.input_nonces.contains(&nonce) {
+        // 0. A read-only share has no input path at all. Enforced here as well
+        //    as in `Session::handle_input` and on the hub (defence in depth).
+        //    Doing it HERE means a read-only host does zero AEAD work on
+        //    hub-supplied bytes and its ledger stays empty — the "--write only"
+        //    blast radius becomes structural rather than incidental.
+        if !self.write.is_write_enabled() {
+            self.input_drops.read_only += 1;
             return None;
         }
-        let plaintext = self
+
+        // 1. Shape, before any AES work. The hub already caps `data` at 4096
+        //    base64 chars; we do not depend on that.
+        if blob.len() > MAX_INPUT_BLOB_BYTES {
+            self.input_drops.rejected += 1;
+            return None;
+        }
+        let Some(nonce) = blob
+            .get(..NONCE_LEN)
+            .and_then(|n| <[u8; NONCE_LEN]>::try_from(n).ok())
+        else {
+            self.input_drops.rejected += 1;
+            return None;
+        };
+
+        // 2. Replay check FIRST: a re-delivered blob costs no AEAD work, and
+        //    stays classified as a replay even after the budget is exhausted
+        //    (so the notice below is not fired by traffic that would have been
+        //    dropped anyway).
+        if self.input_nonces.contains(&nonce) {
+            self.input_drops.replay += 1;
+            return None;
+        }
+
+        // 3. FAIL CLOSED. Never evict => never forget => refuse. This is the
+        //    whole fix: the alternative to refusing is forgetting, and
+        //    forgetting is the replay defect. An exhausted host also stops
+        //    doing AEAD work entirely, hence this precedes step 4.
+        if self.input_nonces.is_full() {
+            self.input_drops.exhausted += 1;
+            self.note_input_exhausted();
+            return None;
+        }
+
+        // 4. Authenticate BEFORE spending budget. Garbage from a keyless hub
+        //    must never consume a slot — that is what makes the memory bound
+        //    and the fail-closed point un-inflatable by a hostile hub. It also
+        //    preserves the older invariant that garbage cannot displace real
+        //    nonces, strengthened into "garbage cannot consume budget".
+        let Ok(plaintext) = self
             .key
             .decrypt(blob, &crypto::frame_aad(FrameKind::Input, 0))
-            .ok()?;
+        else {
+            self.input_drops.rejected += 1;
+            return None;
+        };
+
+        // 5. An empty plaintext writes zero bytes to the PTY, so it has no
+        //    legitimate use — and spending budget on it is exactly the
+        //    amplifier that used to flush a 1024-entry window in 1.8 seconds.
+        //    Drop it WITHOUT spending anything.
+        //
+        //    This is BUDGET INTEGRITY, NOT A REPLAY DEFENCE. A key holder can
+        //    approximate a zero-visibility filler byte with `\0` or a lone
+        //    `ESC`; empty-rejection only removes the free, zero-trace
+        //    amplifier. Anyone reading this step as "the amplifier is fixed, so
+        //    replay is fixed" has misread it — what closes replay is steps 2, 3
+        //    and 6 together, i.e. the never-forget ledger and the fail-closed
+        //    cap. The harness's one-byte flood case exists to catch exactly
+        //    that misreading.
+        if plaintext.is_empty() {
+            self.input_drops.empty += 1;
+            return None;
+        }
+
+        // 6. Spend one unit and deliver. Exactly once, for the life of this
+        //    process, at any delay, in any order, across any reconnect and any
+        //    hub-forced fresh session.
         self.input_nonces.record(nonce);
+        self.input_drops.accepted += 1;
         Some(plaintext)
     }
 
-    fn on_joined(&mut self, response: &Value, in_tx: &UnboundedSender<Inbound>) {
+    /// Arm the one-shot host notice for an exhausted input budget.
+    ///
+    /// Fires on the first input frame refused for budget, whatever that frame
+    /// was (we deliberately do not decrypt it to find out). The session does
+    /// NOT tear down: output keeps flowing, viewers keep watching, the host's
+    /// own keystrokes are unaffected, the link stays live. Only viewer typing
+    /// stops mattering.
+    ///
+    /// Nothing is printed from here. The notice travels as
+    /// [`Inbound::InputDisabled`] to the session, which owns the host's
+    /// terminal and turns it into a **sticky bar segment** plus one
+    /// explanatory line. A bare `eprintln!` from this side would be composited
+    /// over by the next repaint — and since this state is permanent and the
+    /// latch fires once, that would leave a fail-closed host with no signal at
+    /// all a few keystrokes later.
+    ///
+    /// The viewer and the hub are still deliberately NOT told: telling them
+    /// needs a new channel event, i.e. a wire change, which this fix forbids.
+    fn note_input_exhausted(&mut self) {
+        if self.input_exhausted_notified {
+            return;
+        }
+        self.input_exhausted_notified = true;
+        self.input_disabled_pending = true;
+    }
+
+    /// Take the armed "viewer input is disabled" notice, if any. True at most
+    /// once per process — see [`Transport::input_disabled_pending`].
+    fn take_input_disabled_notice(&mut self) -> bool {
+        std::mem::take(&mut self.input_disabled_pending)
+    }
+
+    /// Handle a successful join reply: validate the hub-minted join URL,
+    /// append the key fragment, cache the session's tokens, and report the URL
+    /// to both consumers.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::JoinUrlOrigin`] if `join_url` is absent, unparseable,
+    /// relative, or on a foreign origin. On that path **nothing** is reported:
+    /// no `first_url_tx`, no [`Inbound::Connected`], no cached tokens — so no
+    /// consumer ever sees a link carrying the key fragment off the configured
+    /// hub's origin. The error is fatal in [`Transport::run`], not retried.
+    fn on_joined(
+        &mut self,
+        response: &Value,
+        in_tx: &UnboundedSender<Inbound>,
+    ) -> Result<(), TransportError> {
+        // The single point the hub-minted URL enters the program: validate its
+        // origin and append the key as a URL fragment HERE, so the printed
+        // link, the frozen `ATUIN_SHARE_URL`, and every other consumer only
+        // ever see one full fragmented URL — and only ever one pointing at the
+        // hub the user configured. Browsers never send fragments in HTTP
+        // requests, so the hub never sees the key; a reconnect-as-new-session
+        // re-appends the same (cached) fragment to the new link.
+        //
+        // Validating the origin is what bounds the blast radius of a hostile
+        // or compromised hub to the hub itself: without it, a join reply of
+        // `join_url = "https://attacker.example.com/collect?s=1"` makes the CLI
+        // print — and freeze into the subshell's `ATUIN_SHARE_URL` — a link
+        // that hands the AES key to an attacker origin the moment anyone opens
+        // it.
+        //
+        // Parsing first also closes a latent hole: `as_str().unwrap_or_default()`
+        // on a missing `join_url` used to produce the bare string
+        // `"#<43-char key fragment>"` — a naked key with no URL at all.
+        //
+        // The raw string (not the reserialized `Url`) is what gets the
+        // fragment, so the hub's link is published byte-for-byte as minted. A
+        // hub that mints a URL which *already* has a fragment therefore yields
+        // a link the viewer cannot read a key out of; that is availability
+        // only — the key still never leaves the hub's own origin — and a hub
+        // can deny service far more simply than that.
+        let raw = response["join_url"].as_str().unwrap_or_default();
+        let origin_ok = Url::parse(raw).is_ok_and(|join| same_origin(&self.hub_url, &join));
+        if !origin_ok {
+            return Err(TransportError::JoinUrlOrigin {
+                got: raw.to_string(),
+                want: self.hub_url.to_string(),
+            });
+        }
+        let join_url = format!("{raw}#{}", self.key_fragment);
+
         // The public view token. Kept here to feed `is_fresh_session` across
         // rejoins; deliberately NOT forwarded to the session, which only ever
         // prints `join_url` — and that already embeds the token.
         let token = response["token"].as_str().unwrap_or_default().to_string();
-        // The single point the hub-minted URL enters the program: append the
-        // key as a URL fragment HERE, so the printed link, the frozen
-        // `ATUIN_SHARE_URL`, and every other consumer only ever see the full
-        // fragmented URL. Browsers never send fragments in HTTP requests, so
-        // the hub never sees the key; a reconnect-as-new-session re-appends
-        // the same (cached) fragment to the new link.
-        let join_url = format!(
-            "{}#{}",
-            response["join_url"].as_str().unwrap_or_default(),
-            self.key_fragment
-        );
 
         // Store the SECRET resume credential. Never send the public `token` as
         // `resume_token`: it is in the share link, so anyone holding the link
@@ -644,7 +1066,52 @@ impl Transport {
             join_url,
             fresh_session,
         });
+        Ok(())
     }
+}
+
+/// A URL scheme normalized for origin comparison: `ws` and `wss` are the
+/// transport spellings of `http` and `https`, and everything else is left
+/// alone.
+///
+/// This is the whole subtlety of [`same_origin`]. `Transport::hub_url` is a
+/// **ws/wss** URL by construction (`lab_ws_url` derives it http->ws,
+/// https->wss) while a hub-minted `join_url` is **http/https** — a browser
+/// link. So comparing raw schemes, or comparing `url::Origin` values (which
+/// carry the raw scheme), rejects every legitimate join.
+fn normalized_scheme(scheme: &str) -> &str {
+    match scheme {
+        "ws" => "http",
+        "wss" => "https",
+        other => other,
+    }
+}
+
+/// Whether the hub-minted `join` URL sits on the same origin as the configured
+/// `hub`.
+///
+/// Compares exactly the triple (normalized scheme, host, port), and:
+///
+/// * The join side must be `http`/`https` outright, not after normalization:
+///   it is a link handed to a browser, so `ws:`, `javascript:`, `file:` and
+///   `data:` are never share links — and normalizing ws->http on this side too
+///   would otherwise let `ws://hub/...` through as "same origin".
+/// * Ports use [`Url::port_or_known_default`], never `port()`: the latter is
+///   `None` for an implicit default and `Some(443)` when the same port is
+///   written out, so it would reject `wss://hub` vs `https://hub:443`. `url`
+///   maps `http|ws => 80` and `https|wss => 443`, which is exactly the
+///   equivalence we want.
+/// * The **path is deliberately not compared**. The hub may mint any path
+///   under its own origin, and [`Transport::ws_url`] already documents that a
+///   reverse-proxy path prefix on the base URL is legitimate — so the base's
+///   path and the join URL's path routinely differ on a healthy hub.
+fn same_origin(hub: &Url, join: &Url) -> bool {
+    if !matches!(join.scheme(), "http" | "https") {
+        return false;
+    }
+    normalized_scheme(hub.scheme()) == join.scheme()
+        && hub.host_str() == join.host_str()
+        && hub.port_or_known_default() == join.port_or_known_default()
 }
 
 /// "The session we were using was replaced." True only when we had already
@@ -683,10 +1150,26 @@ mod tests {
         )
     }
 
+    /// A transport whose input ledger fails closed after `cap` accepted
+    /// frames, so the never-forget rule is testable without minting 2^20
+    /// blobs. Test-only: production always uses [`INPUT_NONCE_CAP`].
+    fn capped_transport(write: bool, cap: usize) -> Transport {
+        let mut t = test_transport(write);
+        t.input_nonces = AcceptedNonces::with_cap(cap);
+        t
+    }
+
     /// Seal `plaintext` exactly as a viewer's `encryptBlob` would for the
     /// input channel: Input AAD, constant seq 0.
     fn sealed_input(plaintext: &[u8]) -> Vec<u8> {
         test_key().encrypt(plaintext, &crypto::frame_aad(FrameKind::Input, 0))
+    }
+
+    /// A distinct, deterministic nonce per `i`, for the ledger's own tests.
+    fn nonce_of(i: u32) -> [u8; NONCE_LEN] {
+        let mut n = [0u8; NONCE_LEN];
+        n[..4].copy_from_slice(&i.to_be_bytes());
+        n
     }
 
     #[test]
@@ -787,6 +1270,10 @@ mod tests {
         assert!(t.decrypt_input(&sealed_input(b"echo hi\n")).is_some());
     }
 
+    /// Also the **memory-integrity** test: none of this spends a unit of the
+    /// fail-closed budget, so a keyless hub — which can only ever produce
+    /// blobs like these — cannot drive the host toward refusing viewer input,
+    /// nor grow its ledger by a single entry.
     #[test]
     fn garbage_input_blobs_are_dropped_without_panic_or_delivery() {
         let mut t = test_transport(true);
@@ -801,8 +1288,18 @@ mod tests {
         let last = blob.len() - 1;
         blob[last] ^= 0x01;
         assert_eq!(t.decrypt_input(&blob), None);
+        assert_eq!(
+            t.input_nonces.len(),
+            0,
+            "unauthenticated bytes never consume budget"
+        );
         blob[last] ^= 0x01;
         assert_eq!(t.decrypt_input(&blob).as_deref(), Some(&b"x"[..]));
+        assert_eq!(
+            t.input_nonces.len(),
+            1,
+            "only the genuine blob spent a slot"
+        );
     }
 
     /// Cross-channel reflection: a blob the host sealed as *output* must never
@@ -814,23 +1311,260 @@ mod tests {
         assert_eq!(t.decrypt_input(&blob), None);
     }
 
+    /// Within the budget the ledger is a pure accumulator: no entry is ever
+    /// displaced by a newer one, because the *only* thing that makes exact
+    /// nonce dedup a replay defence is that it never forgets.
     #[test]
-    fn nonce_window_is_bounded_and_evicts_oldest_first() {
-        let nonce_of = |i: u32| {
-            let mut n = [0u8; NONCE_LEN];
-            n[..4].copy_from_slice(&i.to_be_bytes());
-            n
-        };
-        let mut w = NonceWindow::new();
-        let cap = u32::try_from(INPUT_NONCE_CAP).expect("cap fits u32");
-        for i in 0..cap {
-            w.record(nonce_of(i));
+    fn accepted_nonces_never_forget_within_the_cap() {
+        let mut ledger = AcceptedNonces::with_cap(4);
+        for i in 0..4 {
+            ledger.record(nonce_of(i));
         }
-        assert!(w.contains(&nonce_of(0)));
-        w.record(nonce_of(cap));
-        assert!(!w.contains(&nonce_of(0)), "oldest nonce is evicted");
-        assert!(w.contains(&nonce_of(1)));
-        assert!(w.contains(&nonce_of(cap)));
+        for i in 0..4 {
+            assert!(ledger.contains(&nonce_of(i)), "nonce {i} was forgotten");
+        }
+        assert_eq!(ledger.len(), 4);
+    }
+
+    /// Full means full: the oldest entry stays, and the ledger refuses to grow
+    /// rather than making room. The predecessor of this type evicted here —
+    /// which is precisely what made a captured blob replayable.
+    #[test]
+    fn accepted_nonces_refuse_new_entries_once_full() {
+        let mut ledger = AcceptedNonces::with_cap(4);
+        for i in 0..4 {
+            ledger.record(nonce_of(i));
+        }
+        assert!(ledger.is_full());
+        assert!(
+            ledger.contains(&nonce_of(0)),
+            "the oldest nonce is NOT evicted to make room"
+        );
+        assert_eq!(ledger.len(), 4);
+    }
+
+    /// **The replay defect in miniature**, mirroring the `rv-f.sh` harness
+    /// step for step: capture one sealed keystroke, push a whole cap's worth of
+    /// further *genuine, non-empty* inputs on top of it — enough to have
+    /// evicted the capture from any window of this size — then re-send the
+    /// capture byte-for-byte.
+    ///
+    /// A cap's worth on top of `X` is deliberately one more than fits: under a
+    /// FIFO window that is exactly the push that evicted `X` and made the
+    /// replay execute. Here it is simply refused, and `X` stays remembered
+    /// forever. There must be no cap at which this flips.
+    #[test]
+    fn decrypt_input_rejects_a_replay_after_a_full_cap_of_newer_inputs() {
+        const CAP: usize = 16;
+        let mut t = capped_transport(true, CAP);
+        let x = sealed_input(b"RVMARKER\n");
+        assert_eq!(t.decrypt_input(&x).as_deref(), Some(&b"RVMARKER\n"[..]));
+
+        // The flood: CAP distinct, non-empty, genuine inputs. The budget only
+        // has room for CAP-1 more, so the tail of the flood is refused —
+        // failing closed, never forgetting.
+        for i in 0..CAP {
+            t.decrypt_input(&sealed_input(format!("k{i}").as_bytes()));
+        }
+
+        // Asserted before anything else about the ledger's state, so that a
+        // regression to an evicting policy fails HERE, on the security
+        // property, rather than on a bookkeeping precondition.
+        assert_eq!(
+            t.decrypt_input(&x),
+            None,
+            "the captured blob must never execute a second time"
+        );
+        assert_eq!(t.input_drops.replay, 1);
+
+        // And the flood's tail was refused rather than allowed to displace it.
+        assert!(t.input_nonces.is_full());
+        assert_eq!(t.input_drops.accepted, u64::try_from(CAP).expect("fits"));
+        assert_eq!(t.input_drops.exhausted, 1);
+    }
+
+    /// The fail-closed half of the trade this fix knowingly makes: once the
+    /// budget is spent, even brand-new genuine input is refused. Viewer typing
+    /// stops; output, viewing and the host's own keystrokes are unaffected.
+    #[test]
+    fn decrypt_input_fails_closed_on_fresh_genuine_input_when_full() {
+        const CAP: usize = 8;
+        let mut t = capped_transport(true, CAP);
+        for i in 0..CAP {
+            assert!(
+                t.decrypt_input(&sealed_input(format!("k{i}").as_bytes()))
+                    .is_some()
+            );
+        }
+        assert_eq!(
+            t.decrypt_input(&sealed_input(b"never delivered")),
+            None,
+            "a full ledger refuses rather than forgets"
+        );
+        assert_eq!(t.input_drops.exhausted, 1);
+        assert_eq!(t.input_nonces.len(), CAP);
+    }
+
+    /// An authenticated but EMPTY input writes zero bytes to the PTY, so it has
+    /// no legitimate use — and under the old window each one evicted a real
+    /// nonce, which is what made the whole ledger flushable in 1.8 seconds.
+    /// They are now dropped without spending a single slot.
+    #[test]
+    fn empty_plaintext_input_is_dropped_without_spending_budget() {
+        let mut t = capped_transport(true, 4);
+        for _ in 0..100 {
+            assert_eq!(t.decrypt_input(&sealed_input(b"")), None);
+        }
+        assert_eq!(t.input_nonces.len(), 0, "empties never consume budget");
+        assert_eq!(t.input_drops.empty, 100);
+        // And the budget they did not spend is still there for real input.
+        assert!(t.decrypt_input(&sealed_input(b"ls\n")).is_some());
+        assert_eq!(t.input_nonces.len(), 1);
+    }
+
+    /// Read-only shares have no input path at all: the transport refuses before
+    /// any AES work, so the ledger of a read-only host stays empty and its
+    /// fail-closed budget can never be approached by hub traffic.
+    #[test]
+    fn read_only_transport_never_decrypts_or_records_input() {
+        let mut t = test_transport(false);
+        assert_eq!(t.decrypt_input(&sealed_input(b"rm -rf /\n")), None);
+        assert_eq!(t.input_nonces.len(), 0);
+        assert_eq!(t.input_drops.read_only, 1);
+        assert_eq!(t.input_drops.accepted, 0);
+    }
+
+    /// The size bound is the host's own, not the hub's: `Inbound::from_event`
+    /// b64-decodes input with no length bound at all. Boundary on both sides —
+    /// a genuine blob one byte over is refused before decryption, and a genuine
+    /// blob exactly at the limit still delivers.
+    #[test]
+    fn oversized_input_blob_is_refused_before_decryption() {
+        let mut t = test_transport(true);
+
+        // Genuine and decryptable, but one byte too long: 3045 + 12 + 16.
+        let too_long = sealed_input(&vec![b'a'; MAX_INPUT_BLOB_BYTES - 27]);
+        assert_eq!(too_long.len(), MAX_INPUT_BLOB_BYTES + 1);
+        assert_eq!(t.decrypt_input(&too_long), None);
+        assert_eq!(t.input_nonces.len(), 0, "refused before any AES work");
+        assert_eq!(t.input_drops.rejected, 1);
+
+        // Exactly at the limit: 3044 + 12 + 16 = 3072.
+        let at_limit = sealed_input(&vec![b'a'; MAX_INPUT_BLOB_BYTES - 28]);
+        assert_eq!(at_limit.len(), MAX_INPUT_BLOB_BYTES);
+        assert_eq!(
+            t.decrypt_input(&at_limit).map(|p| p.len()),
+            Some(MAX_INPUT_BLOB_BYTES - 28)
+        );
+    }
+
+    /// The ledger is process-lifetime and cleared by NOTHING — in particular
+    /// not by a hub-forced fresh session, where the hub rejects our resume
+    /// token and mints a new public token while the same key is reused. If it
+    /// were rebuilt there, a hub could force a resume rejection on demand and
+    /// replay every blob it had ever captured.
+    #[test]
+    fn input_ledger_survives_a_hub_forced_fresh_session() {
+        let (url_tx, _url_rx) = oneshot::channel();
+        let mut t = Transport::new(
+            Url::parse("https://hub.example.com").expect("valid URL"),
+            "tok".to_string(),
+            WriteMode::from_flag(true),
+            test_key(),
+            url_tx,
+        );
+        let (in_tx, _in_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let x = sealed_input(b"echo hi\n");
+        assert!(t.decrypt_input(&x).is_some());
+
+        // Two joins with DIFFERENT public tokens: the second is the hub
+        // silently replacing the session behind our back.
+        t.on_joined(
+            &json!({ "token": "tok-a", "join_url": "https://hub.example.com/lab/share/tok-a" }),
+            &in_tx,
+        )
+        .expect("a same-origin join url is accepted");
+        t.on_joined(
+            &json!({ "token": "tok-b", "join_url": "https://hub.example.com/lab/share/tok-b" }),
+            &in_tx,
+        )
+        .expect("a same-origin join url is accepted");
+        assert_eq!(t.last_public_token.as_deref(), Some("tok-b"));
+
+        assert_eq!(
+            t.decrypt_input(&x),
+            None,
+            "a fresh session must not resurrect an already-accepted nonce"
+        );
+    }
+
+    /// The exhaustion notice is a one-shot: an exhausted budget must not
+    /// re-announce itself once per refused frame for the rest of the session.
+    #[test]
+    fn input_exhausted_notice_fires_at_most_once() {
+        const CAP: usize = 4;
+        let mut t = capped_transport(true, CAP);
+        for i in 0..CAP {
+            assert!(
+                t.decrypt_input(&sealed_input(format!("k{i}").as_bytes()))
+                    .is_some()
+            );
+        }
+        assert!(!t.input_exhausted_notified);
+        for i in 0..10 {
+            assert_eq!(
+                t.decrypt_input(&sealed_input(format!("x{i}").as_bytes())),
+                None
+            );
+        }
+        assert!(t.input_exhausted_notified, "the notice latches");
+        assert_eq!(
+            t.input_drops.exhausted, 10,
+            "every refusal is still counted"
+        );
+        // Armed exactly once, and drained by the first taker.
+        assert!(t.take_input_disabled_notice());
+        assert!(!t.take_input_disabled_notice());
+    }
+
+    /// The fail-closed state must reach the **session**, not just stderr: the
+    /// session owns the status bar, and a bar segment is the only host-facing
+    /// surface a repaint does not erase. Driven through `handle_text`, the
+    /// real hub-frame path, so the wiring — not just the flag — is covered.
+    #[test]
+    fn an_exhausted_budget_tells_the_session_exactly_once() {
+        const CAP: usize = 2;
+        let mut t = capped_transport(true, CAP);
+        let (in_tx, mut in_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let input_frame = |plaintext: &str| {
+            format!(
+                r#"["1","2","share:host","input",{{"data":"{}"}}]"#,
+                crate::protocol::b64_encode(&sealed_input(plaintext.as_bytes()))
+            )
+        };
+
+        // Spend the budget: every one of these is delivered as input.
+        for i in 0..CAP {
+            t.handle_text(&input_frame(&format!("k{i}")), &in_tx)
+                .expect("a genuine input frame is not a transport error");
+            assert!(matches!(in_rx.try_recv(), Ok(Inbound::Input(_))));
+        }
+
+        // The first refused frame: nothing reaches the PTY, and the session is
+        // told once.
+        t.handle_text(&input_frame("refused"), &in_tx)
+            .expect("a refused input frame is not a transport error");
+        assert!(matches!(in_rx.try_recv(), Ok(Inbound::InputDisabled)));
+
+        // Every later refusal is silent — the host's bar already says so.
+        for i in 0..5 {
+            t.handle_text(&input_frame(&format!("x{i}")), &in_tx)
+                .expect("still not a transport error");
+        }
+        assert!(in_rx.try_recv().is_err(), "the notice must not repeat");
+        assert_eq!(t.input_drops.exhausted, 6);
     }
 
     #[test]
@@ -916,7 +1650,8 @@ mod tests {
                 "host_resume_token": "secret",
             }),
             &in_tx,
-        );
+        )
+        .expect("a same-origin join url is accepted");
 
         let fragment = test_key().to_fragment();
         assert_eq!(fragment.len(), 43);
@@ -948,7 +1683,8 @@ mod tests {
                 "join_url": "https://hub.example.com/lab/share/new-token",
             }),
             &in_tx,
-        );
+        )
+        .expect("a same-origin join url is accepted on a rejoin too");
         match in_rx.try_recv().expect("second Connected was sent") {
             Inbound::Connected {
                 join_url,
@@ -961,6 +1697,205 @@ mod tests {
                 assert!(fresh_session);
             }
             _ => panic!("expected Connected"),
+        }
+    }
+
+    /// Drive one `on_joined` against a transport configured for hub base `hub`.
+    ///
+    /// On acceptance, both join-URL consumers — the first-join oneshot (which
+    /// feeds `ATUIN_SHARE_URL`) and the session's `Connected` — must have been
+    /// handed the SAME string, which is returned. On refusal both must have
+    /// been handed NOTHING: that silence is the security property, so it is
+    /// asserted here once instead of in every caller.
+    fn join_once(hub: &str, response: &Value) -> Result<String, TransportError> {
+        let (url_tx, mut url_rx) = oneshot::channel();
+        let mut t = Transport::new(
+            Url::parse(hub).expect("valid hub URL"),
+            "tok".to_string(),
+            WriteMode::from_flag(false),
+            test_key(),
+            url_tx,
+        );
+        let (in_tx, mut in_rx) = tokio::sync::mpsc::unbounded_channel();
+        let result = t.on_joined(response, &in_tx);
+        let to_env = url_rx.try_recv().ok();
+        let to_session = match in_rx.try_recv() {
+            Ok(Inbound::Connected { join_url, .. }) => Some(join_url),
+            Ok(other) => panic!("expected Connected, got {}", kind(&Some(other))),
+            Err(_) => None,
+        };
+        match result {
+            Ok(()) => {
+                let url = to_env.expect("an accepted join fires the first-url oneshot");
+                assert_eq!(
+                    to_session.as_deref(),
+                    Some(url.as_str()),
+                    "both consumers must see the same URL"
+                );
+                Ok(url)
+            }
+            Err(e) => {
+                assert_eq!(
+                    to_env, None,
+                    "a refused join must not hand the key fragment to ATUIN_SHARE_URL"
+                );
+                assert_eq!(to_session, None, "a refused join must not report Connected");
+                // Nothing about the refused session is remembered either.
+                assert_eq!(t.host_resume_token, None);
+                assert_eq!(t.last_public_token, None);
+                Err(e)
+            }
+        }
+    }
+
+    /// The D5 attack, verbatim: a hub answering the join with a URL on an
+    /// origin it does not own would otherwise make the CLI print — and freeze
+    /// into `ATUIN_SHARE_URL` — a link handing the AES key to that origin.
+    #[test]
+    fn on_joined_refuses_a_foreign_origin_join_url() {
+        let err = join_once(
+            "wss://hub.example.com",
+            &json!({
+                "token": "pub-token",
+                "join_url": "https://attacker.example.com/collect?s=1",
+                "host_resume_token": "secret",
+            }),
+        )
+        .expect_err("a foreign origin is refused");
+        match &err {
+            TransportError::JoinUrlOrigin { got, want } => {
+                assert_eq!(got, "https://attacker.example.com/collect?s=1");
+                assert!(want.contains("hub.example.com"), "want: {want}");
+            }
+            other => panic!("expected JoinUrlOrigin, got {other:?}"),
+        }
+        // The message names the offending URL and never the key fragment.
+        let msg = err.to_string();
+        assert!(msg.is_ascii(), "user-visible copy stays ASCII: {msg}");
+        assert!(msg.contains("attacker.example.com"), "{msg}");
+        assert!(!msg.contains(&test_key().to_fragment()), "{msg}");
+    }
+
+    /// The regression a naive check introduces: the hub base is **ws/wss** by
+    /// construction (`lab_ws_url` derives http->ws, https->wss) while the join
+    /// URL is a browser link, so raw-scheme or `url::Origin` equality would
+    /// reject every real share while passing an `https` test fixture.
+    #[test]
+    fn on_joined_accepts_an_https_join_url_from_a_wss_hub() {
+        let url = join_once(
+            "wss://hub.example.com",
+            &json!({ "token": "t", "join_url": "https://hub.example.com/lab/share/t" }),
+        )
+        .expect("wss hub and https join url are the same origin");
+        assert_eq!(
+            url,
+            format!(
+                "https://hub.example.com/lab/share/t#{}",
+                test_key().to_fragment()
+            )
+        );
+    }
+
+    /// The local-dev / repro configuration: a plain-HTTP hub reached as
+    /// `ws://`, which `ATUIN_LAB_HUB_URL` passes through as given.
+    #[test]
+    fn on_joined_accepts_an_http_join_url_from_a_ws_hub_on_an_explicit_port() {
+        let url = join_once(
+            "ws://127.0.0.1:4131",
+            &json!({ "token": "t", "join_url": "http://127.0.0.1:4131/lab/share/t" }),
+        )
+        .expect("ws hub and http join url on the same port are the same origin");
+        assert!(url.starts_with("http://127.0.0.1:4131/lab/share/t#"));
+    }
+
+    /// Origin is scheme+host+port and nothing else: a reverse-proxied hub's
+    /// base path and the minted link's path routinely differ, and a default
+    /// port spelled out on one side only must still match.
+    #[test]
+    fn on_joined_accepts_a_different_path_and_a_spelled_out_default_port() {
+        let url = join_once(
+            "wss://hub.example.com/hub/",
+            &json!({ "token": "t", "join_url": "https://hub.example.com:443/lab/share/t?v=2" }),
+        )
+        .expect("path and explicit default port do not change the origin");
+        assert!(url.contains("/lab/share/t?v=2#"));
+    }
+
+    /// A missing `join_url` used to yield the bare string `"#<43-char key
+    /// fragment>"` — a naked session key with no URL at all — because the
+    /// format string ran on `unwrap_or_default()`. Parsing first refuses it.
+    #[test]
+    fn on_joined_refuses_a_missing_join_url_instead_of_printing_a_naked_key() {
+        let err = join_once("wss://hub.example.com", &json!({ "token": "pub-token" }))
+            .expect_err("a missing join url is refused");
+        match err {
+            TransportError::JoinUrlOrigin { got, .. } => assert_eq!(got, ""),
+            other => panic!("expected JoinUrlOrigin, got {other:?}"),
+        }
+    }
+
+    /// The pure origin rule, including every way a hostile hub can try to be
+    /// "almost" the configured origin.
+    #[test]
+    fn same_origin_compares_scheme_host_and_port_and_nothing_else() {
+        let accept = [
+            // ws/wss hub bases against the http/https links they mint.
+            (
+                "wss://hub.example.com",
+                "https://hub.example.com/lab/share/t",
+            ),
+            ("wss://hub.example.com", "https://hub.example.com:443/x"),
+            ("ws://127.0.0.1:4131", "http://127.0.0.1:4131/lab/share/t"),
+            ("ws://localhost", "http://localhost:80/x"),
+            // An http/https base (an `ATUIN_LAB_HUB_URL` given as given).
+            (
+                "https://hub.example.com/hub/",
+                "https://hub.example.com/a/b?c=1",
+            ),
+            ("http://127.0.0.1:4131", "http://127.0.0.1:4131/x"),
+        ];
+        for (hub, join) in accept {
+            assert!(
+                same_origin(
+                    &Url::parse(hub).expect("hub"),
+                    &Url::parse(join).expect("join")
+                ),
+                "expected same origin: {hub} vs {join}"
+            );
+        }
+
+        let refuse = [
+            // Different host, including a lookalike subdomain and suffix.
+            (
+                "wss://hub.example.com",
+                "https://attacker.example.com/collect?s=1",
+            ),
+            (
+                "wss://hub.example.com",
+                "https://hub.example.com.evil.test/x",
+            ),
+            ("wss://hub.example.com", "https://evil.hub.example.com/x"),
+            // Different port, including the implicit-vs-wrong-explicit pair.
+            ("ws://127.0.0.1:4131", "http://127.0.0.1:4132/x"),
+            ("wss://hub.example.com", "https://hub.example.com:8443/x"),
+            // Scheme downgrade: a wss hub never mints a plaintext link.
+            ("wss://hub.example.com", "http://hub.example.com/x"),
+            ("ws://hub.example.com", "https://hub.example.com/x"),
+            // Not a browser link at all. `ws:` must NOT be normalized on the
+            // join side, or `ws://hub/...` would read as same-origin.
+            ("wss://hub.example.com", "ws://hub.example.com/x"),
+            ("wss://hub.example.com", "javascript:alert(1)"),
+            ("wss://hub.example.com", "data:text/html,x"),
+            ("wss://hub.example.com", "file:///etc/passwd"),
+        ];
+        for (hub, join) in refuse {
+            assert!(
+                !same_origin(
+                    &Url::parse(hub).expect("hub"),
+                    &Url::parse(join).expect("join")
+                ),
+                "expected different origins: {hub} vs {join}"
+            );
         }
     }
 
@@ -1029,6 +1964,101 @@ mod tests {
         assert_eq!(refs.take(), "4");
     }
 
+    /// The VIEWER-DIRECTION half of the cross-language interop harness, and
+    /// the only machine check that Rust and JS agree on the **input** AAD.
+    ///
+    /// `crypto::tests::frozen_vector_encrypts_to_the_exact_bytes` proves the
+    /// Rust->JS direction against a byte-frozen vector, and
+    /// `crypto::tests::emit_interop_blob` hands a Rust-sealed blob to the
+    /// shipped viewer `crypto.js`. Neither exercises the direction this fix is
+    /// actually about: a blob the **viewer** sealed, opened by the host's
+    /// accept path. This does, and it runs in every `cargo test` — not behind
+    /// `#[ignore]`, and not depending on a file outside the repository.
+    ///
+    /// The record is produced by `tests/interop/seal-input.mjs`, which imports
+    /// the shipped, unmodified `hub/assets/js/lab_share/crypto.js` and seals a
+    /// plaintext with `encryptBlob(key, bytes, frameAad(INPUT, 0))` — the exact
+    /// call `term.onData` makes. One such record is **frozen** next to it and
+    /// compiled in here, so CI keeps proving the property with no node step and
+    /// no hub checkout; `INTEROP_INPUT` swaps in a freshly generated one when
+    /// re-running the emitter against a changed viewer.
+    ///
+    /// Three assertions:
+    ///
+    /// 1. Both sides built the same 9-byte input AAD (`03` then eight zero
+    ///    bytes), compared as bytes rather than assumed.
+    /// 2. [`Transport::decrypt_input`] returns the exact plaintext JS sealed,
+    ///    so the size bound, replay check, fail-closed gate, and authentication
+    ///    step did not disturb the wire.
+    /// 3. Feeding the **byte-identical** blob a second time returns `None` —
+    ///    the never-forget ledger refusing a replay of a genuine, JS-minted,
+    ///    correctly-authenticated frame. That is D1's attack in miniature,
+    ///    driven from the real viewer implementation.
+    #[test]
+    fn open_js_sealed_input_blob() {
+        /// The frozen viewer-sealed input blob (see the doc above). Compiled
+        /// in, so this test has no runtime dependency on anything outside the
+        /// crate.
+        const FROZEN: &str = include_str!("../tests/interop/js-sealed-input.json");
+
+        let record: Value = match std::env::var("INTEROP_INPUT") {
+            Ok(path) => {
+                serde_json::from_str(&std::fs::read_to_string(&path).expect("read INTEROP_INPUT"))
+                    .expect("INTEROP_INPUT is JSON")
+            }
+            Err(_) => serde_json::from_str(FROZEN).expect("the frozen record is JSON"),
+        };
+
+        let field = |name: &str| -> String {
+            record[name]
+                .as_str()
+                .unwrap_or_else(|| panic!("the interop record has a string {name}"))
+                .to_string()
+        };
+
+        // If `test_key` ever changes, the JS side sealed under a different key
+        // and every assertion below would fail for an unrelated reason. Say so
+        // here instead.
+        assert_eq!(
+            field("fragment"),
+            test_key().to_fragment(),
+            "the JS sealer and this test must use the same session key"
+        );
+
+        // Both implementations independently built the input AAD; compare the
+        // bytes rather than trusting that they agree.
+        let aad = crypto::frame_aad(FrameKind::Input, 0);
+        assert_eq!(
+            field("aad_hex"),
+            hex::encode(aad),
+            "Rust and JS disagree on the input AAD layout"
+        );
+
+        let blob = hex::decode(field("blob_hex")).expect("blob_hex is hex");
+        let expected = hex::decode(field("plaintext_hex")).expect("plaintext_hex is hex");
+        assert!(
+            !expected.is_empty(),
+            "the sealed plaintext must be non-empty"
+        );
+
+        let mut transport = test_transport(true);
+
+        // The host opens what the viewer sealed.
+        assert_eq!(
+            transport.decrypt_input(&blob).as_deref(),
+            Some(expected.as_slice()),
+            "the host must open a blob sealed by the shipped viewer crypto.js"
+        );
+
+        // And refuses the byte-identical replay of that same genuine blob.
+        assert!(
+            transport.decrypt_input(&blob).is_none(),
+            "a byte-identical replay of a JS-sealed input blob must be refused"
+        );
+        assert_eq!(transport.input_drops.replay, 1);
+        assert_eq!(transport.input_nonces.len(), 1, "a replay records nothing");
+    }
+
     /// `Inbound` carries no `Debug` impl (it holds raw terminal bytes); a
     /// variant name is enough for a test failure message.
     fn kind(v: &Option<Inbound>) -> &'static str {
@@ -1038,6 +2068,7 @@ mod tests {
             Some(Inbound::SetSize { .. }) => "SetSize",
             Some(Inbound::Participants(_)) => "Participants",
             Some(Inbound::RequestKeyframe) => "RequestKeyframe",
+            Some(Inbound::InputDisabled) => "InputDisabled",
             Some(Inbound::Connected { .. }) => "Connected",
             Some(Inbound::Disconnected) => "Disconnected",
         }

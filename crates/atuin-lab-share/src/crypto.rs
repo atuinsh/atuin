@@ -36,7 +36,14 @@
 //! * **The AAD binds frame type and envelope `seq`** ([`frame_aad`]): a blob
 //!   sealed as viewer input can never be replayed to a viewer as output, and a
 //!   hub that rewrites the plaintext `seq` it orders by causes an
-//!   authentication failure instead of spliced history.
+//!   authentication failure instead of spliced history. For **input** the
+//!   `seq` is the constant 0 (viewers are anonymous, so there is nothing to
+//!   count), so an input AAD binds *direction only* and every input blob in a
+//!   session shares one AAD. Nothing in the sealed bytes distinguishes one
+//!   input frame from another except its random nonce, which is why input
+//!   replay protection is entirely receiver-side state — the never-forgetting
+//!   ledger in `transport::AcceptedNonces` — and not a property of this
+//!   module.
 
 use aes_gcm::aead::rand_core::RngCore as _;
 use aes_gcm::aead::{Aead as _, OsRng, Payload};
@@ -75,8 +82,11 @@ pub enum FrameKind {
 ///
 /// Host→viewer frames use the envelope `seq` the hub orders and replays on;
 /// viewer input uses the constant `seq` 0 (viewers are anonymous, so no
-/// per-sender counter exists — replay there is handled by nonce dedup on the
-/// host instead).
+/// per-sender counter exists). Input replay is handled on the host by an
+/// exact-nonce ledger that **never forgets** — bounded at `INPUT_NONCE_CAP`
+/// accepted frames per process, after which input is refused (fail closed).
+/// Dedup prevents *duplication*; it does **not** prevent the hub from dropping
+/// or reordering input, which remain open. See `transport::AcceptedNonces`.
 #[must_use]
 pub fn frame_aad(kind: FrameKind, seq: u64) -> [u8; AAD_LEN] {
     let mut aad = [0u8; AAD_LEN];

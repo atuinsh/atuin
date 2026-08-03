@@ -69,6 +69,17 @@ const TIER_PROSE: u8 = 3;
 pub(crate) struct StatusBar {
     pub(crate) viewers: u32,
     pub(crate) write: WriteMode,
+    /// Viewer input died permanently for the rest of this process: the
+    /// transport's never-forget replay ledger is full and every further
+    /// viewer keystroke is refused (`transport::INPUT_NONCE_CAP`).
+    ///
+    /// Carried on the bar rather than announced once, because the condition is
+    /// **terminal and silent**: the viewer is never told (that would need a
+    /// wire change), so the host's terminal is the only place it can be seen,
+    /// and a printed line lives only until the next repaint composites over
+    /// the child area. A sticky segment is the durable form of a permanent
+    /// state.
+    pub(crate) input_disabled: bool,
 }
 
 impl StatusBar {
@@ -108,10 +119,18 @@ impl StatusBar {
     /// first row.
     #[must_use]
     pub(crate) fn render(&self, cols: u16) -> Vec<u8> {
-        let write_state = if self.write.is_write_enabled() {
-            "WRITE ON"
-        } else {
-            "WRITE OFF"
+        let write_state = match (self.write.is_write_enabled(), self.input_disabled) {
+            // Supersedes "WRITE ON": the share was started with `--write`, but
+            // viewer typing is now refused for the rest of the process, so
+            // claiming write is live would be a lie the host acts on. Stays in
+            // the mandatory tier — a permanent state the host cannot afford to
+            // lose is exactly what that tier is for.
+            (true, true) => "INPUT DISABLED",
+            (true, false) => "WRITE ON",
+            // Unreachable in the read-only case: the transport refuses viewer
+            // input before any AEAD work there, so a read-only share never
+            // spends a unit of the budget that produces this state.
+            (false, _) => "WRITE OFF",
         };
         let segments: [(u8, Cow<'static, str>); 5] = [
             (MANDATORY, Cow::Borrowed("! SHARED SESSION")),
@@ -219,6 +238,17 @@ mod tests {
         StatusBar {
             viewers,
             write: WriteMode::from_flag(write),
+            input_disabled: false,
+        }
+        .render(cols)
+    }
+
+    /// The same bar after viewer input died permanently (replay budget spent).
+    fn exhausted_bar(cols: u16) -> Vec<u8> {
+        StatusBar {
+            viewers: 1,
+            write: WriteMode::from_flag(true),
+            input_disabled: true,
         }
         .render(cols)
     }
@@ -296,6 +326,24 @@ mod tests {
     fn bar_reflects_the_write_state() {
         assert!(bar_text(&bar(100, 0, true)).contains("WRITE ON"));
         assert!(bar_text(&bar(100, 0, false)).contains("WRITE OFF"));
+    }
+
+    /// An exhausted input budget is a permanent, viewer-invisible condition,
+    /// so the bar — the one host-facing surface a repaint cannot erase — must
+    /// carry it, and must stop claiming the share still takes viewer input.
+    /// It rides in the mandatory tier, so it survives a narrow terminal too.
+    #[test]
+    fn bar_shows_input_disabled_instead_of_write_on_when_the_budget_is_spent() {
+        let wide = bar_text(&exhausted_bar(100));
+        assert!(wide.contains("INPUT DISABLED"));
+        assert!(!wide.contains("WRITE ON"));
+
+        // Narrow enough that every optional tier is gone: the state is still
+        // there, next to the mandatory shared-session marker.
+        let narrow = bar_text(&exhausted_bar(35));
+        assert!(narrow.contains("SHARED SESSION"));
+        assert!(narrow.contains("INPUT DISABLED"));
+        assert!(!narrow.contains("viewers"));
     }
 
     /// The fit is measured in **display columns**, not `char`s. The bar text

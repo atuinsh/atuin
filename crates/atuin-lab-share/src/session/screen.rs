@@ -29,6 +29,12 @@ pub(super) const KEYFRAME_TICK: Duration = Duration::from_millis(100);
 /// no lock involved.
 pub(super) struct ScreenState {
     parser: vt100::Parser,
+    /// The grid the parser was last built or resized to, floored at
+    /// [`crate::MIN_COLS`] x [`crate::MIN_CHILD_ROWS`]. Kept alongside the
+    /// parser because [`ScreenState::vt100_guarded`] needs a size to rebuild
+    /// at, and `vt100` 0.16.2's own `Screen::size()` is not reachable from a
+    /// parser that just unwound.
+    size: Size,
     /// The next sequence number for `output`/`keyframe`, starting at 1.
     seq: u64,
     /// The next minting opportunity must also produce a keyframe. Starts
@@ -56,9 +62,17 @@ pub(super) struct ProcessOutcome {
 impl ScreenState {
     /// A blank screen sized to the rows *available to the child* — the host's
     /// terminal minus the bar row, subtracted exactly once by `run_share`.
+    ///
+    /// The size is floored at [`crate::MIN_COLS`] x [`crate::MIN_CHILD_ROWS`]
+    /// before it reaches `vt100`. Every caller already clamps or refuses
+    /// upstream (`host_size_from`, `clamp_host_size`, `clamp_child`,
+    /// `proxy_tap::clamp_tap_size`); this is the last of those gates and the
+    /// only one that sits directly on the library that panics.
     pub(super) fn new(size: Size) -> Self {
+        let size = clamp(size);
         Self {
             parser: vt100::Parser::new(size.rows, size.cols, 0),
+            size,
             seq: 1,
             want_keyframe: true, // initial keyframe
             last_keyframe: Instant::now(),
@@ -69,6 +83,30 @@ impl ScreenState {
     /// The current screen, for compositing.
     pub(super) fn screen(&self) -> &vt100::Screen {
         self.parser.screen()
+    }
+
+    /// Run a `vt100` operation, absorbing any panic inside the library.
+    ///
+    /// Defence in depth, mirroring `atuin_pty_proxy::screen::ParserState`'s
+    /// guard of the same name and for the same reason: `vt100` 0.16.2 has
+    /// panic paths beyond the degenerate-geometry ones the clamps remove, and
+    /// this parser has no supervisor. It is owned by the session's central
+    /// task, which is awaited directly by `run_share` — so an unwind out of
+    /// here does not restart anything, it ends the share. (`TermGuard` still
+    /// restores the tty on the way out, which is exactly why the failure looks
+    /// like an unexplained exit rather than a broken terminal.)
+    ///
+    /// On a caught panic the model is rebuilt blank at the tracked size and a
+    /// keyframe is requested, so the next mint repaints every viewer. Frame
+    /// sequencing is untouched: `seq` lives outside the parser, so the seq
+    /// invariant survives a rebuild.
+    fn vt100_guarded(&mut self, op: impl FnOnce(&mut vt100::Parser)) {
+        let caught =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(&mut self.parser)));
+        if caught.is_err() {
+            self.parser = vt100::Parser::new(self.size.rows, self.size.cols, 0);
+            self.want_keyframe = true;
+        }
     }
 
     fn next_seq(&mut self) -> u64 {
@@ -92,7 +130,7 @@ impl ScreenState {
             self.want_keyframe = true;
         }
 
-        self.parser.process(chunk);
+        self.vt100_guarded(|parser| parser.process(chunk));
         let output = Frame {
             seq: self.next_seq(),
             data: chunk.to_vec(),
@@ -143,10 +181,27 @@ impl ScreenState {
     ///
     /// NB: `set_size` lives on `Screen`, not `Parser` — reach it via
     /// `screen_mut()`. (`vt100` 0.16.2 has no `Parser::set_size`.)
+    ///
+    /// The requested size is floored exactly as in [`ScreenState::new`], and
+    /// the tracked size is updated **before** the call so a panic inside
+    /// `vt100` rebuilds at the size that was asked for, not the one being
+    /// left behind.
     #[must_use]
     pub(super) fn set_size(&mut self, size: Size) -> Frame {
-        self.parser.screen_mut().set_size(size.rows, size.cols);
+        self.size = clamp(size);
+        let (rows, cols) = (self.size.rows, self.size.cols);
+        self.vt100_guarded(|parser| parser.screen_mut().set_size(rows, cols));
         self.emit_keyframe()
+    }
+}
+
+/// Floor a child geometry at what `vt100` 0.16.2 survives — see
+/// [`crate::MIN_COLS`] and [`crate::MIN_CHILD_ROWS`] for the two panic sites
+/// each number comes from.
+fn clamp(size: Size) -> Size {
+    Size {
+        cols: size.cols.max(crate::MIN_COLS),
+        rows: size.rows.max(crate::MIN_CHILD_ROWS),
     }
 }
 
@@ -246,6 +301,81 @@ mod tests {
             !state.keyframe_due(),
             "set_size serviced the pending request"
         );
+    }
+
+    /// The degenerate-geometry floor, end to end through the model.
+    ///
+    /// The size is asked for at 0x0 — what `crossterm::terminal::size()`
+    /// reports under `script -q /dev/null CMD > file` — and must come back
+    /// floored, never at the 1x1 that panics `vt100`'s `grid.rs`.
+    ///
+    /// The text MUST wrap. An empty feed proves nothing here: the compositor's
+    /// own `composite_region_bottom_never_rises_above_row_2` survives a
+    /// zero-row child precisely because it never draws, and the observed
+    /// panics were all in *drawing* (`row.rs` index-out-of-bounds,
+    /// `grid.rs` scroll underflow). So this pushes far more text than fits and
+    /// forces several wraps and scrolls.
+    #[test]
+    fn the_smallest_survivable_screen_takes_wrapping_text_and_keyframes() {
+        let mut state = ScreenState::new(Size { cols: 0, rows: 0 });
+        assert_eq!(
+            state.screen().size(),
+            (crate::MIN_CHILD_ROWS, crate::MIN_COLS),
+            "a 0x0 request must be floored, not honoured"
+        );
+
+        // Wraps every cell and scrolls many times over on a 1x2 grid.
+        const WRAPPING: &[u8] = b"wrap this line and keep going well past the end";
+        let outcome = state.process_chunk(WRAPPING);
+        assert_eq!(outcome.output.data, WRAPPING, "the chunk still fans out");
+        let _ = state.emit_keyframe();
+
+        // Newlines, carriage returns and SGR on the same tiny grid.
+        let _ = state.process_chunk(b"\r\n\x1b[31mred\x1b[0m\r\nmore\r\n");
+        let keyframe = state.emit_keyframe();
+        assert!(
+            !keyframe.data.is_empty(),
+            "a keyframe at the floor is still a real repaint"
+        );
+    }
+
+    /// `set_size` floors the same way, including the mid-session shrink to a
+    /// hub-negotiated 1x1 that `clamp_child` would already have caught.
+    #[test]
+    fn set_size_floors_a_degenerate_request_and_still_repaints() {
+        let mut state = ScreenState::new(SIZE);
+        let _ = state.process_chunk(b"hello world");
+        let keyframe = state.set_size(Size { cols: 1, rows: 1 });
+        assert_eq!(
+            state.screen().size(),
+            (crate::MIN_CHILD_ROWS, crate::MIN_COLS)
+        );
+        assert!(!keyframe.data.is_empty());
+        // ...and the floored grid still takes wrapping text afterwards.
+        let _ = state.process_chunk(b"and more text that wraps repeatedly");
+    }
+
+    /// The guard's contract: a panic inside `vt100` rebuilds the model blank
+    /// at the tracked size and asks for a repaint, rather than unwinding out
+    /// through the session task and ending the share. Driven with a closure
+    /// that panics outright, since the geometry clamps remove the known
+    /// upstream panic paths.
+    #[test]
+    fn a_vt100_panic_rebuilds_the_model_instead_of_killing_the_session() {
+        let mut state = settled();
+        let _ = state.process_chunk(b"visible text");
+        assert!(state.screen().contents().contains("visible text"));
+
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {})); // keep the test output clean
+        state.vt100_guarded(|_| panic!("vt100 went bang"));
+        std::panic::set_hook(previous);
+
+        assert_eq!(state.screen().size(), (SIZE.rows, SIZE.cols));
+        assert_eq!(state.screen().contents(), "", "rebuilt blank");
+        assert!(state.keyframe_due(), "a rebuild must request a repaint");
+        // The seq counter lives outside the parser, so sequencing survives.
+        assert_eq!(state.emit_keyframe().seq, 3);
     }
 
     #[test]

@@ -1,16 +1,16 @@
 //! The child shell: a process attached to a PTY sized to the negotiated child
 //! dimensions (the host's terminal minus the row reserved for the warning bar).
 
-use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
-use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
+use crate::source::{ByteReader, SessionSource, SourceParts};
 use crate::{Error, Size};
 
 /// The shared subshell: a child process attached to a PTY.
 ///
-/// Lives only between [`Subshell::spawn`] and [`Subshell::into_parts`]:
+/// Lives only between [`Subshell::spawn`] and [`SessionSource::into_parts`]:
 /// `run_share` spawns it, then the session splits it into the pieces its task
 /// topology needs.
 pub(crate) struct Subshell {
@@ -30,10 +30,10 @@ pub(crate) struct Subshell {
 /// `Mutex<T>: Sync` when `T: Send`), so the session future holding the resizer
 /// stays freely movable across the runtime's worker threads.
 ///
-/// After [`Subshell::into_parts`] the resizer holds the boxed master itself,
-/// but it is **not** the only master fd: the reader and writer split off there
-/// are dups of it (`portable-pty` 0.9 implements `try_clone_reader` /
-/// `take_writer` as fd clones), so dropping the resizer alone does not close
+/// After [`SessionSource::into_parts`] the resizer holds the boxed master
+/// itself, but it is **not** the only master fd: the reader and writer split
+/// off there are dups of it (`portable-pty` 0.9 implements `try_clone_reader`
+/// / `take_writer` as fd clones), so dropping the resizer alone does not close
 /// the master side. Nothing relies on it doing so — the reader's EOF comes
 /// from the *slave* side, once the child and every descendant that inherited
 /// the tty have exited.
@@ -53,25 +53,6 @@ impl PtyResizer {
             });
         }
     }
-}
-
-/// The session-facing pieces of a spawned subshell, split apart so each can go
-/// where the session's topology needs it: the reader to the pty-reader thread,
-/// the child to the blocking-pool wait, and the writer, resizer and killer to
-/// the central task.
-pub(crate) struct SubshellParts {
-    /// A blocking reader over the PTY master (child output).
-    pub(crate) reader: Box<dyn Read + Send>,
-    /// The sole PTY writer (child input).
-    pub(crate) writer: Box<dyn Write + Send>,
-    /// Child PTY resizer — holds the boxed master after the split (though the
-    /// reader and writer are fd dups of it); see [`PtyResizer`].
-    pub(crate) resizer: PtyResizer,
-    /// Terminates the child without owning it, so the session can kill while
-    /// `child.wait()` runs on the blocking pool.
-    pub(crate) killer: Box<dyn ChildKiller + Send + Sync>,
-    /// The child itself, kept only to be `wait()`ed on for its exit code.
-    pub(crate) child: Box<dyn Child + Send + Sync>,
 }
 
 impl Subshell {
@@ -115,18 +96,27 @@ impl Subshell {
             child,
         })
     }
+}
 
-    /// Split the subshell into the pieces the session's topology needs — see
-    /// [`SubshellParts`]. The boxed PTY master survives inside the resizer;
-    /// the reader and writer carry their own dups of the master fd.
+impl SessionSource for Subshell {
+    /// Split the subshell into the pieces the session's topology needs. The
+    /// boxed PTY master survives inside the resizer closure; the reader and
+    /// writer carry their own dups of the master fd.
+    ///
+    /// The subshell owns its child outright, so `stop` kills it, and `wait`
+    /// applies the exit-code mapping the session has always used: the child's
+    /// own code when the wait succeeds (non-`i32` codes clamp to 1), 0 when
+    /// it fails. Everything else is the subshell's defaults: no bootstrap (a
+    /// fresh shell starts blank), synthetic query answers (the compositor
+    /// swallows its output, so nothing else would reply), and hub resizes
+    /// applied to the child PTY.
     ///
     /// # Panics
     ///
     /// Panics if the reader cannot be cloned (the process is out of file
     /// descriptors) or the writer was already taken — impossible on a freshly
     /// spawned subshell, which is the only caller.
-    #[must_use]
-    pub(crate) fn into_parts(self) -> SubshellParts {
+    fn into_parts(self) -> crate::Result<SourceParts> {
         let (reader, writer) = {
             let master = self.master.lock().expect("master lock");
             (
@@ -134,12 +124,27 @@ impl Subshell {
                 master.take_writer().expect("take pty writer"),
             )
         };
-        SubshellParts {
-            reader,
+        let resizer = PtyResizer(self.master);
+        // Terminates the child without owning it, so the session can stop the
+        // child while `wait` runs on the blocking pool.
+        let mut killer = self.child.clone_killer();
+        let mut child = self.child;
+        Ok(SourceParts {
+            reader: Box::new(ByteReader(reader)),
             writer,
-            resizer: PtyResizer(self.master),
-            killer: self.child.clone_killer(),
-            child: self.child,
-        }
+            resizer: Box::new(move |size| resizer.resize(size)),
+            stop: Box::new(move || {
+                // Best-effort, exactly as the session's kill switch always
+                // treated it: a failed kill still reaches `wait`'s mapping.
+                let _ = killer.kill();
+            }),
+            wait: Box::new(move || match child.wait() {
+                Ok(status) => i32::try_from(status.exit_code()).unwrap_or(1),
+                Err(_) => 0,
+            }),
+            bootstrap: None,
+            answer_queries: true,
+            follows_hub_resize: true,
+        })
     }
 }
