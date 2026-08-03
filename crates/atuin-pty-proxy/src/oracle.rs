@@ -1,10 +1,10 @@
 //! Headless zsh completion oracle.
 //!
 //! compsys only runs inside an interactive ZLE session, so a captive
-//! `zsh -f -i` lives under its own pty. An init script overrides `compadd`
-//! to divert every candidate into an array (so nothing is ever displayed or
-//! inserted) and prints them between NUL-delimiter lines. One oracle
-//! persists per session: compinit runs once, then each query is a
+//! interactive zsh lives under its own pty. An init script overrides
+//! `compadd` to divert every candidate into an array (so nothing is ever
+//! displayed or inserted) and prints them between NUL-delimiter lines. One
+//! oracle persists per session: compinit runs once, then each query is a
 //! kill-line + text + Tab round trip.
 //!
 //! The `compadd` interception technique is adapted from
@@ -18,7 +18,16 @@ use std::time::{Duration, Instant};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 const READY_MARKER: &str = "__ATUIN_ORACLE_READY__";
-const SPAWN_TIMEOUT: Duration = Duration::from_secs(5);
+/// User rc files (nvm and friends) can take a while; the hermetic `-f`
+/// variant has nothing to load.
+const SPAWN_TIMEOUT_USER_CONFIG: Duration = Duration::from_secs(10);
+const SPAWN_TIMEOUT_HERMETIC: Duration = Duration::from_secs(5);
+/// The oracle thread's own per-query deadline. Generous on purpose: a slow
+/// query (first-load of a completer, huge candidate sets) must finish or
+/// truly wedge — abandoning it mid-protocol desyncs the NUL framing.
+const QUERY_DEADLINE: Duration = Duration::from_secs(2);
+/// Wedged-oracle respawns before completions are given up for the session.
+const RESPAWN_LIMIT: u32 = 3;
 const KILL_WHOLE_LINE: &[u8] = b"\x15";
 
 /// Delimits completion output; re-arms itself because zsh clears the
@@ -28,8 +37,11 @@ PROMPT=''
 RPROMPT=''
 unset zle_bracketed_paste 2>/dev/null
 
-autoload -Uz compinit
-compinit -C -d "${TMPDIR:-/tmp}/.atuin-oracle-zcompdump"
+# The user's rc may already have run compinit; don't clobber its setup.
+if ! (( ${+functions[compdef]} )); then
+    autoload -Uz compinit
+    compinit -C -d "${TMPDIR:-/tmp}/.atuin-oracle-zcompdump"
+fi
 
 # The oracle must never run a command, only complete.
 bindkey '^M' undefined
@@ -82,8 +94,12 @@ compadd() {
 
     [[ -n $__hits ]] || return
 
+    # Printing is a shell-level loop: cap it so huge candidate sets (every
+    # command, giant directories) can't stall the oracle past its deadline.
+    integer __max=$(( $#__hits > 100 ? 100 : $#__hits ))
+
     local dsuf dscr
-    for i in {1..$#__hits}; do
+    for i in {1..$__max}; do
         (( dirsuf )) && [[ -d $__hits[$i] ]] && dsuf=/ || dsuf=
         (( $#__dscr >= $i )) && dscr=$'\t'"${__dscr[$i]}" || dscr=
         print -r -- "$IPREFIX$apre$hpre$__hits[$i]$dsuf$hsuf$asuf$dscr"
@@ -93,6 +109,110 @@ compadd() {
 print -r -- __ATUIN_ORACLE_READY__
 "#;
 
+/// Async front door to the oracle: queries and answers cross a dedicated
+/// thread, so a caller on a latency budget can stop waiting without
+/// abandoning the pty protocol mid-read (which would desync it). Stale
+/// answers are discarded by query id; a query arriving while the oracle is
+/// busy simply replaces any queued one (latest wins).
+pub struct ZshOracleHandle {
+    query_tx: mpsc::SyncSender<(u64, String)>,
+    answer_rx: Receiver<(u64, Vec<String>)>,
+    next_id: u64,
+}
+
+impl ZshOracleHandle {
+    /// Start the oracle thread. The captive zsh itself spawns lazily on the
+    /// first query and is respawned (up to a cap) if it wedges.
+    pub fn spawn(zsh: std::path::PathBuf, load_user_config: bool) -> Self {
+        let (query_tx, query_rx) = mpsc::sync_channel::<(u64, String)>(1);
+        let (answer_tx, answer_rx) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            let mut load_user_config = load_user_config;
+            let mut spawns = 0u32;
+            let respawn = |load_user_config: &mut bool, spawns: &mut u32| {
+                if *spawns >= RESPAWN_LIMIT {
+                    return None;
+                }
+                *spawns += 1;
+                let proc = ZshOracle::spawn(&zsh, *load_user_config);
+                if proc.is_some() || !*load_user_config {
+                    return proc;
+                }
+                // Their rc never produced a ready shell; retry hermetic
+                // without burning another attempt.
+                *load_user_config = false;
+                ZshOracle::spawn(&zsh, false)
+            };
+
+            // Warm up before the first keystroke needs an answer: spawning
+            // (rc files, compinit) costs more than any query's wait budget.
+            let mut proc = respawn(&mut load_user_config, &mut spawns);
+
+            while let Ok((mut id, mut line)) = query_rx.recv() {
+                // Only the newest queued query is worth answering.
+                while let Ok((newer_id, newer_line)) = query_rx.try_recv() {
+                    id = newer_id;
+                    line = newer_line;
+                }
+
+                if proc.is_none() {
+                    proc = respawn(&mut load_user_config, &mut spawns);
+                }
+                let Some(oracle) = proc.as_mut() else {
+                    let _ = answer_tx.send((id, Vec::new()));
+                    continue;
+                };
+
+                match oracle.complete(&line, QUERY_DEADLINE) {
+                    Some(candidates) => {
+                        if answer_tx.send((id, candidates)).is_err() {
+                            return;
+                        }
+                    }
+                    // Truly wedged: kill it; the next query respawns.
+                    None => {
+                        proc = None;
+                        let _ = answer_tx.send((id, Vec::new()));
+                    }
+                }
+            }
+        });
+
+        Self {
+            query_tx,
+            answer_rx,
+            next_id: 0,
+        }
+    }
+
+    /// Ask for completions, waiting at most `wait`. A miss returns empty —
+    /// the answer keeps computing and is discarded as stale later, and the
+    /// oracle stays healthy for the next keystroke.
+    pub fn complete(&mut self, line: &str, wait: Duration) -> Vec<String> {
+        while self.answer_rx.try_recv().is_ok() {}
+
+        self.next_id += 1;
+        let id = self.next_id;
+        if self.query_tx.try_send((id, line.to_string())).is_err() {
+            // Oracle busy and one query already queued: this one loses.
+            return Vec::new();
+        }
+
+        let deadline = Instant::now() + wait;
+        loop {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return Vec::new();
+            };
+            match self.answer_rx.recv_timeout(remaining) {
+                Ok((answer_id, candidates)) if answer_id == id => return candidates,
+                Ok(_) => {} // stale answer to an abandoned query
+                Err(_) => return Vec::new(),
+            }
+        }
+    }
+}
+
 pub struct ZshOracle {
     writer: Box<dyn Write + Send>,
     lines: Receiver<String>,
@@ -101,7 +221,11 @@ pub struct ZshOracle {
 
 impl ZshOracle {
     /// Spawn a captive zsh and wait for its completion system to come up.
-    pub fn spawn(zsh: &Path) -> Option<Self> {
+    ///
+    /// With `load_user_config` the user's rc files run first, so their
+    /// custom completions and fpath additions answer too; the caller falls
+    /// back to a hermetic spawn if that shell never becomes ready.
+    pub fn spawn(zsh: &Path, load_user_config: bool) -> Option<Self> {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 50,
@@ -111,11 +235,25 @@ impl ZshOracle {
             })
             .ok()?;
 
-        // -f: no user rc files — hermetic and fast. vt100 keeps ZLE alive
-        // (it refuses to run under TERM=dumb) with minimal escape noise.
+        // vt100 keeps ZLE alive (it refuses to run under TERM=dumb) with
+        // minimal escape noise.
         let mut cmd = CommandBuilder::new(zsh);
-        cmd.args(["-f", "-i"]);
+        if load_user_config {
+            cmd.args(["-i"]);
+        } else {
+            cmd.args(["-f", "-i"]);
+        }
         cmd.env("TERM", "vt100");
+        // An rc that evals `atuin init zsh` may contain the pty-proxy exec
+        // preamble; these are its guards, and they stop the captive shell
+        // from exec-ing a proxy inside the proxy.
+        cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
+        cmd.env(
+            "ATUIN_PTY_PROXY_TMUX",
+            std::env::var_os("TMUX").unwrap_or_default(),
+        );
+        // Escape hatch so rc files can skip heavy setup in the oracle.
+        cmd.env("ATUIN_SUGGEST_ORACLE", "1");
         if let Ok(cwd) = std::env::current_dir() {
             cmd.cwd(cwd);
         }
@@ -164,7 +302,12 @@ impl ZshOracle {
             child,
         };
 
-        let deadline = Instant::now() + SPAWN_TIMEOUT;
+        let spawn_timeout = if load_user_config {
+            SPAWN_TIMEOUT_USER_CONFIG
+        } else {
+            SPAWN_TIMEOUT_HERMETIC
+        };
+        let deadline = Instant::now() + spawn_timeout;
         let ready = loop {
             match oracle.recv_line(deadline) {
                 Some(line) if line.contains(READY_MARKER) && !line.contains("source ") => {
@@ -235,7 +378,7 @@ mod tests {
             eprintln!("zsh not installed; skipping oracle test");
             return;
         };
-        let mut oracle = ZshOracle::spawn(&zsh).expect("oracle spawns");
+        let mut oracle = ZshOracle::spawn(&zsh, false).expect("oracle spawns");
 
         let candidates = oracle
             .complete("git ch", Duration::from_secs(3))
