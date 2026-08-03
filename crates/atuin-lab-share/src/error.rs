@@ -93,7 +93,7 @@ pub enum Error {
     /// The `--active` detection ladder found no cooperating PTY owner to
     /// attach to: `ATUIN_PTY_PROXY_SOCKET` is unset, or nothing answers on
     /// it. `--active` never spawns anything, so this is a refusal — the
-    /// display is [`ACTIVE_SHARE_REFUSAL`], the full instructive copy.
+    /// display is `ACTIVE_SHARE_REFUSAL`, the full instructive copy.
     #[error("{}", ACTIVE_SHARE_REFUSAL)]
     ActiveShareUnsupported,
 
@@ -176,7 +176,7 @@ pub enum Error {
 
     /// The host's terminal is too small for the session to render at all:
     /// `vt100` 0.16.2 panics on a zero-column grid and on a one-row child
-    /// grid (see [`crate::MIN_COLS`] / [`crate::MIN_CHILD_ROWS`] for the two
+    /// grid (see `MIN_COLS` / `MIN_CHILD_ROWS` for the two
     /// panic sites). Raised by `read_host_size`, which runs before the
     /// session key is minted and before the hub hears from us — so a refusal
     /// here leaves nothing minted anywhere.

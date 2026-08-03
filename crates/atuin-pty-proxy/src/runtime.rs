@@ -110,7 +110,7 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
 
 /// Everything the proxy engine needs, with the endpoints injected so tests
 /// can drive a real PTY and a real socket without touching the terminal
-/// (raw mode, SIGWINCH, and stdin stay in [`run`]).
+/// (raw mode, SIGWINCH, and stdin stay in `run`).
 pub struct ProxyCoreConfig {
     /// PTY master read side (the shell's output).
     pub reader: Box<dyn Read + Send>,

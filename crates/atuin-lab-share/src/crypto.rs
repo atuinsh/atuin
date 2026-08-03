@@ -200,7 +200,7 @@ impl SessionKey {
     }
 
     /// Deterministic sealing used by [`SessionKey::encrypt`] and, in tests, by
-    /// [`SessionKey::encrypt_with_nonce`]. Every production nonce comes fresh
+    /// `encrypt_with_nonce`. Every production nonce comes fresh
     /// from the OS RNG in `encrypt`.
     fn seal(&self, nonce: &[u8; NONCE_LEN], plaintext: &[u8], aad: &[u8; AAD_LEN]) -> Vec<u8> {
         let sealed = self

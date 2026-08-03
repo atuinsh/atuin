@@ -466,7 +466,7 @@ async fn run_share_active(opts: ShareOptions) -> Result<()> {
     Ok(())
 }
 
-/// Wait — bounded by [`END_FLUSH_TIMEOUT`] — for the transport task to
+/// Wait — bounded by `END_FLUSH_TIMEOUT` — for the transport task to
 /// finish after the session ends.
 ///
 /// The session's every exit path queues `Outbound::End` before dropping its
