@@ -180,8 +180,13 @@ fn suggestion_worker(
     }
 }
 
-/// Lazily connected suggestion backends: the daemon's search index first,
-/// the local sqlite database as fallback.
+/// How long a fish `complete -C` oracle call may take before it's abandoned;
+/// must fit inside [`SUGGEST_REPLY_TIMEOUT`] alongside the history lookup.
+#[cfg(all(feature = "client", feature = "pty-proxy", unix))]
+const COMPLETION_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Lazily connected suggestion backends: history (daemon index first, sqlite
+/// fallback), topped up with shell completions from fish when installed.
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
 struct SuggestionBackend {
     settings: atuin_client::settings::Settings,
@@ -191,20 +196,42 @@ struct SuggestionBackend {
         atuin_client::database::Sqlite,
         atuin_client::database::Context,
     )>,
+    /// fish binary, if installed. It is the one shell whose completion
+    /// engine runs headless (`complete -C`), so it serves as the completion
+    /// oracle no matter which shell the user runs.
+    fish: Option<std::path::PathBuf>,
 }
 
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
 impl SuggestionBackend {
     fn new(settings: atuin_client::settings::Settings) -> Self {
+        let fish = std::env::var_os("PATH").and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join("fish"))
+                .find(|candidate| candidate.is_file())
+        });
         Self {
             settings,
             #[cfg(feature = "daemon")]
             daemon: None,
             local: None,
+            fish,
         }
     }
 
     async fn fetch(&mut self, query: &str) -> Vec<String> {
+        let mut suggestions = self.fetch_history(query).await;
+        // History first — it's ranked and personal; completions top up below
+        // so the ghost stays a command you've actually run when one matches.
+        for completion in self.fetch_completions(query).await {
+            if !suggestions.contains(&completion) {
+                suggestions.push(completion);
+            }
+        }
+        suggestions
+    }
+
+    async fn fetch_history(&mut self, query: &str) -> Vec<String> {
         // Daemon first: in-memory, frecency-ranked, no sqlite per keystroke.
         #[cfg(feature = "daemon")]
         if self.settings.daemon.enabled {
@@ -231,6 +258,38 @@ impl SuggestionBackend {
         }
 
         self.fetch_local(query).await
+    }
+
+    /// Shell completions for the line's last token, returned as whole lines
+    /// (`git ch` + `checkout` → `git checkout`) so the popup, ghost text,
+    /// and accept treat them exactly like history suggestions.
+    async fn fetch_completions(&self, line: &str) -> Vec<String> {
+        let Some(fish) = &self.fish else {
+            return Vec::new();
+        };
+
+        // `--do-complete=$argv[1]` keeps the user's line out of fish's
+        // parser: it arrives as an argument, never as code.
+        let output = tokio::time::timeout(
+            COMPLETION_TIMEOUT,
+            tokio::process::Command::new(fish)
+                .args(["--no-config", "-c", "complete --do-complete=$argv[1]"])
+                .arg(line)
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await;
+        let Ok(Ok(output)) = output else {
+            return Vec::new();
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        stdout
+            .lines()
+            .filter_map(|candidate| apply_completion(line, candidate))
+            .take(self.settings.suggest.limit as usize)
+            .collect()
     }
 
     async fn fetch_local(&mut self, query: &str) -> Vec<String> {
@@ -268,6 +327,48 @@ impl SuggestionBackend {
         .into_iter()
         .map(|entry| entry.command)
         .collect()
+    }
+}
+
+/// Splice one `complete -C` output line (`token\tdescription`) back into the
+/// command line by replacing its last whitespace-separated token. Whole-line
+/// form keeps completions prefix-extensions of the typed line, which is what
+/// the ghost text and accept paths expect.
+#[cfg(all(feature = "client", feature = "pty-proxy", unix))]
+fn apply_completion(line: &str, candidate: &str) -> Option<String> {
+    let token = candidate.split('\t').next().unwrap_or_default();
+    if token.is_empty() {
+        return None;
+    }
+    let token_start = line
+        .rfind(char::is_whitespace)
+        .map_or(0, |position| position + 1);
+    let completed = format!("{}{}", &line[..token_start], token);
+    (completed != line).then_some(completed)
+}
+
+#[cfg(all(feature = "client", feature = "pty-proxy", unix, test))]
+mod suggestion_tests {
+    use super::apply_completion;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::subcommand("git ch", "checkout\tCheckout a branch", Some("git checkout"))]
+    #[case::flag(
+        "git status --sh",
+        "--short\tGive output in short format",
+        Some("git status --short")
+    )]
+    #[case::first_token("gi", "git\tdistributed VCS", Some("git"))]
+    #[case::after_trailing_space("git ", "checkout", Some("git checkout"))]
+    #[case::noop_completion("git checkout", "checkout", None)]
+    #[case::empty_candidate("git ch", "", None)]
+    fn splices_completion_into_line(
+        #[case] line: &str,
+        #[case] candidate: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(apply_completion(line, candidate).as_deref(), expected);
     }
 }
 
