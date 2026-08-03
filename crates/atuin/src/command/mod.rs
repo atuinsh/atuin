@@ -180,13 +180,63 @@ fn suggestion_worker(
     }
 }
 
-/// How long a fish `complete -C` oracle call may take before it's abandoned;
+/// How long one completion-oracle call may take before it's abandoned;
 /// must fit inside [`SUGGEST_REPLY_TIMEOUT`] alongside the history lookup.
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
 const COMPLETION_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150);
 
+/// A wedged zsh oracle is killed and respawned this many times before
+/// completions are given up on for the session.
+#[cfg(all(feature = "client", feature = "pty-proxy", unix))]
+const ORACLE_RESPAWN_LIMIT: u32 = 3;
+
+/// The engine answering shell-completion queries. Both run headless: zsh as
+/// a captive interactive process under a pty, fish via `complete -C`.
+#[cfg(all(feature = "client", feature = "pty-proxy", unix))]
+enum CompletionOracle {
+    Zsh {
+        zsh: std::path::PathBuf,
+        proc: Option<atuin_pty_proxy::ZshOracle>,
+        spawns: u32,
+    },
+    Fish(std::path::PathBuf),
+    None,
+}
+
+#[cfg(all(feature = "client", feature = "pty-proxy", unix))]
+impl CompletionOracle {
+    /// Match the user's shell where we can (zsh gets real compsys answers,
+    /// fish its own engine); otherwise any engine beats none.
+    fn detect() -> Self {
+        let find = |name: &str| {
+            std::env::var_os("PATH").and_then(|path| {
+                std::env::split_paths(&path)
+                    .map(|dir| dir.join(name))
+                    .find(|candidate| candidate.is_file())
+            })
+        };
+        let user_shell = std::env::var("SHELL").unwrap_or_default();
+        let user_shell = user_shell.rsplit('/').next().unwrap_or_default();
+
+        let zsh = || {
+            find("zsh").map(|zsh| CompletionOracle::Zsh {
+                zsh,
+                proc: None,
+                spawns: 0,
+            })
+        };
+        let fish = || find("fish").map(CompletionOracle::Fish);
+
+        match user_shell {
+            "zsh" => zsh().or_else(fish),
+            _ => fish().or_else(zsh),
+        }
+        .unwrap_or(CompletionOracle::None)
+    }
+}
+
 /// Lazily connected suggestion backends: history (daemon index first, sqlite
-/// fallback), topped up with shell completions from fish when installed.
+/// fallback), topped up with shell completions from an oracle when available.
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
 struct SuggestionBackend {
     settings: atuin_client::settings::Settings,
@@ -196,26 +246,18 @@ struct SuggestionBackend {
         atuin_client::database::Sqlite,
         atuin_client::database::Context,
     )>,
-    /// fish binary, if installed. It is the one shell whose completion
-    /// engine runs headless (`complete -C`), so it serves as the completion
-    /// oracle no matter which shell the user runs.
-    fish: Option<std::path::PathBuf>,
+    oracle: CompletionOracle,
 }
 
 #[cfg(all(feature = "client", feature = "pty-proxy", unix))]
 impl SuggestionBackend {
     fn new(settings: atuin_client::settings::Settings) -> Self {
-        let fish = std::env::var_os("PATH").and_then(|path| {
-            std::env::split_paths(&path)
-                .map(|dir| dir.join("fish"))
-                .find(|candidate| candidate.is_file())
-        });
         Self {
             settings,
             #[cfg(feature = "daemon")]
             daemon: None,
             local: None,
-            fish,
+            oracle: CompletionOracle::detect(),
         }
     }
 
@@ -263,30 +305,29 @@ impl SuggestionBackend {
     /// Shell completions for the line's last token, returned as whole lines
     /// (`git ch` + `checkout` → `git checkout`) so the popup, ghost text,
     /// and accept treat them exactly like history suggestions.
-    async fn fetch_completions(&self, line: &str) -> Vec<String> {
-        let Some(fish) = &self.fish else {
-            return Vec::new();
+    async fn fetch_completions(&mut self, line: &str) -> Vec<String> {
+        let candidates = match &mut self.oracle {
+            CompletionOracle::Zsh { zsh, proc, spawns } => {
+                if proc.is_none() && *spawns < ORACLE_RESPAWN_LIMIT {
+                    *spawns += 1;
+                    *proc = atuin_pty_proxy::ZshOracle::spawn(zsh);
+                }
+                let Some(oracle) = proc.as_mut() else {
+                    return Vec::new();
+                };
+                let Some(candidates) = oracle.complete(line, COMPLETION_TIMEOUT) else {
+                    // Desynced or dead; a fresh oracle answers next query.
+                    *proc = None;
+                    return Vec::new();
+                };
+                candidates
+            }
+            CompletionOracle::Fish(fish) => fish_complete(fish, line).await,
+            CompletionOracle::None => return Vec::new(),
         };
 
-        // `--do-complete=$argv[1]` keeps the user's line out of fish's
-        // parser: it arrives as an argument, never as code.
-        let output = tokio::time::timeout(
-            COMPLETION_TIMEOUT,
-            tokio::process::Command::new(fish)
-                .args(["--no-config", "-c", "complete --do-complete=$argv[1]"])
-                .arg(line)
-                .stdin(std::process::Stdio::null())
-                .kill_on_drop(true)
-                .output(),
-        )
-        .await;
-        let Ok(Ok(output)) = output else {
-            return Vec::new();
-        };
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        stdout
-            .lines()
+        candidates
+            .iter()
             .filter_map(|candidate| apply_completion(line, candidate))
             .take(self.settings.suggest.limit as usize)
             .collect()
@@ -330,7 +371,30 @@ impl SuggestionBackend {
     }
 }
 
-/// Splice one `complete -C` output line (`token\tdescription`) back into the
+/// fish's engine runs headless by design: `--do-complete=$argv[1]` keeps the
+/// user's line out of fish's parser — it arrives as an argument, never code.
+#[cfg(all(feature = "client", feature = "pty-proxy", unix))]
+async fn fish_complete(fish: &std::path::Path, line: &str) -> Vec<String> {
+    let output = tokio::time::timeout(
+        COMPLETION_TIMEOUT,
+        tokio::process::Command::new(fish)
+            .args(["--no-config", "-c", "complete --do-complete=$argv[1]"])
+            .arg(line)
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await;
+    let Ok(Ok(output)) = output else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Splice one oracle candidate line (`token\tdescription`) back into the
 /// command line by replacing its last whitespace-separated token. Whole-line
 /// form keeps completions prefix-extensions of the typed line, which is what
 /// the ghost text and accept paths expect.
