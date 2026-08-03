@@ -1,5 +1,14 @@
 # Key Binding
 
+!!! note
+
+    The snippets on this page must go in your shell's startup file (`~/.bashrc`,
+    `~/.zshrc`, `~/.config/fish/config.fish`, etc.) — the same file where you run
+    `atuin init`. Custom bindings that set `ATUIN_NOBIND` and bind keys afterwards
+    only take effect if they run at shell startup. Running them once in an
+    interactive session, or placing them in a file your shell does not source, has
+    no lasting effect.
+
 ## Custom up arrow filter mode
 
 It can be useful to use a different filter or search mode on the up arrow. For example, you could use ctrl-r for searching globally, but the up arrow for searching history from the current directory only.
