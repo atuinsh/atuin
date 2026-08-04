@@ -18,9 +18,34 @@ use atuin_common::ansi;
 use crate::compositor::{Compositor, OverlayContent, OverlayFlags, lock_unpoisoned};
 use crate::osc133::{Event, Parser, Segment, Zone};
 
+/// One dropdown entry: the full command line it would produce, plus where
+/// it came from (rendered as an icon next to the suggestion).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Suggestion {
+    pub text: String,
+    pub source: SuggestionSource,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SuggestionSource {
+    History,
+    Completion,
+}
+
+#[cfg(test)]
+impl Suggestion {
+    /// Test shorthand: a history-sourced suggestion.
+    pub(crate) fn history(text: &str) -> Self {
+        Self {
+            text: text.to_string(),
+            source: SuggestionSource::History,
+        }
+    }
+}
+
 /// Candidate completions for the current line, best first. Runs on the UI
 /// thread; implementations enforce their own timeout.
-pub type SuggestionProvider = Box<dyn Fn(&str) -> Vec<String> + Send>;
+pub type SuggestionProvider = Box<dyn Fn(&str) -> Vec<Suggestion> + Send>;
 
 /// Rows in the persistent line emulator. Input that scrolls past this grid
 /// has lost its own beginning, so suggestions stop until the next prompt —
@@ -75,7 +100,7 @@ enum UiEvent {
 struct PopupState {
     /// Plain-text command line currently being edited.
     line: String,
-    suggestions: std::sync::Arc<[String]>,
+    suggestions: std::sync::Arc<[Suggestion]>,
     selected: usize,
     /// Line the popup was dismissed (or a suggestion accepted) for;
     /// suppress the popup until the line changes again.
@@ -331,7 +356,9 @@ impl<W: Write> KeyFilter<W> {
         if st.suggestions.is_empty() {
             return KeyAction::Forward;
         }
-        let selected = st.suggestions[st.selected.min(st.suggestions.len() - 1)].clone();
+        let selected = st.suggestions[st.selected.min(st.suggestions.len() - 1)]
+            .text
+            .clone();
         let suffix = selected.strip_prefix(st.line.as_str()).map(str::to_owned);
 
         match span {
@@ -484,10 +511,13 @@ fn handle_query<W: Write>(
         st.dismissed_for.is_some()
     };
 
-    let suggestions: Vec<String> = if suppressed || line.trim().is_empty() {
+    let suggestions: Vec<Suggestion> = if suppressed || line.trim().is_empty() {
         Vec::new()
     } else {
-        provider(&line).into_iter().filter(|s| s != &line).collect()
+        provider(&line)
+            .into_iter()
+            .filter(|s| s.text != line)
+            .collect()
     };
 
     let content = {
@@ -615,7 +645,7 @@ mod tests {
 
         let state = Arc::new(Mutex::new(PopupState {
             line: line.to_string(),
-            suggestions: suggestions.iter().map(ToString::to_string).collect(),
+            suggestions: suggestions.iter().map(|s| Suggestion::history(s)).collect(),
             selected,
             dismissed_for: None,
         }));
@@ -771,8 +801,12 @@ mod tests {
         let state = Arc::new(Mutex::new(PopupState::default()));
         // Two suggestions so the dropdown renders (a lone prefix match
         // would show as ghost text only).
-        let provider: SuggestionProvider =
-            Box::new(|_| vec!["git status".to_string(), "git stash".to_string()]);
+        let provider: SuggestionProvider = Box::new(|_| {
+            vec![
+                Suggestion::history("git status"),
+                Suggestion::history("git stash"),
+            ]
+        });
 
         handle_query(&provider, &compositor, &state, "git st".to_string());
         assert!(flags.popup.load(Ordering::Acquire));
@@ -791,7 +825,7 @@ mod tests {
     fn empty_line_clears_overlay() {
         let (flags, compositor) = test_compositor();
         let state = Arc::new(Mutex::new(PopupState::default()));
-        let provider: SuggestionProvider = Box::new(|_| vec!["anything".to_string()]);
+        let provider: SuggestionProvider = Box::new(|_| vec![Suggestion::history("anything")]);
 
         handle_query(&provider, &compositor, &state, "g".to_string());
         assert!(flags.popup.load(Ordering::Acquire));

@@ -12,6 +12,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::suggest::{Suggestion, SuggestionSource};
+
 const MAX_POPUP_ROWS: usize = 5;
 
 /// Below this there is no room to render anything useful.
@@ -25,13 +27,27 @@ const SELECTED_STYLE: &[u8] = b"\x1b[0m\x1b[48;5;24m\x1b[97m";
 const UNSELECTED_STYLE: &[u8] = b"\x1b[0m\x1b[48;5;236m\x1b[37m";
 const GHOST_STYLE: &[u8] = b"\x1b[0m\x1b[38;5;242m";
 
+/// Nerd-font source icons, one cell each. Terminals without a nerd font
+/// show a replacement glyph in that cell; the suggestion itself is intact.
+const HISTORY_ICON: char = '\u{f1da}'; //  (fa-history)
+const COMPLETION_ICON: char = '\u{f120}'; //  (fa-terminal)
+/// Leading space + icon + separating space + trailing space.
+const ROW_CHROME_WIDTH: usize = 4;
+
+fn source_icon(source: SuggestionSource) -> char {
+    match source {
+        SuggestionSource::History => HISTORY_ICON,
+        SuggestionSource::Completion => COMPLETION_ICON,
+    }
+}
+
 /// What the suggestion UI wants painted. Suggestions are shared, not
 /// cloned: every navigation keystroke re-sends this.
 #[derive(Clone, Default)]
 pub(crate) struct OverlayContent {
     /// Plain-text command line currently being edited.
     pub(crate) line: String,
-    pub(crate) suggestions: std::sync::Arc<[String]>,
+    pub(crate) suggestions: std::sync::Arc<[Suggestion]>,
     pub(crate) selected: usize,
 }
 
@@ -297,6 +313,7 @@ impl<W: Write> Compositor<W> {
 
         let selected = content.selected.min(content.suggestions.len() - 1);
         let ghost_suffix = content.suggestions[selected]
+            .text
             .strip_prefix(content.line.as_str())
             .filter(|suffix| !suffix.is_empty());
 
@@ -376,9 +393,9 @@ fn draw_popup(
     let line_width = content.line.width().min(u16::MAX as usize) as u16;
     let width = window
         .iter()
-        .map(|s| s.width() + 2)
+        .map(|s| s.text.width() + ROW_CHROME_WIDTH)
         .max()
-        .unwrap_or(2)
+        .unwrap_or(ROW_CHROME_WIDTH)
         .clamp(MIN_POPUP_WIDTH, cols as usize);
     let col = cursor_col
         .saturating_sub(line_width)
@@ -394,8 +411,19 @@ fn draw_popup(
         });
 
         buf.push(b' ');
-        let used = 1 + write_fitted(buf, suggestion, width - 2);
-        buf.resize(buf.len() + (width - used), b' ');
+        let mut utf8 = [0u8; 4];
+        buf.extend_from_slice(
+            source_icon(suggestion.source)
+                .encode_utf8(&mut utf8)
+                .as_bytes(),
+        );
+        buf.push(b' ');
+        let used = 3 + write_fitted(
+            buf,
+            &suggestion.text,
+            width.saturating_sub(ROW_CHROME_WIDTH),
+        );
+        buf.resize(buf.len() + width.saturating_sub(used), b' ');
     }
 
     Some(DrawnRegion {
@@ -599,7 +627,7 @@ mod tests {
     fn content(line: &str, suggestions: &[&str], selected: usize) -> OverlayContent {
         OverlayContent {
             line: line.to_string(),
-            suggestions: suggestions.iter().map(ToString::to_string).collect(),
+            suggestions: suggestions.iter().map(|s| Suggestion::history(s)).collect(),
             selected,
         }
     }
