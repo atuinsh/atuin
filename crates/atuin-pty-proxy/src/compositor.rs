@@ -25,12 +25,13 @@ const SELECTED_STYLE: &[u8] = b"\x1b[0m\x1b[48;5;24m\x1b[97m";
 const UNSELECTED_STYLE: &[u8] = b"\x1b[0m\x1b[48;5;236m\x1b[37m";
 const GHOST_STYLE: &[u8] = b"\x1b[0m\x1b[38;5;242m";
 
-/// What the suggestion UI wants painted.
+/// What the suggestion UI wants painted. Suggestions are shared, not
+/// cloned: every navigation keystroke re-sends this.
 #[derive(Clone, Default)]
 pub(crate) struct OverlayContent {
     /// Plain-text command line currently being edited.
     pub(crate) line: String,
-    pub(crate) suggestions: Vec<String>,
+    pub(crate) suggestions: std::sync::Arc<[String]>,
     pub(crate) selected: usize,
 }
 
@@ -66,6 +67,10 @@ pub(crate) struct Compositor<W: Write> {
     ghost_row: Option<u16>,
     window_offset: usize,
     flags: Arc<OverlayFlags>,
+    /// Reused per-chunk paint buffers, so the overlay-active path allocates
+    /// nothing steady-state.
+    scratch: Vec<u8>,
+    repaint_scratch: Vec<u8>,
 }
 
 impl<W: Write> Compositor<W> {
@@ -86,6 +91,8 @@ impl<W: Write> Compositor<W> {
             ghost_row: None,
             window_offset: 0,
             flags,
+            scratch: Vec::new(),
+            repaint_scratch: Vec::new(),
         }
     }
 
@@ -116,7 +123,8 @@ impl<W: Write> Compositor<W> {
             return Ok(());
         }
 
-        let mut buf = Vec::with_capacity(256);
+        let mut buf = std::mem::take(&mut self.scratch);
+        buf.clear();
         self.erase_into(&mut buf);
 
         self.tail.extend_from_slice(data);
@@ -131,19 +139,21 @@ impl<W: Write> Compositor<W> {
         // Parsing a chunk costs microseconds, so erase + data + repaint go
         // out as one write instead of paying two syscall pairs per chunk.
         self.parser.process(&ready);
-        let mut repaint = Vec::new();
+        let mut repaint = std::mem::take(&mut self.repaint_scratch);
+        repaint.clear();
         self.draw_into(&mut repaint, false);
 
-        if buf.is_empty() && repaint.is_empty() {
-            self.out.write_all(&ready)?;
-            self.out.flush()?;
-            self.update_flags();
-            Ok(())
+        let result = if buf.is_empty() && repaint.is_empty() {
+            self.out.write_all(&ready).and_then(|()| self.out.flush())
         } else {
             buf.extend_from_slice(&ready);
             buf.extend_from_slice(&repaint);
-            self.flush(buf)
-        }
+            self.out.write_all(&buf).and_then(|()| self.out.flush())
+        };
+        self.update_flags();
+        self.scratch = buf;
+        self.repaint_scratch = repaint;
+        result
     }
 
     /// Flush any withheld partial-sequence tail (e.g. on shutdown).
@@ -153,19 +163,21 @@ impl<W: Write> Compositor<W> {
         }
         let tail = std::mem::take(&mut self.tail);
         self.parser.process(&tail);
-        let _ = self.flush(tail);
+        let _ = self.flush(&tail);
     }
 
     /// Replace the overlay content and repaint.
     pub(crate) fn set_overlay(&mut self, content: Option<OverlayContent>) {
-        let mut buf = Vec::with_capacity(256);
+        let mut buf = std::mem::take(&mut self.scratch);
+        buf.clear();
         self.erase_into(&mut buf);
         self.content = content.filter(|content| !content.suggestions.is_empty());
         if self.content.is_none() {
             self.window_offset = 0;
         }
         self.draw_into(&mut buf, true);
-        let _ = self.flush(buf);
+        let _ = self.flush(&buf);
+        self.scratch = buf;
     }
 
     /// Resize reflow scrambles screen and model unpredictably, so restoring
@@ -194,14 +206,14 @@ impl<W: Write> Compositor<W> {
             }
             hand_back(&mut buf, self.parser.screen());
         }
-        let _ = self.flush(buf);
+        let _ = self.flush(&buf);
     }
 
-    fn flush(&mut self, buf: Vec<u8>) -> std::io::Result<()> {
+    fn flush(&mut self, buf: &[u8]) -> std::io::Result<()> {
         let result = if buf.is_empty() {
             Ok(())
         } else {
-            self.out.write_all(&buf).and_then(|()| self.out.flush())
+            self.out.write_all(buf).and_then(|()| self.out.flush())
         };
         self.update_flags();
         result
@@ -289,11 +301,14 @@ impl<W: Write> Compositor<W> {
         // covers mid-line edits or a right-side prompt.
         if with_ghost && let Some(suffix) = ghost_suffix {
             let budget = blank_cells_after_cursor(screen) as usize;
-            let (text, _) = fit_to_width(suffix, budget);
-            if !text.is_empty() {
-                move_to(buf, cursor_row, cursor_col);
-                buf.extend_from_slice(GHOST_STYLE);
-                buf.extend_from_slice(text.as_bytes());
+            let rollback = buf.len();
+            move_to(buf, cursor_row, cursor_col);
+            buf.extend_from_slice(GHOST_STYLE);
+            let text_start = buf.len();
+            write_fitted(buf, suffix, budget);
+            if buf.len() == text_start {
+                buf.truncate(rollback);
+            } else {
                 self.ghost_row = Some(cursor_row);
             }
         }
@@ -367,14 +382,9 @@ fn draw_popup(
             UNSELECTED_STYLE
         });
 
-        let (fitted, fitted_width) = fit_to_width(suggestion, width - 2);
-        let mut text = String::with_capacity(width + 1);
-        text.push(' ');
-        text.push_str(&fitted);
-        for _ in 1 + fitted_width..width {
-            text.push(' ');
-        }
-        buf.extend_from_slice(text.as_bytes());
+        buf.push(b' ');
+        let used = 1 + write_fitted(buf, suggestion, width - 2);
+        buf.resize(buf.len() + (width - used), b' ');
     }
 
     Some(DrawnRegion {
@@ -383,21 +393,22 @@ fn draw_popup(
     })
 }
 
-/// Longest printable prefix of `text` fitting `budget` display cells, and
-/// its width. Control characters render as placeholders — a stray `\n` in a
-/// suggestion would otherwise break out of the overlay entirely.
-fn fit_to_width(text: &str, budget: usize) -> (String, usize) {
-    let mut fitted = String::new();
+/// Append the longest printable prefix of `text` fitting `budget` display
+/// cells; returns the width appended. Control characters render as
+/// placeholders — a stray `\n` in a suggestion would otherwise break out of
+/// the overlay entirely.
+fn write_fitted(buf: &mut Vec<u8>, text: &str, budget: usize) -> usize {
     let mut used = 0;
     for ch in text.chars().map(printable) {
         let ch_width = ch.width().unwrap_or(0);
         if used + ch_width > budget {
             break;
         }
-        fitted.push(ch);
+        let mut utf8 = [0u8; 4];
+        buf.extend_from_slice(ch.encode_utf8(&mut utf8).as_bytes());
         used += ch_width;
     }
-    (fitted, used)
+    used
 }
 
 /// Rewrite one screen row from pre-formatted model bytes, which skip

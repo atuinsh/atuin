@@ -7,7 +7,6 @@
 
 use std::borrow::Cow;
 use std::io::{Read, Write};
-use std::num::NonZeroU16;
 use std::os::fd::AsFd;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -23,7 +22,10 @@ use crate::osc133::{Event, Parser, Segment, Zone};
 /// thread; implementations enforce their own timeout.
 pub type SuggestionProvider = Box<dyn Fn(&str) -> Vec<String> + Send>;
 
-const MAX_INPUT_BUF_BYTES: usize = 64 * 1024;
+/// Rows in the persistent line emulator. Input that scrolls past this grid
+/// has lost its own beginning, so suggestions stop until the next prompt —
+/// nobody wants completions for a screenful of pasted text anyway.
+const LINE_GRID_ROWS: u16 = 32;
 
 /// Kill-line (`^U`): replaces the line when accepting a suggestion that
 /// doesn't extend the typed prefix (fuzzy hits).
@@ -73,7 +75,7 @@ enum UiEvent {
 struct PopupState {
     /// Plain-text command line currently being edited.
     line: String,
-    suggestions: Vec<String>,
+    suggestions: std::sync::Arc<[String]>,
     selected: usize,
     /// Line the popup was dismissed (or a suggestion accepted) for;
     /// suppress the popup until the line changes again.
@@ -98,35 +100,58 @@ impl PopupState {
 /// in-progress command line to the UI thread.
 pub(crate) struct InputTracker {
     parser: Parser,
-    buf: Vec<u8>,
+    /// Persistent emulator for the input-zone echo. vt100 is a state
+    /// machine, so feeding each chunk once equals re-emulating the whole
+    /// accumulated input — without `ansi::to_plain_text`'s per-keystroke
+    /// grid allocation and O(line²) reprocessing.
+    line_screen: vt100::Parser,
+    grid_cols: u16,
+    /// Bytes fed since the last prompt; past the grid's capacity the line's
+    /// beginning has scrolled away and suggestions stop.
+    fed: usize,
+    onlcr_scratch: Vec<u8>,
     cols: Arc<AtomicU16>,
     ui_tx: Sender<UiEvent>,
 }
 
 impl InputTracker {
     fn new(ui_tx: Sender<UiEvent>, cols: Arc<AtomicU16>) -> Self {
+        let grid_cols = cols.load(Ordering::Relaxed).max(1);
         Self {
             parser: Parser::new(),
-            buf: Vec::new(),
+            line_screen: vt100::Parser::new(LINE_GRID_ROWS, grid_cols, 0),
+            grid_cols,
+            fed: 0,
+            onlcr_scratch: Vec::new(),
             cols,
             ui_tx,
         }
     }
 
     pub(crate) fn push(&mut self, data: &[u8]) {
-        let buf = &mut self.buf;
+        let line_screen = &mut self.line_screen;
+        let onlcr_scratch = &mut self.onlcr_scratch;
+        let fed = &mut self.fed;
+        let grid_cols = &mut self.grid_cols;
+        let cols = &self.cols;
         let mut input_changed = false;
         let mut hide = false;
         self.parser.segments(data, |segment| match segment {
             Segment::Text(Zone::Input, bytes) => {
-                let remaining = MAX_INPUT_BUF_BYTES.saturating_sub(buf.len());
-                buf.extend_from_slice(&bytes[..bytes.len().min(remaining)]);
+                *fed += bytes.len();
+                // Match ansi::to_plain_text: bare `\n` must return the
+                // carriage like a terminal in onlcr mode would.
+                onlcr_scratch.clear();
+                onlcr_scratch.extend(ansi::onlcr(bytes.iter().copied()));
+                line_screen.process(onlcr_scratch);
                 input_changed = true;
             }
             Segment::Text(..) => {}
             Segment::Marker { located, .. } => {
                 if matches!(located.event, Event::PromptStart | Event::CommandStart) {
-                    buf.clear();
+                    *grid_cols = cols.load(Ordering::Relaxed).max(1);
+                    *line_screen = vt100::Parser::new(LINE_GRID_ROWS, *grid_cols, 0);
+                    *fed = 0;
                 }
                 // Any marker starts a fresh zone: whatever was typed before
                 // it in this chunk no longer needs a popup update of its own.
@@ -135,16 +160,31 @@ impl InputTracker {
             }
         });
 
-        if input_changed {
-            let cols =
-                NonZeroU16::new(self.cols.load(Ordering::Relaxed)).unwrap_or(NonZeroU16::MIN);
-            let line = ansi::to_plain_text(&self.buf, cols)
-                .trim_matches(|c| c == '\r' || c == '\n')
-                .to_string();
-            let _ = self.ui_tx.send(UiEvent::Query(line));
-        } else if hide {
+        if input_changed && !self.overflowed() {
+            let _ = self.ui_tx.send(UiEvent::Query(self.current_line()));
+        } else if hide || input_changed {
             let _ = self.ui_tx.send(UiEvent::Hide);
         }
+    }
+
+    fn overflowed(&self) -> bool {
+        // Conservative: every fed byte could take a cell; leave slack rows
+        // for cursor movement so the line start provably hasn't scrolled.
+        self.fed > (LINE_GRID_ROWS as usize - 2) * self.grid_cols as usize
+    }
+
+    /// The line as displayed, mirroring `ansi::to_plain_text`'s trimming.
+    fn current_line(&self) -> String {
+        let contents = self.line_screen.screen().contents();
+        let trimmed = contents.trim_end();
+        let mut line = String::with_capacity(trimmed.len());
+        for (i, row) in trimmed.lines().enumerate() {
+            if i > 0 {
+                line.push('\n');
+            }
+            line.push_str(row.trim_end());
+        }
+        line.trim_matches(|c| c == '\r' || c == '\n').to_string()
     }
 }
 
@@ -279,7 +319,7 @@ impl<W: Write> KeyFilter<W> {
     fn dismiss(&self) -> KeyAction {
         let mut st = lock_unpoisoned(&self.state);
         st.dismissed_for = Some(st.line.clone());
-        st.suggestions.clear();
+        st.suggestions = Vec::new().into();
         st.selected = 0;
         drop(st);
         self.set_overlay(None);
@@ -297,7 +337,7 @@ impl<W: Write> KeyFilter<W> {
         match span {
             AcceptSpan::Full => {
                 st.dismissed_for = Some(selected.clone());
-                st.suggestions.clear();
+                st.suggestions = Vec::new().into();
                 st.selected = 0;
                 drop(st);
                 // Eager hide is safe under the compositor: erasing always
@@ -419,7 +459,7 @@ fn spawn_ui_thread<W: Write + Send + 'static>(
                 UiEvent::Query(line) => handle_query(&provider, &compositor, &state, line),
                 UiEvent::Hide => {
                     let mut st = lock_unpoisoned(&state);
-                    st.suggestions.clear();
+                    st.suggestions = Vec::new().into();
                     st.selected = 0;
                     drop(st);
                     lock_unpoisoned(&compositor).set_overlay(None);
@@ -452,11 +492,7 @@ fn handle_query<W: Write>(
 
     let content = {
         let mut st = lock_unpoisoned(state);
-        // A newer query may already be queued behind us.
-        if st.line != line {
-            return;
-        }
-        st.suggestions = suggestions;
+        st.suggestions = suggestions.into();
         st.selected = 0;
         st.overlay_content()
     };

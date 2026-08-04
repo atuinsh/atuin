@@ -37,8 +37,7 @@ pub(super) fn history_suggestion_provider(
 
     let min_chars = settings.suggest.min_chars.max(1);
     let oracle = completion_oracle(session_shell);
-    let (req_tx, req_rx) =
-        mpsc::sync_channel::<(String, mpsc::Sender<Vec<String>>)>(SUGGEST_QUEUE_DEPTH);
+    let (req_tx, req_rx) = mpsc::sync_channel::<SuggestRequest>(SUGGEST_QUEUE_DEPTH);
 
     std::thread::spawn(move || suggestion_worker(settings, oracle, &req_rx));
 
@@ -47,14 +46,23 @@ pub(super) fn history_suggestion_provider(
         if line.chars().take(min_chars).count() < min_chars {
             return Vec::new();
         }
-        let (reply_tx, reply_rx) = mpsc::channel();
-        if req_tx.try_send((line.to_string(), reply_tx)).is_err() {
+        let (reply, reply_rx) = mpsc::channel();
+        let request = SuggestRequest {
+            line: line.to_string(),
+            reply,
+        };
+        if req_tx.try_send(request).is_err() {
             return Vec::new();
         }
         reply_rx
             .recv_timeout(SUGGEST_REPLY_TIMEOUT)
             .unwrap_or_default()
     }))
+}
+
+struct SuggestRequest {
+    line: String,
+    reply: mpsc::Sender<Vec<String>>,
 }
 
 /// Pick the completion engine for the session's shell (so its config and
@@ -101,7 +109,7 @@ fn completion_oracle(session_shell: Option<&Path>) -> Option<CompletionOracleHan
 fn suggestion_worker(
     settings: Settings,
     oracle: Option<CompletionOracleHandle>,
-    req_rx: &mpsc::Receiver<(String, mpsc::Sender<Vec<String>>)>,
+    req_rx: &mpsc::Receiver<SuggestRequest>,
 ) {
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -112,15 +120,14 @@ fn suggestion_worker(
 
     let mut backend = SuggestionBackend::new(settings, oracle);
 
-    while let Ok((mut query, mut reply_tx)) = req_rx.recv() {
-        // Only the newest queued query is worth a full fetch; earlier ones
+    while let Ok(mut request) = req_rx.recv() {
+        // Only the newest queued request is worth a full fetch; earlier ones
         // have already outlived their caller's reply timeout.
-        while let Ok((newer_query, newer_tx)) = req_rx.try_recv() {
-            query = newer_query;
-            reply_tx = newer_tx;
+        while let Ok(newer) = req_rx.try_recv() {
+            request = newer;
         }
 
-        let results = runtime.block_on(backend.fetch(&query));
+        let results = runtime.block_on(backend.fetch(&request.line));
 
         // Each newline typed into the pty would submit the line so far; the
         // daemon filters multiline already, this covers the other backends.
@@ -128,7 +135,7 @@ fn suggestion_worker(
             .into_iter()
             .filter(|command| !command.contains('\n'))
             .collect();
-        let _ = reply_tx.send(commands);
+        let _ = request.reply.send(commands);
     }
 }
 
@@ -171,12 +178,11 @@ impl SuggestionBackend {
 
         if let (Some(oracle), Some(id)) = (self.oracle.as_mut(), pending) {
             let limit = self.settings.suggest.limit as usize;
-            let completions: Vec<String> = oracle
+            let completions = oracle
                 .collect(id, COMPLETION_TIMEOUT)
                 .into_iter()
                 .filter_map(|candidate| apply_completion(query, &candidate.completion))
-                .take(limit)
-                .collect();
+                .take(limit);
             for completion in completions {
                 if !suggestions.contains(&completion) {
                     suggestions.push(completion);
