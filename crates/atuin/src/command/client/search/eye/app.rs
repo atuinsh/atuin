@@ -9,20 +9,20 @@
 //! between them, with the old event loop's arms living in
 //! `apply_input_action` (async arms become detached effects).
 //!
-//! Not yet ported: vim cursor-shape changes (a later `eye_declare`
-//! capability).
-
 use std::cell::RefCell;
 use std::sync::Arc;
 
 use atuin_client::database::{Context, Database};
 use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{History, HistoryId, HistoryStats};
-use atuin_client::settings::{ExitMode, FilterMode, KeymapMode, SearchMode, Settings};
+use atuin_client::settings::{
+    CursorStyle as CfgCursorStyle, ExitMode, FilterMode, KeymapMode, SearchMode, Settings,
+};
 use atuin_client::theme::Theme;
 use crossterm::event::{KeyEvent, KeyEventKind};
 use eye_declare::{
-    App, Ctx, Element, ElementExt, Focus, FocusHandle, InputEvent, Keymap, Task, empty, keymap,
+    App, Ctx, CursorStyle, Element, ElementExt, Focus, FocusHandle, InputEvent, Keymap, Task,
+    empty, keymap,
 };
 use semver::Version;
 use time::OffsetDateTime;
@@ -66,6 +66,9 @@ pub(super) enum Msg {
     },
     HistoryCount(i64),
     UpdateNeeded(Option<Version>),
+    Resize {
+        height: u16,
+    },
     /// A detached background operation (delete, rebuild) finished; carries
     /// nothing — the model was already updated optimistically.
     OpDone,
@@ -91,7 +94,10 @@ pub(super) struct SearchApp<'a> {
     /// connects lazily) and `get_highlight_indices` is pure local compute.
     pub(super) highlight_engine: AnySearchEngine,
     pub(super) now: Box<dyn Fn() -> OffsetDateTime + Send>,
-    pub(super) inline_height: u16,
+    /// The frame's height: the configured inline height, or the tracked
+    /// terminal height in fullscreen mode.
+    pub(super) frame_height: u16,
+    fullscreen: bool,
     pub(super) keymap_mode: KeymapMode,
     pub(super) search_mode: SearchMode,
     pub(super) prefix: bool,
@@ -116,6 +122,10 @@ pub(super) struct SearchApp<'a> {
     /// Set by `Action::Accept`/`AcceptNth`; distinguishes accept-and-run
     /// from return-to-command-line when the exit resolves.
     accept: bool,
+    /// The keymap-driven cursor shape currently in effect; `None` until a
+    /// configured shape first applies (so apps with no `keymap_cursor`
+    /// config never touch the terminal's cursor shape).
+    current_cursor: Option<CfgCursorStyle>,
     initial_context: Context,
     default_filter_mode: FilterMode,
     /// Swapped in by `CycleSearchMode`; the next query installs it inside
@@ -142,7 +152,8 @@ impl<'a> SearchApp<'a> {
         context: Context,
         filter_mode: FilterMode,
         search_mode: SearchMode,
-        inline_height: u16,
+        initial_height: u16,
+        fullscreen: bool,
     ) -> Self {
         let original_input_empty = search_input.is_empty();
         let mut input = Cursor::from(search_input);
@@ -159,7 +170,7 @@ impl<'a> SearchApp<'a> {
             Box::new(OffsetDateTime::now_utc)
         };
 
-        Self {
+        let mut app = Self {
             settings,
             theme,
             search: SearchState {
@@ -173,7 +184,8 @@ impl<'a> SearchApp<'a> {
             results_state: RefCell::new(ListState::default()),
             highlight_engine,
             now,
-            inline_height,
+            frame_height: initial_height,
+            fullscreen,
             keymap_mode: match settings.keymap_mode {
                 KeymapMode::Auto => KeymapMode::Emacs,
                 value => value,
@@ -199,6 +211,7 @@ impl<'a> SearchApp<'a> {
             pending_vim_key: None,
             original_input_empty,
             accept: false,
+            current_cursor: None,
             initial_context: context,
             default_filter_mode: filter_mode,
             pending_engine: None,
@@ -208,6 +221,44 @@ impl<'a> SearchApp<'a> {
             exiting: false,
             _focus: focus,
             input_focus,
+        };
+        app.initialize_keymap_cursor();
+        app
+    }
+
+    fn set_keymap_cursor(&mut self, keymap_name: &str) {
+        let cursor_style = if keymap_name == "__clear__" {
+            None
+        } else {
+            self.settings.keymap_cursor.get(keymap_name).copied()
+        }
+        .or_else(|| {
+            self.current_cursor
+                .map(|_| CfgCursorStyle::DefaultUserShape)
+        });
+
+        if cursor_style != self.current_cursor && cursor_style.is_some() {
+            self.current_cursor = cursor_style;
+        }
+    }
+
+    fn initialize_keymap_cursor(&mut self) {
+        match self.keymap_mode {
+            KeymapMode::Emacs => self.set_keymap_cursor("emacs"),
+            KeymapMode::VimNormal => self.set_keymap_cursor("vim_normal"),
+            KeymapMode::VimInsert => self.set_keymap_cursor("vim_insert"),
+            KeymapMode::Auto => {}
+        }
+    }
+
+    /// The shell gets the shape configured for its keymap mode; the final
+    /// (exit) present emits it.
+    fn finalize_keymap_cursor(&mut self) {
+        match self.settings.keymap_mode_shell {
+            KeymapMode::Emacs => self.set_keymap_cursor("emacs"),
+            KeymapMode::VimNormal => self.set_keymap_cursor("vim_normal"),
+            KeymapMode::VimInsert => self.set_keymap_cursor("vim_insert"),
+            KeymapMode::Auto => self.set_keymap_cursor("__clear__"),
         }
     }
 
@@ -260,7 +311,9 @@ impl<'a> SearchApp<'a> {
     fn finish(&mut self, output: Output, ctx: &mut Ctx<'_, Self>) {
         // Emptying the tail in the same update as the exit makes the final
         // present vacate the region; finalize then reclaims the rows, so the
-        // prompt returns to where the search UI appeared.
+        // prompt returns to where the search UI appeared. The same present
+        // carries the shell's cursor shape.
+        self.finalize_keymap_cursor();
         self.exiting = true;
         ctx.exit(output);
     }
@@ -697,35 +750,42 @@ impl<'a> SearchApp<'a> {
             // Cursor-shape changes (set_keymap_cursor in the ratatui path)
             // need an eye_declare capability that lands in a later phase.
             Action::VimEnterNormal => {
+                self.set_keymap_cursor("vim_normal");
                 self.keymap_mode = KeymapMode::VimNormal;
                 InputAction::Continue
             }
             Action::VimEnterInsert => {
+                self.set_keymap_cursor("vim_insert");
                 self.keymap_mode = KeymapMode::VimInsert;
                 InputAction::Continue
             }
             Action::VimEnterInsertAfter => {
                 self.search.input.right();
+                self.set_keymap_cursor("vim_insert");
                 self.keymap_mode = KeymapMode::VimInsert;
                 InputAction::Continue
             }
             Action::VimEnterInsertAtStart => {
                 self.search.input.start();
+                self.set_keymap_cursor("vim_insert");
                 self.keymap_mode = KeymapMode::VimInsert;
                 InputAction::Continue
             }
             Action::VimEnterInsertAtEnd => {
                 self.search.input.end();
+                self.set_keymap_cursor("vim_insert");
                 self.keymap_mode = KeymapMode::VimInsert;
                 InputAction::Continue
             }
             Action::VimSearchInsert => {
                 self.search.input.clear();
+                self.set_keymap_cursor("vim_insert");
                 self.keymap_mode = KeymapMode::VimInsert;
                 InputAction::Continue
             }
             Action::VimChangeToEnd => {
                 self.search.input.clear_to_end();
+                self.set_keymap_cursor("vim_insert");
                 self.keymap_mode = KeymapMode::VimInsert;
                 InputAction::Continue
             }
@@ -999,6 +1059,13 @@ impl App for SearchApp<'_> {
                 }
             }
             Msg::HistoryCount(count) => self.history_count = Some(count),
+            Msg::Resize { height } => {
+                // Inline frames are a fixed height; only fullscreen tracks
+                // the terminal.
+                if self.fullscreen {
+                    self.frame_height = height;
+                }
+            }
             Msg::UpdateNeeded(version) => self.update_needed = version,
             Msg::OpDone => {}
             Msg::Raw(event) => {
@@ -1050,6 +1117,22 @@ impl App for SearchApp<'_> {
 
     fn keymap(&self) -> Keymap<Msg> {
         keymap().fallthrough(&self.input_focus, Msg::Raw)
+    }
+
+    fn cursor_style(&self) -> CursorStyle {
+        match self.current_cursor {
+            None | Some(CfgCursorStyle::DefaultUserShape) => CursorStyle::DefaultUserShape,
+            Some(CfgCursorStyle::BlinkingBlock) => CursorStyle::BlinkingBlock,
+            Some(CfgCursorStyle::SteadyBlock) => CursorStyle::SteadyBlock,
+            Some(CfgCursorStyle::BlinkingUnderScore) => CursorStyle::BlinkingUnderScore,
+            Some(CfgCursorStyle::SteadyUnderScore) => CursorStyle::SteadyUnderScore,
+            Some(CfgCursorStyle::BlinkingBar) => CursorStyle::BlinkingBar,
+            Some(CfgCursorStyle::SteadyBar) => CursorStyle::SteadyBar,
+        }
+    }
+
+    fn on_resize(&self, _width: u16, height: u16) -> Option<Msg> {
+        Some(Msg::Resize { height })
     }
 }
 
@@ -1119,6 +1202,7 @@ mod tests {
             FilterMode::Global,
             SearchMode::Fuzzy,
             20,
+            false,
         );
         app.keymap_mode = keymap_mode;
         app.original_input_empty = false;
@@ -1543,6 +1627,7 @@ mod tests {
             FilterMode::Global,
             SearchMode::Fuzzy,
             20,
+            false,
         );
         assert_eq!(app.keymap_mode, KeymapMode::VimInsert);
         let mut runtime = eye_declare::Runtime::new(app, 120, 30);

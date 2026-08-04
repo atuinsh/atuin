@@ -66,7 +66,7 @@ proptest = "1.11.0"
 parking_lot = "0.12.5"
 rstest = "0.26.1"
 thiserror = "2"
-rustix = { version = "1.1.4", features = ["process", "fs"] }
+rustix = { version = "1.1.4", features = ["process", "fs", "stdio"] }
 tower = "0.5"
 tracing = "0.1"
 tree-sitter = "0.26.8"

@@ -246,8 +246,8 @@ impl Cmd {
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         if self.interactive {
-            let item = if let Some(inline_height) = eye::inline_height(settings) {
-                eye::history(&query, settings, db, &history_store, theme, inline_height).await?
+            let item = if let Some(mode) = eye::mode(settings) {
+                eye::history(&query, settings, db, &history_store, theme, mode).await?
             } else {
                 interactive::history(&query, settings, db, &history_store, theme).await?
             };

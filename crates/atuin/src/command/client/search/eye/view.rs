@@ -172,7 +172,7 @@ impl SearchFrame<'_, '_> {
 
 impl Element for SearchFrame<'_, '_> {
     fn height(&self, _width: u16) -> u16 {
-        self.app.inline_height
+        self.app.frame_height
     }
 
     #[allow(clippy::too_many_lines)]
