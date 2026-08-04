@@ -47,8 +47,8 @@ fn class_fg(class: SyntaxClass) -> Option<&'static [u8]> {
 /// show a replacement glyph in that cell; the suggestion itself is intact.
 const HISTORY_ICON: char = '\u{f1da}'; //  (fa-history)
 const COMPLETION_ICON: char = '\u{f120}'; //  (fa-terminal)
-/// Icon + separating space + one trailing pad cell.
-const ROW_CHROME_WIDTH: usize = 3;
+/// Leading pad + icon + separating space + one trailing pad cell.
+const ROW_CHROME_WIDTH: usize = 4;
 
 /// Scrollbar glyphs for the popup's right edge, shown only when there are
 /// more suggestions than visible rows.
@@ -525,6 +525,7 @@ fn draw_popup(
             UNSELECTED_STYLE
         });
 
+        buf.push(b' ');
         let mut utf8 = [0u8; 4];
         buf.extend_from_slice(
             source_icon(suggestion.source)
@@ -533,7 +534,7 @@ fn draw_popup(
         );
         buf.push(b' ');
         let shown = shown_from_token(suggestion, line_head);
-        let used = 2 + write_fitted_syntax(
+        let used = 3 + write_fitted_syntax(
             buf,
             shown,
             suggestion.text.len() - shown.len(),
@@ -857,10 +858,10 @@ mod tests {
         let refs: Vec<&str> = all.iter().map(String::as_str).collect();
 
         // 7 suggestions, 5 visible rows: popup at col 2 ("g" token), width
-        // 6 (text) + 4 (chrome incl. scrollbar) — bar in column 11.
+        // 6 (text) + 5 (chrome incl. scrollbar) — bar in column 12.
         let bar = |c: &Compositor<Vec<u8>>, row: u16| -> String {
             let checker = displayed(c);
-            let cell = checker.screen().cell(row, 11);
+            let cell = checker.screen().cell(row, 12);
             cell.map(|cell| cell.contents().to_string())
                 .unwrap_or_default()
         };
@@ -905,14 +906,14 @@ mod tests {
             selected: 1,
         }));
 
-        // Row text starts at col 4 (anchor 2 + icon + space): "git -a".
+        // Row text starts at col 5 (anchor 2 + pad + icon + space): "git -a".
         let checker = displayed(&c);
         let fg = |row, col| checker.screen().cell(row, col).unwrap().fgcolor();
-        assert_eq!(fg(1, 4), vt100::Color::Idx(10), "command is green");
-        assert_eq!(fg(1, 7), vt100::Color::Idx(7), "plain keeps the row fg");
-        assert_eq!(fg(1, 8), vt100::Color::Idx(6), "flag is cyan");
+        assert_eq!(fg(1, 5), vt100::Color::Idx(10), "command is green");
+        assert_eq!(fg(1, 8), vt100::Color::Idx(7), "plain keeps the row fg");
+        assert_eq!(fg(1, 9), vt100::Color::Idx(6), "flag is cyan");
         // Unstyled suggestion on the selected row: uniform bright fg.
-        assert_eq!(fg(2, 4), vt100::Color::Idx(15));
+        assert_eq!(fg(2, 5), vt100::Color::Idx(15));
     }
 
     #[rstest]
@@ -930,7 +931,7 @@ mod tests {
         // The row shows "commit" (token-anchored, 4 bytes skipped), so its
         // first char must take the span covering byte 4, not byte 0.
         let checker = displayed(&c);
-        let cell = checker.screen().cell(1, 8).unwrap();
+        let cell = checker.screen().cell(1, 9).unwrap();
         assert_eq!(cell.contents(), "c");
         assert_eq!(cell.fgcolor(), vt100::Color::Idx(3), "string, not command");
     }
