@@ -254,6 +254,11 @@ impl InputTracker {
                     Event::PromptStart | Event::CommandStart => {
                         // First prompt: the shell's startup is over.
                         if let Some(ready) = session_ready.take() {
+                            if crate::pty_proxy::env_flag("ATUIN_PTY_PROXY_TRACE") {
+                                eprintln!(
+                                    "atuin pty-proxy: trace: first prompt marker; session ready\r"
+                                );
+                            }
                             ready();
                         }
                         // A prompt marker with no command since the last
