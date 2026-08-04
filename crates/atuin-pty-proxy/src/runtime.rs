@@ -241,13 +241,19 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
     .wrap_err("install resize handler")?;
     trace.step("socket + resize handlers");
 
+    let input_activity = Arc::new(ActivityClock::new());
     let (mut input_tracker, mut key_filter) = options
         .hooks
         .suggestion_provider
         .take()
         .map(|provider| {
-            let handles =
-                crate::suggest::spawn(provider, compositor.clone(), flags, current_cols.clone());
+            let handles = crate::suggest::spawn(
+                provider,
+                compositor.clone(),
+                flags,
+                current_cols.clone(),
+                input_activity.clone(),
+            );
             (handles.tracker, handles.keys)
         })
         .unzip();
@@ -351,6 +357,7 @@ fn spawn_stdin_pump(input_tx: SyncSender<Vec<u8>>) {
             match stdin.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
+                    input_activity.touch();
                     // A key-filter panic must not eat the user's keyboard:
                     // drop the filter and forward this and all later
                     // chunks raw.
@@ -506,32 +513,42 @@ fn parse_report(bytes: &[u8]) -> Option<(usize, Report)> {
     Some((2 + end + 1, report))
 }
 
-/// Millisecond clock of pty output activity, shared between the stdout
-/// pump and the resize thread: the mid-session cursor resync must wait for
-/// the post-SIGWINCH prompt repaint to settle before querying.
-struct ActivityClock {
+/// Millisecond activity clock. One instance tracks pty output (the resize
+/// thread's cursor resync waits for the post-SIGWINCH repaint to settle);
+/// another tracks user keystrokes (the input tracker only queries when the
+/// echo follows one, so program output can't conjure the popup).
+pub(crate) struct ActivityClock {
     epoch: std::time::Instant,
     elapsed_ms: AtomicU64,
 }
 
+/// Sentinel for "never touched": maximally idle, so gates that require
+/// recent activity stay closed until the first real event.
+const NEVER: u64 = u64::MAX;
+
 impl ActivityClock {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             epoch: std::time::Instant::now(),
-            elapsed_ms: AtomicU64::new(0),
+            elapsed_ms: AtomicU64::new(NEVER),
         }
     }
 
     /// Relaxed: only tens-of-milliseconds freshness matters.
-    fn touch(&self) {
+    pub(crate) fn touch(&self) {
         self.elapsed_ms
             .store(self.epoch.elapsed().as_millis() as u64, Ordering::Relaxed);
     }
 
-    /// Time since the last touch.
-    fn idle(&self) -> std::time::Duration {
-        let last = std::time::Duration::from_millis(self.elapsed_ms.load(Ordering::Relaxed));
-        self.epoch.elapsed().saturating_sub(last)
+    /// Time since the last touch; `Duration::MAX` if never touched.
+    pub(crate) fn idle(&self) -> std::time::Duration {
+        match self.elapsed_ms.load(Ordering::Relaxed) {
+            NEVER => std::time::Duration::MAX,
+            last => self
+                .epoch
+                .elapsed()
+                .saturating_sub(std::time::Duration::from_millis(last)),
+        }
     }
 }
 

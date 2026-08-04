@@ -17,6 +17,7 @@ use atuin_common::ansi;
 
 use crate::compositor::{Compositor, OverlayContent, OverlayFlags, lock_unpoisoned};
 use crate::osc133::{Event, Parser, Segment, Zone};
+use crate::runtime::ActivityClock;
 
 /// One dropdown entry: the full command line it would produce, plus where
 /// it came from (rendered as an icon next to the suggestion).
@@ -94,6 +95,12 @@ const RESYNC_REPLY_TIMEOUT: Duration = Duration::from_secs(1);
 /// listing many attributes (xterm) are the longest legitimate one.
 const MAX_REPLY_CARRY: usize = 48;
 
+/// An input-zone change only counts as typing if a keystroke arrived this
+/// recently. Echo follows a key within milliseconds; without one, the
+/// "input" is program output — cat of a typescript containing OSC 133
+/// markers — and must not conjure the popup.
+const INPUT_ECHO_WINDOW: Duration = Duration::from_secs(1);
+
 pub(crate) struct Suggest<W: Write> {
     pub(crate) tracker: InputTracker,
     pub(crate) keys: KeyFilter<W>,
@@ -105,6 +112,7 @@ pub(crate) fn spawn<W: Write + Send + 'static>(
     compositor: Arc<Mutex<Compositor<W>>>,
     flags: Arc<OverlayFlags>,
     cols: Arc<AtomicU16>,
+    input_activity: Arc<ActivityClock>,
 ) -> Suggest<W> {
     let state = Arc::new(Mutex::new(PopupState::default()));
     let (ui_tx, ui_rx) = mpsc::channel();
@@ -112,7 +120,7 @@ pub(crate) fn spawn<W: Write + Send + 'static>(
     spawn_ui_thread(provider, compositor.clone(), ui_rx, state.clone());
 
     Suggest {
-        tracker: InputTracker::new(ui_tx, cols),
+        tracker: InputTracker::new(ui_tx, cols, input_activity),
         keys: KeyFilter {
             state,
             compositor,
@@ -175,12 +183,19 @@ pub(crate) struct InputTracker {
     /// before their prompt marker arrives, so this — not the mid-redraw
     /// grid — is what a redraw must carry over.
     last_line: String,
+    /// Last user keystroke; input-zone changes without a recent one are
+    /// program output, not typing.
+    input_activity: Arc<ActivityClock>,
     cols: Arc<AtomicU16>,
     ui_tx: Sender<UiEvent>,
 }
 
 impl InputTracker {
-    fn new(ui_tx: Sender<UiEvent>, cols: Arc<AtomicU16>) -> Self {
+    fn new(
+        ui_tx: Sender<UiEvent>,
+        cols: Arc<AtomicU16>,
+        input_activity: Arc<ActivityClock>,
+    ) -> Self {
         // MODEL_FLOOR, not 1: vt100 panics rendering wide glyphs into a
         // single-column grid.
         let grid_cols = cols
@@ -194,6 +209,7 @@ impl InputTracker {
             onlcr_scratch: Vec::new(),
             ran_command: false,
             last_line: String::new(),
+            input_activity,
             cols,
             ui_tx,
         }
@@ -268,7 +284,7 @@ impl InputTracker {
             }
         });
 
-        if input_changed && !self.overflowed() {
+        if input_changed && !self.overflowed() && self.input_activity.idle() <= INPUT_ECHO_WINDOW {
             let line = self.current_line();
             self.last_line = line.clone();
             let _ = self.ui_tx.send(UiEvent::Query(line));
@@ -809,11 +825,42 @@ mod tests {
     // -- InputTracker -------------------------------------------------------
 
     fn tracker() -> (InputTracker, Receiver<UiEvent>) {
+        let (tracker, rx, _clock) = tracker_with_clock();
+        (tracker, rx)
+    }
+
+    fn tracker_with_clock() -> (InputTracker, Receiver<UiEvent>, Arc<ActivityClock>) {
         let (ui_tx, ui_rx) = mpsc::channel();
+        let clock = Arc::new(ActivityClock::new());
+        // Most tests simulate echo of live typing.
+        clock.touch();
         (
-            InputTracker::new(ui_tx, Arc::new(AtomicU16::new(80))),
+            InputTracker::new(ui_tx, Arc::new(AtomicU16::new(80)), clock.clone()),
             ui_rx,
+            clock,
         )
+    }
+
+    /// Program output containing OSC 133 markers (cat of a typescript, a
+    /// replayed CI log) must not conjure the popup: input-zone changes only
+    /// count as typing when a keystroke arrived recently.
+    #[rstest]
+    fn output_without_keystrokes_does_not_query() {
+        let (ui_tx, ui_rx) = mpsc::channel();
+        // Never-touched clock: no keystroke has happened yet.
+        let clock = Arc::new(ActivityClock::new());
+        let mut tracker = InputTracker::new(ui_tx, Arc::new(AtomicU16::new(80)), clock.clone());
+
+        tracker.push(b"\x1b]133;A\x07$ \x1b]133;B\x07ls -la");
+        assert!(
+            last_query(&ui_rx).is_none(),
+            "no query without a recent keystroke"
+        );
+
+        // The user starts typing: queries resume.
+        clock.touch();
+        tracker.push(b"x");
+        assert_eq!(last_query(&ui_rx).as_deref(), Some("ls -lax"));
     }
 
     fn last_query(rx: &Receiver<UiEvent>) -> Option<String> {
