@@ -1,9 +1,11 @@
 use std::io::Read;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crossterm::terminal;
+use eyre::WrapErr;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::CommandCaptureSink;
@@ -14,15 +16,88 @@ use crate::pty_proxy::RuntimeOptions;
 use crate::screen;
 
 pub(crate) fn main(options: RuntimeOptions) {
-    if let Err(e) = run(options) {
-        let _ = terminal::disable_raw_mode();
-        eprintln!("atuin pty-proxy: {e:#}");
-        std::process::exit(1);
+    let fallback = options.shell.clone();
+    let session = match start(options) {
+        Ok(session) => session,
+        // The init preamble exec'd the shell away to run us: dying here
+        // would close the user's tab. Hand the terminal to a plain shell
+        // and keep only the proxy features unavailable.
+        Err(e) => {
+            let _ = terminal::disable_raw_mode();
+            eprintln!("atuin pty-proxy: {e:#}; starting the shell without the proxy");
+            exec_fallback_shell(fallback.as_deref());
+        }
+    };
+
+    let code = session.wait();
+    let _ = terminal::disable_raw_mode();
+    std::process::exit(code);
+}
+
+/// The proxied session once startup can no longer fail: the shell is
+/// running and both pumps are attached.
+struct Session {
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+    stdout_thread: std::thread::JoinHandle<()>,
+    sock_path: PathBuf,
+}
+
+impl Session {
+    fn wait(mut self) -> i32 {
+        let code = match self.child.wait() {
+            Ok(status) => process_exit_code(status.exit_code()),
+            Err(e) => {
+                eprintln!("atuin pty-proxy: wait for shell: {e:#}");
+                1
+            }
+        };
+        let _ = self.stdout_thread.join();
+        let _ = std::fs::remove_file(&self.sock_path);
+        code
     }
 }
 
-fn run(mut options: RuntimeOptions) -> eyre::Result<()> {
-    let (cols, rows) = terminal::size()?;
+/// Kill the child shell if startup fails after the spawn, so a bailed
+/// proxy doesn't leave an orphan on the inner pty.
+struct ChildGuard(Option<Box<dyn portable_pty::Child + Send + Sync>>);
+
+impl ChildGuard {
+    fn defuse(mut self) -> Box<dyn portable_pty::Child + Send + Sync> {
+        self.0.take().expect("guard defused twice")
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if let Some(child) = self.0.as_mut() {
+            let _ = child.kill();
+        }
+    }
+}
+
+/// Replace this process with the shell the proxy would have wrapped.
+/// `ATUIN_PTY_PROXY_ACTIVE` stays exported so the shell's own init
+/// preamble doesn't recurse into another doomed proxy.
+fn exec_fallback_shell(shell: Option<&Path>) -> ! {
+    use std::os::unix::process::CommandExt;
+
+    let shell = shell
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            std::env::var_os("SHELL")
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from)
+        })
+        .unwrap_or_else(|| PathBuf::from("/bin/sh"));
+    let err = std::process::Command::new(&shell)
+        .env("ATUIN_PTY_PROXY_ACTIVE", "1")
+        .exec();
+    eprintln!("atuin pty-proxy: exec {}: {err}", shell.display());
+    std::process::exit(1);
+}
+
+fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
+    let (cols, rows) = terminal::size().wrap_err("query terminal size")?;
 
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -32,7 +107,8 @@ fn run(mut options: RuntimeOptions) -> eyre::Result<()> {
             pixel_width: 0,
             pixel_height: 0,
         })
-        .map_err(|e| eyre::eyre!("{e:#}"))?;
+        .map_err(|e| eyre::eyre!("{e:#}"))
+        .wrap_err("open pty")?;
 
     // The socket lives in a per-proxy 0700 directory next to its input
     // token. Validate the sockaddr_un length limit BEFORE exporting the env
@@ -44,16 +120,22 @@ fn run(mut options: RuntimeOptions) -> eyre::Result<()> {
     }
     let sock_path = screen::socket_path_in(&dir);
 
-    let mut cmd = match options.shell {
+    // The init preamble can only pass what its shell knew about itself,
+    // which is often a bare name ("zsh" via ZSH_ARGZERO). Resolve it here
+    // so the spawn, the child's `$SHELL`, and everything reading it
+    // downstream get a real path instead of a name they must re-resolve.
+    let shell = options.shell.take().map(resolve_shell);
+
+    let mut cmd = match shell {
         Some(ref path) => CommandBuilder::new(path),
         None => CommandBuilder::new_default_prog(),
     };
-    cmd.cwd(std::env::current_dir()?);
+    cmd.cwd(std::env::current_dir().wrap_err("resolve current directory")?);
     // Reflect the shell we actually spawn in `$SHELL` so the child — and
     // anything it execs via `$SHELL -c` (e.g. fzf's `become`) — sees the
     // shell the user asked for instead of a stale value inherited from the
     // parent environment.
-    if let Some(ref path) = options.shell {
+    if let Some(ref path) = shell {
         cmd.env("SHELL", path);
     }
     cmd.env("ATUIN_PTY_PROXY_SOCKET", sock_path.as_os_str());
@@ -66,21 +148,25 @@ fn run(mut options: RuntimeOptions) -> eyre::Result<()> {
         cmd.umask(Some(mask as _));
     }
 
-    let mut child = pair
-        .slave
-        .spawn_command(cmd)
-        .map_err(|e| eyre::eyre!("{e:#}"))?;
+    let child = ChildGuard(Some(
+        pair.slave
+            .spawn_command(cmd)
+            .map_err(|e| eyre::eyre!("{e:#}"))
+            .wrap_err("spawn shell")?,
+    ));
 
     drop(pair.slave);
 
     let pty_reader = pair
         .master
         .try_clone_reader()
-        .map_err(|e| eyre::eyre!("{e:#}"))?;
-    let pty_writer = pair
+        .map_err(|e| eyre::eyre!("{e:#}"))
+        .wrap_err("open pty reader")?;
+    let mut pty_writer = pair
         .master
         .take_writer()
-        .map_err(|e| eyre::eyre!("{e:#}"))?;
+        .map_err(|e| eyre::eyre!("{e:#}"))
+        .wrap_err("open pty writer")?;
 
     let current_cols = Arc::new(AtomicU16::new(cols.max(1)));
 
@@ -97,7 +183,8 @@ fn run(mut options: RuntimeOptions) -> eyre::Result<()> {
     )));
 
     screen::spawn_socket_server(sock_path.clone(), compositor.clone());
-    spawn_resize_handler(pair.master, compositor.clone(), current_cols.clone())?;
+    spawn_resize_handler(pair.master, compositor.clone(), current_cols.clone())
+        .wrap_err("install resize handler")?;
 
     let (mut input_tracker, key_filter) = options
         .hooks
@@ -110,7 +197,7 @@ fn run(mut options: RuntimeOptions) -> eyre::Result<()> {
         })
         .unzip();
 
-    terminal::enable_raw_mode()?;
+    terminal::enable_raw_mode().wrap_err("enable raw mode")?;
     seed_cursor_from_terminal(&compositor, &mut pty_writer);
 
     let pump_compositor = compositor;
@@ -189,6 +276,21 @@ fn spawn_stdin_pump(input_tx: SyncSender<Vec<u8>>) {
             }
         }
     });
+
+    Ok(Session {
+        child: child.defuse(),
+        stdout_thread,
+        sock_path,
+    })
+}
+
+/// Resolve a bare shell name against `PATH`; paths pass through, and an
+/// unresolvable name is kept for the spawn to report.
+fn resolve_shell(shell: PathBuf) -> PathBuf {
+    if shell.as_os_str().to_string_lossy().contains('/') {
+        return shell;
+    }
+    crate::oracle::find_in_path(&shell.to_string_lossy()).unwrap_or(shell)
 }
 
 /// How long to wait for the terminal's cursor-position report. Real
