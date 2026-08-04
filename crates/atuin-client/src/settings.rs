@@ -1479,7 +1479,7 @@ impl Settings {
         let key_path = data_dir.join("key");
         let meta_path = data_dir.join("meta.db");
 
-        Config::builder()
+        Ok(Config::builder()
             .set_default("history_format", "{time}\t{command}\t{duration}")?
             .set_default("db_path", db_path.to_str())?
             .set_default("record_store_path", record_store_path.to_str())?
@@ -1590,7 +1590,12 @@ impl Settings {
                     .map(|_| config::Value::new(None, config::ValueKind::Boolean(true)))
                     .unwrap_or_else(|| config::Value::new(None, config::ValueKind::Boolean(false))),
             )?
-            .set_default("no_mouse", false)
+            .set_default("no_mouse", false)?
+            .add_source(
+                Environment::with_prefix("atuin")
+                    .prefix_separator("_")
+                    .separator("__"),
+            ))
     }
 
     pub fn get_config_path() -> Result<PathBuf> {
@@ -1676,15 +1681,6 @@ impl Settings {
 
             config_builder
         };
-
-        // Env last, after the config file: sources added later win, and the
-        // documented layering is defaults -> config file -> env overrides.
-        // (It used to sit before the file, which silently inverted that.)
-        config_builder = config_builder.add_source(
-            Environment::with_prefix("atuin")
-                .prefix_separator("_")
-                .separator("__"),
-        );
 
         // all paths should be expanded
         let built = config_builder.build_cloned()?;

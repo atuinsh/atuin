@@ -16,7 +16,7 @@ use atuin_pty_proxy::{
     SyntaxClass, SyntaxSpan, find_in_path,
 };
 
-use super::client::search::syntax;
+use super::client::syntax;
 
 /// How long the popup waits for the suggestion worker before giving up, so
 /// a slow backend can never wedge the proxy's UI.

@@ -28,7 +28,10 @@ mod init;
 mod kv;
 mod lab;
 mod scripts;
-pub(super) mod search;
+mod search;
+// The one item the suggest module needs; the search module itself stays
+// private to the client command tree.
+pub(in crate::command) use search::syntax;
 mod setup;
 mod stats;
 mod store;
