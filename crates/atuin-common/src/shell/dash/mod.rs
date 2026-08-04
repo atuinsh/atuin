@@ -6,25 +6,21 @@ use std::{
     sync::Arc,
 };
 
+use bstr::{BStr, BString};
 use futures::{
     FutureExt,
     future::{BoxFuture, Shared},
 };
 use tracing::instrument;
 
-use bstr::{BStr, BString};
-
 use super::{
     Alias, AliasValue, AliasesError, IsShell, Rendered, RunError, Var, VarName, VarParsingError,
-    common,
+    common::{self, Aliases},
 };
 
-mod alias;
 mod exe;
 
-use exe::ZshExe;
-
-pub(super) type Aliases = HashMap<BString, AliasValue>;
+use exe::DashExe;
 
 type Probe<T, E> = Shared<BoxFuture<'static, Result<T, E>>>;
 
@@ -35,25 +31,25 @@ struct Inner {
 }
 
 #[derive(Debug, Clone, derive_more::Display)]
-#[display("zsh")]
-pub struct Zsh {
-    exe: Arc<ZshExe>,
+#[display("dash")]
+pub struct Dash {
+    exe: Arc<DashExe>,
     inner: Arc<Inner>,
 }
 
-impl Zsh {
-    const CANONICAL_NAME: &str = "zsh";
+impl Dash {
+    const CANONICAL_NAME: &str = "dash";
 
-    /// Create a new Zsh shell object.
+    /// Create a new Dash shell object.
     ///
     /// This will kick off background tokio tasks to eagerly probe information. Resolving the
     /// asynchronous methods will block on said probe tasks.
     pub fn new(path: &Path) -> Self {
         let config_path = directories::BaseDirs::new()
-            .map(|dirs| dirs.home_dir().join(".zshrc"))
-            .unwrap_or_else(|| PathBuf::from(".zshrc"));
+            .map(|dirs| dirs.home_dir().join(".profile"))
+            .unwrap_or_else(|| PathBuf::from(".profile"));
 
-        let exe = Arc::new(ZshExe::new(path));
+        let exe = Arc::new(DashExe::new(path));
 
         // Probe lazily: the shared future is not polled until `aliases()` is
         // first awaited, so merely constructing a shell (e.g. to render config)
@@ -61,11 +57,8 @@ impl Zsh {
         let aliases = {
             let exe = exe.clone();
             async move {
-                // `unsetopt rcquotes` normalises the listing: with `rcquotes` set,
-                // `alias -L` renders an embedded single quote as `''` inside the
-                // single-quoted value, which the parser does not decode.
-                let output = exe.run("unsetopt rcquotes; alias -L").await?;
-                alias::parse_aliases(&output.stdout)
+                let output = exe.run("alias").await?;
+                common::parse_aliases(&output.stdout)
             }
             .boxed()
             .shared()
@@ -81,7 +74,7 @@ impl Zsh {
     }
 }
 
-impl IsShell for Zsh {
+impl IsShell for Dash {
     #[instrument]
     async fn aliases(&self) -> Result<HashMap<BString, AliasValue>, AliasesError> {
         self.inner.aliases.clone().await

@@ -12,6 +12,7 @@ use std::{
 
 use crate::sysinfo::SystemExt;
 use bstr::{BStr, BString};
+use enum_dispatch::enum_dispatch;
 use serde::Serialize;
 use sysinfo::{Process, RefreshKind, System, get_current_pid};
 use thiserror::Error;
@@ -28,7 +29,11 @@ use parse::Fallback;
 pub use parse::{Command, ShellParser, Token, TokenKind, commands};
 
 pub mod bash;
+pub mod dash;
 pub mod fish;
+pub mod ksh;
+pub mod nu;
+pub mod powershell;
 pub mod sh;
 pub mod xonsh;
 pub mod zsh;
@@ -56,14 +61,12 @@ pub enum RunError {
     Delimiter { command: String },
 }
 
-#[async_trait::async_trait]
+#[enum_dispatch]
+#[allow(
+    async_fn_in_trait,
+    reason = "only dispatched over [`Shell`] within our code; never needs to be Send"
+)]
 pub trait IsShell: Send + Sync {
-    /// Get the name of this shell that we use internal to atuin.
-    fn canonical_name(&self) -> &'static str;
-
-    /// Return whether the shell is POSIX-compliant.
-    fn is_posix(&self) -> bool;
-
     /// Query the aliases defined in the current shell.
     async fn aliases(&self) -> Result<HashMap<BString, AliasValue>, AliasesError>;
 
@@ -108,10 +111,22 @@ pub trait IsShell: Send + Sync {
     }
 }
 
-/// Compile-time proof that `IsShell` is object-safe. If a method signature ever
-/// reintroduces a generic, associated type, or `impl Trait` argument, this fails
-/// to compile.
-const _: fn(&dyn IsShell) = |_shell| {};
+/// Static-dispatch enum over every shell atuin can drive. `enum_dispatch`
+/// generates the [`IsShell`] impl and the `From<Sh>`/… conversions, so this is
+/// what [`ShellKind::interface`] hands back in place of a `Box<dyn IsShell>` —
+/// which is why `IsShell` no longer needs to be object-safe.
+#[enum_dispatch(IsShell)]
+pub enum Shell {
+    Sh(sh::Sh),
+    Bash(bash::Bash),
+    Fish(fish::Fish),
+    Zsh(zsh::Zsh),
+    Dash(dash::Dash),
+    Ksh(ksh::Ksh),
+    Xonsh(xonsh::Xonsh),
+    Nu(nu::Nu),
+    Powershell(powershell::Powershell),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Display)]
 pub enum ShellKind {
@@ -255,23 +270,23 @@ impl ShellKind {
         }
     }
 
-    /// Construct the object-safe [`IsShell`] interface for this shell, if atuin
-    /// has an implementation for it (`None` for nu, powershell and unknown).
+    /// Construct the [`Shell`] interface for this shell, if atuin has an
+    /// implementation for it (`None` for powershell and unknown).
     ///
     /// The executable is resolved from `$PATH` by its canonical name when a
     /// command is run.
-    pub fn interface(&self) -> Option<Box<dyn IsShell>> {
-        let shell: Box<dyn IsShell> = match self {
-            ShellKind::Bash => Box::new(bash::Bash::new(Path::new("bash"))),
-            ShellKind::Sh => Box::new(sh::Sh::new(Path::new("sh"))),
-            ShellKind::Zsh => Box::new(zsh::Zsh::new(Path::new("zsh"))),
-            ShellKind::Fish => Box::new(fish::Fish::new(Path::new("fish"))),
-            ShellKind::Xonsh => Box::new(xonsh::Xonsh::new(Path::new("xonsh"))),
-            ShellKind::Nu
-            | ShellKind::Powershell
-            | ShellKind::Dash
-            | ShellKind::Ksh
-            | ShellKind::Unknown => return None,
+    pub fn interface(&self) -> Option<Shell> {
+        let shell: Shell = match self {
+            ShellKind::Bash => bash::Bash::new(Path::new("bash")).into(),
+            ShellKind::Sh => sh::Sh::new(Path::new("sh")).into(),
+            ShellKind::Zsh => zsh::Zsh::new(Path::new("zsh")).into(),
+            ShellKind::Fish => fish::Fish::new(Path::new("fish")).into(),
+            ShellKind::Xonsh => xonsh::Xonsh::new(Path::new("xonsh")).into(),
+            ShellKind::Nu => nu::Nu::new(Path::new("nu")).into(),
+            ShellKind::Dash => dash::Dash::new(Path::new("dash")).into(),
+            ShellKind::Ksh => ksh::Ksh::new(Path::new("ksh")).into(),
+            ShellKind::Powershell => powershell::Powershell::new(Path::new("pwsh")).into(),
+            ShellKind::Unknown => return None,
         };
         Some(shell)
     }
@@ -314,6 +329,25 @@ impl ShellKind {
         };
 
         Ok(String::from_utf8(output.stdout).unwrap())
+    }
+}
+
+#[cfg(test)]
+mod interface_dispatch {
+    use super::*;
+
+    // `enum_dispatch` must route each `Shell` variant's methods to the wrapped
+    // shell; shells with no implementation resolve to `None`.
+    #[test]
+    fn interface_dispatches_to_the_wrapped_shell() {
+        let bash = ShellKind::Bash.interface().expect("bash has an interface");
+        assert!(bash.user_config_path().ends_with(".bashrc"));
+
+        let zsh = ShellKind::Zsh.interface().expect("zsh has an interface");
+        assert!(zsh.user_config_path().ends_with(".zshrc"));
+
+        assert!(ShellKind::Powershell.interface().is_some());
+        assert!(ShellKind::Unknown.interface().is_none());
     }
 }
 

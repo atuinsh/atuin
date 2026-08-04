@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_common::shell::{ShellKind, Var as ShellVar};
+use atuin_common::shell::{IsShell, ShellKind, Var as ShellVar};
 use atuin_domain::record::{DecryptedData, Host, HostId};
 use eyre::{Result, bail, ensure, eyre};
 

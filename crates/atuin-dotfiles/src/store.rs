@@ -5,8 +5,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 // This will be noticeable similar to the kv store, though I expect the two shall diverge
 // While we will support a range of shell config, I'd rather have a larger number of small records
 // + stores, rather than one mega config store.
-use atuin_common::shell::{AliasValue, ShellKind};
-use atuin_common::utils::unquote;
+use atuin_common::shell::{AliasValue, IsShell, ShellKind};
 use atuin_domain::record::{DecryptedData, Host, HostId};
 use eyre::{Result, bail, ensure, eyre};
 
@@ -165,14 +164,9 @@ impl AliasStore {
     fn render(shell: ShellKind, aliases: &[Alias]) -> String {
         let shell_aliases: Vec<atuin_common::shell::Alias> = aliases
             .iter()
-            .map(|alias| {
-                // Records may store the value already quoted; strip one layer so
-                // the renderer quotes exactly once.
-                let value = unquote(&alias.value).unwrap_or_else(|_| alias.value.clone());
-                atuin_common::shell::Alias {
-                    name: alias.name.clone().into(),
-                    value: AliasValue::Command(value.into()),
-                }
+            .map(|alias| atuin_common::shell::Alias {
+                name: alias.name.clone().into(),
+                value: AliasValue::Command(alias.value.clone().into()),
             })
             .collect();
 
@@ -409,7 +403,7 @@ mod tests {
         alias.set("k", "kubectl").await.unwrap();
         alias.set("gp", "git push").await.unwrap();
         alias
-            .set("kgap", "'kubectl get pods --all-namespaces'")
+            .set("kgap", "kubectl get pods --all-namespaces")
             .await
             .unwrap();
 
@@ -439,7 +433,7 @@ mod tests {
             aliases[2],
             Alias {
                 name: String::from("kgap"),
-                value: String::from("'kubectl get pods --all-namespaces'")
+                value: String::from("kubectl get pods --all-namespaces")
             }
         );
 

@@ -1,8 +1,6 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use eyre::{Result, eyre};
-
 use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine};
 use getrandom::fill;
 use uuid::Uuid;
@@ -149,30 +147,6 @@ pub fn get_current_dir() -> String {
 pub fn broken_symlink<P: Into<PathBuf>>(path: P) -> bool {
     let path = path.into();
     path.is_symlink() && !path.exists()
-}
-
-pub fn unquote(s: &str) -> Result<String> {
-    if s.chars().count() < 2 {
-        return Err(eyre!("not enough chars"));
-    }
-
-    let quote = s.chars().next().unwrap();
-
-    // not quoted, do nothing
-    if quote != '"' && quote != '\'' && quote != '`' {
-        return Ok(s.to_string());
-    }
-
-    if s.chars().last().unwrap() != quote {
-        return Err(eyre!("unexpected eof, quotes do not match"));
-    }
-
-    // removes quote characters
-    // the sanity checks performed above ensure that the quotes will be ASCII and this will not
-    // panic
-    let s = &s[1..s.len() - 1];
-
-    Ok(s.to_string())
 }
 
 /// Normalize an optional string by trimming whitespace and filtering out empty strings.

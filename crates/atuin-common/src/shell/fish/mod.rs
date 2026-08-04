@@ -70,6 +70,8 @@ pub struct Fish {
 }
 
 impl Fish {
+    const CANONICAL_NAME: &str = "fish";
+
     /// Create a new Fish shell object.
     ///
     /// This will kick off background tokio tasks to eagerly probe information. Resolving the
@@ -104,16 +106,7 @@ impl Fish {
     }
 }
 
-#[async_trait::async_trait]
 impl IsShell for Fish {
-    fn canonical_name(&self) -> &'static str {
-        "fish"
-    }
-
-    fn is_posix(&self) -> bool {
-        false
-    }
-
     #[instrument]
     async fn aliases(&self) -> Result<HashMap<BString, AliasValue>, AliasesError> {
         self.inner.aliases.clone().await
@@ -141,7 +134,7 @@ impl IsShell for Fish {
     }
 
     fn validate_var_name(&self, name: BString) -> Result<VarName, VarParsingError> {
-        var::validate_var_name(name, self.canonical_name())
+        var::validate_var_name(name, Self::CANONICAL_NAME)
     }
 
     fn render_vars(&self, vars: &[Var]) -> BString {

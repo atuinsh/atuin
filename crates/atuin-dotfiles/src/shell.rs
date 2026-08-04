@@ -2,7 +2,7 @@ use eyre::{Result, ensure, eyre};
 use rmp::{decode, encode};
 use serde::Serialize;
 
-use atuin_common::shell::ShellKind;
+use atuin_common::shell::{IsShell, ShellKind};
 
 use crate::store::AliasStore;
 

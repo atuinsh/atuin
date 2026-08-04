@@ -38,6 +38,8 @@ pub struct Sh {
 }
 
 impl Sh {
+    const CANONICAL_NAME: &str = "sh";
+
     /// Create a new Sh shell object.
     ///
     /// This will kick off background tokio tasks to eagerly probe information. Resolving the
@@ -75,16 +77,7 @@ impl Sh {
     }
 }
 
-#[async_trait::async_trait]
 impl IsShell for Sh {
-    fn canonical_name(&self) -> &'static str {
-        "sh"
-    }
-
-    fn is_posix(&self) -> bool {
-        true
-    }
-
     #[instrument]
     async fn aliases(&self) -> Result<HashMap<BString, AliasValue>, AliasesError> {
         self.inner.aliases.clone().await
@@ -116,6 +109,6 @@ impl IsShell for Sh {
     }
 
     fn validate_var_name(&self, name: BString) -> Result<VarName, VarParsingError> {
-        common::validate_var_name(name, self.canonical_name())
+        common::validate_var_name(name, Self::CANONICAL_NAME)
     }
 }

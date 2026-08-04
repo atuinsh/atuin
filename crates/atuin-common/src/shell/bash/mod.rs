@@ -38,6 +38,8 @@ pub struct Bash {
 }
 
 impl Bash {
+    const CANONICAL_NAME: &str = "bash";
+
     /// Create a new Bash shell object.
     ///
     /// This will kick off background tokio tasks to eagerly probe information. Resolving the
@@ -72,16 +74,7 @@ impl Bash {
     }
 }
 
-#[async_trait::async_trait]
 impl IsShell for Bash {
-    fn canonical_name(&self) -> &'static str {
-        "bash"
-    }
-
-    fn is_posix(&self) -> bool {
-        true
-    }
-
     #[instrument]
     async fn aliases(&self) -> Result<HashMap<BString, AliasValue>, AliasesError> {
         self.inner.aliases.clone().await
@@ -113,6 +106,6 @@ impl IsShell for Bash {
     }
 
     fn validate_var_name(&self, name: BString) -> Result<VarName, VarParsingError> {
-        common::validate_var_name(name, self.canonical_name())
+        common::validate_var_name(name, Self::CANONICAL_NAME)
     }
 }

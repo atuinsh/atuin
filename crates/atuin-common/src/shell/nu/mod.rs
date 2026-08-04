@@ -16,17 +16,22 @@ use bstr::{BStr, BString};
 
 use super::{
     Alias, AliasValue, AliasesError, IsShell, Rendered, RunError, Var, VarName, VarParsingError,
-    common,
 };
 
 mod alias;
 mod exe;
+mod var;
 
-use exe::ZshExe;
+use exe::NuExe;
 
 pub(super) type Aliases = HashMap<BString, AliasValue>;
 
 type Probe<T, E> = Shared<BoxFuture<'static, Result<T, E>>>;
+
+/// Lists the aliases defined in the loaded config as JSON records with `name`
+/// and `expansion` fields (among others). A default `nu -c` loads the user's
+/// config, so their interactive aliases are in scope.
+const ALIAS_PROBE: &str = "scope aliases | to json";
 
 #[derive(Debug)]
 struct Inner {
@@ -35,25 +40,25 @@ struct Inner {
 }
 
 #[derive(Debug, Clone, derive_more::Display)]
-#[display("zsh")]
-pub struct Zsh {
-    exe: Arc<ZshExe>,
+#[display("nu")]
+pub struct Nu {
+    exe: Arc<NuExe>,
     inner: Arc<Inner>,
 }
 
-impl Zsh {
-    const CANONICAL_NAME: &str = "zsh";
+impl Nu {
+    const CANONICAL_NAME: &str = "nu";
 
-    /// Create a new Zsh shell object.
+    /// Create a new Nu shell object.
     ///
     /// This will kick off background tokio tasks to eagerly probe information. Resolving the
     /// asynchronous methods will block on said probe tasks.
     pub fn new(path: &Path) -> Self {
         let config_path = directories::BaseDirs::new()
-            .map(|dirs| dirs.home_dir().join(".zshrc"))
-            .unwrap_or_else(|| PathBuf::from(".zshrc"));
+            .map(|dirs| dirs.config_dir().join("nushell").join("config.nu"))
+            .unwrap_or_else(|| PathBuf::from("config.nu"));
 
-        let exe = Arc::new(ZshExe::new(path));
+        let exe = Arc::new(NuExe::new(path));
 
         // Probe lazily: the shared future is not polled until `aliases()` is
         // first awaited, so merely constructing a shell (e.g. to render config)
@@ -61,10 +66,7 @@ impl Zsh {
         let aliases = {
             let exe = exe.clone();
             async move {
-                // `unsetopt rcquotes` normalises the listing: with `rcquotes` set,
-                // `alias -L` renders an embedded single quote as `''` inside the
-                // single-quoted value, which the parser does not decode.
-                let output = exe.run("unsetopt rcquotes; alias -L").await?;
+                let output = exe.run(ALIAS_PROBE).await?;
                 alias::parse_aliases(&output.stdout)
             }
             .boxed()
@@ -81,7 +83,7 @@ impl Zsh {
     }
 }
 
-impl IsShell for Zsh {
+impl IsShell for Nu {
     #[instrument]
     async fn aliases(&self) -> Result<HashMap<BString, AliasValue>, AliasesError> {
         self.inner.aliases.clone().await
@@ -101,18 +103,18 @@ impl IsShell for Zsh {
     }
 
     fn render_aliases(&self, aliases: &[Alias]) -> Rendered {
-        common::render_aliases(aliases)
-    }
-
-    fn render_vars(&self, vars: &[Var]) -> BString {
-        common::render_vars(vars)
+        alias::render_aliases(aliases)
     }
 
     fn quote_value<'a>(&self, value: &'a [u8]) -> Cow<'a, BStr> {
-        common::quote_value(value)
+        var::quote_value(value)
     }
 
     fn validate_var_name(&self, name: BString) -> Result<VarName, VarParsingError> {
-        common::validate_var_name(name, Self::CANONICAL_NAME)
+        var::validate_var_name(name, Self::CANONICAL_NAME)
+    }
+
+    fn render_vars(&self, vars: &[Var]) -> BString {
+        var::render_vars(vars)
     }
 }

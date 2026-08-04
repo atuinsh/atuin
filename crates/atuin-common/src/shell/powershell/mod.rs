@@ -22,18 +22,35 @@ mod alias;
 mod exe;
 mod var;
 
-use exe::XonshExe;
+use exe::PowershellExe;
 
 pub(super) type Aliases = HashMap<BString, AliasValue>;
 
 type Probe<T, E> = Shared<BoxFuture<'static, Result<T, E>>>;
 
-// str/list aliases map directly onto our command/argv model. A string alias
-// xonsh stored as an `ExecAlias` (it had exec markers, or was not a Python
-// expression) keeps its original source on `.src`, so capture that too. A
-// `FuncAlias`/callable has no source string and cannot be represented, so it is
-// omitted.
-const ALIAS_PROBE: &str = "import json; print(json.dumps({k: (v if isinstance(v, (str, list)) else v.src) for k, v in aliases.items() if isinstance(v, (str, list)) or isinstance(getattr(v, 'src', None), str)}))";
+/// Lists the aliases defined in the loaded profile as JSON records with `Name`
+/// and `Definition`. Read-only aliases (PowerShell's built-ins, like `ls` →
+/// `Get-ChildItem`) are filtered out so only the user's own aliases are
+/// imported. `-AsArray` forces an array even for zero or one alias.
+const ALIAS_PROBE: &str = "Get-Alias | Where-Object { $_.Options -notmatch 'ReadOnly' } | Select-Object Name,Definition | ConvertTo-Json -AsArray";
+
+/// Wrap `inner` so a syntax error in one rendered line does not abort the whole
+/// sourced config. PowerShell aborts a script on a parse error (unlike POSIX
+/// shells), so each line is run through `Invoke-Expression -ErrorAction
+/// Continue`. `inner` is embedded as a single-quoted string, so its `'` are
+/// doubled to `''`.
+pub(super) fn secure_command(inner: &[u8]) -> BString {
+    let mut out = BString::from(&b"Invoke-Expression -ErrorAction Continue -Command '"[..]);
+    for &b in inner {
+        if b == b'\'' {
+            out.extend_from_slice(b"''");
+        } else {
+            out.push(b);
+        }
+    }
+    out.extend_from_slice(b"'\n");
+    out
+}
 
 #[derive(Debug)]
 struct Inner {
@@ -42,25 +59,29 @@ struct Inner {
 }
 
 #[derive(Debug, Clone, derive_more::Display)]
-#[display("xonsh")]
-pub struct Xonsh {
-    exe: Arc<XonshExe>,
+#[display("powershell")]
+pub struct Powershell {
+    exe: Arc<PowershellExe>,
     inner: Arc<Inner>,
 }
 
-impl Xonsh {
-    const CANONICAL_NAME: &str = "xonsh";
+impl Powershell {
+    const CANONICAL_NAME: &str = "powershell";
 
-    /// Create a new Xonsh shell object.
+    /// Create a new PowerShell shell object.
     ///
     /// This will kick off background tokio tasks to eagerly probe information. Resolving the
     /// asynchronous methods will block on said probe tasks.
     pub fn new(path: &Path) -> Self {
         let config_path = directories::BaseDirs::new()
-            .map(|dirs| dirs.home_dir().join(".xonshrc"))
-            .unwrap_or_else(|| PathBuf::from(".xonshrc"));
+            .map(|dirs| {
+                dirs.config_dir()
+                    .join("powershell")
+                    .join("Microsoft.PowerShell_profile.ps1")
+            })
+            .unwrap_or_else(|| PathBuf::from("Microsoft.PowerShell_profile.ps1"));
 
-        let exe = Arc::new(XonshExe::new(path));
+        let exe = Arc::new(PowershellExe::new(path));
 
         // Probe lazily: the shared future is not polled until `aliases()` is
         // first awaited, so merely constructing a shell (e.g. to render config)
@@ -85,7 +106,7 @@ impl Xonsh {
     }
 }
 
-impl IsShell for Xonsh {
+impl IsShell for Powershell {
     #[instrument]
     async fn aliases(&self) -> Result<HashMap<BString, AliasValue>, AliasesError> {
         self.inner.aliases.clone().await
@@ -118,5 +139,21 @@ impl IsShell for Xonsh {
 
     fn render_vars(&self, vars: &[Var]) -> BString {
         var::render_vars(vars)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    // The inner command is embedded as a single-quoted PowerShell string, so its
+    // own `'` are doubled; the whole thing runs under `-ErrorAction Continue`.
+    #[test]
+    fn secure_command_wraps_and_doubles_quotes() {
+        assert_eq!(
+            secure_command(b"echo 'foo'"),
+            BString::from("Invoke-Expression -ErrorAction Continue -Command 'echo ''foo'''\n")
+        );
     }
 }
