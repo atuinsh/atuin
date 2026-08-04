@@ -11,7 +11,7 @@ use std::os::fd::AsFd;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use atuin_common::ansi;
 
@@ -62,6 +62,14 @@ const ESC_POLL_RETRIES: u32 = 3;
 /// Sleep between those polls; retries × interval is the felt Escape delay.
 const ESC_POLL_INTERVAL: Duration = Duration::from_millis(8);
 
+/// How long the resize handshake may stay unanswered before the filter
+/// gives up and releases any withheld bytes: a terminal that never replies
+/// must not wedge stdin filtering forever.
+const RESYNC_REPLY_TIMEOUT: Duration = Duration::from_secs(1);
+/// Longest tail worth withholding as a possibly-split reply. DA1 answers
+/// listing many attributes (xterm) are the longest legitimate one.
+const MAX_REPLY_CARRY: usize = 48;
+
 pub(crate) struct Suggest<W: Write> {
     pub(crate) tracker: InputTracker,
     pub(crate) keys: KeyFilter<W>,
@@ -85,6 +93,7 @@ pub(crate) fn spawn<W: Write + Send + 'static>(
             state,
             compositor,
             flags,
+            resync: ResyncState::default(),
         },
     }
 }
@@ -255,21 +264,53 @@ pub(crate) struct KeyFilter<W: Write> {
     state: Arc<Mutex<PopupState>>,
     compositor: Arc<Mutex<Compositor<W>>>,
     flags: Arc<OverlayFlags>,
+    resync: ResyncState,
+}
+
+/// Bookkeeping for an in-flight resize cursor handshake. Only touched
+/// while the resync flag is set; the filter lives on the single stdin
+/// pump thread.
+#[derive(Default)]
+struct ResyncState {
+    /// Trailing bytes that may still become a reply split across reads.
+    carry: Vec<u8>,
+    /// Last cursor report seen; the DA1 fence promotes it to the seed
+    /// (earlier ones answered the shell's own queries, e.g. p10k).
+    cursor: Option<CursorReport>,
+    /// Self-heal deadline, armed when the filter first sees the flag —
+    /// replies arrive on stdin, so nothing can be withheld before then.
+    deadline: Option<Instant>,
+}
+
+/// One `ESC[row;colR` cursor report, 1-based as the terminal sends it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CursorReport {
+    row: u16,
+    col: u16,
 }
 
 impl<W: Write> KeyFilter<W> {
     /// Process one stdin chunk and return the bytes to forward to the pty.
-    ///
+    pub(crate) fn process<'a>(
+        &mut self,
+        chunk: &'a [u8],
+        stdin: &mut (impl Read + AsFd),
+    ) -> Cow<'a, [u8]> {
+        // One atomic load in normal life; the branch only runs while a
+        // resize cursor handshake is in flight.
+        if self.flags.resync.load(Ordering::Acquire) {
+            let kept = self.consume_resync(chunk);
+            return Cow::Owned(self.filter_keys(&kept, stdin).into_owned());
+        }
+        self.filter_keys(chunk, stdin)
+    }
+
     /// Pass-through when hidden. When visible, the chunk is tokenized so
     /// keys batched into one read (arrow auto-repeat, fast typing) are each
     /// intercepted or forwarded in order. A chunk ending in a possible key
     /// prefix (e.g. a lone `ESC`) briefly waits for its tail before
     /// deciding; an `ESC` that stays lone dismisses the popup.
-    pub(crate) fn process<'a>(
-        &self,
-        chunk: &'a [u8],
-        stdin: &mut (impl Read + AsFd),
-    ) -> Cow<'a, [u8]> {
+    fn filter_keys<'a>(&self, chunk: &'a [u8], stdin: &mut (impl Read + AsFd)) -> Cow<'a, [u8]> {
         if !self.visible() {
             return Cow::Borrowed(chunk);
         }
@@ -397,6 +438,125 @@ impl<W: Write> KeyFilter<W> {
     fn set_overlay(&self, content: Option<OverlayContent>) {
         lock_unpoisoned(&self.compositor).set_overlay(content);
     }
+
+    /// Swallow the resize handshake's replies from the stdin stream: every
+    /// cursor report up to the DA1 fence, seeding the model from the last
+    /// one — the terminal answers in order, so that one is ours. Returns
+    /// the bytes that were not part of the handshake.
+    fn consume_resync(&mut self, chunk: &[u8]) -> Vec<u8> {
+        let now = Instant::now();
+        let deadline = *self
+            .resync
+            .deadline
+            .get_or_insert(now + RESYNC_REPLY_TIMEOUT);
+
+        let mut pending = std::mem::take(&mut self.resync.carry);
+        pending.extend_from_slice(chunk);
+
+        if now >= deadline {
+            self.finish_resync(None);
+            return pending;
+        }
+
+        let mut kept = Vec::with_capacity(pending.len());
+        let mut i = 0;
+        let mut fenced = false;
+        while i < pending.len() {
+            if pending[i] != 0x1b {
+                kept.push(pending[i]);
+                i += 1;
+                continue;
+            }
+            match scan_reply(&pending[i..]) {
+                ReplyScan::Cursor { len, report } => {
+                    self.resync.cursor = Some(report);
+                    i += len;
+                }
+                ReplyScan::Fence { len } => {
+                    fenced = true;
+                    // Handshake over: the rest is ordinary input again.
+                    kept.extend_from_slice(&pending[i + len..]);
+                    break;
+                }
+                ReplyScan::Partial if pending.len() - i <= MAX_REPLY_CARRY => {
+                    self.resync.carry = pending[i..].to_vec();
+                    break;
+                }
+                // Not a reply, or too long to ever become one: forward it.
+                ReplyScan::Partial | ReplyScan::Other => {
+                    kept.push(pending[i]);
+                    i += 1;
+                }
+            }
+        }
+
+        if fenced {
+            let seed = self.resync.cursor.take();
+            self.finish_resync(seed);
+        }
+        kept
+    }
+
+    /// End the handshake, seeding the model when the fence confirmed a
+    /// report; a timeout seeds nothing rather than trust a stale reply.
+    fn finish_resync(&mut self, seed: Option<CursorReport>) {
+        if let Some(report) = seed {
+            lock_unpoisoned(&self.compositor).seed_cursor(report.row, report.col);
+        }
+        self.resync = ResyncState::default();
+        self.flags.resync.store(false, Ordering::Release);
+    }
+}
+
+/// Verdict on one ESC-led span while a resize handshake is in flight.
+#[derive(Debug, PartialEq)]
+enum ReplyScan {
+    /// Complete `ESC[row;colR`, `len` bytes long.
+    Cursor { len: usize, report: CursorReport },
+    /// Complete DA1 reply (`ESC[?...c`), `len` bytes long.
+    Fence { len: usize },
+    /// Still a viable prefix of a reply; more bytes could complete it.
+    Partial,
+    /// Definitely not a handshake reply.
+    Other,
+}
+
+/// Match `bytes` (starting at ESC) against the two handshake replies.
+fn scan_reply(bytes: &[u8]) -> ReplyScan {
+    match bytes.get(1) {
+        None => return ReplyScan::Partial,
+        Some(b'[') => {}
+        Some(_) => return ReplyScan::Other,
+    }
+    let fence = bytes.get(2) == Some(&b'?');
+    let mut i = if fence { 3 } else { 2 };
+    loop {
+        let Some(&byte) = bytes.get(i) else {
+            return ReplyScan::Partial;
+        };
+        if byte.is_ascii_digit() || byte == b';' {
+            i += 1;
+            continue;
+        }
+        return match byte {
+            b'c' if fence => ReplyScan::Fence { len: i + 1 },
+            b'R' if !fence => match parse_cursor(&bytes[2..i]) {
+                Some(report) => ReplyScan::Cursor { len: i + 1, report },
+                None => ReplyScan::Other,
+            },
+            _ => ReplyScan::Other,
+        };
+    }
+}
+
+/// `row;col`, exactly two in-range params — anything else is some other
+/// CSI (a keyboard sequence, say) and must pass through untouched.
+fn parse_cursor(params: &[u8]) -> Option<CursorReport> {
+    let params = std::str::from_utf8(params).ok()?;
+    let mut parts = params.split(';');
+    let row = parts.next()?.parse().ok()?;
+    let col = parts.next()?.parse().ok()?;
+    parts.next().is_none().then_some(CursorReport { row, col })
 }
 
 enum AcceptSpan {
@@ -664,6 +824,7 @@ mod tests {
                 state,
                 compositor,
                 flags,
+                resync: ResyncState::default(),
             },
             stdin,
             peer,
@@ -783,6 +944,110 @@ mod tests {
         assert_eq!(&*fx.filter.process(b"\x7f", &mut fx.stdin), b"\x7f");
         // Left arrow is never intercepted.
         assert_eq!(&*fx.filter.process(b"\x1b[D", &mut fx.stdin), b"\x1b[D");
+    }
+
+    // -- Resize cursor resync -------------------------------------------
+
+    fn arm_resync(fx: &Fixture) {
+        fx.filter.flags.resync.store(true, Ordering::Release);
+    }
+
+    fn resync_pending(fx: &Fixture) -> bool {
+        fx.filter.flags.resync.load(Ordering::Acquire)
+    }
+
+    /// 0-based model cursor, to check what `seed_cursor` received.
+    fn model_cursor(fx: &Fixture) -> (u16, u16) {
+        fx.filter
+            .compositor
+            .lock()
+            .unwrap()
+            .screen()
+            .cursor_position()
+    }
+
+    #[rstest]
+    #[case::lone_esc(b"\x1b".as_slice(), ReplyScan::Partial)]
+    #[case::csi_start(b"\x1b[".as_slice(), ReplyScan::Partial)]
+    #[case::private_start(b"\x1b[?".as_slice(), ReplyScan::Partial)]
+    #[case::cursor_prefix(b"\x1b[12;3".as_slice(), ReplyScan::Partial)]
+    #[case::cursor(
+        b"\x1b[12;34R".as_slice(),
+        ReplyScan::Cursor { len: 8, report: CursorReport { row: 12, col: 34 } }
+    )]
+    #[case::fence(b"\x1b[?64;1;9c".as_slice(), ReplyScan::Fence { len: 10 })]
+    #[case::arrow_key(b"\x1b[A".as_slice(), ReplyScan::Other)]
+    #[case::ss3_key(b"\x1bOA".as_slice(), ReplyScan::Other)]
+    #[case::three_params(b"\x1b[1;2;3R".as_slice(), ReplyScan::Other)]
+    #[case::private_cpr(b"\x1b[?12;3R".as_slice(), ReplyScan::Other)]
+    #[case::row_overflow(b"\x1b[99999;1R".as_slice(), ReplyScan::Other)]
+    fn classifies_handshake_replies(#[case] bytes: &[u8], #[case] expected: ReplyScan) {
+        assert_eq!(scan_reply(bytes), expected);
+    }
+
+    #[rstest]
+    fn resync_consumes_reply_and_seeds_model() {
+        let mut fx = fixture("git st", &["git status"], 0);
+        arm_resync(&fx);
+        let out = fx.filter.process(b"\x1b[12;5R\x1b[?1;2c", &mut fx.stdin);
+        assert!(out.is_empty(), "reply fully swallowed: {out:?}");
+        assert!(!resync_pending(&fx));
+        assert_eq!(model_cursor(&fx), (11, 4), "seeded from the 1-based report");
+    }
+
+    #[rstest]
+    fn resync_reassembles_reply_split_across_reads() {
+        let mut fx = fixture("git st", &["git status"], 0);
+        arm_resync(&fx);
+        assert!(fx.filter.process(b"\x1b[12;", &mut fx.stdin).is_empty());
+        assert!(resync_pending(&fx), "still waiting for the fence");
+        assert!(fx.filter.process(b"5R\x1b[?1;2c", &mut fx.stdin).is_empty());
+        assert!(!resync_pending(&fx));
+        assert_eq!(model_cursor(&fx), (11, 4));
+    }
+
+    #[rstest]
+    fn resync_seeds_from_last_report_before_fence() {
+        let mut fx = fixture("git st", &["git status"], 0);
+        arm_resync(&fx);
+        // A stale p10k reply, type-ahead, our reply, the fence, more keys.
+        let out = fx
+            .filter
+            .process(b"\x1b[3;42Rls\x1b[24;1R\x1b[?1;2cx", &mut fx.stdin);
+        assert_eq!(&*out, b"lsx", "non-reply bytes forwarded in order");
+        assert_eq!(model_cursor(&fx), (23, 0));
+        assert!(!resync_pending(&fx));
+    }
+
+    #[rstest]
+    fn resync_forwards_unrelated_bytes_while_waiting() {
+        let mut fx = fixture("git st", &["git status"], 0);
+        arm_resync(&fx);
+        let out = fx.filter.process(b"echo hi", &mut fx.stdin);
+        assert_eq!(&*out, b"echo hi");
+        assert!(resync_pending(&fx), "junk must not end the handshake");
+    }
+
+    #[rstest]
+    fn cursor_reports_pass_through_when_no_resync_pending() {
+        let mut fx = fixture("git st", &["git status"], 0);
+        // p10k's own CPR reply: not ours to touch outside a handshake.
+        let chunk = b"\x1b[42;7R";
+        assert_eq!(&*fx.filter.process(chunk, &mut fx.stdin), chunk);
+        assert_eq!(model_cursor(&fx), (0, 8), "model cursor untouched");
+    }
+
+    #[rstest]
+    fn resync_timeout_flushes_carried_bytes_unseeded() {
+        let mut fx = fixture("git st", &["git status"], 0);
+        arm_resync(&fx);
+        assert!(fx.filter.process(b"\x1b[12;", &mut fx.stdin).is_empty());
+        // Expire the armed deadline without sleeping.
+        fx.filter.resync.deadline = Some(Instant::now() - Duration::from_millis(1));
+        let out = fx.filter.process(b"ok", &mut fx.stdin);
+        assert_eq!(&*out, b"\x1b[12;ok", "withheld bytes released to the shell");
+        assert!(!resync_pending(&fx));
+        assert_eq!(model_cursor(&fx), (0, 8), "no seed from a timed-out reply");
     }
 
     #[rstest]
