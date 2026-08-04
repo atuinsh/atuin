@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::suggest::{Suggestion, SuggestionSource};
+use crate::suggest::{Suggestion, SuggestionSource, SyntaxClass, SyntaxSpan};
 
 const MAX_POPUP_ROWS: usize = 5;
 
@@ -24,8 +24,24 @@ const MIN_POPUP_WIDTH: usize = 4;
 const MAX_TAIL_BYTES: usize = 8192;
 
 const SELECTED_STYLE: &[u8] = b"\x1b[0m\x1b[48;5;24m\x1b[97m";
+const SELECTED_FG: &[u8] = b"\x1b[97m";
 const UNSELECTED_STYLE: &[u8] = b"\x1b[0m\x1b[48;5;236m\x1b[37m";
+const UNSELECTED_FG: &[u8] = b"\x1b[37m";
 const GHOST_STYLE: &[u8] = b"\x1b[0m\x1b[38;5;242m";
+
+/// Foreground per syntax class, mirroring the TUI theme's defaults —
+/// plain ANSI palette colors, so both UIs follow the terminal scheme.
+/// `None` (plain text, operators) keeps the row's own foreground.
+fn class_fg(class: SyntaxClass) -> Option<&'static [u8]> {
+    match class {
+        SyntaxClass::Plain => None,
+        SyntaxClass::Command => Some(b"\x1b[92m"),
+        SyntaxClass::Flag => Some(b"\x1b[36m"),
+        SyntaxClass::String => Some(b"\x1b[33m"),
+        SyntaxClass::Variable => Some(b"\x1b[95m"),
+        SyntaxClass::Comment => Some(b"\x1b[90m"),
+    }
+}
 
 /// Nerd-font source icons, one cell each. Terminals without a nerd font
 /// show a replacement glyph in that cell; the suggestion itself is intact.
@@ -502,7 +518,8 @@ fn draw_popup(
     for (i, suggestion) in window.iter().enumerate() {
         let row = first_row + i as u16;
         move_to(buf, row, col);
-        buf.extend_from_slice(if *window_offset + i == selected {
+        let is_selected = *window_offset + i == selected;
+        buf.extend_from_slice(if is_selected {
             SELECTED_STYLE
         } else {
             UNSELECTED_STYLE
@@ -515,9 +532,17 @@ fn draw_popup(
                 .as_bytes(),
         );
         buf.push(b' ');
-        let used = 2 + write_fitted(
+        let shown = shown_from_token(suggestion, line_head);
+        let used = 2 + write_fitted_syntax(
             buf,
-            shown_from_token(suggestion, line_head),
+            shown,
+            suggestion.text.len() - shown.len(),
+            &suggestion.syntax,
+            if is_selected {
+                SELECTED_FG
+            } else {
+                UNSELECTED_FG
+            },
             width.saturating_sub(chrome),
         );
         let pad_to = width - usize::from(scrollbar);
@@ -536,6 +561,59 @@ fn draw_popup(
         first_row,
         count: visible as u16,
     })
+}
+
+/// [`write_fitted`], coloring each character by its syntax class. `skip`
+/// is the byte offset of `text` within the classified suggestion (rows
+/// show a token-anchored suffix); `base_fg` restores the row's foreground
+/// for plain runs and after the text, so padding and the scrollbar keep
+/// the row color.
+fn write_fitted_syntax(
+    buf: &mut Vec<u8>,
+    text: &str,
+    skip: usize,
+    syntax: &[SyntaxSpan],
+    base_fg: &'static [u8],
+    budget: usize,
+) -> usize {
+    if syntax.is_empty() {
+        return write_fitted(buf, text, budget);
+    }
+
+    let mut spans = syntax.iter();
+    let mut span_end = 0usize;
+    let mut class = SyntaxClass::Plain;
+    let mut painted: Option<&[u8]> = None;
+    let mut used = 0;
+    for (i, ch) in text.char_indices() {
+        while skip + i >= span_end {
+            let Some(span) = spans.next() else {
+                class = SyntaxClass::Plain;
+                span_end = usize::MAX;
+                break;
+            };
+            span_end += span.len;
+            class = span.class;
+        }
+
+        let ch = printable(ch);
+        let ch_width = ch.width().unwrap_or(0);
+        if used + ch_width > budget {
+            break;
+        }
+        let fg = class_fg(class);
+        if fg != painted {
+            buf.extend_from_slice(fg.unwrap_or(base_fg));
+            painted = fg;
+        }
+        let mut utf8 = [0u8; 4];
+        buf.extend_from_slice(ch.encode_utf8(&mut utf8).as_bytes());
+        used += ch_width;
+    }
+    if painted.is_some() {
+        buf.extend_from_slice(base_fg);
+    }
+    used
 }
 
 /// Append the longest printable prefix of `text` fitting `budget` display
@@ -809,6 +887,56 @@ mod tests {
         let row = row_text(&checker, 1);
         assert!(!row.contains(SCROLL_THUMB), "no scrollbar: {row:?}");
         assert!(!row.contains(SCROLL_TRACK), "no scrollbar: {row:?}");
+    }
+
+    #[rstest]
+    fn popup_rows_render_syntax_colors() {
+        let mut c = compositor();
+        c.apply_pty(b"$ g").unwrap();
+        let mut styled = Suggestion::history("git -a");
+        styled.syntax = vec![
+            span(3, SyntaxClass::Command),
+            span(1, SyntaxClass::Plain),
+            span(2, SyntaxClass::Flag),
+        ];
+        c.set_overlay(Some(OverlayContent {
+            line: "g".to_string(),
+            suggestions: vec![styled, Suggestion::history("got x")].into(),
+            selected: 1,
+        }));
+
+        // Row text starts at col 4 (anchor 2 + icon + space): "git -a".
+        let checker = displayed(&c);
+        let fg = |row, col| checker.screen().cell(row, col).unwrap().fgcolor();
+        assert_eq!(fg(1, 4), vt100::Color::Idx(10), "command is green");
+        assert_eq!(fg(1, 7), vt100::Color::Idx(7), "plain keeps the row fg");
+        assert_eq!(fg(1, 8), vt100::Color::Idx(6), "flag is cyan");
+        // Unstyled suggestion on the selected row: uniform bright fg.
+        assert_eq!(fg(2, 4), vt100::Color::Idx(15));
+    }
+
+    #[rstest]
+    fn syntax_spans_follow_the_token_offset() {
+        let mut c = compositor();
+        c.apply_pty(b"$ git c").unwrap();
+        let mut styled = Suggestion::history("git commit");
+        styled.syntax = vec![span(4, SyntaxClass::Command), span(6, SyntaxClass::String)];
+        c.set_overlay(Some(OverlayContent {
+            line: "git c".to_string(),
+            suggestions: vec![styled, Suggestion::history("git clone")].into(),
+            selected: 0,
+        }));
+
+        // The row shows "commit" (token-anchored, 4 bytes skipped), so its
+        // first char must take the span covering byte 4, not byte 0.
+        let checker = displayed(&c);
+        let cell = checker.screen().cell(1, 8).unwrap();
+        assert_eq!(cell.contents(), "c");
+        assert_eq!(cell.fgcolor(), vt100::Color::Idx(3), "string, not command");
+    }
+
+    fn span(len: usize, class: SyntaxClass) -> SyntaxSpan {
+        SyntaxSpan { len, class }
     }
 
     // -- Compositor behaviour ---------------------------------------------

@@ -29,7 +29,7 @@ mod internal;
 mod kv;
 mod lab;
 mod scripts;
-mod search;
+pub(super) mod search;
 mod setup;
 mod stats;
 mod store;

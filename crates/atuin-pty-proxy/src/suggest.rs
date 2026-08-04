@@ -24,12 +24,35 @@ use crate::osc133::{Event, Parser, Segment, Zone};
 pub struct Suggestion {
     pub text: String,
     pub source: SuggestionSource,
+    /// Shell-syntax classification of `text` as ordered byte runs, for
+    /// popup coloring. Empty renders unstyled.
+    pub syntax: Vec<SyntaxSpan>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SuggestionSource {
     History,
     Completion,
+}
+
+/// One run of shell-syntax classification over [`Suggestion::text`].
+///
+/// A minimal mirror of the TUI theme's syntax meanings, so this crate can
+/// reuse the classifier's verdicts without depending on atuin-client.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SyntaxSpan {
+    pub len: usize,
+    pub class: SyntaxClass,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyntaxClass {
+    Plain,
+    Command,
+    Flag,
+    String,
+    Variable,
+    Comment,
 }
 
 #[cfg(test)]
@@ -39,6 +62,7 @@ impl Suggestion {
         Self {
             text: text.to_string(),
             source: SuggestionSource::History,
+            syntax: Vec::new(),
         }
     }
 }
