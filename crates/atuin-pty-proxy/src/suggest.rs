@@ -232,41 +232,48 @@ impl InputTracker {
     }
 
     /// The line as displayed, mirroring `ansi::to_plain_text`'s trimming.
+    /// The line typed so far: grid cells up to the cursor, nothing after.
+    ///
+    /// Everything past the cursor is display, not input — the erase
+    /// artifact of a backspace echo, and above all zsh-autosuggestions'
+    /// POSTDISPLAY ghost, which is echoed inside the input zone and would
+    /// otherwise be queried as if the user had typed it. Typed trailing
+    /// spaces are written cells before the cursor, so they survive.
     fn current_line(&self) -> String {
-        let contents = self.line_screen.screen().contents();
-        let trimmed = contents.trim_end();
-        let mut line = String::with_capacity(trimmed.len());
-        for (i, row) in trimmed.lines().enumerate() {
-            if i > 0 {
+        let screen = self.line_screen.screen();
+        let (cursor_row, cursor_col) = screen.cursor_position();
+        let mut line = String::new();
+        for row in 0..=cursor_row {
+            if row > 0 {
                 line.push('\n');
             }
-            line.push_str(row.trim_end());
+            let end = if row == cursor_row {
+                cursor_col
+            } else {
+                self.grid_cols
+            };
+            let mut text = String::new();
+            for col in 0..end {
+                let Some(cell) = screen.cell(row, col) else {
+                    continue;
+                };
+                if cell.is_wide_continuation() {
+                    continue;
+                }
+                let contents = cell.contents();
+                if contents.is_empty() {
+                    text.push(' ');
+                } else {
+                    text.push_str(&contents);
+                }
+            }
+            if row == cursor_row {
+                line.push_str(&text);
+            } else {
+                line.push_str(text.trim_end());
+            }
         }
-        let mut line = line.trim_matches(|c| c == '\r' || c == '\n').to_string();
-        // Row trimming just ate any typed trailing space, but a space is
-        // exactly when next-word suggestions should start. Re-append them.
-        for _ in 0..self.typed_trailing_spaces() {
-            line.push(' ');
-        }
-        line
-    }
-
-    /// Typed spaces between the text and the cursor. Row text can't tell a
-    /// typed trailing space from an empty cell, but the grid can: typed
-    /// cells hold `" "`, untouched ones are empty. Bounded by the cursor so
-    /// the written-space artifact of a backspace echo (`\b \b`) — which
-    /// lands beyond the cursor — doesn't count.
-    fn typed_trailing_spaces(&self) -> usize {
-        let screen = self.line_screen.screen();
-        let (row, cursor_col) = screen.cursor_position();
-        (0..cursor_col)
-            .rev()
-            .take_while(|&col| {
-                screen
-                    .cell(row, col)
-                    .is_some_and(|cell| cell.contents() == " ")
-            })
-            .count()
+        line.trim_matches(|c| c == '\r' || c == '\n').to_string()
     }
 }
 
@@ -780,6 +787,22 @@ mod tests {
         let (mut tracker, rx) = tracker();
         tracker.push(b"\x1b]133;B\x07gix\x08 \x08t");
         assert_eq!(last_query(&rx).as_deref(), Some("git"));
+    }
+
+    /// zsh-autosuggestions paints its ghost after the cursor, inside the
+    /// input zone. It is display, not input: queries must stop at the
+    /// cursor or the ghost gets treated as typed text.
+    #[rstest]
+    fn text_painted_after_the_cursor_is_not_input() {
+        let (mut tracker, rx) = tracker();
+        // Type "git ", then a plugin paints a dim ghost and moves the
+        // cursor back to the end of the typed text.
+        tracker.push(b"\x1b]133;B\x07git \x1b[90mstatus --short\x1b[0m\x1b[14D");
+        assert_eq!(last_query(&rx).as_deref(), Some("git "));
+
+        // Typing continues over the ghost.
+        tracker.push(b"p");
+        assert_eq!(last_query(&rx).as_deref(), Some("git p"));
     }
 
     /// A trailing space is when next-word suggestions should begin — the
