@@ -264,7 +264,7 @@ impl InputTracker {
                 if contents.is_empty() {
                     text.push(' ');
                 } else {
-                    text.push_str(&contents);
+                    text.push_str(contents);
                 }
             }
             if row == cursor_row {
