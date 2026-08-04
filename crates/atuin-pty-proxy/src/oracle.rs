@@ -28,6 +28,10 @@ const SPAWN_TIMEOUT_HERMETIC: Duration = Duration::from_secs(5);
 const QUERY_DEADLINE: Duration = Duration::from_secs(2);
 /// Wedged-oracle respawns before completions are given up for the session.
 const RESPAWN_LIMIT: u32 = 3;
+/// How long the oracle stays unspawned after proxy start unless a query
+/// arrives first: its rc-loading captive shell must not compete with the
+/// session shell's own startup.
+const WARM_SPAWN_DELAY: Duration = Duration::from_secs(5);
 const KILL_WHOLE_LINE: &[u8] = b"\x15";
 
 /// Turns the captive zsh into a completion driver: Tab is the only live
@@ -309,11 +313,27 @@ impl CompletionOracleHandle {
                 OracleProc::spawn(shell, &bin, false)
             };
 
-            // Warm up before the first keystroke needs an answer: spawning
-            // (rc files, compinit) costs more than any query's wait budget.
+            // The captive shell loads the user's rc files — exactly what
+            // the tab's own shell is doing at this moment. Spawning both
+            // at once makes them fight over CPU and compinit's zcompdump
+            // lock, visibly delaying the prompt to serve a popup nobody
+            // has asked for yet. Wait for the first query (the session is
+            // interactive by then) or a quiet delay, whichever is first.
+            let mut pending = match query_rx.recv_timeout(WARM_SPAWN_DELAY) {
+                Ok(query) => Some(query),
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            };
             let mut proc = respawn(&mut load_user_config, &mut spawns);
 
-            while let Ok(mut query) = query_rx.recv() {
+            loop {
+                let mut query = match pending.take() {
+                    Some(query) => query,
+                    None => match query_rx.recv() {
+                        Ok(query) => query,
+                        Err(_) => return,
+                    },
+                };
                 // Only the newest queued query is worth answering.
                 while let Ok(newer) = query_rx.try_recv() {
                     query = newer;
