@@ -175,6 +175,14 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
     }
     cmd.env("ATUIN_PTY_PROXY_SOCKET", sock_path.as_os_str());
     cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
+    // The init preamble re-execs when TMUX doesn't match this marker (a
+    // new pane deserves its own proxy). A manually launched proxy hasn't
+    // set it, and the mismatch would nest a second proxy inside this one —
+    // whose overlay bytes the outer proxy would then track as input.
+    cmd.env(
+        "ATUIN_PTY_PROXY_TMUX",
+        std::env::var_os("TMUX").unwrap_or_default(),
+    );
     // Atuin sets a restrictive process-wide umask on startup to protect the
     // files it creates. The shell must not inherit it (#3695) — restore the
     // umask the user launched us with. Applied in the child between fork and
