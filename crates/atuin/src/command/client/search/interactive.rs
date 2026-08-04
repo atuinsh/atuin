@@ -79,16 +79,21 @@ pub struct InspectingState {
 }
 
 impl InspectingState {
+    // Boundary moves are no-ops: clearing the state instead (as this used
+    // to) left `previous`/`next` empty with the stats cache still warm, so
+    // no refresh ever repopulated them and navigation went dead.
     pub fn move_to_previous(&mut self) {
-        let previous = self.previous.clone();
-        self.reset();
-        self.current = previous;
+        if let Some(previous) = self.previous.clone() {
+            self.reset();
+            self.current = Some(previous);
+        }
     }
 
     pub fn move_to_next(&mut self) {
-        let next = self.next.clone();
-        self.reset();
-        self.current = next;
+        if let Some(next) = self.next.clone() {
+            self.reset();
+            self.current = Some(next);
+        }
     }
 
     pub fn reset(&mut self) {
@@ -2405,6 +2410,36 @@ mod tests {
         );
         settings.keys.accept_with_backspace = false;
         state.keymaps = KeymapSet::defaults(&settings);
+    }
+
+    #[rstest]
+    fn inspecting_boundary_moves_are_noops() {
+        use atuin_client::history::HistoryId;
+
+        let mut state = InspectingState {
+            current: Some(HistoryId::from("b".to_string())),
+            next: Some(HistoryId::from("a".to_string())),
+            previous: Some(HistoryId::from("c".to_string())),
+        };
+
+        // Move to the newest entry: no next beyond it.
+        state.move_to_next();
+        assert_eq!(state.current, Some(HistoryId::from("a".to_string())));
+        assert_eq!(state.next, None);
+
+        // Past the boundary: the state must survive, not clear — clearing
+        // left navigation dead because the stats cache never refreshed it.
+        state.move_to_next();
+        assert_eq!(state.current, Some(HistoryId::from("a".to_string())));
+
+        state.previous = Some(HistoryId::from("b".to_string()));
+        state.move_to_previous();
+        assert_eq!(state.current, Some(HistoryId::from("b".to_string())));
+
+        // And past the oldest end likewise.
+        state.previous = None;
+        state.move_to_previous();
+        assert_eq!(state.current, Some(HistoryId::from("b".to_string())));
     }
 
     #[rstest]
