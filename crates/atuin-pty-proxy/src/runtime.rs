@@ -128,6 +128,24 @@ impl Trace {
     }
 }
 
+/// Direct writes to fd 1. `std::io::stdout()` is line-buffered: it splits
+/// every batched chunk at the last newline and holds the remainder for the
+/// flush — two or three syscalls where one carries the compositor's
+/// already-batched bytes.
+pub(crate) struct RawStdout;
+
+impl Write for RawStdout {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // SAFETY: fd 1 outlives the process; never closed here.
+        let fd = unsafe { rustix::fd::BorrowedFd::borrow_raw(1) };
+        rustix::io::write(fd, buf).map_err(std::io::Error::from)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
     let mut trace = Trace::new();
     let (cols, rows) = terminal::size().wrap_err("query terminal size")?;
@@ -224,7 +242,7 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
     let compositor = Arc::new(Mutex::new(Compositor::new(
         rows,
         cols,
-        std::io::stdout(),
+        RawStdout,
         flags.clone(),
         options.hooks.suggestion_provider.is_some(),
     )));
@@ -265,8 +283,12 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
     terminal::enable_raw_mode()
         .wrap_err_with(|| format!("enable raw mode ({})", tty_diagnosis()))?;
     trace.step("raw mode");
-    seed_cursor_from_terminal(&compositor, &mut pty_writer);
-    trace.step("cursor handshake");
+    // Overlays are the only consumer of the seeded cursor; without a
+    // suggestion provider the handshake would only delay first output.
+    if input_tracker.is_some() {
+        seed_cursor_from_terminal(&compositor, &mut pty_writer);
+        trace.step("cursor handshake");
+    }
 
     let pump_compositor = compositor;
     let stdout_thread = std::thread::spawn(move || {
@@ -291,7 +313,7 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
                     activity.touch();
 
                     if degraded {
-                        let mut out = std::io::stdout();
+                        let mut out = RawStdout;
                         if out.write_all(&buf[..n]).and_then(|()| out.flush()).is_err() {
                             break;
                         }
@@ -332,7 +354,7 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
                             // The chunk that hit the panic was never
                             // forwarded; the session continues as a plain
                             // pass-through.
-                            let mut out = std::io::stdout();
+                            let mut out = RawStdout;
                             let _ = out.write_all(&buf[..n]).and_then(|()| out.flush());
                             eprintln!(
                                 "atuin pty-proxy: internal error; continuing without suggestions\r"
@@ -363,25 +385,33 @@ fn spawn_stdin_pump(input_tx: SyncSender<Vec<u8>>) {
                 Ok(n) => {
                     input_activity.touch();
                     // A key-filter panic must not eat the user's keyboard:
-                    // drop the filter and forward this and all later
-                    // chunks raw.
-                    let filtered = match key_filter.as_mut() {
+                    // forward the chunk raw and drop the filter for good.
+                    let mut drop_filter = false;
+                    let forwarded = match key_filter.as_mut() {
                         Some(filter) => {
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                filter.process(&buf[..n], &mut stdin)
-                            }))
-                            .ok()
+                            let outcome =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    let bytes = filter.process(&buf[..n], &mut stdin);
+                                    if bytes.is_empty() {
+                                        Ok(())
+                                    } else {
+                                        pty_writer.write_all(&bytes)
+                                    }
+                                }));
+                            match outcome {
+                                Ok(result) => result,
+                                Err(_) => {
+                                    drop_filter = true;
+                                    pty_writer.write_all(&buf[..n])
+                                }
+                            }
                         }
-                        None => Some(std::borrow::Cow::Borrowed(&buf[..n])),
+                        None => pty_writer.write_all(&buf[..n]),
                     };
-                    let bytes: &[u8] = match filtered.as_deref() {
-                        Some(out) => out,
-                        None => {
-                            key_filter = None;
-                            &buf[..n]
-                        }
-                    };
-                    if !bytes.is_empty() && pty_writer.write_all(bytes).is_err() {
+                    if drop_filter {
+                        key_filter = None;
+                    }
+                    if forwarded.is_err() {
                         break;
                     }
                 }
@@ -520,10 +550,11 @@ fn resolve_shell(shell: PathBuf) -> PathBuf {
     crate::oracle::find_in_path(&shell.to_string_lossy()).unwrap_or(shell)
 }
 
-/// How long to wait for the terminal's cursor-position report. Real
-/// terminals answer within a few milliseconds; on a miss the proxy runs
-/// with an unseeded model, as before.
-const CPR_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);
+/// How long to wait for the terminal's cursor-position report — the one
+/// startup step that delays first output, so it errs small. Real terminals
+/// answer within a few milliseconds; on a miss the proxy runs with an
+/// unseeded model, as before.
+const CPR_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150);
 const CPR_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1);
 
 /// Ask the terminal where its cursor is (`ESC[6n`) and seed the screen
@@ -539,7 +570,7 @@ const CPR_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(
 /// child as junk keystrokes. Keys the user types ahead of the replies are
 /// forwarded untouched.
 fn seed_cursor_from_terminal(
-    compositor: &Arc<Mutex<Compositor<std::io::Stdout>>>,
+    compositor: &Arc<Mutex<Compositor<RawStdout>>>,
     pty_writer: &mut (impl Write + ?Sized),
 ) {
     let mut stdout = std::io::stdout();
@@ -688,7 +719,7 @@ fn await_pty_quiet(activity: &ActivityClock) {
 
 fn spawn_resize_handler(
     master: Box<dyn portable_pty::MasterPty + Send>,
-    compositor: Arc<Mutex<Compositor<std::io::Stdout>>>,
+    compositor: Arc<Mutex<Compositor<RawStdout>>>,
     current_cols: Arc<AtomicU16>,
     activity: Arc<ActivityClock>,
 ) -> eyre::Result<()> {
