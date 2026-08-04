@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, IsTerminal};
 
 use clap::Parser;
 use eyre::{Context, Result, bail};
@@ -67,7 +67,7 @@ impl Cmd {
             self.run_legacy_login(settings, store).await?;
         }
 
-        verify_key_against_remote(settings).await
+        verify_key_against_remote(settings, store).await
     }
 
     /// Hub login: use the browser flow unless the username was provided for headless use.
@@ -191,93 +191,110 @@ impl Cmd {
             atuin_common::docs::url("guide/sync/#login")
         );
 
-        let key = or_user_input(
-            self.key.clone(),
-            "encryption key [blank to use existing key file]",
-        );
+        // Only re-prompt on bad input when the key came from an interactive
+        // prompt — a bad --key flag or piped stdin should fail immediately.
+        let mut flag_key = self.key.clone();
+        let interactive = flag_key.is_none() && io::stdin().is_terminal();
 
-        // if provided, the key may be EITHER base64, or a bip mnemonic
-        // try to normalize on base64
-        let key = if key.is_empty() {
-            key
-        } else {
-            // try parse the key as a mnemonic...
-            match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
-                Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
-                Err(err) => {
-                    match err {
-                        // assume they copied in the base64 key
-                        bip39::ErrorKind::InvalidWord(_) => key,
-                        bip39::ErrorKind::InvalidChecksum => {
-                            bail!("Key mnemonic is not valid")
-                        }
-                        bip39::ErrorKind::InvalidKeysize(_)
-                        | bip39::ErrorKind::InvalidWordLength(_)
-                        | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
-                            bail!("Key is not the correct length")
-                        }
-                    }
-                }
-            }
-        };
+        loop {
+            let key = or_user_input(
+                flag_key.take(),
+                "encryption key [blank to use existing key file]",
+            );
 
-        if key.is_empty() {
-            if key_path.exists() {
-                let bytes = fs_err::read_to_string(key_path).context(format!(
-                    "Existing key file at '{}' could not be read",
-                    key_path.to_string_lossy()
-                ))?;
-                if decode_key(bytes).is_err() {
-                    bail!(format!(
-                        "The key in existing key file at '{}' is invalid",
+            if key.is_empty() {
+                if key_path.exists() {
+                    let bytes = fs_err::read_to_string(key_path).context(format!(
+                        "Existing key file at '{}' could not be read",
                         key_path.to_string_lossy()
-                    ));
+                    ))?;
+                    if decode_key(bytes).is_err() {
+                        bail!(format!(
+                            "The key in existing key file at '{}' is invalid",
+                            key_path.to_string_lossy()
+                        ));
+                    }
+                    return Ok(());
                 }
-            } else {
-                panic!(
-                    "No key provided and no existing key file found. Please use 'atuin key' on your other machine, or recover your key from a backup"
-                )
+
+                let msg = "No key provided and no existing key file found. Please use 'atuin key' on your other machine, or recover your key from a backup";
+                if !interactive {
+                    bail!(msg);
+                }
+                println!("\n{msg}\n");
+                continue;
             }
-        } else if !key_path.exists() {
-            if decode_key(key.clone()).is_err() {
-                bail!("The specified key is invalid");
-            }
 
-            let mut file = File::create(key_path).await?;
-            file.write_all(key.as_bytes()).await?;
-        } else {
-            // we now know that the user has logged in specifying a key, AND that the key path
-            // exists
-
-            // 1. check if the saved key and the provided key match. if so, nothing to do.
-            // 2. if not, re-encrypt the local history and overwrite the key
-            let current_key: [u8; 32] = load_key(settings)?.into();
-
-            let encoded = key.clone(); // gonna want to save it in a bit
-            let new_key: [u8; 32] = decode_key(key)
-                .context("Could not decode provided key; is not valid base64-encoded key")?
-                .into();
-
-            if new_key != current_key {
-                println!("\nRe-encrypting local store with new key");
-
-                store.re_encrypt(&current_key, &new_key).await?;
-
-                println!("Writing new key");
-                let mut file = File::create(key_path).await?;
-                file.write_all(encoded.as_bytes()).await?;
+            match normalize_key(&key) {
+                Ok(encoded) => {
+                    store_key(settings, store, &encoded).await?;
+                    return Ok(());
+                }
+                Err(err) if interactive => {
+                    println!("\n{err}. Please try again.\n");
+                }
+                Err(err) => return Err(err),
             }
         }
-
-        Ok(())
     }
 }
 
-async fn verify_key_against_remote(settings: &Settings) -> Result<()> {
-    let key: [u8; 32] = load_key(settings)
-        .context("could not load encryption key for verification")?
-        .into();
+/// A key may be provided as EITHER base64 or a bip39 mnemonic;
+/// normalize to base64 and validate it.
+fn normalize_key(key: &str) -> Result<String> {
+    // try parse the key as a mnemonic...
+    let encoded = match bip39::Mnemonic::from_phrase(key, bip39::Language::English) {
+        Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
+        Err(err) => {
+            match err {
+                // assume they copied in the base64 key
+                bip39::ErrorKind::InvalidWord(_) => key.to_string(),
+                bip39::ErrorKind::InvalidChecksum => {
+                    bail!("Key mnemonic is not valid")
+                }
+                bip39::ErrorKind::InvalidKeysize(_)
+                | bip39::ErrorKind::InvalidWordLength(_)
+                | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
+                    bail!("Key is not the correct length")
+                }
+            }
+        }
+    };
 
+    if decode_key(encoded.clone()).is_err() {
+        bail!("The specified key is invalid");
+    }
+
+    Ok(encoded)
+}
+
+/// Write the key to the key file, re-encrypting the local store first if it
+/// was previously encrypted with a different key.
+async fn store_key(settings: &Settings, store: &SqliteStore, encoded: &str) -> Result<()> {
+    let key_path = &settings.key_path;
+
+    if key_path.exists() {
+        let current_key: [u8; 32] = load_key(settings)?.into();
+        let new_key: [u8; 32] = decode_key(encoded.to_string())
+            .context("Could not decode provided key; is not valid base64-encoded key")?
+            .into();
+
+        if new_key == current_key {
+            return Ok(());
+        }
+
+        println!("\nRe-encrypting local store with new key");
+        store.re_encrypt(&current_key, &new_key).await?;
+        println!("Writing new key");
+    }
+
+    let mut file = File::create(key_path).await?;
+    file.write_all(encoded.as_bytes()).await?;
+
+    Ok(())
+}
+
+async fn verify_key_against_remote(settings: &Settings, store: &SqliteStore) -> Result<()> {
     let client = sync::build_client(settings).await?;
     let remote_index = match client.record_status().await {
         Ok(idx) => idx,
@@ -287,32 +304,61 @@ async fn verify_key_against_remote(settings: &Settings) -> Result<()> {
         }
     };
 
-    match sync::check_encryption_key(&client, &remote_index, &key).await {
-        Ok(()) => Ok(()),
-        Err(SyncError::WrongKey) => {
-            // Roll back the saved session so the user is not left in a
-            // half-authenticated state with a key that can't read the data.
-            if let Ok(meta) = Settings::meta_store().await {
-                let _ = meta.delete_session().await;
-                let _ = meta.delete_hub_session().await;
+    loop {
+        let key: [u8; 32] = load_key(settings)
+            .context("could not load encryption key for verification")?
+            .into();
+
+        match sync::check_encryption_key(&client, &remote_index, &key).await {
+            Ok(()) => return Ok(()),
+            Err(SyncError::WrongKey) => {
+                if !io::stdin().is_terminal() {
+                    logout_wrong_key().await;
+                }
+
+                println!(
+                    "\nThe encryption key on this machine does not match the data on the server."
+                );
+                println!(
+                    "You can find the correct key by running 'atuin key' on a machine that already syncs successfully."
+                );
+
+                let key = read_user_input("encryption key [blank to log out and cancel]");
+                if key.is_empty() {
+                    logout_wrong_key().await;
+                }
+
+                match normalize_key(&key) {
+                    Ok(encoded) => store_key(settings, store, &encoded).await?,
+                    Err(err) => println!("\n{err}. Please try again."),
+                }
             }
-            crate::print_error::print_error(
-                "Wrong encryption key",
-                "The encryption key on this machine does not match the data on the server. \
-                 You have been logged out.\n\n\
-                 To fix this, find your existing key by running `atuin key` on a machine that \
-                 already syncs successfully, then run `atuin login` again here with that key.",
-            );
-            std::process::exit(1);
-        }
-        Err(e) => {
-            // Non-key error (e.g. transient network issue). Don't fail the
-            // login — the user is authenticated and can sync later when the
-            // network recovers.
-            tracing::warn!("could not verify encryption key against remote: {e}");
-            Ok(())
+            Err(e) => {
+                // Non-key error (e.g. transient network issue). Don't fail the
+                // login — the user is authenticated and can sync later when the
+                // network recovers.
+                tracing::warn!("could not verify encryption key against remote: {e}");
+                return Ok(());
+            }
         }
     }
+}
+
+/// Roll back the saved session so the user is not left in a
+/// half-authenticated state with a key that can't read the data, then exit.
+async fn logout_wrong_key() {
+    if let Ok(meta) = Settings::meta_store().await {
+        let _ = meta.delete_session().await;
+        let _ = meta.delete_hub_session().await;
+    }
+    crate::print_error::print_error(
+        "Wrong encryption key",
+        "The encryption key on this machine does not match the data on the server. \
+         You have been logged out.\n\n\
+         To fix this, find your existing key by running `atuin key` on a machine that \
+         already syncs successfully, then run `atuin login` again here with that key.",
+    );
+    std::process::exit(1);
 }
 
 pub(super) fn or_user_input(value: Option<String>, name: &'static str) -> String {
