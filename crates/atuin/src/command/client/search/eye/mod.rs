@@ -180,7 +180,8 @@ pub async fn history(
 
     let options = eye_declare::RunOptions::default()
         .keyboard(keyboard)
-        .screen(screen);
+        .screen(screen)
+        .mouse_capture(!settings.no_mouse);
     let output = eye_declare::driver_tokio::run_with(search_app, options).await?;
 
     let accept_shell = matches!(

@@ -107,7 +107,7 @@ futures-util = "0.3"
 colored = "2.0.4"
 open = "5"
 ratatui = { workspace = true }
-eye_declare = "0.6.5"
+eye_declare = "0.7"
 ratatui-core = "0.1"
 tracing = "0.1"
 tracing-subscriber = { workspace = true }

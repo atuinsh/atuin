@@ -19,7 +19,7 @@ use atuin_client::settings::{
     CursorStyle as CfgCursorStyle, ExitMode, FilterMode, KeymapMode, SearchMode, Settings,
 };
 use atuin_client::theme::Theme;
-use crossterm::event::{KeyEvent, KeyEventKind};
+use crossterm::event::{KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
 use eye_declare::{
     App, Ctx, CursorStyle, Element, ElementExt, Focus, FocusHandle, InputEvent, Keymap, Task,
     empty, keymap,
@@ -334,6 +334,20 @@ impl<'a> SearchApp<'a> {
         let i = state.selected().saturating_sub(scroll_len);
         state.select(i);
         self.inspecting_state.reset();
+    }
+
+    /// Wheel scrolling in visual terms, matching the ratatui path's
+    /// `handle_mouse_input` (wheel only; there is no click-select).
+    fn handle_mouse_input(&mut self, input: MouseEvent) {
+        match (input.kind, self.settings.invert) {
+            (MouseEventKind::ScrollDown, false) | (MouseEventKind::ScrollUp, true) => {
+                self.scroll_down(1);
+            }
+            (MouseEventKind::ScrollDown, true) | (MouseEventKind::ScrollUp, false) => {
+                self.scroll_up(1);
+            }
+            _ => {}
+        }
     }
 
     fn handle_key_exit(settings: &Settings) -> InputAction {
@@ -1087,6 +1101,9 @@ impl App for SearchApp<'_> {
                             self.search.input.insert(c);
                         }
                     }
+                    InputEvent::Mouse(mouse) => self.handle_mouse_input(mouse),
+                    // InputEvent is non-exhaustive; future kinds are ignored.
+                    _ => {}
                 }
 
                 if !self.exiting

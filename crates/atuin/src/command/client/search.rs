@@ -172,7 +172,9 @@ impl Cmd {
     // clippy: please write this instead
     // clippy: now it has too many lines
     // me: I'll do it later OKAY
-    #[allow(clippy::too_many_lines)]
+    // (future_not_send: the eye search path holds the stdout lock across
+    // awaits; the CLI drives this single-threaded, like client::Cmd::run.)
+    #[allow(clippy::too_many_lines, clippy::future_not_send)]
     pub async fn run(
         self,
         db: impl Database,
