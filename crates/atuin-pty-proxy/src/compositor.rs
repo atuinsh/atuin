@@ -41,10 +41,20 @@ fn source_icon(source: SuggestionSource) -> char {
     }
 }
 
-/// What accepting `s` would add to the typed line — the only part worth
-/// showing in a dropdown row anchored at the cursor.
-fn remainder<'a>(s: &'a Suggestion, line: &str) -> &'a str {
-    s.text.strip_prefix(line).unwrap_or(&s.text)
+/// Dropdown rows restart at the current whitespace-delimited token: a row
+/// cut mid-word ("atus --short") is harder to read than one showing the
+/// whole token ("status --short"). `line_head` is the typed line up to the
+/// token start; non-prefix suggestions fall back to their full text.
+fn shown_from_token<'a>(s: &'a Suggestion, line_head: &str) -> &'a str {
+    s.text.strip_prefix(line_head).unwrap_or(&s.text)
+}
+
+/// Byte offset where the last whitespace-delimited token of `line` starts.
+fn token_start(line: &str) -> usize {
+    line.char_indices()
+        .rev()
+        .find(|&(_, ch)| ch.is_whitespace())
+        .map_or(0, |(i, ch)| i + ch.len_utf8())
 }
 
 /// What the suggestion UI wants painted. Suggestions are shared, not
@@ -79,6 +89,17 @@ struct DrawnRegion {
     count: u16,
 }
 
+/// Where the open popup is pinned. Kept while the same token is being
+/// completed, so rows growing and shrinking as candidates change can't
+/// shuffle the popup sideways under the user's eyes.
+#[derive(Clone, Copy)]
+struct PopupAnchor {
+    /// Column of the token being completed — the unclamped ideal.
+    token_col: u16,
+    /// Column actually drawn at, after any right-edge clamping.
+    col: u16,
+}
+
 /// Recover a poisoned lock: the compositor and popup state stay usable
 /// after a panic elsewhere, and eating output would freeze the terminal.
 pub(crate) fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -96,6 +117,7 @@ pub(crate) struct Compositor<W: Write> {
     drawn: Option<DrawnRegion>,
     ghost_row: Option<u16>,
     window_offset: usize,
+    anchor: Option<PopupAnchor>,
     flags: Arc<OverlayFlags>,
     /// Reused per-chunk paint buffers, so the overlay-active path allocates
     /// nothing steady-state.
@@ -120,6 +142,7 @@ impl<W: Write> Compositor<W> {
             drawn: None,
             ghost_row: None,
             window_offset: 0,
+            anchor: None,
             flags,
             scratch: Vec::new(),
             repaint_scratch: Vec::new(),
@@ -215,6 +238,7 @@ impl<W: Write> Compositor<W> {
         self.content = content.filter(|content| !content.suggestions.is_empty());
         if self.content.is_none() {
             self.window_offset = 0;
+            self.anchor = None;
         }
         self.draw_into(&mut buf, true);
         let _ = self.flush(&buf);
@@ -233,6 +257,7 @@ impl<W: Write> Compositor<W> {
         self.content = None;
         self.ghost_row = None;
         self.window_offset = 0;
+        self.anchor = None;
         self.parser.screen_mut().set_size(rows, cols);
 
         let mut buf = Vec::new();
@@ -358,7 +383,14 @@ impl<W: Write> Compositor<W> {
 
         buf.extend_from_slice(b"\x1b[?25l");
         if !solo_ghost {
-            self.drawn = draw_popup(buf, screen, content, selected, &mut self.window_offset);
+            self.drawn = draw_popup(
+                buf,
+                screen,
+                content,
+                selected,
+                &mut self.window_offset,
+                &mut self.anchor,
+            );
         }
 
         // Ghost only into cells the model says are blank, so it never
@@ -383,14 +415,16 @@ impl<W: Write> Compositor<W> {
 
 /// Paint the dropdown rows; returns the region drawn, if any.
 ///
-/// `window_offset` persists across repaints so the visible slice doesn't
-/// jump while the selection moves within it.
+/// `window_offset` and `anchor` persist across repaints so the visible
+/// slice doesn't jump while the selection moves within it, and the popup
+/// column stays put while the same token is being completed.
 fn draw_popup(
     buf: &mut Vec<u8>,
     screen: &vt100::Screen,
     content: &OverlayContent,
     selected: usize,
     window_offset: &mut usize,
+    anchor: &mut Option<PopupAnchor>,
 ) -> Option<DrawnRegion> {
     let (rows, cols) = screen.size();
     let (cursor_row, cursor_col) = screen.cursor_position();
@@ -425,16 +459,27 @@ fn draw_popup(
     *window_offset = (*window_offset).min(content.suggestions.len() - visible);
     let window = &content.suggestions[*window_offset..*window_offset + visible];
 
-    // Rows show only what the suggestion would add, so the popup anchors
-    // at the cursor and each row reads as a continuation of the typed
-    // line. Non-prefix suggestions (rare) fall back to their full text.
+    // Rows pick up at the token being typed, and the popup anchors at that
+    // token's column, so each row reads as a completion of the current
+    // word rather than a fragment split mid-word.
+    let (line_head, partial_token) = content.line.split_at(token_start(&content.line));
     let width = window
         .iter()
-        .map(|s| remainder(s, &content.line).width() + ROW_CHROME_WIDTH)
+        .map(|s| shown_from_token(s, line_head).width() + ROW_CHROME_WIDTH)
         .max()
         .unwrap_or(ROW_CHROME_WIDTH)
         .clamp(MIN_POPUP_WIDTH, cols as usize);
-    let col = cursor_col.min(cols.saturating_sub(width as u16));
+    let partial_width = partial_token.width().min(u16::MAX as usize) as u16;
+    let token_col = cursor_col.saturating_sub(partial_width);
+    let rightmost = cols.saturating_sub(width as u16);
+    let col = match *anchor {
+        // Same token: stay where the popup already is — row widths change
+        // with every keystroke and following them reads as jitter. Move
+        // only if the popup no longer fits.
+        Some(a) if a.token_col == token_col => a.col.min(rightmost),
+        _ => token_col.min(rightmost),
+    };
+    *anchor = Some(PopupAnchor { token_col, col });
 
     for (i, suggestion) in window.iter().enumerate() {
         let row = first_row + i as u16;
@@ -455,7 +500,7 @@ fn draw_popup(
         buf.push(b' ');
         let used = 3 + write_fitted(
             buf,
-            remainder(suggestion, &content.line),
+            shown_from_token(suggestion, line_head),
             width.saturating_sub(ROW_CHROME_WIDTH),
         );
         buf.resize(buf.len() + width.saturating_sub(used), b' ');
@@ -653,6 +698,53 @@ mod tests {
         assert_eq!(complete_prefix_len(data), expected);
     }
 
+    #[rstest]
+    #[case::mid_token("git st", 4)]
+    #[case::single_token("gi", 0)]
+    #[case::trailing_space("git ", 4)]
+    #[case::empty("", 0)]
+    #[case::wide_whitespace("a\u{3000}b", 4)]
+    fn token_starts_after_last_whitespace(#[case] line: &str, #[case] expected: usize) {
+        assert_eq!(token_start(line), expected);
+    }
+
+    /// Column of the first written (non-erased) cell in a row: where the
+    /// popup was drawn. Erased cells have empty contents, written pad
+    /// spaces don't.
+    fn popup_col(c: &Compositor<Vec<u8>>, row: u16) -> u16 {
+        let checker = displayed(c);
+        let screen = checker.screen();
+        (0..40)
+            .find(|&col| {
+                screen
+                    .cell(row, col)
+                    .is_some_and(|cell| !cell.contents().is_empty())
+            })
+            .expect("popup row has content")
+    }
+
+    #[rstest]
+    fn popup_column_stays_put_while_completing_one_token() {
+        let mut c = compositor(); // 10 rows x 40 cols
+        c.apply_pty(b"$ do abc").unwrap();
+
+        // Wide rows clamp the popup left of the token column.
+        let long = "do abcdefghijklmnopqrstuvwxyz0123456789";
+        c.set_overlay(Some(content("do abc", &[long, "do abcd"], 0)));
+        let clamped = popup_col(&c, 1);
+        assert!(clamped < 5, "clamped by the right edge: {clamped}");
+
+        // Narrower candidate set, same token: the popup must not slide
+        // back toward the token column mid-typing.
+        c.set_overlay(Some(content("do abc", &["do abcd", "do abce"], 0)));
+        assert_eq!(popup_col(&c, 1), clamped);
+
+        // Closing and reopening re-anchors at the token column.
+        c.set_overlay(None);
+        c.set_overlay(Some(content("do abc", &["do abcd", "do abce"], 0)));
+        assert_eq!(popup_col(&c, 1), 5);
+    }
+
     // -- Compositor behaviour ---------------------------------------------
 
     fn compositor() -> Compositor<Vec<u8>> {
@@ -741,17 +833,18 @@ mod tests {
         c.apply_pty(b"$ git st").unwrap();
         c.set_overlay(Some(content("git st", &["git status", "git stash"], 0)));
 
-        // Rows show only what each suggestion would add, anchored at the
-        // cursor — the typed prefix is already on screen above them.
+        // Rows restart at the token being typed ("st" → "status"); the
+        // earlier part of the line is never repeated — it's on screen
+        // directly above.
         let checker = displayed(&c);
         let first = row_text(&checker, 1);
         let second = row_text(&checker, 2);
-        assert!(first.contains("atus"), "remainder visible: {first:?}");
+        assert!(first.contains("status"), "token remainder: {first:?}");
         assert!(
             !first.contains("git"),
             "typed prefix not repeated: {first:?}"
         );
-        assert!(second.contains("ash"));
+        assert!(second.contains("stash"));
         assert!(c.flags.popup.load(Ordering::Acquire));
 
         c.set_overlay(None);
