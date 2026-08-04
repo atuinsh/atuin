@@ -112,13 +112,15 @@ struct DrawnRegion {
 
 /// Where the open popup is pinned. Kept while the same token is being
 /// completed, so rows growing and shrinking as candidates change can't
-/// shuffle the popup sideways under the user's eyes.
+/// shuffle or shrink the popup under the user's eyes.
 #[derive(Clone, Copy)]
 struct PopupAnchor {
     /// Column of the token being completed — the unclamped ideal.
     token_col: u16,
     /// Column actually drawn at, after any right-edge clamping.
     col: u16,
+    /// Drawn width; grow-only while the token is unchanged.
+    width: usize,
 }
 
 /// Recover a poisoned lock: the compositor and popup state stay usable
@@ -486,7 +488,10 @@ fn draw_popup(
     let (line_head, partial_token) = content.line.split_at(token_start(&content.line));
     let scrollbar = content.suggestions.len() > visible;
     let chrome = ROW_CHROME_WIDTH + usize::from(scrollbar);
-    let width = window
+    // Width covers the whole list — never just the visible window, so
+    // scrolling can't make the popup breathe.
+    let computed_width = content
+        .suggestions
         .iter()
         .map(|s| shown_from_token(s, line_head).width() + chrome)
         .max()
@@ -505,15 +510,24 @@ fn draw_popup(
     };
     let partial_width = partial_token.width().min(u16::MAX as usize) as u16;
     let token_col = cursor_col.saturating_sub(partial_width);
-    let rightmost = cols.saturating_sub(width as u16);
-    let col = match *anchor {
-        // Same token: stay where the popup already is — row widths change
-        // with every keystroke and following them reads as jitter. Move
-        // only if the popup no longer fits.
-        Some(a) if a.token_col == token_col => a.col.min(rightmost),
-        _ => token_col.min(rightmost),
+    let same_token = anchor.filter(|a| a.token_col == token_col);
+    // Same token: the geometry only ever grows and the column stays put —
+    // candidates coming and going as keystrokes narrow the set must not
+    // make the popup shuffle or shrink under the user's eyes.
+    let width = match same_token {
+        Some(a) => computed_width.max(a.width).min(cols as usize),
+        None => computed_width,
     };
-    *anchor = Some(PopupAnchor { token_col, col });
+    let rightmost = cols.saturating_sub(width as u16);
+    let col = match same_token {
+        Some(a) => a.col.min(rightmost),
+        None => token_col.min(rightmost),
+    };
+    *anchor = Some(PopupAnchor {
+        token_col,
+        col,
+        width,
+    });
 
     for (i, suggestion) in window.iter().enumerate() {
         let row = first_row + i as u16;
@@ -875,6 +889,41 @@ mod tests {
         c.set_overlay(Some(content("g", &refs, 6)));
         assert_eq!(bar(&c, 1), SCROLL_TRACK.to_string());
         assert_eq!(bar(&c, 5), SCROLL_THUMB.to_string(), "thumb at bottom");
+    }
+
+    /// First and last written cell of a row: the popup's drawn extent.
+    fn row_written_span(c: &Compositor<Vec<u8>>, row: u16) -> (u16, u16) {
+        let checker = displayed(c);
+        let screen = checker.screen();
+        let mut written = (0..40).filter(|&col| {
+            screen
+                .cell(row, col)
+                .is_some_and(|cell| !cell.contents().is_empty())
+        });
+        let first = written.next().expect("row has content");
+        (first, written.next_back().unwrap_or(first))
+    }
+
+    #[rstest]
+    fn popup_width_is_stable_while_scrolling() {
+        let mut c = compositor();
+        c.apply_pty(b"$ g").unwrap();
+        // The longest entry sits beyond the first window: the width must
+        // account for it up front, not upon scrolling it into view.
+        let all: Vec<String> = (0..7)
+            .map(|i| match i {
+                6 => "git muchlongerentry".to_string(),
+                _ => format!("git c{i}"),
+            })
+            .collect();
+        let refs: Vec<&str> = all.iter().map(String::as_str).collect();
+
+        c.set_overlay(Some(content("g", &refs, 0)));
+        let span = row_written_span(&c, 1);
+        assert!(span.1 - span.0 >= 19, "sized for the longest entry");
+
+        c.set_overlay(Some(content("g", &refs, 6)));
+        assert_eq!(row_written_span(&c, 1), span, "no breathing on scroll");
     }
 
     #[rstest]
