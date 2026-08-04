@@ -16,7 +16,7 @@
 
 use atuin_client::{
     history::History,
-    settings::{PreviewStrategy, RequestedSearchMode, Settings},
+    settings::{KeymapMode, PreviewStrategy, RequestedSearchMode, Settings},
     theme::{Meaning, Theme},
 };
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
@@ -224,7 +224,9 @@ impl Element for SearchFrame<'_, '_> {
 
         let indicator: String = match compactness {
             Compactness::Ultracompact => {
-                if app.search.custom_context.is_some() {
+                if app.switched_search_mode {
+                    format!("S{}>", app.search_mode.as_str().chars().next().unwrap())
+                } else if app.search.custom_context.is_some() {
                     format!(
                         "C{}>",
                         app.search.filter_mode.as_str().chars().next().unwrap()
@@ -246,7 +248,7 @@ impl Element for SearchFrame<'_, '_> {
         let results_list = HistoryList::new(
             &app.results,
             invert,
-            false, // alternate (vim-normal) highlight arrives with keybindings
+            app.keymap_mode == KeymapMode::VimNormal,
             &*app.now,
             settings.timezone.0,
             indicator.as_str(),
@@ -462,7 +464,11 @@ fn build_input<'a>(
     inner_width: u16,
     prefix_width: u16,
 ) -> Paragraph<'a> {
-    let (pref, mode) = if app.search.custom_context.is_some() {
+    let (pref, mode) = if app.prefix {
+        ("", "PREFIX")
+    } else if app.switched_search_mode {
+        (" SRCH:", app.search_mode.as_str())
+    } else if app.search.custom_context.is_some() {
         (" CTX:", app.search.filter_mode.as_str())
     } else {
         ("", app.search.filter_mode.as_str())

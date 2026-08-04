@@ -1,39 +1,53 @@
 //! The Elm-shaped search application.
 //!
-//! Hardcoded emacs-style keys via keymap fallthrough, live queries as
-//! cancel-on-drop effects, and a fixed-height frame element for rendering.
-//! The real keybinding pipeline (`KeymapSet` + conditions) arrives in P2.
+//! Input flows through the same resolve+execute pipeline as the ratatui
+//! path: every key event reaches `handle_key_input` via keymap fallthrough,
+//! resolves against the user-configurable `KeymapSet` (conditions, vim
+//! pending keys, prefix chords), and `execute_action` carries it out. Both
+//! functions are ported nearly verbatim from `interactive.rs` so behavior
+//! stays identical by construction; `InputAction` is reused as the interface
+//! between them, with the old event loop's arms living in
+//! `apply_input_action` (async arms become detached effects).
+//!
+//! Not yet ported: the inspector tab (`ToggleTab` and the inspector actions
+//! are inert until then) and vim cursor-shape changes (a later `eye_declare`
+//! capability).
 
 use std::cell::RefCell;
 use std::sync::Arc;
 
 use atuin_client::database::{Context, Database};
 use atuin_client::history::History;
-use atuin_client::settings::{FilterMode, Settings};
+use atuin_client::history::store::HistoryStore;
+use atuin_client::settings::{ExitMode, FilterMode, KeymapMode, SearchMode, Settings};
 use atuin_client::theme::Theme;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyEvent, KeyEventKind};
 use eye_declare::{
     App, Ctx, Element, ElementExt, Focus, FocusHandle, InputEvent, Keymap, Task, empty, keymap,
 };
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
+use unicode_width::UnicodeWidthStr;
 
 use super::super::cursor::Cursor;
-use super::super::engines::{AnySearchEngine, SearchEngine, SearchState};
+use super::super::engines::{self, AnySearchEngine, SearchEngine, SearchState};
 use super::super::history_list::ListState;
+use super::super::interactive::InputAction;
+use super::super::keybindings::key::{KeyCodeValue, KeyInput, SingleKey};
+use super::super::keybindings::{Action, EvalContext, KeymapSet};
 use super::view::SearchFrame;
 
 /// What the run loop hands back to `eye::history` for resolution into the
 /// final shell-facing string. `Default` (stdin closing, driver teardown)
 /// deliberately maps to "keep the original command line".
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub(super) enum Output {
     #[default]
     ReturnOriginal,
     /// Return the current search input to the command line.
     ReturnQuery(String),
     /// A selected history entry; `execute` distinguishes accept-and-run
-    /// (Enter with `enter_accept`) from return-to-command-line (Tab).
+    /// (the `Accept` action) from return-to-command-line (`ReturnSelection`).
     Selection { command: String, execute: bool },
 }
 
@@ -44,6 +58,9 @@ pub(super) enum Msg {
         generation: u64,
         results: Vec<History>,
     },
+    /// A detached background operation (delete, rebuild) finished; carries
+    /// nothing — the model was already updated optimistically.
+    OpDone,
 }
 
 /// Engine + database behind one lock so query effects serialize; the
@@ -53,6 +70,7 @@ struct QueryBackend {
     db: Box<dyn Database>,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 pub(super) struct SearchApp<'a> {
     pub(super) settings: &'a Settings,
     pub(super) theme: &'a Theme,
@@ -66,6 +84,22 @@ pub(super) struct SearchApp<'a> {
     pub(super) highlight_engine: AnySearchEngine,
     pub(super) now: Box<dyn Fn() -> OffsetDateTime + Send>,
     pub(super) inline_height: u16,
+    pub(super) keymap_mode: KeymapMode,
+    pub(super) search_mode: SearchMode,
+    pub(super) prefix: bool,
+    pub(super) switched_search_mode: bool,
+    history_store: HistoryStore,
+    keymaps: KeymapSet,
+    pending_vim_key: Option<char>,
+    original_input_empty: bool,
+    /// Set by `Action::Accept`/`AcceptNth`; distinguishes accept-and-run
+    /// from return-to-command-line when the exit resolves.
+    accept: bool,
+    initial_context: Context,
+    default_filter_mode: FilterMode,
+    /// Swapped in by `CycleSearchMode`; the next query installs it inside
+    /// the backend lock (the engine can't be replaced synchronously).
+    pending_engine: Option<AnySearchEngine>,
     generation: u64,
     backend: Arc<Mutex<QueryBackend>>,
     query_task: Option<Task>,
@@ -83,10 +117,13 @@ impl<'a> SearchApp<'a> {
         db: Box<dyn Database>,
         engine: AnySearchEngine,
         highlight_engine: AnySearchEngine,
+        history_store: HistoryStore,
         context: Context,
         filter_mode: FilterMode,
+        search_mode: SearchMode,
         inline_height: u16,
     ) -> Self {
+        let original_input_empty = search_input.is_empty();
         let mut input = Cursor::from(search_input);
         input.end();
 
@@ -107,7 +144,7 @@ impl<'a> SearchApp<'a> {
             search: SearchState {
                 input,
                 filter_mode,
-                context,
+                context: context.clone(),
                 custom_context: None,
                 shells: settings.search.shells.clone(),
             },
@@ -116,6 +153,21 @@ impl<'a> SearchApp<'a> {
             highlight_engine,
             now,
             inline_height,
+            keymap_mode: match settings.keymap_mode {
+                KeymapMode::Auto => KeymapMode::Emacs,
+                value => value,
+            },
+            search_mode,
+            prefix: false,
+            switched_search_mode: false,
+            history_store,
+            keymaps: KeymapSet::from_settings(settings),
+            pending_vim_key: None,
+            original_input_empty,
+            accept: false,
+            initial_context: context,
+            default_filter_mode: filter_mode,
+            pending_engine: None,
             generation: 0,
             backend: Arc::new(Mutex::new(QueryBackend { engine, db })),
             query_task: None,
@@ -133,6 +185,7 @@ impl<'a> SearchApp<'a> {
         let generation = self.generation;
         let backend = Arc::clone(&self.backend);
         let smart_sort = self.settings.smart_sort;
+        let new_engine = self.pending_engine.take();
         // SearchState isn't Clone (Cursor); snapshot the fields the engine reads.
         let state = SearchState {
             input: Cursor::from(self.search.input.as_str().to_owned()),
@@ -145,6 +198,9 @@ impl<'a> SearchApp<'a> {
         self.query_task = Some(ctx.perform(async move {
             let results = {
                 let mut backend = backend.lock().await;
+                if let Some(engine) = new_engine {
+                    backend.engine = engine;
+                }
                 let QueryBackend { engine, db } = &mut *backend;
                 engine.query(&state, db.as_mut()).await
             };
@@ -175,77 +231,581 @@ impl<'a> SearchApp<'a> {
         ctx.exit(output);
     }
 
-    fn accept(&mut self, execute: bool, ctx: &mut Ctx<'_, Self>) {
-        let selected = self.results_state.get_mut().selected();
-        let output = match self.results.get(selected) {
-            Some(entry) => Output::Selection {
-                command: entry.command.clone(),
-                execute,
-            },
-            None => Output::ReturnQuery(self.search.input.as_str().to_owned()),
-        };
-        self.finish(output, ctx);
-    }
-
     /// Move the selection toward older entries (visually up when the list
     /// is bottom-anchored).
-    fn scroll_up(&mut self, n: usize) {
+    fn scroll_up(&mut self, scroll_len: usize) {
         let len = self.results.len();
         let state = self.results_state.get_mut();
-        let i = state.selected() + n;
+        let i = state.selected() + scroll_len;
         state.select(i.min(len.saturating_sub(1)));
     }
 
     /// Move the selection toward newer entries.
-    fn scroll_down(&mut self, n: usize) {
+    fn scroll_down(&mut self, scroll_len: usize) {
         let state = self.results_state.get_mut();
-        let i = state.selected().saturating_sub(n);
+        let i = state.selected().saturating_sub(scroll_len);
         state.select(i);
     }
 
-    fn handle_key(&mut self, key: KeyEvent, ctx: &mut Ctx<'_, Self>) {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let invert = self.settings.invert;
-        match key.code {
-            KeyCode::Esc => self.finish(Output::ReturnOriginal, ctx),
-            KeyCode::Char('c' | 'd' | 'g') if ctrl => self.finish(Output::ReturnOriginal, ctx),
-            KeyCode::Enter => self.accept(self.settings.enter_accept, ctx),
-            KeyCode::Tab => self.accept(false, ctx),
-            KeyCode::Up => {
-                if invert {
-                    self.scroll_down(1);
-                } else {
-                    self.scroll_up(1);
+    fn handle_key_exit(settings: &Settings) -> InputAction {
+        match settings.exit_mode {
+            ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
+            ExitMode::ReturnQuery => InputAction::ReturnQuery,
+        }
+    }
+
+    /// Select the keymap for the current mode (ignoring prefix).
+    fn mode_keymap(&self) -> &super::super::keybindings::Keymap {
+        match self.keymap_mode {
+            KeymapMode::Emacs | KeymapMode::Auto => &self.keymaps.emacs,
+            KeymapMode::VimNormal => &self.keymaps.vim_normal,
+            KeymapMode::VimInsert => &self.keymaps.vim_insert,
+        }
+    }
+
+    /// Whether the current mode supports character insertion on unmatched keys.
+    fn is_insert_mode(&self) -> bool {
+        matches!(
+            self.keymap_mode,
+            KeymapMode::Emacs | KeymapMode::Auto | KeymapMode::VimInsert
+        )
+    }
+
+    fn handle_key_input(&mut self, input: &KeyEvent) -> InputAction {
+        // Skip release events
+        if input.kind == KeyEventKind::Release {
+            return InputAction::Continue;
+        }
+
+        // Reset switched_search_mode at start of each key event
+        self.switched_search_mode = false;
+
+        // Build evaluation context from current state
+        let ctx = EvalContext {
+            cursor_position: self.search.input.position(),
+            input_width: UnicodeWidthStr::width(self.search.input.as_str()),
+            input_byte_len: self.search.input.as_str().len(),
+            selected_index: self.results_state.get_mut().selected(),
+            results_len: self.results.len(),
+            original_input_empty: self.original_input_empty,
+            has_context: self.search.custom_context.is_some(),
+        };
+
+        // Convert KeyEvent to SingleKey
+        let Some(single) = SingleKey::from_event(input) else {
+            return InputAction::Continue;
+        };
+
+        // --- Phase 1: Resolve (take pending key first, then immutable borrows) ---
+
+        // Take pending key before any immutable borrows of self
+        let pending = self.pending_vim_key.take();
+
+        // If in prefix mode, try prefix keymap first (single keys only)
+        let prefix_action = if self.prefix {
+            let ki = KeyInput::Single(single.clone());
+            self.keymaps.prefix.resolve(&ki, &ctx)
+        } else {
+            None
+        };
+
+        // The if-let/else-if chain here is clearer than map_or_else with nested closures.
+        #[allow(clippy::option_if_let_else)]
+        let (action, new_pending) = if prefix_action.is_some() {
+            (prefix_action, None)
+        } else {
+            // Use mode keymap (handles both single and multi-key sequences)
+            let keymap = self.mode_keymap();
+
+            if let Some(pending_char) = pending {
+                // We have a pending key from a previous press (e.g., first 'g' of 'gg')
+                let pending_single = SingleKey {
+                    code: KeyCodeValue::Char(pending_char),
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                    super_key: false,
+                };
+                let seq = KeyInput::Sequence(vec![pending_single, single.clone()]);
+                let action = keymap
+                    .resolve(&seq, &ctx)
+                    .or_else(|| keymap.resolve(&KeyInput::Single(single.clone()), &ctx));
+                (action, None)
+            } else if keymap.has_sequence_starting_with(&single)
+                && matches!(single.code, KeyCodeValue::Char(_))
+                && !single.ctrl
+                && !single.alt
+            {
+                // This key starts a multi-key sequence; wait for next key
+                let KeyCodeValue::Char(c) = single.code else {
+                    unreachable!()
+                };
+                (Some(Action::Noop), Some(c))
+            } else {
+                (
+                    keymap.resolve(&KeyInput::Single(single.clone()), &ctx),
+                    None,
+                )
+            }
+        };
+
+        // --- Phase 2: Apply mutations ---
+        self.pending_vim_key = new_pending;
+
+        // Reset prefix (before execute, so EnterPrefixMode can re-set it)
+        self.prefix = false;
+
+        if let Some(action) = action {
+            self.execute_action(&action)
+        } else {
+            // No action matched. In insert-capable modes, insert the character.
+            if self.is_insert_mode() && !single.ctrl && !single.alt {
+                match single.code {
+                    KeyCodeValue::Char(c) => {
+                        self.search.input.insert(c);
+                    }
+                    KeyCodeValue::Space => {
+                        self.search.input.insert(' ');
+                    }
+                    _ => {}
                 }
             }
-            KeyCode::Down => {
-                if invert {
-                    self.scroll_up(1);
-                } else {
-                    self.scroll_down(1);
-                }
-            }
-            KeyCode::Backspace => {
-                self.search.input.back();
-                self.spawn_query(ctx);
-            }
-            KeyCode::Left => {
+            InputAction::Continue
+        }
+    }
+
+    /// Execute a resolved action, performing all synchronous side effects and
+    /// returning the `InputAction` for `apply_input_action` to dispatch.
+    ///
+    /// Invert handling: scroll actions account for `settings.invert` so that
+    /// keybindings are always in "visual" terms — users never need to think
+    /// about invert in their keybinding config.
+    #[allow(clippy::too_many_lines)]
+    fn execute_action(&mut self, action: &Action) -> InputAction {
+        let settings = self.settings;
+        match action {
+            // -- Cursor movement --
+            Action::CursorLeft => {
                 self.search.input.left();
+                InputAction::Continue
             }
-            KeyCode::Right => self.search.input.right(),
-            KeyCode::Home => self.search.input.start(),
-            KeyCode::End => self.search.input.end(),
-            KeyCode::Char('a') if ctrl => self.search.input.start(),
-            KeyCode::Char('e') if ctrl => self.search.input.end(),
-            KeyCode::Char('u') if ctrl => {
+            Action::CursorRight => {
+                self.search.input.right();
+                InputAction::Continue
+            }
+            Action::CursorWordLeft => {
+                self.search
+                    .input
+                    .prev_word(&settings.word_chars, settings.word_jump_mode);
+                InputAction::Continue
+            }
+            Action::CursorWordRight => {
+                self.search
+                    .input
+                    .next_word(&settings.word_chars, settings.word_jump_mode);
+                InputAction::Continue
+            }
+            Action::CursorWordEnd => {
+                self.search.input.word_end(&settings.word_chars);
+                InputAction::Continue
+            }
+            Action::CursorStart => {
+                self.search.input.start();
+                InputAction::Continue
+            }
+            Action::CursorEnd => {
+                self.search.input.end();
+                InputAction::Continue
+            }
+
+            // -- Editing --
+            Action::DeleteCharBefore => {
+                self.search.input.back();
+                InputAction::Continue
+            }
+            Action::DeleteCharAfter => {
+                self.search.input.remove();
+                InputAction::Continue
+            }
+            Action::DeleteWordBefore => {
+                self.search
+                    .input
+                    .remove_prev_word(&settings.word_chars, settings.word_jump_mode);
+                InputAction::Continue
+            }
+            Action::DeleteWordAfter => {
+                self.search
+                    .input
+                    .remove_next_word(&settings.word_chars, settings.word_jump_mode);
+                InputAction::Continue
+            }
+            Action::DeleteToWordBoundary => {
+                // ctrl-w: remove trailing whitespace, then delete to word boundary
+                while matches!(self.search.input.back(), Some(c) if c.is_whitespace()) {}
+                while self.search.input.left() {
+                    if self.search.input.char().unwrap().is_whitespace() {
+                        self.search.input.right();
+                        break;
+                    }
+                    self.search.input.remove();
+                }
+                InputAction::Continue
+            }
+            Action::ClearLine => {
                 self.search.input.clear();
-                self.spawn_query(ctx);
+                InputAction::Continue
             }
-            KeyCode::Char(c) if !ctrl => {
-                self.search.input.insert(c);
-                self.spawn_query(ctx);
+            Action::ClearToStart => {
+                self.search.input.clear_to_start();
+                InputAction::Continue
             }
-            _ => {}
+            Action::ClearToEnd => {
+                self.search.input.clear_to_end();
+                InputAction::Continue
+            }
+
+            // -- List navigation (invert-aware) --
+            Action::SelectNext => {
+                if settings.invert {
+                    self.scroll_up(1);
+                } else {
+                    self.scroll_down(1);
+                }
+                InputAction::Continue
+            }
+            Action::SelectPrevious => {
+                if settings.invert {
+                    self.scroll_down(1);
+                } else {
+                    self.scroll_up(1);
+                }
+                InputAction::Continue
+            }
+            // -- Page/half-page scroll (invert-aware) --
+            Action::ScrollHalfPageUp => {
+                let scroll_len = self
+                    .results_state
+                    .get_mut()
+                    .max_entries()
+                    .saturating_sub(settings.scroll_context_lines)
+                    / 2;
+                if settings.invert {
+                    self.scroll_down(scroll_len);
+                } else {
+                    self.scroll_up(scroll_len);
+                }
+                InputAction::Continue
+            }
+            Action::ScrollHalfPageDown => {
+                let scroll_len = self
+                    .results_state
+                    .get_mut()
+                    .max_entries()
+                    .saturating_sub(settings.scroll_context_lines)
+                    / 2;
+                if settings.invert {
+                    self.scroll_up(scroll_len);
+                } else {
+                    self.scroll_down(scroll_len);
+                }
+                InputAction::Continue
+            }
+            Action::ScrollPageUp => {
+                let scroll_len = self
+                    .results_state
+                    .get_mut()
+                    .max_entries()
+                    .saturating_sub(settings.scroll_context_lines);
+                if settings.invert {
+                    self.scroll_down(scroll_len);
+                } else {
+                    self.scroll_up(scroll_len);
+                }
+                InputAction::Continue
+            }
+            Action::ScrollPageDown => {
+                let scroll_len = self
+                    .results_state
+                    .get_mut()
+                    .max_entries()
+                    .saturating_sub(settings.scroll_context_lines);
+                if settings.invert {
+                    self.scroll_up(scroll_len);
+                } else {
+                    self.scroll_down(scroll_len);
+                }
+                InputAction::Continue
+            }
+
+            // -- Absolute jumps (invert-aware) --
+            Action::ScrollToTop => {
+                // Visual top of history
+                if settings.invert {
+                    self.results_state.get_mut().select(0);
+                } else {
+                    let last_idx = self.results.len().saturating_sub(1);
+                    self.results_state.get_mut().select(last_idx);
+                }
+                InputAction::Continue
+            }
+            Action::ScrollToBottom => {
+                // Visual bottom of history
+                if settings.invert {
+                    let last_idx = self.results.len().saturating_sub(1);
+                    self.results_state.get_mut().select(last_idx);
+                } else {
+                    self.results_state.get_mut().select(0);
+                }
+                InputAction::Continue
+            }
+            Action::ScrollToScreenTop => {
+                // H — jump to top of visible screen
+                let results_len = self.results.len();
+                let state = self.results_state.get_mut();
+                let top = state.offset();
+                let visible = state.max_entries().min(results_len);
+                let bottom = top + visible.saturating_sub(1);
+                state.select(bottom.min(results_len.saturating_sub(1)));
+                InputAction::Continue
+            }
+            Action::ScrollToScreenMiddle => {
+                // M — jump to middle of visible screen
+                let results_len = self.results.len();
+                let state = self.results_state.get_mut();
+                let top = state.offset();
+                let visible = state.max_entries().min(results_len);
+                let middle = top + visible / 2;
+                state.select(middle.min(results_len.saturating_sub(1)));
+                InputAction::Continue
+            }
+            Action::ScrollToScreenBottom => {
+                // L — jump to bottom of visible screen
+                let state = self.results_state.get_mut();
+                let top_visible = state.offset();
+                state.select(top_visible);
+                InputAction::Continue
+            }
+
+            // -- Commands --
+            Action::Accept => {
+                self.accept = true;
+                InputAction::Accept(self.results_state.get_mut().selected())
+            }
+            Action::AcceptNth(n) => {
+                self.accept = true;
+                InputAction::Accept(self.results_state.get_mut().selected() + *n as usize)
+            }
+            Action::ReturnSelection => InputAction::Accept(self.results_state.get_mut().selected()),
+            Action::ReturnSelectionNth(n) => {
+                InputAction::Accept(self.results_state.get_mut().selected() + *n as usize)
+            }
+            Action::Copy => InputAction::Copy(self.results_state.get_mut().selected()),
+            Action::Delete => InputAction::Delete(self.results_state.get_mut().selected()),
+            Action::DeleteAll => {
+                InputAction::DeleteAllMatching(self.results_state.get_mut().selected())
+            }
+            Action::ReturnOriginal => InputAction::ReturnOriginal,
+            Action::ReturnQuery => InputAction::ReturnQuery,
+            Action::Exit => Self::handle_key_exit(settings),
+            Action::Redraw => InputAction::Redraw,
+            Action::CycleFilterMode => {
+                self.search.rotate_filter_mode(settings, 1);
+                InputAction::Continue
+            }
+            Action::CycleSearchMode => {
+                self.switched_search_mode = true;
+                self.search_mode = self.search_mode.next(settings);
+                self.pending_engine = Some(engines::engine(self.search_mode, settings));
+                self.highlight_engine = engines::engine(self.search_mode, settings);
+                InputAction::Continue
+            }
+            Action::SwitchContext => {
+                InputAction::SwitchContext(Some(self.results_state.get_mut().selected()))
+            }
+            Action::ClearContext => InputAction::SwitchContext(None),
+            // The inspector tab arrives in a later phase; until then tab
+            // switching and the inspector actions are inert.
+            Action::ToggleTab | Action::InspectPrevious | Action::InspectNext => {
+                InputAction::Continue
+            }
+
+            // -- Mode changes --
+            // Cursor-shape changes (set_keymap_cursor in the ratatui path)
+            // need an eye_declare capability that lands in a later phase.
+            Action::VimEnterNormal => {
+                self.keymap_mode = KeymapMode::VimNormal;
+                InputAction::Continue
+            }
+            Action::VimEnterInsert => {
+                self.keymap_mode = KeymapMode::VimInsert;
+                InputAction::Continue
+            }
+            Action::VimEnterInsertAfter => {
+                self.search.input.right();
+                self.keymap_mode = KeymapMode::VimInsert;
+                InputAction::Continue
+            }
+            Action::VimEnterInsertAtStart => {
+                self.search.input.start();
+                self.keymap_mode = KeymapMode::VimInsert;
+                InputAction::Continue
+            }
+            Action::VimEnterInsertAtEnd => {
+                self.search.input.end();
+                self.keymap_mode = KeymapMode::VimInsert;
+                InputAction::Continue
+            }
+            Action::VimSearchInsert => {
+                self.search.input.clear();
+                self.keymap_mode = KeymapMode::VimInsert;
+                InputAction::Continue
+            }
+            Action::VimChangeToEnd => {
+                self.search.input.clear_to_end();
+                self.keymap_mode = KeymapMode::VimInsert;
+                InputAction::Continue
+            }
+            Action::EnterPrefixMode => {
+                self.prefix = true;
+                InputAction::Continue
+            }
+
+            // -- Special --
+            Action::Noop => InputAction::Continue,
+        }
+    }
+
+    /// The old event loop's match arms: dispatch the `InputAction` that
+    /// `handle_key_input` resolved, turning exits into `Output`s and async
+    /// work into detached effects.
+    fn apply_input_action(&mut self, action: InputAction, ctx: &mut Ctx<'_, Self>) {
+        match action {
+            // AcceptInspecting is inert until the inspector tab is ported.
+            InputAction::Continue | InputAction::Redraw | InputAction::AcceptInspecting => {}
+            InputAction::Accept(index) => {
+                let execute = self.accept;
+                let output = match self.results.get(index) {
+                    Some(entry) => Output::Selection {
+                        command: entry.command.clone(),
+                        execute,
+                    },
+                    // Out of bounds usually implies no selected entry, so
+                    // return the input (matching the ratatui path).
+                    None => Output::ReturnQuery(self.search.input.as_str().to_owned()),
+                };
+                self.finish(output, ctx);
+            }
+            InputAction::ReturnOriginal => self.finish(Output::ReturnOriginal, ctx),
+            InputAction::ReturnQuery => {
+                let input = self.search.input.as_str().to_owned();
+                self.finish(Output::ReturnQuery(input), ctx);
+            }
+            InputAction::Copy(index) => {
+                if let Some(entry) = self.results.get(index)
+                    && let Err(e) = super::super::interactive::set_clipboard(entry.command.clone())
+                {
+                    tracing::warn!(?e, "failed to copy to clipboard");
+                }
+                self.finish(Output::ReturnOriginal, ctx);
+            }
+            InputAction::Delete(index) => self.delete_single(index, ctx),
+            InputAction::DeleteAllMatching(index) => self.delete_all_matching(index, ctx),
+            InputAction::SwitchContext(selected) => self.switch_context(selected),
+        }
+    }
+
+    // The lock guard spans the rebuild await on purpose: it keeps the delete
+    // from interleaving with an in-flight query on the shared db handle.
+    #[allow(clippy::significant_drop_tightening)]
+    fn delete_single(&mut self, index: usize, ctx: &mut Ctx<'_, Self>) {
+        if self.results.is_empty() || index >= self.results.len() {
+            return;
+        }
+        let state = self.results_state.get_mut();
+        let selected = state.selected();
+        if selected == self.results.len() - 1 {
+            state.select(selected.saturating_sub(1));
+        }
+        let entry = self.results.remove(index);
+
+        let store = self.history_store.clone();
+        let backend = Arc::clone(&self.backend);
+        ctx.perform(async move {
+            let ids = match store.delete_entries([entry]).await {
+                Ok(ids) => ids,
+                Err(e) => {
+                    tracing::error!(?e, "failed to delete history entry");
+                    return Msg::OpDone;
+                }
+            };
+            let backend = backend.lock().await;
+            if let Err(e) = store.build_all(&*backend.db, &ids).await {
+                tracing::error!(?e, "failed to rebuild history after delete");
+            }
+            Msg::OpDone
+        })
+        .detach();
+    }
+
+    // See delete_single for why the guard spans the awaits.
+    #[allow(clippy::significant_drop_tightening)]
+    fn delete_all_matching(&mut self, index: usize, ctx: &mut Ctx<'_, Self>) {
+        if self.results.is_empty() || index >= self.results.len() {
+            return;
+        }
+        let command = self.results[index].command.clone();
+
+        // Remove matching entries from the visible results
+        self.results.retain(|e| e.command != command);
+        *self.results_state.get_mut() = ListState::default();
+
+        // Query the DB for ALL entries with this command and delete them
+        let store = self.history_store.clone();
+        let backend = Arc::clone(&self.backend);
+        ctx.perform(async move {
+            let backend = backend.lock().await;
+            let all_matching = match backend
+                .db
+                .query_history(&format!(
+                    "select * from history where command = '{}' and deleted_at is null",
+                    command.replace('\'', "''")
+                ))
+                .await
+            {
+                Ok(all) => all,
+                Err(e) => {
+                    tracing::error!(?e, "failed to query history for delete-all");
+                    return Msg::OpDone;
+                }
+            };
+            let ids = match store.delete_entries(all_matching).await {
+                Ok(ids) => ids,
+                Err(e) => {
+                    tracing::error!(?e, "failed to delete history entries");
+                    return Msg::OpDone;
+                }
+            };
+            if let Err(e) = store.build_all(&*backend.db, &ids).await {
+                tracing::error!(?e, "failed to rebuild history after delete-all");
+            }
+            Msg::OpDone
+        })
+        .detach();
+    }
+
+    fn switch_context(&mut self, selected: Option<usize>) {
+        if let Some(index) = selected
+            && let Some(entry) = self.results.get(index)
+        {
+            self.search.custom_context = Some(entry.id.clone());
+            self.search.context = Context::from_history(entry);
+            self.search.filter_mode = FilterMode::Session;
+            self.search.input = Cursor::from(String::new());
+            *self.results_state.get_mut() = ListState::default();
+        } else {
+            self.search.custom_context = None;
+            self.search.context = self.initial_context.clone();
+            self.search.filter_mode = self.default_filter_mode;
         }
     }
 }
@@ -270,12 +830,36 @@ impl App for SearchApp<'_> {
                     self.results_state.get_mut().select(0);
                 }
             }
-            Msg::Raw(InputEvent::Key(key)) => self.handle_key(key, ctx),
-            Msg::Raw(InputEvent::Paste(text)) => {
-                for c in text.chars() {
-                    self.search.input.insert(c);
+            Msg::OpDone => {}
+            Msg::Raw(event) => {
+                // The old event loop requeried when an input pass changed
+                // anything the engine reads; mirror that by diffing the
+                // query-relevant state around the key handling.
+                let initial_input = self.search.input.as_str().to_owned();
+                let initial_filter_mode = self.search.filter_mode;
+                let initial_search_mode = self.search_mode;
+                let initial_custom_context = self.search.custom_context.clone();
+
+                match event {
+                    InputEvent::Key(key) => {
+                        let action = self.handle_key_input(&key);
+                        self.apply_input_action(action, ctx);
+                    }
+                    InputEvent::Paste(text) => {
+                        for c in text.chars() {
+                            self.search.input.insert(c);
+                        }
+                    }
                 }
-                self.spawn_query(ctx);
+
+                if !self.exiting
+                    && (initial_input != self.search.input.as_str()
+                        || initial_filter_mode != self.search.filter_mode
+                        || initial_search_mode != self.search_mode
+                        || initial_custom_context != self.search.custom_context)
+                {
+                    self.spawn_query(ctx);
+                }
             }
         }
     }
@@ -289,5 +873,507 @@ impl App for SearchApp<'_> {
 
     fn keymap(&self) -> Keymap<Msg> {
         keymap().fallthrough(&self.input_focus, Msg::Raw)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use atuin_client::database::Sqlite;
+    use atuin_client::record::sqlite_store::SqliteStore;
+    use atuin_client::settings::{ExitMode, KeyBindingConfig, Keys};
+    use atuin_client::theme::ThemeManager;
+    use atuin_common::utils::uuid_v7;
+    use atuin_domain::record::HostId;
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    use super::super::super::keybindings::KeymapSet;
+    use super::*;
+
+    fn test_theme() -> &'static Theme {
+        let manager = Box::leak(Box::new(ThemeManager::new(Some(false), None)));
+        manager.load_theme("default", None)
+    }
+
+    fn dummy_results(n: usize) -> Vec<History> {
+        (0..n)
+            .map(|i| {
+                History::capture()
+                    .timestamp(OffsetDateTime::now_utc())
+                    .command(format!("command number {i}"))
+                    .cwd("/")
+                    .build()
+                    .into()
+            })
+            .collect()
+    }
+
+    /// Build a `SearchApp` mirroring the ratatui suite's `state` fixture:
+    /// `results_len` dummy results, `selected` index, and — matching that
+    /// fixture — `original_input_empty` forced to false.
+    async fn test_app(
+        keymap_mode: KeymapMode,
+        results_len: usize,
+        selected: usize,
+        input: &str,
+        settings: Settings,
+    ) -> SearchApp<'static> {
+        let settings: &'static Settings = Box::leak(Box::new(settings));
+        let db = Sqlite::new("sqlite::memory:", 30.0).await.unwrap();
+        let store = SqliteStore::new(":memory:", 30.0).await.unwrap();
+        let history_store = HistoryStore::new(store, HostId(uuid_v7()), [0u8; 32]);
+
+        let mut app = SearchApp::new(
+            input.to_string(),
+            settings,
+            test_theme(),
+            Box::new(db),
+            engines::engine(SearchMode::Fuzzy, settings),
+            engines::engine(SearchMode::Fuzzy, settings),
+            history_store,
+            Context {
+                session: String::new(),
+                cwd: String::new(),
+                hostname: String::new(),
+                host_id: String::new(),
+                git_root: None,
+            },
+            FilterMode::Global,
+            SearchMode::Fuzzy,
+            20,
+        );
+        app.keymap_mode = keymap_mode;
+        app.original_input_empty = false;
+        app.results = dummy_results(results_len);
+        app.results_state.get_mut().select(selected);
+        app
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn ctrl(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+    }
+
+    #[tokio::test]
+    async fn accept_keybindings() {
+        let base_keys = Keys {
+            scroll_exits: true,
+            exit_past_line_start: false,
+            accept_past_line_end: true,
+            accept_past_line_start: false,
+            accept_with_backspace: false,
+            prefix: "a".to_string(),
+        };
+        let mut settings = Settings::utc();
+        settings.keys = base_keys.clone();
+        let mut app = test_app(KeymapMode::Emacs, 1, 0, "", settings).await;
+
+        let rebind = |app: &mut SearchApp<'_>, f: &dyn Fn(&mut Keys)| {
+            let mut settings = Settings::utc();
+            settings.keys = base_keys.clone();
+            f(&mut settings.keys);
+            app.keymaps = KeymapSet::defaults(&settings);
+        };
+
+        assert!(
+            matches!(
+                app.handle_key_input(&key(KeyCode::Tab)),
+                InputAction::Accept(_)
+            ),
+            "Tab should always accept"
+        );
+
+        // Left arrow with accept_past_line_start disabled → continue
+        assert!(matches!(
+            app.handle_key_input(&key(KeyCode::Left)),
+            InputAction::Continue
+        ));
+
+        // Left arrow with accept_past_line_start enabled → accept at line start
+        rebind(&mut app, &|k| k.accept_past_line_start = true);
+        assert!(matches!(
+            app.handle_key_input(&key(KeyCode::Left)),
+            InputAction::Accept(_)
+        ));
+        rebind(&mut app, &|_| {});
+
+        // Backspace disabled → continue
+        assert!(matches!(
+            app.handle_key_input(&key(KeyCode::Backspace)),
+            InputAction::Continue
+        ));
+
+        // Backspace enabled → accept at line start
+        rebind(&mut app, &|k| k.accept_with_backspace = true);
+        assert!(matches!(
+            app.handle_key_input(&key(KeyCode::Backspace)),
+            InputAction::Accept(_)
+        ));
+
+        for c in "test".chars() {
+            app.search.input.insert(c);
+        }
+        app.search.input.end();
+
+        // Right arrow at end of line with accept_past_line_end → accept
+        assert!(matches!(
+            app.handle_key_input(&key(KeyCode::Right)),
+            InputAction::Accept(_)
+        ));
+
+        // With text present, line-start accepts no longer fire
+        rebind(&mut app, &|k| k.accept_past_line_start = true);
+        assert!(matches!(
+            app.handle_key_input(&key(KeyCode::Left)),
+            InputAction::Continue
+        ));
+        rebind(&mut app, &|k| k.accept_with_backspace = true);
+        assert!(matches!(
+            app.handle_key_input(&key(KeyCode::Backspace)),
+            InputAction::Continue
+        ));
+    }
+
+    #[tokio::test]
+    async fn vim_gg_multikey_sequence() {
+        let mut app = test_app(KeymapMode::VimNormal, 100, 50, "", Settings::utc()).await;
+
+        let g = key(KeyCode::Char('g'));
+        assert!(matches!(app.handle_key_input(&g), InputAction::Continue));
+        assert_eq!(app.pending_vim_key, Some('g'));
+        assert_eq!(app.results_state.get_mut().selected(), 50);
+
+        assert!(matches!(app.handle_key_input(&g), InputAction::Continue));
+        assert_eq!(app.pending_vim_key, None);
+        assert_eq!(app.results_state.get_mut().selected(), 99);
+    }
+
+    #[tokio::test]
+    async fn vim_g_key_clears_on_other_input() {
+        let mut app = test_app(KeymapMode::VimNormal, 100, 50, "", Settings::utc()).await;
+
+        app.handle_key_input(&key(KeyCode::Char('g')));
+        assert_eq!(app.pending_vim_key, Some('g'));
+
+        app.handle_key_input(&key(KeyCode::Char('j')));
+        assert_eq!(app.pending_vim_key, None);
+    }
+
+    #[tokio::test]
+    async fn vim_big_g_jump_to_bottom() {
+        let mut app = test_app(KeymapMode::VimNormal, 100, 50, "", Settings::utc()).await;
+
+        assert!(matches!(
+            app.handle_key_input(&key(KeyCode::Char('G'))),
+            InputAction::Continue
+        ));
+        assert_eq!(app.results_state.get_mut().selected(), 0);
+    }
+
+    #[tokio::test]
+    async fn vim_ctrl_scroll_clears_pending() {
+        for c in ['d', 'u', 'f', 'b'] {
+            let mut app = test_app(KeymapMode::VimNormal, 100, 50, "", Settings::utc()).await;
+            app.pending_vim_key = Some('g');
+            assert!(matches!(
+                app.handle_key_input(&ctrl(c)),
+                InputAction::Continue
+            ));
+            assert_eq!(app.pending_vim_key, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_scroll_selection() {
+        let cases = [
+            (false, Action::SelectNext, 49),
+            (true, Action::SelectNext, 51),
+            (false, Action::SelectPrevious, 51),
+            (false, Action::ScrollToTop, 99),
+            (true, Action::ScrollToTop, 0),
+            (false, Action::ScrollToBottom, 0),
+        ];
+        for (invert, action, expected) in cases {
+            let mut settings = Settings::utc();
+            settings.invert = invert;
+            let mut app = test_app(KeymapMode::Emacs, 100, 50, "", settings).await;
+            assert!(matches!(app.execute_action(&action), InputAction::Continue));
+            assert_eq!(
+                app.results_state.get_mut().selected(),
+                expected,
+                "invert={invert} action={action:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_vim_mode_change() {
+        let cases = [
+            (
+                KeymapMode::Emacs,
+                Action::VimEnterNormal,
+                KeymapMode::VimNormal,
+            ),
+            (
+                KeymapMode::VimNormal,
+                Action::VimEnterInsert,
+                KeymapMode::VimInsert,
+            ),
+            (
+                KeymapMode::VimInsert,
+                Action::VimEnterNormal,
+                KeymapMode::VimNormal,
+            ),
+        ];
+        for (start, action, expected) in cases {
+            let mut app = test_app(start, 100, 0, "", Settings::utc()).await;
+            assert!(matches!(app.execute_action(&action), InputAction::Continue));
+            assert_eq!(app.keymap_mode, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_accept_sets_accept_flag() {
+        let mut app = test_app(KeymapMode::Emacs, 100, 5, "", Settings::utc()).await;
+        assert!(matches!(
+            app.execute_action(&Action::Accept),
+            InputAction::Accept(5)
+        ));
+        assert!(app.accept);
+    }
+
+    #[tokio::test]
+    async fn execute_return_selection_does_not_set_accept() {
+        let mut app = test_app(KeymapMode::Emacs, 100, 5, "", Settings::utc()).await;
+        assert!(matches!(
+            app.execute_action(&Action::ReturnSelection),
+            InputAction::Accept(5)
+        ));
+        assert!(!app.accept);
+    }
+
+    #[tokio::test]
+    async fn execute_accept_nth() {
+        let mut app = test_app(KeymapMode::Emacs, 100, 5, "", Settings::utc()).await;
+        assert!(matches!(
+            app.execute_action(&Action::AcceptNth(3)),
+            InputAction::Accept(8)
+        ));
+    }
+
+    #[tokio::test]
+    async fn execute_enter_prefix_mode() {
+        let mut app = test_app(KeymapMode::Emacs, 100, 0, "", Settings::utc()).await;
+        assert!(!app.prefix);
+        app.execute_action(&Action::EnterPrefixMode);
+        assert!(app.prefix);
+    }
+
+    #[tokio::test]
+    async fn prefix_chord_ctrl_a_c_switches_context() {
+        let mut app = test_app(KeymapMode::Emacs, 100, 7, "", Settings::utc()).await;
+
+        assert!(matches!(
+            app.handle_key_input(&ctrl('a')),
+            InputAction::Continue
+        ));
+        assert!(app.prefix, "ctrl-a should enter prefix mode");
+
+        let result = app.handle_key_input(&key(KeyCode::Char('c')));
+        assert!(
+            matches!(result, InputAction::SwitchContext(Some(7))),
+            "prefix + c should switch context"
+        );
+        assert_eq!(app.search.input.as_str(), "", "c should not be inserted");
+    }
+
+    #[tokio::test]
+    async fn execute_exit_returns_based_on_exit_mode() {
+        let mut settings = Settings::utc();
+        settings.exit_mode = ExitMode::ReturnOriginal;
+        let mut app = test_app(KeymapMode::Emacs, 100, 0, "", settings).await;
+        assert!(matches!(
+            app.execute_action(&Action::Exit),
+            InputAction::ReturnOriginal
+        ));
+
+        let mut settings = Settings::utc();
+        settings.exit_mode = ExitMode::ReturnQuery;
+        let mut app = test_app(KeymapMode::Emacs, 100, 0, "", settings).await;
+        assert!(matches!(
+            app.execute_action(&Action::Exit),
+            InputAction::ReturnQuery
+        ));
+    }
+
+    #[tokio::test]
+    async fn execute_command_dispositions() {
+        let mut app = test_app(KeymapMode::Emacs, 100, 7, "", Settings::utc()).await;
+        assert!(matches!(
+            app.execute_action(&Action::ReturnOriginal),
+            InputAction::ReturnOriginal
+        ));
+        assert!(matches!(
+            app.execute_action(&Action::Copy),
+            InputAction::Copy(7)
+        ));
+        assert!(matches!(
+            app.execute_action(&Action::Delete),
+            InputAction::Delete(7)
+        ));
+        assert!(matches!(
+            app.execute_action(&Action::SwitchContext),
+            InputAction::SwitchContext(Some(7))
+        ));
+        assert!(matches!(
+            app.execute_action(&Action::ClearContext),
+            InputAction::SwitchContext(None)
+        ));
+        assert!(matches!(
+            app.execute_action(&Action::Noop),
+            InputAction::Continue
+        ));
+    }
+
+    #[tokio::test]
+    async fn execute_cycle_search_mode() {
+        let mut app = test_app(KeymapMode::Emacs, 100, 0, "", Settings::utc()).await;
+        let original_mode = app.search_mode;
+        assert!(matches!(
+            app.execute_action(&Action::CycleSearchMode),
+            InputAction::Continue
+        ));
+        assert!(app.switched_search_mode);
+        assert_ne!(app.search_mode, original_mode);
+        assert!(
+            app.pending_engine.is_some(),
+            "the next query must install the new engine"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_vim_search_insert() {
+        let mut app = test_app(KeymapMode::VimNormal, 100, 0, "", Settings::utc()).await;
+        app.search.input.insert('h');
+        app.search.input.insert('i');
+        assert!(matches!(
+            app.execute_action(&Action::VimSearchInsert),
+            InputAction::Continue
+        ));
+        assert_eq!(app.search.input.as_str(), "");
+        assert_eq!(app.keymap_mode, KeymapMode::VimInsert);
+    }
+
+    #[tokio::test]
+    async fn execute_cursor_movement() {
+        let mut app = test_app(KeymapMode::Emacs, 100, 0, "", Settings::utc()).await;
+        for c in "hello".chars() {
+            app.search.input.insert(c);
+        }
+
+        app.execute_action(&Action::CursorLeft);
+        assert_eq!(app.search.input.position(), 4);
+        app.execute_action(&Action::CursorStart);
+        assert_eq!(app.search.input.position(), 0);
+        app.execute_action(&Action::CursorEnd);
+        assert_eq!(app.search.input.position(), 5);
+        app.execute_action(&Action::CursorRight);
+        assert_eq!(app.search.input.position(), 5);
+    }
+
+    #[tokio::test]
+    async fn execute_editing() {
+        let mut app = test_app(KeymapMode::Emacs, 100, 0, "", Settings::utc()).await;
+        for c in "hello".chars() {
+            app.search.input.insert(c);
+        }
+
+        app.execute_action(&Action::DeleteCharBefore);
+        assert_eq!(app.search.input.as_str(), "hell");
+        app.execute_action(&Action::ClearLine);
+        assert_eq!(app.search.input.as_str(), "");
+    }
+
+    #[tokio::test]
+    async fn keymap_config_return_query() {
+        let mut settings = Settings::utc();
+        settings.keymap.emacs = HashMap::from([(
+            "tab".to_string(),
+            KeyBindingConfig::Simple("return-query".to_string()),
+        )]);
+        let mut app = test_app(KeymapMode::Emacs, 100, 0, "test query", settings).await;
+        // Rebuild from the same modified settings (test_app leaked them).
+        app.keymaps = KeymapSet::from_settings(app.settings);
+
+        assert!(
+            matches!(
+                app.handle_key_input(&key(KeyCode::Tab)),
+                InputAction::ReturnQuery
+            ),
+            "Tab configured as return-query should resolve to ReturnQuery"
+        );
+    }
+
+    /// End-to-end through the eye runtime: keys in, `Output` out.
+    #[tokio::test]
+    async fn runtime_enter_and_esc_produce_outputs() {
+        let app = test_app(KeymapMode::Emacs, 3, 1, "", Settings::utc()).await;
+        let mut runtime = eye_declare::Runtime::new(app, 120, 30);
+        let (_bytes, exit) = runtime.handle(InputEvent::Key(key(KeyCode::Enter)));
+        match exit {
+            Some(Output::Selection { command, execute }) => {
+                assert_eq!(command, "command number 1");
+                // enter_accept defaults to false in Settings::utc()
+                assert!(!execute);
+            }
+            other => panic!("expected Selection output, got {other:?}"),
+        }
+
+        let app = test_app(KeymapMode::Emacs, 3, 0, "", Settings::utc()).await;
+        let mut runtime = eye_declare::Runtime::new(app, 120, 30);
+        let (_bytes, exit) = runtime.handle(InputEvent::Key(key(KeyCode::Esc)));
+        assert_eq!(exit, Some(Output::ReturnOriginal));
+    }
+    /// Regression: Esc in vim-insert must enter vim-normal, not exit.
+    #[tokio::test]
+    async fn esc_in_vim_insert_enters_normal_via_runtime() {
+        let mut settings = Settings::utc();
+        settings.keymap_mode = KeymapMode::VimInsert;
+        // Build WITHOUT overriding keymap_mode: mirror production construction.
+        let settings_ref: &'static Settings = Box::leak(Box::new(settings));
+        let db = Sqlite::new("sqlite::memory:", 30.0).await.unwrap();
+        let store = SqliteStore::new(":memory:", 30.0).await.unwrap();
+        let history_store = HistoryStore::new(store, HostId(uuid_v7()), [0u8; 32]);
+        let app = SearchApp::new(
+            String::new(),
+            settings_ref,
+            test_theme(),
+            Box::new(db),
+            engines::engine(SearchMode::Fuzzy, settings_ref),
+            engines::engine(SearchMode::Fuzzy, settings_ref),
+            history_store,
+            Context {
+                session: String::new(),
+                cwd: String::new(),
+                hostname: String::new(),
+                host_id: String::new(),
+                git_root: None,
+            },
+            FilterMode::Global,
+            SearchMode::Fuzzy,
+            20,
+        );
+        assert_eq!(app.keymap_mode, KeymapMode::VimInsert);
+        let mut runtime = eye_declare::Runtime::new(app, 120, 30);
+        let (_bytes, exit) = runtime.handle(InputEvent::Key(key(KeyCode::Esc)));
+        assert!(
+            exit.is_none(),
+            "esc in vim-insert must not exit, got {exit:?}"
+        );
+        assert_eq!(runtime.app().keymap_mode, KeymapMode::VimNormal);
     }
 }

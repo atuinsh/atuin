@@ -61,7 +61,7 @@ pub async fn history(
     query: &[String],
     settings: &Settings,
     db: impl Database,
-    _history_store: &HistoryStore,
+    history_store: &HistoryStore,
     theme: &Theme,
     inline_height: u16,
 ) -> Result<String> {
@@ -98,8 +98,10 @@ pub async fn history(
         Box::new(db),
         engines::engine(search_mode, settings),
         engines::engine(search_mode, settings),
+        history_store.clone(),
         context,
         filter_mode,
+        search_mode,
         inline_height,
     );
 

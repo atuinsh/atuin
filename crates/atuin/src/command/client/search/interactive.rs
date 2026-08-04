@@ -57,6 +57,7 @@ use windows_sys::Win32::System::Console::{GetConsoleOutputCP, SetConsoleOutputCP
 
 const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
 
+#[derive(Clone, Copy)]
 pub enum InputAction {
     Accept(usize),
     AcceptInspecting,
@@ -2141,7 +2142,7 @@ pub async fn history(
     feature = "clipboard",
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 ))]
-fn set_clipboard(s: String) -> Result<(), arboard::Error> {
+pub(super) fn set_clipboard(s: String) -> Result<(), arboard::Error> {
     let mut ctx = arboard::Clipboard::new()?;
     ctx.set_text(s)?;
     // Use the clipboard context to make sure it is saved
@@ -2153,7 +2154,7 @@ fn set_clipboard(s: String) -> Result<(), arboard::Error> {
     feature = "clipboard",
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 )))]
-fn set_clipboard(_s: String) -> Result<(), std::convert::Infallible> {
+pub(super) fn set_clipboard(_s: String) -> Result<(), std::convert::Infallible> {
     Ok(())
 }
 
