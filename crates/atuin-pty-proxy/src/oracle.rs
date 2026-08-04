@@ -30,8 +30,10 @@ const QUERY_DEADLINE: Duration = Duration::from_secs(2);
 const RESPAWN_LIMIT: u32 = 3;
 const KILL_WHOLE_LINE: &[u8] = b"\x15";
 
-/// Delimits completion output; re-arms itself because zsh clears the
-/// pre/post function arrays after every completion.
+/// Turns the captive zsh into a completion driver: Tab is the only live
+/// binding, atuin's own hooks and autosuggestions are stripped, candidates
+/// are diverted through a `compadd` override, and pre/post completion hooks
+/// bracket the output with NUL delimiter lines for the reader.
 const INIT_SCRIPT: &str = r#"
 PROMPT=''
 RPROMPT=''
@@ -48,6 +50,7 @@ bindkey '^M' undefined
 bindkey '^J' undefined
 bindkey '^I' complete-word
 
+# zsh clears these arrays after every completion, so each hook re-arms itself.
 _atuin_pre()  { print -r -- $'\0'; compprefuncs=(_atuin_pre); }
 _atuin_post() { print -r -- $'\0'; comppostfuncs=(_atuin_post); }
 compprefuncs=(_atuin_pre)
@@ -262,19 +265,30 @@ fn fish_complete(fish: &Path, line: &str) -> Vec<Candidate> {
 /// Async front door to the oracle: queries and answers cross a dedicated
 /// thread, so a caller on a latency budget can stop waiting without
 /// abandoning the wire protocol mid-read (which would desync it). Stale
-/// answers are discarded by query id; a query arriving while the oracle is
-/// busy simply replaces any queued one (latest wins).
+/// answers are discarded by query id; the worker skips to the newest
+/// queued query, and [`Self::enqueue`] rejects a query outright while an
+/// unread one already sits in the (single-slot) queue.
 pub struct CompletionOracleHandle {
-    query_tx: mpsc::SyncSender<(u64, String)>,
-    answer_rx: Receiver<(u64, Vec<Candidate>)>,
+    query_tx: mpsc::SyncSender<OracleQuery>,
+    answer_rx: Receiver<OracleAnswer>,
     next_id: u64,
+}
+
+struct OracleQuery {
+    id: u64,
+    line: String,
+}
+
+struct OracleAnswer {
+    id: u64,
+    candidates: Vec<Candidate>,
 }
 
 impl CompletionOracleHandle {
     /// Start the oracle thread; the captive shell is respawned (up to a
     /// cap) if it wedges.
     pub fn spawn(shell: OracleShell, bin: std::path::PathBuf, load_user_config: bool) -> Self {
-        let (query_tx, query_rx) = mpsc::sync_channel::<(u64, String)>(1);
+        let (query_tx, query_rx) = mpsc::sync_channel::<OracleQuery>(1);
         let (answer_tx, answer_rx) = mpsc::channel();
 
         std::thread::spawn(move || {
@@ -299,31 +313,34 @@ impl CompletionOracleHandle {
             // (rc files, compinit) costs more than any query's wait budget.
             let mut proc = respawn(&mut load_user_config, &mut spawns);
 
-            while let Ok((mut id, mut line)) = query_rx.recv() {
+            while let Ok(mut query) = query_rx.recv() {
                 // Only the newest queued query is worth answering.
-                while let Ok((newer_id, newer_line)) = query_rx.try_recv() {
-                    id = newer_id;
-                    line = newer_line;
+                while let Ok(newer) = query_rx.try_recv() {
+                    query = newer;
                 }
 
                 if proc.is_none() {
                     proc = respawn(&mut load_user_config, &mut spawns);
                 }
+                let answer = |candidates| OracleAnswer {
+                    id: query.id,
+                    candidates,
+                };
                 let Some(oracle) = proc.as_mut() else {
-                    let _ = answer_tx.send((id, Vec::new()));
+                    let _ = answer_tx.send(answer(Vec::new()));
                     continue;
                 };
 
-                match oracle.complete(&line, QUERY_DEADLINE) {
+                match oracle.complete(&query.line, QUERY_DEADLINE) {
                     Some(candidates) => {
-                        if answer_tx.send((id, candidates)).is_err() {
+                        if answer_tx.send(answer(candidates)).is_err() {
                             return;
                         }
                     }
                     // Truly wedged: kill it; the next query respawns.
                     None => {
                         proc = None;
-                        let _ = answer_tx.send((id, Vec::new()));
+                        let _ = answer_tx.send(answer(Vec::new()));
                     }
                 }
             }
@@ -337,14 +354,20 @@ impl CompletionOracleHandle {
     }
 
     /// Submit a query without waiting, so the caller can overlap other work
-    /// (e.g. the history lookup) before collecting. `None` means the oracle
-    /// is busy with one query already queued: this one loses.
+    /// (e.g. the history lookup) before collecting. `None` means the query
+    /// was not accepted: an unread one is already queued, or the oracle
+    /// thread has exited.
     pub fn enqueue(&mut self, line: &str) -> Option<u64> {
         while self.answer_rx.try_recv().is_ok() {}
 
         self.next_id += 1;
         let id = self.next_id;
-        self.query_tx.try_send((id, line.to_string())).ok()?;
+        self.query_tx
+            .try_send(OracleQuery {
+                id,
+                line: line.to_string(),
+            })
+            .ok()?;
         Some(id)
     }
 
@@ -358,7 +381,7 @@ impl CompletionOracleHandle {
                 return Vec::new();
             };
             match self.answer_rx.recv_timeout(remaining) {
-                Ok((answer_id, candidates)) if answer_id == id => return candidates,
+                Ok(answer) if answer.id == id => return answer.candidates,
                 Ok(_) => {} // stale answer to an abandoned query
                 Err(_) => return Vec::new(),
             }
@@ -624,7 +647,7 @@ fn recv_line(lines: &Receiver<String>, deadline: Instant) -> Option<String> {
 /// Skip startup noise until the init script's ready marker appears.
 fn await_ready(lines: &Receiver<String>, deadline: Instant) -> bool {
     while let Some(line) = recv_line(lines, deadline) {
-        if line.contains(READY_MARKER) && !line.contains("source ") {
+        if line.contains(READY_MARKER) {
             return true;
         }
     }

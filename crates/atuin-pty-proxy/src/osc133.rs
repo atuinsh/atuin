@@ -107,7 +107,6 @@ pub enum Segment<'a> {
 
 /// The current semantic zone as determined by the most recent OSC 133 marker.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum Zone {
     /// No marker seen yet, or after a `D` marker (between commands).
     #[default]
@@ -186,8 +185,8 @@ impl Parser {
     }
 
     /// The current semantic zone based on markers seen so far.
+    #[cfg(test)]
     #[inline]
-    #[allow(dead_code)]
     pub fn zone(&self) -> Zone {
         self.zone
     }
@@ -272,11 +271,8 @@ impl Parser {
     #[inline]
     pub fn segments<'a>(&mut self, data: &'a [u8], mut f: impl FnMut(Segment<'a>)) {
         let mut zone = self.zone;
-        let mut events = Vec::new();
-        self.push_located(data, |located| events.push(located));
-
         let mut start = 0;
-        for located in events {
+        self.push_located(data, |located| {
             let marker_start = located.start_offset.min(data.len()).max(start);
             let offset = located.offset.min(data.len());
             if marker_start > start {
@@ -286,7 +282,7 @@ impl Parser {
             zone = located.zone;
             f(Segment::Marker { before, located });
             start = offset;
-        }
+        });
 
         let end = self
             .incomplete_osc_sequence_start()
