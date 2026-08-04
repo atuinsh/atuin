@@ -626,7 +626,7 @@ dependencies = [
  "clap",
  "crossterm",
  "eyre",
- "nix 0.29.0",
+ "libc",
  "portable-pty",
  "rand 0.8.7",
  "rstest",

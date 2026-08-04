@@ -394,25 +394,26 @@ fn spawn_stdin_pump(input_tx: SyncSender<Vec<u8>>) {
     })
 }
 
-/// How long to wait to become the terminal's foreground process group.
-/// Wrappers assign it within milliseconds; when it never happens, raw
-/// mode fails with a diagnosis and the fallback shell takes over.
-const FOREGROUND_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+/// How long the de-orphaning helpers stay alive: long enough for the
+/// retried `tcsetpgrp` to land, short enough to never be noticed.
+const DEORPHAN_HELPER_LIFETIME_MS: u32 = 300;
 
 /// Make this process group the terminal's foreground group if it isn't.
 ///
-/// Some terminals (ghostty spawns shells through a wrapper) haven't handed
-/// the terminal to the shell's group by the time the init preamble execs
-/// the proxy. Running in the background breaks the proxy outright:
-/// `tcsetattr` fails with EIO on macOS ("enable raw mode: Input/output
-/// error"), and stdin reads die under SIGTTIN elsewhere.
+/// Some terminals leave the shell's group in the background at the moment
+/// the init preamble execs the proxy — ghostty hands the foreground to a
+/// group that exits without giving it back. A background proxy is broken
+/// outright: `tcsetattr` fails with EIO on macOS ("enable raw mode:
+/// Input/output error"), and stdin reads die under SIGTTIN elsewhere.
 ///
-/// Two recovery paths, retried briefly: take the foreground ourselves
-/// (`tcsetpgrp` — the shell's ignored-SIGTTOU disposition survives exec,
-/// which on some systems lets it through from the background), and wait
-/// for the wrapper to hand our group the terminal, since the exec'd proxy
-/// keeps the pgrp the wrapper is about to foreground. Both fds crossterm
-/// might use are tried — it falls back to stdin when `/dev/tty` won't open.
+/// `tcsetpgrp` is the fix, and it needs two preconditions this arranges:
+/// SIGTTOU must be ignored (set explicitly — the disposition inherited
+/// from the exec'ing shell is unknown), and the group must not be
+/// orphaned — a session leader spawned directly by the terminal has its
+/// parent outside the session, and macOS refuses every tty operation from
+/// an orphaned background group with EIO, including this one. Both fds
+/// crossterm might use are tried, since it falls back to stdin when
+/// `/dev/tty` won't open.
 fn claim_foreground_tty() {
     fn claim(fd: impl std::os::fd::AsFd, ours: rustix::process::Pid) -> bool {
         match rustix::termios::tcgetpgrp(&fd) {
@@ -421,22 +422,68 @@ fn claim_foreground_tty() {
             Err(_) => false,
         }
     }
-
-    let ours = rustix::process::getpgrp();
-    let deadline = std::time::Instant::now() + FOREGROUND_TIMEOUT;
-    loop {
+    fn claim_any(ours: rustix::process::Pid) -> bool {
         if let Ok(tty) = std::fs::File::open("/dev/tty")
             && claim(&tty, ours)
         {
-            return;
+            return true;
         }
-        if claim(std::io::stdin(), ours) {
-            return;
-        }
-        if std::time::Instant::now() >= deadline {
+        claim(std::io::stdin(), ours)
+    }
+
+    // SAFETY: setting a signal disposition to SIG_IGN.
+    unsafe { libc::signal(libc::SIGTTOU, libc::SIG_IGN) };
+
+    let ours = rustix::process::getpgrp();
+    if claim_any(ours) {
+        return;
+    }
+
+    // Orphaned is the likely refusal: lend the group a member whose parent
+    // is another group of this session, and retry while the loan lasts.
+    deorphan();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(150);
+    loop {
+        if claim_any(ours) || std::time::Instant::now() >= deadline {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Un-orphan our process group for a moment.
+///
+/// A group is orphaned when no member has a parent in a different group
+/// of the same session. Fork a helper into its own new group, and have it
+/// fork a grandchild that rejoins ours: the grandchild's parent now sits
+/// in another in-session group, so ours is no longer orphaned while they
+/// live. The children only touch async-signal-safe calls (this process
+/// has threads), and a detached thread reaps the helper.
+fn deorphan() {
+    let ours = rustix::process::getpgrp();
+    // SAFETY: fork with only async-signal-safe calls (setpgid, fork,
+    // usleep, _exit) in the children.
+    let helper = unsafe { libc::fork() };
+    match helper {
+        -1 => {}
+        0 => unsafe {
+            let _ = libc::setpgid(0, 0);
+            let grandchild = libc::fork();
+            if grandchild == 0 {
+                let _ = libc::setpgid(0, ours.as_raw_nonzero().get());
+                libc::usleep(DEORPHAN_HELPER_LIFETIME_MS * 1000);
+                libc::_exit(0);
+            }
+            libc::usleep(DEORPHAN_HELPER_LIFETIME_MS * 1000);
+            libc::_exit(0);
+        },
+        pid => {
+            std::thread::spawn(move || {
+                let mut status = 0;
+                // SAFETY: reaping our own direct child.
+                unsafe { libc::waitpid(pid, &mut status, 0) };
+            });
+        }
     }
 }
 
