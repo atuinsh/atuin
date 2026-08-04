@@ -116,15 +116,19 @@ fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
     trace("command capture sink");
 
     #[cfg(feature = "client")]
-    let suggestion_provider =
-        settings.and_then(|settings| suggest::history_suggestion_provider(settings, proxy.shell()));
+    let (suggestion_provider, session_ready) = settings
+        .and_then(|settings| suggest::history_suggestion_provider(settings, proxy.shell()))
+        .map_or((None, None), |hooks| {
+            (Some(hooks.provider), hooks.session_ready)
+        });
     #[cfg(not(feature = "client"))]
-    let suggestion_provider = None;
+    let (suggestion_provider, session_ready) = (None, None);
     trace("suggestion provider");
 
     proxy.run(atuin_pty_proxy::RunOptions {
         command_capture_sink,
         suggestion_provider,
+        session_ready,
         child_umask,
     });
 }

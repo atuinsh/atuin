@@ -113,6 +113,7 @@ pub(crate) fn spawn<W: Write + Send + 'static>(
     flags: Arc<OverlayFlags>,
     cols: Arc<AtomicU16>,
     input_activity: Arc<ActivityClock>,
+    session_ready: Option<Box<dyn FnOnce() + Send>>,
 ) -> Suggest<W> {
     let state = Arc::new(Mutex::new(PopupState::default()));
     let (ui_tx, ui_rx) = mpsc::channel();
@@ -120,7 +121,7 @@ pub(crate) fn spawn<W: Write + Send + 'static>(
     spawn_ui_thread(provider, compositor.clone(), ui_rx, state.clone());
 
     Suggest {
-        tracker: InputTracker::new(ui_tx, cols, input_activity),
+        tracker: InputTracker::new(ui_tx, cols, input_activity, session_ready),
         keys: KeyFilter {
             state,
             compositor,
@@ -186,6 +187,8 @@ pub(crate) struct InputTracker {
     /// Last user keystroke; input-zone changes without a recent one are
     /// program output, not typing.
     input_activity: Arc<ActivityClock>,
+    /// Fired at the first prompt marker: the shell finished starting.
+    session_ready: Option<Box<dyn FnOnce() + Send>>,
     cols: Arc<AtomicU16>,
     ui_tx: Sender<UiEvent>,
 }
@@ -195,6 +198,7 @@ impl InputTracker {
         ui_tx: Sender<UiEvent>,
         cols: Arc<AtomicU16>,
         input_activity: Arc<ActivityClock>,
+        session_ready: Option<Box<dyn FnOnce() + Send>>,
     ) -> Self {
         // MODEL_FLOOR, not 1: vt100 panics rendering wide glyphs into a
         // single-column grid.
@@ -210,6 +214,7 @@ impl InputTracker {
             ran_command: false,
             last_line: String::new(),
             input_activity,
+            session_ready,
             cols,
             ui_tx,
         }
@@ -222,6 +227,7 @@ impl InputTracker {
         let grid_cols = &mut self.grid_cols;
         let ran_command = &mut self.ran_command;
         let last_line = &mut self.last_line;
+        let session_ready = &mut self.session_ready;
         let cols = &self.cols;
         let mut input_changed = false;
         let mut hide = false;
@@ -246,6 +252,10 @@ impl InputTracker {
             Segment::Marker { located, .. } => {
                 match located.event {
                     Event::PromptStart | Event::CommandStart => {
+                        // First prompt: the shell's startup is over.
+                        if let Some(ready) = session_ready.take() {
+                            ready();
+                        }
                         // A prompt marker with no command since the last
                         // one is a redraw of the current line (resize, ^L,
                         // reset-prompt). zsh reprints prompt AND buffer
@@ -835,10 +845,40 @@ mod tests {
         // Most tests simulate echo of live typing.
         clock.touch();
         (
-            InputTracker::new(ui_tx, Arc::new(AtomicU16::new(80)), clock.clone()),
+            InputTracker::new(ui_tx, Arc::new(AtomicU16::new(80)), clock.clone(), None),
             ui_rx,
             clock,
         )
+    }
+
+    /// The session-ready hook fires exactly once, at the first prompt
+    /// marker — the moment the shell's startup is over.
+    #[rstest]
+    fn session_ready_fires_once_at_first_prompt() {
+        use std::sync::atomic::AtomicUsize;
+        let fired = Arc::new(AtomicUsize::new(0));
+        let hook = {
+            let fired = fired.clone();
+            Box::new(move || {
+                fired.fetch_add(1, Ordering::Relaxed);
+            })
+        };
+        let (ui_tx, _ui_rx) = mpsc::channel();
+        let clock = Arc::new(ActivityClock::new());
+        let mut tracker = InputTracker::new(ui_tx, Arc::new(AtomicU16::new(80)), clock, Some(hook));
+
+        tracker.push(b"banner text, no markers yet");
+        assert_eq!(fired.load(Ordering::Relaxed), 0);
+
+        tracker.push(b"\x1b]133;A\x07$ \x1b]133;B\x07");
+        assert_eq!(fired.load(Ordering::Relaxed), 1);
+
+        tracker.push(b"ls\r\n\x1b]133;C\x07\x1b]133;A\x07$ \x1b]133;B\x07");
+        assert_eq!(
+            fired.load(Ordering::Relaxed),
+            1,
+            "later prompts don't re-fire"
+        );
     }
 
     /// Program output containing OSC 133 markers (cat of a typescript, a
@@ -849,7 +889,8 @@ mod tests {
         let (ui_tx, ui_rx) = mpsc::channel();
         // Never-touched clock: no keystroke has happened yet.
         let clock = Arc::new(ActivityClock::new());
-        let mut tracker = InputTracker::new(ui_tx, Arc::new(AtomicU16::new(80)), clock.clone());
+        let mut tracker =
+            InputTracker::new(ui_tx, Arc::new(AtomicU16::new(80)), clock.clone(), None);
 
         tracker.push(b"\x1b]133;A\x07$ \x1b]133;B\x07ls -la");
         assert!(
