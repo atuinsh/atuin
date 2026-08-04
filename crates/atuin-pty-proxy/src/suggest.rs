@@ -168,6 +168,13 @@ pub(crate) struct InputTracker {
     /// beginning has scrolled away and suggestions stop.
     fed: usize,
     onlcr_scratch: Vec<u8>,
+    /// A command ran since the last grid reset, so the next prompt marker
+    /// is a genuinely new prompt rather than a redraw of the current line.
+    ran_command: bool,
+    /// The line as last reported. Redraw bursts scramble the grid cursor
+    /// before their prompt marker arrives, so this — not the mid-redraw
+    /// grid — is what a redraw must carry over.
+    last_line: String,
     cols: Arc<AtomicU16>,
     ui_tx: Sender<UiEvent>,
 }
@@ -181,6 +188,8 @@ impl InputTracker {
             grid_cols,
             fed: 0,
             onlcr_scratch: Vec::new(),
+            ran_command: false,
+            last_line: String::new(),
             cols,
             ui_tx,
         }
@@ -191,11 +200,20 @@ impl InputTracker {
         let onlcr_scratch = &mut self.onlcr_scratch;
         let fed = &mut self.fed;
         let grid_cols = &mut self.grid_cols;
+        let ran_command = &mut self.ran_command;
+        let last_line = &mut self.last_line;
         let cols = &self.cols;
         let mut input_changed = false;
         let mut hide = false;
+        // Set when a prompt marker turns out to be a redraw of the current
+        // line: the rest of the chunk is repaint choreography — cursor
+        // moves sized for the real screen — not input.
+        let mut skip_input = false;
         self.parser.segments(data, |segment| match segment {
             Segment::Text(Zone::Input, bytes) => {
+                if skip_input {
+                    return;
+                }
                 *fed += bytes.len();
                 // Match ansi::to_plain_text: bare `\n` must return the
                 // carriage like a terminal in onlcr mode would.
@@ -206,10 +224,36 @@ impl InputTracker {
             }
             Segment::Text(..) => {}
             Segment::Marker { located, .. } => {
-                if matches!(located.event, Event::PromptStart | Event::CommandStart) {
-                    *grid_cols = cols.load(Ordering::Relaxed).max(1);
-                    *line_screen = vt100::Parser::new(LINE_GRID_ROWS, *grid_cols, 0);
-                    *fed = 0;
+                match located.event {
+                    Event::PromptStart | Event::CommandStart => {
+                        // A prompt marker with no command since the last
+                        // one is a redraw of the current line (resize, ^L,
+                        // reset-prompt). zsh reprints prompt AND buffer
+                        // before the input marker, so the typed line never
+                        // reappears in the input zone: carry it across the
+                        // reset instead of forgetting it.
+                        let seed = if *ran_command {
+                            last_line.clear();
+                            String::new()
+                        } else {
+                            last_line.clone()
+                        };
+                        *grid_cols = cols.load(Ordering::Relaxed).max(1);
+                        *line_screen = vt100::Parser::new(LINE_GRID_ROWS, *grid_cols, 0);
+                        *fed = seed.len();
+                        if !seed.is_empty() {
+                            onlcr_scratch.clear();
+                            onlcr_scratch.extend(ansi::onlcr(seed.bytes()));
+                            line_screen.process(onlcr_scratch);
+                            skip_input = true;
+                        }
+                        if located.event == Event::CommandStart {
+                            *ran_command = false;
+                        }
+                    }
+                    Event::CommandExecuted | Event::CommandFinished { .. } => {
+                        *ran_command = true;
+                    }
                 }
                 // Any marker starts a fresh zone: whatever was typed before
                 // it in this chunk no longer needs a popup update of its own.
@@ -219,7 +263,9 @@ impl InputTracker {
         });
 
         if input_changed && !self.overflowed() {
-            let _ = self.ui_tx.send(UiEvent::Query(self.current_line()));
+            let line = self.current_line();
+            self.last_line = line.clone();
+            let _ = self.ui_tx.send(UiEvent::Query(line));
         } else if hide || input_changed {
             let _ = self.ui_tx.send(UiEvent::Hide);
         }
@@ -231,50 +277,52 @@ impl InputTracker {
         self.fed > (LINE_GRID_ROWS as usize - 2) * self.grid_cols as usize
     }
 
-    /// The line as displayed, mirroring `ansi::to_plain_text`'s trimming.
-    /// The line typed so far: grid cells up to the cursor, nothing after.
-    ///
-    /// Everything past the cursor is display, not input — the erase
-    /// artifact of a backspace echo, and above all zsh-autosuggestions'
-    /// POSTDISPLAY ghost, which is echoed inside the input zone and would
-    /// otherwise be queried as if the user had typed it. Typed trailing
-    /// spaces are written cells before the cursor, so they survive.
     fn current_line(&self) -> String {
-        let screen = self.line_screen.screen();
-        let (cursor_row, cursor_col) = screen.cursor_position();
-        let mut line = String::new();
-        for row in 0..=cursor_row {
-            if row > 0 {
-                line.push('\n');
-            }
-            let end = if row == cursor_row {
-                cursor_col
-            } else {
-                self.grid_cols
+        line_up_to_cursor(self.line_screen.screen(), self.grid_cols)
+    }
+}
+
+/// The line typed so far: grid cells up to the cursor, nothing after.
+///
+/// Everything past the cursor is display, not input — the erase artifact
+/// of a backspace echo, and above all zsh-autosuggestions' POSTDISPLAY
+/// ghost, which is echoed inside the input zone and would otherwise be
+/// queried as if the user had typed it. Typed trailing spaces are written
+/// cells before the cursor, so they survive.
+fn line_up_to_cursor(screen: &vt100::Screen, grid_cols: u16) -> String {
+    let (cursor_row, cursor_col) = screen.cursor_position();
+    let mut line = String::new();
+    for row in 0..=cursor_row {
+        if row > 0 {
+            line.push('\n');
+        }
+        let end = if row == cursor_row {
+            cursor_col
+        } else {
+            grid_cols
+        };
+        let mut text = String::new();
+        for col in 0..end {
+            let Some(cell) = screen.cell(row, col) else {
+                continue;
             };
-            let mut text = String::new();
-            for col in 0..end {
-                let Some(cell) = screen.cell(row, col) else {
-                    continue;
-                };
-                if cell.is_wide_continuation() {
-                    continue;
-                }
-                let contents = cell.contents();
-                if contents.is_empty() {
-                    text.push(' ');
-                } else {
-                    text.push_str(contents);
-                }
+            if cell.is_wide_continuation() {
+                continue;
             }
-            if row == cursor_row {
-                line.push_str(&text);
+            let contents = cell.contents();
+            if contents.is_empty() {
+                text.push(' ');
             } else {
-                line.push_str(text.trim_end());
+                text.push_str(contents);
             }
         }
-        line.trim_matches(|c| c == '\r' || c == '\n').to_string()
+        if row == cursor_row {
+            line.push_str(&text);
+        } else {
+            line.push_str(text.trim_end());
+        }
     }
+    line.trim_matches(|c| c == '\r' || c == '\n').to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -787,6 +835,34 @@ mod tests {
         let (mut tracker, rx) = tracker();
         tracker.push(b"\x1b]133;B\x07gix\x08 \x08t");
         assert_eq!(last_query(&rx).as_deref(), Some("git"));
+    }
+
+    /// zsh's SIGWINCH/^L redisplay reprints prompt AND buffer before the
+    /// input marker, then only repositions the cursor: the typed line
+    /// never reappears in the input zone and must be carried across the
+    /// marker reset. (Byte sequence captured from a live zsh under tmux.)
+    #[rstest]
+    fn prompt_redraw_without_command_keeps_the_line() {
+        let (mut tracker, rx) = tracker();
+        tracker.push(b"\x1b]133;A\x07$ \x1b]133;B\x07git p");
+        assert_eq!(last_query(&rx).as_deref(), Some("git p"));
+
+        tracker.push(
+            b"\r\r\x1b[0m\x1b[27m\x1b[24m\x1b[J\x1b]133;A;cl=line\x07$ git p\x1b[K\x1b[43C\x1b]133;B\x07\x1b[43D",
+        );
+        tracker.push(b"u");
+        assert_eq!(last_query(&rx).as_deref(), Some("git pu"));
+    }
+
+    /// After a command actually ran, the next prompt is genuinely new: the
+    /// carried line must not leak into it.
+    #[rstest]
+    fn new_prompt_after_a_command_still_resets() {
+        let (mut tracker, rx) = tracker();
+        tracker.push(b"\x1b]133;B\x07git p\r\n\x1b]133;C\x07output\r\n");
+        tracker.push(b"\x1b]133;A\x07$ \x1b]133;B\x07");
+        tracker.push(b"ls");
+        assert_eq!(last_query(&rx).as_deref(), Some("ls"));
     }
 
     /// zsh-autosuggestions paints its ghost after the cursor, inside the
