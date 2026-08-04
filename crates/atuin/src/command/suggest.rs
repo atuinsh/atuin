@@ -10,7 +10,10 @@ use std::time::Duration;
 
 use atuin_client::settings::Settings;
 use atuin_common::shell::Shell;
-use atuin_pty_proxy::{CompletionOracleHandle, OracleShell, SuggestionProvider, find_in_path};
+use atuin_pty_proxy::{
+    CompletionOracleHandle, OracleShell, Suggestion, SuggestionProvider, SuggestionSource,
+    find_in_path,
+};
 
 /// How long the popup waits for the suggestion worker before giving up, so
 /// a slow backend can never wedge the proxy's UI.
@@ -62,7 +65,7 @@ pub(super) fn history_suggestion_provider(
 
 struct SuggestRequest {
     line: String,
-    reply: mpsc::Sender<Vec<String>>,
+    reply: mpsc::Sender<Vec<Suggestion>>,
 }
 
 /// Pick the completion engine for the session's shell (so its config and
@@ -133,7 +136,7 @@ fn suggestion_worker(
         // daemon filters multiline already, this covers the other backends.
         let commands = results
             .into_iter()
-            .filter(|command| !command.contains('\n'))
+            .filter(|suggestion| !suggestion.text.contains('\n'))
             .collect();
         let _ = request.reply.send(commands);
     }
@@ -163,7 +166,7 @@ impl SuggestionBackend {
         }
     }
 
-    async fn fetch(&mut self, query: &str) -> Vec<String> {
+    async fn fetch(&mut self, query: &str) -> Vec<Suggestion> {
         // The oracle computes on its own thread while history runs, so the
         // two costs overlap instead of adding.
         let pending = self
@@ -174,18 +177,31 @@ impl SuggestionBackend {
         // History first — it's ranked and personal; completions top up
         // below so the ghost stays a command you've actually run when one
         // matches.
-        let mut suggestions = self.fetch_history(query).await;
+        let mut suggestions: Vec<Suggestion> = self
+            .fetch_history(query)
+            .await
+            .into_iter()
+            .map(|text| Suggestion {
+                text,
+                source: SuggestionSource::History,
+            })
+            .collect();
 
+        // History honors `suggest.limit`; completions are shown in full —
+        // the shell already scoped them to the typed word, and the popup
+        // windows long lists anyway. The oracle protocol caps each batch,
+        // so "in full" stays bounded.
         if let (Some(oracle), Some(id)) = (self.oracle.as_mut(), pending) {
-            let limit = self.settings.suggest.limit as usize;
             let completions = oracle
                 .collect(id, COMPLETION_TIMEOUT)
                 .into_iter()
-                .filter_map(|candidate| apply_completion(query, &candidate.completion))
-                .take(limit);
+                .filter_map(|candidate| apply_completion(query, &candidate.completion));
             for completion in completions {
-                if !suggestions.contains(&completion) {
-                    suggestions.push(completion);
+                if !suggestions.iter().any(|s| s.text == completion) {
+                    suggestions.push(Suggestion {
+                        text: completion,
+                        source: SuggestionSource::Completion,
+                    });
                 }
             }
         }

@@ -26,7 +26,7 @@ pub use oracle::{Candidate, CompletionOracleHandle, OracleShell, find_in_path};
 #[cfg(unix)]
 pub use pty_proxy::{PtyProxy, RunOptions, Shell, init_script};
 #[cfg(unix)]
-pub use suggest::SuggestionProvider;
+pub use suggest::{Suggestion, SuggestionProvider, SuggestionSource};
 
 #[cfg(not(unix))]
 #[allow(dead_code)]
