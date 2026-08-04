@@ -1,16 +1,16 @@
-//! Headless zsh completion oracle.
+//! Headless shell-completion oracles.
 //!
-//! compsys only runs inside an interactive ZLE session, so a captive
-//! interactive zsh lives under its own pty. An init script overrides
-//! `compadd` to divert every candidate into an array (so nothing is ever
-//! displayed or inserted) and prints them between NUL-delimiter lines. One
-//! oracle persists per session: compinit runs once, then each query is a
-//! kill-line + text + Tab round trip.
+//! zsh's compsys only runs inside an interactive ZLE session, so a captive
+//! interactive zsh lives under its own pty; bash's programmable completion
+//! needs no terminal, so its captive shell runs over plain pipes; fish is
+//! headless by design and runs per query. The captive init scripts print
+//! candidates between NUL-delimiter lines, and one oracle persists per
+//! session so rc files and compinit load once.
 //!
-//! The `compadd` interception technique is adapted from
+//! The zsh `compadd` interception technique is adapted from
 //! <https://github.com/Valodim/zsh-capture-completion> (MIT).
 
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
@@ -191,16 +191,35 @@ __atuin_complete() {
 echo __ATUIN_ORACLE_READY__
 "#;
 
-/// Which shell engine a captive oracle runs.
+/// One shell completion: the token that replaces the current word, plus the
+/// engine's description when it has one. The `token\tdescription` wire
+/// format stays internal to each engine.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Candidate {
+    pub completion: String,
+    pub description: Option<String>,
+}
+
+/// Which shell engine an oracle runs. zsh and bash are persistent captive
+/// processes; fish's engine is headless by design, so it runs per query.
 #[derive(Clone, Copy, Debug)]
 pub enum OracleShell {
     Zsh,
     Bash,
+    Fish,
+}
+
+/// Locate a binary on `PATH`.
+pub fn find_in_path(name: &str) -> Option<std::path::PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_file())
 }
 
 enum OracleProc {
     Zsh(ZshOracle),
     Bash(BashOracle),
+    Fish(std::path::PathBuf),
 }
 
 impl OracleProc {
@@ -208,15 +227,36 @@ impl OracleProc {
         match shell {
             OracleShell::Zsh => ZshOracle::spawn(bin, load_user_config).map(Self::Zsh),
             OracleShell::Bash => BashOracle::spawn(bin, load_user_config).map(Self::Bash),
+            OracleShell::Fish => Some(Self::Fish(bin.to_path_buf())),
         }
     }
 
-    fn complete(&mut self, line: &str, timeout: Duration) -> Option<Vec<String>> {
+    fn complete(&mut self, line: &str, timeout: Duration) -> Option<Vec<Candidate>> {
         match self {
             Self::Zsh(oracle) => oracle.complete(line, timeout),
             Self::Bash(oracle) => oracle.complete(line, timeout),
+            Self::Fish(fish) => Some(fish_complete(fish, line)),
         }
     }
+}
+
+/// fish's engine runs headless by design (`complete -C`), one process per
+/// query — the only engine paying spawn cost per keystroke, but there is no
+/// captive mode to keep warm. `--do-complete=$argv[1]` keeps the user's
+/// line out of fish's parser: it arrives as an argument, never as code.
+fn fish_complete(fish: &Path, line: &str) -> Vec<Candidate> {
+    let output = std::process::Command::new(fish)
+        .args(["--no-config", "-c", "complete --do-complete=$argv[1]"])
+        .arg(line)
+        .stdin(std::process::Stdio::null())
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(parse_candidate)
+        .collect()
 }
 
 /// Async front door to the oracle: queries and answers cross a dedicated
@@ -226,7 +266,7 @@ impl OracleProc {
 /// busy simply replaces any queued one (latest wins).
 pub struct CompletionOracleHandle {
     query_tx: mpsc::SyncSender<(u64, String)>,
-    answer_rx: Receiver<(u64, Vec<String>)>,
+    answer_rx: Receiver<(u64, Vec<Candidate>)>,
     next_id: u64,
 }
 
@@ -296,19 +336,22 @@ impl CompletionOracleHandle {
         }
     }
 
-    /// Ask for completions, waiting at most `wait`. A miss returns empty —
-    /// the answer keeps computing and is discarded as stale later, and the
-    /// oracle stays healthy for the next keystroke.
-    pub fn complete(&mut self, line: &str, wait: Duration) -> Vec<String> {
+    /// Submit a query without waiting, so the caller can overlap other work
+    /// (e.g. the history lookup) before collecting. `None` means the oracle
+    /// is busy with one query already queued: this one loses.
+    pub fn enqueue(&mut self, line: &str) -> Option<u64> {
         while self.answer_rx.try_recv().is_ok() {}
 
         self.next_id += 1;
         let id = self.next_id;
-        if self.query_tx.try_send((id, line.to_string())).is_err() {
-            // Oracle busy and one query already queued: this one loses.
-            return Vec::new();
-        }
+        self.query_tx.try_send((id, line.to_string())).ok()?;
+        Some(id)
+    }
 
+    /// Wait up to `wait` for the answer to an enqueued query. A miss
+    /// returns empty — the answer keeps computing and is discarded as stale
+    /// later, and the oracle stays healthy for the next keystroke.
+    pub fn collect(&mut self, id: u64, wait: Duration) -> Vec<Candidate> {
         let deadline = Instant::now() + wait;
         loop {
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
@@ -321,9 +364,54 @@ impl CompletionOracleHandle {
             }
         }
     }
+
+    /// [`Self::enqueue`] + [`Self::collect`] in one step.
+    pub fn complete(&mut self, line: &str, wait: Duration) -> Vec<Candidate> {
+        match self.enqueue(line) {
+            Some(id) => self.collect(id, wait),
+            None => Vec::new(),
+        }
+    }
 }
 
-pub struct ZshOracle {
+/// Environment for a captive oracle shell. The `ATUIN_PTY_PROXY_*` guards
+/// stop an rc that evals `atuin init` from exec-ing a proxy inside the
+/// proxy; `ATUIN_SUGGEST_ORACLE` is an escape hatch so rc files can skip
+/// heavy setup.
+fn guard_env() -> [(&'static str, std::ffi::OsString); 3] {
+    [
+        ("ATUIN_PTY_PROXY_ACTIVE", "1".into()),
+        (
+            "ATUIN_PTY_PROXY_TMUX",
+            std::env::var_os("TMUX").unwrap_or_default(),
+        ),
+        ("ATUIN_SUGGEST_ORACLE", "1".into()),
+    ]
+}
+
+/// Write the init script to a temp file, source it in the captive shell,
+/// and wait for its ready marker.
+fn source_init(
+    writer: &mut impl Write,
+    lines: &Receiver<String>,
+    script: &str,
+    extension: &str,
+    load_user_config: bool,
+) -> bool {
+    let init_path =
+        std::env::temp_dir().join(format!("atuin-oracle-{}.{extension}", std::process::id()));
+    if std::fs::write(&init_path, script).is_err() {
+        return false;
+    }
+    let sourced = writeln!(writer, "source {}", init_path.display())
+        .and_then(|()| writer.flush())
+        .is_ok();
+    let ready = sourced && await_ready(lines, spawn_deadline(load_user_config));
+    let _ = std::fs::remove_file(&init_path);
+    ready
+}
+
+pub(crate) struct ZshOracle {
     writer: Box<dyn Write + Send>,
     lines: Receiver<String>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
@@ -335,7 +423,7 @@ impl ZshOracle {
     /// With `load_user_config` the user's rc files run first, so their
     /// custom completions and fpath additions answer too; the caller falls
     /// back to a hermetic spawn if that shell never becomes ready.
-    pub fn spawn(zsh: &Path, load_user_config: bool) -> Option<Self> {
+    pub(crate) fn spawn(zsh: &Path, load_user_config: bool) -> Option<Self> {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 50,
@@ -354,16 +442,9 @@ impl ZshOracle {
             cmd.args(["-f", "-i"]);
         }
         cmd.env("TERM", "vt100");
-        // An rc that evals `atuin init zsh` may contain the pty-proxy exec
-        // preamble; these are its guards, and they stop the captive shell
-        // from exec-ing a proxy inside the proxy.
-        cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
-        cmd.env(
-            "ATUIN_PTY_PROXY_TMUX",
-            std::env::var_os("TMUX").unwrap_or_default(),
-        );
-        // Escape hatch so rc files can skip heavy setup in the oracle.
-        cmd.env("ATUIN_SUGGEST_ORACLE", "1");
+        for (key, value) in guard_env() {
+            cmd.env(key, value);
+        }
         if let Ok(cwd) = std::env::current_dir() {
             cmd.cwd(cwd);
         }
@@ -374,24 +455,16 @@ impl ZshOracle {
         let mut writer = pair.master.take_writer().ok()?;
         let lines = spawn_line_reader(reader);
 
-        let init_path =
-            std::env::temp_dir().join(format!("atuin-oracle-{}.zsh", std::process::id()));
-        std::fs::write(&init_path, INIT_SCRIPT).ok()?;
-        writeln!(writer, "source {}", init_path.display()).ok()?;
-        writer.flush().ok()?;
-
-        let ready = await_ready(&lines, spawn_deadline(load_user_config));
-        let _ = std::fs::remove_file(&init_path);
-        ready.then_some(Self {
+        source_init(&mut writer, &lines, INIT_SCRIPT, "zsh", load_user_config).then_some(Self {
             writer,
             lines,
             child,
         })
     }
 
-    /// Complete `line`, returning raw `candidate\tdescription` lines.
-    /// `None` means the oracle is desynced or dead: drop and respawn.
-    pub fn complete(&mut self, line: &str, timeout: Duration) -> Option<Vec<String>> {
+    /// Complete `line`. `None` means the oracle is desynced or dead: drop
+    /// and respawn.
+    pub(crate) fn complete(&mut self, line: &str, timeout: Duration) -> Option<Vec<Candidate>> {
         // Stale output would misattribute results to this query.
         while self.lines.try_recv().is_ok() {}
 
@@ -415,7 +488,7 @@ impl Drop for ZshOracle {
 /// prints `COMPREPLY` between NUL delimiters. Unlike the zsh oracle this
 /// shell *executes* the protocol lines we send, so queries are passed as a
 /// single-quoted argument.
-pub struct BashOracle {
+pub(crate) struct BashOracle {
     stdin: std::process::ChildStdin,
     lines: Receiver<String>,
     child: std::process::Child,
@@ -427,7 +500,7 @@ impl BashOracle {
     /// With `load_user_config` bash runs interactively so `~/.bashrc` (and
     /// its custom completions) load; hermetic mode uses `--norc` and the
     /// system bash-completion only.
-    pub fn spawn(bash: &Path, load_user_config: bool) -> Option<Self> {
+    pub(crate) fn spawn(bash: &Path, load_user_config: bool) -> Option<Self> {
         let mut cmd = std::process::Command::new(bash);
         // -i so rc files load and completion state behaves interactively;
         // with piped stdio readline stays out of the way (prompts land on
@@ -438,15 +511,9 @@ impl BashOracle {
             cmd.args(["--norc", "-i"]);
         }
         cmd.env("TERM", "dumb");
-        // Same guards as the zsh oracle: an rc that evals `atuin init` must
-        // not exec a proxy inside the proxy, and rc files get an escape
-        // hatch to skip heavy setup.
-        cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
-        cmd.env(
-            "ATUIN_PTY_PROXY_TMUX",
-            std::env::var_os("TMUX").unwrap_or_default(),
-        );
-        cmd.env("ATUIN_SUGGEST_ORACLE", "1");
+        for (key, value) in guard_env() {
+            cmd.env(key, value);
+        }
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
@@ -474,24 +541,23 @@ impl BashOracle {
             let _ = std::io::copy(&mut sink, &mut std::io::sink());
         });
 
-        let init_path =
-            std::env::temp_dir().join(format!("atuin-oracle-{}.bash", std::process::id()));
-        std::fs::write(&init_path, BASH_INIT_SCRIPT).ok()?;
-        writeln!(stdin, "source {}", init_path.display()).ok()?;
-        stdin.flush().ok()?;
-
-        let ready = await_ready(&lines, spawn_deadline(load_user_config));
-        let _ = std::fs::remove_file(&init_path);
-        ready.then_some(Self {
+        source_init(
+            &mut stdin,
+            &lines,
+            BASH_INIT_SCRIPT,
+            "bash",
+            load_user_config,
+        )
+        .then_some(Self {
             stdin,
             lines,
             child,
         })
     }
 
-    /// Complete `line`, returning raw candidate lines. `None` means the
-    /// oracle is desynced or dead: drop and respawn.
-    pub fn complete(&mut self, line: &str, timeout: Duration) -> Option<Vec<String>> {
+    /// Complete `line`. `None` means the oracle is desynced or dead: drop
+    /// and respawn.
+    pub(crate) fn complete(&mut self, line: &str, timeout: Duration) -> Option<Vec<Candidate>> {
         while self.lines.try_recv().is_ok() {}
 
         writeln!(self.stdin, "__atuin_complete {}", single_quoted(line)).ok()?;
@@ -524,28 +590,24 @@ fn spawn_deadline(load_user_config: bool) -> Instant {
 
 /// Split a byte stream into `\r?\n`-terminated lines on a thread, so
 /// protocol reads can carry deadlines via `recv_timeout`.
-fn spawn_line_reader(mut reader: impl Read + Send + 'static) -> Receiver<String> {
+fn spawn_line_reader(reader: impl Read + Send + 'static) -> Receiver<String> {
     let (line_tx, lines) = mpsc::channel();
     std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        let mut pending = Vec::new();
+        let mut reader = BufReader::new(reader);
+        let mut line = Vec::new();
         loop {
-            match reader.read(&mut buf) {
+            line.clear();
+            match reader.read_until(b'\n', &mut line) {
                 Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    pending.extend_from_slice(&buf[..n]);
-                    while let Some(end) = pending.iter().position(|&b| b == b'\n') {
-                        let mut line: Vec<u8> = pending.drain(..=end).collect();
+                Ok(_) => {
+                    while line.last().is_some_and(|&b| b == b'\n' || b == b'\r') {
                         line.pop();
-                        if line.last() == Some(&b'\r') {
-                            line.pop();
-                        }
-                        if line_tx
-                            .send(String::from_utf8_lossy(&line).into_owned())
-                            .is_err()
-                        {
-                            return;
-                        }
+                    }
+                    if line_tx
+                        .send(String::from_utf8_lossy(&line).into_owned())
+                        .is_err()
+                    {
+                        return;
                     }
                 }
             }
@@ -570,9 +632,8 @@ fn await_ready(lines: &Receiver<String>, deadline: Instant) -> bool {
 }
 
 /// Collect candidate lines between the two NUL-delimiter lines, dropping
-/// display noise. Trailing spaces are trimmed: bash completers append them
-/// as insert-a-space hints, which would leak into the spliced suggestion.
-fn collect_candidates(lines: &Receiver<String>, deadline: Instant) -> Option<Vec<String>> {
+/// display noise.
+fn collect_candidates(lines: &Receiver<String>, deadline: Instant) -> Option<Vec<Candidate>> {
     let mut candidates = Vec::new();
     let mut in_results = false;
     loop {
@@ -582,38 +643,44 @@ fn collect_candidates(lines: &Receiver<String>, deadline: Instant) -> Option<Vec
                 return Some(candidates);
             }
             in_results = true;
-        } else if in_results && !received.is_empty() && !received.contains('\x1b') {
-            let trimmed = received.trim_end_matches(' ');
-            if !trimmed.is_empty() {
-                candidates.push(trimmed.to_string());
-            }
+        } else if in_results && !received.contains('\x1b') {
+            candidates.extend(parse_candidate(&received));
         }
     }
+}
+
+/// Parse one `token\tdescription` oracle line. Trailing spaces are trimmed:
+/// bash completers append them as insert-a-space hints, which would leak
+/// into the spliced suggestion.
+fn parse_candidate(line: &str) -> Option<Candidate> {
+    let (completion, description) = match line.split_once('\t') {
+        Some((completion, description)) => (completion, Some(description)),
+        None => (line, None),
+    };
+    let completion = completion.trim_end_matches(' ');
+    if completion.is_empty() {
+        return None;
+    }
+    Some(Candidate {
+        completion: completion.to_string(),
+        description: description
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(str::to_string),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn zsh_path() -> Option<std::path::PathBuf> {
-        std::env::var_os("PATH").and_then(|path| {
-            std::env::split_paths(&path)
-                .map(|dir| dir.join("zsh"))
-                .find(|candidate| candidate.is_file())
-        })
-    }
-
-    fn bash_path() -> Option<std::path::PathBuf> {
-        std::env::var_os("PATH").and_then(|path| {
-            std::env::split_paths(&path)
-                .map(|dir| dir.join("bash"))
-                .find(|candidate| candidate.is_file())
-        })
+    fn completions(candidates: &[Candidate]) -> Vec<&str> {
+        candidates.iter().map(|c| c.completion.as_str()).collect()
     }
 
     #[test]
     fn completes_against_real_bash() {
-        let Some(bash) = bash_path() else {
+        let Some(bash) = find_in_path("bash") else {
             eprintln!("bash not installed; skipping oracle test");
             return;
         };
@@ -627,7 +694,7 @@ mod tests {
             .complete("git ch", Duration::from_secs(3))
             .expect("oracle answers");
         assert!(
-            candidates.iter().any(|c| c == "checkout"),
+            completions(&candidates).contains(&"checkout"),
             "git subcommands complete: {candidates:?}"
         );
 
@@ -637,10 +704,30 @@ mod tests {
             .complete("echo 'a b' /tm", Duration::from_secs(3))
             .expect("oracle answers again");
         assert!(
-            candidates.iter().any(|c| c.contains("tmp")),
+            completions(&candidates).iter().any(|c| c.contains("tmp")),
             "file completion: {candidates:?}"
         );
-        assert!(!candidates.iter().any(|c| c == "checkout"));
+        assert!(!completions(&candidates).contains(&"checkout"));
+    }
+
+    #[test]
+    fn parses_candidate_lines() {
+        assert_eq!(
+            parse_candidate("checkout\tCheckout a branch"),
+            Some(Candidate {
+                completion: "checkout".to_string(),
+                description: Some("Checkout a branch".to_string()),
+            })
+        );
+        assert_eq!(
+            parse_candidate("checkout "),
+            Some(Candidate {
+                completion: "checkout".to_string(),
+                description: None,
+            })
+        );
+        assert_eq!(parse_candidate(""), None);
+        assert_eq!(parse_candidate("  "), None);
     }
 
     #[test]
@@ -651,7 +738,7 @@ mod tests {
 
     #[test]
     fn completes_against_real_zsh() {
-        let Some(zsh) = zsh_path() else {
+        let Some(zsh) = find_in_path("zsh") else {
             eprintln!("zsh not installed; skipping oracle test");
             return;
         };
@@ -660,13 +747,9 @@ mod tests {
         let candidates = oracle
             .complete("git ch", Duration::from_secs(3))
             .expect("oracle answers");
-        let tokens: Vec<&str> = candidates
-            .iter()
-            .map(|c| c.split('\t').next().unwrap_or_default())
-            .collect();
         assert!(
-            tokens.contains(&"checkout"),
-            "git subcommands complete: {tokens:?}"
+            completions(&candidates).contains(&"checkout"),
+            "git subcommands complete: {candidates:?}"
         );
 
         // The oracle is persistent: a second, unrelated query must work and
@@ -675,9 +758,13 @@ mod tests {
             .complete("cd /tm", Duration::from_secs(3))
             .expect("oracle answers again");
         assert!(
-            candidates.iter().any(|c| c.contains("tmp")),
+            completions(&candidates).iter().any(|c| c.contains("tmp")),
             "directory completion: {candidates:?}"
         );
-        assert!(!candidates.iter().any(|c| c.contains("checkout")));
+        assert!(
+            !completions(&candidates)
+                .iter()
+                .any(|c| c.contains("checkout"))
+        );
     }
 }

@@ -17,7 +17,7 @@ use std::time::Duration;
 use atuin_common::ansi;
 
 use crate::compositor::{Compositor, OverlayContent, OverlayFlags, lock_unpoisoned};
-use crate::osc133::{Event, Parser, Zone};
+use crate::osc133::{Event, Parser, Segment, Zone};
 
 /// Candidate completions for the current line, best first. Runs on the UI
 /// thread; implementations enforce their own timeout.
@@ -98,7 +98,6 @@ impl PopupState {
 /// in-progress command line to the UI thread.
 pub(crate) struct InputTracker {
     parser: Parser,
-    zone: Zone,
     buf: Vec<u8>,
     cols: Arc<AtomicU16>,
     ui_tx: Sender<UiEvent>,
@@ -108,49 +107,33 @@ impl InputTracker {
     fn new(ui_tx: Sender<UiEvent>, cols: Arc<AtomicU16>) -> Self {
         Self {
             parser: Parser::new(),
-            zone: Zone::Unknown,
             buf: Vec::new(),
             cols,
             ui_tx,
         }
     }
 
-    /// Mirrors [`crate::capture::CommandCaptureTracker::push`]'s marker
-    /// splitting, tracking only the input zone.
     pub(crate) fn push(&mut self, data: &[u8]) {
-        let mut events = Vec::new();
-        self.parser
-            .push_located(data, |located| events.push(located));
-
-        let mut start = 0;
+        let buf = &mut self.buf;
         let mut input_changed = false;
         let mut hide = false;
-        for located in events {
-            let marker_start = located.start_offset.min(data.len()).max(start);
-            let offset = located.offset.min(data.len());
-            self.append(&data[start..marker_start]);
-
-            if matches!(located.event, Event::PromptStart | Event::CommandStart) {
-                self.buf.clear();
+        self.parser.segments(data, |segment| match segment {
+            Segment::Text(Zone::Input, bytes) => {
+                let remaining = MAX_INPUT_BUF_BYTES.saturating_sub(buf.len());
+                buf.extend_from_slice(&bytes[..bytes.len().min(remaining)]);
+                input_changed = true;
             }
-            // Any marker starts a fresh zone: whatever was typed before it in
-            // this chunk no longer needs a popup update of its own.
-            hide = true;
-            input_changed = false;
-
-            self.zone = located.zone;
-            start = offset;
-        }
-
-        let append_end = self
-            .parser
-            .incomplete_osc_sequence_start()
-            .map_or(data.len(), |sequence_start| {
-                sequence_start.min(data.len()).max(start)
-            });
-        if start < append_end {
-            input_changed |= self.append(&data[start..append_end]);
-        }
+            Segment::Text(..) => {}
+            Segment::Marker { located, .. } => {
+                if matches!(located.event, Event::PromptStart | Event::CommandStart) {
+                    buf.clear();
+                }
+                // Any marker starts a fresh zone: whatever was typed before
+                // it in this chunk no longer needs a popup update of its own.
+                hide = true;
+                input_changed = false;
+            }
+        });
 
         if input_changed {
             let cols =
@@ -163,36 +146,38 @@ impl InputTracker {
             let _ = self.ui_tx.send(UiEvent::Hide);
         }
     }
-
-    fn append(&mut self, data: &[u8]) -> bool {
-        if self.zone != Zone::Input || data.is_empty() {
-            return false;
-        }
-        let remaining = MAX_INPUT_BUF_BYTES.saturating_sub(self.buf.len());
-        self.buf
-            .extend_from_slice(&data[..data.len().min(remaining)]);
-        true
-    }
 }
 
 // ---------------------------------------------------------------------------
 // Key interception (stdin→pty pump thread)
 // ---------------------------------------------------------------------------
 
-/// Sequences stealable while the overlay is visible; everything else
-/// forwards untouched.
-const INTERCEPTABLE: &[&[u8]] = &[
-    b"\t",
-    b"\x1b",
-    b"\x1b[A",
-    b"\x1b[B",
-    b"\x1b[C",
-    b"\x1bOA",
-    b"\x1bOB",
-    b"\x1bOC",
-    b"\x1b[1;3C",
-    b"\x1b[1;5C",
-    b"\x1bf",
+/// A key the filter may steal while the overlay is visible.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Key {
+    Tab,
+    Up,
+    Down,
+    Right,
+    WordRight,
+    Esc,
+}
+
+/// The single source of truth for interceptable keys: partial-prefix
+/// detection, longest-match decoding, and dispatch all derive from it, so a
+/// key exists in exactly one place.
+const KEY_TABLE: &[(&[u8], Key)] = &[
+    (b"\t", Key::Tab),
+    (b"\x1b", Key::Esc),
+    (b"\x1b[A", Key::Up),
+    (b"\x1bOA", Key::Up),
+    (b"\x1b[B", Key::Down),
+    (b"\x1bOB", Key::Down),
+    (b"\x1b[C", Key::Right),
+    (b"\x1bOC", Key::Right),
+    (b"\x1b[1;3C", Key::WordRight),
+    (b"\x1b[1;5C", Key::WordRight),
+    (b"\x1bf", Key::WordRight),
 ];
 
 enum KeyAction {
@@ -223,6 +208,11 @@ impl<W: Write> KeyFilter<W> {
         if !self.visible() {
             return Cow::Borrowed(chunk);
         }
+        // Every interceptable key starts with ESC or Tab; anything else is
+        // a pure pass-through even while the overlay shows.
+        if !chunk.contains(&0x1b) && !chunk.contains(&b'\t') {
+            return Cow::Borrowed(chunk);
+        }
 
         let mut bytes = chunk.to_vec();
         let mut out = Vec::new();
@@ -235,14 +225,14 @@ impl<W: Write> KeyFilter<W> {
             }
 
             let rest = &bytes[pos..];
-            let Some(key) = match_key(rest) else {
+            let Some((sequence, key)) = match_key(rest) else {
                 out.push(bytes[pos]);
                 pos += 1;
                 continue;
             };
-            pos += key.len();
+            pos += sequence.len();
             match self.intercept(key) {
-                KeyAction::Forward => out.extend_from_slice(key),
+                KeyAction::Forward => out.extend_from_slice(sequence),
                 KeyAction::Consume => {}
                 KeyAction::Replace(replacement) => out.extend_from_slice(&replacement),
             }
@@ -258,20 +248,18 @@ impl<W: Write> KeyFilter<W> {
         self.flags.ghost.load(Ordering::Acquire)
     }
 
-    fn intercept(&self, bytes: &[u8]) -> KeyAction {
-        match bytes {
-            b"\t" => self.accept(AcceptSpan::Full),
+    fn intercept(&self, key: Key) -> KeyAction {
+        match key {
+            Key::Tab => self.accept(AcceptSpan::Full),
             // Right accepts the ghost, fish-style; a drawn ghost implies
             // cursor-at-EOL, where Right is otherwise a no-op.
-            b"\x1b[C" | b"\x1bOC" if self.ghost_visible() => self.accept(AcceptSpan::Full),
+            Key::Right if self.ghost_visible() => self.accept(AcceptSpan::Full),
             // Alt/Ctrl+Right (and Alt-f): accept one word of the ghost.
-            b"\x1b[1;3C" | b"\x1b[1;5C" | b"\x1bf" if self.ghost_visible() => {
-                self.accept(AcceptSpan::Word)
-            }
-            b"\x1b[B" | b"\x1bOB" => self.navigate(1),
-            b"\x1b[A" | b"\x1bOA" => self.navigate(-1),
-            b"\x1b" => self.dismiss(),
-            _ => KeyAction::Forward,
+            Key::WordRight if self.ghost_visible() => self.accept(AcceptSpan::Word),
+            Key::Right | Key::WordRight => KeyAction::Forward,
+            Key::Down => self.navigate(1),
+            Key::Up => self.navigate(-1),
+            Key::Esc => self.dismiss(),
         }
     }
 
@@ -369,21 +357,21 @@ fn first_word(suffix: &str) -> &str {
 /// True if `bytes` is a proper prefix of some interceptable key sequence —
 /// i.e. more bytes could still turn it into one.
 fn is_partial_interceptable(bytes: &[u8]) -> bool {
-    INTERCEPTABLE
+    KEY_TABLE
         .iter()
-        .any(|seq| seq.len() > bytes.len() && seq.starts_with(bytes))
+        .any(|(seq, _)| seq.len() > bytes.len() && seq.starts_with(bytes))
 }
 
 /// Longest interceptable key at the start of `rest`. A bare `ESC` only
 /// counts when nothing follows it — `ESC [` etc. is the start of some other
 /// key's sequence, not an Escape press.
-fn match_key(rest: &[u8]) -> Option<&'static [u8]> {
-    INTERCEPTABLE
+fn match_key(rest: &[u8]) -> Option<(&'static [u8], Key)> {
+    KEY_TABLE
         .iter()
-        .filter(|seq| rest.starts_with(seq))
-        .max_by_key(|seq| seq.len())
+        .filter(|(seq, _)| rest.starts_with(seq))
+        .max_by_key(|(seq, _)| seq.len())
         .copied()
-        .filter(|seq| *seq != b"\x1b" || rest.len() == 1)
+        .filter(|(seq, _)| *seq != b"\x1b" || rest.len() == 1)
 }
 
 fn read_more(bytes: &mut Vec<u8>, stdin: &mut impl Read) -> bool {
@@ -569,9 +557,10 @@ mod tests {
         peer: UnixStream,
     }
 
-    /// Build a filter over a real (Vec-backed) compositor with the overlay
-    /// painted, so visibility flags reflect a live popup.
-    fn fixture(line: &str, suggestions: &[&str], selected: usize) -> Fixture {
+    type SharedCompositor = Arc<Mutex<Compositor<Vec<u8>>>>;
+
+    /// A Vec-backed compositor plus its visibility flags.
+    fn test_compositor() -> (Arc<OverlayFlags>, SharedCompositor) {
         let flags = Arc::new(OverlayFlags::default());
         let compositor = Arc::new(Mutex::new(Compositor::new(
             24,
@@ -580,6 +569,13 @@ mod tests {
             flags.clone(),
             true,
         )));
+        (flags, compositor)
+    }
+
+    /// Build a filter over a real (Vec-backed) compositor with the overlay
+    /// painted, so visibility flags reflect a live popup.
+    fn fixture(line: &str, suggestions: &[&str], selected: usize) -> Fixture {
+        let (flags, compositor) = test_compositor();
 
         let state = Arc::new(Mutex::new(PopupState {
             line: line.to_string(),
@@ -734,14 +730,7 @@ mod tests {
 
     #[rstest]
     fn query_paints_and_dismissal_suppresses() {
-        let flags = Arc::new(OverlayFlags::default());
-        let compositor = Arc::new(Mutex::new(Compositor::new(
-            24,
-            80,
-            Vec::new(),
-            flags.clone(),
-            true,
-        )));
+        let (flags, compositor) = test_compositor();
         compositor.lock().unwrap().apply_pty(b"$ git st").unwrap();
         let state = Arc::new(Mutex::new(PopupState::default()));
         // Two suggestions so the dropdown renders (a lone prefix match
@@ -764,14 +753,7 @@ mod tests {
 
     #[rstest]
     fn empty_line_clears_overlay() {
-        let flags = Arc::new(OverlayFlags::default());
-        let compositor = Arc::new(Mutex::new(Compositor::new(
-            24,
-            80,
-            Vec::new(),
-            flags.clone(),
-            true,
-        )));
+        let (flags, compositor) = test_compositor();
         let state = Arc::new(Mutex::new(PopupState::default()));
         let provider: SuggestionProvider = Box::new(|_| vec!["anything".to_string()]);
 

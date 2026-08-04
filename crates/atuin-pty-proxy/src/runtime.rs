@@ -99,14 +99,16 @@ fn run(mut options: RuntimeOptions) -> eyre::Result<()> {
     screen::spawn_socket_server(sock_path.clone(), compositor.clone());
     spawn_resize_handler(pair.master, compositor.clone(), current_cols.clone())?;
 
-    let (mut input_tracker, key_filter) = match options.hooks.suggestion_provider.take() {
-        Some(provider) => {
+    let (mut input_tracker, key_filter) = options
+        .hooks
+        .suggestion_provider
+        .take()
+        .map(|provider| {
             let handles =
                 crate::suggest::spawn(provider, compositor.clone(), flags, current_cols.clone());
-            (Some(handles.tracker), Some(handles.keys))
-        }
-        None => (None, None),
-    };
+            (handles.tracker, handles.keys)
+        })
+        .unzip();
 
     terminal::enable_raw_mode()?;
 
