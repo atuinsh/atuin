@@ -31,8 +31,13 @@ const GHOST_STYLE: &[u8] = b"\x1b[0m\x1b[38;5;242m";
 /// show a replacement glyph in that cell; the suggestion itself is intact.
 const HISTORY_ICON: char = '\u{f1da}'; //  (fa-history)
 const COMPLETION_ICON: char = '\u{f120}'; //  (fa-terminal)
-/// Leading space + icon + separating space + trailing space.
-const ROW_CHROME_WIDTH: usize = 4;
+/// Icon + separating space + one trailing pad cell.
+const ROW_CHROME_WIDTH: usize = 3;
+
+/// Scrollbar glyphs for the popup's right edge, shown only when there are
+/// more suggestions than visible rows.
+const SCROLL_THUMB: char = '█';
+const SCROLL_TRACK: char = '│';
 
 fn source_icon(source: SuggestionSource) -> char {
     match source {
@@ -463,12 +468,25 @@ fn draw_popup(
     // token's column, so each row reads as a completion of the current
     // word rather than a fragment split mid-word.
     let (line_head, partial_token) = content.line.split_at(token_start(&content.line));
+    let scrollbar = content.suggestions.len() > visible;
+    let chrome = ROW_CHROME_WIDTH + usize::from(scrollbar);
     let width = window
         .iter()
-        .map(|s| shown_from_token(s, line_head).width() + ROW_CHROME_WIDTH)
+        .map(|s| shown_from_token(s, line_head).width() + chrome)
         .max()
-        .unwrap_or(ROW_CHROME_WIDTH)
+        .unwrap_or(chrome)
         .clamp(MIN_POPUP_WIDTH, cols as usize);
+
+    // Proportional thumb: its length mirrors the visible share of the
+    // list, and its travel spans the track as the window scrolls.
+    let (thumb_top, thumb_len) = if scrollbar {
+        let total = content.suggestions.len();
+        let len = (visible * visible).div_ceil(total).max(1);
+        let top = (*window_offset * (visible - len) + (total - visible) / 2) / (total - visible);
+        (top, len)
+    } else {
+        (0, 0)
+    };
     let partial_width = partial_token.width().min(u16::MAX as usize) as u16;
     let token_col = cursor_col.saturating_sub(partial_width);
     let rightmost = cols.saturating_sub(width as u16);
@@ -490,7 +508,6 @@ fn draw_popup(
             UNSELECTED_STYLE
         });
 
-        buf.push(b' ');
         let mut utf8 = [0u8; 4];
         buf.extend_from_slice(
             source_icon(suggestion.source)
@@ -498,12 +515,21 @@ fn draw_popup(
                 .as_bytes(),
         );
         buf.push(b' ');
-        let used = 3 + write_fitted(
+        let used = 2 + write_fitted(
             buf,
             shown_from_token(suggestion, line_head),
-            width.saturating_sub(ROW_CHROME_WIDTH),
+            width.saturating_sub(chrome),
         );
-        buf.resize(buf.len() + width.saturating_sub(used), b' ');
+        let pad_to = width - usize::from(scrollbar);
+        buf.resize(buf.len() + pad_to.saturating_sub(used), b' ');
+        if scrollbar {
+            let glyph = if (thumb_top..thumb_top + thumb_len).contains(&i) {
+                SCROLL_THUMB
+            } else {
+                SCROLL_TRACK
+            };
+            buf.extend_from_slice(glyph.encode_utf8(&mut utf8).as_bytes());
+        }
     }
 
     Some(DrawnRegion {
@@ -743,6 +769,46 @@ mod tests {
         c.set_overlay(None);
         c.set_overlay(Some(content("do abc", &["do abcd", "do abce"], 0)));
         assert_eq!(popup_col(&c, 1), 5);
+    }
+
+    #[rstest]
+    fn scrollbar_tracks_the_window() {
+        let mut c = compositor();
+        c.apply_pty(b"$ g").unwrap();
+        let all: Vec<String> = (0..7).map(|i| format!("git c{i}")).collect();
+        let refs: Vec<&str> = all.iter().map(String::as_str).collect();
+
+        // 7 suggestions, 5 visible rows: popup at col 2 ("g" token), width
+        // 6 (text) + 4 (chrome incl. scrollbar) — bar in column 11.
+        let bar = |c: &Compositor<Vec<u8>>, row: u16| -> String {
+            let checker = displayed(c);
+            let cell = checker.screen().cell(row, 11);
+            cell.map(|cell| cell.contents().to_string())
+                .unwrap_or_default()
+        };
+
+        c.set_overlay(Some(content("g", &refs, 0)));
+        assert_eq!(bar(&c, 1), SCROLL_THUMB.to_string(), "thumb starts at top");
+        assert_eq!(bar(&c, 5), SCROLL_TRACK.to_string());
+
+        // Selecting the last entry scrolls the window; the thumb follows
+        // to the bottom of the track.
+        c.set_overlay(Some(content("g", &refs, 6)));
+        assert_eq!(bar(&c, 1), SCROLL_TRACK.to_string());
+        assert_eq!(bar(&c, 5), SCROLL_THUMB.to_string(), "thumb at bottom");
+    }
+
+    #[rstest]
+    fn few_suggestions_render_without_scrollbar() {
+        let mut c = compositor();
+        c.apply_pty(b"$ g").unwrap();
+        c.set_overlay(Some(content("g", &["git a", "git b"], 0)));
+
+        // Rows are icon + space + text + one pad cell — no bar column.
+        let checker = displayed(&c);
+        let row = row_text(&checker, 1);
+        assert!(!row.contains(SCROLL_THUMB), "no scrollbar: {row:?}");
+        assert!(!row.contains(SCROLL_TRACK), "no scrollbar: {row:?}");
     }
 
     // -- Compositor behaviour ---------------------------------------------
