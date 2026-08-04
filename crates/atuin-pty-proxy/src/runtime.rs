@@ -199,16 +199,23 @@ const CPR_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(
 
 /// Ask the terminal where its cursor is (`ESC[6n`) and seed the screen
 /// model with the answer, so overlays land on the prompt the user sees
-/// even when the proxy starts on a non-empty screen. Runs before the
-/// pumps, in raw mode; anything the user typed ahead of the reply is
-/// forwarded to the pty untouched.
+/// even when the proxy starts on a non-empty screen.
+///
+/// The shell this proxy replaced may have had its own queries in flight
+/// (powerlevel10k and iTerm2 send `ESC[6n` around every prompt), so the
+/// first cursor report to arrive is not necessarily the answer to ours.
+/// A DA1 query (`ESC[c`) sent after the CPR acts as a fence: the terminal
+/// answers in order, so the last cursor report before the DA1 reply is
+/// ours, and every stale report is swallowed rather than forwarded to the
+/// child as junk keystrokes. Keys the user types ahead of the replies are
+/// forwarded untouched.
 fn seed_cursor_from_terminal(
     compositor: &Arc<Mutex<Compositor<std::io::Stdout>>>,
     pty_writer: &mut (impl Write + ?Sized),
 ) {
     let mut stdout = std::io::stdout();
     if stdout
-        .write_all(b"\x1b[6n")
+        .write_all(b"\x1b[6n\x1b[c")
         .and_then(|()| stdout.flush())
         .is_err()
     {
@@ -219,7 +226,8 @@ fn seed_cursor_from_terminal(
     let deadline = std::time::Instant::now() + CPR_TIMEOUT;
     let mut pending = Vec::new();
     let mut buf = [0u8; 256];
-    loop {
+    let mut cursor = None;
+    'read: loop {
         if rustix::io::ioctl_fionread(&stdin).unwrap_or(0) == 0 {
             if std::time::Instant::now() >= deadline {
                 break;
@@ -232,38 +240,67 @@ fn seed_cursor_from_terminal(
             break;
         }
         pending.extend_from_slice(&buf[..n]);
-        if let Some((row, col)) = take_cursor_report(&mut pending) {
-            lock_unpoisoned(compositor).seed_cursor(row, col);
-            break;
+        while let Some(report) = take_report(&mut pending) {
+            match report {
+                Report::Cursor { row, col } => cursor = Some((row, col)),
+                Report::Attributes => break 'read,
+            }
         }
     }
 
+    if let Some((row, col)) = cursor {
+        lock_unpoisoned(compositor).seed_cursor(row, col);
+    }
     if !pending.is_empty() {
         let _ = pty_writer.write_all(&pending);
     }
 }
 
-/// Find and remove the first `ESC[row;colR` cursor-position report,
-/// returning its 1-based coordinates. Keystrokes racing the report are
-/// left in place.
-fn take_cursor_report(bytes: &mut Vec<u8>) -> Option<(u16, u16)> {
+/// A terminal-to-host report the handshake consumes: these answer queries,
+/// possibly ones sent by the shell this proxy replaced, and must never
+/// reach the child as input.
+enum Report {
+    /// `ESC[row;colR` — 1-based cursor position.
+    Cursor { row: u16, col: u16 },
+    /// `ESC[?...c` — DA1 attributes, the handshake's fence.
+    Attributes,
+}
+
+/// Find and remove the first complete report in `bytes`; everything else
+/// (keystrokes racing the replies) is left in place.
+fn take_report(bytes: &mut Vec<u8>) -> Option<Report> {
     for start in 0..bytes.len() {
         if bytes[start] != 0x1b {
             continue;
         }
-        if let Some((len, row, col)) = parse_cursor_report(&bytes[start..]) {
+        if let Some((len, report)) = parse_report(&bytes[start..]) {
             bytes.drain(start..start + len);
-            return Some((row, col));
+            return Some(report);
         }
     }
     None
 }
 
-fn parse_cursor_report(bytes: &[u8]) -> Option<(usize, u16, u16)> {
+fn parse_report(bytes: &[u8]) -> Option<(usize, Report)> {
     let rest = bytes.strip_prefix(b"\x1b[")?;
-    let end = rest.iter().position(|&b| b == b'R')?;
+    if let Some(params) = rest.strip_prefix(b"?") {
+        let end = params
+            .iter()
+            .position(|&b| !b.is_ascii_digit() && b != b';')?;
+        return (params[end] == b'c').then_some((2 + 1 + end + 1, Report::Attributes));
+    }
+    let end = rest
+        .iter()
+        .position(|&b| !b.is_ascii_digit() && b != b';')?;
+    if rest[end] != b'R' {
+        return None;
+    }
     let (row, col) = std::str::from_utf8(&rest[..end]).ok()?.split_once(';')?;
-    Some((2 + end + 1, row.parse().ok()?, col.parse().ok()?))
+    let report = Report::Cursor {
+        row: row.parse().ok()?,
+        col: col.parse().ok()?,
+    };
+    Some((2 + end + 1, report))
 }
 
 fn spawn_resize_handler(
@@ -299,8 +336,15 @@ fn process_exit_code(code: u32) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{process_exit_code, take_cursor_report};
+    use super::{Report, process_exit_code, take_report};
     use rstest::rstest;
+
+    fn cursor_of(report: Option<Report>) -> Option<(u16, u16)> {
+        match report {
+            Some(Report::Cursor { row, col }) => Some((row, col)),
+            _ => None,
+        }
+    }
 
     #[rstest]
     #[case::clean(b"\x1b[24;1R".to_vec(), Some((24, 1)), b"".to_vec())]
@@ -317,8 +361,21 @@ mod tests {
         #[case] expected: Option<(u16, u16)>,
         #[case] remainder: Vec<u8>,
     ) {
-        assert_eq!(take_cursor_report(&mut bytes), expected);
+        assert_eq!(cursor_of(take_report(&mut bytes)), expected);
         assert_eq!(bytes, remainder);
+    }
+
+    /// Stale reports from queries the replaced shell sent are all consumed
+    /// in order; the terminal answers in order, so the last cursor report
+    /// before the DA1 fence is the proxy's own.
+    #[rstest]
+    fn stale_reports_are_swallowed_and_ordered() {
+        let mut bytes = b"\x1b[3;42Rls\x1b[24;1R\x1b[?64;1;9cx".to_vec();
+        assert_eq!(cursor_of(take_report(&mut bytes)), Some((3, 42)));
+        assert_eq!(cursor_of(take_report(&mut bytes)), Some((24, 1)));
+        assert!(matches!(take_report(&mut bytes), Some(Report::Attributes)));
+        assert!(take_report(&mut bytes).is_none());
+        assert_eq!(bytes, b"lsx".to_vec());
     }
 
     #[rstest]
