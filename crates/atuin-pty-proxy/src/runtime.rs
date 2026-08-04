@@ -522,7 +522,7 @@ fn resolve_shell(shell: PathBuf) -> PathBuf {
 /// terminals answer within a few milliseconds; on a miss the proxy runs
 /// with an unseeded model, as before.
 const CPR_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);
-const CPR_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(5);
+const CPR_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1);
 
 /// Ask the terminal where its cursor is (`ESC[6n`) and seed the screen
 /// model with the answer, so overlays land on the prompt the user sees
