@@ -9,22 +9,22 @@
 //! between them, with the old event loop's arms living in
 //! `apply_input_action` (async arms become detached effects).
 //!
-//! Not yet ported: the inspector tab (`ToggleTab` and the inspector actions
-//! are inert until then) and vim cursor-shape changes (a later `eye_declare`
+//! Not yet ported: vim cursor-shape changes (a later `eye_declare`
 //! capability).
 
 use std::cell::RefCell;
 use std::sync::Arc;
 
 use atuin_client::database::{Context, Database};
-use atuin_client::history::History;
 use atuin_client::history::store::HistoryStore;
+use atuin_client::history::{History, HistoryId, HistoryStats};
 use atuin_client::settings::{ExitMode, FilterMode, KeymapMode, SearchMode, Settings};
 use atuin_client::theme::Theme;
 use crossterm::event::{KeyEvent, KeyEventKind};
 use eye_declare::{
     App, Ctx, Element, ElementExt, Focus, FocusHandle, InputEvent, Keymap, Task, empty, keymap,
 };
+use semver::Version;
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
 use unicode_width::UnicodeWidthStr;
@@ -32,7 +32,7 @@ use unicode_width::UnicodeWidthStr;
 use super::super::cursor::Cursor;
 use super::super::engines::{self, AnySearchEngine, SearchEngine, SearchState};
 use super::super::history_list::ListState;
-use super::super::interactive::InputAction;
+use super::super::interactive::{InputAction, InspectingState};
 use super::super::keybindings::key::{KeyCodeValue, KeyInput, SingleKey};
 use super::super::keybindings::{Action, EvalContext, KeymapSet};
 use super::view::SearchFrame;
@@ -58,6 +58,14 @@ pub(super) enum Msg {
         generation: u64,
         results: Vec<History>,
     },
+    /// The inspector fetch effect finished: the inspected entry and its
+    /// stats, boxed to keep the message small.
+    Inspected {
+        entry: Box<History>,
+        stats: Box<HistoryStats>,
+    },
+    HistoryCount(i64),
+    UpdateNeeded(Option<Version>),
     /// A detached background operation (delete, rebuild) finished; carries
     /// nothing — the model was already updated optimistically.
     OpDone,
@@ -88,6 +96,19 @@ pub(super) struct SearchApp<'a> {
     pub(super) search_mode: SearchMode,
     pub(super) prefix: bool,
     pub(super) switched_search_mode: bool,
+    pub(super) tab_index: usize,
+    pub(super) inspecting: Option<History>,
+    pub(super) stats: Option<HistoryStats>,
+    pub(super) history_count: Option<i64>,
+    pub(super) update_needed: Option<Version>,
+    inspecting_state: InspectingState,
+    /// The entry id `stats` was computed for, so the inspector only hits
+    /// the database when the inspected entry actually changes.
+    stats_for: Option<HistoryId>,
+    inspector_task: Option<Task>,
+    /// Set when entering/leaving a custom context with an empty input: the
+    /// next results delivery re-selects the context's anchor entry.
+    highlight_context_anchor: bool,
     history_store: HistoryStore,
     keymaps: KeymapSet,
     pending_vim_key: Option<char>,
@@ -160,6 +181,19 @@ impl<'a> SearchApp<'a> {
             search_mode,
             prefix: false,
             switched_search_mode: false,
+            tab_index: 0,
+            inspecting: None,
+            stats: None,
+            history_count: None,
+            update_needed: None,
+            inspecting_state: InspectingState {
+                current: None,
+                next: None,
+                previous: None,
+            },
+            stats_for: None,
+            inspector_task: None,
+            highlight_context_anchor: false,
             history_store,
             keymaps: KeymapSet::from_settings(settings),
             pending_vim_key: None,
@@ -238,6 +272,7 @@ impl<'a> SearchApp<'a> {
         let state = self.results_state.get_mut();
         let i = state.selected() + scroll_len;
         state.select(i.min(len.saturating_sub(1)));
+        self.inspecting_state.reset();
     }
 
     /// Move the selection toward newer entries.
@@ -245,6 +280,7 @@ impl<'a> SearchApp<'a> {
         let state = self.results_state.get_mut();
         let i = state.selected().saturating_sub(scroll_len);
         state.select(i);
+        self.inspecting_state.reset();
     }
 
     fn handle_key_exit(settings: &Settings) -> InputAction {
@@ -256,6 +292,9 @@ impl<'a> SearchApp<'a> {
 
     /// Select the keymap for the current mode (ignoring prefix).
     fn mode_keymap(&self) -> &super::super::keybindings::Keymap {
+        if self.tab_index == 1 {
+            return &self.keymaps.inspector;
+        }
         match self.keymap_mode {
             KeymapMode::Emacs | KeymapMode::Auto => &self.keymaps.emacs,
             KeymapMode::VimNormal => &self.keymaps.vim_normal,
@@ -264,11 +303,14 @@ impl<'a> SearchApp<'a> {
     }
 
     /// Whether the current mode supports character insertion on unmatched keys.
+    /// The inspector tab has no text input, so unmatched keys are dropped there
+    /// rather than leaking into the (hidden) search input.
     fn is_insert_mode(&self) -> bool {
-        matches!(
-            self.keymap_mode,
-            KeymapMode::Emacs | KeymapMode::Auto | KeymapMode::VimInsert
-        )
+        self.tab_index == 0
+            && matches!(
+                self.keymap_mode,
+                KeymapMode::Emacs | KeymapMode::Auto | KeymapMode::VimInsert
+            )
     }
 
     fn handle_key_input(&mut self, input: &KeyEvent) -> InputAction {
@@ -546,6 +588,7 @@ impl<'a> SearchApp<'a> {
                     let last_idx = self.results.len().saturating_sub(1);
                     self.results_state.get_mut().select(last_idx);
                 }
+                self.inspecting_state.reset();
                 InputAction::Continue
             }
             Action::ScrollToBottom => {
@@ -556,6 +599,7 @@ impl<'a> SearchApp<'a> {
                 } else {
                     self.results_state.get_mut().select(0);
                 }
+                self.inspecting_state.reset();
                 InputAction::Continue
             }
             Action::ScrollToScreenTop => {
@@ -566,6 +610,7 @@ impl<'a> SearchApp<'a> {
                 let visible = state.max_entries().min(results_len);
                 let bottom = top + visible.saturating_sub(1);
                 state.select(bottom.min(results_len.saturating_sub(1)));
+                self.inspecting_state.reset();
                 InputAction::Continue
             }
             Action::ScrollToScreenMiddle => {
@@ -576,6 +621,7 @@ impl<'a> SearchApp<'a> {
                 let visible = state.max_entries().min(results_len);
                 let middle = top + visible / 2;
                 state.select(middle.min(results_len.saturating_sub(1)));
+                self.inspecting_state.reset();
                 InputAction::Continue
             }
             Action::ScrollToScreenBottom => {
@@ -583,11 +629,15 @@ impl<'a> SearchApp<'a> {
                 let state = self.results_state.get_mut();
                 let top_visible = state.offset();
                 state.select(top_visible);
+                self.inspecting_state.reset();
                 InputAction::Continue
             }
 
             // -- Commands --
             Action::Accept => {
+                if self.tab_index == 1 {
+                    return InputAction::AcceptInspecting;
+                }
                 self.accept = true;
                 InputAction::Accept(self.results_state.get_mut().selected())
             }
@@ -595,7 +645,12 @@ impl<'a> SearchApp<'a> {
                 self.accept = true;
                 InputAction::Accept(self.results_state.get_mut().selected() + *n as usize)
             }
-            Action::ReturnSelection => InputAction::Accept(self.results_state.get_mut().selected()),
+            Action::ReturnSelection => {
+                if self.tab_index == 1 {
+                    return InputAction::AcceptInspecting;
+                }
+                InputAction::Accept(self.results_state.get_mut().selected())
+            }
             Action::ReturnSelectionNth(n) => {
                 InputAction::Accept(self.results_state.get_mut().selected() + *n as usize)
             }
@@ -623,10 +678,19 @@ impl<'a> SearchApp<'a> {
                 InputAction::SwitchContext(Some(self.results_state.get_mut().selected()))
             }
             Action::ClearContext => InputAction::SwitchContext(None),
-            // The inspector tab arrives in a later phase; until then tab
-            // switching and the inspector actions are inert.
-            Action::ToggleTab | Action::InspectPrevious | Action::InspectNext => {
+            Action::ToggleTab => {
+                self.tab_index = (self.tab_index + 1) % 2;
                 InputAction::Continue
+            }
+
+            // -- Inspector --
+            Action::InspectPrevious => {
+                self.inspecting_state.move_to_previous();
+                InputAction::Redraw
+            }
+            Action::InspectNext => {
+                self.inspecting_state.move_to_next();
+                InputAction::Redraw
             }
 
             // -- Mode changes --
@@ -680,8 +744,17 @@ impl<'a> SearchApp<'a> {
     /// work into detached effects.
     fn apply_input_action(&mut self, action: InputAction, ctx: &mut Ctx<'_, Self>) {
         match action {
-            // AcceptInspecting is inert until the inspector tab is ported.
-            InputAction::Continue | InputAction::Redraw | InputAction::AcceptInspecting => {}
+            InputAction::Continue | InputAction::Redraw => {}
+            InputAction::AcceptInspecting => {
+                let output = match &self.inspecting {
+                    Some(entry) => Output::Selection {
+                        command: entry.command.clone(),
+                        execute: self.accept,
+                    },
+                    None => Output::ReturnOriginal,
+                };
+                self.finish(output, ctx);
+            }
             InputAction::Accept(index) => {
                 let execute = self.accept;
                 let output = match self.results.get(index) {
@@ -727,6 +800,8 @@ impl<'a> SearchApp<'a> {
             state.select(selected.saturating_sub(1));
         }
         let entry = self.results.remove(index);
+        self.inspecting_state.reset();
+        self.tab_index = 0;
 
         let store = self.history_store.clone();
         let backend = Arc::clone(&self.backend);
@@ -758,6 +833,8 @@ impl<'a> SearchApp<'a> {
         // Remove matching entries from the visible results
         self.results.retain(|e| e.command != command);
         *self.results_state.get_mut() = ListState::default();
+        self.inspecting_state.reset();
+        self.tab_index = 0;
 
         // Query the DB for ALL entries with this command and delete them
         let store = self.history_store.clone();
@@ -793,6 +870,57 @@ impl<'a> SearchApp<'a> {
         .detach();
     }
 
+    /// Keep the inspector's entry + stats in sync with the model: when the
+    /// inspector tab is showing, fetch whenever the target entry (the
+    /// explicitly inspected id, else the selection) differs from what
+    /// `stats` was computed for. Runs after every update; `Msg::Inspected`
+    /// re-enters it, so a target that moved mid-fetch converges on the next
+    /// pass. Mirrors the per-iteration stats block of the ratatui loop.
+    fn sync_inspector(&mut self, ctx: &mut Ctx<'_, Self>) {
+        if self.tab_index != 1 || self.results.is_empty() {
+            self.stats = None;
+            self.stats_for = None;
+            return;
+        }
+        let selected = self
+            .results_state
+            .get_mut()
+            .selected()
+            .min(self.results.len() - 1);
+        let fallback = self.results[selected].clone();
+        let inspected = self.inspecting_state.current.clone();
+        let target = inspected.clone().unwrap_or_else(|| fallback.id.clone());
+        if self.stats_for.as_ref() == Some(&target) {
+            return;
+        }
+        let backend = Arc::clone(&self.backend);
+        // Replacing the task cancels a fetch for a stale target.
+        self.inspector_task = Some(ctx.perform(async move {
+            let backend = backend.lock().await;
+            let entry = match inspected {
+                Some(id) => match backend.db.load(id.0.as_str()).await {
+                    Ok(Some(entry)) => entry,
+                    Ok(None) => fallback,
+                    Err(e) => {
+                        tracing::error!(?e, "failed to load inspected entry");
+                        return Msg::OpDone;
+                    }
+                },
+                None => fallback,
+            };
+            match backend.db.stats(&entry).await {
+                Ok(stats) => Msg::Inspected {
+                    entry: Box::new(entry),
+                    stats: Box::new(stats),
+                },
+                Err(e) => {
+                    tracing::error!(?e, "failed to compute history stats");
+                    Msg::OpDone
+                }
+            }
+        }));
+    }
+
     fn switch_context(&mut self, selected: Option<usize>) {
         if let Some(index) = selected
             && let Some(entry) = self.results.get(index)
@@ -816,6 +944,25 @@ impl App for SearchApp<'_> {
 
     fn init(&mut self, ctx: &mut Ctx<'_, Self>) {
         self.spawn_query(ctx);
+
+        // Counting history is a full table scan, which can take a while on a
+        // large, cold database — don't hold up the first frame for it.
+        let backend = Arc::clone(&self.backend);
+        ctx.perform(async move {
+            let backend = backend.lock().await;
+            match backend.db.history_count(false).await {
+                Ok(count) => Msg::HistoryCount(count),
+                Err(e) => {
+                    tracing::error!(?e, "failed to count history");
+                    Msg::OpDone
+                }
+            }
+        })
+        .detach();
+
+        let settings = self.settings.clone();
+        ctx.perform(async move { Msg::UpdateNeeded(settings.needs_update().await) })
+            .detach();
     }
 
     fn update(&mut self, msg: Msg, ctx: &mut Ctx<'_, Self>) {
@@ -828,8 +975,31 @@ impl App for SearchApp<'_> {
                     self.results = results;
                     // New results reset the selection, matching query_results.
                     self.results_state.get_mut().select(0);
+                    self.inspecting_state.reset();
+                    // In custom context mode with no filter, highlight the
+                    // entry that was used to enter the context.
+                    if self.highlight_context_anchor {
+                        self.highlight_context_anchor = false;
+                        if let Some(id) = self.search.custom_context.clone()
+                            && let Some(pos) = self.results.iter().position(|e| e.id == id)
+                        {
+                            self.results_state.get_mut().select(pos);
+                        }
+                    }
                 }
             }
+            Msg::Inspected { entry, stats } => {
+                if self.tab_index == 1 {
+                    self.inspecting_state.current = Some(entry.id.clone());
+                    self.inspecting_state.previous = stats.previous.as_ref().map(|p| p.id.clone());
+                    self.inspecting_state.next = stats.next.as_ref().map(|n| n.id.clone());
+                    self.stats_for = Some(entry.id.clone());
+                    self.inspecting = Some(*entry);
+                    self.stats = Some(*stats);
+                }
+            }
+            Msg::HistoryCount(count) => self.history_count = Some(count),
+            Msg::UpdateNeeded(version) => self.update_needed = version,
             Msg::OpDone => {}
             Msg::Raw(event) => {
                 // The old event loop requeried when an input pass changed
@@ -858,10 +1028,17 @@ impl App for SearchApp<'_> {
                         || initial_search_mode != self.search_mode
                         || initial_custom_context != self.search.custom_context)
                 {
+                    // The anchor re-select fires when a context change (or
+                    // its filter modes) delivers unfiltered results.
+                    self.highlight_context_anchor = self.search.custom_context.is_some()
+                        && self.search.input.as_str().is_empty()
+                        && (initial_custom_context != self.search.custom_context
+                            || initial_filter_mode != self.search.filter_mode);
                     self.spawn_query(ctx);
                 }
             }
         }
+        self.sync_inspector(ctx);
     }
 
     fn tail(&self) -> impl Element + '_ {

@@ -73,9 +73,9 @@ pub enum InputAction {
 
 #[derive(Clone)]
 pub struct InspectingState {
-    current: Option<HistoryId>,
-    next: Option<HistoryId>,
-    previous: Option<HistoryId>,
+    pub(super) current: Option<HistoryId>,
+    pub(super) next: Option<HistoryId>,
+    pub(super) previous: Option<HistoryId>,
 }
 
 impl InspectingState {
@@ -1016,11 +1016,11 @@ impl State {
                         None => &results[self.results_state.selected()],
                     };
                     super::inspector::draw(
-                        f,
+                        f.buffer_mut(),
                         results_list_chunk,
                         inspecting,
                         &stats.expect("Drawing inspector, but no stats"),
-                        settings,
+                        compactness,
                         theme,
                         settings.timezone,
                     );

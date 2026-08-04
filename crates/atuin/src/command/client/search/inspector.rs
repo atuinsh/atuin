@@ -1,25 +1,22 @@
 use std::time::Duration;
 use time::macros::format_description;
 
-use atuin_client::{
-    history::{History, HistoryStats},
-    settings::Settings,
-};
+use atuin_client::history::{History, HistoryStats};
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use ratatui::{
-    Frame,
     backend::FromCrossterm,
+    buffer::Buffer,
     layout::Rect,
     prelude::{Constraint, Direction, Layout},
     style::Style,
     text::{Span, Text},
-    widgets::{Bar, BarChart, BarGroup, Block, Borders, Padding, Paragraph, Row, Table},
+    widgets::{Bar, BarChart, BarGroup, Block, Borders, Padding, Paragraph, Row, Table, Widget},
 };
 
 use atuin_common::time::{DurationExt, UtcOffsetSpec};
 
 use super::super::theme::{Meaning, Theme};
-use super::interactive::{Compactness, to_compactness};
+use super::interactive::Compactness;
 
 #[allow(clippy::cast_sign_loss)]
 fn u64_or_zero(num: i64) -> u64 {
@@ -27,7 +24,7 @@ fn u64_or_zero(num: i64) -> u64 {
 }
 
 pub fn draw_commands(
-    f: &mut Frame<'_>,
+    buf: &mut Buffer,
     parent: Rect,
     history: &History,
     stats: &HistoryStats,
@@ -105,13 +102,13 @@ pub fn draw_commands(
             .style(Style::from_crossterm(theme.as_style(Meaning::Annotation)))
     });
 
-    f.render_widget(previous, commands[0]);
-    f.render_widget(command, commands[1]);
-    f.render_widget(next, commands[2]);
+    previous.render(commands[0], buf);
+    command.render(commands[1], buf);
+    next.render(commands[2], buf);
 }
 
 pub fn draw_stats_table(
-    f: &mut Frame<'_>,
+    buf: &mut Buffer,
     parent: Rect,
     history: &History,
     tz: UtcOffsetSpec,
@@ -157,7 +154,7 @@ pub fn draw_stats_table(
             .padding(Padding::vertical(1)),
     );
 
-    f.render_widget(table, parent);
+    table.render(parent, buf);
 }
 
 fn num_to_day(num: &str) -> String {
@@ -200,7 +197,7 @@ fn sort_duration_over_time(durations: &[(String, i64)]) -> Vec<(String, i64)> {
         .collect()
 }
 
-fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, theme: &Theme) {
+fn draw_stats_charts(buf: &mut Buffer, parent: Rect, stats: &HistoryStats, theme: &Theme) {
     let exits: Vec<Bar> = stats
         .exits
         .iter()
@@ -284,40 +281,38 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, them
         ])
         .split(parent);
 
-    f.render_widget(exits, layout[0]);
-    f.render_widget(day_of_week, layout[1]);
-    f.render_widget(duration_over_time, layout[2]);
+    exits.render(layout[0], buf);
+    day_of_week.render(layout[1], buf);
+    duration_over_time.render(layout[2], buf);
 }
 
 pub fn draw(
-    f: &mut Frame<'_>,
+    buf: &mut Buffer,
     chunk: Rect,
     history: &History,
     stats: &HistoryStats,
-    settings: &Settings,
+    compactness: Compactness,
     theme: &Theme,
     tz: UtcOffsetSpec,
 ) {
-    let compactness = to_compactness(f, settings);
-
     match compactness {
-        Compactness::Ultracompact => draw_ultracompact(f, chunk, history, stats, theme),
-        _ => draw_full(f, chunk, history, stats, theme, tz),
+        Compactness::Ultracompact => draw_ultracompact(buf, chunk, history, stats, theme),
+        _ => draw_full(buf, chunk, history, stats, theme, tz),
     }
 }
 
 pub fn draw_ultracompact(
-    f: &mut Frame<'_>,
+    buf: &mut Buffer,
     chunk: Rect,
     history: &History,
     stats: &HistoryStats,
     theme: &Theme,
 ) {
-    draw_commands(f, chunk, history, stats, true, theme);
+    draw_commands(buf, chunk, history, stats, true, theme);
 }
 
 pub fn draw_full(
-    f: &mut Frame<'_>,
+    buf: &mut Buffer,
     chunk: Rect,
     history: &History,
     stats: &HistoryStats,
@@ -334,9 +329,9 @@ pub fn draw_full(
         .constraints([Constraint::Ratio(1, 3), Constraint::Ratio(2, 3)])
         .split(vert_layout[1]);
 
-    draw_commands(f, vert_layout[0], history, stats, false, theme);
-    draw_stats_table(f, stats_layout[0], history, tz, stats, theme);
-    draw_stats_charts(f, stats_layout[1], stats, theme);
+    draw_commands(buf, vert_layout[0], history, stats, false, theme);
+    draw_stats_table(buf, stats_layout[0], history, tz, stats, theme);
+    draw_stats_charts(buf, stats_layout[1], stats, theme);
 }
 
 #[cfg(test)]
@@ -432,7 +427,8 @@ mod tests {
         let next = stats.next.clone().unwrap();
 
         let theme = theme_manager.load_theme("(none)", None);
-        let _ = terminal.draw(|f| draw_ultracompact(f, chunk, &history, &stats, theme));
+        let _ =
+            terminal.draw(|f| draw_ultracompact(f.buffer_mut(), chunk, &history, &stats, theme));
         let mut lines = ["                      "; 5].map(Line::from);
         for (n, entry) in [prev, history, next].iter().enumerate() {
             let mut l = lines[n].to_string();
@@ -459,7 +455,8 @@ mod tests {
         stats.next.as_mut().unwrap().command = "next\0cmd".to_string();
 
         let theme = theme_manager.load_theme("(none)", None);
-        let _ = terminal.draw(|f| draw_ultracompact(f, chunk, &history, &stats, theme));
+        let _ =
+            terminal.draw(|f| draw_ultracompact(f.buffer_mut(), chunk, &history, &stats, theme));
 
         let rendered: String = terminal
             .backend()

@@ -27,22 +27,17 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Paragraph, StatefulWidget, Tabs, Widget},
+    widgets::{Block, BorderType, Borders, Padding, Paragraph, StatefulWidget, Tabs, Widget},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::super::history_list::{HistoryHighlighter, HistoryList};
+use super::super::inspector;
+use super::super::interactive::Compactness;
 use super::app::SearchApp;
 use crate::VERSION;
 
 const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub(super) enum Compactness {
-    Ultracompact,
-    Compact,
-    Full,
-}
 
 /// `to_compactness` from the ratatui path, with the viewport height passed
 /// directly instead of read off a `Frame`.
@@ -92,6 +87,7 @@ impl SearchFrame<'_, '_> {
             settings,
             &self.app.results,
             self.app.results_state.borrow().selected(),
+            self.app.tab_index,
             compactness,
             border_size,
             preview_width,
@@ -195,7 +191,7 @@ impl Element for SearchFrame<'_, '_> {
             let titles: Vec<_> = TAB_TITLES.iter().copied().map(Line::from).collect();
             let tabs = Tabs::new(titles)
                 .block(Block::default().borders(Borders::NONE))
-                .select(0)
+                .select(app.tab_index)
                 .style(Style::default())
                 .highlight_style(Style::from_crossterm(theme.as_style(Meaning::Important)));
             tabs.render(chunks.tabs, buf);
@@ -214,12 +210,54 @@ impl Element for SearchFrame<'_, '_> {
                 )
                 .split(chunks.header);
 
-            build_title(theme).render(header_chunks[0], buf);
-            build_help(settings, theme).render(header_chunks[1], buf);
+            build_title(app, theme).render(header_chunks[0], buf);
+            build_help(app.tab_index, settings, theme).render(header_chunks[1], buf);
+            build_stats(app, theme).render(header_chunks[2], buf);
         }
 
         if chunks.warning.height > 0 {
             Paragraph::new(build_warnings(settings, theme)).render(chunks.warning, buf);
+        }
+
+        if app.tab_index == 1 {
+            if app.results.is_empty() {
+                let message = Paragraph::new("Nothing to inspect")
+                    .block(
+                        Block::new()
+                            .title(Line::from(" Info ".to_string()))
+                            .title_alignment(Alignment::Center)
+                            .borders(Borders::ALL)
+                            .padding(Padding::vertical(2)),
+                    )
+                    .alignment(Alignment::Center);
+                message.render(chunks.results_list, buf);
+            } else {
+                let selected = app
+                    .results_state
+                    .borrow()
+                    .selected()
+                    .min(app.results.len() - 1);
+                let inspecting = app.inspecting.as_ref().unwrap_or(&app.results[selected]);
+                // Stats arrive as an effect; the frame before they land
+                // renders the chrome without the inspector body.
+                if let Some(stats) = &app.stats {
+                    inspector::draw(
+                        buf,
+                        chunks.results_list,
+                        inspecting,
+                        stats,
+                        compactness,
+                        theme,
+                        settings.timezone,
+                    );
+                }
+            }
+
+            let feedback = Paragraph::new(
+                "The inspector is new - please give feedback (good, or bad) at https://forum.atuin.sh",
+            );
+            feedback.render(chunks.input, buf);
+            return;
         }
 
         let indicator: String = match compactness {
@@ -313,7 +351,20 @@ impl Element for SearchFrame<'_, '_> {
         }
     }
 
+    fn animated(&self) -> Option<std::time::Duration> {
+        // Keep relative timestamps ("3s ago") moving. The engine diffs, so
+        // a tick where nothing changed writes nothing to the terminal.
+        if self.app.settings.prefers_reduced_motion {
+            None
+        } else {
+            Some(std::time::Duration::from_secs(1))
+        }
+    }
+
     fn cursor(&self, area: Rect) -> Option<(u16, u16)> {
+        if self.app.tab_index == 1 {
+            return None;
+        }
         let chunks = self.chunks(area);
         if matches!(chunks.compactness, Compactness::Ultracompact) {
             return None;
@@ -331,18 +382,20 @@ impl Element for SearchFrame<'_, '_> {
     }
 }
 
-/// `State::calc_preview_height`, minus the inspector tab (always tab 0 here).
+/// `State::calc_preview_height`, ported verbatim.
 #[allow(clippy::cast_possible_truncation, clippy::bool_to_int_with_if)]
 fn calc_preview_height(
     settings: &Settings,
     results: &[History],
     selected: usize,
+    tab_index: usize,
     compactness: Compactness,
     border_size: u16,
     preview_width: u16,
 ) -> u16 {
     if settings.show_preview
         && settings.preview.strategy == PreviewStrategy::Auto
+        && tab_index == 0
         && !results.is_empty()
     {
         let length_current_cmd = results[selected].command.width() as u16;
@@ -375,7 +428,10 @@ fn calc_preview_height(
         } else {
             1
         }
-    } else if settings.show_preview && settings.preview.strategy == PreviewStrategy::Static {
+    } else if settings.show_preview
+        && settings.preview.strategy == PreviewStrategy::Static
+        && tab_index == 0
+    {
         let longest_command = results
             .iter()
             .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
@@ -393,40 +449,73 @@ fn calc_preview_height(
         }) + border_size * 2
     } else if settings.show_preview && settings.preview.strategy == PreviewStrategy::Fixed {
         settings.max_preview_height + border_size * 2
-    } else if !matches!(compactness, Compactness::Full) {
+    } else if !matches!(compactness, Compactness::Full) || tab_index == 1 {
         0
     } else {
         1
     }
 }
 
-fn build_title(theme: &Theme) -> Paragraph<'static> {
-    let style: Style = Style::from_crossterm(theme.as_style(Meaning::Base));
-    Paragraph::new(Text::from(Span::styled(
-        format!("Atuin v{VERSION}"),
-        style.add_modifier(Modifier::BOLD),
-    )))
-    .alignment(Alignment::Left)
+fn build_title(app: &SearchApp<'_>, theme: &Theme) -> Paragraph<'static> {
+    let title = if app.update_needed.is_some() {
+        let error_style: Style = Style::from_crossterm(theme.get_error());
+        Paragraph::new(Text::from(Span::styled(
+            format!("Atuin v{VERSION} - UPDATE"),
+            error_style.add_modifier(Modifier::BOLD),
+        )))
+    } else {
+        let style: Style = Style::from_crossterm(theme.as_style(Meaning::Base));
+        Paragraph::new(Text::from(Span::styled(
+            format!("Atuin v{VERSION}"),
+            style.add_modifier(Modifier::BOLD),
+        )))
+    };
+    title.alignment(Alignment::Left)
 }
 
-fn build_help(settings: &Settings, theme: &Theme) -> Paragraph<'static> {
-    Paragraph::new(Text::from(Line::from(vec![
-        Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(": exit"),
-        Span::raw(", "),
-        Span::styled("<tab>", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(": edit"),
-        Span::raw(", "),
-        Span::styled("<enter>", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(if settings.enter_accept {
-            ": run"
-        } else {
-            ": edit"
-        }),
-        Span::raw(", "),
-        Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(": inspect"),
-    ])))
+fn build_stats(app: &SearchApp<'_>, theme: &Theme) -> Paragraph<'static> {
+    Paragraph::new(Text::from(Span::raw(
+        app.history_count
+            .map_or_else(String::new, |count| format!("history count: {count}")),
+    )))
+    .style(Style::from_crossterm(theme.as_style(Meaning::Annotation)))
+    .alignment(Alignment::Right)
+}
+
+fn build_help(tab_index: usize, settings: &Settings, theme: &Theme) -> Paragraph<'static> {
+    match tab_index {
+        // search
+        0 => Paragraph::new(Text::from(Line::from(vec![
+            Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": exit"),
+            Span::raw(", "),
+            Span::styled("<tab>", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": edit"),
+            Span::raw(", "),
+            Span::styled("<enter>", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(if settings.enter_accept {
+                ": run"
+            } else {
+                ": edit"
+            }),
+            Span::raw(", "),
+            Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": inspect"),
+        ]))),
+
+        1 => Paragraph::new(Text::from(Line::from(vec![
+            Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": exit"),
+            Span::raw(", "),
+            Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": search"),
+            Span::raw(", "),
+            Span::styled("<ctrl-d>", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": delete"),
+        ]))),
+
+        _ => unreachable!("invalid tab index"),
+    }
     .style(Style::from_crossterm(theme.as_style(Meaning::Annotation)))
     .alignment(Alignment::Center)
 }
