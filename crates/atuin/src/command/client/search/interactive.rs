@@ -1598,10 +1598,21 @@ impl Drop for Stdout {
             tracing::error!(?e, "Failed to leave alt screen mode");
         }
 
-        if !self.no_mouse
-            && let Err(e) = execute!(self.writer, event::DisableMouseCapture)
-        {
-            tracing::error!(?e, "Failed to disable mouse capture");
+        if !self.no_mouse {
+            if let Err(e) = execute!(self.writer, event::DisableMouseCapture) {
+                tracing::error!(?e, "Failed to disable mouse capture");
+            }
+            // A fast wheel can exit the TUI (keys.scroll_exits) with dozens
+            // of reports still queued or in flight; anything the terminal
+            // emitted before processing the disable would land in the
+            // shell's input as escape garbage. Drain until quiet — bounded,
+            // and while raw mode is still on so reads work.
+            let deadline = std::time::Instant::now() + Duration::from_millis(50);
+            while std::time::Instant::now() < deadline
+                && matches!(event::poll(Duration::from_millis(5)), Ok(true))
+            {
+                let _ = event::read();
+            }
         }
 
         if let Err(e) = execute!(self.writer, event::DisableBracketedPaste) {
