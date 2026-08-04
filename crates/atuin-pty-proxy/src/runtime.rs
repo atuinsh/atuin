@@ -1,7 +1,7 @@
 use std::io::Read;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crossterm::terminal;
@@ -10,7 +10,7 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::CommandCaptureSink;
 use crate::capture::CommandCaptureTracker;
-use crate::compositor::{Compositor, OverlayFlags, lock_unpoisoned};
+use crate::compositor::{CURSOR_HANDSHAKE, Compositor, OverlayFlags, lock_unpoisoned};
 use crate::debug::{Osc133DebugHighlighter, RESET};
 use crate::pty_proxy::RuntimeOptions;
 use crate::screen;
@@ -218,12 +218,19 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
         options.hooks.suggestion_provider.is_some(),
     )));
 
+    let activity = Arc::new(ActivityClock::new());
+
     screen::spawn_socket_server(sock_path.clone(), compositor.clone());
-    spawn_resize_handler(pair.master, compositor.clone(), current_cols.clone())
-        .wrap_err("install resize handler")?;
+    spawn_resize_handler(
+        pair.master,
+        compositor.clone(),
+        current_cols.clone(),
+        activity.clone(),
+    )
+    .wrap_err("install resize handler")?;
     trace.step("socket + resize handlers");
 
-    let (mut input_tracker, key_filter) = options
+    let (mut input_tracker, mut key_filter) = options
         .hooks
         .suggestion_provider
         .take()
@@ -256,6 +263,7 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
                 Ok(n) => {
                     trace.step("first pty output");
                     trace.enabled = false;
+                    activity.touch();
                     if let (Some(tracker), Some(sink)) = (
                         capture_tracker.as_mut(),
                         options.hooks.command_capture_sink.as_ref(),
@@ -300,7 +308,7 @@ fn spawn_stdin_pump(input_tx: SyncSender<Vec<u8>>) {
             match stdin.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    let forwarded = match key_filter.as_ref() {
+                    let forwarded = match key_filter.as_mut() {
                         Some(filter) => {
                             let out = filter.process(&buf[..n], &mut stdin);
                             if out.is_empty() {
@@ -359,7 +367,7 @@ fn seed_cursor_from_terminal(
 ) {
     let mut stdout = std::io::stdout();
     if stdout
-        .write_all(b"\x1b[6n\x1b[c")
+        .write_all(CURSOR_HANDSHAKE)
         .and_then(|()| stdout.flush())
         .is_err()
     {
@@ -447,10 +455,55 @@ fn parse_report(bytes: &[u8]) -> Option<(usize, Report)> {
     Some((2 + end + 1, report))
 }
 
+/// Millisecond clock of pty output activity, shared between the stdout
+/// pump and the resize thread: the mid-session cursor resync must wait for
+/// the post-SIGWINCH prompt repaint to settle before querying.
+struct ActivityClock {
+    epoch: std::time::Instant,
+    elapsed_ms: AtomicU64,
+}
+
+impl ActivityClock {
+    fn new() -> Self {
+        Self {
+            epoch: std::time::Instant::now(),
+            elapsed_ms: AtomicU64::new(0),
+        }
+    }
+
+    /// Relaxed: only tens-of-milliseconds freshness matters.
+    fn touch(&self) {
+        self.elapsed_ms
+            .store(self.epoch.elapsed().as_millis() as u64, Ordering::Relaxed);
+    }
+
+    /// Time since the last touch.
+    fn idle(&self) -> std::time::Duration {
+        let last = std::time::Duration::from_millis(self.elapsed_ms.load(Ordering::Relaxed));
+        self.epoch.elapsed().saturating_sub(last)
+    }
+}
+
+/// Querying while the shell is still repainting its prompt would race the
+/// reply against output that moves the cursor.
+const RESYNC_QUIET: std::time::Duration = std::time::Duration::from_millis(50);
+const RESYNC_POLL: std::time::Duration = std::time::Duration::from_millis(25);
+/// A chatty background job must not defer the resync forever — a slightly
+/// racy seed beats none at all.
+const RESYNC_MAX_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
+
+fn await_pty_quiet(activity: &ActivityClock) {
+    let deadline = std::time::Instant::now() + RESYNC_MAX_WAIT;
+    while activity.idle() < RESYNC_QUIET && std::time::Instant::now() < deadline {
+        std::thread::sleep(RESYNC_POLL);
+    }
+}
+
 fn spawn_resize_handler(
     master: Box<dyn portable_pty::MasterPty + Send>,
     compositor: Arc<Mutex<Compositor<std::io::Stdout>>>,
     current_cols: Arc<AtomicU16>,
+    activity: Arc<ActivityClock>,
 ) -> eyre::Result<()> {
     use signal_hook::consts::SIGWINCH;
     use signal_hook::iterator::Signals;
@@ -466,7 +519,16 @@ fn spawn_resize_handler(
                     pixel_width: 0,
                     pixel_height: 0,
                 });
+                // The resize counts as activity: quiet is then measured
+                // from it, so a repaint that hasn't started yet after a
+                // long-idle pty can't look like quiet already.
+                activity.touch();
                 lock_unpoisoned(&compositor).resize(rows, cols);
+                // Real terminals reflow wrapped lines on resize; the vt100
+                // model doesn't, so the model cursor has drifted. Re-ask
+                // the terminal once the repaint settles.
+                await_pty_quiet(&activity);
+                lock_unpoisoned(&compositor).begin_cursor_resync();
             }
         }
     });

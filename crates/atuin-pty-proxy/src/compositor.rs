@@ -57,7 +57,15 @@ pub(crate) struct OverlayContent {
 pub(crate) struct OverlayFlags {
     pub(crate) popup: AtomicBool,
     pub(crate) ghost: AtomicBool,
+    /// A cursor-position query is in flight; the stdin filter must consume
+    /// the reply before it reaches the shell as junk keystrokes.
+    pub(crate) resync: AtomicBool,
 }
+
+/// CPR query plus DA1 fence: the terminal answers in order, so the last
+/// cursor report before the DA1 reply is the answer to this query, and
+/// earlier reports belong to queries the shell sent (p10k, iTerm2).
+pub(crate) const CURSOR_HANDSHAKE: &[u8] = b"\x1b[6n\x1b[c";
 
 #[derive(Clone, Copy)]
 struct DrawnRegion {
@@ -234,6 +242,28 @@ impl<W: Write> Compositor<W> {
             hand_back(&mut buf, self.parser.screen());
         }
         let _ = self.flush(&buf);
+    }
+
+    /// Start a mid-session cursor resync: real terminals reflow wrapped
+    /// lines on resize but the vt100 model does not, so the model cursor
+    /// drifts and overlays would paint at stale rows. The stdin-side
+    /// KeyFilter consumes the replies and seeds the model; without a
+    /// suggestion provider that filter doesn't exist, so stay inert.
+    pub(crate) fn begin_cursor_resync(&mut self) {
+        if !self.split_partials {
+            return;
+        }
+        // At most one query in flight: a second reply with nobody left
+        // expecting it would leak to the shell as junk keystrokes.
+        if self.flags.resync.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        // Straight to the terminal, not through the parser: the query
+        // prints nothing and must not disturb the model.
+        let _ = self
+            .out
+            .write_all(CURSOR_HANDSHAKE)
+            .and_then(|()| self.out.flush());
     }
 
     fn flush(&mut self, buf: &[u8]) -> std::io::Result<()> {
@@ -889,6 +919,33 @@ mod tests {
         c.resize(20, 60);
         assert!(!c.flags.popup.load(Ordering::Acquire));
         assert!(c.drawn.is_none() && c.ghost_row.is_none());
+    }
+
+    #[rstest]
+    fn cursor_resync_queries_once_and_skips_the_model() {
+        let mut c = compositor();
+        c.apply_pty(b"$ git st").unwrap();
+        c.begin_cursor_resync();
+        assert!(c.out.ends_with(CURSOR_HANDSHAKE));
+        assert!(c.flags.resync.load(Ordering::Acquire));
+        assert_eq!(
+            c.parser.screen().cursor_position(),
+            (0, 8),
+            "query bytes must not reach the model"
+        );
+
+        let sent = c.out.len();
+        c.begin_cursor_resync();
+        assert_eq!(c.out.len(), sent, "one query in flight at a time");
+    }
+
+    #[rstest]
+    fn cursor_resync_is_inert_without_suggestions() {
+        let flags = Arc::new(OverlayFlags::default());
+        let mut c: Compositor<Vec<u8>> = Compositor::new(10, 40, Vec::new(), flags.clone(), false);
+        c.begin_cursor_resync();
+        assert!(c.out.is_empty(), "nobody would consume the reply");
+        assert!(!flags.resync.load(Ordering::Acquire));
     }
 
     #[rstest]
