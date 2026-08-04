@@ -20,6 +20,7 @@ use super::history::ListMode;
 
 mod cursor;
 mod engines;
+mod eye;
 mod history_list;
 mod inspector;
 mod interactive;
@@ -245,7 +246,11 @@ impl Cmd {
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         if self.interactive {
-            let item = interactive::history(&query, settings, db, &history_store, theme).await?;
+            let item = if let Some(inline_height) = eye::inline_height(settings) {
+                eye::history(&query, settings, db, &history_store, theme, inline_height).await?
+            } else {
+                interactive::history(&query, settings, db, &history_store, theme).await?
+            };
 
             if let Some(result_file) = self.result_file {
                 let mut file = File::create(result_file)?;
