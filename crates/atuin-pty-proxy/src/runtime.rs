@@ -260,7 +260,8 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
 
     trace.step("suggestion hooks");
     claim_foreground_tty();
-    terminal::enable_raw_mode().wrap_err("enable raw mode")?;
+    terminal::enable_raw_mode()
+        .wrap_err_with(|| format!("enable raw mode ({})", tty_diagnosis()))?;
     trace.step("raw mode");
     seed_cursor_from_terminal(&compositor, &mut pty_writer);
     trace.step("cursor handshake");
@@ -393,23 +394,72 @@ fn spawn_stdin_pump(input_tx: SyncSender<Vec<u8>>) {
     })
 }
 
+/// How long to wait to become the terminal's foreground process group.
+/// Wrappers assign it within milliseconds; when it never happens, raw
+/// mode fails with a diagnosis and the fallback shell takes over.
+const FOREGROUND_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// Make this process group the terminal's foreground group if it isn't.
 ///
 /// Some terminals (ghostty spawns shells through a wrapper) haven't handed
 /// the terminal to the shell's group by the time the init preamble execs
 /// the proxy. Running in the background breaks the proxy outright:
 /// `tcsetattr` fails with EIO on macOS ("enable raw mode: Input/output
-/// error"), and stdin reads die under SIGTTIN elsewhere. The shell's
-/// ignored-SIGTTOU disposition survives exec, which is exactly what lets
-/// `tcsetpgrp` through from the background.
+/// error"), and stdin reads die under SIGTTIN elsewhere.
+///
+/// Two recovery paths, retried briefly: take the foreground ourselves
+/// (`tcsetpgrp` — the shell's ignored-SIGTTOU disposition survives exec,
+/// which on some systems lets it through from the background), and wait
+/// for the wrapper to hand our group the terminal, since the exec'd proxy
+/// keeps the pgrp the wrapper is about to foreground. Both fds crossterm
+/// might use are tried — it falls back to stdin when `/dev/tty` won't open.
 fn claim_foreground_tty() {
-    let Ok(tty) = std::fs::File::open("/dev/tty") else {
-        return;
-    };
-    let ours = rustix::process::getpgrp();
-    if rustix::termios::tcgetpgrp(&tty) != Ok(ours) {
-        let _ = rustix::termios::tcsetpgrp(&tty, ours);
+    fn claim(fd: impl std::os::fd::AsFd, ours: rustix::process::Pid) -> bool {
+        match rustix::termios::tcgetpgrp(&fd) {
+            Ok(fg) if fg == ours => true,
+            Ok(_) => rustix::termios::tcsetpgrp(&fd, ours).is_ok(),
+            Err(_) => false,
+        }
     }
+
+    let ours = rustix::process::getpgrp();
+    let deadline = std::time::Instant::now() + FOREGROUND_TIMEOUT;
+    loop {
+        if let Ok(tty) = std::fs::File::open("/dev/tty")
+            && claim(&tty, ours)
+        {
+            return;
+        }
+        if claim(std::io::stdin(), ours) {
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// One-line job-control snapshot for raw-mode failures: which group we're
+/// in and who owns the terminal, via both fds crossterm might use. The
+/// EIO class of failures is undiagnosable without it.
+fn tty_diagnosis() -> String {
+    fn fg_of(fd: impl std::os::fd::AsFd) -> String {
+        match rustix::termios::tcgetpgrp(&fd) {
+            Ok(fg) => fg.as_raw_nonzero().to_string(),
+            Err(e) => format!("err:{e}"),
+        }
+    }
+
+    let pgrp = rustix::process::getpgrp().as_raw_nonzero();
+    let tty = match std::fs::File::open("/dev/tty") {
+        Ok(tty) => fg_of(&tty),
+        Err(e) => format!("open-err:{e}"),
+    };
+    format!(
+        "pgrp={pgrp} tty-fg={tty} stdin-fg={}",
+        fg_of(std::io::stdin())
+    )
 }
 
 /// Resolve a bare shell name against `PATH`; paths pass through, and an
