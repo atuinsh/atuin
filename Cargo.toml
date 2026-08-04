@@ -104,6 +104,18 @@ lto = "fat"
 strip = "symbols"
 codegen-units = 1
 
+[profile.profiling]
+inherits = "dist"
+debug = true
+strip = "none"
+split-debuginfo = "packed"
+# dist inherits fat LTO + codegen-units = 1, which inline aggressively across
+# crates and collapse the call tree in a profiler. Override both to keep frames
+# distinct. For a finer knob, lower LLVM's inline threshold at build time with
+# RUSTFLAGS="-C llvm-args=--inline-threshold=25" (0 = flattest).
+lto = false
+codegen-units = 256
+
 # For local development against a local eye-declare, uncomment below
 #eye_declare = { path = "../eye_declare/crates/eye_declare" }
 #eye_declare_engine = { path = "../eye_declare/crates/eye_declare_engine" }
