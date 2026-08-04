@@ -73,14 +73,14 @@ impl AppContext {
 #[derive(Clone, Debug)]
 pub(crate) struct ClientContext {
     pub os: String,
-    pub shell: Option<String>,
+    pub shell: Option<&'static str>,
     pub distro: Option<String>,
 }
 
 impl ClientContext {
     pub(crate) fn detect() -> Self {
         let os = detect_os();
-        let shell = crate::commands::detect_shell();
+        let shell = Some(atuin_common::shell::ShellKind::current().as_str());
         let distro = if os == "linux" {
             Some(detect_linux_distribution())
         } else {

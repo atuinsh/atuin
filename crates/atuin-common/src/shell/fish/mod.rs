@@ -15,7 +15,7 @@ use tracing::instrument;
 use bstr::{BStr, BString};
 
 use super::{
-    Alias, AliasValue, AliasesError, Rendered, RunError, Shell, Var, VarName, VarParsingError,
+    Alias, AliasValue, AliasesError, IsShell, Rendered, RunError, Var, VarName, VarParsingError,
 };
 
 mod alias;
@@ -105,7 +105,7 @@ impl Fish {
 }
 
 #[async_trait::async_trait]
-impl Shell for Fish {
+impl IsShell for Fish {
     fn canonical_name(&self) -> &'static str {
         "fish"
     }

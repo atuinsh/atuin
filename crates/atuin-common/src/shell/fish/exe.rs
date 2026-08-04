@@ -6,7 +6,7 @@ use std::{
 
 use tracing::instrument;
 
-use crate::shell::RunError;
+use crate::shell::{RunError, common};
 
 /// The `fish` executable itself, and the ability to invoke it.
 #[derive(Debug)]
@@ -15,12 +15,6 @@ pub(super) struct FishExe {
 }
 
 impl FishExe {
-    /// `fish -i` sources the user's config files before running our command, and anything they
-    /// print lands on the same stdout. Bracket the real output with these NUL-delimited markers so
-    /// it can be sliced back out; NUL cannot occur in a command's arguments or output.
-    const OUTPUT_BEGIN: &[u8] = b"\0atuin\0";
-    const OUTPUT_END: &[u8] = b"\0nituA\0";
-
     pub(super) fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
@@ -29,9 +23,9 @@ impl FishExe {
         &self.path
     }
 
-    /// Wrap `command` so its output is delimited by [`Self::OUTPUT_BEGIN`] and
-    /// [`Self::OUTPUT_END`]. `$status` is captured and re-raised so that framing does not mask the
-    /// command's own exit status.
+    /// Like the shared POSIX `common::frame`, but fish spells the exit status
+    /// `$status` rather than `$?`. It writes the same NUL markers, so
+    /// `common::unframe` reads it back.
     fn frame(command: &str) -> String {
         format!(
             r"printf '\000atuin\000'; {command}; set __atuin_status $status; printf '\000nituA\000'; exit $__atuin_status"
@@ -49,22 +43,7 @@ impl FishExe {
                 error: Arc::new(error),
             })?;
 
-        let delimiter = || RunError::Delimiter {
-            command: command.to_owned(),
-        };
-        let start = output
-            .stdout
-            .windows(Self::OUTPUT_BEGIN.len())
-            .position(|window| window == Self::OUTPUT_BEGIN)
-            .map(|at| at + Self::OUTPUT_BEGIN.len())
-            .ok_or_else(delimiter)?;
-        let end = output.stdout[start..]
-            .windows(Self::OUTPUT_END.len())
-            .position(|window| window == Self::OUTPUT_END)
-            .map(|at| at + start)
-            .ok_or_else(delimiter)?;
-
-        output.stdout = output.stdout[start..end].to_vec();
+        common::unframe(&mut output, command)?;
 
         if output.status.success() {
             Ok(output)

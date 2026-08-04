@@ -6,7 +6,7 @@ use std::{
 
 use tracing::instrument;
 
-use crate::shell::RunError;
+use crate::shell::{RunError, common};
 
 /// The `xonsh` executable itself, and the ability to invoke it.
 #[derive(Debug)]
@@ -15,12 +15,6 @@ pub(super) struct XonshExe {
 }
 
 impl XonshExe {
-    /// `xonsh -i` sources the user's rc files before running our command, and anything they print
-    /// lands on the same stdout. Bracket the real output with these NUL-delimited markers so it
-    /// can be sliced back out; NUL cannot occur in a command's arguments or output.
-    const OUTPUT_BEGIN: &[u8] = b"\0atuin\0";
-    const OUTPUT_END: &[u8] = b"\0nituA\0";
-
     pub(super) fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
@@ -29,9 +23,10 @@ impl XonshExe {
         &self.path
     }
 
-    /// Wrap `command` so its output is delimited by [`Self::OUTPUT_BEGIN`] and
-    /// [`Self::OUTPUT_END`]. The exit status of the last subprocess is captured and re-raised so
-    /// that framing does not mask the command's own exit status.
+    /// xonsh's frame writes the same NUL markers as `common::frame` (so
+    /// `common::unframe` reads it back), but the body is Python, not POSIX, and
+    /// the exit status of the last subprocess is captured and re-raised so that
+    /// framing does not mask the command's own exit status.
     ///
     /// `print` is used rather than `sys.stdout.write` because `-i -c` echoes the value of any
     /// expression statement, colourised, into the framed region; `print` evaluates to `None` and
@@ -64,22 +59,7 @@ impl XonshExe {
                 error: Arc::new(error),
             })?;
 
-        let delimiter = || RunError::Delimiter {
-            command: command.to_owned(),
-        };
-        let start = output
-            .stdout
-            .windows(Self::OUTPUT_BEGIN.len())
-            .position(|window| window == Self::OUTPUT_BEGIN)
-            .map(|at| at + Self::OUTPUT_BEGIN.len())
-            .ok_or_else(delimiter)?;
-        let end = output.stdout[start..]
-            .windows(Self::OUTPUT_END.len())
-            .position(|window| window == Self::OUTPUT_END)
-            .map(|at| at + start)
-            .ok_or_else(delimiter)?;
-
-        output.stdout = output.stdout[start..end].to_vec();
+        common::unframe(&mut output, command)?;
 
         if output.status.success() {
             Ok(output)

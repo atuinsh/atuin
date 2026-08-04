@@ -435,16 +435,12 @@ impl AiApp {
                 Effect::LoadSkill { name, arguments } => {
                     let Some(io) = &self.io else { continue };
                     let registry = io.skill_registry.clone();
-                    let shell = io
-                        .client_ctx
-                        .shell
-                        .clone()
-                        .unwrap_or_else(|| "sh".to_string());
+                    let shell = io.client_ctx.shell.unwrap_or("sh");
                     ctx.perform(async move {
                         let content = crate::tui::tools_exec::load_skill_content(
                             &registry,
                             &name,
-                            &shell,
+                            shell,
                             arguments.as_deref(),
                         )
                         .await;
@@ -709,16 +705,12 @@ impl AiApp {
             ClientToolCall::LoadSkill(skill_call) => {
                 let Some(io) = &self.io else { return };
                 let registry = io.skill_registry.clone();
-                let shell = io
-                    .client_ctx
-                    .shell
-                    .clone()
-                    .unwrap_or_else(|| "sh".to_string());
+                let shell = io.client_ctx.shell.unwrap_or("sh");
                 ctx.perform(async move {
                     let content = crate::tui::tools_exec::load_skill_content(
                         &registry,
                         &skill_call.name,
-                        &shell,
+                        shell,
                         None,
                     )
                     .await;

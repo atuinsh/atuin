@@ -15,7 +15,7 @@ use tracing::instrument;
 use bstr::{BStr, BString};
 
 use super::{
-    Alias, AliasValue, AliasesError, Rendered, RunError, Shell, Var, VarName, VarParsingError,
+    Alias, AliasValue, AliasesError, IsShell, Rendered, RunError, Var, VarName, VarParsingError,
     common,
 };
 
@@ -80,7 +80,7 @@ impl Zsh {
 }
 
 #[async_trait::async_trait]
-impl Shell for Zsh {
+impl IsShell for Zsh {
     fn canonical_name(&self) -> &'static str {
         "zsh"
     }

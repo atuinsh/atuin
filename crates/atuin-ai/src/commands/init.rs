@@ -1,5 +1,3 @@
-use crate::commands::detect_shell;
-
 pub(crate) async fn run(shell: String) -> eyre::Result<()> {
     let integration = match shell.as_str() {
         "zsh" => generate_zsh_integration(),
@@ -14,13 +12,11 @@ pub(crate) async fn run(shell: String) -> eyre::Result<()> {
 }
 
 fn generate_auto_integration() -> eyre::Result<&'static str> {
-    let shell = detect_shell();
-    match shell.as_deref() {
-        Some("zsh") => Ok(generate_zsh_integration()),
-        Some("bash") => Ok(generate_bash_integration()),
-        Some("fish") => Ok(generate_fish_integration()),
-        Some(s) => eyre::bail!("Unsupported shell: {}", s),
-        None => eyre::bail!("Could not detect shell"),
+    match atuin_common::shell::ShellKind::current().as_str() {
+        "zsh" => Ok(generate_zsh_integration()),
+        "bash" => Ok(generate_bash_integration()),
+        "fish" => Ok(generate_fish_integration()),
+        other => eyre::bail!("Unsupported shell: {other}"),
     }
 }
 

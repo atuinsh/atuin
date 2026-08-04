@@ -150,7 +150,10 @@ pub(super) fn parse_aliases(input: &[u8]) -> Result<Aliases, AliasesError> {
             // `alias -L` prints a `-s `/`-g ` flag for suffix/global aliases and a
             // `-- ` guard before a name that starts with `-` or `+`, so the name is
             // not read as an option. Consume them; the real name follows.
-            opt(alt((literal(b"-g ".as_slice()), literal(b"-s ".as_slice())))),
+            opt(alt((
+                literal(b"-g ".as_slice()),
+                literal(b"-s ".as_slice()),
+            ))),
             opt(literal(b"-- ".as_slice())),
             alias_name,
             literal(b"=".as_slice()),

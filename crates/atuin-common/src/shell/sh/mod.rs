@@ -14,7 +14,7 @@ use futures::{
 use tracing::instrument;
 
 use super::{
-    Alias, AliasValue, AliasesError, Rendered, RunError, Shell, Var, VarName, VarParsingError,
+    Alias, AliasValue, AliasesError, IsShell, Rendered, RunError, Var, VarName, VarParsingError,
     common::{self, Aliases},
 };
 
@@ -76,7 +76,7 @@ impl Sh {
 }
 
 #[async_trait::async_trait]
-impl Shell for Sh {
+impl IsShell for Sh {
     fn canonical_name(&self) -> &'static str {
         "sh"
     }

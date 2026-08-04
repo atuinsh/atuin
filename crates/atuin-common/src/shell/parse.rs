@@ -43,7 +43,7 @@ pub trait ShellParser: Send + Sync {
     fn classify(&self, code: &str) -> Vec<Token>;
 }
 
-/// Compile-time proof of object-safety (mirrors the one guarding `Shell`).
+/// Compile-time proof of object-safety (mirrors the one guarding `IsShell`).
 const _: fn(&dyn ShellParser) = |_p| {};
 
 /// Word-level parser for shells with no grammar (nu, xonsh, unknown). Emits a

@@ -6,12 +6,14 @@ use std::{
     io,
     path::Path,
     process::{self, ExitStatus},
+    str::FromStr,
     sync::Arc,
 };
 
+use crate::sysinfo::SystemExt;
 use bstr::{BStr, BString};
 use serde::Serialize;
-use sysinfo::{Process, System, get_current_pid};
+use sysinfo::{Process, RefreshKind, System, get_current_pid};
 use thiserror::Error;
 
 mod alias;
@@ -33,6 +35,7 @@ pub mod zsh;
 
 pub use alias::{Alias, AliasValue, AliasesError};
 pub use render::{Rendered, Skipped};
+use tracing::instrument;
 pub use var::{Var, VarName, VarParsingError, VarValue};
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -54,7 +57,7 @@ pub enum RunError {
 }
 
 #[async_trait::async_trait]
-pub trait Shell: Send + Sync {
+pub trait IsShell: Send + Sync {
     /// Get the name of this shell that we use internal to atuin.
     fn canonical_name(&self) -> &'static str;
 
@@ -105,10 +108,10 @@ pub trait Shell: Send + Sync {
     }
 }
 
-/// Compile-time proof that `Shell` is object-safe. If a method signature ever
+/// Compile-time proof that `IsShell` is object-safe. If a method signature ever
 /// reintroduces a generic, associated type, or `impl Trait` argument, this fails
 /// to compile.
-const _: fn(&dyn Shell) = |_shell| {};
+const _: fn(&dyn IsShell) = |_shell| {};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Display)]
 pub enum ShellKind {
@@ -132,6 +135,38 @@ pub enum ShellKind {
     Powershell,
     #[display("unknown")]
     Unknown,
+}
+
+/// The string did not name a shell atuin knows.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("unrecognised shell: {0:?}")]
+pub struct UnknownShell(pub String);
+
+impl FromStr for ShellKind {
+    type Err = UnknownShell;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Ok(match name {
+            "bash" => Self::Bash,
+            "fish" => Self::Fish,
+            "zsh" => Self::Zsh,
+            "dash" => Self::Dash,
+            "ksh" => Self::Ksh,
+            "xonsh" => Self::Xonsh,
+            "nu" => Self::Nu,
+            "sh" => Self::Sh,
+            "powershell" => Self::Powershell,
+            other => return Err(UnknownShell(other.to_owned())),
+        })
+    }
+}
+
+impl TryFrom<&str> for ShellKind {
+    type Error = UnknownShell;
+
+    fn try_from(name: &str) -> Result<Self, Self::Error> {
+        name.parse()
+    }
 }
 
 #[derive(Debug, Error, Serialize)]
@@ -158,12 +193,16 @@ impl ShellKind {
         let shell = parent.name().trim().to_lowercase();
         let shell = shell.strip_prefix('-').unwrap_or(&shell);
 
-        ShellKind::from_string(shell.to_string())
+        shell.parse().unwrap_or(ShellKind::Unknown)
     }
 
     pub fn from_env() -> ShellKind {
         std::env::var("ATUIN_SHELL").map_or(ShellKind::Unknown, |shell| {
-            ShellKind::from_string(shell.trim().to_lowercase())
+            shell
+                .trim()
+                .to_lowercase()
+                .parse()
+                .unwrap_or(ShellKind::Unknown)
         })
     }
 
@@ -193,34 +232,36 @@ impl ShellKind {
             return Err(ShellError::NotSupported);
         }
 
-        Ok(ShellKind::from_string(
-            shell.unwrap().to_string_lossy().to_string(),
-        ))
+        Ok(shell
+            .unwrap()
+            .to_string_lossy()
+            .parse()
+            .unwrap_or(ShellKind::Unknown))
     }
 
-    pub fn from_string(name: String) -> ShellKind {
-        match name.as_str() {
-            "bash" => ShellKind::Bash,
-            "fish" => ShellKind::Fish,
-            "zsh" => ShellKind::Zsh,
-            "dash" => ShellKind::Dash,
-            "ksh" => ShellKind::Ksh,
-            "xonsh" => ShellKind::Xonsh,
-            "nu" => ShellKind::Nu,
-            "sh" => ShellKind::Sh,
-            "powershell" => ShellKind::Powershell,
-
-            _ => ShellKind::Unknown,
+    /// This shell's canonical name.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Sh => "sh",
+            Self::Bash => "bash",
+            Self::Fish => "fish",
+            Self::Zsh => "zsh",
+            Self::Dash => "dash",
+            Self::Ksh => "ksh",
+            Self::Xonsh => "xonsh",
+            Self::Nu => "nu",
+            Self::Powershell => "powershell",
+            Self::Unknown => "unknown",
         }
     }
 
-    /// Construct the object-safe [`Shell`] interface for this shell, if atuin
+    /// Construct the object-safe [`IsShell`] interface for this shell, if atuin
     /// has an implementation for it (`None` for nu, powershell and unknown).
     ///
     /// The executable is resolved from `$PATH` by its canonical name when a
     /// command is run.
-    pub fn interface(&self) -> Option<Box<dyn Shell>> {
-        let shell: Box<dyn Shell> = match self {
+    pub fn interface(&self) -> Option<Box<dyn IsShell>> {
+        let shell: Box<dyn IsShell> = match self {
             ShellKind::Bash => Box::new(bash::Bash::new(Path::new("bash"))),
             ShellKind::Sh => Box::new(sh::Sh::new(Path::new("sh"))),
             ShellKind::Zsh => Box::new(zsh::Zsh::new(Path::new("zsh"))),

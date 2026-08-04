@@ -1,3 +1,3 @@
 pub mod process;
 
-pub use process::{PidAncestors, SystemExt};
+pub use process::{PidAncestorWalkError, SystemExt};

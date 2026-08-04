@@ -28,11 +28,11 @@ pub(crate) fn stream_bridge(
     async_stream::stream! {
         // User context files (TERMINAL.md) are gathered and interpolated on
         // the first request, then served from the cache until `/reload`.
-        let shell = client_ctx.shell.clone().unwrap_or_else(|| "sh".to_string());
+        let shell = client_ctx.shell.unwrap_or("sh");
         let start_dir = std::env::current_dir().unwrap_or_default();
         let global_ctx_path = crate::user_context::global_context_path();
         let user_contexts = user_context_cache
-            .get_or_gather(&start_dir, Some(&global_ctx_path), &shell)
+            .get_or_gather(&start_dir, Some(&global_ctx_path), shell)
             .await;
 
         let stream = create_chat_stream(

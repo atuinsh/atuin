@@ -68,6 +68,3 @@ pub async fn run(command: Command, settings: &Settings) -> eyre::Result<()> {
     }
 }
 
-pub(crate) fn detect_shell() -> Option<String> {
-    Some(atuin_common::shell::ShellKind::current().to_string())
-}

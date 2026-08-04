@@ -770,7 +770,10 @@ impl PermissibleToolCall for ShellToolCall {
             return true;
         };
 
-        let shell_kind = atuin_common::shell::ShellKind::from_string(self.shell.clone());
+        let shell_kind = self
+            .shell
+            .parse()
+            .unwrap_or(atuin_common::shell::ShellKind::Unknown);
         let cmds = shell_kind.commands(&self.command);
         // Deny/ask path: prefix_bare = true so `deny = ["Shell(rm)"]` blocks `rm -rf /`
         crate::permissions::shell::any_subcommand_matches(&cmds, true, scope)
@@ -782,7 +785,10 @@ impl PermissibleToolCall for ShellToolCall {
     fn all_covered_by(&self, rules: &[Rule]) -> bool {
         use crate::permissions::shell;
 
-        let shell_kind = atuin_common::shell::ShellKind::from_string(self.shell.clone());
+        let shell_kind = self
+            .shell
+            .parse()
+            .unwrap_or(atuin_common::shell::ShellKind::Unknown);
         let cmds = shell_kind.commands(&self.command);
 
         // If parsing yields nothing, don't vacuously allow — fall through to ask.

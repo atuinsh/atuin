@@ -36,7 +36,9 @@ pub fn classify(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
 fn parse(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
     use atuin_common::shell::{ShellKind, TokenKind};
 
-    let kind = shell.map_or(ShellKind::Bash, |s| ShellKind::from_string(s.to_string()));
+    let kind = shell.map_or(ShellKind::Bash, |s| {
+        ShellKind::try_from(s).unwrap_or(ShellKind::Unknown)
+    });
     let mut meanings = vec![Meaning::Base; cmd.len()];
     for t in kind.parser().classify(cmd) {
         let m = match t.kind {

@@ -5,9 +5,9 @@ use thiserror::Error;
 
 /// A shell variable in atuin's neutral model, with a validated name and value.
 ///
-/// Build the components through a [`Shell`](super::Shell)'s
-/// [`validate_var_name`](super::Shell::validate_var_name) and
-/// [`validate_var_value`](super::Shell::validate_var_value) factories.
+/// Build the components through a [`IsShell`](super::IsShell)'s
+/// [`validate_var_name`](super::IsShell::validate_var_name) and
+/// [`validate_var_value`](super::IsShell::validate_var_value) factories.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Var {
     pub name: VarName,
@@ -63,7 +63,7 @@ impl From<VarValue> for BString {
 #[allow(unsafe_code)]
 impl VarName {
     /// Wrap `name` as a [`VarName`] without validating it, bypassing
-    /// [`Shell::validate_var_name`](super::Shell::validate_var_name).
+    /// [`IsShell::validate_var_name`](super::IsShell::validate_var_name).
     ///
     /// # Safety
     ///
@@ -80,7 +80,7 @@ impl VarName {
 #[allow(unsafe_code)]
 impl VarValue {
     /// Wrap `value` as a [`VarValue`] without going through
-    /// [`Shell::validate_var_value`](super::Shell::validate_var_value).
+    /// [`IsShell::validate_var_value`](super::IsShell::validate_var_value).
     ///
     /// # Safety
     ///

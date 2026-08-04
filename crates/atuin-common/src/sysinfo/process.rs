@@ -3,8 +3,11 @@
 use sysinfo::{Pid, Process, System};
 use thiserror::Error;
 
+/// The absolute maximum number of parents we will walk before giving up.
+const MAX_DEPTH: usize = 128;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Error)]
-pub enum PidAncestorStopError {
+pub enum PidAncestorWalkError {
     #[error("pid {0:?} is not present in the snapshot")]
     Unreachable(Pid),
     #[error("pid {claimed:?} claims to be the parent of {child:?} but started after it")]
@@ -12,86 +15,6 @@ pub enum PidAncestorStopError {
     #[error("encountered cycle -- likely means that a PID number was reused by the system")]
     Cycle(Option<Pid>),
 }
-
-#[must_use = "an ancestry walk does nothing unless iterated"]
-pub struct PidAncestors<'a> {
-    system: &'a System,
-    /// The pid the walk began at, retained to detect a wrap-around to the origin.
-    start: Pid,
-    /// The pid whose parent will be produced by the next call to `next`.
-    cursor: Pid,
-    depth: usize,
-    /// Set exactly once, when iteration ends. `Some` implies exhausted.
-    stop: Option<Result<(), PidAncestorStopError>>,
-}
-
-impl PidAncestors<'_> {
-    /// The absolute maximum number of parents we will iterate until giving up.
-    const MAX_DEPTH: usize = 128;
-
-    /// Why the walk ended, or `None` if it has not ended yet.
-    ///
-    /// Returns `Ok(())` if the walk ended normally, and [`PidAncestorStopError`] otherwise.
-    #[must_use]
-    pub fn result(&self) -> Option<Result<(), PidAncestorStopError>> {
-        self.stop
-    }
-}
-
-impl Iterator for PidAncestors<'_> {
-    type Item = Pid;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.stop.is_some() {
-            return None;
-        }
-
-        if self.depth >= Self::MAX_DEPTH {
-            self.stop = Some(Err(PidAncestorStopError::Cycle(None)));
-            return None;
-        }
-
-        let system = self.system;
-
-        let Some(child) = system.process(self.cursor) else {
-            self.stop = Some(Err(PidAncestorStopError::Unreachable(self.cursor)));
-            return None;
-        };
-
-        let Some(parent_pid) = child.parent() else {
-            self.stop = Some(Ok(()));
-            return None;
-        };
-
-        if parent_pid == self.cursor || parent_pid == self.start {
-            self.stop = Some(Err(PidAncestorStopError::Cycle(Some(parent_pid))));
-            return None;
-        }
-
-        let Some(parent) = system.process(parent_pid) else {
-            self.stop = Some(Err(PidAncestorStopError::Unreachable(parent_pid)));
-            return None;
-        };
-
-        if parent.start_time() > child.start_time() {
-            self.stop = Some(Err(PidAncestorStopError::StaleParent {
-                claimed: parent_pid,
-                child: self.cursor,
-            }));
-            return None;
-        }
-
-        self.cursor = parent_pid;
-        self.depth += 1;
-        Some(parent_pid)
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, Some(Self::MAX_DEPTH.saturating_sub(self.depth)))
-    }
-}
-
-impl std::iter::FusedIterator for PidAncestors<'_> {}
 
 pub trait SystemExt {
     /// An iterator over the ancestors of `proc`, nearest parent first, not including `proc` itself.
@@ -101,22 +24,64 @@ pub trait SystemExt {
     ///
     /// # Termination
     ///
-    /// Stops at the first of:
-    ///   - a process with no recorded parent,
-    ///   - a parent absent from the snapshot,
-    ///   - a repeat of the starting pid,
-    ///   - or `MAX_DEPTH` hops.
-    fn walk_parents(&self, proc: &Process) -> PidAncestors<'_>;
+    /// Yields `Ok(pid)` for each ancestor. The walk ends after one of:
+    ///   - a process with no recorded parent, where the iterator simply finishes, or
+    ///   - a final `Err(`[`PidAncestorWalkError`]`)` when a parent is absent from the
+    ///     snapshot, a pid repeats, or `MAX_DEPTH` hops are exceeded.
+    ///
+    /// At most one `Err` is ever yielded, and when present it is always the last item.
+    #[must_use = "an ancestry walk does nothing unless iterated"]
+    fn walk_parents(
+        &self,
+        proc: &Process,
+    ) -> impl Iterator<Item = Result<Pid, PidAncestorWalkError>>;
 }
 
 impl SystemExt for System {
-    fn walk_parents(&self, proc: &Process) -> PidAncestors<'_> {
-        PidAncestors {
-            system: self,
-            start: proc.pid(),
-            cursor: proc.pid(),
-            depth: 0,
-            stop: None,
-        }
+    fn walk_parents(
+        &self,
+        proc: &Process,
+    ) -> impl Iterator<Item = Result<Pid, PidAncestorWalkError>> {
+        // The pid the walk began at, retained to detect a wrap-around to the origin.
+        let start = proc.pid();
+        // The pid whose parent the next iteration produces, or `None` once the walk ends.
+        let mut cursor = Some(start);
+        let mut depth = 0usize;
+
+        std::iter::from_fn(move || {
+            // Taking the cursor fuses the iterator: every early return below leaves it
+            // `None`, and only the success path re-arms it.
+            let current = cursor.take()?;
+
+            if depth >= MAX_DEPTH {
+                return Some(Err(PidAncestorWalkError::Cycle(None)));
+            }
+
+            let Some(child) = self.process(current) else {
+                return Some(Err(PidAncestorWalkError::Unreachable(current)));
+            };
+
+            // A process with no recorded parent ends the walk without an error.
+            let parent_pid = child.parent()?;
+
+            if parent_pid == current || parent_pid == start {
+                return Some(Err(PidAncestorWalkError::Cycle(Some(parent_pid))));
+            }
+
+            let Some(parent) = self.process(parent_pid) else {
+                return Some(Err(PidAncestorWalkError::Unreachable(parent_pid)));
+            };
+
+            if parent.start_time() > child.start_time() {
+                return Some(Err(PidAncestorWalkError::StaleParent {
+                    claimed: parent_pid,
+                    child: current,
+                }));
+            }
+
+            cursor = Some(parent_pid);
+            depth += 1;
+            Some(Ok(parent_pid))
+        })
     }
 }
