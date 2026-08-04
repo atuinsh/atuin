@@ -4,6 +4,7 @@
 pub mod ansi;
 pub mod docs;
 pub mod filter;
+pub mod git;
 pub mod logs;
 pub mod path;
 pub mod shell;

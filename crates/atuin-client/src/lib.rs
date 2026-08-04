@@ -14,6 +14,7 @@ pub mod login;
 #[cfg(feature = "sync")]
 pub mod register;
 
+pub mod ctx;
 pub mod database;
 pub mod distro;
 pub mod encryption;
