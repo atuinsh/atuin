@@ -10,9 +10,53 @@ use bstr::{BStr, BString, ByteSlice};
 
 use super::{
     Alias, AliasValue, AliasesError, Rendered, RunError, Skipped, Var, VarName, VarParsingError,
+    VarValue,
+    typed::{AliasCodec, VarCodec},
 };
 
 pub(super) type Aliases = HashMap<BString, AliasValue>;
+
+/// The POSIX-family alias codec — shared by sh, bash, dash, ksh (and zsh's
+/// renderer). A ZST; all state lives in the free functions it delegates to.
+#[derive(Clone, Copy)]
+pub struct PosixAliases;
+
+impl AliasCodec for PosixAliases {
+    fn render(&self, aliases: &[Alias]) -> Rendered {
+        render_aliases(aliases)
+    }
+
+    fn parse(&self, listing: &[u8]) -> Result<Aliases, AliasesError> {
+        parse_aliases(listing)
+    }
+}
+
+/// The POSIX-family variable codec — shared by every POSIX shell. Carries only
+/// the shell's name, so a rejected variable name can say which shell rejected it.
+#[derive(Clone, Copy)]
+pub struct PosixVars {
+    pub(super) shell: &'static str,
+}
+
+impl VarCodec for PosixVars {
+    fn validate_name(&self, name: impl AsRef<BStr>) -> Result<VarName, VarParsingError> {
+        validate_var_name(name.as_ref().to_owned(), self.shell)
+    }
+
+    #[allow(unsafe_code)]
+    fn validate_value(&self, value: impl AsRef<BStr>) -> Result<VarValue, VarParsingError> {
+        // SAFETY: no value is rejected; any bytes are representable once quoted.
+        Ok(unsafe { VarValue::new_unchecked(value.as_ref().to_owned()) })
+    }
+
+    fn quote<'a>(&self, value: &'a [u8]) -> Cow<'a, BStr> {
+        quote_value(value)
+    }
+
+    fn render(&self, vars: &[Var]) -> BString {
+        render_vars(vars)
+    }
+}
 
 #[cfg(feature = "shell-syntax")]
 use super::parse::{ShellParser, Token, classify_with};

@@ -116,3 +116,33 @@ impl IsShell for Zsh {
         common::validate_var_name(name, Self::CANONICAL_NAME)
     }
 }
+
+/// zsh's alias codec: it renders as plain POSIX but parses its own `$'…'`
+/// (ANSI-C) alias listing.
+#[derive(Clone, Copy)]
+pub struct ZshAliases;
+
+impl crate::shell::typed::AliasCodec for ZshAliases {
+    fn render(&self, aliases: &[Alias]) -> Rendered {
+        common::render_aliases(aliases)
+    }
+
+    fn parse(&self, listing: &[u8]) -> Result<crate::shell::typed::Aliases, AliasesError> {
+        alias::parse_aliases(listing)
+    }
+}
+
+// New capability SPI: `zsh::Zsh` is the *installed handle* for the `Zsh` marker.
+impl crate::shell::typed::InstalledShell for Zsh {
+    fn abspath(&self) -> &std::path::Path {
+        self.exe.path()
+    }
+
+    async fn aliases(&self) -> Result<crate::shell::typed::Aliases, AliasesError> {
+        self.inner.aliases.clone().await
+    }
+
+    async fn run(&self, command: &str) -> Result<std::process::Output, RunError> {
+        self.exe.run(command).await
+    }
+}

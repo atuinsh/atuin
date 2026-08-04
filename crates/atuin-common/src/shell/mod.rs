@@ -35,6 +35,7 @@ pub mod ksh;
 pub mod nu;
 pub mod powershell;
 pub mod sh;
+pub mod typed;
 pub mod xonsh;
 pub mod zsh;
 

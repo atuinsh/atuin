@@ -112,3 +112,18 @@ impl IsShell for Sh {
         common::validate_var_name(name, Self::CANONICAL_NAME)
     }
 }
+
+// New capability SPI: `sh::Sh` is the *installed handle* for the `Sh` marker.
+impl crate::shell::typed::InstalledShell for Sh {
+    fn abspath(&self) -> &Path {
+        self.exe.path()
+    }
+
+    async fn aliases(&self) -> Result<Aliases, AliasesError> {
+        self.inner.aliases.clone().await
+    }
+
+    async fn run(&self, command: &str) -> Result<process::Output, RunError> {
+        self.exe.run(command).await
+    }
+}

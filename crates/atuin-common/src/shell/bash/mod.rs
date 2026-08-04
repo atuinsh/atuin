@@ -109,3 +109,18 @@ impl IsShell for Bash {
         common::validate_var_name(name, Self::CANONICAL_NAME)
     }
 }
+
+// New capability SPI: `bash::Bash` is the *installed handle* for the `Bash` marker.
+impl crate::shell::typed::InstalledShell for Bash {
+    fn abspath(&self) -> &std::path::Path {
+        self.exe.path()
+    }
+
+    async fn aliases(&self) -> Result<crate::shell::typed::Aliases, AliasesError> {
+        self.inner.aliases.clone().await
+    }
+
+    async fn run(&self, command: &str) -> Result<std::process::Output, RunError> {
+        self.exe.run(command).await
+    }
+}

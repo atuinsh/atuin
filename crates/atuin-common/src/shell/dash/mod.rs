@@ -109,3 +109,18 @@ impl IsShell for Dash {
         common::validate_var_name(name, Self::CANONICAL_NAME)
     }
 }
+
+// New capability SPI: `dash::Dash` is the *installed handle* for the `Dash` marker.
+impl crate::shell::typed::InstalledShell for Dash {
+    fn abspath(&self) -> &std::path::Path {
+        self.exe.path()
+    }
+
+    async fn aliases(&self) -> Result<crate::shell::typed::Aliases, AliasesError> {
+        self.inner.aliases.clone().await
+    }
+
+    async fn run(&self, command: &str) -> Result<std::process::Output, RunError> {
+        self.exe.run(command).await
+    }
+}
