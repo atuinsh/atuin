@@ -131,6 +131,9 @@ impl Trace {
 fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
     let mut trace = Trace::new();
     let (cols, rows) = terminal::size().wrap_err("query terminal size")?;
+    // Terminals can report 0x0 during window setup; a zero-sized vt100
+    // grid panics deep in the parser and would kill the output pump.
+    let (cols, rows) = (cols.max(1), rows.max(1));
     trace.step("terminal size");
 
     let pty_system = native_pty_system();
@@ -265,6 +268,10 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
             .map(|_| CommandCaptureTracker::new(current_cols));
         let mut buf = [0u8; 8192];
 
+        // A panic anywhere in the tracking machinery must not freeze the
+        // terminal: after one, every chunk bypasses it as a raw write.
+        let mut degraded = false;
+
         loop {
             match pty_reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
@@ -272,38 +279,66 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
                     trace.step("first pty output");
                     trace.enabled = false;
                     activity.touch();
-                    if let (Some(tracker), Some(sink)) = (
-                        capture_tracker.as_mut(),
-                        options.hooks.command_capture_sink.as_ref(),
-                    ) {
-                        tracker.push(&buf[..n], sink);
+
+                    if degraded {
+                        let mut out = std::io::stdout();
+                        if out.write_all(&buf[..n]).and_then(|()| out.flush()).is_err() {
+                            break;
+                        }
+                        continue;
                     }
 
-                    let mut compositor = lock_unpoisoned(&pump_compositor);
-                    let written = if let Some(highlighter) = highlighter.as_mut() {
-                        let rendered = highlighter.render(&buf[..n]);
-                        compositor.apply_pty(&rendered)
-                    } else {
-                        compositor.apply_pty(&buf[..n])
-                    };
-                    drop(compositor);
-                    if written.is_err() {
-                        break;
-                    }
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        if let (Some(tracker), Some(sink)) = (
+                            capture_tracker.as_mut(),
+                            options.hooks.command_capture_sink.as_ref(),
+                        ) {
+                            tracker.push(&buf[..n], sink);
+                        }
 
-                    // After the chunk is applied to screen and model alike,
-                    // so suggestion repaints see this chunk everywhere.
-                    if let Some(tracker) = input_tracker.as_mut() {
-                        tracker.push(&buf[..n]);
+                        let mut compositor = lock_unpoisoned(&pump_compositor);
+                        let written = if let Some(highlighter) = highlighter.as_mut() {
+                            let rendered = highlighter.render(&buf[..n]);
+                            compositor.apply_pty(&rendered)
+                        } else {
+                            compositor.apply_pty(&buf[..n])
+                        };
+                        drop(compositor);
+                        written?;
+
+                        // After the chunk is applied to screen and model
+                        // alike, so suggestion repaints see this chunk
+                        // everywhere.
+                        if let Some(tracker) = input_tracker.as_mut() {
+                            tracker.push(&buf[..n]);
+                        }
+                        Ok::<(), std::io::Error>(())
+                    }));
+                    match outcome {
+                        Ok(Ok(())) => {}
+                        Ok(Err(_)) => break,
+                        Err(_) => {
+                            degraded = true;
+                            // The chunk that hit the panic was never
+                            // forwarded; the session continues as a plain
+                            // pass-through.
+                            let mut out = std::io::stdout();
+                            let _ = out.write_all(&buf[..n]).and_then(|()| out.flush());
+                            eprintln!(
+                                "atuin pty-proxy: internal error; continuing without suggestions\r"
+                            );
+                        }
                     }
                 }
             }
         }
 
-        let mut compositor = lock_unpoisoned(&pump_compositor);
-        compositor.flush_pending();
-        if highlighter.is_some() {
-            let _ = compositor.apply_pty(RESET);
+        if !degraded {
+            let mut compositor = lock_unpoisoned(&pump_compositor);
+            compositor.flush_pending();
+            if highlighter.is_some() {
+                let _ = compositor.apply_pty(RESET);
+            }
         }
     });
 }
@@ -316,18 +351,26 @@ fn spawn_stdin_pump(input_tx: SyncSender<Vec<u8>>) {
             match stdin.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    let forwarded = match key_filter.as_mut() {
+                    // A key-filter panic must not eat the user's keyboard:
+                    // drop the filter and forward this and all later
+                    // chunks raw.
+                    let filtered = match key_filter.as_mut() {
                         Some(filter) => {
-                            let out = filter.process(&buf[..n], &mut stdin);
-                            if out.is_empty() {
-                                Ok(())
-                            } else {
-                                pty_writer.write_all(&out)
-                            }
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                filter.process(&buf[..n], &mut stdin)
+                            }))
+                            .ok()
                         }
-                        None => pty_writer.write_all(&buf[..n]),
+                        None => Some(std::borrow::Cow::Borrowed(&buf[..n])),
                     };
-                    if forwarded.is_err() {
+                    let bytes: &[u8] = match filtered.as_deref() {
+                        Some(out) => out,
+                        None => {
+                            key_filter = None;
+                            &buf[..n]
+                        }
+                    };
+                    if !bytes.is_empty() && pty_writer.write_all(bytes).is_err() {
                         break;
                     }
                 }
@@ -521,6 +564,9 @@ fn spawn_resize_handler(
     std::thread::spawn(move || {
         for _ in signals.forever() {
             if let Ok((cols, rows)) = terminal::size() {
+                // Same 0x0 guard as startup: a zero-sized grid panics vt100.
+                let (cols, rows) = (cols.max(1), rows.max(1));
+                current_cols.store(cols, Ordering::Relaxed);
                 let _ = master.resize(PtySize {
                     rows,
                     cols,

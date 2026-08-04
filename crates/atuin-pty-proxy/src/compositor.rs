@@ -129,8 +129,17 @@ pub(crate) fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// vt100 panics on degenerate grids (line wrap with a single row, wide
+/// glyphs with a single column), so the model never goes below this; the
+/// real terminal size is kept separately to gate overlay drawing, which
+/// is pointless at such sizes anyway.
+pub(crate) const MODEL_FLOOR: u16 = 4;
+
 pub(crate) struct Compositor<W: Write> {
     parser: vt100::Parser,
+    /// The terminal's actual size; the model may be floored above it.
+    real_rows: u16,
+    real_cols: u16,
     out: W,
     /// Withhold tails ending mid escape sequence / UTF-8 character so a
     /// later overlay paint can't splice into one; off when no overlay can paint.
@@ -157,7 +166,9 @@ impl<W: Write> Compositor<W> {
         split_partials: bool,
     ) -> Self {
         Self {
-            parser: vt100::Parser::new(rows, cols, 0),
+            parser: vt100::Parser::new(rows.max(MODEL_FLOOR), cols.max(MODEL_FLOOR), 0),
+            real_rows: rows,
+            real_cols: cols,
             out,
             split_partials,
             tail: Vec::new(),
@@ -281,7 +292,11 @@ impl<W: Write> Compositor<W> {
         self.ghost_row = None;
         self.window_offset = 0;
         self.anchor = None;
-        self.parser.screen_mut().set_size(rows, cols);
+        self.real_rows = rows;
+        self.real_cols = cols;
+        self.parser
+            .screen_mut()
+            .set_size(rows.max(MODEL_FLOOR), cols.max(MODEL_FLOOR));
 
         let mut buf = Vec::new();
         if let Some(region) = drawn
@@ -389,9 +404,11 @@ impl<W: Write> Compositor<W> {
         if screen.alternate_screen() {
             return;
         }
-        let (rows, cols) = screen.size();
+        // Layout math uses the REAL terminal size: the model may be floored
+        // above it, and drawing past the real edge would scroll the screen.
+        let (rows, cols) = (self.real_rows, self.real_cols);
         let (cursor_row, cursor_col) = screen.cursor_position();
-        if rows < 2 || (cols as usize) < MIN_POPUP_WIDTH {
+        if rows < 2 || (cols as usize) < MIN_POPUP_WIDTH || cursor_row >= rows {
             return;
         }
 
