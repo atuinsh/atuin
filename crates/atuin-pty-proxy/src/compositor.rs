@@ -151,8 +151,10 @@ pub(crate) struct Compositor<W: Write> {
     window_offset: usize,
     anchor: Option<PopupAnchor>,
     flags: Arc<OverlayFlags>,
-    /// Reused per-chunk paint buffers, so the overlay-active path allocates
-    /// nothing steady-state.
+    /// Reused per-chunk paint buffers. Together with the cell-based row
+    /// restore they keep the erase/repaint cycle allocation-free except
+    /// `hand_back`'s two small vt100 Vecs — cursor restoration has a
+    /// pending-wrap case plain CUP can't express, so the library call stays.
     scratch: Vec<u8>,
     repaint_scratch: Vec<u8>,
 }
@@ -225,29 +227,33 @@ impl<W: Write> Compositor<W> {
         buf.clear();
         self.erase_into(&mut buf);
 
+        // The tail keeps its allocation: consumed bytes are compacted out
+        // after the write instead of split into a fresh Vec per chunk.
         self.tail.extend_from_slice(data);
-        let mut ready = std::mem::take(&mut self.tail);
-        let ready_len = if self.split_partials && ready.len() <= MAX_TAIL_BYTES {
-            complete_prefix_len(&ready)
+        let ready_len = if self.split_partials && self.tail.len() <= MAX_TAIL_BYTES {
+            complete_prefix_len(&self.tail)
         } else {
-            ready.len()
+            self.tail.len()
         };
-        self.tail = ready.split_off(ready_len);
 
         // Parsing a chunk costs microseconds, so erase + data + repaint go
         // out as one write instead of paying two syscall pairs per chunk.
-        self.parser.process(&ready);
+        self.parser.process(&self.tail[..ready_len]);
         let mut repaint = std::mem::take(&mut self.repaint_scratch);
         repaint.clear();
         self.draw_into(&mut repaint, false);
 
         let result = if buf.is_empty() && repaint.is_empty() {
-            self.out.write_all(&ready).and_then(|()| self.out.flush())
+            self.out
+                .write_all(&self.tail[..ready_len])
+                .and_then(|()| self.out.flush())
         } else {
-            buf.extend_from_slice(&ready);
+            buf.extend_from_slice(&self.tail[..ready_len]);
             buf.extend_from_slice(&repaint);
             self.out.write_all(&buf).and_then(|()| self.out.flush())
         };
+        self.tail.copy_within(ready_len.., 0);
+        self.tail.truncate(self.tail.len() - ready_len);
         self.update_flags();
         self.scratch = buf;
         self.repaint_scratch = repaint;
@@ -376,18 +382,15 @@ impl<W: Write> Compositor<W> {
             .max()
             .unwrap_or(0);
 
-        // One rows_formatted pass over popup and ghost rows together: the
-        // iterator formats every row it yields, so passes are what cost.
+        // Rebuild covered rows straight from model cells: vt100's
+        // rows_formatted would format AND allocate every row up to the
+        // popup — most of the screen when the prompt sits low — per erase,
+        // i.e. per echoed keystroke.
         let screen = self.parser.screen();
         let (_, cols) = screen.size();
-        for (row, bytes) in screen
-            .rows_formatted(0, cols)
-            .enumerate()
-            .take(last as usize)
-        {
-            let row = row as u16;
+        for row in 0..last {
             if covered(row) {
-                restore_row(buf, row, &bytes);
+                restore_row_from_cells(buf, screen, row, cols);
             }
         }
         hand_back(buf, screen);
@@ -565,18 +568,19 @@ fn draw_popup(
         );
         buf.push(b' ');
         let shown = shown_from_token(suggestion, line_head);
-        let used = 3 + write_fitted_syntax(
-            buf,
-            shown,
-            suggestion.text.len() - shown.len(),
-            &suggestion.syntax,
-            if is_selected {
-                SELECTED_FG
-            } else {
-                UNSELECTED_FG
-            },
-            width.saturating_sub(chrome),
-        );
+        let used = (ROW_CHROME_WIDTH - 1)
+            + write_fitted_syntax(
+                buf,
+                shown,
+                suggestion.text.len() - shown.len(),
+                &suggestion.syntax,
+                if is_selected {
+                    SELECTED_FG
+                } else {
+                    UNSELECTED_FG
+                },
+                width.saturating_sub(chrome),
+            );
         let pad_to = width - usize::from(scrollbar);
         buf.resize(buf.len() + pad_to.saturating_sub(used), b' ');
         if scrollbar {
@@ -666,13 +670,117 @@ fn write_fitted(buf: &mut Vec<u8>, text: &str, budget: usize) -> usize {
     used
 }
 
-/// Rewrite one screen row from pre-formatted model bytes, which skip
-/// default cells with cursor jumps — hence the clear first.
-fn restore_row(buf: &mut Vec<u8>, row: u16, bytes: &[u8]) {
+/// Rewrite one screen row from the model's cells, allocation-free.
+///
+/// Cells with content or attributes are re-emitted with their SGR state;
+/// runs of untouched default cells become cursor jumps. Attribute runs
+/// change rarely (a prompt has a handful), so the SGR churn stays small.
+fn restore_row_from_cells(buf: &mut Vec<u8>, screen: &vt100::Screen, row: u16, cols: u16) {
     buf.extend_from_slice(b"\x1b[0m");
     move_to(buf, row, 0);
     buf.extend_from_slice(b"\x1b[2K");
-    buf.extend_from_slice(bytes);
+
+    let mut attrs = CellAttrs::DEFAULT;
+    let mut gap = 0u16;
+    for col in 0..cols {
+        let Some(cell) = screen.cell(row, col) else {
+            break;
+        };
+        if cell.is_wide_continuation() {
+            continue;
+        }
+        let cell_attrs = CellAttrs::of(cell);
+        if !cell.has_contents() && cell_attrs == CellAttrs::DEFAULT {
+            gap += 1;
+            continue;
+        }
+        if gap > 0 {
+            // 2K already blanked these cells; just step over them.
+            let _ = write!(buf, "\x1b[{gap}C");
+            gap = 0;
+        }
+        if cell_attrs != attrs {
+            cell_attrs.emit(buf);
+            attrs = cell_attrs;
+        }
+        if cell.has_contents() {
+            buf.extend_from_slice(cell.contents().as_bytes());
+        } else {
+            // No glyph, but a non-default background must survive.
+            buf.push(b' ');
+        }
+    }
+}
+
+/// One cell's SGR-visible state, for run-length re-emission.
+#[derive(Clone, Copy, PartialEq)]
+struct CellAttrs {
+    fg: vt100::Color,
+    bg: vt100::Color,
+    bold: bool,
+    dim: bool,
+    italic: bool,
+    underline: bool,
+    inverse: bool,
+}
+
+impl CellAttrs {
+    const DEFAULT: Self = Self {
+        fg: vt100::Color::Default,
+        bg: vt100::Color::Default,
+        bold: false,
+        dim: false,
+        italic: false,
+        underline: false,
+        inverse: false,
+    };
+
+    fn of(cell: &vt100::Cell) -> Self {
+        Self {
+            fg: cell.fgcolor(),
+            bg: cell.bgcolor(),
+            bold: cell.bold(),
+            dim: cell.dim(),
+            italic: cell.italic(),
+            underline: cell.underline(),
+            inverse: cell.inverse(),
+        }
+    }
+
+    /// Emit as one reset-plus-attributes SGR sequence.
+    fn emit(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(b"\x1b[0");
+        for (on, code) in [
+            (self.bold, "1"),
+            (self.dim, "2"),
+            (self.italic, "3"),
+            (self.underline, "4"),
+            (self.inverse, "7"),
+        ] {
+            if on {
+                let _ = write!(buf, ";{code}");
+            }
+        }
+        match self.fg {
+            vt100::Color::Default => {}
+            vt100::Color::Idx(n) => {
+                let _ = write!(buf, ";38;5;{n}");
+            }
+            vt100::Color::Rgb(r, g, b) => {
+                let _ = write!(buf, ";38;2;{r};{g};{b}");
+            }
+        }
+        match self.bg {
+            vt100::Color::Default => {}
+            vt100::Color::Idx(n) => {
+                let _ = write!(buf, ";48;5;{n}");
+            }
+            vt100::Color::Rgb(r, g, b) => {
+                let _ = write!(buf, ";48;2;{r};{g};{b}");
+            }
+        }
+        buf.push(b'm');
+    }
 }
 
 /// Restore the shell's cursor state, then its drawing attributes — in that
@@ -879,6 +987,31 @@ mod tests {
         c.set_overlay(None);
         c.set_overlay(Some(content("do abc", &["do abcd", "do abce"], 0)));
         assert_eq!(popup_col(&c, 1), 5);
+    }
+
+    /// The cell-based row restore must reproduce styled content exactly:
+    /// colors, attributes, wide glyphs, and gaps.
+    #[rstest]
+    fn erase_restores_styled_rows_exactly() {
+        let mut c = compositor();
+        // Row 1 (under the future popup): colored, bold, wide chars, a gap.
+        c.apply_pty(b"$ g\r\n\x1b[31;1mred\x1b[0m \xe4\xbd\xa0\xe5\xa5\xbd\x1b[44m  \x1b[0m\x1b[5Cend\x1b[1;4H")
+            .unwrap();
+        let before = displayed(&c);
+
+        c.set_overlay(Some(content("g", &["git a", "git b"], 0)));
+        c.set_overlay(None);
+
+        let after = displayed(&c);
+        for col in 0..40u16 {
+            let b = before.screen().cell(1, col).unwrap();
+            let a = after.screen().cell(1, col).unwrap();
+            assert_eq!(
+                (b.contents(), b.fgcolor(), b.bgcolor(), b.bold()),
+                (a.contents(), a.fgcolor(), a.bgcolor(), a.bold()),
+                "cell (1,{col}) must survive erase"
+            );
+        }
     }
 
     #[rstest]

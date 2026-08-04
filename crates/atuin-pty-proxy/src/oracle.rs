@@ -28,9 +28,10 @@ const SPAWN_TIMEOUT_HERMETIC: Duration = Duration::from_secs(5);
 const QUERY_DEADLINE: Duration = Duration::from_secs(2);
 /// Wedged-oracle respawns before completions are given up for the session.
 const RESPAWN_LIMIT: u32 = 3;
-/// How long the oracle stays unspawned after proxy start unless a query
-/// arrives first: its rc-loading captive shell must not compete with the
-/// session shell's own startup.
+/// How long the oracle stays unspawned after proxy start unless a warm
+/// nudge (the session's first prompt) or a query arrives first: its
+/// rc-loading captive shell must not compete with the session shell's
+/// own startup.
 const WARM_SPAWN_DELAY: Duration = Duration::from_secs(5);
 const KILL_WHOLE_LINE: &[u8] = b"\x15";
 
@@ -514,6 +515,8 @@ impl ZshOracle {
     /// back to a hermetic spawn if that shell never becomes ready.
     pub(crate) fn spawn(zsh: &Path, load_user_config: bool) -> Option<Self> {
         let pair = native_pty_system()
+            // Tall enough that compsys never paginates its candidate
+            // list, wide enough that long candidates don't wrap mid-token.
             .openpty(PtySize {
                 rows: 50,
                 cols: 200,

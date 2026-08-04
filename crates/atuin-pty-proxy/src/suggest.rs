@@ -127,6 +127,8 @@ pub(crate) fn spawn<W: Write + Send + 'static>(
             compositor,
             flags,
             resync: ResyncState::default(),
+            key_scratch: Vec::new(),
+            out_scratch: Vec::new(),
         },
     }
 }
@@ -184,6 +186,8 @@ pub(crate) struct InputTracker {
     /// before their prompt marker arrives, so this — not the mid-redraw
     /// grid — is what a redraw must carry over.
     last_line: String,
+    /// Reused per-keystroke line buffer.
+    line_scratch: String,
     /// Last user keystroke; input-zone changes without a recent one are
     /// program output, not typing.
     input_activity: Arc<ActivityClock>,
@@ -213,6 +217,7 @@ impl InputTracker {
             onlcr_scratch: Vec::new(),
             ran_command: false,
             last_line: String::new(),
+            line_scratch: String::new(),
             input_activity,
             session_ready,
             cols,
@@ -300,9 +305,18 @@ impl InputTracker {
         });
 
         if input_changed && !self.overflowed() && self.input_activity.idle() <= INPUT_ECHO_WINDOW {
-            let line = self.current_line();
-            self.last_line = line.clone();
-            let _ = self.ui_tx.send(UiEvent::Query(line));
+            let mut line = std::mem::take(&mut self.line_scratch);
+            line_up_to_cursor(self.line_screen.screen(), self.grid_cols, &mut line);
+            // Pure cursor motion echoes back through the input zone too;
+            // an unchanged line needs no re-fetch and no repaint.
+            if line != self.last_line {
+                self.last_line.clear();
+                self.last_line.push_str(&line);
+                // The only per-keystroke allocation left: the line crosses
+                // to the UI thread.
+                let _ = self.ui_tx.send(UiEvent::Query(line.clone()));
+            }
+            self.line_scratch = line;
         } else if hide || input_changed {
             let _ = self.ui_tx.send(UiEvent::Hide);
         }
@@ -313,10 +327,6 @@ impl InputTracker {
         // for cursor movement so the line start provably hasn't scrolled.
         self.fed > (LINE_GRID_ROWS as usize - 2) * self.grid_cols as usize
     }
-
-    fn current_line(&self) -> String {
-        line_up_to_cursor(self.line_screen.screen(), self.grid_cols)
-    }
 }
 
 /// The line typed so far: grid cells up to the cursor, nothing after.
@@ -326,9 +336,9 @@ impl InputTracker {
 /// ghost, which is echoed inside the input zone and would otherwise be
 /// queried as if the user had typed it. Typed trailing spaces are written
 /// cells before the cursor, so they survive.
-fn line_up_to_cursor(screen: &vt100::Screen, grid_cols: u16) -> String {
+fn line_up_to_cursor(screen: &vt100::Screen, grid_cols: u16, line: &mut String) {
+    line.clear();
     let (cursor_row, cursor_col) = screen.cursor_position();
-    let mut line = String::new();
     for row in 0..=cursor_row {
         if row > 0 {
             line.push('\n');
@@ -338,7 +348,7 @@ fn line_up_to_cursor(screen: &vt100::Screen, grid_cols: u16) -> String {
         } else {
             grid_cols
         };
-        let mut text = String::new();
+        let row_start = line.len();
         for col in 0..end {
             let Some(cell) = screen.cell(row, col) else {
                 continue;
@@ -348,18 +358,22 @@ fn line_up_to_cursor(screen: &vt100::Screen, grid_cols: u16) -> String {
             }
             let contents = cell.contents();
             if contents.is_empty() {
-                text.push(' ');
+                line.push(' ');
             } else {
-                text.push_str(contents);
+                line.push_str(contents);
             }
         }
-        if row == cursor_row {
-            line.push_str(&text);
-        } else {
-            line.push_str(text.trim_end());
+        if row != cursor_row {
+            let kept = line[row_start..].trim_end().len();
+            line.truncate(row_start + kept);
         }
     }
-    line.trim_matches(|c| c == '\r' || c == '\n').to_string()
+    // Trim \r\n edges in place; this runs per keystroke.
+    line.truncate(line.trim_end_matches(['\r', '\n']).len());
+    let lead = line.len() - line.trim_start_matches(['\r', '\n']).len();
+    if lead > 0 {
+        line.drain(..lead);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -405,6 +419,10 @@ pub(crate) struct KeyFilter<W: Write> {
     compositor: Arc<Mutex<Compositor<W>>>,
     flags: Arc<OverlayFlags>,
     resync: ResyncState,
+    /// Reused per-chunk buffers: keystroke filtering while the popup
+    /// shows must not allocate.
+    key_scratch: Vec<u8>,
+    out_scratch: Vec<u8>,
 }
 
 /// Bookkeeping for an in-flight resize cursor handshake. Only touched
@@ -432,7 +450,7 @@ struct CursorReport {
 impl<W: Write> KeyFilter<W> {
     /// Process one stdin chunk and return the bytes to forward to the pty.
     pub(crate) fn process<'a>(
-        &mut self,
+        &'a mut self,
         chunk: &'a [u8],
         stdin: &mut (impl Read + AsFd),
     ) -> Cow<'a, [u8]> {
@@ -450,7 +468,11 @@ impl<W: Write> KeyFilter<W> {
     /// intercepted or forwarded in order. A chunk ending in a possible key
     /// prefix (e.g. a lone `ESC`) briefly waits for its tail before
     /// deciding; an `ESC` that stays lone dismisses the popup.
-    fn filter_keys<'a>(&self, chunk: &'a [u8], stdin: &mut (impl Read + AsFd)) -> Cow<'a, [u8]> {
+    fn filter_keys<'a>(
+        &'a mut self,
+        chunk: &'a [u8],
+        stdin: &mut (impl Read + AsFd),
+    ) -> Cow<'a, [u8]> {
         if !self.visible() {
             return Cow::Borrowed(chunk);
         }
@@ -460,8 +482,11 @@ impl<W: Write> KeyFilter<W> {
             return Cow::Borrowed(chunk);
         }
 
-        let mut bytes = chunk.to_vec();
-        let mut out = Vec::new();
+        let mut bytes = std::mem::take(&mut self.key_scratch);
+        bytes.clear();
+        bytes.extend_from_slice(chunk);
+        let mut out = std::mem::take(&mut self.out_scratch);
+        out.clear();
         let mut pos = 0;
         while pos < bytes.len() {
             while is_partial_interceptable(&bytes[pos..]) {
@@ -483,7 +508,9 @@ impl<W: Write> KeyFilter<W> {
                 KeyAction::Replace(replacement) => out.extend_from_slice(&replacement),
             }
         }
-        Cow::Owned(out)
+        self.key_scratch = bytes;
+        self.out_scratch = out;
+        Cow::Borrowed(&self.out_scratch)
     }
 
     fn visible(&self) -> bool {
@@ -774,7 +801,15 @@ fn spawn_ui_thread<W: Write + Send + 'static>(
     state: Arc<Mutex<PopupState>>,
 ) {
     std::thread::spawn(move || {
-        while let Ok(first) = ui_rx.recv() {
+        let mut preempted = None;
+        loop {
+            let first = match preempted.take() {
+                Some(event) => event,
+                None => match ui_rx.recv() {
+                    Ok(event) => event,
+                    Err(_) => break,
+                },
+            };
             // Coalesce bursts (per-keystroke echo chunks): only the most
             // recent event matters for what ends up on screen.
             let mut event = first;
@@ -783,7 +818,12 @@ fn spawn_ui_thread<W: Write + Send + 'static>(
             }
 
             match event {
-                UiEvent::Query(line) => handle_query(&provider, &compositor, &state, line),
+                // A provider call can take its full timeout; an event that
+                // arrived meanwhile (an Enter's Hide, a newer line) must
+                // not wait behind painting its stale result.
+                UiEvent::Query(line) => {
+                    preempted = handle_query(&provider, &compositor, &state, line, &ui_rx);
+                }
                 UiEvent::Hide => {
                     let mut st = lock_unpoisoned(&state);
                     st.suggestions = Vec::new().into();
@@ -796,12 +836,16 @@ fn spawn_ui_thread<W: Write + Send + 'static>(
     });
 }
 
+/// Fetch and paint suggestions for `line`. Returns an event that arrived
+/// during the fetch, in which case the stale result was discarded unpainted
+/// and the caller should process the newer event instead.
 fn handle_query<W: Write>(
     provider: &SuggestionProvider,
     compositor: &Arc<Mutex<Compositor<W>>>,
     state: &Arc<Mutex<PopupState>>,
     line: String,
-) {
+    ui_rx: &Receiver<UiEvent>,
+) -> Option<UiEvent> {
     let suppressed = {
         let mut st = lock_unpoisoned(state);
         st.line = line.clone();
@@ -820,6 +864,10 @@ fn handle_query<W: Write>(
             .collect()
     };
 
+    if let Ok(newer) = ui_rx.try_recv() {
+        return Some(newer);
+    }
+
     let content = {
         let mut st = lock_unpoisoned(state);
         st.suggestions = suggestions.into();
@@ -828,6 +876,7 @@ fn handle_query<W: Write>(
     };
 
     lock_unpoisoned(compositor).set_overlay(content);
+    None
 }
 
 #[cfg(test)]
@@ -838,6 +887,13 @@ mod tests {
     use std::os::unix::net::UnixStream;
 
     // -- InputTracker -------------------------------------------------------
+
+    /// An empty, never-fed UI channel for direct handle_query calls.
+    fn idle_rx() -> Receiver<UiEvent> {
+        let (tx, rx) = mpsc::channel();
+        std::mem::forget(tx);
+        rx
+    }
 
     fn tracker() -> (InputTracker, Receiver<UiEvent>) {
         let (tracker, rx, _clock) = tracker_with_clock();
@@ -1087,6 +1143,8 @@ mod tests {
                 compositor,
                 flags,
                 resync: ResyncState::default(),
+                key_scratch: Vec::new(),
+                out_scratch: Vec::new(),
             },
             stdin,
             peer,
@@ -1335,15 +1393,33 @@ mod tests {
             ]
         });
 
-        handle_query(&provider, &compositor, &state, "git st".to_string());
+        handle_query(
+            &provider,
+            &compositor,
+            &state,
+            "git st".to_string(),
+            &idle_rx(),
+        );
         assert!(flags.popup.load(Ordering::Acquire));
 
         state.lock().unwrap().dismissed_for = Some("git st".to_string());
-        handle_query(&provider, &compositor, &state, "git st".to_string());
+        handle_query(
+            &provider,
+            &compositor,
+            &state,
+            "git st".to_string(),
+            &idle_rx(),
+        );
         assert!(!flags.popup.load(Ordering::Acquire));
 
         // A changed line clears the dismissal.
-        handle_query(&provider, &compositor, &state, "git sta".to_string());
+        handle_query(
+            &provider,
+            &compositor,
+            &state,
+            "git sta".to_string(),
+            &idle_rx(),
+        );
         assert!(flags.popup.load(Ordering::Acquire));
         assert!(state.lock().unwrap().dismissed_for.is_none());
     }
@@ -1354,9 +1430,9 @@ mod tests {
         let state = Arc::new(Mutex::new(PopupState::default()));
         let provider: SuggestionProvider = Box::new(|_| vec![Suggestion::history("anything")]);
 
-        handle_query(&provider, &compositor, &state, "g".to_string());
+        handle_query(&provider, &compositor, &state, "g".to_string(), &idle_rx());
         assert!(flags.popup.load(Ordering::Acquire));
-        handle_query(&provider, &compositor, &state, "".to_string());
+        handle_query(&provider, &compositor, &state, "".to_string(), &idle_rx());
         assert!(!flags.popup.load(Ordering::Acquire));
     }
 }

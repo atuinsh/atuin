@@ -9,6 +9,10 @@ use crate::osc133::{Event, Params, Parser, Segment, Zone};
 const HISTORY_ID_PARAM: &str = "history_id";
 const SESSION_ID_PARAM: &str = "session_id";
 const MAX_OUTPUT_CAPTURE_BYTES: usize = 1024 * 1024;
+/// Prompt and command zones are lines, not streams; a marker desync (a
+/// program emitting an input marker and then a firehose) must not buffer
+/// the firehose.
+const MAX_LINE_CAPTURE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandCapture {
@@ -68,11 +72,19 @@ impl CommandCaptureTracker {
     }
 }
 
+fn append_capped(buf: &mut Vec<u8>, data: &[u8]) {
+    let remaining = MAX_LINE_CAPTURE_BYTES.saturating_sub(buf.len());
+    let retained = data.len().min(remaining);
+    if retained > 0 {
+        buf.extend_from_slice(&data[..retained]);
+    }
+}
+
 impl CaptureBuffers {
     fn append(&mut self, zone: Zone, data: &[u8]) {
         match zone {
-            Zone::Prompt => self.prompt.extend_from_slice(data),
-            Zone::Input => self.command.extend_from_slice(data),
+            Zone::Prompt => append_capped(&mut self.prompt, data),
+            Zone::Input => append_capped(&mut self.command, data),
             Zone::Output => self.append_output(data),
             Zone::Unknown => {}
         }
