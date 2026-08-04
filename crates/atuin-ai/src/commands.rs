@@ -67,4 +67,3 @@ pub async fn run(command: Command, settings: &Settings) -> eyre::Result<()> {
         } => inline::run(command, args.api_endpoint, args.api_token, settings, hook).await,
     }
 }
-

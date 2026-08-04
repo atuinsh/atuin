@@ -59,13 +59,20 @@ impl ShellParser for Fallback {
         while i < bytes.len() {
             let sep = match bytes[i] {
                 b';' => Some(1),
-                b'|' => Some(if bytes.get(i + 1) == Some(&b'|') { 2 } else { 1 }),
+                b'|' => Some(if bytes.get(i + 1) == Some(&b'|') {
+                    2
+                } else {
+                    1
+                }),
                 b'&' if bytes.get(i + 1) == Some(&b'&') => Some(2),
                 _ => None,
             };
             if let Some(len) = sep {
                 push_first_word(code, seg_start, i, &mut out);
-                out.push(Token { range: i..i + len, kind: TokenKind::Operator });
+                out.push(Token {
+                    range: i..i + len,
+                    kind: TokenKind::Operator,
+                });
                 i += len;
                 seg_start = i;
             } else {
@@ -147,8 +154,12 @@ fn walk_tokens(node: tree_sitter::Node, src: &[u8], out: &mut Vec<Token>) {
     let kind = match node.kind() {
         "comment" => Some(TokenKind::Comment),
         "command_name" => Some(TokenKind::Command),
-        "string" | "raw_string" | "ansi_c_string" | "heredoc_body"
-        | "single_quote_string" | "double_quote_string" => Some(TokenKind::String),
+        "string"
+        | "raw_string"
+        | "ansi_c_string"
+        | "heredoc_body"
+        | "single_quote_string"
+        | "double_quote_string" => Some(TokenKind::String),
         "simple_expansion" | "expansion" | "variable_assignment" | "variable_expansion" => {
             Some(TokenKind::Variable)
         }
@@ -162,7 +173,10 @@ fn walk_tokens(node: tree_sitter::Node, src: &[u8], out: &mut Vec<Token>) {
         _ => None,
     };
     if let Some(kind) = kind {
-        out.push(Token { range: node.byte_range(), kind });
+        out.push(Token {
+            range: node.byte_range(),
+            kind,
+        });
     }
     // Fish has no `command_name` node; the command's `name` field points at a
     // plain `word`, which the match above never tags. Bash's `command` node
@@ -173,11 +187,17 @@ fn walk_tokens(node: tree_sitter::Node, src: &[u8], out: &mut Vec<Token>) {
         && let Some(name) = node.child_by_field_name("name")
         && name.kind() != "command_name"
     {
-        out.push(Token { range: name.byte_range(), kind: TokenKind::Command });
+        out.push(Token {
+            range: name.byte_range(),
+            kind: TokenKind::Command,
+        });
     }
     // An expansion is uniformly a variable; don't let its `$`/`{`/`}` children
     // overwrite it as operators.
-    if matches!(node.kind(), "simple_expansion" | "expansion" | "variable_expansion") {
+    if matches!(
+        node.kind(),
+        "simple_expansion" | "expansion" | "variable_expansion"
+    ) {
         return;
     }
     let mut cursor = node.walk();
@@ -188,9 +208,9 @@ fn walk_tokens(node: tree_sitter::Node, src: &[u8], out: &mut Vec<Token>) {
 
 #[cfg(test)]
 mod tests {
+    use super::{Fallback, ShellParser, Token, TokenKind, commands};
     use pretty_assertions::assert_eq;
     use rstest::rstest;
-    use super::{Fallback, Token, TokenKind, commands, ShellParser};
 
     #[test]
     fn fallback_emits_command_and_operator_tokens() {
@@ -198,11 +218,26 @@ mod tests {
         assert_eq!(
             toks,
             vec![
-                Token { range: 0..1, kind: TokenKind::Command },   // a
-                Token { range: 2..4, kind: TokenKind::Operator },  // &&
-                Token { range: 5..6, kind: TokenKind::Command },   // b
-                Token { range: 7..8, kind: TokenKind::Operator },  // |
-                Token { range: 9..10, kind: TokenKind::Command },  // c
+                Token {
+                    range: 0..1,
+                    kind: TokenKind::Command
+                }, // a
+                Token {
+                    range: 2..4,
+                    kind: TokenKind::Operator
+                }, // &&
+                Token {
+                    range: 5..6,
+                    kind: TokenKind::Command
+                }, // b
+                Token {
+                    range: 7..8,
+                    kind: TokenKind::Operator
+                }, // |
+                Token {
+                    range: 9..10,
+                    kind: TokenKind::Command
+                }, // c
             ]
         );
     }
@@ -216,15 +251,22 @@ mod tests {
     #[case::pipe("cat foo | grep bar", &[("cat", "cat foo"), ("grep", "grep bar")])]
     #[case::empty("", &[])]
     fn commands_fold_over_fallback(#[case] code: &str, #[case] want: &[(&str, &str)]) {
-        let got: Vec<(&str, &str)> =
-            commands(&Fallback, code).iter().map(|c| (c.name, c.full)).collect();
+        let got: Vec<(&str, &str)> = commands(&Fallback, code)
+            .iter()
+            .map(|c| (c.name, c.full))
+            .collect();
         assert_eq!(got, want);
     }
 
     #[test]
     fn command_name_is_a_leading_slice_of_full() {
         for c in commands(&Fallback, "git commit -m hi") {
-            assert!(c.full.starts_with(c.name), "{:?} not a prefix of {:?}", c.name, c.full);
+            assert!(
+                c.full.starts_with(c.name),
+                "{:?} not a prefix of {:?}",
+                c.name,
+                c.full
+            );
         }
     }
 }
@@ -232,8 +274,8 @@ mod tests {
 #[cfg(all(test, feature = "shell-syntax"))]
 mod classify_tests {
     use crate::shell::{ShellKind, TokenKind};
-    use rstest::rstest;
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     // One char per byte: c=command f=flag s=string v=variable o=operator #=comment a=base.
     fn render(cmd: &str, shell: ShellKind) -> String {
@@ -271,6 +313,13 @@ mod classify_tests {
         #[values("echo 'oops", "if (= 1 2) { }", "", "echo héllo")] cmd: &str,
         #[values(ShellKind::Bash, ShellKind::Fish, ShellKind::Nu)] shell: ShellKind,
     ) {
-        assert_eq!(shell.parser().classify(cmd).iter().all(|t| t.range.end <= cmd.len()), true);
+        assert_eq!(
+            shell
+                .parser()
+                .classify(cmd)
+                .iter()
+                .all(|t| t.range.end <= cmd.len()),
+            true
+        );
     }
 }
