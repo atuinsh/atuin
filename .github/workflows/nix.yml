@@ -33,6 +33,9 @@ jobs:
       - name: Run nix build
         run: nix build --print-build-logs
 
+      - name: Check the built binary runs
+        run: ./result/bin/atuin --version
+
   nixfmt:
     runs-on: depot-ubuntu-24.04
 
