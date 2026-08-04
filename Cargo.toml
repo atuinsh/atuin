@@ -104,6 +104,12 @@ lto = "fat"
 strip = "symbols"
 codegen-units = 1
 
+[profile.profiling]
+inherits = "dist"
+debug = true
+strip = "none"
+split-debuginfo = "packed"
+
 # For local development against a local eye-declare, uncomment below
 #eye_declare = { path = "../eye_declare/crates/eye_declare" }
 #eye_declare_engine = { path = "../eye_declare/crates/eye_declare_engine" }
