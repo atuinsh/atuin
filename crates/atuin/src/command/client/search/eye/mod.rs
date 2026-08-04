@@ -62,7 +62,7 @@ pub async fn history(
     settings: &Settings,
     db: impl Database,
     _history_store: &HistoryStore,
-    _theme: &Theme,
+    theme: &Theme,
     inline_height: u16,
 ) -> Result<String> {
     let original_query = query.join(" ");
@@ -94,7 +94,9 @@ pub async fn history(
     let search_app = app::SearchApp::new(
         search_input,
         settings,
+        theme,
         Box::new(db),
+        engines::engine(search_mode, settings),
         engines::engine(search_mode, settings),
         context,
         filter_mode,

@@ -1,23 +1,27 @@
 //! The Elm-shaped search application.
 //!
-//! P0 skeleton: hardcoded emacs-style keys via keymap fallthrough, live
-//! queries as cancel-on-drop effects, height-clamped bottom-anchored list.
+//! Hardcoded emacs-style keys via keymap fallthrough, live queries as
+//! cancel-on-drop effects, and a fixed-height frame element for rendering.
 //! The real keybinding pipeline (`KeymapSet` + conditions) arrives in P2.
 
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use atuin_client::database::{Context, Database};
 use atuin_client::history::History;
 use atuin_client::settings::{FilterMode, Settings};
+use atuin_client::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use eye_declare::{
-    App, Ctx, Element, ElementExt, Focus, FocusHandle, InputEvent, Keymap, Task, col, empty, keymap,
+    App, Ctx, Element, ElementExt, Focus, FocusHandle, InputEvent, Keymap, Task, empty, keymap,
 };
+use time::OffsetDateTime;
 use tokio::sync::Mutex;
 
 use super::super::cursor::Cursor;
 use super::super::engines::{AnySearchEngine, SearchEngine, SearchState};
-use super::view::{InputLine, ResultsList};
+use super::super::history_list::ListState;
+use super::view::SearchFrame;
 
 /// What the run loop hands back to `eye::history` for resolution into the
 /// final shell-facing string. `Default` (stdin closing, driver teardown)
@@ -49,28 +53,36 @@ struct QueryBackend {
     db: Box<dyn Database>,
 }
 
-pub(super) struct SearchApp {
-    search: SearchState,
-    results: Vec<History>,
-    selected: usize,
+pub(super) struct SearchApp<'a> {
+    pub(super) settings: &'a Settings,
+    pub(super) theme: &'a Theme,
+    pub(super) search: SearchState,
+    pub(super) results: Vec<History>,
+    pub(super) results_state: RefCell<ListState>,
+    /// A second engine instance used only for match highlighting at render
+    /// time — the query engine lives behind an async lock the synchronous
+    /// render can't take. Engine construction is cheap (the daemon variant
+    /// connects lazily) and `get_highlight_indices` is pure local compute.
+    pub(super) highlight_engine: AnySearchEngine,
+    pub(super) now: Box<dyn Fn() -> OffsetDateTime + Send>,
+    pub(super) inline_height: u16,
     generation: u64,
     backend: Arc<Mutex<QueryBackend>>,
     query_task: Option<Task>,
-    inline_height: u16,
-    smart_sort: bool,
-    execute_on_enter: bool,
     exiting: bool,
     _focus: Focus,
     input_focus: FocusHandle,
 }
 
-impl SearchApp {
+impl<'a> SearchApp<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         search_input: String,
-        settings: &Settings,
+        settings: &'a Settings,
+        theme: &'a Theme,
         db: Box<dyn Database>,
         engine: AnySearchEngine,
+        highlight_engine: AnySearchEngine,
         context: Context,
         filter_mode: FilterMode,
         inline_height: u16,
@@ -82,7 +94,16 @@ impl SearchApp {
         let input_focus = focus.handle();
         input_focus.focus();
 
+        let now: Box<dyn Fn() -> OffsetDateTime + Send> = if settings.prefers_reduced_motion {
+            let now = OffsetDateTime::now_utc();
+            Box::new(move || now)
+        } else {
+            Box::new(OffsetDateTime::now_utc)
+        };
+
         Self {
+            settings,
+            theme,
             search: SearchState {
                 input,
                 filter_mode,
@@ -91,13 +112,13 @@ impl SearchApp {
                 shells: settings.search.shells.clone(),
             },
             results: Vec::new(),
-            selected: 0,
+            results_state: RefCell::new(ListState::default()),
+            highlight_engine,
+            now,
+            inline_height,
             generation: 0,
             backend: Arc::new(Mutex::new(QueryBackend { engine, db })),
             query_task: None,
-            inline_height,
-            smart_sort: settings.smart_sort,
-            execute_on_enter: settings.enter_accept,
             exiting: false,
             _focus: focus,
             input_focus,
@@ -111,7 +132,7 @@ impl SearchApp {
         self.generation += 1;
         let generation = self.generation;
         let backend = Arc::clone(&self.backend);
-        let smart_sort = self.smart_sort;
+        let smart_sort = self.settings.smart_sort;
         // SearchState isn't Clone (Cursor); snapshot the fields the engine reads.
         let state = SearchState {
             input: Cursor::from(self.search.input.as_str().to_owned()),
@@ -155,7 +176,8 @@ impl SearchApp {
     }
 
     fn accept(&mut self, execute: bool, ctx: &mut Ctx<'_, Self>) {
-        let output = match self.results.get(self.selected) {
+        let selected = self.results_state.get_mut().selected();
+        let output = match self.results.get(selected) {
             Some(entry) => Output::Selection {
                 command: entry.command.clone(),
                 execute,
@@ -165,17 +187,44 @@ impl SearchApp {
         self.finish(output, ctx);
     }
 
+    /// Move the selection toward older entries (visually up when the list
+    /// is bottom-anchored).
+    fn scroll_up(&mut self, n: usize) {
+        let len = self.results.len();
+        let state = self.results_state.get_mut();
+        let i = state.selected() + n;
+        state.select(i.min(len.saturating_sub(1)));
+    }
+
+    /// Move the selection toward newer entries.
+    fn scroll_down(&mut self, n: usize) {
+        let state = self.results_state.get_mut();
+        let i = state.selected().saturating_sub(n);
+        state.select(i);
+    }
+
     fn handle_key(&mut self, key: KeyEvent, ctx: &mut Ctx<'_, Self>) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let invert = self.settings.invert;
         match key.code {
             KeyCode::Esc => self.finish(Output::ReturnOriginal, ctx),
             KeyCode::Char('c' | 'd' | 'g') if ctrl => self.finish(Output::ReturnOriginal, ctx),
-            KeyCode::Enter => self.accept(self.execute_on_enter, ctx),
+            KeyCode::Enter => self.accept(self.settings.enter_accept, ctx),
             KeyCode::Tab => self.accept(false, ctx),
             KeyCode::Up => {
-                self.selected = (self.selected + 1).min(self.results.len().saturating_sub(1));
+                if invert {
+                    self.scroll_down(1);
+                } else {
+                    self.scroll_up(1);
+                }
             }
-            KeyCode::Down => self.selected = self.selected.saturating_sub(1),
+            KeyCode::Down => {
+                if invert {
+                    self.scroll_up(1);
+                } else {
+                    self.scroll_down(1);
+                }
+            }
             KeyCode::Backspace => {
                 self.search.input.back();
                 self.spawn_query(ctx);
@@ -201,7 +250,7 @@ impl SearchApp {
     }
 }
 
-impl App for SearchApp {
+impl App for SearchApp<'_> {
     type Msg = Msg;
     type Output = Output;
 
@@ -218,7 +267,7 @@ impl App for SearchApp {
                 if generation == self.generation {
                     self.results = results;
                     // New results reset the selection, matching query_results.
-                    self.selected = 0;
+                    self.results_state.get_mut().select(0);
                 }
             }
             Msg::Raw(InputEvent::Key(key)) => self.handle_key(key, ctx),
@@ -235,16 +284,7 @@ impl App for SearchApp {
         if self.exiting {
             return empty().any();
         }
-        col()
-            .child(ResultsList {
-                results: &self.results,
-                selected: self.selected,
-                rows: self.inline_height.saturating_sub(1),
-            })
-            .child(InputLine {
-                input: &self.search.input,
-            })
-            .any()
+        SearchFrame { app: self }.any()
     }
 
     fn keymap(&self) -> Keymap<Msg> {
