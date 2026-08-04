@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [unreleased]
+
+### Features
+
+- Add agent hooks for opencode ([#3844](https://github.com/atuinsh/atuin/issues/3844))
+
+
+
 ## 18.19.0
 
 ### Bug Fixes
