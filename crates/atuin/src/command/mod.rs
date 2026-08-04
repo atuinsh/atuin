@@ -95,19 +95,32 @@ fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
     #[allow(clippy::useless_conversion)]
     let child_umask = Some(u32::from(prev_umask.bits()));
 
+    let trace_start = std::time::Instant::now();
+    let trace = |name: &str| {
+        if std::env::var_os("ATUIN_PTY_PROXY_TRACE").is_some_and(|v| v == "1") {
+            eprintln!(
+                "atuin pty-proxy: trace: {name}: total {:?}\r",
+                trace_start.elapsed()
+            );
+        }
+    };
+
     #[cfg(any(feature = "daemon", feature = "client"))]
     let settings = atuin_client::settings::Settings::new().ok();
+    trace("load settings");
 
     #[cfg(feature = "daemon")]
     let command_capture_sink = settings.clone().and_then(semantic_command_capture_sink);
     #[cfg(not(feature = "daemon"))]
     let command_capture_sink = None;
+    trace("command capture sink");
 
     #[cfg(feature = "client")]
     let suggestion_provider =
         settings.and_then(|settings| suggest::history_suggestion_provider(settings, proxy.shell()));
     #[cfg(not(feature = "client"))]
     let suggestion_provider = None;
+    trace("suggestion provider");
 
     proxy.run(atuin_pty_proxy::RunOptions {
         command_capture_sink,

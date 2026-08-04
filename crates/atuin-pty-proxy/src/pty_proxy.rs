@@ -139,7 +139,7 @@ fn shell_from_name(name: &str) -> Option<Shell> {
     }
 }
 
-fn env_flag(name: &str) -> bool {
+pub(crate) fn env_flag(name: &str) -> bool {
     std::env::var(name).is_ok_and(|value| {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),
