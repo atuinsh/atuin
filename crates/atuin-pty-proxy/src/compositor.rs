@@ -41,6 +41,12 @@ fn source_icon(source: SuggestionSource) -> char {
     }
 }
 
+/// What accepting `s` would add to the typed line — the only part worth
+/// showing in a dropdown row anchored at the cursor.
+fn remainder<'a>(s: &'a Suggestion, line: &str) -> &'a str {
+    s.text.strip_prefix(line).unwrap_or(&s.text)
+}
+
 /// What the suggestion UI wants painted. Suggestions are shared, not
 /// cloned: every navigation keystroke re-sends this.
 #[derive(Clone, Default)]
@@ -419,17 +425,16 @@ fn draw_popup(
     *window_offset = (*window_offset).min(content.suggestions.len() - visible);
     let window = &content.suggestions[*window_offset..*window_offset + visible];
 
-    // Left-align with the start of the typed line, sliding left to fit.
-    let line_width = content.line.width().min(u16::MAX as usize) as u16;
+    // Rows show only what the suggestion would add, so the popup anchors
+    // at the cursor and each row reads as a continuation of the typed
+    // line. Non-prefix suggestions (rare) fall back to their full text.
     let width = window
         .iter()
-        .map(|s| s.text.width() + ROW_CHROME_WIDTH)
+        .map(|s| remainder(s, &content.line).width() + ROW_CHROME_WIDTH)
         .max()
         .unwrap_or(ROW_CHROME_WIDTH)
         .clamp(MIN_POPUP_WIDTH, cols as usize);
-    let col = cursor_col
-        .saturating_sub(line_width)
-        .min(cols.saturating_sub(width as u16));
+    let col = cursor_col.min(cols.saturating_sub(width as u16));
 
     for (i, suggestion) in window.iter().enumerate() {
         let row = first_row + i as u16;
@@ -450,7 +455,7 @@ fn draw_popup(
         buf.push(b' ');
         let used = 3 + write_fitted(
             buf,
-            &suggestion.text,
+            remainder(suggestion, &content.line),
             width.saturating_sub(ROW_CHROME_WIDTH),
         );
         buf.resize(buf.len() + width.saturating_sub(used), b' ');
@@ -736,9 +741,17 @@ mod tests {
         c.apply_pty(b"$ git st").unwrap();
         c.set_overlay(Some(content("git st", &["git status", "git stash"], 0)));
 
-        let shown = screen_text(&displayed(&c));
-        assert!(shown.contains("git status"), "popup visible: {shown:?}");
-        assert!(shown.contains("git stash"));
+        // Rows show only what each suggestion would add, anchored at the
+        // cursor — the typed prefix is already on screen above them.
+        let checker = displayed(&c);
+        let first = row_text(&checker, 1);
+        let second = row_text(&checker, 2);
+        assert!(first.contains("atus"), "remainder visible: {first:?}");
+        assert!(
+            !first.contains("git"),
+            "typed prefix not repeated: {first:?}"
+        );
+        assert!(second.contains("ash"));
         assert!(c.flags.popup.load(Ordering::Acquire));
 
         c.set_overlay(None);
