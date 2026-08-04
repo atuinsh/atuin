@@ -181,7 +181,11 @@ pub(crate) struct InputTracker {
 
 impl InputTracker {
     fn new(ui_tx: Sender<UiEvent>, cols: Arc<AtomicU16>) -> Self {
-        let grid_cols = cols.load(Ordering::Relaxed).max(1);
+        // MODEL_FLOOR, not 1: vt100 panics rendering wide glyphs into a
+        // single-column grid.
+        let grid_cols = cols
+            .load(Ordering::Relaxed)
+            .max(crate::compositor::MODEL_FLOOR);
         Self {
             parser: Parser::new(),
             line_screen: vt100::Parser::new(LINE_GRID_ROWS, grid_cols, 0),
@@ -238,7 +242,9 @@ impl InputTracker {
                         } else {
                             last_line.clone()
                         };
-                        *grid_cols = cols.load(Ordering::Relaxed).max(1);
+                        *grid_cols = cols
+                            .load(Ordering::Relaxed)
+                            .max(crate::compositor::MODEL_FLOOR);
                         *line_screen = vt100::Parser::new(LINE_GRID_ROWS, *grid_cols, 0);
                         *fed = seed.len();
                         if !seed.is_empty() {
