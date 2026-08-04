@@ -63,6 +63,11 @@ pub(crate) struct RuntimeOptions {
 }
 
 impl PtyProxy {
+    /// The shell the proxy will spawn, when given explicitly via `--shell`.
+    pub fn shell(&self) -> Option<&std::path::Path> {
+        self.shell.as_deref()
+    }
+
     pub fn run(self, hooks: RunOptions) {
         if self.cmd.is_some() && self.shell.is_some() {
             eprintln!("atuin pty-proxy: --shell only applies when no subcommand is given");

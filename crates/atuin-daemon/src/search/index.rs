@@ -565,8 +565,10 @@ impl SearchIndex {
             .iter()
             .enumerate()
             .filter(|(_, entry)| {
-                !entry.original.contains('\n')
-                    && starts_with_folded(&entry.normalized, &query, fold_case)
+                // Prefix test first: it rejects most entries on the first
+                // character, while the multiline scan reads whole commands.
+                starts_with_folded(&entry.normalized, &query, fold_case)
+                    && !entry.original.contains('\n')
             })
             .map(|(haystack_index, entry)| SuggestMatch {
                 frecency: frecency_map

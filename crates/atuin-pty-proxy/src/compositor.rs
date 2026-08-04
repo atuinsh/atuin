@@ -94,9 +94,8 @@ impl<W: Write> Compositor<W> {
     }
 
     /// Apply a chunk of pty output: erase the overlay, forward the chunk,
-    /// repaint the popup. Write-first — the vt100 parse only feeds the
-    /// *next* paint, so it runs after the write, and with no overlay in
-    /// play this is a pure pass-through (no copy, no allocation, one write).
+    /// repaint the popup — one write per chunk, and with no overlay in
+    /// play a pure pass-through (no copy, no allocation).
     ///
     /// Ghost text is not repainted here: the chunk may have moved the line;
     /// the suggestion pass after the echo redraws it.
@@ -129,19 +128,22 @@ impl<W: Write> Compositor<W> {
         };
         self.tail = ready.split_off(ready_len);
 
-        // User-visible bytes first; the model catches up after the write.
-        if buf.is_empty() {
-            self.out.write_all(&ready)?;
-        } else {
-            buf.extend_from_slice(&ready);
-            self.out.write_all(&buf)?;
-        }
-        self.out.flush()?;
+        // Parsing a chunk costs microseconds, so erase + data + repaint go
+        // out as one write instead of paying two syscall pairs per chunk.
         self.parser.process(&ready);
-
         let mut repaint = Vec::new();
         self.draw_into(&mut repaint, false);
-        self.flush(repaint)
+
+        if buf.is_empty() && repaint.is_empty() {
+            self.out.write_all(&ready)?;
+            self.out.flush()?;
+            self.update_flags();
+            Ok(())
+        } else {
+            buf.extend_from_slice(&ready);
+            buf.extend_from_slice(&repaint);
+            self.flush(buf)
+        }
     }
 
     /// Flush any withheld partial-sequence tail (e.g. on shutdown).
@@ -223,26 +225,30 @@ impl<W: Write> Compositor<W> {
             return;
         }
 
+        let covered = |row: u16| {
+            ghost_row == Some(row)
+                || drawn.is_some_and(|region| {
+                    row >= region.first_row && row < region.first_row.saturating_add(region.count)
+                })
+        };
+        let last = drawn
+            .map(|region| region.first_row.saturating_add(region.count))
+            .into_iter()
+            .chain(ghost_row.map(|row| row + 1))
+            .max()
+            .unwrap_or(0);
+
+        // One rows_formatted pass over popup and ghost rows together: the
+        // iterator formats every row it yields, so passes are what cost.
         let screen = self.parser.screen();
         let (_, cols) = screen.size();
-        if let Some(region) = drawn {
-            let first = region.first_row as usize;
-            // One rows_formatted pass: nth-per-row would re-format every
-            // preceding row for each covered row.
-            for (row, bytes) in screen
-                .rows_formatted(0, cols)
-                .enumerate()
-                .skip(first)
-                .take(region.count as usize)
-            {
-                restore_row(buf, row as u16, &bytes);
-            }
-        }
-        if let Some(row) = ghost_row {
-            let covered = drawn.is_some_and(|region| {
-                row >= region.first_row && row < region.first_row.saturating_add(region.count)
-            });
-            if !covered && let Some(bytes) = screen.rows_formatted(0, cols).nth(row as usize) {
+        for (row, bytes) in screen
+            .rows_formatted(0, cols)
+            .enumerate()
+            .take(last as usize)
+        {
+            let row = row as u16;
+            if covered(row) {
                 restore_row(buf, row, &bytes);
             }
         }
@@ -588,6 +594,19 @@ mod tests {
         parser.screen().contents()
     }
 
+    /// Join one row's cell contents, popup padding included.
+    fn row_text(parser: &vt100::Parser, row: u16) -> String {
+        let (_, cols) = parser.screen().size();
+        (0..cols)
+            .filter_map(|col| {
+                parser
+                    .screen()
+                    .cell(row, col)
+                    .map(|c| c.contents().to_string())
+            })
+            .collect()
+    }
+
     #[rstest]
     fn passthrough_without_overlay_is_byte_identical() {
         let mut c = compositor();
@@ -691,14 +710,7 @@ mod tests {
         let checker = vt100::Parser::new(4, 40, 0);
         let mut checker = checker;
         checker.process(&c.out);
-        let line: String = (0..40)
-            .filter_map(|col| {
-                checker
-                    .screen()
-                    .cell(1, col)
-                    .map(|c| c.contents().to_string())
-            })
-            .collect();
+        let line = row_text(&checker, 1);
         assert!(
             line.starts_with("$ g"),
             "command line row untouched: {line:?}"
@@ -712,14 +724,7 @@ mod tests {
         c.set_overlay(Some(content("git st", &["git status"], 0)));
 
         let checker = displayed(&c);
-        let row: String = (0..40)
-            .filter_map(|col| {
-                checker
-                    .screen()
-                    .cell(0, col)
-                    .map(|c| c.contents().to_string())
-            })
-            .collect();
+        let row = row_text(&checker, 0);
         assert!(
             row.starts_with("$ git status"),
             "ghost completes the line: {row:?}"
@@ -787,14 +792,7 @@ mod tests {
         let checker = displayed(&c);
         // Rows 1-2 hold the popup; the clamped wide row must not have
         // wrapped past it onto row 3.
-        let row3: String = (0..40)
-            .filter_map(|col| {
-                checker
-                    .screen()
-                    .cell(3, col)
-                    .map(|c| c.contents().to_string())
-            })
-            .collect();
+        let row3 = row_text(&checker, 3);
         assert!(row3.trim().is_empty(), "no wrap past popup rows: {row3:?}");
     }
 

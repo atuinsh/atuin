@@ -96,6 +96,15 @@ pub struct LocatedEvent {
     pub params: Params,
 }
 
+/// One piece of a chunk as split by OSC 133 markers; see [`Parser::segments`].
+#[derive(Debug)]
+pub enum Segment<'a> {
+    /// Bytes that belong to `Zone` (never empty).
+    Text(Zone, &'a [u8]),
+    /// A marker, with the zone that was in effect before it.
+    Marker { before: Zone, located: LocatedEvent },
+}
+
 /// The current semantic zone as determined by the most recent OSC 133 marker.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -253,6 +262,39 @@ impl Parser {
                     self.sequence_start = None;
                 }
             }
+        }
+    }
+
+    /// Split a chunk into zone-attributed text and marker [`Segment`]s,
+    /// withholding the tail of an OSC sequence left incomplete by the
+    /// chunk boundary. This owns the offset-clamping that all marker
+    /// consumers need, so the subtle split logic exists once.
+    #[inline]
+    pub fn segments<'a>(&mut self, data: &'a [u8], mut f: impl FnMut(Segment<'a>)) {
+        let mut zone = self.zone;
+        let mut events = Vec::new();
+        self.push_located(data, |located| events.push(located));
+
+        let mut start = 0;
+        for located in events {
+            let marker_start = located.start_offset.min(data.len()).max(start);
+            let offset = located.offset.min(data.len());
+            if marker_start > start {
+                f(Segment::Text(zone, &data[start..marker_start]));
+            }
+            let before = zone;
+            zone = located.zone;
+            f(Segment::Marker { before, located });
+            start = offset;
+        }
+
+        let end = self
+            .incomplete_osc_sequence_start()
+            .map_or(data.len(), |sequence_start| {
+                sequence_start.min(data.len()).max(start)
+            });
+        if end > start {
+            f(Segment::Text(zone, &data[start..end]));
         }
     }
 
