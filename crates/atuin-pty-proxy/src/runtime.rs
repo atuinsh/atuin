@@ -111,6 +111,7 @@ fn run(mut options: RuntimeOptions) -> eyre::Result<()> {
         .unzip();
 
     terminal::enable_raw_mode()?;
+    seed_cursor_from_terminal(&compositor, &mut pty_writer);
 
     let pump_compositor = compositor;
     let stdout_thread = std::thread::spawn(move || {
@@ -190,6 +191,81 @@ fn spawn_stdin_pump(input_tx: SyncSender<Vec<u8>>) {
     });
 }
 
+/// How long to wait for the terminal's cursor-position report. Real
+/// terminals answer within a few milliseconds; on a miss the proxy runs
+/// with an unseeded model, as before.
+const CPR_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);
+const CPR_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(5);
+
+/// Ask the terminal where its cursor is (`ESC[6n`) and seed the screen
+/// model with the answer, so overlays land on the prompt the user sees
+/// even when the proxy starts on a non-empty screen. Runs before the
+/// pumps, in raw mode; anything the user typed ahead of the reply is
+/// forwarded to the pty untouched.
+fn seed_cursor_from_terminal(
+    compositor: &Arc<Mutex<Compositor<std::io::Stdout>>>,
+    pty_writer: &mut (impl Write + ?Sized),
+) {
+    let mut stdout = std::io::stdout();
+    if stdout
+        .write_all(b"\x1b[6n")
+        .and_then(|()| stdout.flush())
+        .is_err()
+    {
+        return;
+    }
+
+    let mut stdin = std::io::stdin();
+    let deadline = std::time::Instant::now() + CPR_TIMEOUT;
+    let mut pending = Vec::new();
+    let mut buf = [0u8; 256];
+    loop {
+        if rustix::io::ioctl_fionread(&stdin).unwrap_or(0) == 0 {
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(CPR_POLL_INTERVAL);
+            continue;
+        }
+        let Ok(n) = stdin.read(&mut buf) else { break };
+        if n == 0 {
+            break;
+        }
+        pending.extend_from_slice(&buf[..n]);
+        if let Some((row, col)) = take_cursor_report(&mut pending) {
+            lock_unpoisoned(compositor).seed_cursor(row, col);
+            break;
+        }
+    }
+
+    if !pending.is_empty() {
+        let _ = pty_writer.write_all(&pending);
+    }
+}
+
+/// Find and remove the first `ESC[row;colR` cursor-position report,
+/// returning its 1-based coordinates. Keystrokes racing the report are
+/// left in place.
+fn take_cursor_report(bytes: &mut Vec<u8>) -> Option<(u16, u16)> {
+    for start in 0..bytes.len() {
+        if bytes[start] != 0x1b {
+            continue;
+        }
+        if let Some((len, row, col)) = parse_cursor_report(&bytes[start..]) {
+            bytes.drain(start..start + len);
+            return Some((row, col));
+        }
+    }
+    None
+}
+
+fn parse_cursor_report(bytes: &[u8]) -> Option<(usize, u16, u16)> {
+    let rest = bytes.strip_prefix(b"\x1b[")?;
+    let end = rest.iter().position(|&b| b == b'R')?;
+    let (row, col) = std::str::from_utf8(&rest[..end]).ok()?.split_once(';')?;
+    Some((2 + end + 1, row.parse().ok()?, col.parse().ok()?))
+}
+
 fn spawn_resize_handler(
     master: Box<dyn portable_pty::MasterPty + Send>,
     compositor: Arc<Mutex<Compositor<std::io::Stdout>>>,
@@ -223,8 +299,27 @@ fn process_exit_code(code: u32) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::process_exit_code;
+    use super::{process_exit_code, take_cursor_report};
     use rstest::rstest;
+
+    #[rstest]
+    #[case::clean(b"\x1b[24;1R".to_vec(), Some((24, 1)), b"".to_vec())]
+    #[case::typed_ahead(b"ls\x1b[3;80R".to_vec(), Some((3, 80)), b"ls".to_vec())]
+    #[case::arrow_key_first(
+        b"\x1b[A\x1b[12;5R".to_vec(),
+        Some((12, 5)),
+        b"\x1b[A".to_vec()
+    )]
+    #[case::incomplete(b"\x1b[24;1".to_vec(), None, b"\x1b[24;1".to_vec())]
+    #[case::no_report(b"plain keys".to_vec(), None, b"plain keys".to_vec())]
+    fn extracts_cursor_report(
+        #[case] mut bytes: Vec<u8>,
+        #[case] expected: Option<(u16, u16)>,
+        #[case] remainder: Vec<u8>,
+    ) {
+        assert_eq!(take_cursor_report(&mut bytes), expected);
+        assert_eq!(bytes, remainder);
+    }
 
     #[rstest]
     #[case::zero(0, 0)]

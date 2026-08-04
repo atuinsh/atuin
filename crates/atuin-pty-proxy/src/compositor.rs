@@ -100,6 +100,17 @@ impl<W: Write> Compositor<W> {
         self.parser.screen()
     }
 
+    /// Align the model cursor with the real terminal's (1-based CPR
+    /// coordinates). The model starts blank but the user's screen usually
+    /// doesn't ("Last login:", motd, rc output), and overlays are placed in
+    /// model coordinates — without this offset every overlay draws above
+    /// the row the user actually sees. Content above the cursor stays
+    /// unknown; that's fine, model and terminal consume an identical byte
+    /// stream from here on.
+    pub(crate) fn seed_cursor(&mut self, row: u16, col: u16) {
+        self.parser.process(format!("\x1b[{row};{col}H").as_bytes());
+    }
+
     /// Apply a chunk of pty output: erase the overlay, forward the chunk,
     /// repaint the popup — one write per chunk, and with no overlay in
     /// play a pure pass-through (no copy, no allocation).
