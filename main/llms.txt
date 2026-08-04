@@ -20,7 +20,7 @@ usage, self-hosting, and AI features.
 - [Basic usage](https://docs.atuin.sh/guide/basic-usage/index.md): What Atuin records, how to use the TUI, and common config tweaks.
 - [Advanced usage](https://docs.atuin.sh/guide/advanced-usage/index.md): Filter modes (global, host, session, directory, workspace) and search modes (prefix, fulltext, fuzzy, daemon-fuzzy).
 - [Shell Integration](https://docs.atuin.sh/guide/shell-integration/index.md): How shell hooks work, environment variables, and embedded terminals.
-- [AI Agent Hooks](https://docs.atuin.sh/guide/agent-hooks/index.md): Capture commands from AI coding agents (Claude Code, Codex, pi) and filter by author.
+- [AI Agent Hooks](https://docs.atuin.sh/guide/agent-hooks/index.md): Capture commands from AI coding agents (Claude Code, Codex, opencode, pi) and filter by author.
 - [Excluding commands](https://docs.atuin.sh/guide/excluding-commands/index.md): Keep commands out of history with ignorespace, history_filter, and cwd_filter.
 - [Deleting history](https://docs.atuin.sh/guide/delete-history/index.md): Delete single entries, bulk delete by query, remove duplicates, or wipe everything.
 - [Syncing dotfiles](https://docs.atuin.sh/guide/dotfiles/index.md): Sync shell aliases and environment variables across machines.
