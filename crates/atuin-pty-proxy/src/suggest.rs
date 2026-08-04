@@ -218,7 +218,31 @@ impl InputTracker {
             }
             line.push_str(row.trim_end());
         }
-        line.trim_matches(|c| c == '\r' || c == '\n').to_string()
+        let mut line = line.trim_matches(|c| c == '\r' || c == '\n').to_string();
+        // Row trimming just ate any typed trailing space, but a space is
+        // exactly when next-word suggestions should start. Re-append them.
+        for _ in 0..self.typed_trailing_spaces() {
+            line.push(' ');
+        }
+        line
+    }
+
+    /// Typed spaces between the text and the cursor. Row text can't tell a
+    /// typed trailing space from an empty cell, but the grid can: typed
+    /// cells hold `" "`, untouched ones are empty. Bounded by the cursor so
+    /// the written-space artifact of a backspace echo (`\b \b`) — which
+    /// lands beyond the cursor — doesn't count.
+    fn typed_trailing_spaces(&self) -> usize {
+        let screen = self.line_screen.screen();
+        let (row, cursor_col) = screen.cursor_position();
+        (0..cursor_col)
+            .rev()
+            .take_while(|&col| {
+                screen
+                    .cell(row, col)
+                    .is_some_and(|cell| cell.contents() == " ")
+            })
+            .count()
     }
 }
 
@@ -731,6 +755,22 @@ mod tests {
     fn replays_backspaces() {
         let (mut tracker, rx) = tracker();
         tracker.push(b"\x1b]133;B\x07gix\x08 \x08t");
+        assert_eq!(last_query(&rx).as_deref(), Some("git"));
+    }
+
+    /// A trailing space is when next-word suggestions should begin — the
+    /// query must carry it instead of waiting for the word's first letter.
+    #[rstest]
+    fn trailing_space_starts_the_next_word() {
+        let (mut tracker, rx) = tracker();
+        tracker.push(b"\x1b]133;B\x07git");
+        assert_eq!(last_query(&rx).as_deref(), Some("git"));
+
+        tracker.push(b" ");
+        assert_eq!(last_query(&rx).as_deref(), Some("git "));
+
+        // Backspacing the space shrinks the query back.
+        tracker.push(b"\x08 \x08");
         assert_eq!(last_query(&rx).as_deref(), Some("git"));
     }
 
