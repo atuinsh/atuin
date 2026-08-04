@@ -40,6 +40,14 @@ rustPlatform.buildRustPackage {
     export LD_LIBRARY_PATH="${lib.makeLibraryPath [ openssl ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   '';
 
+  # The linked binary records no RPATH for OpenSSL, so once it leaves the build
+  # sandbox it fails with "libssl.so.3: cannot open shared object file". The
+  # build never notices, because LD_LIBRARY_PATH above is still exported when
+  # postInstall runs the binary to generate completions.
+  postFixup = lib.optionalString stdenv.hostPlatform.isLinux ''
+    patchelf --add-rpath ${lib.makeLibraryPath [ openssl ]} $out/bin/atuin
+  '';
+
   postInstall = ''
     installShellCompletion --cmd atuin \
       --bash <($out/bin/atuin gen-completions -s bash) \
