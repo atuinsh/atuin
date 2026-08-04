@@ -19,7 +19,7 @@ crossterm = { workspace = true }
 eyre = { workspace = true }
 nix = { version = "0.29", features = ["socket", "user"] }
 portable-pty = "0.9"
-rustix = { workspace = true }
+rustix = { workspace = true, features = ["termios"] }
 signal-hook = "0.3"
 unicode-width = "0.2"
 vt100 = { workspace = true }

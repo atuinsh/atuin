@@ -259,6 +259,7 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
         .unzip();
 
     trace.step("suggestion hooks");
+    claim_foreground_tty();
     terminal::enable_raw_mode().wrap_err("enable raw mode")?;
     trace.step("raw mode");
     seed_cursor_from_terminal(&compositor, &mut pty_writer);
@@ -390,6 +391,25 @@ fn spawn_stdin_pump(input_tx: SyncSender<Vec<u8>>) {
         stdout_thread,
         sock_path,
     })
+}
+
+/// Make this process group the terminal's foreground group if it isn't.
+///
+/// Some terminals (ghostty spawns shells through a wrapper) haven't handed
+/// the terminal to the shell's group by the time the init preamble execs
+/// the proxy. Running in the background breaks the proxy outright:
+/// `tcsetattr` fails with EIO on macOS ("enable raw mode: Input/output
+/// error"), and stdin reads die under SIGTTIN elsewhere. The shell's
+/// ignored-SIGTTOU disposition survives exec, which is exactly what lets
+/// `tcsetpgrp` through from the background.
+fn claim_foreground_tty() {
+    let Ok(tty) = std::fs::File::open("/dev/tty") else {
+        return;
+    };
+    let ours = rustix::process::getpgrp();
+    if rustix::termios::tcgetpgrp(&tty) != Ok(ours) {
+        let _ = rustix::termios::tcsetpgrp(&tty, ours);
+    }
 }
 
 /// Resolve a bare shell name against `PATH`; paths pass through, and an
