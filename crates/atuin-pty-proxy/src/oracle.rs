@@ -216,6 +216,15 @@ pub enum OracleShell {
     Fish,
 }
 
+/// Lifecycle breadcrumbs behind `ATUIN_PTY_PROXY_TRACE=1`, matching the
+/// runtime's startup trace: when tabs feel slow, the oracle's spawn
+/// timing is the first thing to rule in or out.
+fn trace(message: &str) {
+    if crate::pty_proxy::env_flag("ATUIN_PTY_PROXY_TRACE") {
+        eprintln!("atuin pty-proxy: trace: {message}\r");
+    }
+}
+
 /// Locate a binary on `PATH`.
 pub fn find_in_path(name: &str) -> Option<std::path::PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?)
@@ -343,7 +352,14 @@ impl CompletionOracleHandle {
                 Ok(OracleRequest::Warm) | Err(mpsc::RecvTimeoutError::Timeout) => None,
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
             };
+            let spawn_started = Instant::now();
+            trace(&format!("oracle spawn begins ({shell:?})"));
             let mut proc = respawn(&mut load_user_config, &mut spawns);
+            trace(&format!(
+                "oracle {} after {:?}",
+                if proc.is_some() { "ready" } else { "failed" },
+                spawn_started.elapsed()
+            ));
 
             loop {
                 let mut query = match pending.take() {
