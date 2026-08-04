@@ -30,13 +30,20 @@ const SUGGEST_QUEUE_DEPTH: usize = 8;
 /// before the history lookup runs, so this overlaps rather than adds.
 const COMPLETION_TIMEOUT: Duration = Duration::from_millis(150);
 
+/// The provider plus the proxy hook that warms the completion oracle when
+/// the session's first prompt appears.
+pub(super) struct SuggestHooks {
+    pub(super) provider: SuggestionProvider,
+    pub(super) session_ready: Option<Box<dyn FnOnce() + Send>>,
+}
+
 /// Experimental, gated on `suggest.enabled`. `session_shell` is the shell
 /// the proxy will spawn, so the completion oracle matches the session
 /// rather than a possibly-stale `$SHELL`.
 pub(super) fn history_suggestion_provider(
     settings: Settings,
     session_shell: Option<&Path>,
-) -> Option<SuggestionProvider> {
+) -> Option<SuggestHooks> {
     if !settings.suggest.enabled {
         return None;
     }
@@ -44,11 +51,12 @@ pub(super) fn history_suggestion_provider(
     let min_chars = settings.suggest.min_chars.max(1);
     let shell_name = session_shell_name(session_shell);
     let oracle = completion_oracle(&shell_name);
+    let warmer = oracle.as_ref().map(CompletionOracleHandle::warmer);
     let (req_tx, req_rx) = mpsc::sync_channel::<SuggestRequest>(SUGGEST_QUEUE_DEPTH);
 
     std::thread::spawn(move || suggestion_worker(settings, shell_name, oracle, &req_rx));
 
-    Some(Box::new(move |line: &str| {
+    let provider: SuggestionProvider = Box::new(move |line: &str| {
         // take(min_chars) keeps the length check O(min_chars), not O(line).
         if line.chars().take(min_chars).count() < min_chars {
             return Vec::new();
@@ -64,7 +72,12 @@ pub(super) fn history_suggestion_provider(
         reply_rx
             .recv_timeout(SUGGEST_REPLY_TIMEOUT)
             .unwrap_or_default()
-    }))
+    });
+    Some(SuggestHooks {
+        provider,
+        session_ready: warmer
+            .map(|warmer| Box::new(move || warmer.warm()) as Box<dyn FnOnce() + Send>),
+    })
 }
 
 struct SuggestRequest {

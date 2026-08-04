@@ -51,6 +51,10 @@ pub enum Shell {
 pub struct RunOptions {
     pub command_capture_sink: Option<CommandCaptureSink>,
     pub suggestion_provider: Option<SuggestionProvider>,
+    /// Invoked once when the session shell's first prompt appears (OSC
+    /// 133), i.e. when its startup has finished — the moment to warm
+    /// caches without competing with it. Requires a suggestion provider.
+    pub session_ready: Option<Box<dyn FnOnce() + Send>>,
     /// Umask to restore in the spawned shell — atuin tightens its own
     /// process-wide umask early, which the shell must not inherit (#3695).
     pub child_umask: Option<u32>,

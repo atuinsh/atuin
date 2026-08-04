@@ -273,9 +273,28 @@ fn fish_complete(fish: &Path, line: &str) -> Vec<Candidate> {
 /// queued query, and [`Self::enqueue`] rejects a query outright while an
 /// unread one already sits in the (single-slot) queue.
 pub struct CompletionOracleHandle {
-    query_tx: mpsc::SyncSender<OracleQuery>,
+    query_tx: mpsc::SyncSender<OracleRequest>,
     answer_rx: Receiver<OracleAnswer>,
     next_id: u64,
+}
+
+/// Nudges the oracle to spawn its captive shell now — fired when the
+/// session's first prompt appears, so the rc-loading happens while the
+/// user reads the prompt instead of during shell startup or on the first
+/// keystroke. Cheap to clone; safe from any thread.
+#[derive(Clone)]
+pub struct OracleWarmer(mpsc::SyncSender<OracleRequest>);
+
+impl OracleWarmer {
+    pub fn warm(&self) {
+        let _ = self.0.try_send(OracleRequest::Warm);
+    }
+}
+
+enum OracleRequest {
+    /// Spawn the captive shell now; carries no query.
+    Warm,
+    Query(OracleQuery),
 }
 
 struct OracleQuery {
@@ -292,7 +311,7 @@ impl CompletionOracleHandle {
     /// Start the oracle thread; the captive shell is respawned (up to a
     /// cap) if it wedges.
     pub fn spawn(shell: OracleShell, bin: std::path::PathBuf, load_user_config: bool) -> Self {
-        let (query_tx, query_rx) = mpsc::sync_channel::<OracleQuery>(1);
+        let (query_tx, query_rx) = mpsc::sync_channel::<OracleRequest>(1);
         let (answer_tx, answer_rx) = mpsc::channel();
 
         std::thread::spawn(move || {
@@ -317,11 +336,11 @@ impl CompletionOracleHandle {
             // the tab's own shell is doing at this moment. Spawning both
             // at once makes them fight over CPU and compinit's zcompdump
             // lock, visibly delaying the prompt to serve a popup nobody
-            // has asked for yet. Wait for the first query (the session is
-            // interactive by then) or a quiet delay, whichever is first.
+            // has asked for yet. Wait for the warm nudge (the session's
+            // first prompt), the first query, or a quiet delay.
             let mut pending = match query_rx.recv_timeout(WARM_SPAWN_DELAY) {
-                Ok(query) => Some(query),
-                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Ok(OracleRequest::Query(query)) => Some(query),
+                Ok(OracleRequest::Warm) | Err(mpsc::RecvTimeoutError::Timeout) => None,
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
             };
             let mut proc = respawn(&mut load_user_config, &mut spawns);
@@ -329,14 +348,20 @@ impl CompletionOracleHandle {
             loop {
                 let mut query = match pending.take() {
                     Some(query) => query,
-                    None => match query_rx.recv() {
-                        Ok(query) => query,
-                        Err(_) => return,
+                    None => loop {
+                        match query_rx.recv() {
+                            Ok(OracleRequest::Query(query)) => break query,
+                            // Already warm; nothing to do.
+                            Ok(OracleRequest::Warm) => {}
+                            Err(_) => return,
+                        }
                     },
                 };
                 // Only the newest queued query is worth answering.
                 while let Ok(newer) = query_rx.try_recv() {
-                    query = newer;
+                    if let OracleRequest::Query(newer) = newer {
+                        query = newer;
+                    }
                 }
 
                 if proc.is_none() {
@@ -383,12 +408,17 @@ impl CompletionOracleHandle {
         self.next_id += 1;
         let id = self.next_id;
         self.query_tx
-            .try_send(OracleQuery {
+            .try_send(OracleRequest::Query(OracleQuery {
                 id,
                 line: line.to_string(),
-            })
+            }))
             .ok()?;
         Some(id)
+    }
+
+    /// A cloneable early-spawn nudge; see [`OracleWarmer`].
+    pub fn warmer(&self) -> OracleWarmer {
+        OracleWarmer(self.query_tx.clone())
     }
 
     /// Wait up to `wait` for the answer to an enqueued query. A miss

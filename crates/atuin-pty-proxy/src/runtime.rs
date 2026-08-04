@@ -242,6 +242,7 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
     trace.step("socket + resize handlers");
 
     let input_activity = Arc::new(ActivityClock::new());
+    let session_ready = options.hooks.session_ready.take();
     let (mut input_tracker, mut key_filter) = options
         .hooks
         .suggestion_provider
@@ -253,6 +254,7 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
                 flags,
                 current_cols.clone(),
                 input_activity.clone(),
+                session_ready,
             );
             (handles.tracker, handles.keys)
         })
