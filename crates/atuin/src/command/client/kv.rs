@@ -63,8 +63,8 @@ pub enum Cmd {
 
 impl Cmd {
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        let encryption_key = encryption::load_key(settings)
-            .context("could not load encryption key")?;
+        let encryption_key =
+            encryption::load_key(settings).context("could not load encryption key")?;
 
         let host_id = Settings::host_id().await?;
 

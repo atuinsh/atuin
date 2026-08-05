@@ -81,8 +81,7 @@ async fn run(
     db: &impl Database,
     store: SqliteStore,
 ) -> Result<()> {
-    let encryption_key = encryption::load_key(settings)
-        .context("could not load encryption key")?;
+    let encryption_key = encryption::load_key(settings).context("could not load encryption key")?;
 
     let host_id = Settings::host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);

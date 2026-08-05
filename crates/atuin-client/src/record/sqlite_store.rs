@@ -16,8 +16,8 @@ use sqlx::{
     },
 };
 
-use atuin_common::utils;
 use crate::record::encryption::PasetoV4Key;
+use atuin_common::utils;
 use atuin_domain::record::{
     EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordStatus,
 };
@@ -535,7 +535,9 @@ mod tests {
         let mut tail = record();
         records.push(tail.clone());
         for _ in 1..10000 {
-            tail = tail.append(vec![1, 2, 3]).encrypt::<PasetoV4>([0; 32].into());
+            tail = tail
+                .append(vec![1, 2, 3])
+                .encrypt::<PasetoV4>([0; 32].into());
             records.push(tail.clone());
         }
 

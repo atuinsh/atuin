@@ -446,8 +446,8 @@ impl DaemonBuilder {
             .ok_or_else(|| eyre::eyre!("history_db is required"))?;
 
         // Load encryption key
-        let encryption_key = encryption::load_key(&self.settings)
-            .context("could not load encryption key")?;
+        let encryption_key =
+            encryption::load_key(&self.settings).context("could not load encryption key")?;
 
         // Create the event bus
         let (event_tx, _) = broadcast::channel(64);

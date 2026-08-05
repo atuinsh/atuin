@@ -54,8 +54,8 @@ pub async fn login(
         let current_key = load_key(settings)?;
 
         let encoded = key.clone(); // gonna want to save it in a bit
-        let new_key = decode_key(key)
-            .context("could not decode provided key - is not valid base64")?;
+        let new_key =
+            decode_key(key).context("could not decode provided key - is not valid base64")?;
 
         if new_key != current_key {
             println!("\nRe-encrypting local store with new key");

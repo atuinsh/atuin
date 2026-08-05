@@ -609,8 +609,7 @@ pub(super) async fn end_history_entry(
     let db = Sqlite::new(db_path, settings.local_timeout).await?;
     let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
-    let encryption_key = encryption::load_key(settings)
-        .context("could not load encryption key")?;
+    let encryption_key = encryption::load_key(settings).context("could not load encryption key")?;
     let host_id = Settings::host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
@@ -1011,8 +1010,8 @@ impl Cmd {
                 settings.timezone,
             );
         } else {
-            let encryption_key = encryption::load_key(settings)
-                .context("could not load encryption key")?;
+            let encryption_key =
+                encryption::load_key(settings).context("could not load encryption key")?;
             let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
@@ -1064,8 +1063,8 @@ impl Cmd {
                 settings.timezone,
             );
         } else {
-            let encryption_key = encryption::load_key(settings)
-                .context("could not load encryption key")?;
+            let encryption_key =
+                encryption::load_key(settings).context("could not load encryption key")?;
             let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
@@ -1131,8 +1130,8 @@ impl Cmd {
                 let db = Sqlite::new(db_path, settings.local_timeout).await?;
                 let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
-                let encryption_key = encryption::load_key(settings)
-                    .context("could not load encryption key")?;
+                let encryption_key =
+                    encryption::load_key(settings).context("could not load encryption key")?;
 
                 let host_id = Settings::host_id().await?;
                 let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);

@@ -5,11 +5,11 @@ use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use rmp::decode::Bytes;
 
+use crate::record::encryption::PasetoV4Key;
 use crate::{
     database::{Database, current_context},
     record::{encryption::PasetoV4, sqlite_store::SqliteStore},
 };
-use crate::record::encryption::PasetoV4Key;
 use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
 
 use super::{HISTORY_TAG, History, HistoryId, Version};
@@ -223,13 +223,11 @@ impl HistoryStore {
             // A record we can't decrypt or decode must not block the rest of the store -
             // skip it, and load everything else.
             let hist = match Version::from_name(version.as_str()) {
-                Some(_) => {
-                    record
-                        .decrypt::<PasetoV4>(self.encryption_key)
-                        .and_then(|decrypted| {
-                            HistoryRecord::deserialize(&decrypted.data, version.as_str())
-                        })
-                }
+                Some(_) => record
+                    .decrypt::<PasetoV4>(self.encryption_key)
+                    .and_then(|decrypted| {
+                        HistoryRecord::deserialize(&decrypted.data, version.as_str())
+                    }),
                 None => Err(eyre!("unknown history version {version:?}")),
             };
 
@@ -303,15 +301,16 @@ impl HistoryStore {
                 let version = record.version.clone();
 
                 // Skip records we can't decrypt or decode, rather than failing the entire build.
-                let record =
-                    match Version::from_name(version.as_str()) {
-                        Some(_) => record.decrypt::<PasetoV4>(self.encryption_key).and_then(
-                            |decrypted| {
+                let record = match Version::from_name(version.as_str()) {
+                    Some(_) => {
+                        record
+                            .decrypt::<PasetoV4>(self.encryption_key)
+                            .and_then(|decrypted| {
                                 HistoryRecord::deserialize(&decrypted.data, version.as_str())
-                            },
-                        ),
-                        None => Err(eyre!("unknown history version {version:?}")),
-                    };
+                            })
+                    }
+                    None => Err(eyre!("unknown history version {version:?}")),
+                };
 
                 let record = match record {
                     Ok(record) => record,

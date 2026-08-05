@@ -87,8 +87,8 @@ impl Cmd {
         let record_store_path = &settings.record_store_path;
         let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
-        let encryption_key = encryption::load_key(settings)
-            .context("could not load encryption key")?;
+        let encryption_key =
+            encryption::load_key(settings).context("could not load encryption key")?;
         let host_id = Settings::host_id().await?;
 
         let alias_store = AliasStore::new(sqlite_store.clone(), host_id, encryption_key);
