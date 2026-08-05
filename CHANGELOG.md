@@ -4,9 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [unreleased]
 
-### Features
+### Bug Fixes
 
-- Add agent hooks for opencode ([#3844](https://github.com/atuinsh/atuin/issues/3844))
+- *(nix)* Add an RPATH for OpenSSL so the built binary runs ([#3852](https://github.com/atuinsh/atuin/issues/3852))
+
+
+### Miscellaneous Tasks
+
+- Add profiling to the app ([#3853](https://github.com/atuinsh/atuin/issues/3853))
 
 
 
