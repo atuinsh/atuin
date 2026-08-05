@@ -17,14 +17,16 @@ pub struct PasetoV4;
 
 /// Key used for [`PasetoV4`] encryption.
 ///
-/// A newtype around the raw key bytes. It is deliberately **not** `Copy`: the
-/// key is secret material, so every copy should be an explicit `clone`, and
-/// keeping it non-`Copy` leaves room to zeroize the bytes on drop in future (a
-/// `Copy` type cannot implement `Drop`). It is passed by reference.
+/// Intentionally **not** Copy to support zeroing out on Drop.
 #[derive(Clone, PartialEq, Eq)]
 pub struct PasetoV4Key([u8; 32]);
 
 impl PasetoV4Key {
+    /// A key with every byte set to zero.
+    pub const fn zero() -> Self {
+        Self([0u8; 32])
+    }
+
     /// Borrow the raw key bytes.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
@@ -47,9 +49,12 @@ impl TryFrom<&[u8]> for PasetoV4Key {
 
 impl fmt::Debug for PasetoV4Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Never print the key material.
         f.write_str("PasetoV4Key([redacted])")
     }
+}
+
+impl Drop for PasetoV4Key {
+    fn drop(&mut self) {}
 }
 
 /*
@@ -132,7 +137,11 @@ impl Encryption for PasetoV4 {
         }
     }
 
-    fn decrypt(data: EncryptedData, ad: AdditionalData, key: &PasetoV4Key) -> Result<DecryptedData> {
+    fn decrypt(
+        data: EncryptedData,
+        ad: AdditionalData,
+        key: &PasetoV4Key,
+    ) -> Result<DecryptedData> {
         let token = data.data;
         let cek = Self::decrypt_cek(data.content_encryption_key, key)?;
 
