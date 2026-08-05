@@ -97,6 +97,16 @@ default-features = false
 version = "0.9"
 features = ["runtime-tokio", "time", "uuid"]
 
+# Release optimisation, but built for fast local iteration: no LTO,
+# incremental, full debug symbols, and no care for binary size
+[profile.local]
+inherits = "release"
+debug = true
+strip = "none"
+lto = "off"
+codegen-units = 16
+incremental = true
+
 # The profile that 'cargo dist' will build with
 [profile.dist]
 inherits = "release"

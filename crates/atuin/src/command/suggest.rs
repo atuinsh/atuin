@@ -153,11 +153,11 @@ fn suggestion_worker(
 
         let results = runtime.block_on(backend.fetch(&request.line));
 
-        // Each newline typed into the pty would submit the line so far; the
-        // daemon filters multiline already, this covers the other backends.
+        // Display sanitization does not change the bytes accepted into the
+        // pty, so no suggestion may contain a terminal-active control.
         let commands = results
             .into_iter()
-            .filter(|suggestion| !suggestion.text.contains('\n'))
+            .filter(|suggestion| suggestion_text_is_safe(&suggestion.text))
             .collect();
         let _ = request.reply.send(commands);
     }
@@ -330,23 +330,59 @@ fn syntax_spans(text: &str, shell: Option<&str>) -> Vec<SyntaxSpan> {
 }
 
 /// Splice a completion token back into the command line by replacing its
-/// last whitespace-separated token. Whole-line form keeps completions
+/// current shell word. Whole-line form keeps completions
 /// prefix-extensions of the typed line, which is what the ghost text and
 /// accept paths expect.
 fn apply_completion(line: &str, token: &str) -> Option<String> {
     if token.is_empty() {
         return None;
     }
-    let token_start = line
-        .rfind(char::is_whitespace)
-        .map_or(0, |position| position + 1);
+    let token_start = shell_word_start(line);
     let completed = format!("{}{}", &line[..token_start], token);
     (completed != line).then_some(completed)
 }
 
+fn shell_word_start(line: &str) -> usize {
+    let mut start = 0;
+    let mut quote = None;
+    let mut escaped = false;
+
+    for (i, ch) in line.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+
+        match quote {
+            Some('\'') => {
+                if ch == '\'' {
+                    quote = None;
+                }
+            }
+            Some('"') => match ch {
+                '"' => quote = None,
+                '\\' => escaped = true,
+                _ => {}
+            },
+            _ => match ch {
+                '\'' | '"' => quote = Some(ch),
+                '\\' => escaped = true,
+                _ if ch.is_whitespace() => start = i + ch.len_utf8(),
+                _ => {}
+            },
+        }
+    }
+
+    start
+}
+
+fn suggestion_text_is_safe(text: &str) -> bool {
+    !text.chars().any(char::is_control)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::apply_completion;
+    use super::{apply_completion, suggestion_text_is_safe};
     use rstest::rstest;
 
     /// Mirrors the classifier's own `simple_command` case, re-encoded as runs.
@@ -373,6 +409,9 @@ mod tests {
     #[case::flag("git status --sh", "--short", Some("git status --short"))]
     #[case::first_token("gi", "git", Some("git"))]
     #[case::after_trailing_space("git ", "checkout", Some("git checkout"))]
+    #[case::escaped_space("cd My\\ Do", "My\\ Documents", Some("cd My\\ Documents"))]
+    #[case::double_quoted_space("cd \"My Do", "\"My Documents\"", Some("cd \"My Documents\""))]
+    #[case::single_quoted_space("cd 'My Do", "'My Documents'", Some("cd 'My Documents'"))]
     #[case::noop_completion("git checkout", "checkout", None)]
     #[case::empty_token("git ch", "", None)]
     fn splices_completion_into_line(
@@ -381,5 +420,16 @@ mod tests {
         #[case] expected: Option<&str>,
     ) {
         assert_eq!(apply_completion(line, token).as_deref(), expected);
+    }
+
+    #[rstest]
+    #[case::plain("git status", true)]
+    #[case::newline("git status\nrm file", false)]
+    #[case::carriage_return("git status\rrm file", false)]
+    #[case::tab("git\tstatus", false)]
+    #[case::escape("git \x1b[31mstatus", false)]
+    #[case::delete("git \x7fstatus", false)]
+    fn filters_active_control_characters(#[case] text: &str, #[case] expected: bool) {
+        assert_eq!(suggestion_text_is_safe(text), expected);
     }
 }

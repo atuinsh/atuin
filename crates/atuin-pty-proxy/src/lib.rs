@@ -3,6 +3,8 @@ mod capture;
 #[cfg(unix)]
 mod compositor;
 #[cfg(unix)]
+mod core;
+#[cfg(unix)]
 mod debug;
 #[cfg(unix)]
 mod oracle;
@@ -21,6 +23,8 @@ mod suggest;
 
 #[cfg(unix)]
 pub use capture::{CommandCapture, CommandCaptureSink};
+#[cfg(unix)]
+pub use core::{ProxyCore, ProxyCoreConfig, ProxyHandle};
 #[cfg(unix)]
 pub use oracle::{Candidate, CompletionOracleHandle, OracleShell, OracleWarmer, find_in_path};
 #[cfg(unix)]

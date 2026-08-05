@@ -2,21 +2,22 @@ use std::io::Read;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 
 use crossterm::terminal;
 use eyre::WrapErr;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
-use crate::CommandCaptureSink;
 use crate::capture::CommandCaptureTracker;
 use crate::compositor::{CURSOR_HANDSHAKE, Compositor, OverlayFlags, lock_unpoisoned};
 use crate::debug::{Osc133DebugHighlighter, RESET};
 use crate::pty_proxy::RuntimeOptions;
-use crate::screen;
+use crate::screen::{self, Msg};
 
 pub(crate) fn main(options: RuntimeOptions) {
     let fallback = options.shell.clone();
+    let fallback_umask = options.hooks.child_umask;
     let session = match start(options) {
         Ok(session) => session,
         // The init preamble exec'd the shell away to run us: dying here
@@ -25,6 +26,10 @@ pub(crate) fn main(options: RuntimeOptions) {
         Err(e) => {
             let _ = terminal::disable_raw_mode();
             eprintln!("atuin pty-proxy: {e:#}; starting the shell without the proxy");
+            if let Some(mask) = fallback_umask {
+                // SAFETY: exec immediately follows this process-wide change.
+                unsafe { libc::umask(mask as libc::mode_t) };
+            }
             exec_fallback_shell(fallback.as_deref());
         }
     };
@@ -39,7 +44,7 @@ pub(crate) fn main(options: RuntimeOptions) {
 struct Session {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     stdout_thread: std::thread::JoinHandle<()>,
-    sock_path: PathBuf,
+    proxy_dir: PathBuf,
 }
 
 impl Session {
@@ -52,7 +57,7 @@ impl Session {
             }
         };
         let _ = self.stdout_thread.join();
-        let _ = std::fs::remove_file(&self.sock_path);
+        let _ = std::fs::remove_dir_all(&self.proxy_dir);
         code
     }
 }
@@ -166,15 +171,19 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
         .wrap_err("open pty")?;
     trace.step("open pty");
 
-    // The socket lives in a per-proxy 0700 directory next to its input
-    // token. Validate the sockaddr_un length limit BEFORE exporting the env
-    // var, falling back to a literal /tmp path, so we never advertise a
-    // socket we cannot bind.
-    let mut dir = screen::default_proxy_dir();
-    if !screen::socket_path_fits(&screen::socket_path_in(&dir)) {
-        dir = screen::fallback_proxy_dir();
+    let mut proxy_dir = screen::default_proxy_dir();
+    if !screen::socket_path_fits(&screen::socket_path_in(&proxy_dir)) {
+        proxy_dir = screen::fallback_proxy_dir();
     }
-    let sock_path = screen::socket_path_in(&dir);
+    let sock_path = screen::socket_path_in(&proxy_dir);
+    screen::create_proxy_dir(&proxy_dir).wrap_err("create proxy directory")?;
+    let token = screen::write_token(&proxy_dir).wrap_err("create proxy input token")?;
+    let listener =
+        std::os::unix::net::UnixListener::bind(&sock_path).wrap_err("bind proxy socket")?;
+    let (screen_tx, screen_rx) = mpsc::sync_channel::<Msg>(64);
+    let (input_tx, input_rx) = mpsc::sync_channel::<Vec<u8>>(64);
+    screen::spawn_parser_thread(rows, cols, screen_rx);
+    screen::spawn_socket_server(listener, screen_tx.clone(), token, input_tx.clone());
 
     // The init preamble can only pass what its shell knew about itself,
     // which is often a bare name ("zsh" via ZSH_ARGZERO). Resolve it here
@@ -222,7 +231,7 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
 
     drop(pair.slave);
 
-    let pty_reader = pair
+    let mut pty_reader = pair
         .master
         .try_clone_reader()
         .map_err(|e| eyre::eyre!("{e:#}"))
@@ -249,12 +258,12 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
 
     let activity = Arc::new(ActivityClock::new());
 
-    screen::spawn_socket_server(sock_path.clone(), compositor.clone());
     spawn_resize_handler(
         pair.master,
         compositor.clone(),
         current_cols.clone(),
         activity.clone(),
+        screen_tx.clone(),
     )
     .wrap_err("install resize handler")?;
     trace.step("socket + resize handlers");
@@ -289,6 +298,7 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
         seed_cursor_from_terminal(&compositor, &mut pty_writer);
         trace.step("cursor handshake");
     }
+    spawn_pty_writer_thread(pty_writer, input_rx);
 
     let pump_compositor = compositor;
     let stdout_thread = std::thread::spawn(move || {
@@ -311,6 +321,7 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
                     trace.step("first pty output");
                     trace.enabled = false;
                     activity.touch();
+                    let _ = screen_tx.send(Msg::Data(buf[..n].to_vec()));
 
                     if degraded {
                         let mut out = RawStdout;
@@ -372,10 +383,9 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
                 let _ = compositor.apply_pty(RESET);
             }
         }
+        let _ = screen_tx.send(Msg::Eof);
     });
-}
 
-fn spawn_stdin_pump(input_tx: SyncSender<Vec<u8>>) {
     std::thread::spawn(move || {
         let mut stdin = std::io::stdin();
         let mut buf = [0u8; 8192];
@@ -395,18 +405,24 @@ fn spawn_stdin_pump(input_tx: SyncSender<Vec<u8>>) {
                                     if bytes.is_empty() {
                                         Ok(())
                                     } else {
-                                        pty_writer.write_all(&bytes)
+                                        input_tx.send(bytes.to_vec()).map_err(|_| {
+                                            std::io::Error::from(std::io::ErrorKind::BrokenPipe)
+                                        })
                                     }
                                 }));
                             match outcome {
                                 Ok(result) => result,
                                 Err(_) => {
                                     drop_filter = true;
-                                    pty_writer.write_all(&buf[..n])
+                                    input_tx.send(buf[..n].to_vec()).map_err(|_| {
+                                        std::io::Error::from(std::io::ErrorKind::BrokenPipe)
+                                    })
                                 }
                             }
                         }
-                        None => pty_writer.write_all(&buf[..n]),
+                        None => input_tx
+                            .send(buf[..n].to_vec())
+                            .map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
                     };
                     if drop_filter {
                         key_filter = None;
@@ -422,8 +438,19 @@ fn spawn_stdin_pump(input_tx: SyncSender<Vec<u8>>) {
     Ok(Session {
         child: child.defuse(),
         stdout_thread,
-        sock_path,
+        proxy_dir,
     })
+}
+
+fn spawn_pty_writer_thread(mut writer: Box<dyn Write + Send>, input_rx: Receiver<Vec<u8>>) {
+    std::thread::spawn(move || {
+        for chunk in input_rx {
+            if writer.write_all(&chunk).is_err() {
+                break;
+            }
+            let _ = writer.flush();
+        }
+    });
 }
 
 /// How long the de-orphaning helpers stay alive: long enough for the
@@ -722,6 +749,7 @@ fn spawn_resize_handler(
     compositor: Arc<Mutex<Compositor<RawStdout>>>,
     current_cols: Arc<AtomicU16>,
     activity: Arc<ActivityClock>,
+    screen_tx: SyncSender<Msg>,
 ) -> eyre::Result<()> {
     use signal_hook::consts::SIGWINCH;
     use signal_hook::iterator::Signals;
@@ -740,6 +768,7 @@ fn spawn_resize_handler(
                     pixel_width: 0,
                     pixel_height: 0,
                 });
+                let _ = screen_tx.send(Msg::Resize { rows, cols });
                 // The resize counts as activity: quiet is then measured
                 // from it, so a repaint that hasn't started yet after a
                 // long-idle pty can't look like quiet already.

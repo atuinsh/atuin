@@ -62,7 +62,7 @@ fn source_icon(source: SuggestionSource) -> char {
     }
 }
 
-/// Dropdown rows restart at the current whitespace-delimited token: a row
+/// Dropdown rows restart at the current shell word: a row
 /// cut mid-word ("atus --short") is harder to read than one showing the
 /// whole token ("status --short"). `line_head` is the typed line up to the
 /// token start; non-prefix suggestions fall back to their full text.
@@ -70,12 +70,39 @@ fn shown_from_token<'a>(s: &'a Suggestion, line_head: &str) -> &'a str {
     s.text.strip_prefix(line_head).unwrap_or(&s.text)
 }
 
-/// Byte offset where the last whitespace-delimited token of `line` starts.
+/// Byte offset where the current shell word starts.
 fn token_start(line: &str) -> usize {
-    line.char_indices()
-        .rev()
-        .find(|&(_, ch)| ch.is_whitespace())
-        .map_or(0, |(i, ch)| i + ch.len_utf8())
+    let mut start = 0;
+    let mut quote = None;
+    let mut escaped = false;
+
+    for (i, ch) in line.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+
+        match quote {
+            Some('\'') => {
+                if ch == '\'' {
+                    quote = None;
+                }
+            }
+            Some('"') => match ch {
+                '"' => quote = None,
+                '\\' => escaped = true,
+                _ => {}
+            },
+            _ => match ch {
+                '\'' | '"' => quote = Some(ch),
+                '\\' => escaped = true,
+                _ if ch.is_whitespace() => start = i + ch.len_utf8(),
+                _ => {}
+            },
+        }
+    }
+
+    start
 }
 
 /// What the suggestion UI wants painted. Suggestions are shared, not
@@ -115,8 +142,8 @@ struct DrawnRegion {
 /// shuffle or shrink the popup under the user's eyes.
 #[derive(Clone, Copy)]
 struct PopupAnchor {
-    /// Column of the token being completed — the unclamped ideal.
-    token_col: u16,
+    /// Byte offset where the current shell word begins.
+    token_start: usize,
     /// Column actually drawn at, after any right-edge clamping.
     col: u16,
     /// Drawn width; grow-only while the token is unchanged.
@@ -185,6 +212,7 @@ impl<W: Write> Compositor<W> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn screen(&self) -> &vt100::Screen {
         self.parser.screen()
     }
@@ -276,7 +304,16 @@ impl<W: Write> Compositor<W> {
         buf.clear();
         self.erase_into(&mut buf);
         self.content = content.filter(|content| !content.suggestions.is_empty());
-        if self.content.is_none() {
+        if let Some(content) = &self.content {
+            let next_token_start = token_start(&content.line);
+            if self
+                .anchor
+                .is_some_and(|anchor| anchor.token_start != next_token_start)
+            {
+                self.window_offset = 0;
+                self.anchor = None;
+            }
+        } else {
             self.window_offset = 0;
             self.anchor = None;
         }
@@ -429,6 +466,7 @@ impl<W: Write> Compositor<W> {
             self.drawn = draw_popup(
                 buf,
                 screen,
+                (rows, cols),
                 content,
                 selected,
                 &mut self.window_offset,
@@ -464,12 +502,13 @@ impl<W: Write> Compositor<W> {
 fn draw_popup(
     buf: &mut Vec<u8>,
     screen: &vt100::Screen,
+    terminal_size: (u16, u16),
     content: &OverlayContent,
     selected: usize,
     window_offset: &mut usize,
     anchor: &mut Option<PopupAnchor>,
 ) -> Option<DrawnRegion> {
-    let (rows, cols) = screen.size();
+    let (rows, cols) = terminal_size;
     let (cursor_row, cursor_col) = screen.cursor_position();
     let mut visible = content.suggestions.len().min(MAX_POPUP_ROWS);
 
@@ -505,7 +544,8 @@ fn draw_popup(
     // Rows pick up at the token being typed, and the popup anchors at that
     // token's column, so each row reads as a completion of the current
     // word rather than a fragment split mid-word.
-    let (line_head, partial_token) = content.line.split_at(token_start(&content.line));
+    let current_token_start = token_start(&content.line);
+    let (line_head, partial_token) = content.line.split_at(current_token_start);
     let scrollbar = content.suggestions.len() > visible;
     let chrome = ROW_CHROME_WIDTH + usize::from(scrollbar);
     // Width covers the whole list — never just the visible window, so
@@ -530,21 +570,23 @@ fn draw_popup(
     };
     let partial_width = partial_token.width().min(u16::MAX as usize) as u16;
     let token_col = cursor_col.saturating_sub(partial_width);
-    let same_token = anchor.filter(|a| a.token_col == token_col);
+    let same_token = anchor.filter(|a| a.token_start == current_token_start);
     // Same token: the geometry only ever grows and the column stays put —
     // candidates coming and going as keystrokes narrow the set must not
     // make the popup shuffle or shrink under the user's eyes.
-    let width = match same_token {
-        Some(a) => computed_width.max(a.width).min(cols as usize),
-        None => computed_width,
-    };
-    let rightmost = cols.saturating_sub(width as u16);
-    let col = match same_token {
-        Some(a) => a.col.min(rightmost),
-        None => token_col.min(rightmost),
+    let (col, width) = match same_token {
+        Some(a) => {
+            let available = cols.saturating_sub(a.col) as usize;
+            (a.col, computed_width.max(a.width).min(available))
+        }
+        None => {
+            let width = computed_width;
+            let rightmost = cols.saturating_sub(width as u16);
+            (token_col.min(rightmost), width)
+        }
     };
     *anchor = Some(PopupAnchor {
-        token_col,
+        token_start: current_token_start,
         col,
         width,
     });
@@ -948,7 +990,10 @@ mod tests {
     #[case::trailing_space("git ", 4)]
     #[case::empty("", 0)]
     #[case::wide_whitespace("a\u{3000}b", 4)]
-    fn token_starts_after_last_whitespace(#[case] line: &str, #[case] expected: usize) {
+    #[case::escaped_space("cd My\\ Do", 3)]
+    #[case::double_quoted_space("cd \"My Do", 3)]
+    #[case::single_quoted_space("cd 'My Do", 3)]
+    fn finds_current_shell_word(#[case] line: &str, #[case] expected: usize) {
         assert_eq!(token_start(line), expected);
     }
 
@@ -987,6 +1032,34 @@ mod tests {
         c.set_overlay(None);
         c.set_overlay(Some(content("do abc", &["do abcd", "do abce"], 0)));
         assert_eq!(popup_col(&c, 1), 5);
+    }
+
+    #[rstest]
+    fn popup_anchor_survives_echo_repaint_until_the_next_token() {
+        let mut c = compositor();
+        c.apply_pty(b"$ do a").unwrap();
+        c.set_overlay(Some(content("do a", &["do alpha", "do amber"], 0)));
+        let anchored = popup_col(&c, 1);
+
+        // The shell echo lands before the refreshed query. Repainting the
+        // old candidates during that gap must not follow the cursor right.
+        c.apply_pty(b"b").unwrap();
+        assert_eq!(popup_col(&c, 1), anchored);
+
+        c.set_overlay(Some(content("do ab", &["do about", "do absent"], 0)));
+        assert_eq!(popup_col(&c, 1), anchored);
+
+        // A wider result is truncated into the remaining room rather than
+        // pulling the already-visible box left.
+        let wide = "do abcdefghijklmnopqrstuvwxyz0123456789";
+        c.set_overlay(Some(content("do ab", &[wide, "do absent"], 0)));
+        assert_eq!(popup_col(&c, 1), anchored);
+
+        c.apply_pty(b" ").unwrap();
+        assert_eq!(popup_col(&c, 1), anchored);
+
+        c.set_overlay(Some(content("do ab ", &["do ab next", "do ab now"], 0)));
+        assert_eq!(popup_col(&c, 1), 8);
     }
 
     /// The cell-based row restore must reproduce styled content exactly:
@@ -1295,6 +1368,18 @@ mod tests {
             line.starts_with("$ g"),
             "command line row untouched: {line:?}"
         );
+    }
+
+    #[rstest]
+    fn popup_layout_uses_the_physical_terminal_rows() {
+        let flags = Arc::new(OverlayFlags::default());
+        let mut c: Compositor<Vec<u8>> = Compositor::new(2, 40, Vec::new(), flags, true);
+        c.apply_pty(b"one\r\n$ g").unwrap();
+        c.set_overlay(Some(content("g", &["git a", "git b", "git c"], 0)));
+
+        let drawn = c.drawn.expect("popup is visible above the prompt");
+        assert_eq!(drawn.first_row, 0);
+        assert_eq!(drawn.count, 1);
     }
 
     #[rstest]
