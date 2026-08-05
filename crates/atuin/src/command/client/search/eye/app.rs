@@ -1080,7 +1080,7 @@ impl App for SearchApp<'_> {
             Msg::UpdateNeeded(version) => self.update_needed = version,
             Msg::OpDone => {}
             Msg::Raw(event) => {
-                // The old event loop requeried when an input pass changed
+                // The old event loop re-queried when an input pass changed
                 // anything the engine reads; mirror that by diffing the
                 // query-relevant state around the key handling.
                 let initial_input = self.search.input.as_str().to_owned();
