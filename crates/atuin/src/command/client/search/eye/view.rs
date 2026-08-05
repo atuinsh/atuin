@@ -34,6 +34,7 @@ use super::super::history_list::{HistoryHighlighter, HistoryList};
 use super::super::inspector;
 use super::super::interactive::Compactness;
 use super::app::SearchApp;
+use super::state::Tab;
 use crate::VERSION;
 
 const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
@@ -84,9 +85,9 @@ impl SearchFrame<'_, '_> {
         let preview_width = area.width.saturating_sub(2);
         let preview_height = calc_preview_height(
             settings,
-            &self.app.results,
-            self.app.results_state.borrow().selected(),
-            self.app.tab_index,
+            &self.app.listing.entries,
+            self.app.listing.state.borrow().selected(),
+            self.app.tab.index(),
             compactness,
             border_size,
             preview_width,
@@ -171,7 +172,7 @@ impl SearchFrame<'_, '_> {
 
 impl Element for SearchFrame<'_, '_> {
     fn height(&self, _width: u16) -> u16 {
-        self.app.frame_height
+        self.app.viewport.height
     }
 
     #[allow(clippy::too_many_lines)]
@@ -190,7 +191,7 @@ impl Element for SearchFrame<'_, '_> {
             let titles: Vec<_> = TAB_TITLES.iter().copied().map(Line::from).collect();
             let tabs = Tabs::new(titles)
                 .block(Block::default().borders(Borders::NONE))
-                .select(app.tab_index)
+                .select(app.tab.index())
                 .style(Style::default())
                 .highlight_style(Style::from_crossterm(theme.as_style(Meaning::Important)));
             tabs.render(chunks.tabs, buf);
@@ -210,7 +211,7 @@ impl Element for SearchFrame<'_, '_> {
                 .split(chunks.header);
 
             build_title(app, theme).render(header_chunks[0], buf);
-            build_help(app.tab_index, settings, theme).render(header_chunks[1], buf);
+            build_help(app.tab.index(), settings, theme).render(header_chunks[1], buf);
             build_stats(app, theme).render(header_chunks[2], buf);
         }
 
@@ -218,8 +219,8 @@ impl Element for SearchFrame<'_, '_> {
             Paragraph::new(build_warnings(settings, theme)).render(chunks.warning, buf);
         }
 
-        if app.tab_index == 1 {
-            if app.results.is_empty() {
+        if app.tab == Tab::Inspect {
+            if app.listing.entries.is_empty() {
                 let message = Paragraph::new("Nothing to inspect")
                     .block(
                         Block::new()
@@ -232,14 +233,19 @@ impl Element for SearchFrame<'_, '_> {
                 message.render(chunks.results_list, buf);
             } else {
                 let selected = app
-                    .results_state
+                    .listing
+                    .state
                     .borrow()
                     .selected()
-                    .min(app.results.len() - 1);
-                let inspecting = app.inspecting.as_ref().unwrap_or(&app.results[selected]);
+                    .min(app.listing.entries.len() - 1);
+                let inspecting = app
+                    .inspector
+                    .entry
+                    .as_ref()
+                    .unwrap_or(&app.listing.entries[selected]);
                 // Stats arrive as an effect; the frame before they land
                 // renders the chrome without the inspector body.
-                if let Some(stats) = &app.stats {
+                if let Some(stats) = &app.inspector.stats {
                     inspector::draw(
                         buf,
                         chunks.results_list,
@@ -283,9 +289,9 @@ impl Element for SearchFrame<'_, '_> {
             search_input: app.search.input.as_str(),
         };
         let results_list = HistoryList::new(
-            &app.results,
+            &app.listing.entries,
             invert,
-            app.keymap_mode == KeymapMode::VimNormal,
+            app.keymap.mode == KeymapMode::VimNormal,
             &*app.now,
             settings.timezone.0,
             indicator.as_str(),
@@ -322,7 +328,7 @@ impl Element for SearchFrame<'_, '_> {
             results_list,
             chunks.results_list,
             buf,
-            &mut app.results_state.borrow_mut(),
+            &mut app.listing.state.borrow_mut(),
         );
 
         if !matches!(compactness, Compactness::Ultracompact) {
@@ -361,7 +367,7 @@ impl Element for SearchFrame<'_, '_> {
     }
 
     fn cursor(&self, area: Rect) -> Option<(u16, u16)> {
-        if self.app.tab_index == 1 {
+        if self.app.tab == Tab::Inspect {
             return None;
         }
         let chunks = self.chunks(area);
@@ -456,7 +462,7 @@ fn calc_preview_height(
 }
 
 fn build_title(app: &SearchApp<'_>, theme: &Theme) -> Paragraph<'static> {
-    let title = if app.update_needed.is_some() {
+    let title = if app.status.update_needed.is_some() {
         let error_style: Style = Style::from_crossterm(theme.get_error());
         Paragraph::new(Text::from(Span::styled(
             format!("Atuin v{VERSION} - UPDATE"),
@@ -474,7 +480,8 @@ fn build_title(app: &SearchApp<'_>, theme: &Theme) -> Paragraph<'static> {
 
 fn build_stats(app: &SearchApp<'_>, theme: &Theme) -> Paragraph<'static> {
     Paragraph::new(Text::from(Span::raw(
-        app.history_count
+        app.status
+            .history_count
             .map_or_else(String::new, |count| format!("history count: {count}")),
     )))
     .style(Style::from_crossterm(theme.as_style(Meaning::Annotation)))
@@ -552,7 +559,7 @@ fn build_input<'a>(
     inner_width: u16,
     prefix_width: u16,
 ) -> Paragraph<'a> {
-    let (pref, mode) = if app.prefix {
+    let (pref, mode) = if app.keymap.prefix {
         ("", "PREFIX")
     } else if app.switched_search_mode {
         (" SRCH:", app.search_mode.as_str())
@@ -599,11 +606,11 @@ fn build_preview(
     chunk_width: usize,
     theme: &Theme,
 ) -> Paragraph<'static> {
-    let selected = app.results_state.borrow().selected();
-    let command = if app.results.is_empty() {
+    let selected = app.listing.state.borrow().selected();
+    let command = if app.listing.entries.is_empty() {
         String::new()
     } else {
-        let s = &app.results[selected].command;
+        let s = &app.listing.entries[selected].command;
         let mut lines = Vec::new();
         for line in s.split('\n') {
             let line = line.escape_non_printable();

@@ -9,6 +9,7 @@
 //! lets inline mode work under capture, which the ratatui path never did.
 
 mod app;
+mod state;
 mod view;
 
 use std::io::{IsTerminal, stdout};
