@@ -112,7 +112,11 @@ impl WrappedStats {
 
         // Error analysis
         let mut command_errors: HashMap<String, (usize, usize)> = HashMap::new(); // (total_uses, errors)
-        let midyear = history[0].timestamp + Duration::days(182); // Split year in half
+
+        // Find number of days commands have been collected
+        let days =
+            (history[history.len() - 1].timestamp.ordinal() - history[0].timestamp.ordinal()) / 2;
+        let midyear = history[0].timestamp + Duration::days(days.into()); // Split year in half
 
         let mut first_half_commands: HashMap<String, usize> = HashMap::new();
         let mut second_half_commands: HashMap<String, usize> = HashMap::new();
