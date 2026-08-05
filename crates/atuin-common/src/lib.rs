@@ -5,7 +5,6 @@ pub mod ansi;
 pub mod docs;
 pub mod filter;
 pub mod logs;
-pub mod memory;
 pub mod path;
 pub mod shell;
 pub mod slice;
