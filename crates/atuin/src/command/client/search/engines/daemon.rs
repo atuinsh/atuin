@@ -37,8 +37,11 @@ impl LazyClient {
     }
 
     async fn connect(&self, params: &ClientParams) -> Result<SearchClient> {
+        // Resolve the socket path at connect time so we pick up the socket
+        // the running daemon advertises in its pidfile, which may differ
+        // from this process's environment-derived default.
         #[cfg(unix)]
-        return SearchClient::new(params.socket_path.clone()).await;
+        return SearchClient::new(atuin_daemon::client::daemon_socket_path(&params.settings)).await;
 
         #[cfg(not(unix))]
         SearchClient::new(params.tcp_port).await
@@ -85,8 +88,6 @@ impl LazyClient {
 /// mutably borrowed (see [`Search::prepare_index`]).
 struct ClientParams {
     settings: Settings,
-    #[cfg(unix)]
-    socket_path: String,
     #[cfg(not(unix))]
     tcp_port: u64,
 }
@@ -103,8 +104,6 @@ impl Search {
             client: LazyClient::default(),
             params: ClientParams {
                 settings: settings.clone(),
-                #[cfg(unix)]
-                socket_path: settings.daemon.socket_path.clone(),
                 #[cfg(not(unix))]
                 tcp_port: settings.daemon.tcp_port,
             },

@@ -67,6 +67,45 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
     DaemonClientErrorKind::Other
 }
 
+/// Read the endpoint the running daemon advertised in its pidfile.
+///
+/// The pidfile contains the daemon's pid, version and, as of the socket-path
+/// mismatch fix, the endpoint it is actually serving on. Returns `None` for
+/// missing or unreadable pidfiles, and for pidfiles written by older daemons
+/// that predate the endpoint line.
+fn pidfile_endpoint(pidfile_path: &str) -> Option<String> {
+    let contents = std::fs::read_to_string(pidfile_path).ok()?;
+    let mut lines = contents.lines();
+    let _pid = lines.next()?;
+    let _version = lines.next()?;
+    let endpoint = lines.next()?.trim();
+    (!endpoint.is_empty()).then(|| endpoint.to_string())
+}
+
+/// The socket path clients should use to reach the daemon.
+///
+/// The `daemon.socket_path` default is environment-dependent: it lives under
+/// `$XDG_RUNTIME_DIR` when that variable is set and under the data directory
+/// otherwise. A client and a daemon started from different environments (a
+/// PAM login shell vs. a tmux server spawned by a remote command, cron,
+/// containers, ...) can therefore silently disagree about where the socket
+/// lives, leaving every shell hook to time out against a socket that was
+/// never created. Prefer the path the daemon actually bound, as advertised
+/// in its pidfile, whenever that socket still exists.
+#[cfg(unix)]
+#[must_use]
+pub fn daemon_socket_path(settings: &Settings) -> String {
+    match pidfile_endpoint(&settings.daemon.pidfile_path) {
+        Some(advertised)
+            if advertised != settings.daemon.socket_path
+                && std::path::Path::new(&advertised).exists() =>
+        {
+            advertised
+        }
+        _ => settings.daemon.socket_path.clone(),
+    }
+}
+
 // Wrap the grpc client
 impl HistoryClient {
     #[cfg(unix)]
@@ -356,7 +395,7 @@ impl SemanticClient {
 
     #[cfg(unix)]
     pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.socket_path.clone()).await
+        Self::new(daemon_socket_path(settings)).await
     }
 
     #[cfg(not(unix))]
@@ -452,7 +491,7 @@ impl ControlClient {
     /// Connect using settings.
     #[cfg(unix)]
     pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.socket_path.clone()).await
+        Self::new(daemon_socket_path(settings)).await
     }
 
     /// Connect using settings.
@@ -558,4 +597,43 @@ pub async fn emit_event_with_settings(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::pidfile_endpoint;
+
+    fn write_pidfile(contents: &str) -> tempfile::NamedTempFile {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(contents.as_bytes()).unwrap();
+        file
+    }
+
+    #[test]
+    fn pidfile_endpoint_reads_advertised_endpoint() {
+        let file = write_pidfile("1234\n18.9.0\n/run/user/1000/atuin.sock\n");
+        assert_eq!(
+            pidfile_endpoint(file.path().to_str().unwrap()),
+            Some("/run/user/1000/atuin.sock".to_string())
+        );
+    }
+
+    #[test]
+    fn pidfile_endpoint_ignores_legacy_two_line_format() {
+        let file = write_pidfile("1234\n18.9.0\n");
+        assert_eq!(pidfile_endpoint(file.path().to_str().unwrap()), None);
+    }
+
+    #[test]
+    fn pidfile_endpoint_ignores_blank_endpoint_line() {
+        let file = write_pidfile("1234\n18.9.0\n   \n");
+        assert_eq!(pidfile_endpoint(file.path().to_str().unwrap()), None);
+    }
+
+    #[test]
+    fn pidfile_endpoint_ignores_missing_pidfile() {
+        assert_eq!(pidfile_endpoint("/nonexistent/atuin-daemon.pid"), None);
+    }
 }

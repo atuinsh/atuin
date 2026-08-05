@@ -109,7 +109,7 @@ struct PidfileGuard {
 }
 
 impl PidfileGuard {
-    fn acquire(path: &Path) -> Result<Self> {
+    fn acquire(path: &Path, endpoint: &str) -> Result<Self> {
         let mut file = open_lock_file(path)?;
 
         match file.try_lock() {
@@ -124,10 +124,15 @@ impl PidfileGuard {
             }
         }
 
+        // The endpoint line lets clients discover the socket the daemon
+        // actually serves on, even when their own environment resolves a
+        // different `daemon.socket_path` default (e.g. `XDG_RUNTIME_DIR`
+        // set in the client's session but not the daemon's, or vice versa).
         file.set_len(0)
             .wrap_err_with(|| format!("could not truncate daemon pidfile {}", path.display()))?;
         writeln!(file, "{}", std::process::id())
             .and_then(|()| writeln!(file, "{DAEMON_VERSION}"))
+            .and_then(|()| writeln!(file, "{endpoint}"))
             .wrap_err_with(|| format!("could not write daemon pidfile {}", path.display()))?;
 
         Ok(Self { file })
@@ -225,7 +230,7 @@ async fn connect_client(settings: &Settings) -> Result<HistoryClient> {
         #[cfg(not(unix))]
         settings.daemon.tcp_port,
         #[cfg(unix)]
-        settings.daemon.socket_path.clone(),
+        atuin_daemon::client::daemon_socket_path(settings),
     )
     .await
 }
@@ -283,7 +288,20 @@ fn remove_stale_socket_if_present(settings: &Settings) -> Result<()> {
         return Ok(());
     }
 
-    let socket_path = Path::new(&settings.daemon.socket_path);
+    remove_socket_if_stale(Path::new(&settings.daemon.socket_path))?;
+
+    // A dead daemon may still advertise a different socket path in the
+    // pidfile; clean that up too so clients stop preferring it.
+    let advertised = atuin_daemon::client::daemon_socket_path(settings);
+    if advertised != settings.daemon.socket_path {
+        remove_socket_if_stale(Path::new(&advertised))?;
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn remove_socket_if_stale(socket_path: &Path) -> Result<()> {
     if !socket_path.exists() {
         return Ok(());
     }
@@ -568,7 +586,10 @@ async fn status_cmd(settings: &Settings) -> Result<()> {
             println!("  Protocol: {}", status.protocol);
             println!("  Healthy:  {}", status.healthy);
             #[cfg(unix)]
-            println!("  Socket:   {}", settings.daemon.socket_path);
+            println!(
+                "  Socket:   {}",
+                atuin_daemon::client::daemon_socket_path(settings)
+            );
             #[cfg(not(unix))]
             println!("  Port:     {}", settings.daemon.tcp_port);
         }
@@ -669,11 +690,21 @@ async fn run(
     }
 
     let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
-    let _pidfile_guard = PidfileGuard::acquire(&pidfile_path)?;
+    let _pidfile_guard = PidfileGuard::acquire(&pidfile_path, &served_endpoint(&settings))?;
 
     atuin_daemon::boot(settings, store, history_db).await?;
 
     Ok(())
+}
+
+/// The endpoint this daemon will serve on, advertised to clients via the
+/// pidfile.
+fn served_endpoint(settings: &Settings) -> String {
+    #[cfg(unix)]
+    return settings.daemon.socket_path.clone();
+
+    #[cfg(not(unix))]
+    return settings.daemon.tcp_port.to_string();
 }
 
 /// Force cleanup: kill existing daemon process and remove socket.
@@ -785,27 +816,28 @@ mod tests {
         #[from(pidfile)] (_tmp, pidfile): (tempfile::TempDir, PathBuf),
     ) {
         {
-            let _guard = PidfileGuard::acquire(&pidfile).unwrap();
+            let _guard = PidfileGuard::acquire(&pidfile, "/run/user/1000/atuin.sock").unwrap();
             // Guard holds an exclusive lock — on Windows other handles cannot
             // read the file, so we verify contents after the guard is dropped.
         }
 
         let contents = std::fs::read_to_string(&pidfile).unwrap();
         let lines: Vec<&str> = contents.lines().collect();
-        assert_eq!(lines.len(), 2);
+        assert_eq!(lines.len(), 3);
         assert_eq!(lines[0], std::process::id().to_string());
         assert_eq!(lines[1], DAEMON_VERSION);
+        assert_eq!(lines[2], "/run/user/1000/atuin.sock");
 
         // After guard is dropped, lock should be released — acquiring again must succeed.
-        let _guard2 = PidfileGuard::acquire(&pidfile).unwrap();
+        let _guard2 = PidfileGuard::acquire(&pidfile, "/run/user/1000/atuin.sock").unwrap();
     }
 
     #[rstest]
     fn test_pidfile_guard_prevents_double_acquire(
         #[from(pidfile)] (_tmp, pidfile): (tempfile::TempDir, PathBuf),
     ) {
-        let _guard = PidfileGuard::acquire(&pidfile).unwrap();
-        let result = PidfileGuard::acquire(&pidfile);
+        let _guard = PidfileGuard::acquire(&pidfile, "/run/user/1000/atuin.sock").unwrap();
+        let result = PidfileGuard::acquire(&pidfile, "/run/user/1000/atuin.sock");
         assert!(result.is_err());
     }
 }
