@@ -1,5 +1,4 @@
 use std::array::TryFromSliceError;
-use std::fmt;
 
 use atuin_domain::record::{
     AdditionalData, DecryptedData, EncryptedData, Encryption, HostId, RecordId, RecordIdx,
@@ -19,7 +18,8 @@ pub struct PasetoV4;
 /// Key used for [`PasetoV4`] encryption.
 ///
 /// Intentionally **not** Copy to support zeroing out on Drop.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, derive_more::From, derive_more::Debug)]
+#[debug("PasetoV4Key(*******)")]
 pub struct PasetoV4Key([u8; 32]);
 
 impl PasetoV4Key {
@@ -34,23 +34,11 @@ impl PasetoV4Key {
     }
 }
 
-impl From<[u8; 32]> for PasetoV4Key {
-    fn from(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-}
-
 impl TryFrom<&[u8]> for PasetoV4Key {
     type Error = TryFromSliceError;
 
     fn try_from(bytes: &[u8]) -> std::result::Result<Self, Self::Error> {
         <[u8; 32]>::try_from(bytes).map(Self)
-    }
-}
-
-impl fmt::Debug for PasetoV4Key {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("PasetoV4Key([redacted])")
     }
 }
 
