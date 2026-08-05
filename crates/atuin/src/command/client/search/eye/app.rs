@@ -8,7 +8,6 @@
 //! stays identical by construction; `InputAction` is reused as the interface
 //! between them, with the old event loop's arms living in
 //! `apply_input_action` (async arms become detached effects).
-//!
 use std::cell::RefCell;
 use std::sync::Arc;
 
@@ -761,8 +760,6 @@ impl<'a> SearchApp<'a> {
             }
 
             // -- Mode changes --
-            // Cursor-shape changes (set_keymap_cursor in the ratatui path)
-            // need an eye_declare capability that lands in a later phase.
             Action::VimEnterNormal => {
                 self.set_keymap_cursor("vim_normal");
                 self.keymap_mode = KeymapMode::VimNormal;
@@ -1654,5 +1651,142 @@ mod tests {
             "esc in vim-insert must not exit, got {exit:?}"
         );
         assert_eq!(runtime.app().keymap_mode, KeymapMode::VimNormal);
+    }
+
+    /// End-to-end through `Runtime` + a VTE terminal: real in-memory
+    /// sqlite, effects driven to completion, frames verified by content —
+    /// the CI form of the tmux A/B captures used during the migration.
+    mod headless {
+        use eye_declare::{Effect, Runtime};
+        use eye_declare_engine::test_terminal::TestTerminal;
+        use futures_util::StreamExt as _;
+
+        use super::*;
+
+        /// Run every queued effect to completion, feeding produced
+        /// messages back through the runtime (and any effects those
+        /// updates queue in turn), mirroring the async driver.
+        async fn drive_effects(rt: &mut Runtime<SearchApp<'static>>, term: &mut TestTerminal) {
+            loop {
+                let effects = rt.take_effects();
+                if effects.is_empty() {
+                    break;
+                }
+                for effect in effects {
+                    let Effect::Spawn { mut stream, .. } = effect;
+                    while let Some(msg) = stream.next().await {
+                        let (bytes, _) = rt.process(msg);
+                        term.feed(&bytes);
+                    }
+                }
+            }
+        }
+
+        #[allow(clippy::significant_drop_tightening, clippy::cast_possible_wrap)]
+        async fn seeded_session() -> (Runtime<SearchApp<'static>>, TestTerminal) {
+            let app = test_app(KeymapMode::Emacs, 0, 0, "", Settings::utc()).await;
+            {
+                let backend = Arc::clone(&app.backend);
+                let backend = backend.lock().await;
+                for (i, cmd) in ["ls -la", "git status", "cargo build", "echo hi"]
+                    .iter()
+                    .enumerate()
+                {
+                    let entry: History = History::capture()
+                        .timestamp(OffsetDateTime::now_utc() - time::Duration::seconds(i as i64))
+                        .command((*cmd).to_string())
+                        .cwd("/")
+                        .build()
+                        .into();
+                    backend.db.save(&entry).await.unwrap();
+                }
+            }
+            let mut rt = Runtime::new(app, 120, 30);
+            let mut term = TestTerminal::new(120, 30);
+            let (bytes, exit) = rt.startup();
+            assert!(exit.is_none());
+            term.feed(&bytes);
+            drive_effects(&mut rt, &mut term).await;
+            (rt, term)
+        }
+
+        fn screen(term: &TestTerminal) -> String {
+            term.viewport_lines().join("\n")
+        }
+
+        #[tokio::test]
+        async fn browse_renders_the_full_layout() {
+            let (_rt, term) = seeded_session().await;
+            let screen = screen(&term);
+            assert!(screen.contains("Atuin v"), "header title\n{screen}");
+            assert!(screen.contains("Search"), "tabs row\n{screen}");
+            assert!(screen.contains("GLOBAL"), "filter-mode block\n{screen}");
+            assert!(
+                screen.contains("history count: 4"),
+                "count effect\n{screen}"
+            );
+            // Bottom-anchored: the newest entry carries the indicator.
+            let selected = term
+                .viewport_lines()
+                .into_iter()
+                .find(|l| l.contains("ls -la"))
+                .expect("newest entry rendered");
+            assert!(
+                selected.trim_start().starts_with('>'),
+                "indicator: {selected}"
+            );
+        }
+
+        #[tokio::test]
+        async fn typing_filters_through_the_real_engine() {
+            let (mut rt, mut term) = seeded_session().await;
+            for c in "car".chars() {
+                let (bytes, exit) = rt.handle(InputEvent::Key(key(KeyCode::Char(c))));
+                assert!(exit.is_none());
+                term.feed(&bytes);
+            }
+            drive_effects(&mut rt, &mut term).await;
+            let screen = screen(&term);
+            assert!(screen.contains("cargo build"), "fuzzy match\n{screen}");
+            assert!(
+                !screen.contains("git status"),
+                "non-matches filtered\n{screen}"
+            );
+        }
+
+        #[tokio::test]
+        async fn inspector_tab_round_trip() {
+            let (mut rt, mut term) = seeded_session().await;
+            let (bytes, _) = rt.handle(InputEvent::Key(ctrl('o')));
+            term.feed(&bytes);
+            drive_effects(&mut rt, &mut term).await;
+            let screen_now = screen(&term);
+            assert!(
+                screen_now.contains("Command stats"),
+                "inspector\n{screen_now}"
+            );
+            assert!(
+                screen_now.contains("Exit code distribution"),
+                "stats charts\n{screen_now}"
+            );
+
+            let (bytes, _) = rt.handle(InputEvent::Key(ctrl('o')));
+            term.feed(&bytes);
+            drive_effects(&mut rt, &mut term).await;
+            assert!(screen(&term).contains("GLOBAL"), "back to search");
+        }
+
+        #[tokio::test]
+        async fn exit_reclaims_the_region() {
+            let (mut rt, mut term) = seeded_session().await;
+            let (bytes, exit) = rt.handle(InputEvent::Key(key(KeyCode::Esc)));
+            assert_eq!(exit, Some(Output::ReturnOriginal));
+            term.feed(&bytes);
+            let screen = screen(&term);
+            assert!(
+                !screen.contains("Atuin v") && !screen.contains("GLOBAL"),
+                "region must be fully reclaimed on exit\n{screen}"
+            );
+        }
     }
 }

@@ -274,6 +274,7 @@ dependencies = [
  "derive_more",
  "enum_dispatch",
  "eye_declare",
+ "eye_declare_engine",
  "eyre",
  "frizbee",
  "fs-err",

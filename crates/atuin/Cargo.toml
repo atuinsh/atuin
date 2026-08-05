@@ -148,5 +148,6 @@ tree-sitter-fish = { workspace = true }
 windows-sys = { version = "0.61.2", features = ["Win32_System_Console"] }
 
 [dev-dependencies]
+eye_declare_engine = { version = "0.7", features = ["test-util"] }
 proptest = { workspace = true }
 rstest = { workspace = true }

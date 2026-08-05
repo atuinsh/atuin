@@ -7,12 +7,11 @@
 //! `ratatui_core` buffer type eye-declare renders into. Decomposing into
 //! finer-grained elements can happen once behavior parity is locked in.
 //!
-//! The frame reports a fixed height (`inline_height`): a tail taller than the
-//! terminal would stream rows into scrollback irreversibly, so the layout
-//! always fits itself into the fixed region instead of sizing to content.
-//!
-//! Not yet ported (later phases): the inspector tab, history count in the
-//! header, the update-needed notice, prefix/search-mode indicator states.
+//! The frame reports a fixed height (`frame_height`: the configured inline
+//! height, or the tracked terminal height in fullscreen): a tail taller
+//! than the terminal would stream rows into scrollback irreversibly, so
+//! the layout always fits itself into the fixed region instead of sizing
+//! to content.
 
 use atuin_client::{
     history::History,
