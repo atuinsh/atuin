@@ -21,9 +21,8 @@ pub async fn build(
     db: &dyn Database,
     downloaded: Option<&[RecordId]>,
 ) -> Result<()> {
-    let encryption_key: [u8; 32] = atuin_client::encryption::load_key(settings)
-        .context("could not load encryption key")?
-        .into();
+    let encryption_key = atuin_client::encryption::load_key(settings)
+        .context("could not load encryption key")?;
 
     let host_id = Settings::host_id().await?;
 

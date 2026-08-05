@@ -64,8 +64,9 @@ impl Cmd {
                     let encode = encode_key(&key).wrap_err("could not encode encryption key")?;
                     println!("{encode}");
                 } else {
-                    let mnemonic = bip39::Mnemonic::from_entropy(&key, bip39::Language::English)
-                        .map_err(|_| eyre::eyre!("invalid key"))?;
+                    let mnemonic =
+                        bip39::Mnemonic::from_entropy(key.as_bytes(), bip39::Language::English)
+                            .map_err(|_| eyre::eyre!("invalid key"))?;
                     println!("{mnemonic}");
                 }
                 Ok(())
@@ -80,14 +81,13 @@ async fn run(
     db: &impl Database,
     store: SqliteStore,
 ) -> Result<()> {
-    let encryption_key: [u8; 32] = encryption::load_key(settings)
-        .context("could not load encryption key")?
-        .into();
+    let encryption_key = encryption::load_key(settings)
+        .context("could not load encryption key")?;
 
     let host_id = Settings::host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
-    let (uploaded, downloaded) = sync::sync(settings, &store, &encryption_key)
+    let (uploaded, downloaded) = sync::sync(settings, &store, encryption_key)
         .await
         .map_err(crate::print_error::format_sync_error)?;
 
@@ -110,7 +110,7 @@ async fn run(
         println!("Re-running sync due to new records locally");
 
         // we'll want to run sync once more, as there will now be stuff to upload
-        let (uploaded, downloaded) = sync::sync(settings, &store, &encryption_key)
+        let (uploaded, downloaded) = sync::sync(settings, &store, encryption_key)
             .await
             .map_err(crate::print_error::format_sync_error)?;
 

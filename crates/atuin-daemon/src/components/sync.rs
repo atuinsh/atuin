@@ -125,7 +125,7 @@ async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>
     };
 
     // Create the stores we need
-    let encryption_key = *handle.encryption_key();
+    let encryption_key = handle.encryption_key();
     let history_store = HistoryStore::new(handle.store().clone(), host_id, encryption_key);
     let alias_store = AliasStore::new(handle.store().clone(), host_id, encryption_key);
     let var_store = VarStore::new(handle.store().clone(), host_id, encryption_key);

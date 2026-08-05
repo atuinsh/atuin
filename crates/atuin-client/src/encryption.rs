@@ -10,8 +10,8 @@
 
 use std::io::prelude::*;
 
+pub use crate::record::encryption::PasetoV4Key;
 use base64::prelude::{BASE64_STANDARD, Engine};
-pub use crypto_secretbox::Key;
 use crypto_secretbox::{KeyInit, XSalsa20Poly1305, aead::OsRng};
 use eyre::{Context, Result, bail, ensure, eyre};
 use fs_err as fs;
@@ -19,14 +19,14 @@ use rmp::Marker;
 
 use crate::settings::Settings;
 
-pub fn generate_encoded_key() -> Result<(Key, String)> {
-    let key = XSalsa20Poly1305::generate_key(&mut OsRng);
+pub fn generate_encoded_key() -> Result<(PasetoV4Key, String)> {
+    let key = PasetoV4Key::from(<[u8; 32]>::from(XSalsa20Poly1305::generate_key(&mut OsRng)));
     let encoded = encode_key(&key)?;
 
     Ok((key, encoded))
 }
 
-pub fn new_key(settings: &Settings) -> Result<Key> {
+pub fn new_key(settings: &Settings) -> Result<PasetoV4Key> {
     let path = &settings.key_path;
 
     if path.exists() {
@@ -42,7 +42,7 @@ pub fn new_key(settings: &Settings) -> Result<Key> {
 }
 
 // Loads the secret key, will create + save if it doesn't exist
-pub fn load_key(settings: &Settings) -> Result<Key> {
+pub fn load_key(settings: &Settings) -> Result<PasetoV4Key> {
     let path = &settings.key_path;
 
     let key = if path.exists() {
@@ -55,7 +55,8 @@ pub fn load_key(settings: &Settings) -> Result<Key> {
     Ok(key)
 }
 
-pub fn encode_key(key: &Key) -> Result<String> {
+pub fn encode_key(key: &PasetoV4Key) -> Result<String> {
+    let key = key.as_bytes();
     let mut buf = vec![];
     rmp::encode::write_array_len(&mut buf, key.len() as u32)
         .wrap_err("could not encode key to message pack")?;
@@ -68,7 +69,7 @@ pub fn encode_key(key: &Key) -> Result<String> {
     Ok(buf)
 }
 
-pub fn decode_key(key: String) -> Result<Key> {
+pub fn decode_key(key: String) -> Result<PasetoV4Key> {
     use rmp::decode;
 
     let buf = BASE64_STANDARD
@@ -96,11 +97,11 @@ pub fn decode_key(key: String) -> Result<Key> {
                     let len = decode::read_array_len(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
                     ensure!(len == 32, "encryption key is not the correct size");
 
-                    let mut key = Key::default();
+                    let mut key = [0u8; 32];
                     for i in &mut key {
                         *i = rmp::decode::read_int(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
                     }
-                    Ok(key)
+                    Ok(key.into())
                 }
                 _ => {
                     bail!("could not decode encryption key");
@@ -114,7 +115,7 @@ pub fn decode_key(key: String) -> Result<Key> {
 mod test {
     #[test]
     fn key_encodings() {
-        use super::{Key, decode_key, encode_key};
+        use super::{PasetoV4Key, decode_key, encode_key};
 
         // a history of our key encodings.
         // v11.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
@@ -129,7 +130,7 @@ mod test {
         // b8b57c8 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==                     (https://github.com/atuinsh/atuin/pull/1057)
         // 8c94d79 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q== (https://github.com/atuinsh/atuin/pull/1089)
 
-        let key = Key::from([
+        let key = PasetoV4Key::from([
             27, 91, 42, 91, 210, 107, 9, 216, 170, 190, 242, 62, 6, 84, 69, 148, 148, 53, 251, 117,
             226, 167, 173, 52, 82, 34, 138, 110, 169, 124, 92, 229,
         ]);
