@@ -143,7 +143,7 @@ impl HistoryStore {
         let id = record.id;
 
         self.store
-            .push(&record.encrypt::<PasetoV4>(self.encryption_key))
+            .push(&record.encrypt::<PasetoV4>(&self.encryption_key))
             .await?;
 
         Ok((id, idx))
@@ -171,7 +171,7 @@ impl HistoryStore {
                 .data(bytes)
                 .build();
 
-            let record = record.encrypt::<PasetoV4>(self.encryption_key);
+            let record = record.encrypt::<PasetoV4>(&self.encryption_key);
 
             ret.push(record);
         }
@@ -224,7 +224,7 @@ impl HistoryStore {
             // skip it, and load everything else.
             let hist = match Version::from_name(version.as_str()) {
                 Some(_) => record
-                    .decrypt::<PasetoV4>(self.encryption_key)
+                    .decrypt::<PasetoV4>(&self.encryption_key)
                     .and_then(|decrypted| {
                         HistoryRecord::deserialize(&decrypted.data, version.as_str())
                     }),
@@ -304,7 +304,7 @@ impl HistoryStore {
                 let record = match Version::from_name(version.as_str()) {
                     Some(_) => {
                         record
-                            .decrypt::<PasetoV4>(self.encryption_key)
+                            .decrypt::<PasetoV4>(&self.encryption_key)
                             .and_then(|decrypted| {
                                 HistoryRecord::deserialize(&decrypted.data, version.as_str())
                             })
@@ -536,7 +536,7 @@ mod tests {
             .build();
 
         store
-            .push(&corrupt.encrypt::<PasetoV4>([1u8; 32].into()))
+            .push(&corrupt.encrypt::<PasetoV4>(&[1u8; 32].into()))
             .await
             .unwrap();
 

@@ -260,7 +260,7 @@ impl Cmd {
             if new_key != current_key {
                 println!("\nRe-encrypting local store with new key");
 
-                store.re_encrypt(current_key, new_key).await?;
+                store.re_encrypt(&current_key, &new_key).await?;
 
                 println!("Writing new key");
                 let mut file = File::create(key_path).await?;
@@ -284,7 +284,7 @@ async fn verify_key_against_remote(settings: &Settings) -> Result<()> {
         }
     };
 
-    match sync::check_encryption_key(&client, &remote_index, key).await {
+    match sync::check_encryption_key(&client, &remote_index, &key).await {
         Ok(()) => Ok(()),
         Err(SyncError::WrongKey) => {
             // Roll back the saved session so the user is not left in a

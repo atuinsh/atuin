@@ -46,7 +46,7 @@ impl ScriptStore {
         let id = record.id;
 
         self.store
-            .push(&record.encrypt::<PasetoV4>(self.encryption_key))
+            .push(&record.encrypt::<PasetoV4>(&self.encryption_key))
             .await?;
 
         Ok((id, idx))
@@ -80,7 +80,7 @@ impl ScriptStore {
             let script = match record.version.as_str() {
                 SCRIPT_VERSION => {
                     record
-                        .decrypt::<PasetoV4>(self.encryption_key)
+                        .decrypt::<PasetoV4>(&self.encryption_key)
                         .and_then(|decrypted| {
                             ScriptRecord::deserialize(&decrypted.data, SCRIPT_VERSION)
                         })

@@ -15,15 +15,13 @@ use serde::{Deserialize, Serialize};
 /// Use PASETO V4 Local encryption using the additional data as an implicit assertion.
 pub struct PasetoV4;
 
-/// The 32-byte symmetric key that [`PasetoV4`] uses to wrap and unwrap records.
+/// Key used for [`PasetoV4`] encryption.
 ///
-/// This is a newtype around the raw key bytes so the key is passed around as a
-/// distinct type rather than a bare `[u8; 32]`. It is [`Copy`]: the key is small
-/// and cheap to copy, so it is passed by value.
-///
-/// Note that being `Copy` precludes zeroizing the bytes on drop; this matches
-/// the previous `[u8; 32]` representation, which was also copied freely.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// A newtype around the raw key bytes. It is deliberately **not** `Copy`: the
+/// key is secret material, so every copy should be an explicit `clone`, and
+/// keeping it non-`Copy` leaves room to zeroize the bytes on drop in future (a
+/// `Copy` type cannot implement `Drop`). It is passed by reference.
+#[derive(Clone, PartialEq, Eq)]
 pub struct PasetoV4Key([u8; 32]);
 
 impl PasetoV4Key {
@@ -31,22 +29,11 @@ impl PasetoV4Key {
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
-
-    /// Consume the key, returning the raw bytes.
-    pub fn into_bytes(self) -> [u8; 32] {
-        self.0
-    }
 }
 
 impl From<[u8; 32]> for PasetoV4Key {
     fn from(bytes: [u8; 32]) -> Self {
         Self(bytes)
-    }
-}
-
-impl From<PasetoV4Key> for [u8; 32] {
-    fn from(key: PasetoV4Key) -> Self {
-        key.0
     }
 }
 
@@ -109,15 +96,15 @@ impl Encryption for PasetoV4 {
     fn re_encrypt(
         mut data: EncryptedData,
         _ad: AdditionalData,
-        old_key: PasetoV4Key,
-        new_key: PasetoV4Key,
+        old_key: &PasetoV4Key,
+        new_key: &PasetoV4Key,
     ) -> Result<EncryptedData> {
         let cek = Self::decrypt_cek(data.content_encryption_key, old_key)?;
         data.content_encryption_key = Self::encrypt_cek(cek, new_key);
         Ok(data)
     }
 
-    fn encrypt(data: DecryptedData, ad: AdditionalData, key: PasetoV4Key) -> EncryptedData {
+    fn encrypt(data: DecryptedData, ad: AdditionalData, key: &PasetoV4Key) -> EncryptedData {
         // generate a random key for this entry
         // aka content-encryption-key (CEK)
         let random_key = Key::<V4, Local>::new_os_random();
@@ -145,7 +132,7 @@ impl Encryption for PasetoV4 {
         }
     }
 
-    fn decrypt(data: EncryptedData, ad: AdditionalData, key: PasetoV4Key) -> Result<DecryptedData> {
+    fn decrypt(data: EncryptedData, ad: AdditionalData, key: &PasetoV4Key) -> Result<DecryptedData> {
         let token = data.data;
         let cek = Self::decrypt_cek(data.content_encryption_key, key)?;
 
@@ -168,8 +155,8 @@ impl Encryption for PasetoV4 {
 }
 
 impl PasetoV4 {
-    fn decrypt_cek(wrapped_cek: String, key: PasetoV4Key) -> Result<Key<V4, Local>> {
-        let wrapping_key = Key::<V4, Local>::from_bytes(key.into_bytes());
+    fn decrypt_cek(wrapped_cek: String, key: &PasetoV4Key) -> Result<Key<V4, Local>> {
+        let wrapping_key = Key::<V4, Local>::from_bytes(*key.as_bytes());
 
         // let wrapping_key = PasetoSymmetricKey::from(Key::from(key));
 
@@ -198,9 +185,9 @@ impl PasetoV4 {
         Ok(wpk.unwrap_key(&wrapping_key)?)
     }
 
-    fn encrypt_cek(cek: Key<V4, Local>, key: PasetoV4Key) -> String {
+    fn encrypt_cek(cek: Key<V4, Local>, key: &PasetoV4Key) -> String {
         // aka key-encryption-key (KEK)
-        let wrapping_key = Key::<V4, Local>::from_bytes(key.into_bytes());
+        let wrapping_key = Key::<V4, Local>::from_bytes(*key.as_bytes());
 
         // wrap the random key so we can decrypt it later
         let wrapped_cek = AtuinFooter {
@@ -303,8 +290,8 @@ mod tests {
             idx: &idx,
         };
 
-        let encrypted = PasetoV4::encrypt(data.clone(), ad, key.to_bytes().into());
-        let decrypted = PasetoV4::decrypt(encrypted, ad, key.to_bytes().into()).unwrap();
+        let encrypted = PasetoV4::encrypt(data.clone(), ad, &key.to_bytes().into());
+        let decrypted = PasetoV4::decrypt(encrypted, ad, &key.to_bytes().into()).unwrap();
         assert_eq!(decrypted, data);
     }
 
@@ -324,8 +311,8 @@ mod tests {
             idx: &idx,
         };
 
-        let encrypted = PasetoV4::encrypt(data.clone(), ad, key.to_bytes().into());
-        let encrypted2 = PasetoV4::encrypt(data, ad, key.to_bytes().into());
+        let encrypted = PasetoV4::encrypt(data.clone(), ad, &key.to_bytes().into());
+        let encrypted2 = PasetoV4::encrypt(data, ad, &key.to_bytes().into());
 
         assert_ne!(
             encrypted.data, encrypted2.data,
@@ -351,8 +338,8 @@ mod tests {
             idx: &idx,
         };
 
-        let encrypted = PasetoV4::encrypt(data, ad, key.to_bytes().into());
-        let error = PasetoV4::decrypt(encrypted, ad, fake_key.to_bytes().into()).unwrap_err();
+        let encrypted = PasetoV4::encrypt(data, ad, &key.to_bytes().into());
+        let error = PasetoV4::decrypt(encrypted, ad, &fake_key.to_bytes().into()).unwrap_err();
         let message = error.to_string();
 
         assert!(message.contains(
@@ -369,7 +356,7 @@ mod tests {
     fn cannot_decrypt_cek_with_missing_footer_contents() {
         let key = Key::<V4, Local>::new_os_random();
 
-        let Err(error) = PasetoV4::decrypt_cek("{}".to_owned(), key.to_bytes().into()) else {
+        let Err(error) = PasetoV4::decrypt_cek("{}".to_owned(), &key.to_bytes().into()) else {
             panic!("missing footer contents should result in an error");
         };
 
@@ -395,13 +382,13 @@ mod tests {
             idx: &idx,
         };
 
-        let encrypted = PasetoV4::encrypt(data, ad, key.to_bytes().into());
+        let encrypted = PasetoV4::encrypt(data, ad, &key.to_bytes().into());
 
         let ad = AdditionalData {
             id: &RecordId(uuid_v7()),
             ..ad
         };
-        let _ = PasetoV4::decrypt(encrypted, ad, key.to_bytes().into()).unwrap_err();
+        let _ = PasetoV4::decrypt(encrypted, ad, &key.to_bytes().into()).unwrap_err();
     }
 
     #[rstest]
@@ -423,12 +410,12 @@ mod tests {
             idx: &idx,
         };
 
-        let encrypted1 = PasetoV4::encrypt(data.clone(), ad, key1.to_bytes().into());
+        let encrypted1 = PasetoV4::encrypt(data.clone(), ad, &key1.to_bytes().into());
         let encrypted2 = PasetoV4::re_encrypt(
             encrypted1.clone(),
             ad,
-            key1.to_bytes().into(),
-            key2.to_bytes().into(),
+            &key1.to_bytes().into(),
+            &key2.to_bytes().into(),
         )
         .unwrap();
 
@@ -439,7 +426,7 @@ mod tests {
             encrypted2.content_encryption_key
         );
 
-        let decrypted = PasetoV4::decrypt(encrypted2, ad, key2.to_bytes().into()).unwrap();
+        let decrypted = PasetoV4::decrypt(encrypted2, ad, &key2.to_bytes().into()).unwrap();
 
         assert_eq!(decrypted, data);
     }
@@ -447,12 +434,12 @@ mod tests {
     #[rstest]
     fn full_record_round_trip(sample_record: Record<DecryptedData>) {
         let key = PasetoV4Key::from([0x55; 32]);
-        let encrypted = sample_record.encrypt::<PasetoV4>(key);
+        let encrypted = sample_record.encrypt::<PasetoV4>(&key);
 
         assert!(!encrypted.data.data.is_empty());
         assert!(!encrypted.data.content_encryption_key.is_empty());
 
-        let decrypted = encrypted.decrypt::<PasetoV4>(key).unwrap();
+        let decrypted = encrypted.decrypt::<PasetoV4>(&key).unwrap();
 
         assert_eq!(decrypted.data.0, [1, 2, 3, 4]);
     }
@@ -460,18 +447,18 @@ mod tests {
     #[rstest]
     fn full_record_round_trip_fail(sample_record: Record<DecryptedData>) {
         let key = PasetoV4Key::from([0x55; 32]);
-        let encrypted = sample_record.encrypt::<PasetoV4>(key);
+        let encrypted = sample_record.encrypt::<PasetoV4>(&key);
 
         let mut enc1 = encrypted.clone();
         enc1.host = Host::new(HostId(uuid_v7()));
         let _ = enc1
-            .decrypt::<PasetoV4>(key)
+            .decrypt::<PasetoV4>(&key)
             .expect_err("tampering with the host should result in auth failure");
 
         let mut enc2 = encrypted;
         enc2.id = RecordId(uuid_v7());
         let _ = enc2
-            .decrypt::<PasetoV4>(key)
+            .decrypt::<PasetoV4>(&key)
             .expect_err("tampering with the id should result in auth failure");
     }
 }

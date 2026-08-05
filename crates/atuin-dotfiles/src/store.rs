@@ -247,7 +247,7 @@ impl AliasStore {
             .build();
 
         self.store
-            .push(&record.encrypt::<PasetoV4>(self.encryption_key))
+            .push(&record.encrypt::<PasetoV4>(&self.encryption_key))
             .await?;
 
         // set mutates shell config, so build again
@@ -283,7 +283,7 @@ impl AliasStore {
             .build();
 
         self.store
-            .push(&record.encrypt::<PasetoV4>(self.encryption_key))
+            .push(&record.encrypt::<PasetoV4>(&self.encryption_key))
             .await?;
 
         // delete mutates shell config, so build again
@@ -305,7 +305,7 @@ impl AliasStore {
             // Skip records we can't decrypt or decode, rather than failing the entire build.
             let ar = match version.as_str() {
                 CONFIG_SHELL_ALIAS_VERSION => record
-                    .decrypt::<PasetoV4>(self.encryption_key)
+                    .decrypt::<PasetoV4>(&self.encryption_key)
                     .and_then(|decrypted| {
                         AliasRecord::deserialize(&decrypted.data, version.as_str())
                     }),
@@ -469,7 +469,7 @@ alias kgap='kubectl get pods --all-namespaces'
             .build();
 
         store
-            .push(&corrupt.encrypt::<PasetoV4>(corrupt_key.into()))
+            .push(&corrupt.encrypt::<PasetoV4>(&corrupt_key.into()))
             .await
             .unwrap();
 

@@ -73,7 +73,7 @@ impl Rebuild {
 
         let host_id = Settings::host_id().await?;
 
-        let alias_store = AliasStore::new(store.clone(), host_id, encryption_key);
+        let alias_store = AliasStore::new(store.clone(), host_id, encryption_key.clone());
         let var_store = VarStore::new(store.clone(), host_id, encryption_key);
 
         alias_store.build().await?;

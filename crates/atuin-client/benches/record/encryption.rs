@@ -24,7 +24,7 @@ fn encrypt(bencher: divan::Bencher, n: usize) {
     bencher.with_inputs(|| decrypted_records(n)).bench_values(
         |records: Vec<Record<DecryptedData>>| {
             for record in records {
-                divan::black_box(record.encrypt::<PasetoV4>(KEY.into()));
+                divan::black_box(record.encrypt::<PasetoV4>(&KEY.into()));
             }
         },
     );
@@ -36,12 +36,12 @@ fn decrypt(bencher: divan::Bencher, n: usize) {
         .with_inputs(|| {
             decrypted_records(n)
                 .into_iter()
-                .map(|record| record.encrypt::<PasetoV4>(KEY.into()))
+                .map(|record| record.encrypt::<PasetoV4>(&KEY.into()))
                 .collect::<Vec<Record<EncryptedData>>>()
         })
         .bench_values(|records: Vec<Record<EncryptedData>>| {
             for record in records {
-                divan::black_box(record.decrypt::<PasetoV4>(KEY.into()).unwrap());
+                divan::black_box(record.decrypt::<PasetoV4>(&KEY.into()).unwrap());
             }
         });
 }

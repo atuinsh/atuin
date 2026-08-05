@@ -137,8 +137,8 @@ impl DaemonHandle {
     }
 
     /// Get the encryption key.
-    pub fn encryption_key(&self) -> PasetoV4Key {
-        self.state.encryption_key
+    pub fn encryption_key(&self) -> &PasetoV4Key {
+        &self.state.encryption_key
     }
 
     // ---- Database ----

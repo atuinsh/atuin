@@ -101,7 +101,7 @@ impl KvStore {
         let id = record.id;
 
         self.record_store
-            .push(&record.encrypt::<PasetoV4>(self.encryption_key))
+            .push(&record.encrypt::<PasetoV4>(&self.encryption_key))
             .await?;
 
         Ok((id, idx))
@@ -123,7 +123,7 @@ impl KvStore {
             let kv = match record.version.as_str() {
                 "v0" | KV_VERSION => {
                     record
-                        .decrypt::<PasetoV4>(self.encryption_key)
+                        .decrypt::<PasetoV4>(&self.encryption_key)
                         .and_then(|decrypted| {
                             KvRecord::deserialize(&decrypted.data, &decrypted.version)
                         })

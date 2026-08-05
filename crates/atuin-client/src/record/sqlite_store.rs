@@ -302,7 +302,7 @@ impl SqliteStore {
 
     /// Reencrypt every single item in this store with a new key
     /// Be careful - this may mess with sync.
-    pub async fn re_encrypt(&self, old_key: PasetoV4Key, new_key: PasetoV4Key) -> Result<()> {
+    pub async fn re_encrypt(&self, old_key: &PasetoV4Key, new_key: &PasetoV4Key) -> Result<()> {
         // Load all the records
         // In memory like some of the other code here
         // This will never be called in a hot loop, and only under the following circumstances
@@ -341,7 +341,7 @@ impl SqliteStore {
 
     /// Verify that every record in this store can be decrypted with the current key
     /// Someday maybe also check each tag/record can be deserialized, but not for now.
-    pub async fn verify(&self, key: PasetoV4Key) -> Result<()> {
+    pub async fn verify(&self, key: &PasetoV4Key) -> Result<()> {
         let all = self.load_all().await?;
 
         all.into_iter()
@@ -353,7 +353,7 @@ impl SqliteStore {
 
     /// Verify that every record in this store can be decrypted with the current key
     /// Someday maybe also check each tag/record can be deserialized, but not for now.
-    pub async fn purge(&self, key: PasetoV4Key) -> Result<()> {
+    pub async fn purge(&self, key: &PasetoV4Key) -> Result<()> {
         let all = self.load_all().await?;
 
         for record in all.iter() {
@@ -511,7 +511,7 @@ mod tests {
         for _ in 1..100 {
             tail = tail
                 .append(vec![1, 2, 3, 4])
-                .encrypt::<PasetoV4>([0; 32].into());
+                .encrypt::<PasetoV4>(&[0; 32].into());
             store.push(&tail).await.unwrap();
         }
 
@@ -537,7 +537,7 @@ mod tests {
         for _ in 1..10000 {
             tail = tail
                 .append(vec![1, 2, 3])
-                .encrypt::<PasetoV4>([0; 32].into());
+                .encrypt::<PasetoV4>(&[0; 32].into());
             records.push(tail.clone());
         }
 
@@ -565,7 +565,7 @@ mod tests {
                 .idx(i)
                 .data(DecryptedData(data.clone()))
                 .build()
-                .encrypt::<PasetoV4>(key);
+                .encrypt::<PasetoV4>(&key);
             store
                 .push(&record)
                 .await
@@ -576,26 +576,26 @@ mod tests {
         let all = store.all_tagged("test").await.unwrap();
         assert_eq!(all.len(), 10, "failed to fetch all records");
         for record in all {
-            let decrypted = record.decrypt::<PasetoV4>(key).unwrap();
+            let decrypted = record.decrypt::<PasetoV4>(&key).unwrap();
             assert_eq!(decrypted.data.0, data);
         }
 
         // after re-encrypting: the old key fails, the new key works
         let (new_key, _) = generate_encoded_key().unwrap();
         store
-            .re_encrypt(key, new_key)
+            .re_encrypt(&key, &new_key)
             .await
             .expect("failed to re-encrypt store");
 
         let all = store.all_tagged("test").await.unwrap();
         for record in all.iter() {
             assert!(
-                record.clone().decrypt::<PasetoV4>(key).is_err(),
+                record.clone().decrypt::<PasetoV4>(&key).is_err(),
                 "old key still decrypts after re-encrypt"
             );
         }
         for record in all {
-            let decrypted = record.decrypt::<PasetoV4>(new_key).unwrap();
+            let decrypted = record.decrypt::<PasetoV4>(&new_key).unwrap();
             assert_eq!(decrypted.data.0, data);
         }
 

@@ -60,7 +60,7 @@ pub async fn login(
         if new_key != current_key {
             println!("\nRe-encrypting local store with new key");
 
-            store.re_encrypt(current_key, new_key).await?;
+            store.re_encrypt(&current_key, &new_key).await?;
 
             println!("Writing new key");
             let mut file = File::create(key_path).await?;

@@ -294,7 +294,7 @@ impl VarStore {
             .build();
 
         self.store
-            .push(&record.encrypt::<PasetoV4>(self.encryption_key))
+            .push(&record.encrypt::<PasetoV4>(&self.encryption_key))
             .await?;
 
         // set mutates shell config, so build again
@@ -330,7 +330,7 @@ impl VarStore {
             .build();
 
         self.store
-            .push(&record.encrypt::<PasetoV4>(self.encryption_key))
+            .push(&record.encrypt::<PasetoV4>(&self.encryption_key))
             .await?;
 
         // delete mutates shell config, so build again
@@ -353,7 +353,7 @@ impl VarStore {
             let ar =
                 match version.as_str() {
                     DOTFILES_VAR_VERSION => record
-                        .decrypt::<PasetoV4>(self.encryption_key)
+                        .decrypt::<PasetoV4>(&self.encryption_key)
                         .and_then(|decrypted| {
                             VarRecord::deserialize(&decrypted.data, version.as_str())
                         }),

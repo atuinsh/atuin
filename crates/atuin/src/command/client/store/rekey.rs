@@ -45,7 +45,7 @@ impl Rekey {
         let current_key = load_key(settings)?;
         let new_key = decode_key(key.clone())?;
 
-        store.re_encrypt(current_key, new_key).await?;
+        store.re_encrypt(&current_key, &new_key).await?;
 
         println!("Store rewritten. Saving new key");
         let mut file = File::create(settings.key_path.clone()).await?;

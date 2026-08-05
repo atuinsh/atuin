@@ -54,7 +54,7 @@ impl Pull {
         // Skip on --force: local was already wiped above, mismatch is the user's call.
         if !self.force {
             let key = load_key(settings)?;
-            sync::check_encryption_key(&client, &remote_index, key)
+            sync::check_encryption_key(&client, &remote_index, &key)
                 .await
                 .map_err(crate::print_error::format_sync_error)?;
         }
