@@ -1,0 +1,35 @@
+# Base image for atuin end-to-end tests.
+#
+# Builds the `atuin` client (with daemon) and the `atuin-server` sync server from
+# the repo source, then drops them into a slim runtime. Per-shell images build
+# FROM this (see Dockerfile.zsh, .bash, .fish, .nu).
+#
+# Built with the repo root as context (it needs the source tree):
+#   docker build -t atuin-e2e-base:local -f e2e/images/Dockerfile.base .
+#
+# Client features: we drop `clipboard` (pulls X11 libs, useless headless) and
+# `check-update` (phones home) from the default set. Debug build, not release --
+# E2E cares about behaviour, not runtime speed, and debug compiles ~2-3x faster.
+FROM rust:1.97.0-slim-bookworm AS builder
+WORKDIR /app
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential \
+ && rm -rf /var/lib/apt/lists/*
+COPY . .
+RUN cargo build -p atuin-server --bin atuin-server
+RUN cargo build -p atuin --bin atuin \
+      --no-default-features --features client,sync,daemon,ai,pty-proxy
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl sqlite3 \
+ && rm -rf /var/lib/apt/lists/*
+RUN useradd -m -s /bin/bash atuin
+COPY --from=builder /app/target/debug/atuin /usr/local/bin/atuin
+COPY --from=builder /app/target/debug/atuin-server /usr/local/bin/atuin-server
+USER atuin
+WORKDIR /home/atuin
+# Keep the client offline and quiet during tests.
+ENV TZ=Etc/UTC \
+    ATUIN_LOG=warn \
+    TERM=xterm-256color
