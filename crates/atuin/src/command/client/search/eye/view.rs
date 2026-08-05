@@ -398,6 +398,10 @@ fn calc_preview_height(
     border_size: u16,
     preview_width: u16,
 ) -> u16 {
+    // Wrapped-line math: rows = ceil(len / usable). Clamped so narrow
+    // terminals (below the border + ellipsis budget) degrade to tall
+    // previews instead of underflowing or dividing by zero.
+    let usable = preview_width.saturating_sub(border_size).max(1);
     if settings.show_preview
         && settings.preview.strategy == PreviewStrategy::Auto
         && tab_index == 0
@@ -417,18 +421,16 @@ fn calc_preview_height(
                     .command
                     .split('\n')
                     .map(|line| {
-                        (line.len() as u16 + preview_width - 1 - border_size)
-                            / (preview_width - border_size)
+                        (line.len() as u16).saturating_add(usable).saturating_sub(1) / usable
                     })
                     .sum(),
             ) + border_size * 2
         }
         // The '- 19' takes the characters before the command (duration and time) into account
-        else if length_current_cmd > preview_width - 19 {
+        else if length_current_cmd > preview_width.saturating_sub(19) {
             std::cmp::min(
                 settings.max_preview_height,
-                (length_current_cmd + preview_width - 1 - border_size)
-                    / (preview_width - border_size),
+                length_current_cmd.saturating_add(usable).saturating_sub(1) / usable,
             ) + border_size * 2
         } else {
             1
@@ -446,8 +448,7 @@ fn calc_preview_height(
                 v.command
                     .split('\n')
                     .map(|line| {
-                        (line.len() as u16 + preview_width - 1 - border_size)
-                            / (preview_width - border_size)
+                        (line.len() as u16).saturating_add(usable).saturating_sub(1) / usable
                     })
                     .sum(),
             )
@@ -646,5 +647,38 @@ fn build_preview(
         ),
         _ => Paragraph::new(command)
             .style(Style::from_crossterm(theme.as_style(Meaning::Annotation))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::history::History;
+    use atuin_client::settings::{Preview, PreviewStrategy, Settings};
+
+    use super::{Compactness, calc_preview_height};
+
+    /// Narrow terminals must degrade, not underflow: `preview_width - 19`
+    /// and the wrap divisor both saturate (found by review; the ratatui
+    /// original had the same latent panic).
+    #[test]
+    fn preview_height_survives_narrow_terminals() {
+        let mut settings = Settings::utc();
+        settings.show_preview = true;
+        settings.preview = Preview {
+            strategy: PreviewStrategy::Auto,
+        };
+        let results: Vec<History> = vec![
+            History::capture()
+                .timestamp(time::OffsetDateTime::now_utc())
+                .command("a command long enough to overflow a tiny preview budget")
+                .cwd("/")
+                .build()
+                .into(),
+        ];
+        for width in 0..24u16 {
+            // Must not panic at any width, bordered or not.
+            let _ = calc_preview_height(&settings, &results, 0, 0, Compactness::Full, 1, width);
+            let _ = calc_preview_height(&settings, &results, 0, 0, Compactness::Compact, 0, width);
+        }
     }
 }

@@ -750,6 +750,10 @@ impl State {
         border_size: u16,
         preview_width: u16,
     ) -> u16 {
+        // Wrapped-line math: rows = ceil(len / usable). Clamped so narrow
+        // terminals (below the border + ellipsis budget) degrade to tall
+        // previews instead of underflowing or dividing by zero.
+        let usable = preview_width.saturating_sub(border_size).max(1);
         if settings.show_preview
             && settings.preview.strategy == PreviewStrategy::Auto
             && tab_index == 0
@@ -769,18 +773,16 @@ impl State {
                         .command
                         .split('\n')
                         .map(|line| {
-                            (line.len() as u16 + preview_width - 1 - border_size)
-                                / (preview_width - border_size)
+                            (line.len() as u16).saturating_add(usable).saturating_sub(1) / usable
                         })
                         .sum(),
                 ) + border_size * 2
             }
             // The '- 19' takes the characters before the command (duration and time) into account
-            else if length_current_cmd > preview_width - 19 {
+            else if length_current_cmd > preview_width.saturating_sub(19) {
                 std::cmp::min(
                     settings.max_preview_height,
-                    (length_current_cmd + preview_width - 1 - border_size)
-                        / (preview_width - border_size),
+                    length_current_cmd.saturating_add(usable).saturating_sub(1) / usable,
                 ) + border_size * 2
             } else {
                 1
@@ -798,8 +800,7 @@ impl State {
                     v.command
                         .split('\n')
                         .map(|line| {
-                            (line.len() as u16 + preview_width - 1 - border_size)
-                                / (preview_width - border_size)
+                            (line.len() as u16).saturating_add(usable).saturating_sub(1) / usable
                         })
                         .sum(),
                 )
@@ -2296,6 +2297,11 @@ mod tests {
     #[case::static_h3(PreviewStrategy::Static, Some(4), 1, 80, 5)]
     #[case::static_limit_4(PreviewStrategy::Static, Some(4), 1, 20, 6)]
     #[case::fixed(PreviewStrategy::Fixed, Some(15), 1, 20, 17)]
+    // Narrow terminals: below the border + ellipsis budget the math
+    // saturates instead of underflowing (debug panic) — issue found by
+    // review on the eye port, present here since the original.
+    #[case::narrow_auto(PreviewStrategy::Auto, None, 1, 8, 6)]
+    #[case::tiny_auto(PreviewStrategy::Auto, None, 0, 2, 6)]
     fn calc_preview_height_cases(
         #[from(preview_corpus)] results: &[History],
         #[case] strategy: PreviewStrategy,

@@ -69,6 +69,11 @@ pub(super) enum Msg {
     /// A detached background operation (delete, rebuild) finished; carries
     /// nothing — the model was already updated optimistically.
     OpDone,
+    /// A background operation failed after the model was updated
+    /// optimistically: re-run the query so the list reconverges with the
+    /// database (a deleted-then-failed entry reappears — the honest
+    /// outcome; the ratatui path aborted the whole TUI here instead).
+    Requery,
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -725,12 +730,13 @@ impl<'a> SearchApp<'a> {
                 Ok(ids) => ids,
                 Err(e) => {
                     tracing::error!(?e, "failed to delete history entry");
-                    return Msg::OpDone;
+                    return Msg::Requery;
                 }
             };
             let backend = backend.lock().await;
             if let Err(e) = store.build_all(&*backend.db, &ids).await {
                 tracing::error!(?e, "failed to rebuild history after delete");
+                return Msg::Requery;
             }
             Msg::OpDone
         })
@@ -767,18 +773,19 @@ impl<'a> SearchApp<'a> {
                 Ok(all) => all,
                 Err(e) => {
                     tracing::error!(?e, "failed to query history for delete-all");
-                    return Msg::OpDone;
+                    return Msg::Requery;
                 }
             };
             let ids = match store.delete_entries(all_matching).await {
                 Ok(ids) => ids,
                 Err(e) => {
                     tracing::error!(?e, "failed to delete history entries");
-                    return Msg::OpDone;
+                    return Msg::Requery;
                 }
             };
             if let Err(e) = store.build_all(&*backend.db, &ids).await {
                 tracing::error!(?e, "failed to rebuild history after delete-all");
+                return Msg::Requery;
             }
             Msg::OpDone
         })
@@ -876,6 +883,7 @@ impl App for SearchApp<'_> {
             }
             Msg::UpdateNeeded(version) => self.status.update_needed = version,
             Msg::OpDone => {}
+            Msg::Requery => self.spawn_query(ctx),
             Msg::Raw(event) => {
                 // The old event loop re-queried when an input pass changed
                 // anything the engine reads; mirror that by diffing the
@@ -1440,6 +1448,22 @@ mod tests {
             "esc in vim-insert must not exit, got {exit:?}"
         );
         assert_eq!(runtime.app().keymap.mode, KeymapMode::VimNormal);
+    }
+
+    /// A failed background delete asks for a requery so the list
+    /// reconverges with the database.
+    #[tokio::test]
+    async fn requery_respawns_the_search() {
+        let app = test_app(KeymapMode::Emacs, 3, 0, "", Settings::utc()).await;
+        let mut rt = eye_declare::Runtime::new(app, 120, 30);
+        let _ = rt.startup();
+        let _ = rt.take_effects(); // init's query + background effects
+        let (_bytes, exit) = rt.process(Msg::Requery);
+        assert!(exit.is_none());
+        assert!(
+            !rt.take_effects().is_empty(),
+            "Requery must spawn a fresh search effect"
+        );
     }
 
     /// End-to-end through `Runtime` + a VTE terminal: real in-memory
