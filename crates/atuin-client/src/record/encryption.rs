@@ -11,6 +11,7 @@ use rusty_paseto::core::{
     ImplicitAssertion, Key as DataKey, Local as LocalPurpose, Paseto, PasetoNonce, Payload, V4,
 };
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 /// Use PASETO V4 Local encryption using the additional data as an implicit assertion.
 pub struct PasetoV4;
@@ -54,7 +55,9 @@ impl fmt::Debug for PasetoV4Key {
 }
 
 impl Drop for PasetoV4Key {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
 }
 
 /*

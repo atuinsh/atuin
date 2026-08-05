@@ -27,6 +27,7 @@ vendored-tls = ["reqwest?/native-tls-vendored"]
 derive_more = { workspace = true }
 tracing = { workspace = true }
 base64 = { workspace = true }
+zeroize = { workspace = true }
 time = { workspace = true, features = ["macros", "formatting", "parsing"] }
 clap = { workspace = true }
 eyre = { workspace = true }
