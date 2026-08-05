@@ -69,10 +69,12 @@ pub(super) enum Msg {
     /// A detached background operation (delete, rebuild) finished; carries
     /// nothing — the model was already updated optimistically.
     OpDone,
-    /// A background operation failed after the model was updated
-    /// optimistically: re-run the query so the list reconverges with the
-    /// database (a deleted-then-failed entry reappears — the honest
-    /// outcome; the ratatui path aborted the whole TUI here instead).
+    /// A background operation failed *before anything was persisted*:
+    /// re-run the query so the list reconverges with the database (the
+    /// entry honestly reappears; the ratatui path aborted the whole TUI
+    /// here instead). Not sent for failures after the delete tombstone is
+    /// in the record store — at that point the optimistic removal IS the
+    /// truth and the sqlite query index is merely stale.
     Requery,
 }
 
@@ -733,10 +735,19 @@ impl<'a> SearchApp<'a> {
                     return Msg::Requery;
                 }
             };
+            // The tombstone is persisted from here on: the optimistic
+            // removal is the truth, and requerying would resurrect the
+            // entry from a stale sqlite index (it would then vanish again
+            // on the next successful rebuild). Retry once — the likely
+            // failure is a transient SQLITE_BUSY from the daemon — then
+            // accept the stale index; any later incremental build heals it.
             let backend = backend.lock().await;
             if let Err(e) = store.build_all(&*backend.db, &ids).await {
-                tracing::error!(?e, "failed to rebuild history after delete");
-                return Msg::Requery;
+                tracing::warn!(?e, "history rebuild after delete failed; retrying");
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                if let Err(e) = store.build_all(&*backend.db, &ids).await {
+                    tracing::error!(?e, "history rebuild after delete failed; index is stale");
+                }
             }
             Msg::OpDone
         })
@@ -783,9 +794,17 @@ impl<'a> SearchApp<'a> {
                     return Msg::Requery;
                 }
             };
+            // Tombstones persisted: keep the optimistic state (see
+            // delete_single); retry once for transient sqlite contention.
             if let Err(e) = store.build_all(&*backend.db, &ids).await {
-                tracing::error!(?e, "failed to rebuild history after delete-all");
-                return Msg::Requery;
+                tracing::warn!(?e, "history rebuild after delete-all failed; retrying");
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                if let Err(e) = store.build_all(&*backend.db, &ids).await {
+                    tracing::error!(
+                        ?e,
+                        "history rebuild after delete-all failed; index is stale"
+                    );
+                }
             }
             Msg::OpDone
         })
