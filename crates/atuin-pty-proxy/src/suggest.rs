@@ -340,7 +340,7 @@ fn line_up_to_cursor(screen: &vt100::Screen, grid_cols: u16, line: &mut String) 
     line.clear();
     let (cursor_row, cursor_col) = screen.cursor_position();
     for row in 0..=cursor_row {
-        if row > 0 {
+        if row > 0 && !screen.row_wrapped(row - 1) {
             line.push('\n');
         }
         let end = if row == cursor_row {
@@ -363,7 +363,7 @@ fn line_up_to_cursor(screen: &vt100::Screen, grid_cols: u16, line: &mut String) 
                 line.push_str(contents);
             }
         }
-        if row != cursor_row {
+        if row != cursor_row && !screen.row_wrapped(row) {
             let kept = line[row_start..].trim_end().len();
             line.truncate(row_start + kept);
         }
@@ -910,6 +910,28 @@ mod tests {
             ui_rx,
             clock,
         )
+    }
+
+    #[rstest]
+    fn joins_soft_wrapped_rows_in_the_tracked_line() {
+        let mut parser = vt100::Parser::new(4, 8, 0);
+        parser.process(b"123456789");
+        let mut line = String::new();
+
+        line_up_to_cursor(parser.screen(), 8, &mut line);
+
+        assert_eq!(line, "123456789");
+    }
+
+    #[rstest]
+    fn preserves_hard_newlines_in_the_tracked_line() {
+        let mut parser = vt100::Parser::new(4, 8, 0);
+        parser.process(b"1234\r\n5678");
+        let mut line = String::new();
+
+        line_up_to_cursor(parser.screen(), 8, &mut line);
+
+        assert_eq!(line, "1234\n5678");
     }
 
     /// The session-ready hook fires exactly once, at the first prompt

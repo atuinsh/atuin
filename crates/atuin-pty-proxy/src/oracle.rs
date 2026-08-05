@@ -236,7 +236,10 @@ pub fn find_in_path(name: &str) -> Option<std::path::PathBuf> {
 enum OracleProc {
     Zsh(ZshOracle),
     Bash(BashOracle),
-    Fish(std::path::PathBuf),
+    Fish {
+        bin: std::path::PathBuf,
+        load_user_config: bool,
+    },
 }
 
 impl OracleProc {
@@ -244,7 +247,10 @@ impl OracleProc {
         match shell {
             OracleShell::Zsh => ZshOracle::spawn(bin, load_user_config).map(Self::Zsh),
             OracleShell::Bash => BashOracle::spawn(bin, load_user_config).map(Self::Bash),
-            OracleShell::Fish => Some(Self::Fish(bin.to_path_buf())),
+            OracleShell::Fish => Some(Self::Fish {
+                bin: bin.to_path_buf(),
+                load_user_config,
+            }),
         }
     }
 
@@ -252,7 +258,10 @@ impl OracleProc {
         match self {
             Self::Zsh(oracle) => oracle.complete(line, timeout),
             Self::Bash(oracle) => oracle.complete(line, timeout),
-            Self::Fish(fish) => Some(fish_complete(fish, line)),
+            Self::Fish {
+                bin,
+                load_user_config,
+            } => fish_complete(bin, line, *load_user_config, timeout),
         }
     }
 }
@@ -260,20 +269,120 @@ impl OracleProc {
 /// fish's engine runs headless by design (`complete -C`), one process per
 /// query — the only engine paying spawn cost per keystroke, but there is no
 /// captive mode to keep warm. `--do-complete=$argv[1]` keeps the user's
-/// line out of fish's parser: it arrives as an argument, never as code.
-fn fish_complete(fish: &Path, line: &str) -> Vec<Candidate> {
-    let output = std::process::Command::new(fish)
-        .args(["--no-config", "-c", "complete --do-complete=$argv[1]"])
+/// line out of fish's parser: it arrives as an argument, never as code. User
+/// configuration loads only when fish matches the session shell.
+fn fish_complete(
+    fish: &Path,
+    line: &str,
+    load_user_config: bool,
+    timeout: Duration,
+) -> Option<Vec<Candidate>> {
+    let mut command = fish_command(fish, line, load_user_config);
+    let output = command_stdout_with_timeout(&mut command, timeout)?;
+
+    Some(
+        String::from_utf8_lossy(&output)
+            .lines()
+            .filter_map(parse_candidate)
+            .collect(),
+    )
+}
+
+fn fish_command(fish: &Path, line: &str, load_user_config: bool) -> std::process::Command {
+    use std::os::unix::process::CommandExt;
+
+    let mut command = std::process::Command::new(fish);
+    if !load_user_config {
+        command.arg("--no-config");
+    }
+    command
+        .args(["-c", "complete --do-complete=$argv[1]"])
         .arg(line)
         .stdin(std::process::Stdio::null())
-        .output();
-    let Ok(output) = output else {
-        return Vec::new();
+        .stderr(std::process::Stdio::null());
+    unsafe {
+        command.pre_exec(|| {
+            rustix::process::setsid()?;
+            Ok(())
+        });
+    }
+
+    command
+}
+
+fn command_stdout_with_timeout(
+    command: &mut std::process::Command,
+    timeout: Duration,
+) -> Option<Vec<u8>> {
+    command.stdout(std::process::Stdio::piped());
+    let mut child = command.spawn().ok()?;
+    let Some(mut stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
     };
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(parse_candidate)
-        .collect()
+    let reader = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        stdout.read_to_end(&mut output).map(|_| output)
+    });
+    let deadline = Instant::now() + timeout;
+    let mut exited = false;
+
+    loop {
+        if !exited {
+            match child.try_wait() {
+                Ok(Some(_)) => exited = true,
+                Ok(None) => {}
+                Err(_) => {
+                    kill_std_process_group(&mut child);
+                    let _ = reader.join();
+                    return None;
+                }
+            }
+        }
+        if exited && reader.is_finished() {
+            return reader.join().ok()?.ok();
+        }
+
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            kill_std_process_group(&mut child);
+            if !exited {
+                let _ = child.wait();
+            }
+            let _ = reader.join();
+            return None;
+        };
+        std::thread::sleep(remaining.min(Duration::from_millis(5)));
+    }
+}
+
+fn kill_std_process_group(child: &mut std::process::Child) {
+    let pid = rustix::process::Pid::from_raw(child.id() as i32);
+    let killed = pid.is_some_and(|pid| {
+        rustix::process::kill_process_group(pid, rustix::process::Signal::KILL).is_ok()
+    });
+    if !killed {
+        match child.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => {
+                let _ = child.kill();
+            }
+        }
+    }
+    let _ = child.wait();
+}
+
+fn kill_pty_process_group(child: &mut dyn portable_pty::Child) {
+    let killed = child
+        .process_id()
+        .and_then(|pid| rustix::process::Pid::from_raw(pid as i32))
+        .is_some_and(|pid| {
+            rustix::process::kill_process_group(pid, rustix::process::Signal::KILL).is_ok()
+        });
+    if !killed {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
 }
 
 /// Async front door to the oracle: queries and answers cross a dedicated
@@ -540,14 +649,31 @@ impl ZshOracle {
         if let Ok(cwd) = std::env::current_dir() {
             cmd.cwd(cwd);
         }
-        let child = pair.slave.spawn_command(cmd).ok()?;
+        let mut child = pair.slave.spawn_command(cmd).ok()?;
         drop(pair.slave);
 
-        let reader = pair.master.try_clone_reader().ok()?;
-        let mut writer = pair.master.take_writer().ok()?;
+        let reader = match pair.master.try_clone_reader() {
+            Ok(reader) => reader,
+            Err(_) => {
+                kill_pty_process_group(child.as_mut());
+                return None;
+            }
+        };
+        let mut writer = match pair.master.take_writer() {
+            Ok(writer) => writer,
+            Err(_) => {
+                kill_pty_process_group(child.as_mut());
+                return None;
+            }
+        };
         let lines = spawn_line_reader(reader);
 
-        source_init(&mut writer, &lines, INIT_SCRIPT, "zsh", load_user_config).then_some(Self {
+        if !source_init(&mut writer, &lines, INIT_SCRIPT, "zsh", load_user_config) {
+            kill_pty_process_group(child.as_mut());
+            return None;
+        }
+
+        Some(Self {
             writer,
             lines,
             child,
@@ -571,7 +697,7 @@ impl ZshOracle {
 
 impl Drop for ZshOracle {
     fn drop(&mut self) {
-        let _ = self.child.kill();
+        kill_pty_process_group(self.child.as_mut());
     }
 }
 
@@ -826,6 +952,32 @@ mod tests {
     fn single_quoting_escapes_quotes() {
         assert_eq!(single_quoted("git ch"), "'git ch'");
         assert_eq!(single_quoted("echo 'hi'"), r"'echo '\''hi'\'''");
+    }
+
+    #[test]
+    fn fish_config_flag_matches_the_session() {
+        let configured = fish_command(Path::new("/fish"), "git ch", true);
+        assert!(!configured.get_args().any(|arg| arg == "--no-config"));
+
+        let hermetic = fish_command(Path::new("/fish"), "git ch", false);
+        assert!(hermetic.get_args().any(|arg| arg == "--no-config"));
+    }
+
+    #[test]
+    fn command_output_honors_its_deadline() {
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "sleep 2"]);
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            command.pre_exec(|| {
+                rustix::process::setsid()?;
+                Ok(())
+            });
+        }
+        let started = Instant::now();
+
+        assert!(command_stdout_with_timeout(&mut command, Duration::from_millis(50)).is_none());
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

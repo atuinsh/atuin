@@ -641,6 +641,7 @@ dependencies = [
  "crossterm",
  "eyre",
  "libc",
+ "nix 0.29.0",
  "portable-pty",
  "rstest",
  "rustix",
