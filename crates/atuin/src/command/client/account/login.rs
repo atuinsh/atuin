@@ -324,6 +324,37 @@ pub(super) fn read_user_password() -> String {
     password.expect("Failed to read from input")
 }
 
+pub(super) fn read_and_confirm_password(enter_prompt: &str, confirm_prompt: &str) -> String {
+    confirm_password_loop(enter_prompt, confirm_prompt, |prompt: &str| {
+        prompt_password(prompt)
+    })
+    .expect("Failed to read from input")
+}
+
+fn confirm_password_loop<F>(
+    enter_prompt: &str,
+    confirm_prompt: &str,
+    mut prompt: F,
+) -> io::Result<String>
+where
+    F: FnMut(&str) -> io::Result<String>,
+{
+    loop {
+        let password = prompt(enter_prompt)?;
+        if password.is_empty() {
+            eprintln!("Password cannot be empty. Please try again.");
+            continue;
+        }
+
+        let confirmation = prompt(confirm_prompt)?;
+        if password == confirmation {
+            return Ok(password);
+        }
+
+        eprintln!("Passwords do not match. Please try again.");
+    }
+}
+
 fn read_user_input(name: &'static str) -> String {
     eprint!("Please enter {name}: ");
     get_input().expect("Failed to read from input")
@@ -332,6 +363,11 @@ fn read_user_input(name: &'static str) -> String {
 #[cfg(test)]
 mod tests {
     use atuin_client::encryption::Key;
+    use std::io;
+
+    use rstest::{fixture, rstest};
+
+    use super::confirm_password_loop;
 
     #[test]
     fn mnemonic_round_trip() {
@@ -348,5 +384,41 @@ mod tests {
             phrase,
             "adapt amused able anxiety mother adapt beef gaze amount else seat alcohol cage lottery avoid scare alcohol cactus school avoid coral adjust catch pink"
         );
+    }
+
+    /// The (enter, confirm) prompt labels the register / change-password
+    /// flows pass to `read_and_confirm_password`.
+    #[fixture]
+    fn prompts() -> (&'static str, &'static str) {
+        ("Please enter password: ", "Please confirm password: ")
+    }
+
+    #[rstest]
+    #[case::matches_on_first_try(&["hunter2", "hunter2"], 2)]
+    #[case::reprompts_until_entries_match(&["hunter2", "typo", "hunter2", "hunter2"], 4)]
+    #[case::reprompts_past_empty_entry(&["", "hunter2", "hunter2"], 3)]
+    fn confirm_password_returns_matching_entry(
+        prompts: (&'static str, &'static str),
+        #[case] responses: &[&str],
+        #[case] expected_prompt_count: usize,
+    ) {
+        let mut remaining = responses.iter().copied().map(String::from);
+        let mut prompt_count = 0;
+        let result = confirm_password_loop(prompts.0, prompts.1, |_prompt| {
+            prompt_count += 1;
+            Ok(remaining.next().expect("ran out of scripted responses"))
+        });
+
+        assert_eq!(result.unwrap(), "hunter2");
+        assert_eq!(prompt_count, expected_prompt_count);
+    }
+
+    #[rstest]
+    fn confirm_password_propagates_read_error(prompts: (&'static str, &'static str)) {
+        let result = confirm_password_loop(prompts.0, prompts.1, |_prompt| {
+            Err(io::Error::new(io::ErrorKind::UnexpectedEof, "eof"))
+        });
+
+        assert!(result.is_err());
     }
 }

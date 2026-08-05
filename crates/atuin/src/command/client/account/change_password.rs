@@ -38,7 +38,10 @@ impl Cmd {
         }
 
         let new_password = self.new_password.clone().unwrap_or_else(|| {
-            prompt_password("Please enter the new password: ").expect("Failed to read from input")
+            super::login::read_and_confirm_password(
+                "Please enter the new password: ",
+                "Please confirm the new password: ",
+            )
         });
 
         if new_password.is_empty() {
