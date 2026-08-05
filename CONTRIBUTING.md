@@ -188,6 +188,17 @@ This is useful for comparing performance between different search implementation
 
 Be careful creating database migrations - once your database has migrated ahead of current stable, there is no going back
 
-### Stickers
+### Statistical Profiling
 
-We try to ship anyone contributing to Atuin a sticker! Only contributors get a shiny one. Fill out [this form](https://noteforms.com/forms/contributors-stickers) if you'd like one.
+You can profile the application however you like. Some of the team members use
+[`Instruments.app`](https://developer.apple.com/tutorials/instruments).
+
+#### Instruments.app
+
+The easiest way is to use `cargo-instruments`
+
+```bash
+cargo install cargo-instruments
+RUSTFLAGS="-C llvm-args=--inline-threshold=25" \
+  cargo instruments -t time --profile profiling -p atuin --bin atuin -- search "hello world"
+```

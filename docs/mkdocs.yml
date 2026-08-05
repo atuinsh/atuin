@@ -145,7 +145,7 @@ plugins:
           - guide/basic-usage.md: What Atuin records, how to use the TUI, and common config tweaks.
           - guide/advanced-usage.md: Filter modes (global, host, session, directory, workspace) and search modes (prefix, fulltext, fuzzy, daemon-fuzzy).
           - guide/shell-integration.md: How shell hooks work, environment variables, and embedded terminals.
-          - guide/agent-hooks.md: Capture commands from AI coding agents (Claude Code, Codex, pi) and filter by author.
+          - guide/agent-hooks.md: Capture commands from AI coding agents (Claude Code, Codex, opencode, pi) and filter by author.
           - guide/excluding-commands.md: Keep commands out of history with ignorespace, history_filter, and cwd_filter.
           - guide/delete-history.md: Delete single entries, bulk delete by query, remove duplicates, or wipe everything.
           - guide/dotfiles.md: Sync shell aliases and environment variables across machines.
