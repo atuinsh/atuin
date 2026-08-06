@@ -8,7 +8,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_domain::record::{DecryptedData, Host, HostId};
 use eyre::{Result, bail, ensure, eyre};
 
-use atuin_client::record::encryption::{PasetoV4, PasetoV4Key};
+use atuin_common::encryption::paseto_v4;
 
 use crate::shell::Var;
 
@@ -101,12 +101,12 @@ impl VarRecord {
 pub struct VarStore {
     pub store: SqliteStore,
     pub host_id: HostId,
-    pub encryption_key: PasetoV4Key,
+    pub encryption_key: paseto_v4::Key,
 }
 
 impl VarStore {
     // will want to init the actual kv store when that is done
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: PasetoV4Key) -> VarStore {
+    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> VarStore {
         VarStore {
             store,
             host_id,

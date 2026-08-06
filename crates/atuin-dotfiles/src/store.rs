@@ -9,7 +9,7 @@ use atuin_common::utils::unquote;
 use atuin_domain::record::{DecryptedData, Host, HostId};
 use eyre::{Result, bail, ensure, eyre};
 
-use atuin_client::record::encryption::{PasetoV4, PasetoV4Key};
+use atuin_common::encryption::paseto_v4;
 
 use crate::shell::Alias;
 

@@ -5,11 +5,11 @@ use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use rmp::decode::Bytes;
 
-use crate::record::encryption::PasetoV4Key;
 use crate::{
     database::{Database, current_context},
-    record::{encryption::PasetoV4, sqlite_store::SqliteStore},
+    record::sqlite_store::SqliteStore,
 };
+use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
 
 use super::{HISTORY_TAG, History, HistoryId, Version};
@@ -18,7 +18,7 @@ use super::{HISTORY_TAG, History, HistoryId, Version};
 pub struct HistoryStore {
     pub store: SqliteStore,
     pub host_id: HostId,
-    pub encryption_key: PasetoV4Key,
+    pub encryption_key: paseto_v4::Key,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
@@ -116,7 +116,7 @@ impl HistoryRecord {
 }
 
 impl HistoryStore {
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: PasetoV4Key) -> Self {
+    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
         HistoryStore {
             store,
             host_id,
@@ -143,7 +143,7 @@ impl HistoryStore {
         let id = record.id;
 
         self.store
-            .push(&record.encrypt::<PasetoV4>(&self.encryption_key))
+            .push(&record.encrypt(&self.encryption_key))
             .await?;
 
         Ok((id, idx))

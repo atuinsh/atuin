@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use eyre::{Result, eyre};
 
-use atuin_client::record::encryption::{PasetoV4, PasetoV4Key};
 use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx};
 use entry::KvEntry;
 use record::{KV_TAG, KV_VERSION, KvRecord};
@@ -18,7 +18,7 @@ pub struct KvStore {
     pub record_store: SqliteStore,
     pub kv_db: Database,
     pub host_id: HostId,
-    pub encryption_key: PasetoV4Key,
+    pub encryption_key: paseto_v4::Key,
 }
 
 impl KvStore {
@@ -26,7 +26,7 @@ impl KvStore {
         record_store: SqliteStore,
         kv_db: Database,
         host_id: HostId,
-        encryption_key: PasetoV4Key,
+        encryption_key: paseto_v4::Key,
     ) -> Self {
         KvStore {
             record_store,
@@ -192,7 +192,7 @@ mod tests {
         let record_store = SqliteStore::new("sqlite::memory:", 1.0).await.unwrap();
         let kv_db = Database::new("sqlite::memory:", 1.0).await.unwrap();
         let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
-        let encryption_key = PasetoV4Key::from([0; 32]);
+        let encryption_key = paseto_v4::Key::from([0; 32]);
         Ok(KvStore::new(record_store, kv_db, host_id, encryption_key))
     }
 

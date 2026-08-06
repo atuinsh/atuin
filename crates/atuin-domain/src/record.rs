@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use atuin_common::encryption::paseto_v4;
 use eyre::Result;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
@@ -199,25 +200,8 @@ impl RecordStatus {
     }
 }
 
-pub trait Encryption {
-    /// The key type this encryption scheme uses to wrap and unwrap records.
-    type Key;
-
-    fn re_encrypt(
-        data: EncryptedData,
-        ad: AdditionalData,
-        old_key: &Self::Key,
-        new_key: &Self::Key,
-    ) -> Result<EncryptedData> {
-        let data = Self::decrypt(data, ad, old_key)?;
-        Ok(Self::encrypt(data, ad, new_key))
-    }
-    fn encrypt(data: DecryptedData, ad: AdditionalData, key: &Self::Key) -> EncryptedData;
-    fn decrypt(data: EncryptedData, ad: AdditionalData, key: &Self::Key) -> Result<DecryptedData>;
-}
-
 impl Record<DecryptedData> {
-    pub fn encrypt<E: Encryption>(self, key: &E::Key) -> Record<EncryptedData> {
+    pub fn encrypt(self, key: &paseto_v4::EncryptedData) -> Record<EncryptedData> {
         let ad = AdditionalData {
             id: &self.id,
             version: &self.version,
@@ -283,12 +267,30 @@ impl Record<EncryptedData> {
 
 #[cfg(test)]
 mod tests {
-    use crate::record::{Host, HostId};
+    use super::*;
+    use atuin_common::encryption::paseto_v4;
+    use atuin_common::utils::uuid_v7;
+    use rstest::*;
 
     use super::{DecryptedData, Diff, Record, RecordStatus};
     use pretty_assertions::assert_eq;
     use rstest::{fixture, rstest};
     use uuid::Uuid;
+
+    #[fixture]
+    fn key() -> paseto_v4::Key {
+        paseto_v4::Key::new_os_random()
+    }
+
+    #[fixture]
+    fn data() -> DecryptedData {
+        DecryptedData(vec![1, 2, 3, 4])
+    }
+
+    #[fixture]
+    fn ad_parts() -> (RecordId, HostId) {
+        (RecordId(uuid_v7()), HostId(uuid_v7()))
+    }
 
     #[fixture]
     fn test_record() -> Record<DecryptedData> {
@@ -423,5 +425,183 @@ mod tests {
         // diffing with yourself = no diff
         assert_eq!(index1.diff(&index1).len(), 0);
         assert_eq!(index2.diff(&index2).len(), 0);
+    }
+
+    #[rstest]
+    fn round_trip(key: paseto_v4::Key, data: DecryptedData, ad_parts: (RecordId, HostId)) {
+        let (rid, hid) = ad_parts;
+        let idx = 0;
+        let ad = AdditionalData {
+            id: &rid,
+            version: "v0",
+            tag: "kv",
+            host: &hid,
+            idx: &idx,
+        };
+
+        let encrypted = paseto_v4::encrypt(data.clone(), ad, &key);
+        let decrypted = paseto_v4::decrypt(encrypted, ad, &key).unwrap();
+        assert_eq!(decrypted, data);
+    }
+
+    #[rstest]
+    fn same_entry_different_output(
+        key: paseto_v4::Key,
+        data: DecryptedData,
+        ad_parts: (RecordId, HostId),
+    ) {
+        let (rid, hid) = ad_parts;
+        let idx = 0;
+        let ad = AdditionalData {
+            id: &rid,
+            version: "v0",
+            tag: "kv",
+            host: &hid,
+            idx: &idx,
+        };
+
+        let encrypted = paseto_v4::encrypt(data.clone(), ad, &key);
+        let encrypted2 = paseto_v4::encrypt(data, ad, &key);
+
+        assert_ne!(
+            encrypted.data, encrypted2.data,
+            "re-encrypting the same contents should have different output due to key randomization"
+        );
+    }
+
+    #[rstest]
+    fn cannot_decrypt_different_key(
+        key: paseto_v4::Key,
+        data: DecryptedData,
+        ad_parts: (RecordId, HostId),
+    ) {
+        let fake_key = paseto_v4::Key::new_os_random();
+
+        let (rid, hid) = ad_parts;
+        let idx = 0;
+        let ad = AdditionalData {
+            id: &rid,
+            version: "v0",
+            tag: "kv",
+            host: &hid,
+            idx: &idx,
+        };
+
+        let encrypted = paseto_v4::encrypt(data, ad, &key);
+        let error = paseto_v4::decrypt(encrypted, ad, &fake_key).unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains(
+            "This record was encrypted with a different key than the one currently configured."
+        ));
+        assert!(message.contains(&format!(
+            "Currently using {}, expecting {}.",
+            fake_key.key_id(),
+            key.key_id()
+        )));
+    }
+
+    #[rstest]
+    fn cannot_decrypt_cek_with_missing_footer_contents() {
+        let key = paseto_v4::Key::new_os_random();
+
+        let Err(error) = paseto_v4::decrypt_cek("{}".to_owned(), &key) else {
+            panic!("missing footer contents should result in an error");
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "wrapped cek did not contain the correct contents"
+        );
+    }
+
+    #[rstest]
+    fn cannot_decrypt_different_id(
+        key: paseto_v4::Key,
+        data: DecryptedData,
+        ad_parts: (RecordId, HostId),
+    ) {
+        let (rid, hid) = ad_parts;
+        let idx = 0;
+        let ad = AdditionalData {
+            id: &rid,
+            version: "v0",
+            tag: "kv",
+            host: &hid,
+            idx: &idx,
+        };
+
+        let encrypted = paseto_v4::encrypt(data, ad, &key);
+
+        let ad = AdditionalData {
+            id: &RecordId(uuid_v7()),
+            ..ad
+        };
+        let _ = paseto_v4::decrypt(encrypted, ad, &key).unwrap_err();
+    }
+
+    #[rstest]
+    fn re_encrypt_round_trip(
+        key: paseto_v4::Key,
+        data: DecryptedData,
+        ad_parts: (RecordId, HostId),
+    ) {
+        let key1 = key;
+        let key2 = paseto_v4::Key::new_os_random();
+
+        let (rid, hid) = ad_parts;
+        let idx = 0;
+        let ad = AdditionalData {
+            id: &rid,
+            version: "v0",
+            tag: "kv",
+            host: &hid,
+            idx: &idx,
+        };
+
+        let encrypted1 = paseto_v4::encrypt(data.clone(), ad, &key1);
+        let encrypted2 = paseto_v4::re_encrypt(encrypted1.clone(), ad, &key1, &key2).unwrap();
+
+        // we only re-encrypt the content keys
+        assert_eq!(encrypted1.data, encrypted2.data);
+        assert_ne!(
+            encrypted1.content_encryption_key,
+            encrypted2.content_encryption_key
+        );
+
+        let decrypted = paseto_v4::decrypt(encrypted2, ad, &key2).unwrap();
+
+        assert_eq!(decrypted, data);
+    }
+
+    #[rstest]
+    fn full_record_round_trip(sample_record: Record<DecryptedData>) {
+        let key = paseto_v4::Key::from([0x55; 32]);
+        let encrypted = sample_record.encrypt::<PasetoV4>(&key);
+
+        assert!(!encrypted.data.data.is_empty());
+        assert!(!encrypted.data.content_encryption_key.is_empty());
+
+        let decrypted = encrypted.decrypt::<PasetoV4>(&key).unwrap();
+
+        assert_eq!(decrypted.data.0, [1, 2, 3, 4]);
+    }
+
+    #[rstest]
+    fn full_record_round_trip_fail(sample_record: Record<DecryptedData>) {
+        let key = paseto_v4::Key::from([0x55; 32]);
+        let encrypted = sample_record.encrypt::<PasetoV4>(&key);
+
+        let mut enc1 = encrypted.clone();
+        enc1.host = Host::new(HostId(uuid_v7()));
+        let _ = enc1
+            .decrypt::<PasetoV4>(&key)
+            .expect_err("tampering with the host should result in auth failure");
+
+        let mut enc2 = encrypted;
+        enc2.id = RecordId(uuid_v7());
+        let _ = enc2
+            .decrypt::<PasetoV4>(&key)
+            .expect_err("tampering with the id should result in auth failure");
     }
 }

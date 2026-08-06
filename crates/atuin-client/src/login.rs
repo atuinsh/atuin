@@ -1,3 +1,4 @@
+use atuin_common::encryption::paseto_v4;
 use atuin_domain::api::LoginRequest;
 use eyre::{Context, Result, bail};
 use tokio::fs::File;
@@ -5,7 +6,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::{
     api_client,
-    encryption::{PasetoV4Key, decode_key, encode_key, load_key},
+    encryption::{decode_key, encode_key, load_key},
     record::sqlite_store::SqliteStore,
     settings::Settings,
 };
@@ -19,7 +20,7 @@ pub async fn login(
 ) -> Result<String> {
     // try parse the key as a mnemonic...
     let key = match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
-        Ok(mnemonic) => encode_key(&PasetoV4Key::try_from(mnemonic.entropy())?)?,
+        Ok(mnemonic) => encode_key(&paseto_v4::Key::try_from(mnemonic.entropy())?)?,
         Err(err) => {
             match err {
                 // assume they copied in the base64 key
