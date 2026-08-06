@@ -50,8 +50,8 @@ impl<'a> From<AdditionalData<'a>> for paseto_v4::ImplicitAssertion<'a> {
     }
 }
 
-impl<'a> From<&Record<DecryptedData>> for AdditionalData {
-    fn from(value: &Record<DecryptedData>) -> Self {
+impl<'a> From<&'a Record<DecryptedData>> for AdditionalData<'a> {
+    fn from(value: &'a Record<DecryptedData>) -> Self {
         Self {
             id: value.id,
             idx: value.idx,
@@ -416,7 +416,7 @@ mod tests {
             idx: &idx,
         };
 
-        let encrypted = paseto_v4::encrypt(data.clone(), ad, &key);
+        let encrypted = paseto_v4::encrypt_sync(data.clone(), ad, &key);
         let decrypted = paseto_v4::decrypt(encrypted, ad, &key).unwrap();
         assert_eq!(decrypted, data);
     }
@@ -437,8 +437,8 @@ mod tests {
             idx: &idx,
         };
 
-        let encrypted = paseto_v4::encrypt(data.clone(), ad, &key);
-        let encrypted2 = paseto_v4::encrypt(data, ad, &key);
+        let encrypted = paseto_v4::encrypt_sync(data.clone(), ad, &key);
+        let encrypted2 = paseto_v4::encrypt_sync(data, ad, &key);
 
         assert_ne!(
             encrypted.data, encrypted2.data,
@@ -464,7 +464,7 @@ mod tests {
             idx: &idx,
         };
 
-        let encrypted = paseto_v4::encrypt(data, ad, &key);
+        let encrypted = paseto_v4::encrypt_sync(data, ad, &key);
         let error = paseto_v4::decrypt(encrypted, ad, &fake_key).unwrap_err();
         let message = error.to_string();
 
@@ -508,7 +508,7 @@ mod tests {
             idx: &idx,
         };
 
-        let encrypted = paseto_v4::encrypt(data, ad, &key);
+        let encrypted = paseto_v4::encrypt_sync(data, ad, &key);
 
         let ad = AdditionalData {
             id: &RecordId(uuid_v7()),
@@ -536,15 +536,12 @@ mod tests {
             idx: &idx,
         };
 
-        let encrypted1 = paseto_v4::encrypt(data.clone(), ad, &key1);
-        let encrypted2 = paseto_v4::re_encrypt(encrypted1.clone(), ad, &key1, &key2).unwrap();
+        let encrypted1 = paseto_v4::encrypt_sync(data.clone(), ad, &key1);
+        let encrypted2 = paseto_v4::reencrypt_sync(encrypted1.clone(), ad, &key1, &key2).unwrap();
 
         // we only re-encrypt the content keys
-        assert_eq!(encrypted1.data, encrypted2.data);
-        assert_ne!(
-            encrypted1.content_encryption_key,
-            encrypted2.content_encryption_key
-        );
+        assert_eq!(encrypted1.raw, encrypted2.raw);
+        assert_ne!(encrypted1.cek, encrypted2.cek);
 
         let decrypted = paseto_v4::decrypt(encrypted2, ad, &key2).unwrap();
 
@@ -554,31 +551,31 @@ mod tests {
     #[rstest]
     fn full_record_round_trip(sample_record: Record<DecryptedData>) {
         let key = paseto_v4::Key::from([0x55; 32]);
-        let encrypted = sample_record.encrypt::<PasetoV4>(&key);
+        let encrypted = sample_record.encrypt(&key);
 
-        assert!(!encrypted.data.data.is_empty());
-        assert!(!encrypted.data.content_encryption_key.is_empty());
+        assert!(!encrypted.data.raw.is_empty());
+        assert!(!encrypted.data.cek.is_empty());
 
-        let decrypted = encrypted.decrypt::<PasetoV4>(&key).unwrap();
+        let decrypted = encrypted.decrypt(&key).unwrap();
 
         assert_eq!(decrypted.data.0, [1, 2, 3, 4]);
     }
 
     #[rstest]
-    fn full_record_round_trip_fail(sample_record: Record<DecryptedData>) {
+    fn full_record_round_trip_fail(test_record: Record<DecryptedData>) {
         let key = paseto_v4::Key::from([0x55; 32]);
-        let encrypted = sample_record.encrypt::<PasetoV4>(&key);
+        let encrypted = sample_record.encrypt(&key);
 
         let mut enc1 = encrypted.clone();
         enc1.host = Host::new(HostId(uuid_v7()));
         let _ = enc1
-            .decrypt::<PasetoV4>(&key)
+            .decrypt(&key)
             .expect_err("tampering with the host should result in auth failure");
 
         let mut enc2 = encrypted;
         enc2.id = RecordId(uuid_v7());
         let _ = enc2
-            .decrypt::<PasetoV4>(&key)
+            .decrypt(&key)
             .expect_err("tampering with the id should result in auth failure");
     }
 }

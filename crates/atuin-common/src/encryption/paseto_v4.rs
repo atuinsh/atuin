@@ -207,6 +207,14 @@ pub enum DecryptionError {
     DecodingError(#[from] base64::DecodeError),
 }
 
+#[derive(Debug, Error)]
+pub enum ReencryptionError {
+    #[error("unexpected error decrypting CEK: {_0}")]
+    CEKDec(cek::DecryptionError),
+    #[error("unexpected error encrypting CEK: {_0}")]
+    CEKEnc(cek::EncryptionError),
+}
+
 #[derive(Serialize, Deserialize)]
 struct EncryptedJson {
     data: String,
@@ -380,6 +388,26 @@ where
     IA: Into<Option<ImplicitAssertion<'a>>> + Send + 'static,
 {
     tokio::task::spawn_blocking(move || decrypt_sync(&data, implicit_assertion, &key))
+        .await
+        .unwrap()
+}
+
+pub fn reencrypt_sync(data: &EncryptedData, key: &Key) -> Result<EncryptedData, ReencryptionError> {
+    Ok(EncryptedData {
+        raw: data.raw.clone(),
+        cek: cek::Json::encrypt(
+            &(cek::Json::decrypt(&data.cek, key).map_err(ReencryptionError::CEKDec)?),
+            key,
+        )
+        .map_err(ReencryptionError::CEKEnc)?,
+    })
+}
+
+pub async fn reencrypt_async(
+    data: EncryptedData,
+    key: Key,
+) -> Result<EncryptedData, ReencryptionError> {
+    tokio::task::spawn_blocking(move || reencrypt_sync(&data, &key))
         .await
         .unwrap()
 }
