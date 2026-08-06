@@ -3,6 +3,7 @@
 use atuin_client::settings::Settings;
 
 #[derive(clap::Subcommand, Debug)]
+#[command(infer_subcommands = false)]
 pub enum Cmd {
     PrepareSearchIndex,
 }

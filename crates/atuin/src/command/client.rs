@@ -132,7 +132,14 @@ pub enum Cmd {
     Lab(lab::Cmd),
 
     /// Internal subcommands, not for direct use by users.
-    #[command(subcommand, hide = true, name = "__internal")]
+    #[command(
+        subcommand,
+        hide = true,
+        name = "__internal",
+        help_template = "error: this command is not meant to be accessed directly",
+        disable_help_flag = true,
+        disable_help_subcommand = true,
+    )]
     Internal(internal::Cmd),
 
     /// We want to exclude the `__internal` subcommand from Clap's `infer_subcommands`; otherwise,
@@ -140,7 +147,12 @@ pub enum Cmd {
     /// `infer_subcommands` for a single command. As a workaround, we define a dummy command with
     /// the same name but with an extra understore, which forces `__internal` to be typed out in
     /// entirety, since any prefix of the name would be ambiguous.
-    #[command(hide = true, name = "__internal_")]
+    #[command(
+        hide = true,
+        name = "__internal_",
+        disable_help_flag = true,
+        disable_help_subcommand = true,
+    )]
     InternalDecoy,
 }
 
