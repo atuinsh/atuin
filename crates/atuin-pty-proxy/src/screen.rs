@@ -146,6 +146,16 @@ fn proxy_dir_name() -> String {
     )
 }
 
+/// A per-session mark for the shell integration's OSC 133 markers, so this
+/// proxy can tell its own shell's prompt from any other shell's. Not a
+/// secret — it rides in the terminal stream — just unguessable enough that
+/// an unrelated OSC 133 emitter cannot collide with it.
+pub(crate) fn session_mark() -> String {
+    let mut raw = [0u8; 8];
+    rand::thread_rng().fill_bytes(&mut raw);
+    hex_encode(&raw)
+}
+
 pub(crate) fn socket_path_in(dir: &Path) -> PathBuf {
     dir.join("sock")
 }
