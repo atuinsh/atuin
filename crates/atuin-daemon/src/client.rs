@@ -262,6 +262,7 @@ impl SearchClient {
         Ok(response.into_inner())
     }
 
+    /// Tell the daemon to build the search index for the given list of shells.
     pub async fn prepare_index(&mut self, shells: OrFilter<Vec<String>>) -> Result<()> {
         let request = PrepareIndexRequest {
             // Same as `SearchRequest::shells` -- empty list means "all".

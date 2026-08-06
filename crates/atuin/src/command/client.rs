@@ -138,7 +138,7 @@ pub enum Cmd {
         name = "__internal",
         help_template = "error: this command is not meant to be accessed directly",
         disable_help_flag = true,
-        disable_help_subcommand = true,
+        disable_help_subcommand = true
     )]
     Internal(internal::Cmd),
 
@@ -151,7 +151,7 @@ pub enum Cmd {
         hide = true,
         name = "__internal_",
         disable_help_flag = true,
-        disable_help_subcommand = true,
+        disable_help_subcommand = true
     )]
     InternalDecoy,
 }
