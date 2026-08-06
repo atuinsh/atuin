@@ -26,7 +26,7 @@ impl Rekey {
         store.re_encrypt(&current_key, &key).await?;
 
         println!("Store rewritten. Saving new key");
-        key.try_write_path(&settings.key_path)?;
+        key.overwrite_path(&settings.key_path)?;
 
         Ok(())
     }

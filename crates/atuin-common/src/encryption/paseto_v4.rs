@@ -1,4 +1,6 @@
-//!  utilities for atuin.
+//! PASETO v4 / PASERK envelope encryption for atuin records.
+//!
+//! See [`encrypt_sync`] for the encryption description.
 use std::{
     array::TryFromSliceError,
     fs,
@@ -11,20 +13,15 @@ use base64::{
     engine::general_purpose::{STANDARD as B64_STANDARD, URL_SAFE_NO_PAD as B64_URL_SAFE_NO_PAD},
 };
 use crypto_secretbox::{KeyInit, XSalsa20Poly1305, aead};
-use rmp;
-use rusty_paserk;
 use rusty_paseto::Paseto;
 use rusty_paseto::core as rusty_paseto;
 use serde::{Deserialize, Serialize};
-use serde_json;
 use thiserror::Error;
-use tokio;
 use zeroize::Zeroize;
 
 pub type PaserkV4KeyId = rusty_paserk::KeyId<rusty_paserk::V4, rusty_paserk::Local>;
 pub type PaserkV4PieWrappedKey = rusty_paserk::PieWrappedKey<rusty_paserk::V4, rusty_paserk::Local>;
 pub type ImplicitAssertion<'a> = rusty_paseto::ImplicitAssertion<'a>;
-pub type Nonce<'a> = rusty_paseto::PasetoNonce<'a, rusty_paseto::V4, rusty_paseto::Local>;
 
 /// Used to encode the given raw bytes into a string before encrypting. See relevant docs.
 const PAYLOAD_ENCODER: &base64::engine::general_purpose::GeneralPurpose = &B64_URL_SAFE_NO_PAD;
@@ -101,6 +98,12 @@ impl PlainTextEncodedKey {
     }
 }
 
+impl Drop for PlainTextEncodedKey {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
 /// Paseto V4 Key.
 ///
 /// Intentionally **not** Copy to support zeroing out on Drop. Intentionally not `Serialize` so it
@@ -110,12 +113,6 @@ impl PlainTextEncodedKey {
 pub struct Key([u8; 32]);
 
 impl Key {
-    /// A key with every byte set to zero.
-    #[must_use]
-    pub const fn zero() -> Self {
-        Self([0u8; 32])
-    }
-
     /// Borrow the raw key bytes.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
@@ -154,12 +151,14 @@ impl Key {
     /// Encode this key into a B64-encoded string, if possible.
     pub fn encode(&self) -> PlainTextEncodedKey {
         let key_bytes = self.as_bytes();
-        let mut buf = Vec::with_capacity(size_of::<u64>() * key_bytes.len() + size_of::<u32>() + 8);
-        // SAFETY: Cannot return error, claude confirmed.
-        rmp::encode::write_array_len(&mut buf, key_bytes.len() as u32).unwrap();
+        // A msgpack array16 header (3 bytes) followed by each byte as at most a 2-byte uint.
+        let mut buf = Vec::with_capacity(3 + 2 * key_bytes.len());
+        // Writing to a `Vec` is infallible, so neither of these can actually error.
+        rmp::encode::write_array_len(&mut buf, key_bytes.len() as u32)
+            .expect("writing to a Vec is infallible");
         for b in key_bytes {
-            // SAFETY: Cannot return error, claude confirmed.
-            rmp::encode::write_uint(&mut buf, *b as u64).unwrap();
+            rmp::encode::write_uint(&mut buf, u64::from(*b))
+                .expect("writing to a Vec is infallible");
         }
 
         PlainTextEncodedKey(KEY_ENCODER.encode(buf))
@@ -247,6 +246,16 @@ impl Key {
         Ok(())
     }
 
+    /// Write this [`Self::encode`]d key to `path`, replacing any existing file.
+    ///
+    /// Unlike [`Self::try_write_path`], this deliberately overwrites an existing key.
+    pub fn overwrite_path(&self, path: &Path) -> std::io::Result<()> {
+        let mut file = fs::File::create(path)?;
+        file.write_all(self.encode().dangerously_leak_secret().as_bytes())?;
+
+        Ok(())
+    }
+
     /// [`Self::try_load_from_path`], except if the file doesn't exist, creates a key through
     /// [`Self::generate`], stores it and returns it.
     pub fn try_load_or_generate(path: &Path) -> Result<Self, KeyFileLoadOrGenerateError> {
@@ -256,10 +265,22 @@ impl Key {
                 let key = Self::generate();
                 match key.try_write_path(path) {
                     Ok(()) => Ok(key),
-                    Err(KeyFileStoringError::AlreadyExists) => {
-                        // Technically possible, but so rare it's not worth catching.
-                        panic!("File which does not exist immediately afterwards found existing.");
-                    }
+                    // We lost a race: another process wrote a key between our existence check and
+                    // our write. Adopt whatever landed on disk rather than clobbering it or
+                    // panicking.
+                    Err(KeyFileStoringError::AlreadyExists) => Self::try_load_from_path(path)
+                        .map_err(|e| match e {
+                            KeyFileLoadingError::Io(io) => KeyFileLoadOrGenerateError::Io(io),
+                            KeyFileLoadingError::Decoding(d) => {
+                                KeyFileLoadOrGenerateError::Decoding(d)
+                            }
+                            KeyFileLoadingError::NoEntry => {
+                                KeyFileLoadOrGenerateError::Io(std::io::Error::new(
+                                    std::io::ErrorKind::NotFound,
+                                    "key file vanished immediately after a concurrent write",
+                                ))
+                            }
+                        }),
                     Err(KeyFileStoringError::Io(io)) => Err(io.into()),
                 }
             }
@@ -405,22 +426,28 @@ mod cek {
 
 /// Data which was encrypted with the paseto encryption engine.
 ///
-/// Note this contains the encrypted string as [`PasetoEncryptedData::data`] and the content
-/// encryption key that it was encrypted with under [`PasetoEncryptedData::cek`].
+/// Contains the PASETO token (overloaded here to contain arbitrary data) as [`EncryptedData::raw`]
+/// and the wrapped content-encryption key that sealed it as [`EncryptedData::cek`].
 ///
-/// See [`::encrypt`] for more information.
+/// See [`encrypt_sync`] for more information.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EncryptedData {
     /// The encrypted payload as a string.
+    ///
+    /// Serialized on the wire as `data` - the historical field name. Important this is stable.
+    #[serde(rename = "data", alias = "raw")]
     pub raw: String,
-    /// Content encryption key, encoded as a JSON string. See [`cek::Json`].
+    /// Content encryption key, encoded as a JSON string (the `cek::Json` envelope).
+    ///
+    /// On the wire as `content_encryption_key` for the same backwards-compatibility reason.
+    #[serde(rename = "content_encryption_key", alias = "cek")]
     pub cek: String,
 }
 
 #[derive(Debug, Error)]
 pub enum EncryptionError {
     #[error("unexpected paseto error creating new CEK: {_0}")]
-    CEKGeneration(rusty_paseto::PasetoError),
+    CekGeneration(rusty_paseto::PasetoError),
     #[error("JSON serialization error serializing data: {_0}")]
     DataJson(#[from] serde_json::Error),
     #[error("unexpected paseto error creating new nonce: {_0}")]
@@ -428,27 +455,27 @@ pub enum EncryptionError {
     #[error("unexpected encryption error: {_0}")]
     Encryption(rusty_paseto::PasetoError),
     #[error("unexpected error encrypting CEK: {_0}")]
-    CEK(#[from] cek::EncryptionError),
+    Cek(#[from] cek::EncryptionError),
 }
 
 #[derive(Debug, Error)]
 pub enum DecryptionError {
     #[error("unexpected error decrypting CEK: {_0}")]
-    CEK(#[from] cek::DecryptionError),
+    Cek(#[from] cek::DecryptionError),
     #[error("failed to decrypt the payload: {_0}")]
     Decryption(#[from] rusty_paserk::PasetoError),
-    #[error("failed to deserialize decrypted payload into json: {0}")]
+    #[error("failed to deserialize decrypted payload into json: {_0}")]
     Json(#[from] serde_json::Error),
-    #[error("failed to decode the deserialized payload: {_0}")]
-    DecodingError(#[from] base64::DecodeError),
+    #[error("failed to base64-decode the deserialized payload: {_0}")]
+    Base64(#[from] base64::DecodeError),
 }
 
 #[derive(Debug, Error)]
 pub enum ReencryptionError {
     #[error("unexpected error decrypting CEK: {_0}")]
-    CEKDec(cek::DecryptionError),
+    CekDec(cek::DecryptionError),
     #[error("unexpected error encrypting CEK: {_0}")]
-    CEKEnc(cek::EncryptionError),
+    CekEnc(cek::EncryptionError),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -459,10 +486,10 @@ struct EncryptedJson {
 /// Given a piece of data, encrypt it into a paseto-encrypted form.
 ///
 /// This encryptor doesn't actually just encrypt. "encryption", within the context of this algorithm
-/// is actually three operations:
+/// is actually a few operations:
 ///
-///   - **_CEK_ generation**: The given data will be with a randomly-generated "content encryption
-///     key", which is generated completely randomly.
+///   - **_CEK_ generation**: The given data is encrypted with a randomly-generated "content
+///     encryption key" (CEK).
 ///   - **Base64-encoding**: The data given is encoded into a url-safe non-padded b64 string. This
 ///     is necessary because Paseto V4 encryption does not actually support bytes.
 ///   - **JSON packing**: The resulting data is packed in a JSON of the shape
@@ -472,11 +499,10 @@ struct EncryptedJson {
 ///     - The given implicit assertion is optionally added.
 ///     - A randomly-generated nonce.
 ///
-/// We return the encoded data as a [`EncryptedData`] structure.
+/// We return the encoded data as an [`EncryptedData`] structure.
 ///
-/// It is what it is. Most of the work here is CPU-bound so we also offer an async version under
-/// tokio, which off-loads work to the tokio blocking threads. See [`::encrypt_async`] for more
-/// details.
+/// Most of the work here is CPU-bound; callers on an async runtime should run this inside
+/// `tokio::task::spawn_blocking` (or equivalent) rather than blocking the executor.
 ///
 /// ## CEK?
 ///
@@ -487,7 +513,7 @@ struct EncryptedJson {
 /// ```txt
 /// EncryptedData {
 ///   // Note the JSON of the `EncryptedJson` type here:
-///   data: String = '{ data: "ewqkbjvdbkhrkeqbewqhk...(encoded data)" }',
+///   raw: String = '{ data: "ewqkbjvdbkhrkeqbewqhk...(encoded data)" }',
 ///   // Note the JSON of the `cek::Json` type here:
 ///   cek: String = '{
 ///     wpk: "ewquohewqk(encoded random CEK)",
@@ -496,14 +522,10 @@ struct EncryptedJson {
 /// }
 /// ```
 ///
-/// # Original Author Notes
+/// # Why a random content-encryption key?
 ///
-/// I, `@markovejnovic` have moved the original code away from `atuin-client` into `atuin-common`.
-/// The original code came with some docs from the original author (`@conradludgate`), which I
-/// present here verbatim (albeit formatted for rsdoc):
+/// Design rationale, originally written by `@conradludgate`:
 ///
-/// > Why do we use a random content-encryption key?
-/// >
 /// > Originally I was planning on using a derived key for encryption based on additional data.
 /// > This would be a lot more secure than using the master key directly.
 /// >
@@ -521,11 +543,11 @@ struct EncryptedJson {
 /// > your data.
 /// >
 /// > See
-/// >  - https://docs.aws.amazon.com/wellarchitected/latest/financial-services-industry-lens/use-envelope-encryption-with-customer-master-keys.html
-/// >  - https://cloud.google.com/kms/docs/envelope-encryption
-/// >  - https://learn.microsoft.com/en-us/azure/storage/blobs/client-side-encryption?tabs=dotnet#encryption-and-decryption-via-the-envelope-technique
-/// >  - https://www.yubico.com/products/hardware-security-module/
-/// >  - https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html#encrypting-stored-keys
+/// >  - <https://docs.aws.amazon.com/wellarchitected/latest/financial-services-industry-lens/use-envelope-encryption-with-customer-master-keys.html>
+/// >  - <https://cloud.google.com/kms/docs/envelope-encryption>
+/// >  - <https://learn.microsoft.com/en-us/azure/storage/blobs/client-side-encryption?tabs=dotnet#encryption-and-decryption-via-the-envelope-technique>
+/// >  - <https://www.yubico.com/products/hardware-security-module/>
+/// >  - <https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html#encrypting-stored-keys>
 /// >
 /// > Why would we care? In the past we have received some requests for company solutions. If in
 /// > future we can configure a KMS service with little effort, then that would solve a lot of
@@ -551,7 +573,7 @@ pub fn encrypt_sync<'a, IA>(
 where
     IA: Into<Option<ImplicitAssertion<'a>>>,
 {
-    let random_key = Key::try_new_random().map_err(EncryptionError::CEKGeneration)?;
+    let random_key = Key::try_new_random().map_err(EncryptionError::CekGeneration)?;
 
     let payload = serde_json::to_string(&EncryptedJson {
         data: PAYLOAD_ENCODER.encode(data),
@@ -574,27 +596,15 @@ where
 
     Ok(EncryptedData {
         raw: token,
-        cek: cek::Json::encrypt(&random_key, key).map_err(EncryptionError::CEK)?,
+        cek: cek::Json::encrypt(&random_key, key).map_err(EncryptionError::Cek)?,
     })
 }
 
-pub async fn encrypt_async<'a, IA, D>(
-    data: D,
-    implicit_assertion: IA,
-    key: Key,
-) -> Result<EncryptedData, EncryptionError>
-where
-    IA: Into<Option<ImplicitAssertion<'a>>> + Send + 'static,
-    D: AsRef<[u8]> + Send + 'static,
-{
-    tokio::task::spawn_blocking(move || encrypt_sync(data.as_ref(), implicit_assertion, &key))
-        .await
-        .unwrap()
-}
-
-/// The dual to [`encrypt_sync`].
+/// The dual to [`encrypt_sync`]: unwrap the CEK with `key`, decrypt the PASETO token with it, then
+/// base64-decode the payload back into the original bytes.
 ///
-/// **Ensure you read that documentation. Does NOT do what the name of the function says.**
+/// Like [`encrypt_sync`], this is more than a single decrypt step; see that function's docs for the
+/// full envelope scheme.
 pub fn decrypt_sync<'a, IA: Into<Option<ImplicitAssertion<'a>>>>(
     data: &EncryptedData,
     implicit_assertion: IA,
@@ -615,19 +625,6 @@ pub fn decrypt_sync<'a, IA: Into<Option<ImplicitAssertion<'a>>>>(
     Ok(decoded)
 }
 
-pub async fn decrypt_async<'a, IA>(
-    data: EncryptedData,
-    implicit_assertion: IA,
-    key: Key,
-) -> Result<Vec<u8>, DecryptionError>
-where
-    IA: Into<Option<ImplicitAssertion<'a>>> + Send + 'static,
-{
-    tokio::task::spawn_blocking(move || decrypt_sync(&data, implicit_assertion, &key))
-        .await
-        .unwrap()
-}
-
 pub fn reencrypt_sync(
     data: &EncryptedData,
     old_key: &Key,
@@ -636,21 +633,11 @@ pub fn reencrypt_sync(
     Ok(EncryptedData {
         raw: data.raw.clone(),
         cek: cek::Json::encrypt(
-            &(cek::Json::decrypt(&data.cek, old_key).map_err(ReencryptionError::CEKDec)?),
+            &(cek::Json::decrypt(&data.cek, old_key).map_err(ReencryptionError::CekDec)?),
             new_key,
         )
-        .map_err(ReencryptionError::CEKEnc)?,
+        .map_err(ReencryptionError::CekEnc)?,
     })
-}
-
-pub async fn reencrypt_async(
-    data: EncryptedData,
-    old_key: Key,
-    new_key: Key,
-) -> Result<EncryptedData, ReencryptionError> {
-    tokio::task::spawn_blocking(move || reencrypt_sync(&data, &old_key, &new_key))
-        .await
-        .unwrap()
 }
 
 #[cfg(test)]
@@ -700,5 +687,57 @@ mod test {
         // an empty (or whitespace-only) key decodes to an empty buffer;
         // decoding must return an error rather than panic indexing buf[0]
         assert!(Key::decode(input).is_err());
+    }
+
+    #[rstest]
+    fn encrypted_data_wire_format_is_stable() {
+        // The sync wire contract: these JSON field names must stay `data` and
+        // `content_encryption_key` regardless of the Rust field names, or old and new
+        // clients/servers (which do not upgrade atomically) can no longer exchange records.
+        let data = EncryptedData {
+            raw: "R".to_owned(),
+            cek: "C".to_owned(),
+        };
+        assert_eq!(
+            serde_json::to_string(&data).unwrap(),
+            r#"{"data":"R","content_encryption_key":"C"}"#
+        );
+
+        // The historical wire form still deserializes...
+        let from_wire: EncryptedData =
+            serde_json::from_str(r#"{"data":"R","content_encryption_key":"C"}"#).unwrap();
+        assert_eq!(from_wire, data);
+
+        // ...and the internal field names are accepted as aliases on the way in.
+        let from_alias: EncryptedData = serde_json::from_str(r#"{"raw":"R","cek":"C"}"#).unwrap();
+        assert_eq!(from_alias, data);
+    }
+
+    #[rstest]
+    fn overwrite_path_replaces_an_existing_key() {
+        let dir = std::env::temp_dir().join(format!("atuin-key-overwrite-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("key");
+
+        let old = Key::from([0x11u8; 32]);
+        let new = Key::from([0x22u8; 32]);
+
+        old.try_write_path(&path)
+            .expect("first write creates the file");
+
+        // try_write_path refuses to replace a *different* key (correct for create-if-missing)...
+        assert!(matches!(
+            new.try_write_path(&path),
+            Err(KeyFileStoringError::AlreadyExists)
+        ));
+        assert_eq!(Key::try_load_from_path(&path).unwrap(), old);
+
+        // ...but overwrite_path deliberately replaces it, as key rotation requires.
+        new.overwrite_path(&path)
+            .expect("overwrite replaces the key");
+        assert_eq!(Key::try_load_from_path(&path).unwrap(), new);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

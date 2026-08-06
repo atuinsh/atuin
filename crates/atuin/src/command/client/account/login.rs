@@ -244,7 +244,7 @@ impl Cmd {
                     store.re_encrypt(&current_key, &k).await?;
 
                     println!("Writing new key");
-                    k.try_write_path(key_path)?;
+                    k.overwrite_path(key_path)?;
                 }
 
                 Ok(())

@@ -32,13 +32,14 @@ impl Host {
     }
 }
 
+/// Note that the order of items matters here -- `serde` serializes in order.
 #[derive(Debug, Copy, Clone, Serialize)]
 pub struct AdditionalData<'a> {
     pub id: RecordId,
     pub idx: u64,
-    pub host: HostId,
     pub version: &'a str,
     pub tag: &'a str,
+    pub host: HostId,
 }
 
 impl<'a, Data> From<&'a Record<Data>> for AdditionalData<'a> {
@@ -282,6 +283,52 @@ mod tests {
             .data(DecryptedData(vec![0, 1, 2, 3]))
             .idx(0)
             .build()
+    }
+
+    #[test]
+    fn additional_data_assertion_is_stable() {
+        // The JSON below is the PASETO v4 implicit assertion, byte-for-byte. It is part of the
+        // on-disk and on-wire format: serde emits fields in declaration order, so the field order
+        // of `AdditionalData` (`id, idx, version, tag, host`) is frozen by this assertion. If this
+        // string ever changes, every record encrypted by a prior atuin release fails to decrypt.
+        let ad = AdditionalData {
+            id: RecordId(Uuid::from_u128(1)),
+            idx: 7,
+            version: "v1",
+            tag: "history",
+            host: HostId(Uuid::from_u128(2)),
+        };
+        assert_eq!(
+            serde_json::to_string(&ad).unwrap(),
+            r#"{"id":"00000000-0000-0000-0000-000000000001","idx":7,"version":"v1","tag":"history","host":"00000000-0000-0000-0000-000000000002"}"#
+        );
+    }
+
+    #[test]
+    fn decrypts_frozen_record_blob() {
+        // A record produced by atuin's envelope encryption (PASETO v4 payload + PIE-wrapped CEK),
+        // frozen here as a golden fixture. Any change to the encryption format, the implicit
+        // assertion bytes, or the `EncryptedData` wire field names shows up as a decryption
+        // failure of this blob rather than as silent data loss for existing users. Regenerate this
+        // ONLY when the format is *intentionally* migrated.
+        let key = paseto_v4::Key::from([0x55u8; 32]);
+        let record = Record {
+            id: RecordId(Uuid::from_u128(1)),
+            idx: 7,
+            host: Host::new(HostId(Uuid::from_u128(2))),
+            timestamp: 1_687_244_806_000_000,
+            version: "v1".to_owned(),
+            tag: "history".to_owned(),
+            data: paseto_v4::EncryptedData {
+                raw: "v4.local.cSFhI9n30MfwkZrRAt-YAoxp6DrAMMybmLury7svdFMkapmxQmLQaRzqCfIdanPaQ55VbJjGjqwjst2AnLiBQE9cAQAyH69u2HVHrkaKv7rGtQ".to_owned(),
+                cek: r#"{"wpk":"k4.local-wrap.pie.8xXPgrNyliEUy_PnbM3S88Yk8tQQA0HN2o6jyUkGHK5duUEfW-zSCI1kSYRpyPESCK7-5822hPzRAbyZXPRVAbCkoLqqwPJ8_oi8clKEr6u8nJuIQQLHVClvYJmZyZIu","kid":"k4.lid.2LzCmxDtbwu2tK5T1X1VLEth8umaI9vbKgTDkkt7ARR0"}"#.to_owned(),
+            },
+        };
+
+        let decrypted = record
+            .decrypt(&key)
+            .expect("frozen record blob must still decrypt");
+        assert_eq!(decrypted.data.0, [1, 2, 3, 4, 5]);
     }
 
     #[rstest]

@@ -32,7 +32,7 @@ pub async fn login(
             store.re_encrypt(&current_key, &key).await?;
 
             println!("Writing new key");
-            key.try_write_path(key_path)?;
+            key.overwrite_path(key_path)?;
         }
     }
 
