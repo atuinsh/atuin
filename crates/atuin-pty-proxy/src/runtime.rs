@@ -237,6 +237,19 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
     }
     cmd.env("ATUIN_PTY_PROXY_SOCKET", sock_path.as_os_str());
     cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
+    // Lets the shell integration stamp its OSC 133 markers so this proxy can
+    // recognise its own shell's prompt. Any other shell reaching this
+    // terminal — over ssh, inside a container, under a different user — does
+    // not inherit the variable and so cannot be mistaken for ours. Only
+    // generated when something actually consumes the markers.
+    let mark = options
+        .hooks
+        .suggestion_provider
+        .is_some()
+        .then(screen::session_mark);
+    if let Some(mark) = &mark {
+        cmd.env(crate::suggest::MARK_ENV, mark);
+    }
     // The init preamble re-execs when TMUX doesn't match this marker (a
     // new pane deserves its own proxy). A manually launched proxy hasn't
     // set it, and the mismatch would nest a second proxy inside this one —
@@ -316,6 +329,7 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
                 current_cols.clone(),
                 input_activity.clone(),
                 session_ready,
+                mark,
             );
             (handles.tracker, handles.keys)
         })

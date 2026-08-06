@@ -94,6 +94,16 @@ const BACKSPACE: u8 = 0x7f;
 /// so no OSC 133 marker reports it; see [`KeyFilter::process`].
 const CTRL_C: u8 = 0x03;
 
+/// OSC 133 marker parameter carrying this proxy's session mark, so markers
+/// from the shell it started can be told from any other shell's.
+pub const MARK_PARAM: &str = "atuin_mark";
+
+/// Environment variable through which the shell integration learns the mark.
+/// Deliberately an environment variable: `ssh` does not forward it, and
+/// `docker exec` does not inherit it, so a prompt on the far side of either
+/// cannot claim to be ours.
+pub const MARK_ENV: &str = "ATUIN_PTY_PROXY_MARK";
+
 /// Polls before a lone `ESC` counts as a real Escape press rather than the
 /// start of a split key sequence.
 const ESC_POLL_RETRIES: u32 = 3;
@@ -127,6 +137,7 @@ pub(crate) fn spawn<W: Write + Send + 'static>(
     cols: Arc<AtomicU16>,
     input_activity: Arc<ActivityClock>,
     session_ready: Option<Box<dyn FnOnce() + Send>>,
+    mark: Option<String>,
 ) -> Suggest<W> {
     let state = Arc::new(Mutex::new(PopupState::default()));
     let (ui_tx, ui_rx) = mpsc::channel();
@@ -137,7 +148,14 @@ pub(crate) fn spawn<W: Write + Send + 'static>(
     spawn_ui_thread(provider, compositor.clone(), ui_rx, state.clone());
 
     Suggest {
-        tracker: InputTracker::new(ui_tx, cols, input_activity, session_ready, aborted.clone()),
+        tracker: InputTracker::new(
+            ui_tx,
+            cols,
+            input_activity,
+            session_ready,
+            aborted.clone(),
+            mark,
+        ),
         keys: KeyFilter {
             state,
             compositor,
@@ -200,6 +218,14 @@ pub(crate) struct InputTracker {
     /// The user interrupted the line; like a command having run, it means
     /// the next prompt is a new one and must not inherit the old text.
     aborted: Arc<AtomicBool>,
+    /// Identifies markers from the shell this proxy spawned. `None` accepts
+    /// only unmarked markers, which is how the tests drive the tracker; the
+    /// runtime always supplies one.
+    mark: Option<String>,
+    /// Zone according to our own shell's markers alone. The parser's zone
+    /// follows whichever shell is emitting, including one on the far side of
+    /// an ssh, so it cannot be used to decide what to complete.
+    trusted_zone: Zone,
     /// The line as last reported. Redraw bursts scramble the grid cursor
     /// before their prompt marker arrives, so this — not the mid-redraw
     /// grid — is what a redraw must carry over.
@@ -222,6 +248,7 @@ impl InputTracker {
         input_activity: Arc<ActivityClock>,
         session_ready: Option<Box<dyn FnOnce() + Send>>,
         aborted: Arc<AtomicBool>,
+        mark: Option<String>,
     ) -> Self {
         // MODEL_FLOOR, not 1: vt100 panics rendering wide glyphs into a
         // single-column grid.
@@ -235,6 +262,8 @@ impl InputTracker {
             onlcr_scratch: Vec::new(),
             ran_command: false,
             aborted,
+            mark,
+            trusted_zone: Zone::Unknown,
             last_line: String::new(),
             line_scratch: String::new(),
             input_activity,
@@ -259,9 +288,12 @@ impl InputTracker {
         // line: the rest of the chunk is repaint choreography — cursor
         // moves sized for the real screen — not input.
         let mut skip_input = false;
+        let mark = self.mark.as_deref();
+        let trusted_zone = &mut self.trusted_zone;
         self.parser.segments(data, |segment| match segment {
             Segment::Text(Zone::Input, bytes) => {
-                if skip_input {
+                // Only our own shell's input zone is ours to complete.
+                if skip_input || *trusted_zone != Zone::Input {
                     return;
                 }
                 // Match ansi::to_plain_text: bare `\n` must return the
@@ -273,6 +305,23 @@ impl InputTracker {
             }
             Segment::Text(..) => {}
             Segment::Marker { located, .. } => {
+                // OSC 133 is a public convention: a shell on the far side of
+                // an ssh, or in a container, or any other prompt this proxy
+                // did not start, emits the same markers. Its prompt is not
+                // ours — completing it would offer this machine's history and
+                // this machine's file completions to a shell running
+                // somewhere else entirely. Only the shell we spawned knows
+                // the mark, because it reads it from an environment variable
+                // that does not cross those boundaries.
+                if located.params.get(MARK_PARAM) != mark {
+                    // Conservative: we no longer know whose input zone the
+                    // stream is in, and only one of our own markers can say.
+                    *trusted_zone = Zone::Unknown;
+                    hide = true;
+                    input_changed = false;
+                    return;
+                }
+                *trusted_zone = located.zone;
                 match located.event {
                     Event::PromptStart | Event::CommandStart => {
                         // First prompt: the shell's startup is over.
@@ -1072,6 +1121,7 @@ mod tests {
                 clock.clone(),
                 None,
                 aborted.clone(),
+                None,
             ),
             ui_rx,
             clock,
@@ -1121,6 +1171,7 @@ mod tests {
             clock,
             Some(hook),
             Arc::new(AtomicBool::new(false)),
+            None,
         );
 
         tracker.push(b"banner text, no markers yet");
@@ -1151,6 +1202,7 @@ mod tests {
             clock.clone(),
             None,
             Arc::new(AtomicBool::new(false)),
+            None,
         );
 
         tracker.push(b"\x1b]133;A\x07$ \x1b]133;B\x07ls -la");
@@ -1805,5 +1857,82 @@ mod tests {
         assert!(flags.popup.load(Ordering::Acquire));
         handle_query(&provider, &compositor, &state, "".to_string(), &idle_rx());
         assert!(!flags.popup.load(Ordering::Acquire));
+    }
+
+    // -- prompt provenance --------------------------------------------------
+
+    fn marked_tracker(mark: &str) -> (InputTracker, Receiver<UiEvent>) {
+        let (ui_tx, ui_rx) = mpsc::channel();
+        let clock = Arc::new(ActivityClock::new());
+        clock.touch();
+        (
+            InputTracker::new(
+                ui_tx,
+                Arc::new(AtomicU16::new(80)),
+                clock,
+                None,
+                Arc::new(AtomicBool::new(false)),
+                Some(mark.to_string()),
+            ),
+            ui_rx,
+        )
+    }
+
+    /// Over ssh (or into a container, or any other prompt this proxy did not
+    /// start) the far shell's own OSC 133 integration keeps announcing
+    /// prompts. Completing them would offer this machine's history — and this
+    /// machine's file completions — to a shell running somewhere else.
+    #[rstest]
+    fn a_foreign_prompt_never_drives_the_popup() {
+        let (mut tracker, rx) = marked_tracker("abc123");
+        tracker.push(b"\x1b]133;A;cl=line;atuin_mark=abc123\x07$ \x1b]133;B;atuin_mark=abc123\x07");
+        tracker.push(b"ssh remote");
+        assert_eq!(last_query(&rx).as_deref(), Some("ssh remote"));
+
+        // Enter: our ssh is now the running command.
+        tracker.push(b"\r\n\x1b]133;C;atuin_mark=abc123\x07");
+        // The remote announces its prompt. Same markers, no mark: not ours.
+        tracker.push(b"\x1b]133;A;cl=line\x07remote$ \x1b]133;B\x07");
+        tracker.push(b"rm -rf /tmp/data");
+        assert!(
+            last_query(&rx).is_none(),
+            "a prompt we did not start must not be completed"
+        );
+
+        // Back home: our own prompt works again.
+        tracker.push(b"\x1b]133;D;0;atuin_mark=abc123\x07");
+        tracker.push(b"\x1b]133;A;cl=line;atuin_mark=abc123\x07$ \x1b]133;B;atuin_mark=abc123\x07");
+        tracker.push(b"ls");
+        assert_eq!(last_query(&rx).as_deref(), Some("ls"));
+    }
+
+    /// A mark from some other proxy is as foreign as none at all.
+    #[rstest]
+    fn a_mark_from_another_session_is_foreign() {
+        let (mut tracker, rx) = marked_tracker("ours");
+        tracker.push(b"\x1b]133;A;atuin_mark=theirs\x07$ \x1b]133;B;atuin_mark=theirs\x07");
+        tracker.push(b"whoami");
+        assert!(last_query(&rx).is_none());
+    }
+
+    /// Shells with no OSC 133 at all — sh, dash, or any shell without our
+    /// hooks — never open an input zone, so the popup simply never appears.
+    #[rstest]
+    fn a_shell_without_markers_never_opens_an_input_zone() {
+        let (mut tracker, rx) = marked_tracker("abc123");
+        tracker.push(b"$ ls -la\r\ntotal 0\r\n$ ");
+        assert!(last_query(&rx).is_none());
+    }
+
+    /// fish and nushell emit `C`/`D` but never `A`/`B`, so no input zone is
+    /// ever opened for them and the popup stays out of their way.
+    #[rstest]
+    fn command_markers_alone_never_open_an_input_zone() {
+        let (mut tracker, rx) = marked_tracker("abc123");
+        tracker.push(b"\x1b]133;C;atuin_mark=abc123\x07");
+        tracker.push(b"echo hi");
+        tracker.push(b"\x1b]133;D;0;atuin_mark=abc123\x07");
+        tracker.push(b"echo there");
+        assert!(last_query(&rx).is_none());
     }
 }
