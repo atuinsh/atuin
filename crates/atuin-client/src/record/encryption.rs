@@ -33,30 +33,25 @@ impl PasetoV4Key {
     }
 
     /// Borrow the raw key bytes.
-    #[inline]
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 
     /// Equivalent to [`rusty_paserk::Key::new_os_random()`].
-    #[inline]
     pub fn new_os_random() -> Self {
         rusty_paserk::Key::<rusty_paserk::V4, rusty_paserk::Local>::new_os_random().into()
     }
 
-    #[inline]
     pub fn try_new_random() -> Result<Self, rusty_paseto::PasetoError> {
         let paseto: rusty_paseto::Key<32> = rusty_paseto::Key::<32>::try_new_random()?;
         Ok(paseto.into())
     }
 
-    #[inline]
     pub fn key_id(&self) -> PaserkV4KeyId {
         let paserk: rusty_paserk::Key<rusty_paserk::V4, rusty_paserk::Local> = self.into();
         paserk.to_id()
     }
 
-    #[inline]
     pub fn wrap_pie(&self, wrapping: &PasetoV4Key) -> PaserkV4PieWrappedKey {
         let p_self: rusty_paserk::Key<rusty_paserk::V4, rusty_paserk::Local> = self.into();
         let p_wrapping: rusty_paserk::Key<rusty_paserk::V4, rusty_paserk::Local> = wrapping.into();
