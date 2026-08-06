@@ -251,6 +251,16 @@ mod tests {
     use rstest::{fixture, rstest};
     use uuid::Uuid;
 
+    use paseto_v4::ImplicitAssertion;
+
+    /// Serialize `AdditionalData` into the JSON used as the paseto implicit assertion.
+    ///
+    /// The returned `String` must outlive any `ImplicitAssertion` borrowed from it, so callers
+    /// bind it to a local before constructing the assertion.
+    fn assertion(ad: &AdditionalData) -> String {
+        serde_json::to_string(ad).expect("failed to serialize additional data")
+    }
+
     #[fixture]
     fn key() -> paseto_v4::Key {
         paseto_v4::Key::new_os_random()
@@ -404,18 +414,22 @@ mod tests {
     #[rstest]
     fn round_trip(key: paseto_v4::Key, data: DecryptedData, ad_parts: (RecordId, HostId)) {
         let (rid, hid) = ad_parts;
-        let idx = 0;
         let ad = AdditionalData {
-            id: &rid,
+            id: rid,
             version: "v0",
             tag: "kv",
-            host: &hid,
-            idx: &idx,
+            host: hid,
+            idx: 0,
         };
+        let aj = assertion(&ad);
 
-        let encrypted = paseto_v4::encrypt_sync(data.clone(), ad, &key);
-        let decrypted = paseto_v4::decrypt(encrypted, ad, &key).unwrap();
-        assert_eq!(decrypted, data);
+        let encrypted =
+            paseto_v4::encrypt_sync(&data.0, Some(ImplicitAssertion::from(aj.as_str())), &key)
+                .unwrap();
+        let decrypted =
+            paseto_v4::decrypt_sync(&encrypted, Some(ImplicitAssertion::from(aj.as_str())), &key)
+                .unwrap();
+        assert_eq!(DecryptedData(decrypted), data);
     }
 
     #[rstest]
@@ -425,20 +439,24 @@ mod tests {
         ad_parts: (RecordId, HostId),
     ) {
         let (rid, hid) = ad_parts;
-        let idx = 0;
         let ad = AdditionalData {
-            id: &rid,
+            id: rid,
             version: "v0",
             tag: "kv",
-            host: &hid,
-            idx: &idx,
+            host: hid,
+            idx: 0,
         };
+        let aj = assertion(&ad);
 
-        let encrypted = paseto_v4::encrypt_sync(data.clone(), ad, &key);
-        let encrypted2 = paseto_v4::encrypt_sync(data, ad, &key);
+        let encrypted =
+            paseto_v4::encrypt_sync(&data.0, Some(ImplicitAssertion::from(aj.as_str())), &key)
+                .unwrap();
+        let encrypted2 =
+            paseto_v4::encrypt_sync(&data.0, Some(ImplicitAssertion::from(aj.as_str())), &key)
+                .unwrap();
 
         assert_ne!(
-            encrypted.data, encrypted2.data,
+            encrypted.raw, encrypted2.raw,
             "re-encrypting the same contents should have different output due to key randomization"
         );
     }
@@ -452,40 +470,59 @@ mod tests {
         let fake_key = paseto_v4::Key::new_os_random();
 
         let (rid, hid) = ad_parts;
-        let idx = 0;
         let ad = AdditionalData {
-            id: &rid,
+            id: rid,
             version: "v0",
             tag: "kv",
-            host: &hid,
-            idx: &idx,
+            host: hid,
+            idx: 0,
         };
+        let aj = assertion(&ad);
 
-        let encrypted = paseto_v4::encrypt_sync(data, ad, &key);
-        let error = paseto_v4::decrypt(encrypted, ad, &fake_key).unwrap_err();
+        let encrypted =
+            paseto_v4::encrypt_sync(&data.0, Some(ImplicitAssertion::from(aj.as_str())), &key)
+                .unwrap();
+        let error = paseto_v4::decrypt_sync(
+            &encrypted,
+            Some(ImplicitAssertion::from(aj.as_str())),
+            &fake_key,
+        )
+        .unwrap_err();
         let message = error.to_string();
 
-        assert!(message.contains(
-            "This record was encrypted with a different key than the one currently configured."
-        ));
-        assert!(message.contains(&format!(
-            "Currently using {}, expecting {}.",
-            fake_key.key_id(),
-            key.key_id()
-        )));
+        assert!(
+            message.contains("bad key"),
+            "unexpected error message: {message}"
+        );
+        assert!(
+            message.contains(&format!(
+                "encrypted key id: {}, given decryption key: {}",
+                key.key_id(),
+                fake_key.key_id()
+            )),
+            "unexpected error message: {message}"
+        );
     }
 
     #[rstest]
     fn cannot_decrypt_cek_with_missing_footer_contents() {
         let key = paseto_v4::Key::new_os_random();
 
-        let Err(error) = paseto_v4::decrypt_cek("{}".to_owned(), &key) else {
-            panic!("missing footer contents should result in an error");
+        // A CEK JSON that is valid JSON but missing the required `wpk`/`kid` fields. Routed
+        // through the public `decrypt_sync`, which decrypts the CEK before it touches `raw`.
+        let encrypted = paseto_v4::EncryptedData {
+            raw: String::new(),
+            cek: "{}".to_owned(),
         };
 
-        assert_eq!(
-            error.to_string(),
-            "wrapped cek did not contain the correct contents"
+        let error =
+            paseto_v4::decrypt_sync(&encrypted, None::<ImplicitAssertion>, &key).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to deserialize the given key"),
+            "unexpected error message: {error}"
         );
     }
 
@@ -496,22 +533,27 @@ mod tests {
         ad_parts: (RecordId, HostId),
     ) {
         let (rid, hid) = ad_parts;
-        let idx = 0;
         let ad = AdditionalData {
-            id: &rid,
+            id: rid,
             version: "v0",
             tag: "kv",
-            host: &hid,
-            idx: &idx,
+            host: hid,
+            idx: 0,
         };
+        let aj = assertion(&ad);
 
-        let encrypted = paseto_v4::encrypt_sync(data, ad, &key);
+        let encrypted =
+            paseto_v4::encrypt_sync(&data.0, Some(ImplicitAssertion::from(aj.as_str())), &key)
+                .unwrap();
 
         let ad = AdditionalData {
-            id: &RecordId(uuid_v7()),
+            id: RecordId(uuid_v7()),
             ..ad
         };
-        let _ = paseto_v4::decrypt(encrypted, ad, &key).unwrap_err();
+        let aj = assertion(&ad);
+        let _ =
+            paseto_v4::decrypt_sync(&encrypted, Some(ImplicitAssertion::from(aj.as_str())), &key)
+                .unwrap_err();
     }
 
     #[rstest]
@@ -524,44 +566,51 @@ mod tests {
         let key2 = paseto_v4::Key::new_os_random();
 
         let (rid, hid) = ad_parts;
-        let idx = 0;
         let ad = AdditionalData {
-            id: &rid,
+            id: rid,
             version: "v0",
             tag: "kv",
-            host: &hid,
-            idx: &idx,
+            host: hid,
+            idx: 0,
         };
+        let aj = assertion(&ad);
 
-        let encrypted1 = paseto_v4::encrypt_sync(data.clone(), ad, &key1);
-        let encrypted2 = paseto_v4::reencrypt_sync(encrypted1.clone(), ad, &key1, &key2).unwrap();
+        let encrypted1 =
+            paseto_v4::encrypt_sync(&data.0, Some(ImplicitAssertion::from(aj.as_str())), &key1)
+                .unwrap();
+        let encrypted2 = paseto_v4::reencrypt_sync(&encrypted1, &key1, &key2).unwrap();
 
         // we only re-encrypt the content keys
         assert_eq!(encrypted1.raw, encrypted2.raw);
         assert_ne!(encrypted1.cek, encrypted2.cek);
 
-        let decrypted = paseto_v4::decrypt(encrypted2, ad, &key2).unwrap();
+        let decrypted = paseto_v4::decrypt_sync(
+            &encrypted2,
+            Some(ImplicitAssertion::from(aj.as_str())),
+            &key2,
+        )
+        .unwrap();
 
-        assert_eq!(decrypted, data);
+        assert_eq!(DecryptedData(decrypted), data);
     }
 
     #[rstest]
-    fn full_record_round_trip(sample_record: Record<DecryptedData>) {
+    fn full_record_round_trip(test_record: Record<DecryptedData>) {
         let key = paseto_v4::Key::from([0x55; 32]);
-        let encrypted = sample_record.encrypt(&key);
+        let encrypted = test_record.encrypt(&key);
 
         assert!(!encrypted.data.raw.is_empty());
         assert!(!encrypted.data.cek.is_empty());
 
         let decrypted = encrypted.decrypt(&key).unwrap();
 
-        assert_eq!(decrypted.data.0, [1, 2, 3, 4]);
+        assert_eq!(decrypted.data.0, [0, 1, 2, 3]);
     }
 
     #[rstest]
     fn full_record_round_trip_fail(test_record: Record<DecryptedData>) {
         let key = paseto_v4::Key::from([0x55; 32]);
-        let encrypted = sample_record.encrypt(&key);
+        let encrypted = test_record.encrypt(&key);
 
         let mut enc1 = encrypted.clone();
         enc1.host = Host::new(HostId(uuid_v7()));

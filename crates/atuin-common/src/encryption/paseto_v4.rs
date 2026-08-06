@@ -533,12 +533,16 @@ where
         .unwrap()
 }
 
-pub fn reencrypt_sync(data: &EncryptedData, key: &Key) -> Result<EncryptedData, ReencryptionError> {
+pub fn reencrypt_sync(
+    data: &EncryptedData,
+    old_key: &Key,
+    new_key: &Key,
+) -> Result<EncryptedData, ReencryptionError> {
     Ok(EncryptedData {
         raw: data.raw.clone(),
         cek: cek::Json::encrypt(
-            &(cek::Json::decrypt(&data.cek, key).map_err(ReencryptionError::CEKDec)?),
-            key,
+            &(cek::Json::decrypt(&data.cek, old_key).map_err(ReencryptionError::CEKDec)?),
+            new_key,
         )
         .map_err(ReencryptionError::CEKEnc)?,
     })
@@ -546,9 +550,10 @@ pub fn reencrypt_sync(data: &EncryptedData, key: &Key) -> Result<EncryptedData, 
 
 pub async fn reencrypt_async(
     data: EncryptedData,
-    key: Key,
+    old_key: Key,
+    new_key: Key,
 ) -> Result<EncryptedData, ReencryptionError> {
-    tokio::task::spawn_blocking(move || reencrypt_sync(&data, &key))
+    tokio::task::spawn_blocking(move || reencrypt_sync(&data, &old_key, &new_key))
         .await
         .unwrap()
 }
