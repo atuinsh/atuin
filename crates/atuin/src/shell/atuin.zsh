@@ -250,3 +250,5 @@ zle -N atuin-up-search-viins _atuin_up_search_viins
 # These are compatibility widget names for "atuin <= 17.2.1" users.
 zle -N _atuin_search_widget _atuin_search
 zle -N _atuin_up_search_widget _atuin_up_search
+
+(ATUIN_SHELL=zsh atuin __internal prepare-search-index >/dev/null 2>&1 &)
