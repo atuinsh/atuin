@@ -605,11 +605,14 @@ where
 ///
 /// Like [`encrypt_sync`], this is more than a single decrypt step; see that function's docs for the
 /// full envelope scheme.
-pub fn decrypt_sync<'a, IA: Into<Option<ImplicitAssertion<'a>>>>(
+pub fn decrypt_sync<'a, IA>(
     data: &EncryptedData,
     implicit_assertion: IA,
     key: &Key,
-) -> Result<Vec<u8>, DecryptionError> {
+) -> Result<Vec<u8>, DecryptionError>
+where
+    IA: Into<Option<ImplicitAssertion<'a>>>,
+{
     let cek = cek::Json::decrypt(&data.cek, key)?;
 
     let payload_str = rusty_paseto::Paseto::<rusty_paseto::V4, rusty_paseto::Local>::try_decrypt(
