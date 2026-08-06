@@ -10,7 +10,9 @@ use crate::{
     database::{Database, current_context},
     record::{encryption::PasetoV4, sqlite_store::SqliteStore},
 };
-use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
+use atuin_domain::record::{
+    DecryptedData, EncryptedData, Host, HostId, Record, RecordId, RecordIdx,
+};
 
 use super::{HISTORY_TAG, History, HistoryId, Version};
 
@@ -30,6 +32,48 @@ pub struct HistoryStore {
 pub enum HistoryRecord {
     Create(History),   // Create a history record
     Delete(HistoryId), // Delete a history record, identified by ID
+}
+
+/// Build a replacement for an undecryptable history record.
+///
+/// Used by `atuin store repair` to surgically replace a record whose encrypted
+/// payload is unreadable (e.g. encrypted with a wrong key) with a decryptable no-op.
+/// The original record's `(id, host, idx, version, tag, timestamp)` metadata is preserved
+/// so the PASETO implicit assertions still match and so the idx chain stays intact for sync.
+///
+/// The replacement payload is a `HistoryRecord::Delete` pointing at a freshly-generated
+/// UUID that does not correspond to any real history entry. When other hosts receive this
+/// record and process it via `incremental_build`, they call `database.delete_rows([random_id])`
+/// which is an idempotent no-op.
+pub fn build_history_repair_replacement(
+    bad: &Record<EncryptedData>,
+    key: &PasetoV4Key,
+) -> Result<Record<EncryptedData>> {
+    if bad.tag != HISTORY_TAG {
+        bail!(
+            "cannot build repair replacement for tag {:?}, only {:?} supported",
+            bad.tag,
+            HISTORY_TAG
+        );
+    }
+
+    let random_id: HistoryId = atuin_common::utils::uuid_v7()
+        .as_simple()
+        .to_string()
+        .into();
+    let replacement_payload = HistoryRecord::Delete(random_id).serialize()?;
+
+    let record = Record::builder()
+        .id(bad.id)
+        .idx(bad.idx)
+        .host(bad.host.clone())
+        .tag(bad.tag.clone())
+        .version(bad.version.clone())
+        .timestamp(bad.timestamp)
+        .data(replacement_payload)
+        .build();
+
+    Ok(record.encrypt::<PasetoV4>(key))
 }
 
 impl HistoryRecord {
@@ -411,7 +455,8 @@ impl HistoryStore {
 
 #[cfg(test)]
 mod tests {
-    use atuin_domain::record::{DecryptedData, Host, HostId, Record};
+    use atuin_common::utils::uuid_v7;
+    use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordId};
     use futures::TryStreamExt;
     use rstest::*;
     use time::macros::datetime;
@@ -419,11 +464,14 @@ mod tests {
     use crate::{
         database::Sqlite,
         history::{HISTORY_TAG, Version, store::HistoryRecord, store::HistoryStore},
-        record::{encryption::PasetoV4, sqlite_store::SqliteStore},
+        record::{
+            encryption::{PasetoV4, PasetoV4Key},
+            sqlite_store::SqliteStore,
+        },
         settings::test_local_timeout,
     };
 
-    use super::History;
+    use super::{History, build_history_repair_replacement};
 
     /// The identical `History` literal used by both async tests.
     #[fixture]
@@ -571,5 +619,79 @@ mod tests {
 
         assert_eq!(created.len(), 1);
         assert_eq!(created[0], history);
+    }
+
+    #[test]
+    fn test_build_history_repair_replacement_preserves_metadata_and_decrypts() {
+        let key_a = PasetoV4Key::from([0x42; 32]);
+        let key_b = PasetoV4Key::from([0x99; 32]);
+
+        let host_id = HostId(uuid_v7());
+        let record_id = RecordId(uuid_v7());
+        let idx = 42u64;
+        let timestamp = 1_234_567_890_000_000u64;
+
+        // Simulate a record encrypted with the "wrong" key (key_a), as would happen
+        // after a botched login where the key doesn't match what other hosts use.
+        let original = Record::builder()
+            .id(record_id)
+            .idx(idx)
+            .host(Host::new(host_id))
+            .tag(HISTORY_TAG.to_string())
+            .version(Version::LATEST.name().to_string())
+            .timestamp(timestamp)
+            .data(DecryptedData(b"some original payload".to_vec()))
+            .build();
+        let bad = original.encrypt::<PasetoV4>(&key_a);
+
+        // Sanity: the bad record cannot be decrypted with key_b.
+        assert!(
+            bad.clone().decrypt::<PasetoV4>(&key_b).is_err(),
+            "precondition: record encrypted with key_a should not decrypt with key_b"
+        );
+
+        let replacement =
+            build_history_repair_replacement(&bad, &key_b).expect("should build a replacement");
+
+        // Metadata must match so PASETO implicit assertions still line up,
+        // so the idx chain stays intact, and so the server UPDATE targets the right row.
+        assert_eq!(replacement.id, bad.id);
+        assert_eq!(replacement.idx, bad.idx);
+        assert_eq!(replacement.host.id, bad.host.id);
+        assert_eq!(replacement.tag, bad.tag);
+        assert_eq!(replacement.version, bad.version);
+        assert_eq!(replacement.timestamp, bad.timestamp);
+
+        // The replacement must decrypt cleanly with key_b and deserialize to a Delete.
+        let decrypted = replacement
+            .decrypt::<PasetoV4>(&key_b)
+            .expect("replacement should decrypt with key_b");
+        let history_record = HistoryRecord::deserialize(&decrypted.data, Version::LATEST.name())
+            .expect("replacement should deserialize as a HistoryRecord");
+
+        match history_record {
+            HistoryRecord::Delete(_) => {}
+            other => panic!("expected HistoryRecord::Delete, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_build_history_repair_replacement_rejects_non_history_tag() {
+        let key = PasetoV4Key::from([0x11; 32]);
+
+        let original = Record::builder()
+            .id(RecordId(uuid_v7()))
+            .idx(0)
+            .host(Host::new(HostId(uuid_v7())))
+            .tag("kv".to_string())
+            .version("v1".to_string())
+            .timestamp(0)
+            .data(DecryptedData(vec![1, 2, 3]))
+            .build();
+        let bad = original.encrypt::<PasetoV4>(&key);
+
+        let _ = build_history_repair_replacement(&bad, &key).expect_err(
+            "should reject non-history tag since there's no known no-op payload for it",
+        );
     }
 }
