@@ -88,8 +88,11 @@ impl Component for HistoryComponent {
     async fn start(&mut self, handle: DaemonHandle) -> Result<()> {
         // Create the history store
         let host_id = Settings::host_id().await?;
-        let history_store =
-            HistoryStore::new(handle.store().clone(), host_id, *handle.encryption_key());
+        let history_store = HistoryStore::new(
+            handle.store().clone(),
+            host_id,
+            handle.encryption_key().clone(),
+        );
 
         *self.inner.history_store.write().await = Some(history_store);
         *self.inner.handle.write().await = Some(handle);

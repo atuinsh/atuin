@@ -6,7 +6,7 @@ use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{
     auth::{self, AuthClient, AuthResponse},
-    encryption::{Key, decode_key, encode_key, load_key},
+    encryption::{PasetoV4Key, decode_key, encode_key, load_key},
     record::sqlite_store::SqliteStore,
     record::sync::{self, SyncError},
     settings::{Settings, SyncAuth},
@@ -203,7 +203,7 @@ impl Cmd {
         } else {
             // try parse the key as a mnemonic...
             match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
-                Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
+                Ok(mnemonic) => encode_key(&PasetoV4Key::try_from(mnemonic.entropy())?)?,
                 Err(err) => {
                     match err {
                         // assume they copied in the base64 key
@@ -251,12 +251,11 @@ impl Cmd {
 
             // 1. check if the saved key and the provided key match. if so, nothing to do.
             // 2. if not, re-encrypt the local history and overwrite the key
-            let current_key: [u8; 32] = load_key(settings)?.into();
+            let current_key = load_key(settings)?;
 
             let encoded = key.clone(); // gonna want to save it in a bit
-            let new_key: [u8; 32] = decode_key(key)
-                .context("Could not decode provided key; is not valid base64-encoded key")?
-                .into();
+            let new_key = decode_key(key)
+                .context("Could not decode provided key; is not valid base64-encoded key")?;
 
             if new_key != current_key {
                 println!("\nRe-encrypting local store with new key");
@@ -274,9 +273,7 @@ impl Cmd {
 }
 
 async fn verify_key_against_remote(settings: &Settings) -> Result<()> {
-    let key: [u8; 32] = load_key(settings)
-        .context("could not load encryption key for verification")?
-        .into();
+    let key = load_key(settings).context("could not load encryption key for verification")?;
 
     let client = sync::build_client(settings).await?;
     let remote_index = match client.record_status().await {
@@ -331,19 +328,19 @@ fn read_user_input(name: &'static str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::encryption::Key;
+    use atuin_client::encryption::PasetoV4Key;
 
     #[test]
     fn mnemonic_round_trip() {
-        let key = Key::from([
+        let key = PasetoV4Key::from([
             3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4, 6, 2, 6, 4, 3, 3, 8, 3, 2,
             7, 9, 5,
         ]);
-        let phrase = bip39::Mnemonic::from_entropy(&key, bip39::Language::English)
+        let phrase = bip39::Mnemonic::from_entropy(key.as_bytes(), bip39::Language::English)
             .unwrap()
             .into_phrase();
         let mnemonic = bip39::Mnemonic::from_phrase(&phrase, bip39::Language::English).unwrap();
-        assert_eq!(mnemonic.entropy(), key.as_slice());
+        assert_eq!(mnemonic.entropy(), key.as_bytes().as_slice());
         assert_eq!(
             phrase,
             "adapt amused able anxiety mother adapt beef gaze amount else seat alcohol cage lottery avoid scare alcohol cactus school avoid coral adjust catch pink"

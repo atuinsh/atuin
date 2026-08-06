@@ -1,6 +1,6 @@
 use eyre::{Result, eyre};
 
-use atuin_client::record::encryption::PASETO_V4;
+use atuin_client::record::encryption::{PasetoV4, PasetoV4Key};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx};
 use record::ScriptRecord;
@@ -15,11 +15,11 @@ pub mod script;
 pub struct ScriptStore {
     pub store: SqliteStore,
     pub host_id: HostId,
-    pub encryption_key: [u8; 32],
+    pub encryption_key: PasetoV4Key,
 }
 
 impl ScriptStore {
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: [u8; 32]) -> Self {
+    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: PasetoV4Key) -> Self {
         ScriptStore {
             store,
             host_id,
@@ -46,7 +46,7 @@ impl ScriptStore {
         let id = record.id;
 
         self.store
-            .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
+            .push(&record.encrypt::<PasetoV4>(&self.encryption_key))
             .await?;
 
         Ok((id, idx))
@@ -80,7 +80,7 @@ impl ScriptStore {
             let script = match record.version.as_str() {
                 SCRIPT_VERSION => {
                     record
-                        .decrypt::<PASETO_V4>(&self.encryption_key)
+                        .decrypt::<PasetoV4>(&self.encryption_key)
                         .and_then(|decrypted| {
                             ScriptRecord::deserialize(&decrypted.data, SCRIPT_VERSION)
                         })

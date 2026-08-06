@@ -12,7 +12,7 @@ impl Purge {
 
         let key = load_key(settings)?;
 
-        match store.purge(&key.into()).await {
+        match store.purge(&key).await {
             Ok(()) => println!("Local store purge completed OK"),
             Err(e) => println!("Failed to purge local store: {e:?}"),
         }

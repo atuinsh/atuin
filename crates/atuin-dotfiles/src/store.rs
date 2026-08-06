@@ -9,7 +9,7 @@ use atuin_common::utils::unquote;
 use atuin_domain::record::{DecryptedData, Host, HostId};
 use eyre::{Result, bail, ensure, eyre};
 
-use atuin_client::record::encryption::PASETO_V4;
+use atuin_client::record::encryption::{PasetoV4, PasetoV4Key};
 
 use crate::shell::Alias;
 
@@ -126,12 +126,12 @@ impl AliasRecord {
 pub struct AliasStore {
     pub store: SqliteStore,
     pub host_id: HostId,
-    pub encryption_key: [u8; 32],
+    pub encryption_key: PasetoV4Key,
 }
 
 impl AliasStore {
     // will want to init the actual kv store when that is done
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: [u8; 32]) -> AliasStore {
+    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: PasetoV4Key) -> AliasStore {
         AliasStore {
             store,
             host_id,
@@ -247,7 +247,7 @@ impl AliasStore {
             .build();
 
         self.store
-            .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
+            .push(&record.encrypt::<PasetoV4>(&self.encryption_key))
             .await?;
 
         // set mutates shell config, so build again
@@ -283,7 +283,7 @@ impl AliasStore {
             .build();
 
         self.store
-            .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
+            .push(&record.encrypt::<PasetoV4>(&self.encryption_key))
             .await?;
 
         // delete mutates shell config, so build again
@@ -305,7 +305,7 @@ impl AliasStore {
             // Skip records we can't decrypt or decode, rather than failing the entire build.
             let ar = match version.as_str() {
                 CONFIG_SHELL_ALIAS_VERSION => record
-                    .decrypt::<PASETO_V4>(&self.encryption_key)
+                    .decrypt::<PasetoV4>(&self.encryption_key)
                     .and_then(|decrypted| {
                         AliasRecord::deserialize(&decrypted.data, version.as_str())
                     }),
@@ -372,7 +372,7 @@ mod tests {
         let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
         let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
 
-        (AliasStore::new(store.clone(), host_id, key), store)
+        (AliasStore::new(store.clone(), host_id, key.into()), store)
     }
 
     #[test]
@@ -448,7 +448,7 @@ alias kgap='kubectl get pods --all-namespaces'
     #[rstest]
     #[tokio::test]
     async fn build_aliases_skips_corrupt_records(#[future] alias_store: (AliasStore, SqliteStore)) {
-        use atuin_client::record::encryption::PASETO_V4;
+        use atuin_client::record::encryption::PasetoV4;
         use atuin_domain::record::{DecryptedData, Host};
 
         use super::CONFIG_SHELL_ALIAS_TAG;
@@ -469,7 +469,7 @@ alias kgap='kubectl get pods --all-namespaces'
             .build();
 
         store
-            .push(&corrupt.encrypt::<PASETO_V4>(&corrupt_key))
+            .push(&corrupt.encrypt::<PasetoV4>(&corrupt_key.into()))
             .await
             .unwrap();
 

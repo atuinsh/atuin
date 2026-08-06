@@ -5,7 +5,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::{
     api_client,
-    encryption::{Key, decode_key, encode_key, load_key},
+    encryption::{PasetoV4Key, decode_key, encode_key, load_key},
     record::sqlite_store::SqliteStore,
     settings::Settings,
 };
@@ -19,7 +19,7 @@ pub async fn login(
 ) -> Result<String> {
     // try parse the key as a mnemonic...
     let key = match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
-        Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
+        Ok(mnemonic) => encode_key(&PasetoV4Key::try_from(mnemonic.entropy())?)?,
         Err(err) => {
             match err {
                 // assume they copied in the base64 key
@@ -51,12 +51,11 @@ pub async fn login(
 
         // 1. check if the saved key and the provided key match. if so, nothing to do.
         // 2. if not, re-encrypt the local history and overwrite the key
-        let current_key: [u8; 32] = load_key(settings)?.into();
+        let current_key = load_key(settings)?;
 
         let encoded = key.clone(); // gonna want to save it in a bit
-        let new_key: [u8; 32] = decode_key(key)
-            .context("could not decode provided key - is not valid base64")?
-            .into();
+        let new_key =
+            decode_key(key).context("could not decode provided key - is not valid base64")?;
 
         if new_key != current_key {
             println!("\nRe-encrypting local store with new key");

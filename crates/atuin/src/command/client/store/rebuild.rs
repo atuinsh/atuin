@@ -55,7 +55,7 @@ impl Rebuild {
         store: SqliteStore,
         database: &dyn Database,
     ) -> Result<()> {
-        let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
+        let encryption_key = encryption::load_key(settings)?;
 
         let host_id = Settings::host_id().await?;
         let history_store = HistoryStore::new(store, host_id, encryption_key);
@@ -69,11 +69,11 @@ impl Rebuild {
     }
 
     async fn rebuild_dotfiles(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
-        let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
+        let encryption_key = encryption::load_key(settings)?;
 
         let host_id = Settings::host_id().await?;
 
-        let alias_store = AliasStore::new(store.clone(), host_id, encryption_key);
+        let alias_store = AliasStore::new(store.clone(), host_id, encryption_key.clone());
         let var_store = VarStore::new(store.clone(), host_id, encryption_key);
 
         alias_store.build().await?;
@@ -83,7 +83,7 @@ impl Rebuild {
     }
 
     async fn rebuild_scripts(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
-        let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
+        let encryption_key = encryption::load_key(settings)?;
         let host_id = Settings::host_id().await?;
         let script_store = ScriptStore::new(store, host_id, encryption_key);
         let database =

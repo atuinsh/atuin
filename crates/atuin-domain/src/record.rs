@@ -200,21 +200,24 @@ impl RecordStatus {
 }
 
 pub trait Encryption {
+    /// The key type this encryption scheme uses to wrap and unwrap records.
+    type Key;
+
     fn re_encrypt(
         data: EncryptedData,
         ad: AdditionalData,
-        old_key: &[u8; 32],
-        new_key: &[u8; 32],
+        old_key: &Self::Key,
+        new_key: &Self::Key,
     ) -> Result<EncryptedData> {
         let data = Self::decrypt(data, ad, old_key)?;
         Ok(Self::encrypt(data, ad, new_key))
     }
-    fn encrypt(data: DecryptedData, ad: AdditionalData, key: &[u8; 32]) -> EncryptedData;
-    fn decrypt(data: EncryptedData, ad: AdditionalData, key: &[u8; 32]) -> Result<DecryptedData>;
+    fn encrypt(data: DecryptedData, ad: AdditionalData, key: &Self::Key) -> EncryptedData;
+    fn decrypt(data: EncryptedData, ad: AdditionalData, key: &Self::Key) -> Result<DecryptedData>;
 }
 
 impl Record<DecryptedData> {
-    pub fn encrypt<E: Encryption>(self, key: &[u8; 32]) -> Record<EncryptedData> {
+    pub fn encrypt<E: Encryption>(self, key: &E::Key) -> Record<EncryptedData> {
         let ad = AdditionalData {
             id: &self.id,
             version: &self.version,
@@ -235,7 +238,7 @@ impl Record<DecryptedData> {
 }
 
 impl Record<EncryptedData> {
-    pub fn decrypt<E: Encryption>(self, key: &[u8; 32]) -> Result<Record<DecryptedData>> {
+    pub fn decrypt<E: Encryption>(self, key: &E::Key) -> Result<Record<DecryptedData>> {
         let ad = AdditionalData {
             id: &self.id,
             version: &self.version,
@@ -256,8 +259,8 @@ impl Record<EncryptedData> {
 
     pub fn re_encrypt<E: Encryption>(
         self,
-        old_key: &[u8; 32],
-        new_key: &[u8; 32],
+        old_key: &E::Key,
+        new_key: &E::Key,
     ) -> Result<Record<EncryptedData>> {
         let ad = AdditionalData {
             id: &self.id,

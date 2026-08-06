@@ -3,7 +3,7 @@ use eyre::{Result, bail};
 use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{
-    encryption::{Key, decode_key, encode_key, generate_encoded_key, load_key},
+    encryption::{PasetoV4Key, decode_key, encode_key, generate_encoded_key, load_key},
     record::sqlite_store::SqliteStore,
     settings::Settings,
 };
@@ -20,7 +20,7 @@ impl Rekey {
             println!("Re-encrypting store with specified key");
 
             match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
-                Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
+                Ok(mnemonic) => encode_key(&PasetoV4Key::try_from(mnemonic.entropy())?)?,
                 Err(err) => {
                     match err {
                         // assume they copied in the base64 key
@@ -42,8 +42,8 @@ impl Rekey {
             encoded
         };
 
-        let current_key: [u8; 32] = load_key(settings)?.into();
-        let new_key: [u8; 32] = decode_key(key.clone())?.into();
+        let current_key = load_key(settings)?;
+        let new_key = decode_key(key.clone())?;
 
         store.re_encrypt(&current_key, &new_key).await?;
 

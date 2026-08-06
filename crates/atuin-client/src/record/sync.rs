@@ -4,9 +4,10 @@ use std::{cmp::Ordering, fmt::Write};
 use eyre::Result;
 use thiserror::Error;
 
-use super::{encryption::PASETO_V4, sqlite_store::SqliteStore};
+use super::{encryption::PasetoV4, sqlite_store::SqliteStore};
 use crate::{api_client::Client, settings::Settings};
 
+use crate::record::encryption::PasetoV4Key;
 use atuin_domain::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 
@@ -326,7 +327,7 @@ pub async fn sync_remote(
 pub async fn check_encryption_key(
     client: &Client<'_>,
     remote_index: &RecordStatus,
-    encryption_key: &[u8; 32],
+    encryption_key: &PasetoV4Key,
 ) -> Result<(), SyncError> {
     let sample = remote_index
         .hosts
@@ -348,7 +349,7 @@ pub async fn check_encryption_key(
     };
 
     record
-        .decrypt::<PASETO_V4>(encryption_key)
+        .decrypt::<PasetoV4>(encryption_key)
         .map_err(|_| SyncError::WrongKey)?;
 
     Ok(())
@@ -357,7 +358,7 @@ pub async fn check_encryption_key(
 pub async fn sync(
     settings: &Settings,
     store: &SqliteStore,
-    encryption_key: &[u8; 32],
+    encryption_key: &PasetoV4Key,
 ) -> Result<(i64, Vec<RecordId>), SyncError> {
     let client = build_client(settings).await?;
     let (diff, remote_index) = diff(&client, store).await?;
@@ -378,7 +379,7 @@ mod tests {
 
     use crate::{
         record::{
-            encryption::PASETO_V4,
+            encryption::PasetoV4,
             sqlite_store::SqliteStore,
             sync::{self, Operation},
         },
@@ -464,7 +465,7 @@ mod tests {
 
         let local_ahead = shared_record
             .append(vec![1, 2, 3])
-            .encrypt::<PASETO_V4>(&[0; 32]);
+            .encrypt::<PasetoV4>(&[0; 32].into());
 
         assert_eq!(local_ahead.idx, 1);
 
@@ -509,53 +510,53 @@ mod tests {
         let local_only_20 = test_record();
         let local_only_21 = local_only_20
             .append(vec![1, 2, 3])
-            .encrypt::<PASETO_V4>(&[0; 32]);
+            .encrypt::<PasetoV4>(&[0; 32].into());
         let local_only_22 = local_only_21
             .append(vec![1, 2, 3])
-            .encrypt::<PASETO_V4>(&[0; 32]);
+            .encrypt::<PasetoV4>(&[0; 32].into());
         let local_only_23 = local_only_22
             .append(vec![1, 2, 3])
-            .encrypt::<PASETO_V4>(&[0; 32]);
+            .encrypt::<PasetoV4>(&[0; 32].into());
 
         let remote_only = test_record();
 
         let remote_only_20 = test_record();
         let remote_only_21 = remote_only_20
             .append(vec![2, 3, 2])
-            .encrypt::<PASETO_V4>(&[0; 32]);
+            .encrypt::<PasetoV4>(&[0; 32].into());
         let remote_only_22 = remote_only_21
             .append(vec![2, 3, 2])
-            .encrypt::<PASETO_V4>(&[0; 32]);
+            .encrypt::<PasetoV4>(&[0; 32].into());
         let remote_only_23 = remote_only_22
             .append(vec![2, 3, 2])
-            .encrypt::<PASETO_V4>(&[0; 32]);
+            .encrypt::<PasetoV4>(&[0; 32].into());
         let remote_only_24 = remote_only_23
             .append(vec![2, 3, 2])
-            .encrypt::<PASETO_V4>(&[0; 32]);
+            .encrypt::<PasetoV4>(&[0; 32].into());
 
         let second_shared = test_record();
         let second_shared_remote_ahead = second_shared
             .append(vec![1, 2, 3])
-            .encrypt::<PASETO_V4>(&[0; 32]);
+            .encrypt::<PasetoV4>(&[0; 32].into());
         let second_shared_remote_ahead2 = second_shared_remote_ahead
             .append(vec![1, 2, 3])
-            .encrypt::<PASETO_V4>(&[0; 32]);
+            .encrypt::<PasetoV4>(&[0; 32].into());
 
         let third_shared = test_record();
         let third_shared_local_ahead = third_shared
             .append(vec![1, 2, 3])
-            .encrypt::<PASETO_V4>(&[0; 32]);
+            .encrypt::<PasetoV4>(&[0; 32].into());
         let third_shared_local_ahead2 = third_shared_local_ahead
             .append(vec![1, 2, 3])
-            .encrypt::<PASETO_V4>(&[0; 32]);
+            .encrypt::<PasetoV4>(&[0; 32].into());
 
         let fourth_shared = test_record();
         let fourth_shared_remote_ahead = fourth_shared
             .append(vec![1, 2, 3])
-            .encrypt::<PASETO_V4>(&[0; 32]);
+            .encrypt::<PasetoV4>(&[0; 32].into());
         let fourth_shared_remote_ahead2 = fourth_shared_remote_ahead
             .append(vec![1, 2, 3])
-            .encrypt::<PASETO_V4>(&[0; 32]);
+            .encrypt::<PasetoV4>(&[0; 32].into());
 
         let local = vec![
             shared_record.clone(),

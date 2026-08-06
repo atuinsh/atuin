@@ -16,13 +16,14 @@ use sqlx::{
     },
 };
 
+use crate::record::encryption::PasetoV4Key;
 use atuin_common::utils;
 use atuin_domain::record::{
     EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordStatus,
 };
 use uuid::Uuid;
 
-use super::encryption::PASETO_V4;
+use super::encryption::PasetoV4;
 
 #[derive(Debug, Clone)]
 pub struct SqliteStore {
@@ -301,7 +302,7 @@ impl SqliteStore {
 
     /// Reencrypt every single item in this store with a new key
     /// Be careful - this may mess with sync.
-    pub async fn re_encrypt(&self, old_key: &[u8; 32], new_key: &[u8; 32]) -> Result<()> {
+    pub async fn re_encrypt(&self, old_key: &PasetoV4Key, new_key: &PasetoV4Key) -> Result<()> {
         // Load all the records
         // In memory like some of the other code here
         // This will never be called in a hot loop, and only under the following circumstances
@@ -313,7 +314,7 @@ impl SqliteStore {
 
         let re_encrypted = all
             .into_iter()
-            .map(|record| record.re_encrypt::<PASETO_V4>(old_key, new_key))
+            .map(|record| record.re_encrypt::<PasetoV4>(old_key, new_key))
             .collect::<Result<Vec<_>>>()?;
 
         // next up, we delete all the old data and reinsert the new stuff
@@ -340,11 +341,11 @@ impl SqliteStore {
 
     /// Verify that every record in this store can be decrypted with the current key
     /// Someday maybe also check each tag/record can be deserialized, but not for now.
-    pub async fn verify(&self, key: &[u8; 32]) -> Result<()> {
+    pub async fn verify(&self, key: &PasetoV4Key) -> Result<()> {
         let all = self.load_all().await?;
 
         all.into_iter()
-            .map(|record| record.decrypt::<PASETO_V4>(key))
+            .map(|record| record.decrypt::<PasetoV4>(key))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(())
@@ -352,11 +353,11 @@ impl SqliteStore {
 
     /// Verify that every record in this store can be decrypted with the current key
     /// Someday maybe also check each tag/record can be deserialized, but not for now.
-    pub async fn purge(&self, key: &[u8; 32]) -> Result<()> {
+    pub async fn purge(&self, key: &PasetoV4Key) -> Result<()> {
         let all = self.load_all().await?;
 
         for record in all.iter() {
-            match record.clone().decrypt::<PASETO_V4>(key) {
+            match record.clone().decrypt::<PasetoV4>(key) {
                 Ok(_) => continue,
                 Err(_) => {
                     println!(
@@ -380,7 +381,7 @@ mod tests {
     use rstest::{fixture, rstest};
 
     use crate::{
-        encryption::generate_encoded_key, record::encryption::PASETO_V4,
+        encryption::generate_encoded_key, record::encryption::PasetoV4,
         settings::test_local_timeout,
     };
 
@@ -508,7 +509,9 @@ mod tests {
         store.push(&tail).await.expect("failed to push record");
 
         for _ in 1..100 {
-            tail = tail.append(vec![1, 2, 3, 4]).encrypt::<PASETO_V4>(&[0; 32]);
+            tail = tail
+                .append(vec![1, 2, 3, 4])
+                .encrypt::<PasetoV4>(&[0; 32].into());
             store.push(&tail).await.unwrap();
         }
 
@@ -532,7 +535,9 @@ mod tests {
         let mut tail = record();
         records.push(tail.clone());
         for _ in 1..10000 {
-            tail = tail.append(vec![1, 2, 3]).encrypt::<PASETO_V4>(&[0; 32]);
+            tail = tail
+                .append(vec![1, 2, 3])
+                .encrypt::<PasetoV4>(&[0; 32].into());
             records.push(tail.clone());
         }
 
@@ -560,7 +565,7 @@ mod tests {
                 .idx(i)
                 .data(DecryptedData(data.clone()))
                 .build()
-                .encrypt::<PASETO_V4>(&key.into());
+                .encrypt::<PasetoV4>(&key);
             store
                 .push(&record)
                 .await
@@ -571,26 +576,26 @@ mod tests {
         let all = store.all_tagged("test").await.unwrap();
         assert_eq!(all.len(), 10, "failed to fetch all records");
         for record in all {
-            let decrypted = record.decrypt::<PASETO_V4>(&key.into()).unwrap();
+            let decrypted = record.decrypt::<PasetoV4>(&key).unwrap();
             assert_eq!(decrypted.data.0, data);
         }
 
         // after re-encrypting: the old key fails, the new key works
         let (new_key, _) = generate_encoded_key().unwrap();
         store
-            .re_encrypt(&key.into(), &new_key.into())
+            .re_encrypt(&key, &new_key)
             .await
             .expect("failed to re-encrypt store");
 
         let all = store.all_tagged("test").await.unwrap();
         for record in all.iter() {
             assert!(
-                record.clone().decrypt::<PASETO_V4>(&key.into()).is_err(),
+                record.clone().decrypt::<PasetoV4>(&key).is_err(),
                 "old key still decrypts after re-encrypt"
             );
         }
         for record in all {
-            let decrypted = record.decrypt::<PASETO_V4>(&new_key.into()).unwrap();
+            let decrypted = record.decrypt::<PasetoV4>(&new_key).unwrap();
             assert_eq!(decrypted.data.0, data);
         }
 

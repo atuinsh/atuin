@@ -156,9 +156,8 @@ impl Cmd {
             return Ok(());
         }
 
-        let encryption_key: [u8; 32] = encryption::load_key(settings)
-            .context("could not load encryption key")?
-            .into();
+        let encryption_key =
+            encryption::load_key(settings).context("could not load encryption key")?;
         let host_id = Settings::host_id().await?;
 
         let alias_store = AliasStore::new(store, host_id, encryption_key);

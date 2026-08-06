@@ -12,7 +12,7 @@ impl Verify {
 
         let key = load_key(settings)?;
 
-        match store.verify(&key.into()).await {
+        match store.verify(&key).await {
             Ok(()) => println!("Local store encryption verified OK"),
             Err(e) => println!("Failed to verify local store encryption: {e:?}"),
         }
