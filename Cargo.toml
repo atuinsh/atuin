@@ -72,7 +72,10 @@ tower = "0.5"
 tracing = "0.1"
 tree-sitter = "0.26.8"
 tree-sitter-bash = "0.25.1"
+crypto_secretbox = "0.1.1"
+tiny-bip39 = "2"
 tree-sitter-fish = "3.6.0"
+rmp = { version = "0.8.14" }
 ratatui = "0.30.0"
 sql-builder = "3"
 tempfile = { version = "3.19" }

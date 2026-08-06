@@ -382,7 +382,6 @@ dependencies = [
  "codspeed-divan-compat",
  "config",
  "crossterm",
- "crypto_secretbox",
  "derive_more",
  "directories",
  "enum_dispatch",
@@ -434,6 +433,7 @@ name = "atuin-common"
 version = "18.20.0-beta.2"
 dependencies = [
  "base64",
+ "crypto_secretbox",
  "derive_more",
  "directories",
  "eyre",
@@ -441,6 +441,7 @@ dependencies = [
  "itertools 0.15.0",
  "pretty_assertions",
  "proptest",
+ "rmp",
  "rstest",
  "rusty_paserk",
  "rusty_paseto",
@@ -450,6 +451,7 @@ dependencies = [
  "sysinfo",
  "thiserror 2.0.19",
  "time",
+ "tiny-bip39",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -25,7 +25,7 @@ tracing = { workspace = true }
 rmp = { version = "0.8.14" }
 rand = { workspace = true }
 serde = { workspace = true }
-crypto_secretbox = "0.1.1"
+crypto_secretbox = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }

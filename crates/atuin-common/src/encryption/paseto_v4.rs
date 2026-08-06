@@ -1,7 +1,12 @@
 //!  utilities for atuin.
 use std::array::TryFromSliceError;
 
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64_URL_SAFE_NO_PAD};
+use base64::{
+    Engine,
+    engine::general_purpose::{STANDARD as B64_STANDARD, URL_SAFE_NO_PAD as B64_URL_SAFE_NO_PAD},
+};
+use crypto_secretbox::{KeyInit, XSalsa20Poly1305, aead};
+use rmp;
 use rusty_paserk;
 use rusty_paseto::Paseto;
 use rusty_paseto::core as rusty_paseto;
@@ -16,9 +21,59 @@ pub type PaserkV4PieWrappedKey = rusty_paserk::PieWrappedKey<rusty_paserk::V4, r
 pub type ImplicitAssertion<'a> = rusty_paseto::ImplicitAssertion<'a>;
 pub type Nonce<'a> = rusty_paseto::PasetoNonce<'a, rusty_paseto::V4, rusty_paseto::Local>;
 
+/// Used to encode the given raw bytes into a string before encrypting. See relevant docs.
+const PAYLOAD_ENCODER: &'static base64::engine::general_purpose::GeneralPurpose =
+    &B64_URL_SAFE_NO_PAD;
+
+/// Used to encode the key in [`Key::encode`].
+const KEY_ENCODER: &'static base64::engine::general_purpose::GeneralPurpose = &B64_STANDARD;
+
+#[derive(Debug, Error)]
+pub enum KeyDecodingError {
+    #[error("failed to base64 decode the given string: {_0}")]
+    B64Decode(#[from] base64::DecodeError),
+    #[error("encryption key is empty")]
+    EmptyKey,
+    #[error("unexpected decoding error: {_0}")]
+    DecodingError(String),
+    #[error("encryption key is not the correct size")]
+    InvalidSize,
+    #[error("failed to parse the slice: {_0}")]
+    FailedToParseSlice(#[from] TryFromSliceError),
+    #[error("could not decode encryption key")]
+    InvalidToken,
+}
+
+#[derive(Debug, Error)]
+pub enum MnemonicLoadingError {
+    #[error("key mnemonic was not valid")]
+    InvalidMnemonic,
+    #[error("key was not the correct length")]
+    InvalidLength,
+}
+
+/// A type which contains a [`Key`] encoded as a B64 string. See [`Key::encode`] for more details.
+///
+/// **This should never implement ANY derive.** Most importantly, you should NEVER add `Clone`
+/// (otherwise it is bug-prone and users will copy the plain-text string around) and `Serialize` so
+/// it doesn't accidentally go over the wire.
+pub struct PlainTextEncodedKey(String);
+
+impl PlainTextEncodedKey {
+    /// Leaks the plain-text encoded value into a `&str`.
+    ///
+    /// BEWARE: You should **never** take ownership of that `&str`. Bad things can happen (such as
+    /// accidental serialization and transfer over the wire).
+    #[must_use]
+    pub const fn dangerously_leak_secret(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
 /// Paseto V4 Key.
 ///
-/// Intentionally **not** Copy to support zeroing out on Drop.
+/// Intentionally **not** Copy to support zeroing out on Drop. Intentionally not `Serialize` so it
+/// doesn't end up across the wire.
 #[derive(Clone, PartialEq, Eq, derive_more::From, derive_more::Debug)]
 #[debug("Key(*******)")]
 pub struct Key([u8; 32]);
@@ -58,6 +113,94 @@ impl Key {
         let p_wrapping: rusty_paserk::Key<rusty_paserk::V4, rusty_paserk::Local> = wrapping.into();
 
         p_self.wrap_pie(&p_wrapping)
+    }
+
+    /// Generate a new key with the XSalsa20Poly1305 algorithm.
+    pub fn generate() -> Self {
+        <[u8; 32]>::from(XSalsa20Poly1305::generate_key(&mut aead::OsRng)).into()
+    }
+
+    /// Encode this key into a B64-encoded string, if possible.
+    pub fn encode(&self) -> PlainTextEncodedKey {
+        let key_bytes = self.as_bytes();
+        let mut buf = Vec::with_capacity(size_of::<u64>() * key_bytes.len() + size_of::<u32>() + 8);
+        // SAFETY: Cannot return error, claude confirmed.
+        rmp::encode::write_array_len(&mut buf, key_bytes.len() as u32).unwrap();
+        for b in key_bytes {
+            // SAFETY: Cannot return error, claude confirmed.
+            rmp::encode::write_uint(&mut buf, *b as u64).unwrap();
+        }
+
+        PlainTextEncodedKey(KEY_ENCODER.encode(buf))
+    }
+
+    pub fn decode(key: &str) -> Result<Self, KeyDecodingError> {
+        let buf = KEY_ENCODER.decode(key.trim_end())?;
+
+        // Legacy code used to naively encode the base64 string into the string. New code does this
+        // rmp dance.
+        match <[u8; 32]>::try_from(&*buf) {
+            Ok(key) => Ok(key.into()),
+            Err(_) => {
+                if buf.is_empty() {
+                    return Err(KeyDecodingError::EmptyKey);
+                }
+
+                let mut bytes = rmp::decode::Bytes::new(&buf);
+
+                match rmp::Marker::from_u8(buf[0]) {
+                    rmp::Marker::Bin8 => {
+                        let len = rmp::decode::read_bin_len(&mut bytes)
+                            .map_err(|e| KeyDecodingError::DecodingError(format!("{e:?}")))?;
+                        if len != 32 {
+                            return Err(KeyDecodingError::InvalidSize);
+                        }
+
+                        let key = <[u8; 32]>::try_from(bytes.remaining_slice())?;
+
+                        Ok(key.into())
+                    }
+                    rmp::Marker::Array16 => {
+                        let len = rmp::decode::read_array_len(&mut bytes)
+                            .map_err(|e| KeyDecodingError::DecodingError(format!("{e:?}")))?;
+                        if len != 32 {
+                            return Err(KeyDecodingError::InvalidSize);
+                        }
+
+                        let mut key = [0u8; 32];
+                        for i in &mut key {
+                            *i = rmp::decode::read_int(&mut bytes)
+                                .map_err(|e| KeyDecodingError::DecodingError(format!("{e:?}")))?;
+                        }
+                        Ok(key.into())
+                    }
+                    _ => {
+                        return Err(KeyDecodingError::InvalidToken);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn try_from_mnemonic(mnemonic: &str) -> Result<Self, MnemonicLoadingError> {
+        match bip39::Mnemonic::from_phrase(mnemonic, bip39::Language::English) {
+            Ok(mnemonic) => Ok(Self::try_from(mnemonic.entropy())
+                .map_err(|_| MnemonicLoadingError::InvalidMnemonic)?),
+            Err(err) => {
+                match err {
+                    // Assume the given thing was passed as a plain-text key itself.
+                    bip39::ErrorKind::InvalidWord(_) => {
+                        Self::decode(mnemonic).map_err(|_| MnemonicLoadingError::InvalidMnemonic)
+                    }
+                    bip39::ErrorKind::InvalidChecksum => Err(MnemonicLoadingError::InvalidMnemonic),
+                    bip39::ErrorKind::InvalidKeysize(_)
+                    | bip39::ErrorKind::InvalidWordLength(_)
+                    | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
+                        Err(MnemonicLoadingError::InvalidLength)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -164,8 +307,6 @@ mod cek {
         }
     }
 }
-
-const ENCODER: &'static base64::engine::general_purpose::GeneralPurpose = &B64_URL_SAFE_NO_PAD;
 
 /// Data which was encrypted with the paseto encryption engine.
 ///
@@ -318,7 +459,7 @@ where
     let random_key = Key::try_new_random().map_err(EncryptionError::CEKGeneration)?;
 
     let payload = serde_json::to_string(&EncryptedJson {
-        data: ENCODER.encode(data),
+        data: PAYLOAD_ENCODER.encode(data),
     })?;
 
     let nonce = Key::try_new_random().map_err(EncryptionError::NonceGeneration)?;
@@ -374,7 +515,7 @@ pub fn decrypt_sync<'a, IA: Into<Option<ImplicitAssertion<'a>>>>(
     )?;
 
     let payload: EncryptedJson = serde_json::from_str(&payload_str)?;
-    let decoded = ENCODER.decode(payload.data)?;
+    let decoded = PAYLOAD_ENCODER.decode(payload.data)?;
 
     Ok(decoded)
 }
@@ -410,4 +551,55 @@ pub async fn reencrypt_async(
     tokio::task::spawn_blocking(move || reencrypt_sync(&data, &key))
         .await
         .unwrap()
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn key_encodings() {
+        use super::*;
+
+        // a history of our key encodings.
+        // v11.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+        // v12.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+        // v13.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+        // v13.0.1 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+        // v14.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+        // v14.0.1 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+        // c7d89c1 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q== (https://github.com/atuinsh/atuin/pull/805)
+        // b53ca35 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q== (https://github.com/atuinsh/atuin/pull/974)
+        // v15.0.0 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q==
+        // b8b57c8 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==                     (https://github.com/atuinsh/atuin/pull/1057)
+        // 8c94d79 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q== (https://github.com/atuinsh/atuin/pull/1089)
+
+        let key = Key::from([
+            27, 91, 42, 91, 210, 107, 9, 216, 170, 190, 242, 62, 6, 84, 69, 148, 148, 53, 251, 117,
+            226, 167, 173, 52, 82, 34, 138, 110, 169, 124, 92, 229,
+        ]);
+
+        assert_eq!(
+            &key.encode(),
+            "3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q=="
+        );
+
+        // key encodings we have to support
+        let valid_encodings = [
+            "xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==",
+            "3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q==",
+        ];
+
+        for k in valid_encodings {
+            assert_eq!(Key::decode(k).expect(k), key);
+        }
+    }
+
+    #[test]
+    fn decode_empty_key_is_error_not_panic() {
+        // an empty (or whitespace-only) key decodes to an empty buffer;
+        // decoding must return an error rather than panic indexing buf[0]
+        assert!(Key::decode("").is_err());
+        assert!(Key::decode("\n").is_err());
+    }
 }

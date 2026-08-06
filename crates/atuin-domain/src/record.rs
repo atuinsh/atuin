@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use atuin_common::encryption::paseto_v4;
+use eyre::WrapErr;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
@@ -40,18 +41,8 @@ pub struct AdditionalData<'a> {
     pub tag: &'a str,
 }
 
-impl<'a> From<AdditionalData<'a>> for paseto_v4::ImplicitAssertion<'a> {
-    fn from(value: AdditionalData<'a>) -> Self {
-        paseto_v4::ImplicitAssertion::from(
-            serde_json::to_string(&value)
-                .expect("could not serialize implicit assertions")
-                .as_str(),
-        )
-    }
-}
-
-impl<'a> From<&'a Record<DecryptedData>> for AdditionalData<'a> {
-    fn from(value: &'a Record<DecryptedData>) -> Self {
+impl<'a, Data> From<&'a Record<Data>> for AdditionalData<'a> {
+    fn from(value: &'a Record<Data>) -> Self {
         Self {
             id: value.id,
             idx: value.idx,
@@ -126,13 +117,19 @@ impl<Data> Record<Data> {
 
 impl Record<DecryptedData> {
     pub fn encrypt(&self, key: &paseto_v4::Key) -> Record<paseto_v4::EncryptedData> {
-        self.with_data(paseto_v4::encrypt_sync(&self.data, Some(self.into()), key).unwrap())
+        let ad = serde_json::to_string(&AdditionalData::from(self))
+            .expect("could not serialize implicit assertions");
+        let assertion = paseto_v4::ImplicitAssertion::from(ad.as_str());
+        self.with_data(paseto_v4::encrypt_sync(&self.data, Some(assertion), key).unwrap())
     }
 }
 
 impl Record<paseto_v4::EncryptedData> {
     pub fn decrypt(&self, key: &paseto_v4::Key) -> eyre::Result<Record<DecryptedData>> {
-        let data = paseto_v4::decrypt_sync(&self.data, Some(self.into()), key)
+        let ad = serde_json::to_string(&AdditionalData::from(self))
+            .expect("could not serialize implicit assertions");
+        let assertion = paseto_v4::ImplicitAssertion::from(ad.as_str());
+        let data = paseto_v4::decrypt_sync(&self.data, Some(assertion), key)
             .context("could not decrypt entry")?;
         Ok(self.with_data(data.into()))
     }
