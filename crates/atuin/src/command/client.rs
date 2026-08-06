@@ -228,7 +228,10 @@ impl Cmd {
             Self::Config(config) => return config.run(&settings).await,
             Self::Lab(cmd) => return cmd.run(&settings).await,
             Self::Internal(cmd) => return cmd.run(&settings).await,
-            Self::InternalDecoy => return Ok(()),
+            Self::InternalDecoy => {
+                eprintln!("error: this command is not meant to be accessed directly");
+                std::process::exit(1);
+            }
             _ => {}
         }
 
@@ -315,6 +318,8 @@ impl Cmd {
 
             #[cfg(feature = "ai")]
             Self::Ai(cmd) => Some(cmd.log_config(settings)),
+
+            Self::Internal(cmd) => cmd.log_config(),
 
             _ => Some(LogConfig::stderr_only()),
         }
