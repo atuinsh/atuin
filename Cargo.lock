@@ -442,12 +442,15 @@ dependencies = [
  "pretty_assertions",
  "proptest",
  "rstest",
+ "rusty_paserk",
+ "rusty_paseto",
  "serde",
  "serde_json",
  "serde_with",
  "sysinfo",
  "thiserror 2.0.19",
  "time",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "unicode-segmentation",
@@ -455,6 +458,7 @@ dependencies = [
  "url",
  "uuid",
  "vt100",
+ "zeroize",
 ]
 
 [[package]]

@@ -84,6 +84,12 @@ vt100 = "0.16"
 regex = "1.10.5"
 toml_edit = "0.25.4"
 url = { version = "2.5", features = ["serde"] }
+# rusty_paserk 0.5.0 (latest) requires rusty_paseto 0.8.0 unfortunately
+rusty_paseto = { version = "0.8.0", default-features = false }
+rusty_paserk = { version = "0.5.0", default-features = false, features = [
+  "v4",
+  "serde",
+] }
 
 [workspace.dependencies.tracing-subscriber]
 version = "0.3"

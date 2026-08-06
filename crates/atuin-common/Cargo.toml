@@ -42,6 +42,11 @@ unicode-width = { version = "0.2", optional = true }
 unicode-segmentation = { version = "1.11.0", optional = true }
 vt100 = { workspace = true, optional = true }
 itertools = { workspace = true }
+rusty_paseto = { workspace = true }
+rusty_paserk = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
