@@ -351,10 +351,11 @@ impl VarStore {
 
             // Skip records we can't decrypt or decode, rather than failing the entire build.
             let ar = match version.as_str() {
-                DOTFILES_VAR_VERSION => PasetoV4::decrypt_record(record, &self.encryption_key)
-                    .and_then(|decrypted| {
+                DOTFILES_VAR_VERSION => {
+                    record.decrypt(&self.encryption_key).and_then(|decrypted| {
                         VarRecord::deserialize(&decrypted.data, version.as_str())
-                    }),
+                    })
+                }
                 version => Err(eyre!("unknown version {version:?}")),
             };
 

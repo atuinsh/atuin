@@ -41,7 +41,7 @@ fn decrypt(bencher: divan::Bencher, n: usize) {
         })
         .bench_values(|records: Vec<Record<EncryptedData>>| {
             for record in records {
-                divan::black_box(PasetoV4::decrypt_record(record, &KEY.into()).unwrap());
+                divan::black_box(record.decrypt(&KEY.into()).unwrap());
             }
         });
 }

@@ -305,7 +305,7 @@ impl AliasStore {
             // Skip records we can't decrypt or decode, rather than failing the entire build.
             let ar = match version.as_str() {
                 CONFIG_SHELL_ALIAS_VERSION => {
-                    PasetoV4::decrypt_record(record, &self.encryption_key).and_then(|decrypted| {
+                    record.decrypt(&self.encryption_key).and_then(|decrypted| {
                         AliasRecord::deserialize(&decrypted.data, version.as_str())
                     })
                 }

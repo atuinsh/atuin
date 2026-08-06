@@ -353,7 +353,7 @@ impl SqliteStore {
         let all = self.load_all().await?;
 
         all.into_iter()
-            .map(|record| PasetoV4::decrypt_record(record, key))
+            .map(|record| record.decrypt(key))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(())
@@ -365,7 +365,7 @@ impl SqliteStore {
         let all = self.load_all().await?;
 
         for record in all.iter() {
-            match PasetoV4::decrypt_record(record.clone(), key) {
+            match record.clone().decrypt(key) {
                 Ok(_) => continue,
                 Err(_) => {
                     println!(
@@ -586,7 +586,7 @@ mod tests {
         let all = store.all_tagged("test").await.unwrap();
         assert_eq!(all.len(), 10, "failed to fetch all records");
         for record in all {
-            let decrypted = PasetoV4::decrypt_record(record, &key).unwrap();
+            let decrypted = record.decrypt(&key).unwrap();
             assert_eq!(decrypted.data.0, data);
         }
 
@@ -600,12 +600,12 @@ mod tests {
         let all = store.all_tagged("test").await.unwrap();
         for record in all.iter() {
             assert!(
-                PasetoV4::decrypt_record(record.clone(), &key).is_err(),
+                record.clone().decrypt(&key).is_err(),
                 "old key still decrypts after re-encrypt"
             );
         }
         for record in all {
-            let decrypted = PasetoV4::decrypt_record(record, &new_key).unwrap();
+            let decrypted = record.decrypt(&new_key).unwrap();
             assert_eq!(decrypted.data.0, data);
         }
 

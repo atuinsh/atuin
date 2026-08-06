@@ -121,10 +121,9 @@ impl KvStore {
         for record in tagged {
             // Skip records we can't decrypt or decode, rather than failing the entire build.
             let kv = match record.version.as_str() {
-                "v0" | KV_VERSION => PasetoV4::decrypt_record(record, &self.encryption_key)
-                    .and_then(|decrypted| {
-                        KvRecord::deserialize(&decrypted.data, &decrypted.version)
-                    }),
+                "v0" | KV_VERSION => record.decrypt(&self.encryption_key).and_then(|decrypted| {
+                    KvRecord::deserialize(&decrypted.data, &decrypted.version)
+                }),
                 version => Err(eyre!("unknown version {version:?}")),
             };
 

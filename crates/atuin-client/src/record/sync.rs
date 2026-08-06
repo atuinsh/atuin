@@ -348,7 +348,9 @@ pub async fn check_encryption_key(
         return Ok(());
     };
 
-    PasetoV4::decrypt_record(record, encryption_key).map_err(|_| SyncError::WrongKey)?;
+    record
+        .decrypt(encryption_key)
+        .map_err(|_| SyncError::WrongKey)?;
 
     Ok(())
 }
