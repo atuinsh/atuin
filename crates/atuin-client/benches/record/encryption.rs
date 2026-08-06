@@ -1,7 +1,7 @@
 use atuin_client::history::HISTORY_TAG;
 use atuin_client::history::Version;
 use atuin_client::history::store::HistoryRecord;
-use atuin_client::record::encryption::PasetoV4;
+use atuin_common::encryption::paseto_v4;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{DecryptedData, EncryptedData, Host, HostId, Record};
 
@@ -24,7 +24,7 @@ fn encrypt(bencher: divan::Bencher, n: usize) {
     bencher.with_inputs(|| decrypted_records(n)).bench_values(
         |records: Vec<Record<DecryptedData>>| {
             for record in records {
-                divan::black_box(PasetoV4::encrypt_record(record, &KEY.into()));
+                divan::black_box(record.encrypt(&KEY.into()));
             }
         },
     );
@@ -36,7 +36,7 @@ fn decrypt(bencher: divan::Bencher, n: usize) {
         .with_inputs(|| {
             decrypted_records(n)
                 .into_iter()
-                .map(|record| PasetoV4::encrypt_record(record, &KEY.into()))
+                .map(|record| record.encrypt(&KEY.into()))
                 .collect::<Vec<Record<EncryptedData>>>()
         })
         .bench_values(|records: Vec<Record<EncryptedData>>| {

@@ -171,7 +171,7 @@ impl HistoryStore {
                 .data(bytes)
                 .build();
 
-            let record = PasetoV4::encrypt_record(record, &self.encryption_key);
+            let record = record.encrypt(&self.encryption_key);
 
             ret.push(record);
         }
@@ -531,7 +531,7 @@ mod tests {
             .build();
 
         store
-            .push(&PasetoV4::encrypt_record(corrupt, &[1u8; 32].into()))
+            .push(&corrupt.encrypt(&[1u8; 32].into()))
             .await
             .unwrap();
 

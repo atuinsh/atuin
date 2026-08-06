@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use atuin_client::{
-    database::Sqlite as HistoryDatabase, encryption, encryption::PasetoV4Key,
+    database::Sqlite as HistoryDatabase, encryption, encryption::paseto_v4::Key,
     record::sqlite_store::SqliteStore, settings::Settings,
 };
 use enum_dispatch::enum_dispatch;
@@ -38,7 +38,7 @@ pub struct DaemonState {
     settings: RwLock<Settings>,
 
     // Encryption key (immutable - derived at startup)
-    encryption_key: PasetoV4Key,
+    encryption_key: paseto_v4::Key,
 
     // Database handles
     history_db: HistoryDatabase,
@@ -137,7 +137,7 @@ impl DaemonHandle {
     }
 
     /// Get the encryption key.
-    pub fn encryption_key(&self) -> &PasetoV4Key {
+    pub fn encryption_key(&self) -> &paseto_v4::Key {
         &self.state.encryption_key
     }
 

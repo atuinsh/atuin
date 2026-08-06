@@ -294,7 +294,7 @@ impl VarStore {
             .build();
 
         self.store
-            .push(&PasetoV4::encrypt_record(record, &self.encryption_key))
+            .push(&record.encrypt(&self.encryption_key))
             .await?;
 
         // set mutates shell config, so build again
@@ -330,7 +330,7 @@ impl VarStore {
             .build();
 
         self.store
-            .push(&PasetoV4::encrypt_record(record, &self.encryption_key))
+            .push(&record.encrypt(&self.encryption_key))
             .await?;
 
         // delete mutates shell config, so build again

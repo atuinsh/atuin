@@ -176,9 +176,9 @@ const ENCODER: &'static base64::engine::general_purpose::GeneralPurpose = &B64_U
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncryptedData {
     /// The encrypted payload as a string.
-    raw: String,
+    pub raw: String,
     /// Content encryption key, encoded as a JSON string. See [`cek::Json`].
-    cek: String,
+    pub cek: String,
 }
 
 #[derive(Debug, Error)]

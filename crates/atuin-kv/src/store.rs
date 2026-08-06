@@ -101,7 +101,7 @@ impl KvStore {
         let id = record.id;
 
         self.record_store
-            .push(&PasetoV4::encrypt_record(record, &self.encryption_key))
+            .push(&record.encrypt(&self.encryption_key))
             .await?;
 
         Ok((id, idx))

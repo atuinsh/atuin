@@ -6,7 +6,7 @@ use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{
     auth::{self, AuthClient, AuthResponse},
-    encryption::{PasetoV4Key, decode_key, encode_key, load_key},
+    encryption::{decode_key, encode_key, load_key, paseto_v4::Key},
     record::sqlite_store::SqliteStore,
     record::sync::{self, SyncError},
     settings::{Settings, SyncAuth},
@@ -203,7 +203,7 @@ impl Cmd {
         } else {
             // try parse the key as a mnemonic...
             match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
-                Ok(mnemonic) => encode_key(&PasetoV4Key::try_from(mnemonic.entropy())?)?,
+                Ok(mnemonic) => encode_key(&paseto_v4::Key::try_from(mnemonic.entropy())?)?,
                 Err(err) => {
                     match err {
                         // assume they copied in the base64 key
@@ -328,11 +328,11 @@ fn read_user_input(name: &'static str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::encryption::PasetoV4Key;
+    use atuin_client::encryption::paseto_v4::Key;
 
     #[test]
     fn mnemonic_round_trip() {
-        let key = PasetoV4Key::from([
+        let key = paseto_v4::Key::from([
             3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4, 6, 2, 6, 4, 3, 3, 8, 3, 2,
             7, 9, 5,
         ]);
