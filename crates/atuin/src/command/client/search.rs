@@ -390,7 +390,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn search_author_cli_flag_parses_the_special_values() {
         let cmd = Cmd::try_parse_from([
             "search",

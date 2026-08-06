@@ -410,7 +410,7 @@ mod tests {
         VarStore::new(store, host_id, key.into())
     }
 
-    #[test]
+    #[rstest]
     fn encode_decode() {
         let record = Var {
             name: "BEEP".to_owned(),

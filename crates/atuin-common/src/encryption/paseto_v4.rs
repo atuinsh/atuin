@@ -1,5 +1,10 @@
 //!  utilities for atuin.
-use std::{array::TryFromSliceError, fs, io::Write, path::Path};
+use std::{
+    array::TryFromSliceError,
+    fs,
+    io::{Read, Write},
+    path::Path,
+};
 
 use base64::{
     Engine,
@@ -225,6 +230,14 @@ impl Key {
     /// Refuses to overwrite a file that already exists.
     pub fn try_write_path(&self, path: &Path) -> Result<(), KeyFileStoringError> {
         if path.exists() {
+            // We could try to load the path real fast and check whether the contents are the same
+            // as to what the user wants -- save them an error handling if we can:
+            let mut data = String::new();
+            fs::File::open(path)?.read_to_string(&mut data)?;
+            if data == self.encode().dangerously_leak_secret() {
+                return Ok(());
+            }
+
             return Err(KeyFileStoringError::AlreadyExists);
         }
 
@@ -643,50 +656,49 @@ pub async fn reencrypt_async(
 #[cfg(test)]
 mod test {
     use super::*;
+    use rstest::{fixture, rstest};
 
-    #[test]
-    fn key_encodings() {
-        use super::*;
-
-        // a history of our key encodings.
-        // v11.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
-        // v12.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
-        // v13.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
-        // v13.0.1 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
-        // v14.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
-        // v14.0.1 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
-        // c7d89c1 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q== (https://github.com/atuinsh/atuin/pull/805)
-        // b53ca35 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q== (https://github.com/atuinsh/atuin/pull/974)
-        // v15.0.0 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q==
-        // b8b57c8 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==                     (https://github.com/atuinsh/atuin/pull/1057)
-        // 8c94d79 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q== (https://github.com/atuinsh/atuin/pull/1089)
-
-        let key = Key::from([
+    #[fixture]
+    fn key() -> Key {
+        Key::from([
             27, 91, 42, 91, 210, 107, 9, 216, 170, 190, 242, 62, 6, 84, 69, 148, 148, 53, 251, 117,
             226, 167, 173, 52, 82, 34, 138, 110, 169, 124, 92, 229,
-        ]);
+        ])
+    }
 
+    #[rstest]
+    fn key_encodes_to_canonical_form(key: Key) {
         assert_eq!(
             key.encode().dangerously_leak_secret(),
             "3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q=="
         );
-
-        // key encodings we have to support
-        let valid_encodings = [
-            "xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==",
-            "3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q==",
-        ];
-
-        for k in valid_encodings {
-            assert_eq!(Key::decode(k).expect(k), key);
-        }
     }
 
-    #[test]
-    fn decode_empty_key_is_error_not_panic() {
+    // a history of our key encodings — every one of these must still decode.
+    // v11.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+    // v12.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+    // v13.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+    // v13.0.1 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+    // v14.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+    // v14.0.1 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+    // c7d89c1 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q== (https://github.com/atuinsh/atuin/pull/805)
+    // b53ca35 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q== (https://github.com/atuinsh/atuin/pull/974)
+    // v15.0.0 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q==
+    // b8b57c8 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==                     (https://github.com/atuinsh/atuin/pull/1057)
+    // 8c94d79 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q== (https://github.com/atuinsh/atuin/pull/1089)
+    #[rstest]
+    #[case::legacy_v11("xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==")]
+    #[case::canonical("3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q==")]
+    fn decodes_supported_key_encoding(key: Key, #[case] encoded: &str) {
+        assert_eq!(Key::decode(encoded).expect(encoded), key);
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::whitespace("\n")]
+    fn decode_blank_key_is_error_not_panic(#[case] input: &str) {
         // an empty (or whitespace-only) key decodes to an empty buffer;
         // decoding must return an error rather than panic indexing buf[0]
-        assert!(Key::decode("").is_err());
-        assert!(Key::decode("\n").is_err());
+        assert!(Key::decode(input).is_err());
     }
 }

@@ -375,7 +375,7 @@ mod tests {
         (AliasStore::new(store.clone(), host_id, key.into()), store)
     }
 
-    #[test]
+    #[rstest]
     fn encode_decode() {
         let record = Alias {
             name: "k".to_owned(),

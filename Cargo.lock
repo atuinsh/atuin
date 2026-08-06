@@ -437,6 +437,7 @@ dependencies = [
  "derive_more",
  "directories",
  "eyre",
+ "fs-err",
  "getrandom 0.4.3",
  "itertools 0.15.0",
  "pretty_assertions",

@@ -376,6 +376,7 @@ pub async fn sync(
 mod tests {
     use atuin_domain::record::{Diff, EncryptedData, HostId, Record};
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     use crate::{
         record::{
@@ -430,6 +431,7 @@ mod tests {
         (local_store, diff)
     }
 
+    #[rstest]
     #[tokio::test]
     async fn test_basic_diff() {
         // a diff where local is ahead of remote. nothing else.
@@ -454,6 +456,7 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
     async fn build_two_way_diff() {
         // a diff where local is ahead of remote for one, and remote for
@@ -495,6 +498,7 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
     async fn build_complex_diff() {
         // One shared, ahead but known only by remote

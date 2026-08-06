@@ -311,8 +311,9 @@ fn read_user_input(name: &'static str) -> String {
 #[cfg(test)]
 mod tests {
     use atuin_common::encryption::paseto_v4;
+    use rstest::rstest;
 
-    #[test]
+    #[rstest]
     fn mnemonic_round_trip() {
         let key = paseto_v4::Key::from([
             3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4, 6, 2, 6, 4, 3, 3, 8, 3, 2,
