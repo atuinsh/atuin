@@ -78,8 +78,6 @@ fn spawn_proxy(rows: u16, cols: u16) -> TestProxy {
         rows,
         cols,
         dir,
-        debug_osc133: false,
-        command_capture_sink: None,
     })
     .expect("spawn proxy core");
 

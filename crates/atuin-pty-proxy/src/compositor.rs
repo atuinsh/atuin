@@ -238,12 +238,19 @@ impl<W: Write> Compositor<W> {
         let overlay_idle =
             self.drawn.is_none() && self.ghost_row.is_none() && self.content.is_none();
 
+        // The boundary scan is the one per-chunk cost proportional to the
+        // data, so it runs at most once. With an empty tail the buffer below
+        // *is* `data`, so both paths can share this answer; otherwise the
+        // joined buffer has to be scanned instead and this stays `None`.
+        let data_ready =
+            (self.split_partials && self.tail.is_empty()).then(|| complete_prefix_len(data));
+
         // Fast path: nothing painted or pending. The boundary scan still
         // runs pre-write so a later paint can't splice into a sequence
         // this chunk left unterminated.
         if overlay_idle
             && self.tail.is_empty()
-            && (!self.split_partials || complete_prefix_len(data) == data.len())
+            && data_ready.is_none_or(|ready| ready == data.len())
         {
             self.out.write_all(data)?;
             self.out.flush()?;
@@ -258,8 +265,22 @@ impl<W: Write> Compositor<W> {
         // The tail keeps its allocation: consumed bytes are compacted out
         // after the write instead of split into a fresh Vec per chunk.
         self.tail.extend_from_slice(data);
-        let ready_len = if self.split_partials && self.tail.len() <= MAX_TAIL_BYTES {
-            complete_prefix_len(&self.tail)
+        let ready_len = if self.split_partials {
+            let ready = match data_ready {
+                Some(ready) => ready,
+                None => complete_prefix_len(&self.tail),
+            };
+            // The cap bounds what is *withheld*, not what arrived. Measuring
+            // the whole buffer would trip on any carryover plus one
+            // full-size pty read — the everyday case under a shell that
+            // repaints in colour — and turn boundary splitting off for
+            // exactly the chunk that needs it, letting the next overlay
+            // paint land inside an unterminated escape sequence.
+            if self.tail.len() - ready > MAX_TAIL_BYTES {
+                self.tail.len()
+            } else {
+                ready
+            }
         } else {
             self.tail.len()
         };
@@ -1539,5 +1560,40 @@ mod tests {
         c.apply_pty(b"abc\x1b[3").unwrap();
         c.flush_pending();
         assert_eq!(c.out, b"abc\x1b[3");
+    }
+
+    /// The cap bounds the withheld remainder, not the buffer. The pty pump
+    /// reads into exactly `MAX_TAIL_BYTES`, so measuring the buffer meant
+    /// any carryover plus one full read turned splitting off — for the
+    /// everyday chunk, under a shell that repaints in colour.
+    #[rstest]
+    fn a_full_chunk_on_top_of_carryover_still_splits() {
+        let mut c = compositor();
+        c.apply_pty(b"$ g\x1b[3").unwrap(); // 1-byte-plus carryover
+        c.set_overlay(Some(content("g", &["git status"], 0)));
+
+        // A full-size read that itself ends mid-sequence.
+        let mut chunk = b"1mX".to_vec();
+        chunk.extend(std::iter::repeat_n(b'y', MAX_TAIL_BYTES - 3 - 2));
+        chunk.extend_from_slice(b"\x1b["); // unterminated tail
+        assert_eq!(chunk.len(), MAX_TAIL_BYTES);
+        c.apply_pty(&chunk).unwrap();
+
+        assert_eq!(&c.tail, b"\x1b[", "the unterminated tail is still withheld");
+        assert!(
+            !c.out.ends_with(b"\x1b["),
+            "no overlay paint may follow a half-written sequence"
+        );
+    }
+
+    /// A sequence that never terminates must not buffer forever, though.
+    #[rstest]
+    fn an_endless_sequence_is_eventually_flushed() {
+        let mut c = compositor();
+        let mut chunk = b"\x1b[".to_vec();
+        chunk.extend(std::iter::repeat_n(b'1', MAX_TAIL_BYTES + 1));
+        c.apply_pty(&chunk).unwrap();
+        assert!(c.tail.is_empty(), "gave up withholding");
+        assert_eq!(c.out.len(), chunk.len());
     }
 }

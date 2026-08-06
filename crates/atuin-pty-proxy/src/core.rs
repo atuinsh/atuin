@@ -1,3 +1,15 @@
+//! Test harness for the socket-serving half of the proxy.
+//!
+//! The shipped session is [`crate::runtime::start`], which owns raw mode,
+//! SIGWINCH, the compositor and stdin — none of which a test process has.
+//! This wires the same parser and socket-server threads to an injected PTY
+//! and directory so the framed subscriber protocol can be driven for real.
+//!
+//! Deliberately *not* a second copy of the runtime's output pump: it mirrors
+//! bytes and nothing else. Anything richer here (highlighting, capture) would
+//! be a parallel implementation that no shipped path runs, and a divergence
+//! from it would read as coverage while proving nothing.
+
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -5,13 +17,10 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::JoinHandle;
 
-use crate::CommandCaptureSink;
-use crate::capture::CommandCaptureTracker;
-use crate::debug::{Osc133DebugHighlighter, RESET};
 use crate::screen::{self, Msg};
 
-/// Everything the proxy engine needs, with the endpoints injected so tests
-/// can drive a real PTY and socket without touching the terminal.
+/// Endpoints for [`ProxyCore`], injected so a test can supply a real PTY and
+/// a tempdir.
 pub struct ProxyCoreConfig {
     /// PTY master read side.
     pub reader: Box<dyn Read + Send>,
@@ -25,13 +34,9 @@ pub struct ProxyCoreConfig {
     pub cols: u16,
     /// Per-proxy directory for the socket and token.
     pub dir: PathBuf,
-    /// Highlight OSC 133 regions in mirrored output.
-    pub debug_osc133: bool,
-    /// Optional sink for captured command output.
-    pub command_capture_sink: Option<CommandCaptureSink>,
 }
 
-/// The embeddable proxy engine used by the share integration and tests.
+/// The socket-serving half of the proxy, driven without a terminal.
 pub struct ProxyCore {
     msg_tx: SyncSender<Msg>,
     input_tx: SyncSender<Vec<u8>>,
@@ -71,8 +76,6 @@ impl ProxyCore {
             rows,
             cols,
             dir,
-            debug_osc133,
-            command_capture_sink,
         } = config;
 
         screen::create_proxy_dir(&dir)?;
@@ -87,14 +90,7 @@ impl ProxyCore {
         screen::spawn_parser_thread(rows, cols, msg_rx);
         screen::spawn_socket_server(listener, msg_tx.clone(), token, input_tx.clone());
         spawn_pty_writer_thread(writer, input_rx);
-        let output_thread = spawn_output_pump(OutputPump {
-            pty_reader: reader,
-            mirror,
-            msg_tx: msg_tx.clone(),
-            debug_osc133,
-            command_capture_sink,
-            current_cols: current_cols.clone(),
-        });
+        let output_thread = spawn_output_pump(reader, mirror, msg_tx.clone());
 
         Ok(Self {
             msg_tx,
@@ -141,55 +137,24 @@ impl ProxyCore {
     }
 }
 
-struct OutputPump {
-    pty_reader: Box<dyn Read + Send>,
-    mirror: Box<dyn Write + Send>,
+/// Feed PTY output to the screen model and the mirror, in that order, and
+/// mark the end of the stream — the ordering the subscriber protocol relies
+/// on, and all these tests need from a pump.
+fn spawn_output_pump(
+    mut pty_reader: Box<dyn Read + Send>,
+    mut mirror: Box<dyn Write + Send>,
     msg_tx: SyncSender<Msg>,
-    debug_osc133: bool,
-    command_capture_sink: Option<CommandCaptureSink>,
-    current_cols: Arc<AtomicU16>,
-}
-
-fn spawn_output_pump(pump: OutputPump) -> JoinHandle<()> {
+) -> JoinHandle<()> {
     std::thread::spawn(move || {
-        let OutputPump {
-            mut pty_reader,
-            mut mirror,
-            msg_tx,
-            debug_osc133,
-            command_capture_sink,
-            current_cols,
-        } = pump;
-
-        let mut highlighter = debug_osc133.then(Osc133DebugHighlighter::new);
-        let mut capture_tracker = command_capture_sink
-            .as_ref()
-            .map(|_| CommandCaptureTracker::new(current_cols));
         let mut buf = [0u8; 8192];
 
         loop {
             match pty_reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if let (Some(tracker), Some(sink)) =
-                        (capture_tracker.as_mut(), command_capture_sink.as_ref())
-                    {
-                        tracker.push(&buf[..n], sink);
-                    }
-
-                    if let Some(highlighter) = highlighter.as_mut() {
-                        let rendered = highlighter.render(&buf[..n]);
-                        let _ = msg_tx.send(Msg::Data(rendered.clone()));
-
-                        if mirror.write_all(&rendered).is_err() {
-                            break;
-                        }
-                    } else {
-                        let _ = msg_tx.send(Msg::Data(buf[..n].to_vec()));
-
-                        if mirror.write_all(&buf[..n]).is_err() {
-                            break;
-                        }
+                    let _ = msg_tx.send(Msg::Data(buf[..n].to_vec()));
+                    if mirror.write_all(&buf[..n]).is_err() {
+                        break;
                     }
                     let _ = mirror.flush();
                 }
@@ -197,11 +162,6 @@ fn spawn_output_pump(pump: OutputPump) -> JoinHandle<()> {
         }
 
         let _ = msg_tx.send(Msg::Eof);
-
-        if highlighter.is_some() {
-            let _ = mirror.write_all(RESET);
-            let _ = mirror.flush();
-        }
     })
 }
 

@@ -45,9 +45,11 @@ RPROMPT=''
 unset zle_bracketed_paste 2>/dev/null
 
 # The user's rc may already have run compinit; don't clobber its setup.
+# The dump lives in the oracle's own 0700 directory: `-C` skips zsh's
+# insecure-file check, so a dump anyone else could write is code execution.
 if ! (( ${+functions[compdef]} )); then
     autoload -Uz compinit
-    compinit -C -d "${TMPDIR:-/tmp}/.atuin-oracle-zcompdump"
+    compinit -C -d @ATUIN_ZCOMPDUMP@
 fi
 
 # The oracle must never run a command, only complete.
@@ -263,6 +265,15 @@ impl OracleProc {
                 load_user_config,
             } => fish_complete(bin, line, *load_user_config, timeout),
         }
+    }
+
+    /// Whether a missed deadline means this engine is unusable. zsh and bash
+    /// hold a persistent shell whose NUL framing desyncs when a query is
+    /// abandoned mid-protocol, so it must be replaced. fish runs a fresh
+    /// process per query and holds no state to corrupt: a slow spawn there
+    /// is transient, and must not spend a respawn from the session's budget.
+    fn is_captive(&self) -> bool {
+        matches!(self, Self::Zsh(_) | Self::Bash(_))
     }
 }
 
@@ -508,9 +519,15 @@ impl CompletionOracleHandle {
                             return;
                         }
                     }
-                    // Truly wedged: kill it; the next query respawns.
+                    // A captive shell that misses its deadline is wedged
+                    // mid-protocol: drop it so the next query respawns. A
+                    // per-query engine has nothing to wedge, so keep it —
+                    // dropping it would burn respawns until the budget ran
+                    // out and completions stopped for the session.
                     None => {
-                        proc = None;
+                        if oracle.is_captive() {
+                            proc = None;
+                        }
                         let _ = answer_tx.send(answer(Vec::new()));
                     }
                 }
@@ -588,21 +605,80 @@ fn guard_env() -> [(&'static str, std::ffi::OsString); 3] {
     ]
 }
 
-/// Write the init script to a temp file, source it in the captive shell,
-/// and wait for its ready marker.
+/// A private directory for the files the captive shell reads: its init
+/// script, and (for zsh) the completion dump `compinit` loads.
+///
+/// The shell *executes* both as the user, so neither may live at a
+/// predictable path in a shared temp directory: another local user could
+/// pre-create the file, or replace it between the write and the `source`,
+/// and have their code run under this uid. `compinit -C` makes the dump the
+/// sharper edge of the two — it skips zsh's own insecure-file check.
+///
+/// Mirrors the per-proxy directory in [`crate::screen`]: mode 0700, an
+/// unpredictable name, and `create` (never `create_all`), so a name an
+/// attacker got to first fails the spawn instead of being reused.
+struct OracleDir(std::path::PathBuf);
+
+impl OracleDir {
+    fn new() -> Option<Self> {
+        use rand::RngCore;
+        use std::os::unix::fs::DirBuilderExt;
+
+        let mut suffix = [0u8; 8];
+        rand::thread_rng().fill_bytes(&mut suffix);
+        let path = std::env::temp_dir().join(format!(
+            "atuin-oracle-{}-{}",
+            std::process::id(),
+            crate::screen::hex_encode(&suffix)
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .ok()
+            .map(|()| Self(path))
+    }
+
+    fn join(&self, name: &str) -> std::path::PathBuf {
+        self.0.join(name)
+    }
+}
+
+impl Drop for OracleDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// POSIX single-quoting — the one form a shell expands nothing inside — for
+/// paths interpolated into a script line. `$TMPDIR` is the user's own, but a
+/// path with a space or a `$` in it must still reach the shell intact.
+fn shell_quote(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', r"'\''"))
+}
+
+/// Write the init script into the oracle's private directory, source it in
+/// the captive shell, and wait for its ready marker.
 fn source_init(
     writer: &mut impl Write,
     lines: &Receiver<String>,
     script: &str,
+    dir: &OracleDir,
     extension: &str,
     load_user_config: bool,
 ) -> bool {
-    let init_path =
-        std::env::temp_dir().join(format!("atuin-oracle-{}.{extension}", std::process::id()));
-    if std::fs::write(&init_path, script).is_err() {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let init_path = dir.join(&format!("init.{extension}"));
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&init_path)
+        .and_then(|mut file| file.write_all(script.as_bytes()));
+    if written.is_err() {
         return false;
     }
-    let sourced = writeln!(writer, "source {}", init_path.display())
+    let sourced = writeln!(writer, "source {}", shell_quote(&init_path))
         .and_then(|()| writer.flush())
         .is_ok();
     let ready = sourced && await_ready(lines, spawn_deadline(load_user_config));
@@ -614,6 +690,9 @@ pub(crate) struct ZshOracle {
     writer: Box<dyn Write + Send>,
     lines: Receiver<String>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
+    /// Holds the completion dump for the shell's lifetime; dropping it
+    /// removes the directory.
+    _dir: OracleDir,
 }
 
 impl ZshOracle {
@@ -623,6 +702,8 @@ impl ZshOracle {
     /// custom completions and fpath additions answer too; the caller falls
     /// back to a hermetic spawn if that shell never becomes ready.
     pub(crate) fn spawn(zsh: &Path, load_user_config: bool) -> Option<Self> {
+        let dir = OracleDir::new()?;
+        let script = INIT_SCRIPT.replace("@ATUIN_ZCOMPDUMP@", &shell_quote(&dir.join("zcompdump")));
         let pair = native_pty_system()
             // Tall enough that compsys never paginates its candidate
             // list, wide enough that long candidates don't wrap mid-token.
@@ -668,7 +749,7 @@ impl ZshOracle {
         };
         let lines = spawn_line_reader(reader);
 
-        if !source_init(&mut writer, &lines, INIT_SCRIPT, "zsh", load_user_config) {
+        if !source_init(&mut writer, &lines, &script, &dir, "zsh", load_user_config) {
             kill_pty_process_group(child.as_mut());
             return None;
         }
@@ -677,6 +758,7 @@ impl ZshOracle {
             writer,
             lines,
             child,
+            _dir: dir,
         })
     }
 
@@ -710,6 +792,8 @@ pub(crate) struct BashOracle {
     stdin: std::process::ChildStdin,
     lines: Receiver<String>,
     child: std::process::Child,
+    /// Removes the private init-script directory when the shell goes away.
+    _dir: OracleDir,
 }
 
 impl BashOracle {
@@ -719,6 +803,7 @@ impl BashOracle {
     /// its custom completions) load; hermetic mode uses `--norc` and the
     /// system bash-completion only.
     pub(crate) fn spawn(bash: &Path, load_user_config: bool) -> Option<Self> {
+        let dir = OracleDir::new()?;
         let mut cmd = std::process::Command::new(bash);
         // -i so rc files load and completion state behaves interactively;
         // with piped stdio readline stays out of the way (prompts land on
@@ -763,6 +848,7 @@ impl BashOracle {
             &mut stdin,
             &lines,
             BASH_INIT_SCRIPT,
+            &dir,
             "bash",
             load_user_config,
         )
@@ -770,6 +856,7 @@ impl BashOracle {
             stdin,
             lines,
             child,
+            _dir: dir,
         })
     }
 

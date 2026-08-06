@@ -289,12 +289,22 @@ impl SearchClient {
         name = "daemon_client_suggest",
         fields(query = %query),
     )]
-    pub async fn suggest(&mut self, query: &str, limit: u32) -> Result<Vec<Suggestion>> {
+    pub async fn suggest(
+        &mut self,
+        query: &str,
+        limit: u32,
+        shells: OrFilter<Vec<String>>,
+    ) -> Result<Vec<Suggestion>> {
         let response = self
             .client
             .suggest(SuggestRequest {
                 query: query.to_string(),
                 limit,
+                // An empty list means "all", as in `SearchRequest::shells`.
+                shells: match shells.into_list() {
+                    filter::Items::All => vec![],
+                    filter::Items::Some(vec) => vec,
+                },
             })
             .await?;
 

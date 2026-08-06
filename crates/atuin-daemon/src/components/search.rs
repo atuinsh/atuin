@@ -439,10 +439,24 @@ impl SearchSvc for SearchGrpcService {
     ) -> Result<Response<SuggestReply>, Status> {
         let request = request.into_inner();
         let limit = request.limit.min(SUGGEST_LIMIT) as usize;
-        let suggestions = self
-            .index
-            .read()
-            .await
+
+        // The index is shared across clients and carries whichever shell
+        // filter it was last built for, so this has to rebuild on a
+        // mismatch exactly as `search` does. Reading it directly would hand
+        // the pty-proxy whatever filter the last interactive search left
+        // behind, which is nobody's configuration in particular.
+        let shells = OrFilter::from_list(request.shells).unwrap_or_default();
+        let index = match self.maybe_rebuild_index(shells).await {
+            Ok(Some(new_index)) => {
+                let mut guard = self.index.write().await;
+                *guard = new_index;
+                guard.downgrade()
+            }
+            Ok(None) => self.index.read().await,
+            Err(()) => return Err(Status::internal("failed to build index")),
+        };
+
+        let suggestions = index
             .suggest(&request.query, limit)
             .into_iter()
             .map(|command| Suggestion { command })
