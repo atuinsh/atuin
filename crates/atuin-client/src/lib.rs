@@ -16,7 +16,6 @@ pub mod register;
 
 pub mod database;
 pub mod distro;
-pub mod encryption;
 pub mod history;
 pub mod import;
 pub mod logout;

@@ -12,9 +12,9 @@
 use std::sync::Arc;
 
 use atuin_client::{
-    database::Sqlite as HistoryDatabase, encryption, encryption::paseto_v4,
-    record::sqlite_store::SqliteStore, settings::Settings,
+    database::Sqlite as HistoryDatabase, record::sqlite_store::SqliteStore, settings::Settings,
 };
+use atuin_common::encryption::paseto_v4;
 use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result};
 use tokio::sync::{RwLock, broadcast};
@@ -446,9 +446,8 @@ impl DaemonBuilder {
             .ok_or_else(|| eyre::eyre!("history_db is required"))?;
 
         // Load encryption key
-        let encryption_key =
-            encryption::paseto_v4::Key::try_load_from_path(&self.settings.key_path)
-                .context("could not load encryption key")?;
+        let encryption_key = paseto_v4::Key::try_load_from_path(&self.settings.key_path)
+            .context("could not load encryption key")?;
 
         // Create the event bus
         let (event_tx, _) = broadcast::channel(64);

@@ -9,12 +9,12 @@ use eyre::Result;
 use atuin_client::{
     database::Database,
     database::{OptFilters, current_context},
-    encryption,
     history::{AuthorPattern, History, store::HistoryStore},
     record::sqlite_store::SqliteStore,
     settings::{FilterMode, KeymapMode, RequestedSearchMode, Settings},
     theme::Theme,
 };
+use atuin_common::encryption::paseto_v4;
 
 use super::history::ListMode;
 
@@ -239,7 +239,7 @@ impl Cmd {
         };
         settings.keymap_mode_shell = self.keymap_mode;
 
-        let encryption_key = encryption::paseto_v4::Key::try_load_from_path(&settings.key_path)?;
+        let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
 
         let host_id = Settings::host_id().await?;
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);

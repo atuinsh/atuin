@@ -5,11 +5,11 @@ use eyre::{Context, Result, bail};
 
 use atuin_client::{
     auth::{self, AuthClient, AuthResponse},
-    encryption::paseto_v4,
     record::sqlite_store::SqliteStore,
     record::sync::{self, SyncError},
     settings::{Settings, SyncAuth},
 };
+use atuin_common::encryption::paseto_v4;
 use rpassword::prompt_password;
 
 #[derive(Parser, Debug)]
@@ -310,7 +310,7 @@ fn read_user_input(name: &'static str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::encryption::paseto_v4;
+    use atuin_common::encryption::paseto_v4;
 
     #[test]
     fn mnemonic_round_trip() {
