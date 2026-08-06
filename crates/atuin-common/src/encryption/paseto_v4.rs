@@ -24,10 +24,10 @@ pub type PaserkV4PieWrappedKey = rusty_paserk::PieWrappedKey<rusty_paserk::V4, r
 pub type ImplicitAssertion<'a> = rusty_paseto::ImplicitAssertion<'a>;
 
 /// Used to encode the given raw bytes into a string before encrypting. See relevant docs.
-const PAYLOAD_ENCODER: &base64::engine::general_purpose::GeneralPurpose = &B64_URL_SAFE_NO_PAD;
+static PAYLOAD_ENCODER: base64::engine::general_purpose::GeneralPurpose = B64_URL_SAFE_NO_PAD;
 
 /// Used to encode the key in [`Key::encode`].
-const KEY_ENCODER: &base64::engine::general_purpose::GeneralPurpose = &B64_STANDARD;
+static KEY_ENCODER: base64::engine::general_purpose::GeneralPurpose = B64_STANDARD;
 
 #[derive(Debug, Error)]
 pub enum KeyDecodingError {
