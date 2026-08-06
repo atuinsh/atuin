@@ -502,7 +502,11 @@ pub struct Theme {
 pub struct Daemon {
     /// Use the daemon to sync
     /// If enabled, history hooks are routed through the daemon.
-    #[serde(alias = "enable")]
+    ///
+    /// Defaulted by serde rather than `set_default`, for the same reason as
+    /// [`PtyProxy::enabled`]: a merged default would collide with the
+    /// `enable` spelling and fail deserialization.
+    #[serde(alias = "enable", default)]
     pub enabled: bool,
 
     /// Automatically start and manage a local daemon when needed.
@@ -530,7 +534,12 @@ pub struct PtyProxy {
     /// inside `atuin pty-proxy`, so no separate `atuin pty-proxy init` line
     /// is needed in shell config. Supported for bash, zsh, fish and nu on
     /// unix platforms.
-    #[serde(alias = "enable")]
+    ///
+    /// Defaulted by serde rather than `set_default`: a config default is
+    /// merged into the user's table before deserialization, so it would
+    /// arrive alongside the `enable` spelling and serde would reject the
+    /// two keys as a duplicate field.
+    #[serde(alias = "enable", default)]
     pub enabled: bool,
 }
 
@@ -1537,12 +1546,10 @@ impl Settings {
             .set_default("smart_sort", false)?
             .set_default("command_chaining", false)?
             .set_default("store_failed", true)?
-            .set_default("pty_proxy.enabled", false)?
             .set_default("suggest.enabled", false)?
             .set_default("suggest.limit", 8)?
             .set_default("suggest.min_chars", 1)?
             .set_default("daemon.sync_frequency", 300)?
-            .set_default("daemon.enabled", false)?
             .set_default("daemon.autostart", false)?
             .set_default("daemon.socket_path", socket_path.to_str())?
             .set_default("daemon.pidfile_path", pidfile_path.to_str())?
@@ -2032,6 +2039,36 @@ mod tests {
     #[case::plain_data_dir("data_dir = \"/tmp/atuin-test\"\n")]
     fn validate_accepts(#[case] toml: &str) {
         assert!(Settings::validate_str(toml).is_ok());
+    }
+
+    /// A `set_default` for an aliased key is merged into the user's own
+    /// table, so serde sees both spellings and rejects them as a duplicate
+    /// field — breaking every command, not just the feature being toggled.
+    #[rstest]
+    #[case::pty_proxy_alias("[pty_proxy]\nenable = true\n")]
+    #[case::pty_proxy_canonical("[pty_proxy]\nenabled = true\n")]
+    #[case::daemon_alias("[daemon]\nenable = true\n")]
+    #[case::daemon_canonical("[daemon]\nenabled = true\n")]
+    fn enable_alias_still_deserializes(#[case] toml: &str) {
+        Settings::validate_str(toml).expect("the `enable` alias must keep working");
+    }
+
+    #[rstest]
+    #[case::pty_proxy("[pty_proxy]\nenable = true\n", true, false)]
+    #[case::daemon("[daemon]\nenable = true\n", false, true)]
+    fn enable_alias_sets_the_flag(
+        #[case] toml: &str,
+        #[case] pty_proxy: bool,
+        #[case] daemon: bool,
+    ) -> Result<()> {
+        let settings: Settings = Settings::builder()?
+            .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+            .build()?
+            .try_deserialize()?;
+
+        assert_eq!(settings.pty_proxy.enabled, pty_proxy);
+        assert_eq!(settings.daemon.enabled, daemon);
+        Ok(())
     }
 
     /// The error should always name the offending key.

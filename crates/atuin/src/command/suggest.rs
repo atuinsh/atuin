@@ -30,6 +30,13 @@ const SUGGEST_QUEUE_DEPTH: usize = 8;
 /// before the history lookup runs, so this overlaps rather than adds.
 const COMPLETION_TIMEOUT: Duration = Duration::from_millis(150);
 
+/// How long the daemon's in-memory index gets to answer. It normally
+/// replies in well under a millisecond, so this is not a budget but a
+/// backstop: past it the daemon is rebuilding or wedged, and sqlite is the
+/// faster answer.
+#[cfg(feature = "daemon")]
+const DAEMON_SUGGEST_TIMEOUT: Duration = Duration::from_millis(100);
+
 /// The provider plus the proxy hook that warms the completion oracle when
 /// the session's first prompt appears.
 pub(super) struct SuggestHooks {
@@ -249,9 +256,23 @@ impl SuggestionBackend {
                 .await
                 .ok();
             }
+            // The proxy runs outside the hooked shell, so `Shells::Auto`
+            // cannot read `$ATUIN_SHELL`; the shell this session spawned is
+            // the answer that env var would have given.
+            let shells = self
+                .settings
+                .search
+                .shells
+                .to_filter_with(|| (!self.shell_name.is_empty()).then(|| self.shell_name.clone()))
+                .to_vec_filter();
             if let Some(client) = self.daemon.as_mut() {
-                match client.suggest(query, self.settings.suggest.limit).await {
-                    Ok(suggestions) => {
+                // A daemon rebuilding its index answers late, not never, and
+                // an unbounded await would pin this worker there — leaving
+                // the popup blank for the whole stall and never reaching the
+                // sqlite fallback, which only a returned error triggers.
+                let call = client.suggest(query, self.settings.suggest.limit, shells);
+                match tokio::time::timeout(DAEMON_SUGGEST_TIMEOUT, call).await {
+                    Ok(Ok(suggestions)) => {
                         return suggestions
                             .into_iter()
                             .map(|suggestion| suggestion.command)
@@ -259,7 +280,7 @@ impl SuggestionBackend {
                     }
                     // Drop the connection and fall through to sqlite for
                     // this query; the next one retries the daemon.
-                    Err(_) => self.daemon = None,
+                    Ok(Err(_)) | Err(_) => self.daemon = None,
                 }
             }
         }

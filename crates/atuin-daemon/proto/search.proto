@@ -36,6 +36,10 @@ message SearchResponse {
 message SuggestRequest {
   string query = 1;
   uint32 limit = 2;
+  // Which shells' commands to consider. Empty means all, matching
+  // SearchRequest.shells; the index is rebuilt when this differs from the
+  // filter it currently holds.
+  repeated string shells = 3;
 }
 
 message Suggestion {

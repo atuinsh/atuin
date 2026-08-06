@@ -8,7 +8,7 @@
 use std::borrow::Cow;
 use std::io::{Read, Write};
 use std::os::fd::AsFd;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -77,9 +77,22 @@ pub type SuggestionProvider = Box<dyn Fn(&str) -> Vec<Suggestion> + Send>;
 /// nobody wants completions for a screenful of pasted text anyway.
 const LINE_GRID_ROWS: u16 = 32;
 
-/// Kill-line (`^U`): replaces the line when accepting a suggestion that
-/// doesn't extend the typed prefix (fuzzy hits).
-const KILL_LINE: u8 = 0x15;
+/// Erases one character to the left, the way the user's own Backspace does.
+/// Used to take back the typed prefix when accepting a suggestion that
+/// doesn't extend it (fuzzy hits).
+///
+/// `^U` would be one byte instead of one per character, but it means
+/// different things in different line editors: zsh's emacs keymap binds it
+/// to `kill-whole-line`, while readline and zsh's vi keymap bind it to
+/// `unix-line-discard`/`vi-kill-line`, which only kill *backwards* from the
+/// cursor. Under those it would leave everything right of the cursor in
+/// place and splice the accepted command in front of it. `\x7f` is
+/// `backward-delete-char` in every default keymap of both shells.
+const BACKSPACE: u8 = 0x7f;
+
+/// Interrupt (`^C`). The shell abandons the line without running `preexec`,
+/// so no OSC 133 marker reports it; see [`KeyFilter::process`].
+const CTRL_C: u8 = 0x03;
 
 /// Polls before a lone `ESC` counts as a real Escape press rather than the
 /// start of a split key sequence.
@@ -117,16 +130,21 @@ pub(crate) fn spawn<W: Write + Send + 'static>(
 ) -> Suggest<W> {
     let state = Arc::new(Mutex::new(PopupState::default()));
     let (ui_tx, ui_rx) = mpsc::channel();
+    // The interrupt is seen on the stdin thread but only matters to the
+    // tracker on the pty thread, at the next prompt marker.
+    let aborted = Arc::new(AtomicBool::new(false));
 
     spawn_ui_thread(provider, compositor.clone(), ui_rx, state.clone());
 
     Suggest {
-        tracker: InputTracker::new(ui_tx, cols, input_activity, session_ready),
+        tracker: InputTracker::new(ui_tx, cols, input_activity, session_ready, aborted.clone()),
         keys: KeyFilter {
             state,
             compositor,
             flags,
             resync: ResyncState::default(),
+            paste: PasteScanner::default(),
+            aborted,
             key_scratch: Vec::new(),
             out_scratch: Vec::new(),
         },
@@ -175,13 +193,13 @@ pub(crate) struct InputTracker {
     /// grid allocation and O(line²) reprocessing.
     line_screen: vt100::Parser,
     grid_cols: u16,
-    /// Bytes fed since the last prompt; past the grid's capacity the line's
-    /// beginning has scrolled away and suggestions stop.
-    fed: usize,
     onlcr_scratch: Vec<u8>,
     /// A command ran since the last grid reset, so the next prompt marker
     /// is a genuinely new prompt rather than a redraw of the current line.
     ran_command: bool,
+    /// The user interrupted the line; like a command having run, it means
+    /// the next prompt is a new one and must not inherit the old text.
+    aborted: Arc<AtomicBool>,
     /// The line as last reported. Redraw bursts scramble the grid cursor
     /// before their prompt marker arrives, so this — not the mid-redraw
     /// grid — is what a redraw must carry over.
@@ -203,6 +221,7 @@ impl InputTracker {
         cols: Arc<AtomicU16>,
         input_activity: Arc<ActivityClock>,
         session_ready: Option<Box<dyn FnOnce() + Send>>,
+        aborted: Arc<AtomicBool>,
     ) -> Self {
         // MODEL_FLOOR, not 1: vt100 panics rendering wide glyphs into a
         // single-column grid.
@@ -213,9 +232,9 @@ impl InputTracker {
             parser: Parser::new(),
             line_screen: vt100::Parser::new(LINE_GRID_ROWS, grid_cols, 0),
             grid_cols,
-            fed: 0,
             onlcr_scratch: Vec::new(),
             ran_command: false,
+            aborted,
             last_line: String::new(),
             line_scratch: String::new(),
             input_activity,
@@ -228,9 +247,9 @@ impl InputTracker {
     pub(crate) fn push(&mut self, data: &[u8]) {
         let line_screen = &mut self.line_screen;
         let onlcr_scratch = &mut self.onlcr_scratch;
-        let fed = &mut self.fed;
         let grid_cols = &mut self.grid_cols;
         let ran_command = &mut self.ran_command;
+        let aborted = &self.aborted;
         let last_line = &mut self.last_line;
         let session_ready = &mut self.session_ready;
         let cols = &self.cols;
@@ -245,7 +264,6 @@ impl InputTracker {
                 if skip_input {
                     return;
                 }
-                *fed += bytes.len();
                 // Match ansi::to_plain_text: bare `\n` must return the
                 // carriage like a terminal in onlcr mode would.
                 onlcr_scratch.clear();
@@ -272,7 +290,14 @@ impl InputTracker {
                         // before the input marker, so the typed line never
                         // reappears in the input zone: carry it across the
                         // reset instead of forgetting it.
-                        let seed = if *ran_command {
+                        //
+                        // An interrupted line looks the same from here —
+                        // `preexec` never ran, so no `C` marker arrived —
+                        // but the shell threw the text away, so carrying it
+                        // over would query and complete against a line that
+                        // is not on screen. Cleared either way.
+                        let interrupted = aborted.swap(false, Ordering::AcqRel);
+                        let seed = if *ran_command || interrupted {
                             last_line.clear();
                             String::new()
                         } else {
@@ -282,7 +307,6 @@ impl InputTracker {
                             .load(Ordering::Relaxed)
                             .max(crate::compositor::MODEL_FLOOR);
                         *line_screen = vt100::Parser::new(LINE_GRID_ROWS, *grid_cols, 0);
-                        *fed = seed.len();
                         if !seed.is_empty() {
                             onlcr_scratch.clear();
                             onlcr_scratch.extend(ansi::onlcr(seed.bytes()));
@@ -323,9 +347,15 @@ impl InputTracker {
     }
 
     fn overflowed(&self) -> bool {
-        // Conservative: every fed byte could take a cell; leave slack rows
-        // for cursor movement so the line start provably hasn't scrolled.
-        self.fed > (LINE_GRID_ROWS as usize - 2) * self.grid_cols as usize
+        // Measured on the grid, not on bytes fed. Shell line editors re-emit
+        // the whole buffer on every keystroke — zsh-syntax-highlighting
+        // wraps it in SGR sequences, zsh-autosuggestions repaints its ghost
+        // on top — so a one-row line can be worth hundreds of bytes, and a
+        // byte budget would run out mid-command and silently stop
+        // suggesting. The cursor's row is what actually says how much of the
+        // grid the line occupies; a slack row keeps it conservative.
+        let (cursor_row, _) = self.line_screen.screen().cursor_position();
+        cursor_row + 2 >= LINE_GRID_ROWS
     }
 }
 
@@ -419,6 +449,11 @@ pub(crate) struct KeyFilter<W: Write> {
     compositor: Arc<Mutex<Compositor<W>>>,
     flags: Arc<OverlayFlags>,
     resync: ResyncState,
+    /// Tracks bracketed pastes, whose payload is data rather than keys.
+    paste: PasteScanner,
+    /// Set when the user interrupts the line; read and cleared by the
+    /// [`InputTracker`] at the next prompt marker.
+    aborted: Arc<AtomicBool>,
     /// Reused per-chunk buffers: keystroke filtering while the popup
     /// shows must not allocate.
     key_scratch: Vec<u8>,
@@ -454,6 +489,13 @@ impl<W: Write> KeyFilter<W> {
         chunk: &'a [u8],
         stdin: &mut (impl Read + AsFd),
     ) -> Cow<'a, [u8]> {
+        // The shell never reports an aborted line: `preexec` doesn't run for
+        // one, so no OSC 133 `C` arrives and the tracker would carry the
+        // abandoned text into the next prompt. The keystroke itself is the
+        // only signal, and it is on this side of the proxy.
+        if chunk.contains(&CTRL_C) {
+            self.aborted.store(true, Ordering::Release);
+        }
         // One atomic load in normal life; the branch only runs while a
         // resize cursor handshake is in flight.
         if self.flags.resync.load(Ordering::Acquire) {
@@ -473,12 +515,17 @@ impl<W: Write> KeyFilter<W> {
         chunk: &'a [u8],
         stdin: &mut (impl Read + AsFd),
     ) -> Cow<'a, [u8]> {
+        // Paste state advances on every chunk, visible or not: a paste that
+        // begins while the overlay is hidden must still shield a Tab that
+        // arrives in a later chunk, after the echo brought the popup up.
         if !self.visible() {
+            self.paste.feed_all(chunk);
             return Cow::Borrowed(chunk);
         }
         // Every interceptable key starts with ESC or Tab; anything else is
         // a pure pass-through even while the overlay shows.
         if !chunk.contains(&0x1b) && !chunk.contains(&b'\t') {
+            self.paste.feed_all(chunk);
             return Cow::Borrowed(chunk);
         }
 
@@ -489,6 +536,16 @@ impl<W: Write> KeyFilter<W> {
         out.clear();
         let mut pos = 0;
         while pos < bytes.len() {
+            // Bytes between the paste markers are data the user copied, not
+            // keys they pressed. A Makefile recipe, indented code or a TSV
+            // field carries a literal Tab; stealing it as an accept would
+            // run a command that is not the one they pasted.
+            if self.paste.in_paste {
+                self.paste.feed(bytes[pos]);
+                out.push(bytes[pos]);
+                pos += 1;
+                continue;
+            }
             while is_partial_interceptable(&bytes[pos..]) {
                 if !(wait_for_more(&*stdin) && read_more(&mut bytes, stdin)) {
                     break;
@@ -497,10 +554,14 @@ impl<W: Write> KeyFilter<W> {
 
             let rest = &bytes[pos..];
             let Some((sequence, key)) = match_key(rest) else {
+                // Paste markers land here — no key matches them — and so
+                // walk through the scanner one byte at a time.
+                self.paste.feed(bytes[pos]);
                 out.push(bytes[pos]);
                 pos += 1;
                 continue;
             };
+            self.paste.feed_all(sequence);
             pos += sequence.len();
             match self.intercept(key) {
                 KeyAction::Forward => out.extend_from_slice(sequence),
@@ -521,6 +582,10 @@ impl<W: Write> KeyFilter<W> {
         self.flags.ghost.load(Ordering::Acquire)
     }
 
+    fn popup_visible(&self) -> bool {
+        self.flags.popup.load(Ordering::Acquire)
+    }
+
     fn intercept(&self, key: Key) -> KeyAction {
         match key {
             Key::Tab => self.accept(AcceptSpan::Full),
@@ -530,8 +595,13 @@ impl<W: Write> KeyFilter<W> {
             // Alt/Ctrl+Right (and Alt-f): accept one word of the ghost.
             Key::WordRight if self.ghost_visible() => self.accept(AcceptSpan::Word),
             Key::Right | Key::WordRight => KeyAction::Forward,
-            Key::Down => self.navigate(1),
-            Key::Up => self.navigate(-1),
+            // Only the dropdown owns the arrows. A lone prefix match draws
+            // ghost text with no dropdown, and there consuming Up/Down would
+            // silently kill shell history recall with nothing on screen to
+            // explain where the keystroke went.
+            Key::Down if self.popup_visible() => self.navigate(1),
+            Key::Up if self.popup_visible() => self.navigate(-1),
+            Key::Down | Key::Up => KeyAction::Forward,
             Key::Esc => self.dismiss(),
         }
     }
@@ -568,6 +638,8 @@ impl<W: Write> KeyFilter<W> {
             .text
             .clone();
         let suffix = selected.strip_prefix(st.line.as_str()).map(str::to_owned);
+        // Characters, not bytes: one Backspace erases one grid character.
+        let typed = st.line.chars().count();
 
         match span {
             AcceptSpan::Full => {
@@ -581,10 +653,15 @@ impl<W: Write> KeyFilter<W> {
                 match suffix {
                     Some(suffix) if suffix.is_empty() => KeyAction::Consume,
                     Some(suffix) => KeyAction::Replace(suffix.into_bytes()),
-                    // Fuzzy hit that doesn't extend the typed line: replace
-                    // the whole line (kill-line, then the full command).
+                    // Fuzzy hit that doesn't extend the typed line: take the
+                    // typed prefix back one character at a time, then type
+                    // the command. The tracked line is everything up to the
+                    // cursor, so this erases exactly what is known to be
+                    // there and leaves any text to its right alone — the
+                    // same shape as the prefix case, which also inserts at
+                    // the cursor.
                     None => {
-                        let mut bytes = vec![KILL_LINE];
+                        let mut bytes = vec![BACKSPACE; typed];
                         bytes.extend_from_slice(selected.as_bytes());
                         KeyAction::Replace(bytes)
                     }
@@ -756,6 +833,68 @@ fn is_partial_interceptable(bytes: &[u8]) -> bool {
         .any(|(seq, _)| seq.len() > bytes.len() && seq.starts_with(bytes))
 }
 
+/// Tracks whether the stream is inside a bracketed paste.
+///
+/// A rolling match rather than a search over each chunk: a big paste is
+/// split across reads at an arbitrary byte, and a marker straddling that
+/// split would otherwise be missed — leaving the filter stuck in paste mode
+/// for the rest of the session, or out of it for the rest of the paste.
+#[derive(Default)]
+struct PasteScanner {
+    in_paste: bool,
+    /// Bytes of a marker matched so far.
+    matched: usize,
+    /// Which marker the matched prefix is turning into.
+    opening: bool,
+}
+
+impl PasteScanner {
+    /// The two markers are `ESC [ 2 0 <n> ~`, differing only in `<n>`
+    /// (`0` opens, `1` closes).
+    const PREFIX: &'static [u8] = b"\x1b[20";
+
+    fn feed(&mut self, byte: u8) {
+        // No byte of PREFIX repeats its first, so a failed match can only
+        // restart at the beginning — no back-off table needed.
+        let restart = usize::from(byte == Self::PREFIX[0]);
+        match self.matched {
+            n if n < Self::PREFIX.len() => {
+                self.matched = if byte == Self::PREFIX[n] {
+                    n + 1
+                } else {
+                    restart
+                };
+            }
+            n if n == Self::PREFIX.len() => match byte {
+                b'0' | b'1' => {
+                    self.opening = byte == b'0';
+                    self.matched = n + 1;
+                }
+                _ => self.matched = restart,
+            },
+            _ => {
+                if byte == b'~' {
+                    self.in_paste = self.opening;
+                }
+                self.matched = restart;
+            }
+        }
+    }
+
+    fn feed_all(&mut self, bytes: &[u8]) {
+        // At rest no byte but ESC can begin a marker, and `contains` on
+        // bytes is a vectorized search. Without this the pass-through path
+        // walked every byte of every chunk through the state machine, which
+        // costs microseconds on a paste-sized read to learn nothing.
+        if self.matched == 0 && !bytes.contains(&0x1b) {
+            return;
+        }
+        for &byte in bytes {
+            self.feed(byte);
+        }
+    }
+}
+
 /// Longest interceptable key at the start of `rest`. A bare `ESC` only
 /// counts when nothing follows it — `ESC [` etc. is the start of some other
 /// key's sequence, not an Escape press.
@@ -849,6 +988,15 @@ fn handle_query<W: Write>(
     let suppressed = {
         let mut st = lock_unpoisoned(state);
         st.line = line.clone();
+        // The provider call below runs with the lock released, and the
+        // stdin thread reads `line` and `suggestions` together to decide
+        // what Tab types. Publishing the new line beside the previous
+        // line's suggestions would let it accept a command chosen for text
+        // the user has already moved on from, so the pair is emptied here
+        // and refilled together once the answer arrives. Tab meanwhile
+        // finds nothing to accept and falls through to the shell.
+        st.suggestions = Vec::new().into();
+        st.selected = 0;
         if st.dismissed_for.as_deref() != Some(line.as_str()) {
             st.dismissed_for = None;
         }
@@ -870,9 +1018,15 @@ fn handle_query<W: Write>(
 
     let content = {
         let mut st = lock_unpoisoned(state);
-        st.suggestions = suggestions.into();
-        st.selected = 0;
-        st.overlay_content()
+        // An Escape during the fetch dismissed this very line; painting the
+        // result now would put the popup straight back up.
+        if st.dismissed_for.as_deref() == Some(line.as_str()) {
+            None
+        } else {
+            st.suggestions = suggestions.into();
+            st.selected = 0;
+            st.overlay_content()
+        }
     };
 
     lock_unpoisoned(compositor).set_overlay(content);
@@ -896,19 +1050,32 @@ mod tests {
     }
 
     fn tracker() -> (InputTracker, Receiver<UiEvent>) {
-        let (tracker, rx, _clock) = tracker_with_clock();
+        let (tracker, rx, _clock, _aborted) = tracker_with_clock();
         (tracker, rx)
     }
 
-    fn tracker_with_clock() -> (InputTracker, Receiver<UiEvent>, Arc<ActivityClock>) {
+    fn tracker_with_clock() -> (
+        InputTracker,
+        Receiver<UiEvent>,
+        Arc<ActivityClock>,
+        Arc<AtomicBool>,
+    ) {
         let (ui_tx, ui_rx) = mpsc::channel();
         let clock = Arc::new(ActivityClock::new());
+        let aborted = Arc::new(AtomicBool::new(false));
         // Most tests simulate echo of live typing.
         clock.touch();
         (
-            InputTracker::new(ui_tx, Arc::new(AtomicU16::new(80)), clock.clone(), None),
+            InputTracker::new(
+                ui_tx,
+                Arc::new(AtomicU16::new(80)),
+                clock.clone(),
+                None,
+                aborted.clone(),
+            ),
             ui_rx,
             clock,
+            aborted,
         )
     }
 
@@ -948,7 +1115,13 @@ mod tests {
         };
         let (ui_tx, _ui_rx) = mpsc::channel();
         let clock = Arc::new(ActivityClock::new());
-        let mut tracker = InputTracker::new(ui_tx, Arc::new(AtomicU16::new(80)), clock, Some(hook));
+        let mut tracker = InputTracker::new(
+            ui_tx,
+            Arc::new(AtomicU16::new(80)),
+            clock,
+            Some(hook),
+            Arc::new(AtomicBool::new(false)),
+        );
 
         tracker.push(b"banner text, no markers yet");
         assert_eq!(fired.load(Ordering::Relaxed), 0);
@@ -972,8 +1145,13 @@ mod tests {
         let (ui_tx, ui_rx) = mpsc::channel();
         // Never-touched clock: no keystroke has happened yet.
         let clock = Arc::new(ActivityClock::new());
-        let mut tracker =
-            InputTracker::new(ui_tx, Arc::new(AtomicU16::new(80)), clock.clone(), None);
+        let mut tracker = InputTracker::new(
+            ui_tx,
+            Arc::new(AtomicU16::new(80)),
+            clock.clone(),
+            None,
+            Arc::new(AtomicBool::new(false)),
+        );
 
         tracker.push(b"\x1b]133;A\x07$ \x1b]133;B\x07ls -la");
         assert!(
@@ -1040,6 +1218,69 @@ mod tests {
         tracker.push(b"\x1b]133;A\x07$ \x1b]133;B\x07");
         tracker.push(b"ls");
         assert_eq!(last_query(&rx).as_deref(), Some("ls"));
+    }
+
+    /// An interrupted line emits no `C` marker — `preexec` never runs — so
+    /// it reaches the next prompt looking exactly like a redraw. Carrying it
+    /// over would query, and complete, against text the shell threw away.
+    #[rstest]
+    fn an_interrupted_line_is_not_carried_into_the_next_prompt() {
+        let (mut tracker, rx, _clock, aborted) = tracker_with_clock();
+        tracker.push(b"\x1b]133;A\x07$ \x1b]133;B\x07git push");
+        assert_eq!(last_query(&rx).as_deref(), Some("git push"));
+
+        // ^C: the key filter flags it, the shell just prints a new prompt.
+        aborted.store(true, Ordering::Release);
+        tracker.push(b"^C\r\n\x1b]133;A\x07$ \x1b]133;B\x07");
+        tracker.push(b"ls");
+
+        assert_eq!(last_query(&rx).as_deref(), Some("ls"));
+        assert!(
+            !aborted.load(Ordering::Acquire),
+            "the flag is consumed at the prompt"
+        );
+    }
+
+    /// Shell highlighters re-emit the whole buffer wrapped in SGR sequences
+    /// on every keystroke, so a one-row line is worth hundreds of bytes. A
+    /// byte budget ran out mid-command and suggestions silently stopped for
+    /// the rest of the prompt.
+    #[rstest]
+    fn a_highlighted_line_does_not_exhaust_the_grid_budget() {
+        let (mut tracker, rx) = tracker();
+        tracker.push(b"\x1b]133;A\x07$ \x1b]133;B\x07");
+
+        // 30 keystrokes, each repainting the line in colour the way
+        // zsh-syntax-highlighting does: ~4 KiB fed for one 30-cell row.
+        let typed = "git commit -m 'initial commit'";
+        for end in 1..=typed.len() {
+            let mut repaint = b"\r\x1b[K".to_vec();
+            repaint.extend_from_slice(b"\x1b[0m\x1b[32m");
+            repaint.extend_from_slice(&typed.as_bytes()[..end]);
+            repaint.extend_from_slice(b"\x1b[0m");
+            tracker.push(&repaint);
+        }
+
+        assert_eq!(last_query(&rx).as_deref(), Some(typed));
+    }
+
+    /// The grid budget still trips when the line really has scrolled its own
+    /// beginning away — a screenful of pasted text wants no completions.
+    #[rstest]
+    fn a_line_that_fills_the_grid_stops_querying() {
+        let (mut tracker, rx) = tracker();
+        tracker.push(b"\x1b]133;A\x07$ \x1b]133;B\x07");
+        tracker.push(b"x");
+        assert!(last_query(&rx).is_some());
+
+        // 80 columns x 32 rows: past the grid, the start is gone.
+        tracker.push(&vec![b'y'; 80 * 32]);
+        assert!(tracker.overflowed());
+        tracker.push(b"z");
+        assert!(
+            last_query(&rx).is_none(),
+            "no query once the start scrolled"
+        );
     }
 
     /// zsh-autosuggestions paints its ghost after the cursor, inside the
@@ -1165,6 +1406,8 @@ mod tests {
                 compositor,
                 flags,
                 resync: ResyncState::default(),
+                paste: PasteScanner::default(),
+                aborted: Arc::new(AtomicBool::new(false)),
                 key_scratch: Vec::new(),
                 out_scratch: Vec::new(),
             },
@@ -1189,11 +1432,22 @@ mod tests {
         assert_eq!(&*out, b"atus");
     }
 
+    /// The typed prefix is taken back with Backspaces, not `^U`: `^U` kills
+    /// only backwards from the cursor under readline and zsh's vi keymap,
+    /// which would leave the rest of the line spliced onto the command.
     #[rstest]
-    fn fuzzy_accept_replaces_whole_line() {
+    fn fuzzy_accept_backspaces_over_the_typed_prefix() {
         let mut fx = fixture("stat", &["git status"], 0);
         let out = fx.filter.process(b"\t", &mut fx.stdin);
-        assert_eq!(&*out, b"\x15git status");
+        assert_eq!(&*out, b"\x7f\x7f\x7f\x7fgit status");
+    }
+
+    /// One Backspace per character, not per byte.
+    #[rstest]
+    fn fuzzy_accept_counts_characters_not_bytes() {
+        let mut fx = fixture("é☕", &["git status"], 0);
+        let out = fx.filter.process(b"\t", &mut fx.stdin);
+        assert_eq!(&*out, b"\x7f\x7fgit status");
     }
 
     #[rstest]
@@ -1215,6 +1469,101 @@ mod tests {
         assert_eq!(fx.filter.state.lock().unwrap().selected, 0);
         assert!(fx.filter.process(b"\x1b[A", &mut fx.stdin).is_empty());
         assert_eq!(fx.filter.state.lock().unwrap().selected, 1);
+    }
+
+    /// A lone prefix match draws ghost text with no dropdown. Consuming the
+    /// arrows there would kill shell history recall with nothing on screen
+    /// to explain where the keystroke went.
+    #[rstest]
+    fn arrows_reach_the_shell_when_only_a_ghost_is_drawn() {
+        let mut fx = fixture("git st", &["git status"], 0);
+        assert!(fx.filter.ghost_visible());
+        assert!(!fx.filter.popup_visible(), "no dropdown for a lone prefix");
+
+        let out = fx.filter.process(b"\x1b[A", &mut fx.stdin);
+        assert_eq!(&*out, b"\x1b[A", "Up must reach the shell");
+        let out = fx.filter.process(b"\x1b[B", &mut fx.stdin);
+        assert_eq!(&*out, b"\x1b[B", "Down must reach the shell");
+    }
+
+    /// Tab inside pasted content is data — a Makefile recipe, indented code,
+    /// a TSV field — not an accept.
+    #[rstest]
+    fn tab_inside_a_bracketed_paste_is_not_stolen() {
+        let mut fx = fixture("make ", &["make test"], 0);
+        let paste = b"\x1b[200~build:\n\techo hi\x1b[201~";
+        let out = fx.filter.process(paste, &mut fx.stdin);
+        assert_eq!(&*out, paste, "paste payload forwarded verbatim");
+
+        // Out of the paste, Tab accepts again.
+        let out = fx.filter.process(b"\t", &mut fx.stdin);
+        assert_eq!(&*out, b"test");
+    }
+
+    /// A paste split across reads keeps its shield: the state is on the
+    /// filter, not the chunk.
+    #[rstest]
+    fn a_paste_split_across_reads_still_shields_its_keys() {
+        let mut fx = fixture("make ", &["make test"], 0);
+        assert_eq!(
+            &*fx.filter.process(b"\x1b[200~one", &mut fx.stdin),
+            b"\x1b[200~one"
+        );
+        assert_eq!(&*fx.filter.process(b"\ttwo", &mut fx.stdin), b"\ttwo");
+        assert_eq!(&*fx.filter.process(b"\x1b[A", &mut fx.stdin), b"\x1b[A");
+        assert_eq!(
+            &*fx.filter.process(b"\x1b[201~", &mut fx.stdin),
+            b"\x1b[201~"
+        );
+        assert_eq!(&*fx.filter.process(b"\t", &mut fx.stdin), b"test");
+    }
+
+    /// A big paste is split at an arbitrary byte, which lands inside a
+    /// marker sooner or later. Missing the end marker would leave the filter
+    /// in paste mode — and Tab dead — for the rest of the session.
+    #[rstest]
+    fn a_marker_straddling_two_reads_is_still_recognised() {
+        // Every way of cutting `ESC[201~` in half.
+        for split in 1..PasteScanner::PREFIX.len() + 2 {
+            let mut fx = fixture("make ", &["make test"], 0);
+            fx.filter.process(b"\x1b[200~x", &mut fx.stdin);
+            assert!(fx.filter.paste.in_paste, "split {split}: paste opened");
+
+            let end = b"\x1b[201~";
+            fx.filter.process(&end[..split], &mut fx.stdin);
+            fx.filter.process(&end[split..], &mut fx.stdin);
+            assert!(!fx.filter.paste.in_paste, "split {split}: paste closed");
+
+            assert_eq!(
+                &*fx.filter.process(b"\t", &mut fx.stdin),
+                b"test",
+                "split {split}: Tab accepts again"
+            );
+        }
+    }
+
+    /// A byte sequence that only looks like the start of a marker must not
+    /// latch the scanner.
+    #[rstest]
+    #[case::not_a_marker(b"\x1b[20X~".as_slice(), false)]
+    #[case::truncated(b"\x1b[200".as_slice(), false)]
+    #[case::close_without_open(b"\x1b[201~".as_slice(), false)]
+    #[case::open(b"\x1b[200~".as_slice(), true)]
+    #[case::restart_on_esc(b"\x1b[2\x1b[200~".as_slice(), true)]
+    fn paste_scanner_only_latches_on_a_whole_marker(#[case] bytes: &[u8], #[case] expected: bool) {
+        let mut scanner = PasteScanner::default();
+        scanner.feed_all(bytes);
+        assert_eq!(scanner.in_paste, expected);
+    }
+
+    /// The shell reports nothing when a line is interrupted, so the
+    /// keystroke is the only signal the tracker can be told about.
+    #[rstest]
+    fn ctrl_c_marks_the_line_aborted() {
+        let mut fx = fixture("git st", &["git status"], 0);
+        assert!(!fx.filter.aborted.load(Ordering::Acquire));
+        fx.filter.process(b"\x03", &mut fx.stdin);
+        assert!(fx.filter.aborted.load(Ordering::Acquire));
     }
 
     #[rstest]

@@ -151,6 +151,38 @@ impl Write for RawStdout {
     }
 }
 
+/// Unbuffered stdin, for the same reason [`RawStdout`] is unbuffered on the
+/// way out — but here it is a correctness requirement, not a saving.
+///
+/// Both the cursor handshake and the key filter decide whether more input is
+/// coming by asking the kernel (`FIONREAD`), because `poll(2)` doesn't work
+/// on tty fds on macOS. `std::io::Stdin` is a `BufReader`, so a read smaller
+/// than its 8 KiB buffer drains the fd into userspace and leaves `FIONREAD`
+/// answering zero with bytes still pending: the handshake would time out
+/// without seeing its fence and then leak the terminal's reply to the shell
+/// as keystrokes. Reading the fd directly keeps the two in agreement, and
+/// keeps every reader of fd 0 in one queue.
+pub(crate) struct RawStdin;
+
+impl RawStdin {
+    fn fd(&self) -> rustix::fd::BorrowedFd<'static> {
+        // SAFETY: fd 0 outlives the process; never closed here.
+        unsafe { rustix::fd::BorrowedFd::borrow_raw(0) }
+    }
+}
+
+impl Read for RawStdin {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        rustix::io::read(self.fd(), buf).map_err(std::io::Error::from)
+    }
+}
+
+impl std::os::fd::AsFd for RawStdin {
+    fn as_fd(&self) -> rustix::fd::BorrowedFd<'_> {
+        self.fd()
+    }
+}
+
 fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
     let mut trace = Trace::new();
     let (cols, rows) = terminal::size().wrap_err("query terminal size")?;
@@ -248,12 +280,13 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
     // the socket-served screen model; splitting only matters when an
     // overlay may paint.
     let flags = Arc::new(OverlayFlags::default());
+    let overlays_enabled = options.hooks.suggestion_provider.is_some();
     let compositor = Arc::new(Mutex::new(Compositor::new(
         rows,
         cols,
         RawStdout,
         flags.clone(),
-        options.hooks.suggestion_provider.is_some(),
+        overlays_enabled,
     )));
 
     let activity = Arc::new(ActivityClock::new());
@@ -264,6 +297,7 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
         current_cols.clone(),
         activity.clone(),
         screen_tx.clone(),
+        overlays_enabled,
     )
     .wrap_err("install resize handler")?;
     trace.step("socket + resize handlers");
@@ -387,7 +421,7 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
     });
 
     std::thread::spawn(move || {
-        let mut stdin = std::io::stdin();
+        let mut stdin = RawStdin;
         let mut buf = [0u8; 8192];
         loop {
             match stdin.read(&mut buf) {
@@ -609,7 +643,7 @@ fn seed_cursor_from_terminal(
         return;
     }
 
-    let mut stdin = std::io::stdin();
+    let mut stdin = RawStdin;
     let deadline = std::time::Instant::now() + CPR_TIMEOUT;
     let mut pending = Vec::new();
     let mut buf = [0u8; 256];
@@ -750,11 +784,33 @@ fn spawn_resize_handler(
     current_cols: Arc<AtomicU16>,
     activity: Arc<ActivityClock>,
     screen_tx: SyncSender<Msg>,
+    overlays_enabled: bool,
 ) -> eyre::Result<()> {
     use signal_hook::consts::SIGWINCH;
     use signal_hook::iterator::Signals;
 
     let mut signals = Signals::new([SIGWINCH])?;
+    // Real terminals reflow wrapped lines on resize; the vt100 model doesn't,
+    // so the model cursor has drifted and overlays would paint at stale rows.
+    // Re-asking the terminal has to wait for the repaint to settle, which is
+    // up to half a second — far too long to hold the signal loop, since
+    // dragging a window delivers SIGWINCH continuously and the inner pty's
+    // size must track it. So the waiting happens here, and only when an
+    // overlay is around to use the answer.
+    let resync_tx = overlays_enabled.then(|| {
+        let (tx, rx) = mpsc::sync_channel::<()>(1);
+        let compositor = compositor.clone();
+        let activity = activity.clone();
+        std::thread::spawn(move || {
+            while rx.recv().is_ok() {
+                // One resync answers however many resizes piled up.
+                while rx.try_recv().is_ok() {}
+                await_pty_quiet(&activity);
+                lock_unpoisoned(&compositor).begin_cursor_resync();
+            }
+        });
+        tx
+    });
 
     std::thread::spawn(move || {
         for _ in signals.forever() {
@@ -774,11 +830,11 @@ fn spawn_resize_handler(
                 // long-idle pty can't look like quiet already.
                 activity.touch();
                 lock_unpoisoned(&compositor).resize(rows, cols);
-                // Real terminals reflow wrapped lines on resize; the vt100
-                // model doesn't, so the model cursor has drifted. Re-ask
-                // the terminal once the repaint settles.
-                await_pty_quiet(&activity);
-                lock_unpoisoned(&compositor).begin_cursor_resync();
+                if let Some(tx) = &resync_tx {
+                    // Never blocks: a resync is already pending, and it will
+                    // pick up this size too.
+                    let _ = tx.try_send(());
+                }
             }
         }
     });
