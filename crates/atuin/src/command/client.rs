@@ -25,6 +25,7 @@ mod hook;
 mod import;
 mod info;
 mod init;
+mod internal;
 mod kv;
 mod lab;
 mod scripts;
@@ -130,8 +131,17 @@ pub enum Cmd {
     #[command(subcommand, hide = true)]
     Lab(lab::Cmd),
 
-    #[command(hide = true)]
-    InternalPrepareSearchIndex,
+    /// Internal subcommands, not for direct use by users.
+    #[command(subcommand, hide = true, name = "__internal")]
+    Internal(internal::Cmd),
+
+    /// We want to exclude the `__internal` subcommand from Clap's `infer_subcommands`; otherwise,
+    /// a user could access it simply by typing `atuin _`. However, Clap has no way to disable
+    /// `infer_subcommands` for a single command. As a workaround, we define a dummy command with
+    /// the same name but with an extra understore, which forces `__internal` to be typed out in
+    /// entirety, since any prefix of the name would be ambiguous.
+    #[command(hide = true, name = "__internal_")]
+    InternalDecoy,
 }
 
 impl Cmd {
@@ -205,7 +215,8 @@ impl Cmd {
             Self::Update(update) => return update.run(&settings).await,
             Self::Config(config) => return config.run(&settings).await,
             Self::Lab(cmd) => return cmd.run(&settings).await,
-            Self::InternalPrepareSearchIndex => return search::prepare_index(&settings).await,
+            Self::Internal(cmd) => return cmd.run(&settings).await,
+            Self::InternalDecoy => return Ok(()),
             _ => {}
         }
 
@@ -259,7 +270,8 @@ impl Cmd {
             | Self::Doctor
             | Self::Config(_)
             | Self::Lab(_)
-            | Self::InternalPrepareSearchIndex => {
+            | Self::Internal(_)
+            | Self::InternalDecoy => {
                 unreachable!()
             }
 
