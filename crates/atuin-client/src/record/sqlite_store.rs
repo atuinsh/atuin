@@ -314,7 +314,7 @@ impl SqliteStore {
 
         let re_encrypted = all
             .into_iter()
-            .map(|record| record.re_encrypt::<PasetoV4>(old_key, new_key))
+            .map(|record| PasetoV4::re_encrypt_record(record, old_key, new_key))
             .collect::<Result<Vec<_>>>()?;
 
         // next up, we delete all the old data and reinsert the new stuff
@@ -345,7 +345,7 @@ impl SqliteStore {
         let all = self.load_all().await?;
 
         all.into_iter()
-            .map(|record| record.decrypt::<PasetoV4>(key))
+            .map(|record| PasetoV4::decrypt_record(record, key))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(())
@@ -357,7 +357,7 @@ impl SqliteStore {
         let all = self.load_all().await?;
 
         for record in all.iter() {
-            match record.clone().decrypt::<PasetoV4>(key) {
+            match PasetoV4::decrypt_record(record.clone(), key) {
                 Ok(_) => continue,
                 Err(_) => {
                     println!(
@@ -509,9 +509,7 @@ mod tests {
         store.push(&tail).await.expect("failed to push record");
 
         for _ in 1..100 {
-            tail = tail
-                .append(vec![1, 2, 3, 4])
-                .encrypt::<PasetoV4>(&[0; 32].into());
+            tail = PasetoV4::encrypt_record(tail.append(vec![1, 2, 3, 4]), &[0; 32].into());
             store.push(&tail).await.unwrap();
         }
 
@@ -535,9 +533,7 @@ mod tests {
         let mut tail = record();
         records.push(tail.clone());
         for _ in 1..10000 {
-            tail = tail
-                .append(vec![1, 2, 3])
-                .encrypt::<PasetoV4>(&[0; 32].into());
+            tail = PasetoV4::encrypt_record(tail.append(vec![1, 2, 3]), &[0; 32].into());
             records.push(tail.clone());
         }
 
@@ -558,14 +554,16 @@ mod tests {
         let host_id = HostId(uuid_v7());
 
         for i in 0..10 {
-            let record = Record::builder()
-                .host(Host::new(host_id))
-                .version(String::from("test"))
-                .tag(String::from("test"))
-                .idx(i)
-                .data(DecryptedData(data.clone()))
-                .build()
-                .encrypt::<PasetoV4>(&key);
+            let record = PasetoV4::encrypt_record(
+                Record::builder()
+                    .host(Host::new(host_id))
+                    .version(String::from("test"))
+                    .tag(String::from("test"))
+                    .idx(i)
+                    .data(DecryptedData(data.clone()))
+                    .build(),
+                &key,
+            );
             store
                 .push(&record)
                 .await
@@ -576,7 +574,7 @@ mod tests {
         let all = store.all_tagged("test").await.unwrap();
         assert_eq!(all.len(), 10, "failed to fetch all records");
         for record in all {
-            let decrypted = record.decrypt::<PasetoV4>(&key).unwrap();
+            let decrypted = PasetoV4::decrypt_record(record, &key).unwrap();
             assert_eq!(decrypted.data.0, data);
         }
 
@@ -590,12 +588,12 @@ mod tests {
         let all = store.all_tagged("test").await.unwrap();
         for record in all.iter() {
             assert!(
-                record.clone().decrypt::<PasetoV4>(&key).is_err(),
+                PasetoV4::decrypt_record(record.clone(), &key).is_err(),
                 "old key still decrypts after re-encrypt"
             );
         }
         for record in all {
-            let decrypted = record.decrypt::<PasetoV4>(&new_key).unwrap();
+            let decrypted = PasetoV4::decrypt_record(record, &new_key).unwrap();
             assert_eq!(decrypted.data.0, data);
         }
 

@@ -1,19 +1,12 @@
 use std::collections::HashMap;
 
 use atuin_common::encryption::paseto_v4;
-use eyre::Result;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, derive_more::Deref, derive_more::From)]
 pub struct DecryptedData(pub Vec<u8>);
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EncryptedData {
-    pub data: String,
-    pub content_encryption_key: String,
-}
 
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq)]
 pub struct Diff {
@@ -34,6 +27,37 @@ impl Host {
         Host {
             id,
             name: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Serialize)]
+pub struct AdditionalData<'a> {
+    pub id: RecordId,
+    pub idx: u64,
+    pub host: HostId,
+    pub version: &'a str,
+    pub tag: &'a str,
+}
+
+impl<'a> From<AdditionalData<'a>> for paseto_v4::ImplicitAssertion<'a> {
+    fn from(value: AdditionalData<'a>) -> Self {
+        paseto_v4::ImplicitAssertion::from(
+            serde_json::to_string(&value)
+                .expect("could not serialize implicit assertions")
+                .as_str(),
+        )
+    }
+}
+
+impl<'a> From<&Record<DecryptedData>> for AdditionalData {
+    fn from(value: &Record<DecryptedData>) -> Self {
+        Self {
+            id: value.id,
+            idx: value.idx,
+            host: value.host.id,
+            tag: &value.tag,
+            version: &value.version,
         }
     }
 }
@@ -75,14 +99,6 @@ pub struct Record<Data> {
 }
 
 /// Extra data from the record that should be encoded in the data
-#[derive(Debug, Copy, Clone)]
-pub struct AdditionalData<'a> {
-    pub id: &'a RecordId,
-    pub idx: &'a u64,
-    pub version: &'a str,
-    pub tag: &'a str,
-    pub host: &'a HostId,
-}
 
 impl<Data> Record<Data> {
     pub fn append(&self, data: Vec<u8>) -> Record<DecryptedData> {
@@ -93,6 +109,32 @@ impl<Data> Record<Data> {
             .tag(self.tag.clone())
             .data(DecryptedData(data))
             .build()
+    }
+
+    pub fn with_data<New>(&self, data: New) -> Record<New> {
+        Record {
+            id: self.id,
+            idx: self.idx,
+            host: self.host.clone(),
+            timestamp: self.timestamp,
+            version: self.version.clone(),
+            tag: self.tag.clone(),
+            data: data,
+        }
+    }
+}
+
+impl Record<DecryptedData> {
+    pub fn encrypt(&self, key: &paseto_v4::Key) -> Record<paseto_v4::EncryptedData> {
+        self.with_data(paseto_v4::encrypt_sync(&self.data, Some(self.into()), key).unwrap())
+    }
+}
+
+impl Record<paseto_v4::EncryptedData> {
+    pub fn decrypt(&self, key: &paseto_v4::Key) -> eyre::Result<Record<DecryptedData>> {
+        let data = paseto_v4::decrypt_sync(&self.data, Some(self.into()), key)
+            .context("could not decrypt entry")?;
+        Ok(self.with_data(data.into()))
     }
 }
 
@@ -197,71 +239,6 @@ impl RecordStatus {
         // Stability is a nice property to have
         ret.sort();
         ret
-    }
-}
-
-impl Record<DecryptedData> {
-    pub fn encrypt(self, key: &paseto_v4::EncryptedData) -> Record<EncryptedData> {
-        let ad = AdditionalData {
-            id: &self.id,
-            version: &self.version,
-            tag: &self.tag,
-            host: &self.host.id,
-            idx: &self.idx,
-        };
-        Record {
-            data: E::encrypt(self.data, ad, key),
-            id: self.id,
-            host: self.host,
-            idx: self.idx,
-            timestamp: self.timestamp,
-            version: self.version,
-            tag: self.tag,
-        }
-    }
-}
-
-impl Record<EncryptedData> {
-    pub fn decrypt<E: Encryption>(self, key: &E::Key) -> Result<Record<DecryptedData>> {
-        let ad = AdditionalData {
-            id: &self.id,
-            version: &self.version,
-            tag: &self.tag,
-            host: &self.host.id,
-            idx: &self.idx,
-        };
-        Ok(Record {
-            data: E::decrypt(self.data, ad, key)?,
-            id: self.id,
-            host: self.host,
-            idx: self.idx,
-            timestamp: self.timestamp,
-            version: self.version,
-            tag: self.tag,
-        })
-    }
-
-    pub fn re_encrypt<E: Encryption>(
-        self,
-        old_key: &E::Key,
-        new_key: &E::Key,
-    ) -> Result<Record<EncryptedData>> {
-        let ad = AdditionalData {
-            id: &self.id,
-            version: &self.version,
-            tag: &self.tag,
-            host: &self.host.id,
-            idx: &self.idx,
-        };
-        Ok(Record {
-            data: E::re_encrypt(self.data, ad, old_key, new_key)?,
-            id: self.id,
-            host: self.host,
-            idx: self.idx,
-            timestamp: self.timestamp,
-            version: self.version,
-            tag: self.tag,
-        })
     }
 }
 

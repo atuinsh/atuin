@@ -294,7 +294,7 @@ impl VarStore {
             .build();
 
         self.store
-            .push(&record.encrypt::<PasetoV4>(&self.encryption_key))
+            .push(&PasetoV4::encrypt_record(record, &self.encryption_key))
             .await?;
 
         // set mutates shell config, so build again
@@ -330,7 +330,7 @@ impl VarStore {
             .build();
 
         self.store
-            .push(&record.encrypt::<PasetoV4>(&self.encryption_key))
+            .push(&PasetoV4::encrypt_record(record, &self.encryption_key))
             .await?;
 
         // delete mutates shell config, so build again
@@ -350,15 +350,13 @@ impl VarStore {
             let version = record.version.clone();
 
             // Skip records we can't decrypt or decode, rather than failing the entire build.
-            let ar =
-                match version.as_str() {
-                    DOTFILES_VAR_VERSION => record
-                        .decrypt::<PasetoV4>(&self.encryption_key)
-                        .and_then(|decrypted| {
-                            VarRecord::deserialize(&decrypted.data, version.as_str())
-                        }),
-                    version => Err(eyre!("unknown version {version:?}")),
-                };
+            let ar = match version.as_str() {
+                DOTFILES_VAR_VERSION => PasetoV4::decrypt_record(record, &self.encryption_key)
+                    .and_then(|decrypted| {
+                        VarRecord::deserialize(&decrypted.data, version.as_str())
+                    }),
+                version => Err(eyre!("unknown version {version:?}")),
+            };
 
             let ar = match ar {
                 Ok(ar) => ar,
