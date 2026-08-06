@@ -53,8 +53,8 @@ impl BenchRecord {
                     .version(version.clone())
                     .tag(tag.clone())
                     .data(EncryptedData {
-                        data: data.clone(),
-                        content_encryption_key: key.clone(),
+                        raw: data.clone(),
+                        cek: key.clone(),
                     })
                     .idx(idx)
                     .build()

@@ -413,7 +413,7 @@ mod tests {
     use crate::{
         database::Sqlite,
         history::{HISTORY_TAG, Version, store::HistoryRecord, store::HistoryStore},
-        record::{encryption::PasetoV4, sqlite_store::SqliteStore},
+        record::sqlite_store::SqliteStore,
         settings::test_local_timeout,
     };
 

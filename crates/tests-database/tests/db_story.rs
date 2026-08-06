@@ -158,8 +158,8 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
 
 fn generate_record(host: &Host, idx: RecordIdx) -> Record<EncryptedData> {
     let data = EncryptedData {
-        data: "some data".into(),
-        content_encryption_key: "key".into(),
+        raw: "some data".into(),
+        cek: "key".into(),
     };
     Record::builder()
         .idx(idx)

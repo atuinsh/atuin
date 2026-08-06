@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use atuin_client::{
-    database::Sqlite as HistoryDatabase, encryption, encryption::paseto_v4::Key,
+    database::Sqlite as HistoryDatabase, encryption, encryption::paseto_v4,
     record::sqlite_store::SqliteStore, settings::Settings,
 };
 use enum_dispatch::enum_dispatch;

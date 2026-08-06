@@ -182,6 +182,12 @@ impl Key {
         }
     }
 
+    /// Get the mnemonic of this particular key.
+    pub fn try_mnemonic(&self) -> Result<bip39::Mnemonic, bip39::ErrorKind> {
+        bip39::Mnemonic::from_entropy(self.as_bytes(), bip39::Language::English)
+    }
+
+    /// Attempt to construct this key from a mnemonic.
     pub fn try_from_mnemonic(mnemonic: &str) -> Result<Self, MnemonicLoadingError> {
         match bip39::Mnemonic::from_phrase(mnemonic, bip39::Language::English) {
             Ok(mnemonic) => Ok(Self::try_from(mnemonic.entropy())
@@ -314,7 +320,7 @@ mod cek {
 /// encryption key that it was encrypted with under [`PasetoEncryptedData::cek`].
 ///
 /// See [`::encrypt`] for more information.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EncryptedData {
     /// The encrypted payload as a string.
     pub raw: String,
@@ -585,7 +591,7 @@ mod test {
         ]);
 
         assert_eq!(
-            &key.encode(),
+            key.encode().dangerously_leak_secret(),
             "3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q=="
         );
 

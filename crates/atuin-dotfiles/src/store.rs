@@ -448,7 +448,6 @@ alias kgap='kubectl get pods --all-namespaces'
     #[rstest]
     #[tokio::test]
     async fn build_aliases_skips_corrupt_records(#[future] alias_store: (AliasStore, SqliteStore)) {
-        use atuin_common::encryption::paseto_v4;
         use atuin_domain::record::{DecryptedData, Host};
 
         use super::CONFIG_SHELL_ALIAS_TAG;

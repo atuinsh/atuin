@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use atuin_common::encryption::paseto_v4;
+pub use atuin_common::encryption::paseto_v4::{self, EncryptedData};
 use eyre::WrapErr;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
@@ -244,7 +244,6 @@ mod tests {
     use super::*;
     use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
-    use rstest::*;
 
     use super::{DecryptedData, Diff, Record, RecordStatus};
     use pretty_assertions::assert_eq;

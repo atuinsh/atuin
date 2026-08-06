@@ -85,8 +85,8 @@ impl SqliteStore {
         .bind(r.tag.as_str())
         .bind(r.timestamp as i64)
         .bind(r.version.as_str())
-        .bind(r.data.data.as_str())
-        .bind(r.data.content_encryption_key.as_str())
+        .bind(r.data.raw.as_str())
+        .bind(r.data.cek.as_str())
         .execute(&mut **tx)
         .await?;
 
@@ -322,7 +322,10 @@ impl SqliteStore {
 
         let re_encrypted = all
             .into_iter()
-            .map(|record| PasetoV4::re_encrypt_record(record, old_key, new_key))
+            .map(|record| {
+                let data = paseto_v4::reencrypt_sync(&record.data, old_key, new_key)?;
+                Ok(record.with_data(data))
+            })
             .collect::<Result<Vec<_>>>()?;
 
         // next up, we delete all the old data and reinsert the new stuff
@@ -386,10 +389,10 @@ impl SqliteStore {
 mod tests {
     use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
-    use atuin_domain::record::{DecryptedData, Host, HostId, Record, paseto_v4::EncryptedData};
+    use atuin_domain::record::{DecryptedData, Host, HostId, Record};
     use rstest::{fixture, rstest};
 
-    use crate::{encryption::generate_encoded_key, settings::test_local_timeout};
+    use crate::settings::test_local_timeout;
 
     use super::SqliteStore;
 
@@ -561,21 +564,19 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn re_encrypt(#[future(awt)] store: SqliteStore) {
-        let (key, _) = generate_encoded_key().unwrap();
+        let key = paseto_v4::Key::generate();
         let data = vec![0u8, 1u8, 2u8, 3u8];
         let host_id = HostId(uuid_v7());
 
         for i in 0..10 {
-            let record = PasetoV4::encrypt_record(
-                Record::builder()
-                    .host(Host::new(host_id))
-                    .version(String::from("test"))
-                    .tag(String::from("test"))
-                    .idx(i)
-                    .data(DecryptedData(data.clone()))
-                    .build(),
-                &key,
-            );
+            let record = Record::builder()
+                .host(Host::new(host_id))
+                .version(String::from("test"))
+                .tag(String::from("test"))
+                .idx(i)
+                .data(DecryptedData(data.clone()))
+                .build()
+                .encrypt(&key);
             store
                 .push(&record)
                 .await
@@ -591,7 +592,7 @@ mod tests {
         }
 
         // after re-encrypting: the old key fails, the new key works
-        let (new_key, _) = generate_encoded_key().unwrap();
+        let new_key = paseto_v4::Key::generate();
         store
             .re_encrypt(&key, &new_key)
             .await

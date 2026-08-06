@@ -1,7 +1,6 @@
 use atuin_client::history::HISTORY_TAG;
 use atuin_client::history::Version;
 use atuin_client::history::store::HistoryRecord;
-use atuin_common::encryption::paseto_v4;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{DecryptedData, EncryptedData, Host, HostId, Record};
 

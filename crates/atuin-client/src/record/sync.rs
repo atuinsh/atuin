@@ -379,7 +379,6 @@ mod tests {
 
     use crate::{
         record::{
-            encryption::PasetoV4,
             sqlite_store::SqliteStore,
             sync::{self, Operation},
         },
@@ -394,8 +393,8 @@ mod tests {
             .version("v1".into())
             .tag(atuin_common::utils::uuid_v7().simple().to_string())
             .data(EncryptedData {
-                data: String::new(),
-                content_encryption_key: String::new(),
+                raw: String::new(),
+                cek: String::new(),
             })
             .idx(0)
             .build()
@@ -529,10 +528,9 @@ mod tests {
         let second_shared = test_record();
         let second_shared_remote_ahead =
             second_shared.append(vec![1, 2, 3]).encrypt(&[0; 32].into());
-        let second_shared_remote_ahead2 = PasetoV4::encrypt_record(
-            second_shared_remote_ahead.append(vec![1, 2, 3]),
-            &[0; 32].into(),
-        );
+        let second_shared_remote_ahead2 = second_shared_remote_ahead
+            .append(vec![1, 2, 3])
+            .encrypt(&[0; 32].into());
 
         let third_shared = test_record();
         let third_shared_local_ahead = third_shared.append(vec![1, 2, 3]).encrypt(&[0; 32].into());
