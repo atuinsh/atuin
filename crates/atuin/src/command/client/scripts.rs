@@ -569,7 +569,8 @@ impl Cmd {
         history_db: &impl Database,
     ) -> Result<()> {
         let host_id = Settings::host_id().await?;
-        let encryption_key = atuin_client::encryption::load_key(settings)?;
+        let encryption_key =
+            atuin_client::encryption::paseto_v4::Key::try_load_from_path(&settings.key_path)?;
 
         let script_store = ScriptStore::new(store, host_id, encryption_key);
         let script_db =

@@ -326,7 +326,9 @@ pub async fn run(
 
     // Load aliases for expansion
     let alias_map: HashMap<String, String> = if settings.dotfiles.enabled {
-        if let Ok(encryption_key) = encryption::load_key(settings) {
+        if let Ok(encryption_key) =
+            encryption::paseto_v4::Key::try_load_from_path(&settings.key_path)
+        {
             let host_id = Settings::host_id().await?;
             let alias_store = AliasStore::new(store, host_id, encryption_key);
 

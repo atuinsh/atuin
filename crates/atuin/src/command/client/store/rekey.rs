@@ -1,12 +1,7 @@
 use clap::Args;
-use eyre::{Result, bail};
-use tokio::{fs::File, io::AsyncWriteExt};
+use eyre::Result;
 
-use atuin_client::{
-    encryption::{load_key, paseto_v4},
-    record::sqlite_store::SqliteStore,
-    settings::Settings,
-};
+use atuin_client::{encryption::paseto_v4, record::sqlite_store::SqliteStore, settings::Settings};
 
 #[derive(Args, Debug)]
 pub struct Rekey {
@@ -25,14 +20,12 @@ impl Rekey {
             paseto_v4::Key::generate()
         };
 
-        let current_key = load_key(settings)?;
+        let current_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
 
         store.re_encrypt(&current_key, &key).await?;
 
         println!("Store rewritten. Saving new key");
-        let mut file = File::create(settings.key_path.clone()).await?;
-        file.write_all(key.encode().dangerously_leak_secret().as_bytes())
-            .await?;
+        key.try_write_path(&settings.key_path)?;
 
         Ok(())
     }

@@ -156,8 +156,8 @@ impl Cmd {
             return Ok(());
         }
 
-        let encryption_key =
-            encryption::load_key(settings).context("could not load encryption key")?;
+        let encryption_key = encryption::paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .context("could not load encryption key")?;
         let host_id = Settings::host_id().await?;
 
         let var_store = VarStore::new(store, host_id, encryption_key);

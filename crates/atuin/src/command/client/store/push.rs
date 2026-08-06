@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use atuin_client::{
     api_client::Client,
-    encryption::load_key,
+    encryption::paseto_v4,
     record::sync::Operation,
     record::{sqlite_store::SqliteStore, sync},
     settings::Settings,
@@ -67,7 +67,7 @@ impl Push {
 
         // Skip on --force: that path intentionally replaces remote with local.
         if !self.force {
-            let key = load_key(settings)?;
+            let key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
             sync::check_encryption_key(&client, &remote_index, &key)
                 .await
                 .map_err(crate::print_error::format_sync_error)?;

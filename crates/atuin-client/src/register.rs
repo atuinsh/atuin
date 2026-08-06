@@ -20,7 +20,7 @@ pub async fn register_classic(
     let meta = Settings::meta_store().await?;
     meta.save_session(&session.session).await?;
 
-    let _key = crate::encryption::load_key(settings)?;
+    let _key = crate::encryption::paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
 
     Ok(session.session)
 }

@@ -1,12 +1,11 @@
 use std::io;
 
 use clap::Parser;
-use eyre::{Context, Ok, Result, bail};
-use tokio::{fs::File, io::AsyncWriteExt};
+use eyre::{Context, Result, bail};
 
 use atuin_client::{
     auth::{self, AuthClient, AuthResponse},
-    encryption::{load_key, paseto_v4},
+    encryption::paseto_v4,
     record::sqlite_store::SqliteStore,
     record::sync::{self, SyncError},
     settings::{Settings, SyncAuth},
@@ -112,7 +111,7 @@ impl Cmd {
         } else {
             // Interactive login via browser OAuth flow.
             if self.from_registration {
-                load_key(settings)?;
+                paseto_v4::Key::try_load_from_path(&settings.key_path)?;
             } else {
                 self.prompt_and_store_key(settings, store).await?;
             }
@@ -206,11 +205,10 @@ impl Cmd {
 
         match loaded_key {
             None => {
-                if !key_path.exists() {
-                    panic!(
-                        "No key provided and no existing key file found. Please use 'atuin key' on your other machine, or recover your key from a backup"
-                    )
-                }
+                assert!(
+                    key_path.exists(),
+                    "No key provided and no existing key file found. Please use 'atuin key' on your other machine, or recover your key from a backup"
+                );
 
                 let bytes = fs_err::read_to_string(key_path).context(format!(
                     "Existing key file at '{}' could not be read",
@@ -228,9 +226,7 @@ impl Cmd {
             }
             Some(k) => {
                 if !key_path.exists() {
-                    let mut file = File::create(key_path).await?;
-                    file.write_all(k.encode().dangerously_leak_secret().as_bytes())
-                        .await?;
+                    k.try_write_path(key_path)?;
 
                     return Ok(());
                 }
@@ -240,7 +236,7 @@ impl Cmd {
 
                 // 1. check if the saved key and the provided key match. if so, nothing to do.
                 // 2. if not, re-encrypt the local history and overwrite the key
-                let current_key = load_key(settings)?;
+                let current_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
 
                 if k != current_key {
                     println!("\nRe-encrypting local store with new key");
@@ -248,9 +244,7 @@ impl Cmd {
                     store.re_encrypt(&current_key, &k).await?;
 
                     println!("Writing new key");
-                    let mut file = File::create(key_path).await?;
-                    file.write_all(k.encode().dangerously_leak_secret().as_bytes())
-                        .await?;
+                    k.try_write_path(key_path)?;
                 }
 
                 Ok(())
@@ -260,7 +254,8 @@ impl Cmd {
 }
 
 async fn verify_key_against_remote(settings: &Settings) -> Result<()> {
-    let key = load_key(settings).context("could not load encryption key for verification")?;
+    let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+        .context("could not load encryption key for verification")?;
 
     let client = sync::build_client(settings).await?;
     let remote_index = match client.record_status().await {

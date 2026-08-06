@@ -239,7 +239,7 @@ impl Cmd {
         };
         settings.keymap_mode_shell = self.keymap_mode;
 
-        let encryption_key = encryption::load_key(settings)?;
+        let encryption_key = encryption::paseto_v4::Key::try_load_from_path(&settings.key_path)?;
 
         let host_id = Settings::host_id().await?;
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);

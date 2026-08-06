@@ -57,8 +57,9 @@ impl Cmd {
             Self::Register(r) => r.run(&settings, &store).await,
             Self::Status => status::run(&settings).await,
             Self::Key { base64 } => {
-                use atuin_client::encryption::load_key;
-                let key = load_key(&settings).wrap_err("could not load encryption key")?;
+                use atuin_client::encryption::paseto_v4;
+                let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+                    .wrap_err("could not load encryption key")?;
 
                 if base64 {
                     println!("{}", key.encode().dangerously_leak_secret());
@@ -77,7 +78,8 @@ async fn run(
     db: &impl Database,
     store: SqliteStore,
 ) -> Result<()> {
-    let encryption_key = encryption::load_key(settings).context("could not load encryption key")?;
+    let encryption_key = encryption::paseto_v4::Key::try_load_from_path(&settings.key_path)
+        .context("could not load encryption key")?;
 
     let host_id = Settings::host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key.clone());

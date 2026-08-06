@@ -22,7 +22,8 @@ pub async fn build(
     downloaded: Option<&[RecordId]>,
 ) -> Result<()> {
     let encryption_key =
-        atuin_client::encryption::load_key(settings).context("could not load encryption key")?;
+        atuin_client::encryption::paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .context("could not load encryption key")?;
 
     let host_id = Settings::host_id().await?;
 

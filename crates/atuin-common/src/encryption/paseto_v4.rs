@@ -1,5 +1,5 @@
 //!  utilities for atuin.
-use std::array::TryFromSliceError;
+use std::{array::TryFromSliceError, fs, io::Write, path::Path};
 
 use base64::{
     Engine,
@@ -22,11 +22,10 @@ pub type ImplicitAssertion<'a> = rusty_paseto::ImplicitAssertion<'a>;
 pub type Nonce<'a> = rusty_paseto::PasetoNonce<'a, rusty_paseto::V4, rusty_paseto::Local>;
 
 /// Used to encode the given raw bytes into a string before encrypting. See relevant docs.
-const PAYLOAD_ENCODER: &'static base64::engine::general_purpose::GeneralPurpose =
-    &B64_URL_SAFE_NO_PAD;
+const PAYLOAD_ENCODER: &base64::engine::general_purpose::GeneralPurpose = &B64_URL_SAFE_NO_PAD;
 
 /// Used to encode the key in [`Key::encode`].
-const KEY_ENCODER: &'static base64::engine::general_purpose::GeneralPurpose = &B64_STANDARD;
+const KEY_ENCODER: &base64::engine::general_purpose::GeneralPurpose = &B64_STANDARD;
 
 #[derive(Debug, Error)]
 pub enum KeyDecodingError {
@@ -50,6 +49,33 @@ pub enum MnemonicLoadingError {
     InvalidMnemonic,
     #[error("key was not the correct length")]
     InvalidLength,
+}
+
+#[derive(Debug, Error)]
+pub enum KeyFileLoadingError {
+    #[error("the given key path does not exist")]
+    NoEntry,
+    #[error("unexpected io error: {_0}")]
+    Io(#[from] std::io::Error),
+    #[error("failed to decode the loaded key: {_0}")]
+    Decoding(#[from] KeyDecodingError),
+}
+
+#[derive(Debug, Error)]
+pub enum KeyFileStoringError {
+    #[error("the given key path already exists")]
+    AlreadyExists,
+    #[error("unexpected io error: {_0}")]
+    Io(#[from] std::io::Error),
+}
+
+#[derive(Debug, Error)]
+pub enum KeyFileLoadOrGenerateError {
+    #[error("failed to decode the loaded key: {_0}")]
+    Decoding(#[from] KeyDecodingError),
+
+    #[error("unexpected io error: {_0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// A type which contains a [`Key`] encoded as a B64 string. See [`Key::encode`] for more details.
@@ -174,11 +200,58 @@ impl Key {
                         }
                         Ok(key.into())
                     }
-                    _ => {
-                        return Err(KeyDecodingError::InvalidToken);
-                    }
+                    _ => Err(KeyDecodingError::InvalidToken),
                 }
             }
+        }
+    }
+
+    /// Try to load the [`Self::encode`]d file from the given path.
+    ///
+    /// Mostly serves as a convenience function.
+    pub fn try_load_from_path(path: &Path) -> Result<Self, KeyFileLoadingError> {
+        if !path.exists() {
+            return Err(KeyFileLoadingError::NoEntry);
+        }
+
+        // TODO(markovejnovic): Whether we should use fs_err or not is up for debate, but it was
+        // used here historically, so we'll use it.
+        let text = fs_err::read_to_string(path)?;
+        Ok(Self::decode(&text)?)
+    }
+
+    /// Attempt to write this [`Self::encode`]d key into the given path.
+    ///
+    /// Refuses to overwrite a file that already exists.
+    pub fn try_write_path(&self, path: &Path) -> Result<(), KeyFileStoringError> {
+        if path.exists() {
+            return Err(KeyFileStoringError::AlreadyExists);
+        }
+
+        let mut file = fs::File::create(path)?;
+        file.write_all(self.encode().dangerously_leak_secret().as_bytes())?;
+
+        Ok(())
+    }
+
+    /// [`Self::try_load_from_path`], except if the file doesn't exist, creates a key through
+    /// [`Self::generate`], stores it and returns it.
+    pub fn try_load_or_generate(path: &Path) -> Result<Self, KeyFileLoadOrGenerateError> {
+        match Self::try_load_from_path(path) {
+            Ok(s) => Ok(s),
+            Err(KeyFileLoadingError::NoEntry) => {
+                let key = Self::generate();
+                match key.try_write_path(path) {
+                    Ok(()) => Ok(key),
+                    Err(KeyFileStoringError::AlreadyExists) => {
+                        // Technically possible, but so rare it's not worth catching.
+                        panic!("File which does not exist immediately afterwards found existing.");
+                    }
+                    Err(KeyFileStoringError::Io(io)) => Err(io.into()),
+                }
+            }
+            Err(KeyFileLoadingError::Io(io)) => Err(io.into()),
+            Err(KeyFileLoadingError::Decoding(d)) => Err(d.into()),
         }
     }
 
@@ -188,6 +261,9 @@ impl Key {
     }
 
     /// Attempt to construct this key from a mnemonic.
+    ///
+    /// This has quite some logic associated with it that is of debatable decision. **Please read
+    /// the implementation before using as it _could_ be a footgun for your use-case.**
     pub fn try_from_mnemonic(mnemonic: &str) -> Result<Self, MnemonicLoadingError> {
         match bip39::Mnemonic::from_phrase(mnemonic, bip39::Language::English) {
             Ok(mnemonic) => Ok(Self::try_from(mnemonic.entropy())

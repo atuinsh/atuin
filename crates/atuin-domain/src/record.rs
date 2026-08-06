@@ -89,8 +89,6 @@ pub struct Record<Data> {
     pub data: Data,
 }
 
-/// Extra data from the record that should be encoded in the data
-
 impl<Data> Record<Data> {
     pub fn append(&self, data: Vec<u8>) -> Record<DecryptedData> {
         Record::builder()
@@ -110,7 +108,7 @@ impl<Data> Record<Data> {
             timestamp: self.timestamp,
             version: self.version.clone(),
             tag: self.tag.clone(),
-            data: data,
+            data,
         }
     }
 }

@@ -1,12 +1,8 @@
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::api::LoginRequest;
-use eyre::{Context, Result, bail};
-use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
+use eyre::Result;
 
-use crate::{
-    api_client, encryption::load_key, record::sqlite_store::SqliteStore, settings::Settings,
-};
+use crate::{api_client, record::sqlite_store::SqliteStore, settings::Settings};
 
 pub async fn login(
     settings: &Settings,
@@ -21,16 +17,14 @@ pub async fn login(
     let key_path = &settings.key_path;
 
     if !key_path.exists() {
-        let mut file = File::create(key_path).await?;
-        file.write_all(key.encode().dangerously_leak_secret().as_bytes())
-            .await?;
+        key.try_write_path(key_path)?;
     } else {
         // we now know that the user has logged in specifying a key, AND that the key path
         // exists
 
         // 1. check if the saved key and the provided key match. if so, nothing to do.
         // 2. if not, re-encrypt the local history and overwrite the key
-        let current_key = load_key(settings)?;
+        let current_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
 
         if key != current_key {
             println!("\nRe-encrypting local store with new key");
@@ -38,9 +32,7 @@ pub async fn login(
             store.re_encrypt(&current_key, &key).await?;
 
             println!("Writing new key");
-            let mut file = File::create(key_path).await?;
-            file.write_all(key.encode().dangerously_leak_secret().as_bytes())
-                .await?;
+            key.try_write_path(key_path)?;
         }
     }
 

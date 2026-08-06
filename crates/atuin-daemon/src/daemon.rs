@@ -447,7 +447,8 @@ impl DaemonBuilder {
 
         // Load encryption key
         let encryption_key =
-            encryption::load_key(&self.settings).context("could not load encryption key")?;
+            encryption::paseto_v4::Key::try_load_from_path(&self.settings.key_path)
+                .context("could not load encryption key")?;
 
         // Create the event bus
         let (event_tx, _) = broadcast::channel(64);
