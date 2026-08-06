@@ -101,7 +101,7 @@ impl From<&PasetoV4Key>
 
 impl From<&PasetoV4Key> for rusty_paseto::Key<32> {
     fn from(value: &PasetoV4Key) -> Self {
-        rusty_paseto::Key::<32>::from(value.0)
+        value.0.into()
     }
 }
 
