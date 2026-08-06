@@ -446,7 +446,7 @@ impl DaemonBuilder {
             .ok_or_else(|| eyre::eyre!("history_db is required"))?;
 
         // Load encryption key
-        let encryption_key = paseto_v4::Key::try_load_from_path(&self.settings.key_path)
+        let encryption_key = paseto_v4::Key::try_load_or_generate(&self.settings.key_path)
             .context("could not load encryption key")?;
 
         // Create the event bus
