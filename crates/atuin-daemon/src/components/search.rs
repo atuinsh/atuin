@@ -19,10 +19,14 @@ use crate::{
     daemon::{Component, DaemonHandle},
     events::DaemonEvent,
     search::{
-        FilterMode, IndexFilterMode, SearchIndex, SearchRequest, SearchResponse,
+        FilterMode, IndexFilterMode, SearchIndex, SearchRequest, SearchResponse, SuggestReply,
+        SuggestRequest, Suggestion,
         search_server::{Search as SearchSvc, SearchServer},
     },
 };
+
+/// Cap on suggestions returned per request, whatever the client asks for.
+const SUGGEST_LIMIT: u32 = 50;
 
 const PAGE_SIZE: usize = 5000;
 const RESULTS_LIMIT: u32 = 200;
@@ -410,6 +414,38 @@ impl SearchSvc for SearchGrpcService {
         // Convert receiver to stream
         let out_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
         Ok(Response::new(Box::pin(out_stream)))
+    }
+
+    #[instrument(skip_all, level = Level::TRACE, name = "suggest_rpc")]
+    async fn suggest(
+        &self,
+        request: Request<SuggestRequest>,
+    ) -> Result<Response<SuggestReply>, Status> {
+        let request = request.into_inner();
+        let limit = request.limit.min(SUGGEST_LIMIT) as usize;
+
+        // The index is shared across clients and carries whichever shell
+        // filter it was last built for, so this has to rebuild on a
+        // mismatch exactly as `search` does. Reading it directly would hand
+        // the pty-proxy whatever filter the last interactive search left
+        // behind, which is nobody's configuration in particular.
+        let shells = OrFilter::from_list(request.shells).unwrap_or_default();
+        let index = match self.maybe_rebuild_index(shells).await {
+            Ok(Some(new_index)) => {
+                let mut guard = self.index.write().await;
+                *guard = new_index;
+                guard.downgrade()
+            }
+            Ok(None) => self.index.read().await,
+            Err(()) => return Err(Status::internal("failed to build index")),
+        };
+
+        let suggestions = index
+            .suggest(&request.query, limit)
+            .into_iter()
+            .map(|command| Suggestion { command })
+            .collect();
+        Ok(Response::new(SuggestReply { suggestions }))
     }
 }
 

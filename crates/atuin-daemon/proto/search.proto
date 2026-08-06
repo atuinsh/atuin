@@ -31,6 +31,26 @@ message SearchResponse {
   repeated bytes ids = 2;
 }
 
+// Prefix completions for the pty-proxy suggestion UI: commands that start
+// with the typed line, best first.
+message SuggestRequest {
+  string query = 1;
+  uint32 limit = 2;
+  // Which shells' commands to consider. Empty means all, matching
+  // SearchRequest.shells; the index is rebuilt when this differs from the
+  // filter it currently holds.
+  repeated string shells = 3;
+}
+
+message Suggestion {
+  string command = 1;
+}
+
+message SuggestReply {
+  repeated Suggestion suggestions = 1;
+}
+
 service Search {
   rpc Search(stream SearchRequest) returns (stream SearchResponse);
+  rpc Suggest(SuggestRequest) returns (SuggestReply);
 }

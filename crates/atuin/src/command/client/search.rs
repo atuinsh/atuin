@@ -24,7 +24,7 @@ mod history_list;
 mod inspector;
 mod interactive;
 pub mod keybindings;
-mod syntax;
+pub(in crate::command) mod syntax;
 
 use atuin_common::time::UtcOffsetSpec;
 

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand, ValueEnum};
 
-use crate::{CommandCaptureSink, runtime};
+use crate::{CommandCaptureSink, runtime, suggest::SuggestionProvider};
 
 #[derive(Args, Debug)]
 pub struct PtyProxy {
@@ -46,34 +46,33 @@ pub enum Shell {
     Nu,
 }
 
+/// Capabilities the embedding binary injects into the proxy runtime.
+#[derive(Default)]
+pub struct RunOptions {
+    pub command_capture_sink: Option<CommandCaptureSink>,
+    pub suggestion_provider: Option<SuggestionProvider>,
+    /// Invoked once when the session shell's first prompt appears (OSC
+    /// 133), i.e. when its startup has finished — the moment to warm
+    /// caches without competing with it. Requires a suggestion provider.
+    pub session_ready: Option<Box<dyn FnOnce() + Send>>,
+    /// Umask to restore in the spawned shell — atuin tightens its own
+    /// process-wide umask early, which the shell must not inherit (#3695).
+    pub child_umask: Option<u32>,
+}
+
 pub(crate) struct RuntimeOptions {
     pub(crate) debug_osc133: bool,
     pub(crate) shell: Option<PathBuf>,
-    pub(crate) command_capture_sink: Option<CommandCaptureSink>,
-    pub(crate) child_umask: Option<u32>,
-}
-
-impl RuntimeOptions {
-    fn new(
-        debug_osc133: bool,
-        shell: Option<PathBuf>,
-        command_capture_sink: Option<CommandCaptureSink>,
-        child_umask: Option<u32>,
-    ) -> Self {
-        Self {
-            debug_osc133: debug_osc133 || env_flag("ATUIN_PTY_PROXY_DEBUG"),
-            shell,
-            command_capture_sink,
-            child_umask,
-        }
-    }
+    pub(crate) hooks: RunOptions,
 }
 
 impl PtyProxy {
-    /// `child_umask` is the umask to restore in the spawned shell. Atuin sets
-    /// a restrictive process-wide umask early in startup, which the shell
-    /// would otherwise inherit (#3695).
-    pub fn run(self, command_capture_sink: Option<CommandCaptureSink>, child_umask: Option<u32>) {
+    /// The shell the proxy will spawn, when given explicitly via `--shell`.
+    pub fn shell(&self) -> Option<&std::path::Path> {
+        self.shell.as_deref()
+    }
+
+    pub fn run(self, hooks: RunOptions) {
         if self.cmd.is_some() && self.shell.is_some() {
             eprintln!("atuin pty-proxy: --shell only applies when no subcommand is given");
             std::process::exit(2);
@@ -85,12 +84,11 @@ impl PtyProxy {
                     std::process::exit(1);
                 }
             }
-            None => runtime::main(RuntimeOptions::new(
-                self.debug_osc133,
-                self.shell,
-                command_capture_sink,
-                child_umask,
-            )),
+            None => runtime::main(RuntimeOptions {
+                debug_osc133: self.debug_osc133 || env_flag("ATUIN_PTY_PROXY_DEBUG"),
+                shell: self.shell,
+                hooks,
+            }),
         }
     }
 }
@@ -145,7 +143,7 @@ fn shell_from_name(name: &str) -> Option<Shell> {
     }
 }
 
-fn env_flag(name: &str) -> bool {
+pub(crate) fn env_flag(name: &str) -> bool {
     std::env::var(name).is_ok_and(|value| {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),

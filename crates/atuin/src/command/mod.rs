@@ -14,6 +14,9 @@ mod gen_completions;
 
 mod external;
 
+#[cfg(all(feature = "client", feature = "pty-proxy", unix))]
+mod suggest;
+
 #[derive(Subcommand)]
 #[command(infer_subcommands = true)]
 #[allow(clippy::large_enum_variant)]
@@ -92,15 +95,48 @@ fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
     #[allow(clippy::useless_conversion)]
     let child_umask = Some(u32::from(prev_umask.bits()));
 
-    #[cfg(feature = "daemon")]
-    proxy.run(semantic_command_capture_sink(), child_umask);
+    let trace_start = std::time::Instant::now();
+    let trace = |name: &str| {
+        if std::env::var_os("ATUIN_PTY_PROXY_TRACE").is_some_and(|v| v == "1") {
+            eprintln!(
+                "atuin pty-proxy: trace: {name}: total {:?}\r",
+                trace_start.elapsed()
+            );
+        }
+    };
 
+    #[cfg(any(feature = "daemon", feature = "client"))]
+    let settings = atuin_client::settings::Settings::new().ok();
+    trace("load settings");
+
+    #[cfg(feature = "daemon")]
+    let command_capture_sink = settings.clone().and_then(semantic_command_capture_sink);
     #[cfg(not(feature = "daemon"))]
-    proxy.run(None, child_umask);
+    let command_capture_sink = None;
+    trace("command capture sink");
+
+    #[cfg(feature = "client")]
+    let (suggestion_provider, session_ready) = settings
+        .and_then(|settings| suggest::history_suggestion_provider(settings, proxy.shell()))
+        .map_or((None, None), |hooks| {
+            (Some(hooks.provider), hooks.session_ready)
+        });
+    #[cfg(not(feature = "client"))]
+    let (suggestion_provider, session_ready) = (None, None);
+    trace("suggestion provider");
+
+    proxy.run(atuin_pty_proxy::RunOptions {
+        command_capture_sink,
+        suggestion_provider,
+        session_ready,
+        child_umask,
+    });
 }
 
 #[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]
-fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink> {
+fn semantic_command_capture_sink(
+    settings: atuin_client::settings::Settings,
+) -> Option<atuin_pty_proxy::CommandCaptureSink> {
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -108,7 +144,6 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
         return None;
     }
 
-    let settings = atuin_client::settings::Settings::new().ok()?;
     let (tx, rx) = mpsc::sync_channel::<atuin_pty_proxy::CommandCapture>(128);
 
     std::thread::spawn(move || {

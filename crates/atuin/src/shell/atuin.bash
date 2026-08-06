@@ -8,22 +8,32 @@ fi
 ATUIN_STTY=$(stty -g)
 ATUIN_HISTORY_ID=""
 
+# OSC 133 is a public convention, so every prompt the proxy sees looks alike:
+# a shell on the far side of an ssh, or in a container, emits the same
+# markers. The proxy hands us a per-session mark through the environment —
+# which ssh does not forward and a container does not inherit — and ignores
+# any prompt that cannot show it. Empty when no proxy is listening.
+__atuin_osc133_mark=""
+if [[ -n "${ATUIN_PTY_PROXY_MARK:-}" ]]; then
+    __atuin_osc133_mark=";atuin_mark=${ATUIN_PTY_PROXY_MARK}"
+fi
+
 __atuin_osc133_command_executed() {
     [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
     [[ -n "${ATUIN_HISTORY_ID:-}" && "$ATUIN_HISTORY_ID" != "__bash_preexec_failure__" ]] || return
 
-    printf '\033]133;C\a'
+    printf '\033]133;C%s\a' "$__atuin_osc133_mark"
 }
 
 __atuin_osc133_command_finished() {
     [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
     [[ -n "${ATUIN_HISTORY_ID:-}" && "$ATUIN_HISTORY_ID" != "__bash_preexec_failure__" ]] || return
 
-    printf '\033]133;D;%s;history_id=%s;session_id=%s\a' "$1" "$ATUIN_HISTORY_ID" "${ATUIN_SESSION:-}"
+    printf '\033]133;D;%s;history_id=%s;session_id=%s%s\a' "$1" "$ATUIN_HISTORY_ID" "${ATUIN_SESSION:-}" "$__atuin_osc133_mark"
 }
 
-__atuin_osc133_prompt_start=$'\001\033]133;A;cl=line\a\002'
-__atuin_osc133_prompt_end=$'\001\033]133;B\a\002'
+__atuin_osc133_prompt_start=$'\001\033]133;A;cl=line'"${__atuin_osc133_mark}"$'\a\002'
+__atuin_osc133_prompt_end=$'\001\033]133;B'"${__atuin_osc133_mark}"$'\a\002'
 
 __atuin_osc133_wrap_prompt() {
     local __atuin_prompt="${PS1-}"

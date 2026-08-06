@@ -4,11 +4,15 @@ use std::sync::atomic::{AtomicU16, Ordering};
 
 use atuin_common::ansi;
 
-use crate::osc133::{Event, Params, Parser, Zone};
+use crate::osc133::{Event, Params, Parser, Segment, Zone};
 
 const HISTORY_ID_PARAM: &str = "history_id";
 const SESSION_ID_PARAM: &str = "session_id";
 const MAX_OUTPUT_CAPTURE_BYTES: usize = 1024 * 1024;
+/// Prompt and command zones are lines, not streams; a marker desync (a
+/// program emitting an input marker and then a firehose) must not buffer
+/// the firehose.
+const MAX_LINE_CAPTURE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandCapture {
@@ -38,7 +42,6 @@ struct CaptureBuffers {
 
 pub(crate) struct CommandCaptureTracker {
     parser: Parser,
-    zone: Zone,
     buffers: CaptureBuffers,
     cols: Arc<AtomicU16>,
 }
@@ -47,127 +50,125 @@ impl CommandCaptureTracker {
     pub(crate) fn new(cols: Arc<AtomicU16>) -> Self {
         Self {
             parser: Parser::new(),
-            zone: Zone::Unknown,
             buffers: CaptureBuffers::default(),
             cols,
         }
     }
 
     pub(crate) fn push(&mut self, data: &[u8], mut on_capture: impl FnMut(CommandCapture)) {
-        let mut events = Vec::new();
-        self.parser
-            .push_located(data, |located| events.push(located));
-
-        let mut start = 0;
-        for located in events {
-            let marker_start = located.start_offset.min(data.len()).max(start);
-            let offset = located.offset.min(data.len());
-            self.append(&data[start..marker_start]);
-            self.handle_event(located.event, &located.params, &mut on_capture);
-            self.zone = located.zone;
-            start = offset;
-        }
-
-        let append_end = self
-            .parser
-            .incomplete_osc_sequence_start()
-            .map_or(data.len(), |sequence_start| {
-                sequence_start.min(data.len()).max(start)
-            });
-        if start < append_end {
-            self.append(&data[start..append_end]);
-        }
+        let buffers = &mut self.buffers;
+        let cols = &self.cols;
+        self.parser.segments(data, |segment| match segment {
+            Segment::Text(zone, bytes) => buffers.append(zone, bytes),
+            Segment::Marker { before, located } => handle_event(
+                buffers,
+                cols,
+                before,
+                located.event,
+                &located.params,
+                &mut on_capture,
+            ),
+        });
     }
+}
 
-    fn append(&mut self, data: &[u8]) {
-        match self.zone {
-            Zone::Prompt => self.buffers.prompt.extend_from_slice(data),
-            Zone::Input => self.buffers.command.extend_from_slice(data),
+fn append_capped(buf: &mut Vec<u8>, data: &[u8]) {
+    let remaining = MAX_LINE_CAPTURE_BYTES.saturating_sub(buf.len());
+    let retained = data.len().min(remaining);
+    if retained > 0 {
+        buf.extend_from_slice(&data[..retained]);
+    }
+}
+
+impl CaptureBuffers {
+    fn append(&mut self, zone: Zone, data: &[u8]) {
+        match zone {
+            Zone::Prompt => append_capped(&mut self.prompt, data),
+            Zone::Input => append_capped(&mut self.command, data),
             Zone::Output => self.append_output(data),
             Zone::Unknown => {}
         }
     }
 
     fn append_output(&mut self, data: &[u8]) {
-        self.buffers.output_observed_bytes = self
-            .buffers
-            .output_observed_bytes
-            .saturating_add(data.len() as u64);
+        self.output_observed_bytes = self.output_observed_bytes.saturating_add(data.len() as u64);
 
-        if self.buffers.output_truncated {
+        if self.output_truncated {
             return;
         }
 
-        let remaining = MAX_OUTPUT_CAPTURE_BYTES.saturating_sub(self.buffers.output.len());
+        let remaining = MAX_OUTPUT_CAPTURE_BYTES.saturating_sub(self.output.len());
         let retained = data.len().min(remaining);
-        self.buffers.output_truncated = retained < data.len();
+        self.output_truncated = retained < data.len();
 
         if retained > 0 {
-            self.buffers.output.extend_from_slice(&data[..retained]);
+            self.output.extend_from_slice(&data[..retained]);
         }
     }
+}
 
-    fn handle_event(
-        &mut self,
-        event: Event,
-        params: &Params,
-        on_capture: &mut impl FnMut(CommandCapture),
-    ) {
-        match event {
-            Event::PromptStart => {
-                if self.zone != Zone::Prompt {
-                    self.buffers = CaptureBuffers::default();
-                }
-            }
-            Event::CommandStart | Event::CommandExecuted => {}
-            Event::CommandFinished { exit_code } => {
-                let Some(history_id) = params.get(HISTORY_ID_PARAM).map(str::to_owned) else {
-                    return;
-                };
-
-                if exit_code.is_some() || self.buffers.exit_code.is_none() {
-                    self.buffers.exit_code = exit_code;
-                }
-                self.buffers.history_id = Some(history_id);
-                self.buffers.session_id = params.get(SESSION_ID_PARAM).map(str::to_owned);
-
-                if let Some(capture) = self.finish_capture() {
-                    on_capture(capture);
-                }
+fn handle_event(
+    buffers: &mut CaptureBuffers,
+    cols: &AtomicU16,
+    zone_before: Zone,
+    event: Event,
+    params: &Params,
+    on_capture: &mut impl FnMut(CommandCapture),
+) {
+    match event {
+        Event::PromptStart => {
+            if zone_before != Zone::Prompt {
+                *buffers = CaptureBuffers::default();
             }
         }
-    }
+        Event::CommandStart | Event::CommandExecuted => {}
+        Event::CommandFinished { exit_code } => {
+            let Some(history_id) = params.get(HISTORY_ID_PARAM).map(str::to_owned) else {
+                return;
+            };
 
-    fn finish_capture(&mut self) -> Option<CommandCapture> {
-        let buffers = std::mem::take(&mut self.buffers);
-        // A terminal width of 0 (e.g. before the size is known) falls back to 1.
-        let cols = NonZeroU16::new(self.cols.load(Ordering::Relaxed)).unwrap_or(NonZeroU16::MIN);
-        let prompt = ansi::to_plain_text(&buffers.prompt, cols);
-        let command = ansi::to_plain_text(&buffers.command, cols)
-            .trim_matches(|c| c == '\r' || c == '\n')
-            .to_string();
-        let output = ansi::to_plain_text(&buffers.output, cols);
-        let output_truncated = buffers.output_truncated;
-        let output_observed_bytes = buffers.output_observed_bytes;
-        let exit_code = buffers.exit_code;
-        let history_id = buffers.history_id;
-        let session_id = buffers.session_id;
+            if exit_code.is_some() || buffers.exit_code.is_none() {
+                buffers.exit_code = exit_code;
+            }
+            buffers.history_id = Some(history_id);
+            buffers.session_id = params.get(SESSION_ID_PARAM).map(str::to_owned);
 
-        if command.is_empty() && output.is_empty() {
-            return None;
+            if let Some(capture) = finish_capture(buffers, cols) {
+                on_capture(capture);
+            }
         }
-
-        Some(CommandCapture {
-            prompt,
-            command,
-            output,
-            exit_code,
-            history_id,
-            session_id,
-            output_truncated,
-            output_observed_bytes,
-        })
     }
+}
+
+fn finish_capture(buffers: &mut CaptureBuffers, cols: &AtomicU16) -> Option<CommandCapture> {
+    let buffers = std::mem::take(buffers);
+    // A terminal width of 0 (e.g. before the size is known) falls back to 1.
+    let cols = NonZeroU16::new(cols.load(Ordering::Relaxed)).unwrap_or(NonZeroU16::MIN);
+    let prompt = ansi::to_plain_text(&buffers.prompt, cols);
+    let command = ansi::to_plain_text(&buffers.command, cols)
+        .trim_matches(|c| c == '\r' || c == '\n')
+        .to_string();
+    let output = ansi::to_plain_text(&buffers.output, cols);
+    let output_truncated = buffers.output_truncated;
+    let output_observed_bytes = buffers.output_observed_bytes;
+    let exit_code = buffers.exit_code;
+    let history_id = buffers.history_id;
+    let session_id = buffers.session_id;
+
+    if command.is_empty() && output.is_empty() {
+        return None;
+    }
+
+    Some(CommandCapture {
+        prompt,
+        command,
+        output,
+        exit_code,
+        history_id,
+        session_id,
+        output_truncated,
+        output_observed_bytes,
+    })
 }
 
 #[cfg(test)]

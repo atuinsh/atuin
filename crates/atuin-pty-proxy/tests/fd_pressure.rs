@@ -72,8 +72,6 @@ fn spawn_proxy(rows: u16, cols: u16) -> TestProxy {
         rows,
         cols,
         dir: tmp.path().join("proxy"),
-        debug_osc133: false,
-        command_capture_sink: None,
     })
     .expect("spawn proxy core");
 
