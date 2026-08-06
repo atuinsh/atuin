@@ -31,6 +31,13 @@ message SearchResponse {
   repeated bytes ids = 2;
 }
 
+message PrepareIndexRequest {
+  repeated string shells = 1;
+}
+
+message PrepareIndexResponse {}
+
 service Search {
   rpc Search(stream SearchRequest) returns (stream SearchResponse);
+  rpc PrepareIndex(PrepareIndexRequest) returns (PrepareIndexResponse);
 }

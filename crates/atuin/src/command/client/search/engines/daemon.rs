@@ -37,21 +37,28 @@ impl Search {
 
     #[instrument(skip_all, level = Level::TRACE, name = "get_daemon_client")]
     async fn get_client(&mut self) -> Result<&mut SearchClient> {
+        // TODO: Ideally we would write this as follows, to avoid an `unwrap`:
+        //
+        //     Ok(match self.client.as_mut() {
+        //         Some(client) => client,
+        //         None => self.client.insert(self.connect().await?),
+        //     })
+        //
+        // However, Rust's borrow checker incorrectly rejects this code. This will be fixed by
+        // Polonius; see https://rust-lang.github.io/rust-project-goals/2026/polonius.html.
+
         if self.client.is_none() {
-            self.connect().await?;
+            return Ok(self.client.insert(self.connect().await?));
         }
         Ok(self.client.as_mut().unwrap())
     }
 
-    async fn connect(&mut self) -> Result<()> {
+    async fn connect(&self) -> Result<SearchClient> {
         #[cfg(unix)]
-        let client = SearchClient::new(self.socket_path.clone()).await?;
+        return SearchClient::new(self.socket_path.clone()).await;
 
         #[cfg(not(unix))]
-        let client = SearchClient::new(self.tcp_port).await?;
-
-        self.client = Some(client);
-        Ok(())
+        SearchClient::new(self.tcp_port).await
     }
 
     fn should_retry(err: &eyre::Report) -> bool {
@@ -107,6 +114,12 @@ impl Search {
             placeholders.join(",")
         );
         Ok(db.query_history(&sql_query).await?)
+    }
+
+    pub async fn prepare_index(&mut self) -> Result<()> {
+        let shells = self.settings.search.shells.to_filter().to_vec_filter();
+        let client = self.get_client().await?;
+        client.prepare_index(shells).await
     }
 }
 

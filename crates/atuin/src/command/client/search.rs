@@ -361,6 +361,14 @@ async fn run_non_interactive(
     Ok(results)
 }
 
+pub async fn prepare_index(settings: &Settings) -> Result<()> {
+    use engines::AnySearchEngine;
+    if let AnySearchEngine::Daemon(mut search) = engines::engine(settings.search_mode(), settings) {
+        search.prepare_index().await?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AuthorPattern, Cmd};

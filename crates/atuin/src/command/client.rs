@@ -129,6 +129,9 @@ pub enum Cmd {
     /// Experimental laboratory features
     #[command(subcommand, hide = true)]
     Lab(lab::Cmd),
+
+    #[command(hide = true)]
+    InternalPrepareSearchIndex,
 }
 
 impl Cmd {
@@ -179,7 +182,10 @@ impl Cmd {
         res
     }
 
-    #[allow(clippy::too_many_lines, clippy::future_not_send)]
+    #[allow(clippy::too_many_lines)]
+    // `atuin_ai::commands::run` is not `Send` because `eye_declare` holds a `StdoutLock` across
+    // await points.
+    #[allow(clippy::future_not_send)]
     async fn run_inner(
         self,
         mut settings: Settings,
@@ -199,6 +205,7 @@ impl Cmd {
             Self::Update(update) => return update.run(&settings).await,
             Self::Config(config) => return config.run(&settings).await,
             Self::Lab(cmd) => return cmd.run(&settings).await,
+            Self::InternalPrepareSearchIndex => return search::prepare_index(&settings).await,
             _ => {}
         }
 
@@ -251,7 +258,8 @@ impl Cmd {
             | Self::Init(_)
             | Self::Doctor
             | Self::Config(_)
-            | Self::Lab(_) => {
+            | Self::Lab(_)
+            | Self::InternalPrepareSearchIndex => {
                 unreachable!()
             }
 
