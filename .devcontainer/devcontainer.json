@@ -1,0 +1,41 @@
+{
+  "name": "atuin-dev",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
+  "remoteUser": "root",
+  "overrideCommand": false,
+  "workspaceFolder": "/workspaces/atuin",
+
+  // Features are applied at `devcontainer build` time, so they bake into the
+  // prebuilt image. The local ./features/atuin is the seed of a future
+  // published ghcr.io/atuinsh/features/atuin.
+  "features": {
+    "./features/atuin": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+    // docker-in-docker works fine under kata (real VM kernel); under runc it
+    // needs a privileged pod. Enable only on the kata template:
+    // "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+
+  // IMPORTANT: lifecycle hooks (postCreateCommand etc.) only run when the
+  // devcontainer CLI/editor *launches* the container. Our sandboxes are
+  // launched by agent-sandbox as plain pods, so hooks never fire there.
+  // Rule: anything the sandbox needs goes in the Dockerfile or entrypoint.sh,
+  // never in a lifecycle hook.
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "vadimcn.vscode-lldb"
+      ]
+    }
+  },
+
+  "containerEnv": {
+    "CARGO_TARGET_DIR": "/workspaces/.cargo-target"
+  }
+}
