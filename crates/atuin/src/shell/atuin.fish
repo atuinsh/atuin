@@ -176,3 +176,6 @@ function _atuin_bind_up
             up-or-search
     end
 end
+
+ATUIN_SHELL=fish atuin __internal prepare-search-index &>/dev/null &
+disown 2>/dev/null

@@ -25,6 +25,7 @@ mod hook;
 mod import;
 mod info;
 mod init;
+mod internal;
 mod kv;
 mod lab;
 mod scripts;
@@ -129,6 +130,30 @@ pub enum Cmd {
     /// Experimental laboratory features
     #[command(subcommand, hide = true)]
     Lab(lab::Cmd),
+
+    /// Internal subcommands, not for direct use by users.
+    #[command(
+        subcommand,
+        hide = true,
+        name = "__internal",
+        help_template = "error: this command is not meant to be accessed directly",
+        disable_help_flag = true,
+        disable_help_subcommand = true
+    )]
+    Internal(internal::Cmd),
+
+    /// We want to exclude the `__internal` subcommand from Clap's `infer_subcommands`; otherwise,
+    /// a user could access it simply by typing `atuin _`. However, Clap has no way to disable
+    /// `infer_subcommands` for a single command. As a workaround, we define a dummy command with
+    /// the same name but with an extra understore, which forces `__internal` to be typed out in
+    /// entirety, since any prefix of the name would be ambiguous.
+    #[command(
+        hide = true,
+        name = "__internal_",
+        disable_help_flag = true,
+        disable_help_subcommand = true
+    )]
+    InternalDecoy,
 }
 
 impl Cmd {
@@ -179,7 +204,10 @@ impl Cmd {
         res
     }
 
-    #[allow(clippy::too_many_lines, clippy::future_not_send)]
+    #[allow(clippy::too_many_lines)]
+    // `atuin_ai::commands::run` is not `Send` because `eye_declare` holds a `StdoutLock` across
+    // await points.
+    #[allow(clippy::future_not_send)]
     async fn run_inner(
         self,
         mut settings: Settings,
@@ -199,6 +227,11 @@ impl Cmd {
             Self::Update(update) => return update.run(&settings).await,
             Self::Config(config) => return config.run(&settings).await,
             Self::Lab(cmd) => return cmd.run(&settings).await,
+            Self::Internal(cmd) => return cmd.run(&settings).await,
+            Self::InternalDecoy => {
+                eprintln!("error: this command is not meant to be accessed directly");
+                std::process::exit(1);
+            }
             _ => {}
         }
 
@@ -251,7 +284,9 @@ impl Cmd {
             | Self::Init(_)
             | Self::Doctor
             | Self::Config(_)
-            | Self::Lab(_) => {
+            | Self::Lab(_)
+            | Self::Internal(_)
+            | Self::InternalDecoy => {
                 unreachable!()
             }
 
@@ -283,6 +318,8 @@ impl Cmd {
 
             #[cfg(feature = "ai")]
             Self::Ai(cmd) => Some(cmd.log_config(settings)),
+
+            Self::Internal(cmd) => cmd.log_config(),
 
             _ => Some(LogConfig::stderr_only()),
         }

@@ -84,3 +84,25 @@ def _custom_keybindings(bindings, **kw):
         @bindings.add(Keys.Up, filter=should_search)
         def up_search(event):
             _search(event, extra_args=["--shell-up-key-binding"])
+
+
+def _atuin_prepare_search_index():
+    env = ${...}.detype()
+    env["ATUIN_SHELL"] = "xonsh"
+    try:
+        # Launch process in the background to avoid blocking the shell.
+        subprocess.Popen(
+            ["atuin", "__internal", "prepare-search-index"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+            start_new_session=True,
+        )
+    except OSError:
+        # Ignore errors; `prepare-search-index` is an optimization only.
+        pass
+
+
+_atuin_prepare_search_index()
+del _atuin_prepare_search_index

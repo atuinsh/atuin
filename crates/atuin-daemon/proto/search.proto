@@ -31,6 +31,16 @@ message SearchResponse {
   repeated bytes ids = 2;
 }
 
+// Tells the daemon to build the search index for the given list of shells.
+// This message gets sent from the shell init scripts, to avoid a delay when
+// the first search request is sent.
+message PrepareIndexRequest {
+  repeated string shells = 1;
+}
+
+message PrepareIndexResponse {}
+
 service Search {
   rpc Search(stream SearchRequest) returns (stream SearchResponse);
+  rpc PrepareIndex(PrepareIndexRequest) returns (PrepareIndexResponse);
 }
