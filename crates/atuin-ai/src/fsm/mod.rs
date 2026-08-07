@@ -476,7 +476,7 @@ impl AgentFsm {
                     input,
                 });
                 self.state = AgentState::Idle { confirmation: None };
-                vec![Effect::Persist]
+                vec![Effect::TurnEnded, Effect::Persist]
             }
 
             (
@@ -1169,7 +1169,7 @@ impl AgentFsm {
         } else {
             // No tools — turn is done, go idle
             self.state = AgentState::Idle { confirmation: None };
-            vec![Effect::Persist]
+            vec![Effect::TurnEnded, Effect::Persist]
         }
     }
 

@@ -685,6 +685,9 @@ pub struct Ai {
     /// Tool capability flags.
     #[serde(default)]
     pub capabilities: AiCapabilities,
+
+    /// Whether the AI TUI surfaces feature tips. `None` = enabled.
+    pub tips: Option<bool>,
 }
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
