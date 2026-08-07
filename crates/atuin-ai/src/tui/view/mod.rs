@@ -882,8 +882,8 @@ mod tests {
     #[test]
     fn elapsed_formats_by_magnitude() {
         assert_eq!(format_elapsed(Duration::from_millis(600)), "0.6 seconds");
-        assert_eq!(format_elapsed(Duration::from_secs_f64(3.24)), "3.2 seconds");
-        assert_eq!(format_elapsed(Duration::from_secs_f64(42.6)), "43 seconds");
+        assert_eq!(format_elapsed(Duration::from_millis(3240)), "3.2 seconds");
+        assert_eq!(format_elapsed(Duration::from_millis(42600)), "43 seconds");
         assert_eq!(format_elapsed(Duration::from_secs(65)), "1m 05s");
         assert_eq!(format_elapsed(Duration::from_secs(154)), "2m 34s");
     }
