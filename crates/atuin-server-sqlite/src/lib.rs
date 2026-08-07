@@ -188,8 +188,8 @@ impl Database for Sqlite {
             .bind(i.timestamp as i64) // throwing away some data, but i64 is still big in terms of time
             .bind(&i.version)
             .bind(&i.tag)
-            .bind(&i.data.data)
-            .bind(&i.data.content_encryption_key)
+            .bind(&i.data.raw)
+            .bind(&i.data.cek)
             .bind(user.id)
             .execute(&mut *tx)
             .await?;

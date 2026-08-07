@@ -72,7 +72,10 @@ tower = "0.5"
 tracing = "0.1"
 tree-sitter = "0.26.8"
 tree-sitter-bash = "0.25.1"
+crypto_secretbox = "0.1.1"
+tiny-bip39 = "2"
 tree-sitter-fish = "3.6.0"
+rmp = { version = "0.8.14" }
 ratatui = "0.30.0"
 sql-builder = "3"
 tempfile = { version = "3.19" }
@@ -84,6 +87,12 @@ vt100 = "0.16"
 regex = "1.10.5"
 toml_edit = "0.25.4"
 url = { version = "2.5", features = ["serde"] }
+# rusty_paserk 0.5.0 (latest) requires rusty_paseto 0.8.0 unfortunately
+rusty_paseto = { version = "0.8.0", default-features = false }
+rusty_paserk = { version = "0.5.0", default-features = false, features = [
+  "v4",
+  "serde",
+] }
 
 [workspace.dependencies.tracing-subscriber]
 version = "0.3"

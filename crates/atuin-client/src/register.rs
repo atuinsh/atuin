@@ -1,6 +1,7 @@
 use eyre::Result;
 
 use crate::{api_client, settings::Settings};
+use atuin_common::encryption::paseto_v4;
 
 pub async fn register_classic(
     settings: &Settings,
@@ -20,7 +21,7 @@ pub async fn register_classic(
     let meta = Settings::meta_store().await?;
     meta.save_session(&session.session).await?;
 
-    let _key = crate::encryption::load_key(settings)?;
+    let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
 
     Ok(session.session)
 }

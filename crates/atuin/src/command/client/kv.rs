@@ -3,7 +3,8 @@ use std::io::{self, IsTerminal, Read};
 use clap::Subcommand;
 use eyre::{Context, Result, eyre};
 
-use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_client::{record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_common::encryption::paseto_v4;
 use atuin_kv::store::KvStore;
 
 #[derive(Subcommand, Debug)]
@@ -63,8 +64,8 @@ pub enum Cmd {
 
 impl Cmd {
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        let encryption_key =
-            encryption::load_key(settings).context("could not load encryption key")?;
+        let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .context("could not load encryption key")?;
 
         let host_id = Settings::host_id().await?;
 

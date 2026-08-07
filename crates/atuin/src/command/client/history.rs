@@ -28,7 +28,6 @@ use atuin_daemon::history::{HistoryEventKind, TailHistoryReply};
 
 use atuin_client::{
     database::{Database, Sqlite, current_context},
-    encryption,
     history::{History, store::HistoryStore},
     record::sqlite_store::SqliteStore,
     settings::{
@@ -36,6 +35,7 @@ use atuin_client::{
         Settings,
     },
 };
+use atuin_common::encryption::paseto_v4;
 
 #[cfg(feature = "sync")]
 use atuin_client::record;
@@ -609,7 +609,8 @@ pub(super) async fn end_history_entry(
     let db = Sqlite::new(db_path, settings.local_timeout).await?;
     let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
-    let encryption_key = encryption::load_key(settings).context("could not load encryption key")?;
+    let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+        .context("could not load encryption key")?;
     let host_id = Settings::host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
@@ -1010,8 +1011,8 @@ impl Cmd {
                 settings.timezone,
             );
         } else {
-            let encryption_key =
-                encryption::load_key(settings).context("could not load encryption key")?;
+            let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+                .context("could not load encryption key")?;
             let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
@@ -1063,8 +1064,8 @@ impl Cmd {
                 settings.timezone,
             );
         } else {
-            let encryption_key =
-                encryption::load_key(settings).context("could not load encryption key")?;
+            let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+                .context("could not load encryption key")?;
             let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
@@ -1130,8 +1131,8 @@ impl Cmd {
                 let db = Sqlite::new(db_path, settings.local_timeout).await?;
                 let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
-                let encryption_key =
-                    encryption::load_key(settings).context("could not load encryption key")?;
+                let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+                    .context("could not load encryption key")?;
 
                 let host_id = Settings::host_id().await?;
                 let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);

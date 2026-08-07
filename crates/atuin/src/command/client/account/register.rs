@@ -7,6 +7,7 @@ use atuin_client::{
     record::sqlite_store::SqliteStore,
     settings::{Settings, SyncAuth},
 };
+use atuin_common::encryption::paseto_v4;
 
 #[derive(Parser, Debug)]
 pub struct Cmd {
@@ -97,7 +98,7 @@ impl Cmd {
                     }
                 }
 
-                let _key = atuin_client::encryption::load_key(settings)?;
+                let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
 
                 println!(
                     "Registration successful! Please make a note of your key (run 'atuin key') and keep it safe."
@@ -146,7 +147,7 @@ impl Cmd {
             let meta = Settings::meta_store().await?;
             meta.save_session(&session.session).await?;
 
-            let _key = atuin_client::encryption::load_key(settings)?;
+            let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
 
             println!(
                 "Registration successful! Please make a note of your key (run 'atuin key') and keep it safe."

@@ -3,11 +3,11 @@ use eyre::{Result, WrapErr};
 
 use atuin_client::{
     database::Database,
-    encryption,
     history::store::HistoryStore,
     record::{sqlite_store::SqliteStore, sync},
     settings::Settings,
 };
+use atuin_common::encryption::paseto_v4;
 
 mod status;
 
@@ -57,17 +57,13 @@ impl Cmd {
             Self::Register(r) => r.run(&settings, &store).await,
             Self::Status => status::run(&settings).await,
             Self::Key { base64 } => {
-                use atuin_client::encryption::{encode_key, load_key};
-                let key = load_key(&settings).wrap_err("could not load encryption key")?;
+                let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+                    .wrap_err("could not load encryption key")?;
 
                 if base64 {
-                    let encode = encode_key(&key).wrap_err("could not encode encryption key")?;
-                    println!("{encode}");
+                    println!("{}", key.encode().dangerously_leak_secret());
                 } else {
-                    let mnemonic =
-                        bip39::Mnemonic::from_entropy(key.as_bytes(), bip39::Language::English)
-                            .map_err(|_| eyre::eyre!("invalid key"))?;
-                    println!("{mnemonic}");
+                    println!("{}", key.try_mnemonic().context("invalid key")?);
                 }
                 Ok(())
             }
@@ -81,7 +77,8 @@ async fn run(
     db: &impl Database,
     store: SqliteStore,
 ) -> Result<()> {
-    let encryption_key = encryption::load_key(settings).context("could not load encryption key")?;
+    let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+        .context("could not load encryption key")?;
 
     let host_id = Settings::host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key.clone());

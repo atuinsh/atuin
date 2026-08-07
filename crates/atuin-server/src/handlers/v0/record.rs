@@ -31,7 +31,7 @@ pub async fn post<DB: Database>(
 
     let keep = records
         .iter()
-        .all(|r| r.data.data.len() <= settings.max_record_size || settings.max_record_size == 0);
+        .all(|r| r.data.raw.len() <= settings.max_record_size || settings.max_record_size == 0);
 
     if !keep {
         counter!("atuin_record_too_large").increment(1);

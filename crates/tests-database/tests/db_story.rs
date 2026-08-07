@@ -6,6 +6,7 @@ use atuin_server_database::{
 };
 use atuin_server_postgres::Postgres;
 use atuin_server_sqlite::Sqlite;
+use rstest::rstest;
 use tests_database::helpers::{create_test_db, destroy_test_db};
 
 struct TestDb {
@@ -39,6 +40,7 @@ impl Drop for TestDb {
 
 /// This test runs through a story of using the database. The goal is to fully exercise all DB code
 /// in a single repeatable manner.
+#[rstest]
 #[tokio::test]
 async fn test_full_db_story() -> eyre::Result<()> {
     let test_db = TestDb::new().await?;
@@ -158,8 +160,8 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
 
 fn generate_record(host: &Host, idx: RecordIdx) -> Record<EncryptedData> {
     let data = EncryptedData {
-        data: "some data".into(),
-        content_encryption_key: "key".into(),
+        raw: "some data".into(),
+        cek: "key".into(),
     };
     Record::builder()
         .idx(idx)

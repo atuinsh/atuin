@@ -4,9 +4,9 @@ use std::collections::{HashMap, HashSet};
 use time::{Date, Duration, Month, OffsetDateTime, Time};
 
 use atuin_client::{
-    database::Database, encryption, record::sqlite_store::SqliteStore, settings::Settings,
-    theme::Theme,
+    database::Database, record::sqlite_store::SqliteStore, settings::Settings, theme::Theme,
 };
+use atuin_common::encryption::paseto_v4;
 use atuin_dotfiles::store::AliasStore;
 
 use atuin_history::stats::{Stats, compute};
@@ -326,7 +326,7 @@ pub async fn run(
 
     // Load aliases for expansion
     let alias_map: HashMap<String, String> = if settings.dotfiles.enabled {
-        if let Ok(encryption_key) = encryption::load_key(settings) {
+        if let Ok(encryption_key) = paseto_v4::Key::try_load_from_path(&settings.key_path) {
             let host_id = Settings::host_id().await?;
             let alias_store = AliasStore::new(store, host_id, encryption_key);
 

@@ -15,6 +15,7 @@ use eyre::{Result, bail};
 use tempfile::NamedTempFile;
 
 use atuin_client::{database::Database, record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_common::encryption::paseto_v4;
 use tracing::debug;
 
 #[derive(Parser, Debug)]
@@ -569,7 +570,7 @@ impl Cmd {
         history_db: &impl Database,
     ) -> Result<()> {
         let host_id = Settings::host_id().await?;
-        let encryption_key = atuin_client::encryption::load_key(settings)?;
+        let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
 
         let script_store = ScriptStore::new(store, host_id, encryption_key);
         let script_db =

@@ -2,15 +2,14 @@ use std::io;
 
 use clap::Parser;
 use eyre::{Context, Result, bail};
-use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{
     auth::{self, AuthClient, AuthResponse},
-    encryption::{PasetoV4Key, decode_key, encode_key, load_key},
     record::sqlite_store::SqliteStore,
     record::sync::{self, SyncError},
     settings::{Settings, SyncAuth},
 };
+use atuin_common::encryption::paseto_v4;
 use rpassword::prompt_password;
 
 #[derive(Parser, Debug)]
@@ -112,7 +111,7 @@ impl Cmd {
         } else {
             // Interactive login via browser OAuth flow.
             if self.from_registration {
-                load_key(settings)?;
+                paseto_v4::Key::try_load_from_path(&settings.key_path)?;
             } else {
                 self.prompt_and_store_key(settings, store).await?;
             }
@@ -198,82 +197,65 @@ impl Cmd {
 
         // if provided, the key may be EITHER base64, or a bip mnemonic
         // try to normalize on base64
-        let key = if key.is_empty() {
-            key
+        let loaded_key: Option<paseto_v4::Key> = if key.is_empty() {
+            None
         } else {
-            // try parse the key as a mnemonic...
-            match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
-                Ok(mnemonic) => encode_key(&PasetoV4Key::try_from(mnemonic.entropy())?)?,
-                Err(err) => {
-                    match err {
-                        // assume they copied in the base64 key
-                        bip39::ErrorKind::InvalidWord(_) => key,
-                        bip39::ErrorKind::InvalidChecksum => {
-                            bail!("Key mnemonic is not valid")
-                        }
-                        bip39::ErrorKind::InvalidKeysize(_)
-                        | bip39::ErrorKind::InvalidWordLength(_)
-                        | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
-                            bail!("Key is not the correct length")
-                        }
-                    }
-                }
-            }
+            Some(paseto_v4::Key::try_from_mnemonic(&key)?)
         };
 
-        if key.is_empty() {
-            if key_path.exists() {
+        match loaded_key {
+            None => {
+                assert!(
+                    key_path.exists(),
+                    "No key provided and no existing key file found. Please use 'atuin key' on your other machine, or recover your key from a backup"
+                );
+
                 let bytes = fs_err::read_to_string(key_path).context(format!(
                     "Existing key file at '{}' could not be read",
                     key_path.to_string_lossy()
                 ))?;
-                if decode_key(bytes).is_err() {
+
+                if paseto_v4::Key::decode(&bytes).is_err() {
                     bail!(format!(
                         "The key in existing key file at '{}' is invalid",
                         key_path.to_string_lossy()
                     ));
                 }
-            } else {
-                panic!(
-                    "No key provided and no existing key file found. Please use 'atuin key' on your other machine, or recover your key from a backup"
-                )
+
+                Ok(())
             }
-        } else if !key_path.exists() {
-            if decode_key(key.clone()).is_err() {
-                bail!("The specified key is invalid");
-            }
+            Some(k) => {
+                if !key_path.exists() {
+                    k.try_write_path(key_path)?;
 
-            let mut file = File::create(key_path).await?;
-            file.write_all(key.as_bytes()).await?;
-        } else {
-            // we now know that the user has logged in specifying a key, AND that the key path
-            // exists
+                    return Ok(());
+                }
 
-            // 1. check if the saved key and the provided key match. if so, nothing to do.
-            // 2. if not, re-encrypt the local history and overwrite the key
-            let current_key = load_key(settings)?;
+                // we now know that the user has logged in specifying a key, AND that the key path
+                // exists
 
-            let encoded = key.clone(); // gonna want to save it in a bit
-            let new_key = decode_key(key)
-                .context("Could not decode provided key; is not valid base64-encoded key")?;
+                // 1. check if the saved key and the provided key match. if so, nothing to do.
+                // 2. if not, re-encrypt the local history and overwrite the key
+                let current_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
 
-            if new_key != current_key {
-                println!("\nRe-encrypting local store with new key");
+                if k != current_key {
+                    println!("\nRe-encrypting local store with new key");
 
-                store.re_encrypt(&current_key, &new_key).await?;
+                    store.re_encrypt(&current_key, &k).await?;
 
-                println!("Writing new key");
-                let mut file = File::create(key_path).await?;
-                file.write_all(encoded.as_bytes()).await?;
+                    println!("Writing new key");
+                    k.overwrite_path(key_path)?;
+                }
+
+                Ok(())
             }
         }
-
-        Ok(())
     }
 }
 
 async fn verify_key_against_remote(settings: &Settings) -> Result<()> {
-    let key = load_key(settings).context("could not load encryption key for verification")?;
+    let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+        .context("could not load encryption key for verification")?;
 
     let client = sync::build_client(settings).await?;
     let remote_index = match client.record_status().await {
@@ -328,11 +310,12 @@ fn read_user_input(name: &'static str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::encryption::PasetoV4Key;
+    use atuin_common::encryption::paseto_v4;
+    use rstest::rstest;
 
-    #[test]
+    #[rstest]
     fn mnemonic_round_trip() {
-        let key = PasetoV4Key::from([
+        let key = paseto_v4::Key::from([
             3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4, 6, 2, 6, 4, 3, 3, 8, 3, 2,
             7, 9, 5,
         ]);

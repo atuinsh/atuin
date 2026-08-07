@@ -3,11 +3,11 @@ use eyre::Result;
 
 use atuin_client::{
     database::Database,
-    encryption::load_key,
     record::sync::Operation,
     record::{sqlite_store::SqliteStore, sync},
     settings::Settings,
 };
+use atuin_common::encryption::paseto_v4;
 
 #[derive(Args, Debug)]
 pub struct Pull {
@@ -53,7 +53,7 @@ impl Pull {
 
         // Skip on --force: local was already wiped above, mismatch is the user's call.
         if !self.force {
-            let key = load_key(settings)?;
+            let key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
             sync::check_encryption_key(&client, &remote_index, &key)
                 .await
                 .map_err(crate::print_error::format_sync_error)?;

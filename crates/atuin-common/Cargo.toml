@@ -25,6 +25,8 @@ ansi = ["dep:vt100"]
 
 [dependencies]
 derive_more = { workspace = true }
+tiny-bip39 = { workspace = true }
+crypto_secretbox = { workspace = true }
 time = { workspace = true, features = ["formatting", "parsing"] }
 serde = { workspace = true }
 serde_with = "3.8.1"
@@ -42,6 +44,13 @@ unicode-width = { version = "0.2", optional = true }
 unicode-segmentation = { version = "1.11.0", optional = true }
 vt100 = { workspace = true, optional = true }
 itertools = { workspace = true }
+rusty_paseto = { workspace = true }
+rusty_paserk = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+zeroize = { workspace = true }
+rmp = { workspace = true }
+fs-err = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

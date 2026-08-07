@@ -6,6 +6,7 @@ use atuin_client::{
     database::Database, history::store::HistoryStore, record::sqlite_store::SqliteStore,
     settings::Settings,
 };
+use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::RecordId;
 use atuin_kv::store::KvStore;
 
@@ -21,8 +22,8 @@ pub async fn build(
     db: &dyn Database,
     downloaded: Option<&[RecordId]>,
 ) -> Result<()> {
-    let encryption_key =
-        atuin_client::encryption::load_key(settings).context("could not load encryption key")?;
+    let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+        .context("could not load encryption key")?;
 
     let host_id = Settings::host_id().await?;
 

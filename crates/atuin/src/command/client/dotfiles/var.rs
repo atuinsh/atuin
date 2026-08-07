@@ -1,7 +1,8 @@
 use clap::{Subcommand, ValueEnum};
 use eyre::{Context, Result};
 
-use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_client::{record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_common::encryption::paseto_v4;
 
 use atuin_dotfiles::{shell::Var, store::var::VarStore};
 
@@ -156,8 +157,8 @@ impl Cmd {
             return Ok(());
         }
 
-        let encryption_key =
-            encryption::load_key(settings).context("could not load encryption key")?;
+        let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .context("could not load encryption key")?;
         let host_id = Settings::host_id().await?;
 
         let var_store = VarStore::new(store, host_id, encryption_key);

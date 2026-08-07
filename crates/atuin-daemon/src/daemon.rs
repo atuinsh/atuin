@@ -12,9 +12,9 @@
 use std::sync::Arc;
 
 use atuin_client::{
-    database::Sqlite as HistoryDatabase, encryption, encryption::PasetoV4Key,
-    record::sqlite_store::SqliteStore, settings::Settings,
+    database::Sqlite as HistoryDatabase, record::sqlite_store::SqliteStore, settings::Settings,
 };
+use atuin_common::encryption::paseto_v4;
 use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result};
 use tokio::sync::{RwLock, broadcast};
@@ -38,7 +38,7 @@ pub struct DaemonState {
     settings: RwLock<Settings>,
 
     // Encryption key (immutable - derived at startup)
-    encryption_key: PasetoV4Key,
+    encryption_key: paseto_v4::Key,
 
     // Database handles
     history_db: HistoryDatabase,
@@ -137,7 +137,7 @@ impl DaemonHandle {
     }
 
     /// Get the encryption key.
-    pub fn encryption_key(&self) -> &PasetoV4Key {
+    pub fn encryption_key(&self) -> &paseto_v4::Key {
         &self.state.encryption_key
     }
 
@@ -446,8 +446,8 @@ impl DaemonBuilder {
             .ok_or_else(|| eyre::eyre!("history_db is required"))?;
 
         // Load encryption key
-        let encryption_key =
-            encryption::load_key(&self.settings).context("could not load encryption key")?;
+        let encryption_key = paseto_v4::Key::try_load_or_generate(&self.settings.key_path)
+            .context("could not load encryption key")?;
 
         // Create the event bus
         let (event_tx, _) = broadcast::channel(64);

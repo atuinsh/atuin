@@ -1,14 +1,8 @@
+use atuin_common::encryption::paseto_v4;
 use atuin_domain::api::LoginRequest;
-use eyre::{Context, Result, bail};
-use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
+use eyre::Result;
 
-use crate::{
-    api_client,
-    encryption::{PasetoV4Key, decode_key, encode_key, load_key},
-    record::sqlite_store::SqliteStore,
-    settings::Settings,
-};
+use crate::{api_client, record::sqlite_store::SqliteStore, settings::Settings};
 
 pub async fn login(
     settings: &Settings,
@@ -18,53 +12,27 @@ pub async fn login(
     key: String,
 ) -> Result<String> {
     // try parse the key as a mnemonic...
-    let key = match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
-        Ok(mnemonic) => encode_key(&PasetoV4Key::try_from(mnemonic.entropy())?)?,
-        Err(err) => {
-            match err {
-                // assume they copied in the base64 key
-                bip39::ErrorKind::InvalidWord(_) => key,
-                bip39::ErrorKind::InvalidChecksum => {
-                    bail!("key mnemonic was not valid");
-                }
-                bip39::ErrorKind::InvalidKeysize(_)
-                | bip39::ErrorKind::InvalidWordLength(_)
-                | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
-                    bail!("key was not the correct length");
-                }
-            }
-        }
-    };
+    let key = paseto_v4::Key::try_from_mnemonic(&key)?;
 
     let key_path = &settings.key_path;
 
     if !key_path.exists() {
-        if decode_key(key.clone()).is_err() {
-            bail!("the specified key was invalid");
-        }
-
-        let mut file = File::create(key_path).await?;
-        file.write_all(key.as_bytes()).await?;
+        key.try_write_path(key_path)?;
     } else {
         // we now know that the user has logged in specifying a key, AND that the key path
         // exists
 
         // 1. check if the saved key and the provided key match. if so, nothing to do.
         // 2. if not, re-encrypt the local history and overwrite the key
-        let current_key = load_key(settings)?;
+        let current_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
 
-        let encoded = key.clone(); // gonna want to save it in a bit
-        let new_key =
-            decode_key(key).context("could not decode provided key - is not valid base64")?;
-
-        if new_key != current_key {
+        if key != current_key {
             println!("\nRe-encrypting local store with new key");
 
-            store.re_encrypt(&current_key, &new_key).await?;
+            store.re_encrypt(&current_key, &key).await?;
 
             println!("Writing new key");
-            let mut file = File::create(key_path).await?;
-            file.write_all(encoded.as_bytes()).await?;
+            key.overwrite_path(key_path)?;
         }
     }
 

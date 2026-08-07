@@ -5,11 +5,11 @@ use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use rmp::decode::Bytes;
 
-use crate::record::encryption::PasetoV4Key;
 use crate::{
     database::{Database, current_context},
-    record::{encryption::PasetoV4, sqlite_store::SqliteStore},
+    record::sqlite_store::SqliteStore,
 };
+use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
 
 use super::{HISTORY_TAG, History, HistoryId, Version};
@@ -18,7 +18,7 @@ use super::{HISTORY_TAG, History, HistoryId, Version};
 pub struct HistoryStore {
     pub store: SqliteStore,
     pub host_id: HostId,
-    pub encryption_key: PasetoV4Key,
+    pub encryption_key: paseto_v4::Key,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
@@ -116,7 +116,7 @@ impl HistoryRecord {
 }
 
 impl HistoryStore {
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: PasetoV4Key) -> Self {
+    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
         HistoryStore {
             store,
             host_id,
@@ -143,7 +143,7 @@ impl HistoryStore {
         let id = record.id;
 
         self.store
-            .push(&record.encrypt::<PasetoV4>(&self.encryption_key))
+            .push(&record.encrypt(&self.encryption_key))
             .await?;
 
         Ok((id, idx))
@@ -171,7 +171,7 @@ impl HistoryStore {
                 .data(bytes)
                 .build();
 
-            let record = record.encrypt::<PasetoV4>(&self.encryption_key);
+            let record = record.encrypt(&self.encryption_key);
 
             ret.push(record);
         }
@@ -223,11 +223,9 @@ impl HistoryStore {
             // A record we can't decrypt or decode must not block the rest of the store -
             // skip it, and load everything else.
             let hist = match Version::from_name(version.as_str()) {
-                Some(_) => record
-                    .decrypt::<PasetoV4>(&self.encryption_key)
-                    .and_then(|decrypted| {
-                        HistoryRecord::deserialize(&decrypted.data, version.as_str())
-                    }),
+                Some(_) => record.decrypt(&self.encryption_key).and_then(|decrypted| {
+                    HistoryRecord::deserialize(&decrypted.data, version.as_str())
+                }),
                 None => Err(eyre!("unknown history version {version:?}")),
             };
 
@@ -302,13 +300,9 @@ impl HistoryStore {
 
                 // Skip records we can't decrypt or decode, rather than failing the entire build.
                 let record = match Version::from_name(version.as_str()) {
-                    Some(_) => {
-                        record
-                            .decrypt::<PasetoV4>(&self.encryption_key)
-                            .and_then(|decrypted| {
-                                HistoryRecord::deserialize(&decrypted.data, version.as_str())
-                            })
-                    }
+                    Some(_) => record.decrypt(&self.encryption_key).and_then(|decrypted| {
+                        HistoryRecord::deserialize(&decrypted.data, version.as_str())
+                    }),
                     None => Err(eyre!("unknown history version {version:?}")),
                 };
 
@@ -419,7 +413,7 @@ mod tests {
     use crate::{
         database::Sqlite,
         history::{HISTORY_TAG, Version, store::HistoryRecord, store::HistoryStore},
-        record::{encryption::PasetoV4, sqlite_store::SqliteStore},
+        record::sqlite_store::SqliteStore,
         settings::test_local_timeout,
     };
 
@@ -536,7 +530,7 @@ mod tests {
             .build();
 
         store
-            .push(&corrupt.encrypt::<PasetoV4>(&[1u8; 32].into()))
+            .push(&corrupt.encrypt(&[1u8; 32].into()))
             .await
             .unwrap();
 

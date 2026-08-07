@@ -16,14 +16,10 @@ use sqlx::{
     },
 };
 
-use crate::record::encryption::PasetoV4Key;
+use atuin_common::encryption::paseto_v4;
 use atuin_common::utils;
-use atuin_domain::record::{
-    EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordStatus,
-};
+use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx, RecordStatus};
 use uuid::Uuid;
-
-use super::encryption::PasetoV4;
 
 #[derive(Debug, Clone)]
 pub struct SqliteStore {
@@ -76,7 +72,7 @@ impl SqliteStore {
 
     async fn save_raw(
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-        r: &Record<EncryptedData>,
+        r: &Record<paseto_v4::EncryptedData>,
     ) -> Result<()> {
         // In sqlite, we are "limited" to i64. But that is still fine, until 2262.
         sqlx::query(
@@ -89,15 +85,15 @@ impl SqliteStore {
         .bind(r.tag.as_str())
         .bind(r.timestamp as i64)
         .bind(r.version.as_str())
-        .bind(r.data.data.as_str())
-        .bind(r.data.content_encryption_key.as_str())
+        .bind(r.data.raw.as_str())
+        .bind(r.data.cek.as_str())
         .execute(&mut **tx)
         .await?;
 
         Ok(())
     }
 
-    fn query_row(row: SqliteRow) -> Record<EncryptedData> {
+    fn query_row(row: SqliteRow) -> Record<paseto_v4::EncryptedData> {
         let idx: i64 = row.get("idx");
         let timestamp: i64 = row.get("timestamp");
 
@@ -112,14 +108,14 @@ impl SqliteStore {
             timestamp: timestamp as u64,
             tag: row.get("tag"),
             version: row.get("version"),
-            data: EncryptedData {
-                data: row.get("data"),
-                content_encryption_key: row.get("cek"),
+            data: paseto_v4::EncryptedData {
+                raw: row.get("data"),
+                cek: row.get("cek"),
             },
         }
     }
 
-    async fn load_all(&self) -> Result<Vec<Record<EncryptedData>>> {
+    async fn load_all(&self) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
         let res = sqlx::query("select * from store ")
             .map(Self::query_row)
             .fetch_all(&self.pool)
@@ -128,13 +124,13 @@ impl SqliteStore {
         Ok(res)
     }
 
-    pub async fn push(&self, record: &Record<EncryptedData>) -> Result<()> {
+    pub async fn push(&self, record: &Record<paseto_v4::EncryptedData>) -> Result<()> {
         self.push_batch(std::iter::once(record)).await
     }
 
     pub async fn push_batch(
         &self,
-        records: impl Iterator<Item = &Record<EncryptedData>> + Send + Sync,
+        records: impl Iterator<Item = &Record<paseto_v4::EncryptedData>> + Send + Sync,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
@@ -147,7 +143,7 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub async fn get(&self, id: RecordId) -> Result<Record<EncryptedData>> {
+    pub async fn get(&self, id: RecordId) -> Result<Record<paseto_v4::EncryptedData>> {
         let res = sqlx::query("select * from store where store.id = ?1")
             .bind(id.0.as_hyphenated().to_string())
             .map(Self::query_row)
@@ -172,7 +168,11 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub async fn last(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>> {
+    pub async fn last(
+        &self,
+        host: HostId,
+        tag: &str,
+    ) -> Result<Option<Record<paseto_v4::EncryptedData>>> {
         let res =
             sqlx::query("select * from store where host=?1 and tag=?2 order by idx desc limit 1")
                 .bind(host.0.as_hyphenated().to_string())
@@ -188,7 +188,11 @@ impl SqliteStore {
         }
     }
 
-    pub async fn first(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>> {
+    pub async fn first(
+        &self,
+        host: HostId,
+        tag: &str,
+    ) -> Result<Option<Record<paseto_v4::EncryptedData>>> {
         self.idx(host, tag, 0).await
     }
 
@@ -230,7 +234,7 @@ impl SqliteStore {
         tag: &str,
         idx: RecordIdx,
         limit: u64,
-    ) -> Result<Vec<Record<EncryptedData>>> {
+    ) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
         let res = sqlx::query(
             "select * from store where idx >= ?1 and host = ?2 and tag = ?3 order by idx asc limit ?4",
         )
@@ -250,7 +254,7 @@ impl SqliteStore {
         host: HostId,
         tag: &str,
         idx: RecordIdx,
-    ) -> Result<Option<Record<EncryptedData>>> {
+    ) -> Result<Option<Record<paseto_v4::EncryptedData>>> {
         let res = sqlx::query("select * from store where idx = ?1 and host = ?2 and tag = ?3")
             .bind(idx as i64)
             .bind(host.0.as_hyphenated().to_string())
@@ -290,7 +294,7 @@ impl SqliteStore {
         Ok(status)
     }
 
-    pub async fn all_tagged(&self, tag: &str) -> Result<Vec<Record<EncryptedData>>> {
+    pub async fn all_tagged(&self, tag: &str) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
         let res = sqlx::query("select * from store where tag = ?1 order by timestamp asc")
             .bind(tag)
             .map(Self::query_row)
@@ -302,7 +306,11 @@ impl SqliteStore {
 
     /// Reencrypt every single item in this store with a new key
     /// Be careful - this may mess with sync.
-    pub async fn re_encrypt(&self, old_key: &PasetoV4Key, new_key: &PasetoV4Key) -> Result<()> {
+    pub async fn re_encrypt(
+        &self,
+        old_key: &paseto_v4::Key,
+        new_key: &paseto_v4::Key,
+    ) -> Result<()> {
         // Load all the records
         // In memory like some of the other code here
         // This will never be called in a hot loop, and only under the following circumstances
@@ -314,7 +322,10 @@ impl SqliteStore {
 
         let re_encrypted = all
             .into_iter()
-            .map(|record| record.re_encrypt::<PasetoV4>(old_key, new_key))
+            .map(|record| {
+                let data = paseto_v4::reencrypt_sync(&record.data, old_key, new_key)?;
+                Ok(record.with_data(data))
+            })
             .collect::<Result<Vec<_>>>()?;
 
         // next up, we delete all the old data and reinsert the new stuff
@@ -341,11 +352,11 @@ impl SqliteStore {
 
     /// Verify that every record in this store can be decrypted with the current key
     /// Someday maybe also check each tag/record can be deserialized, but not for now.
-    pub async fn verify(&self, key: &PasetoV4Key) -> Result<()> {
+    pub async fn verify(&self, key: &paseto_v4::Key) -> Result<()> {
         let all = self.load_all().await?;
 
         all.into_iter()
-            .map(|record| record.decrypt::<PasetoV4>(key))
+            .map(|record| record.decrypt(key))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(())
@@ -353,11 +364,11 @@ impl SqliteStore {
 
     /// Verify that every record in this store can be decrypted with the current key
     /// Someday maybe also check each tag/record can be deserialized, but not for now.
-    pub async fn purge(&self, key: &PasetoV4Key) -> Result<()> {
+    pub async fn purge(&self, key: &paseto_v4::Key) -> Result<()> {
         let all = self.load_all().await?;
 
         for record in all.iter() {
-            match record.clone().decrypt::<PasetoV4>(key) {
+            match record.clone().decrypt(key) {
                 Ok(_) => continue,
                 Err(_) => {
                     println!(
@@ -376,14 +387,12 @@ impl SqliteStore {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
-    use atuin_domain::record::{DecryptedData, EncryptedData, Host, HostId, Record};
+    use atuin_domain::record::{DecryptedData, Host, HostId, Record};
     use rstest::{fixture, rstest};
 
-    use crate::{
-        encryption::generate_encoded_key, record::encryption::PasetoV4,
-        settings::test_local_timeout,
-    };
+    use crate::settings::test_local_timeout;
 
     use super::SqliteStore;
 
@@ -395,14 +404,14 @@ mod tests {
     }
 
     #[fixture]
-    fn record() -> Record<EncryptedData> {
+    fn record() -> Record<paseto_v4::EncryptedData> {
         Record::builder()
             .host(Host::new(HostId(uuid_v7())))
             .version("v1".into())
             .tag(uuid_v7().simple().to_string())
-            .data(EncryptedData {
-                data: "1234".into(),
-                content_encryption_key: "1234".into(),
+            .data(paseto_v4::EncryptedData {
+                raw: "1234".into(),
+                cek: "1234".into(),
             })
             .idx(0)
             .build()
@@ -418,13 +427,19 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn push_record(#[future(awt)] store: SqliteStore, record: Record<EncryptedData>) {
+    async fn push_record(
+        #[future(awt)] store: SqliteStore,
+        record: Record<paseto_v4::EncryptedData>,
+    ) {
         store.push(&record).await.expect("failed to insert record");
     }
 
     #[rstest]
     #[tokio::test]
-    async fn get_record(#[future(awt)] store: SqliteStore, record: Record<EncryptedData>) {
+    async fn get_record(
+        #[future(awt)] store: SqliteStore,
+        record: Record<paseto_v4::EncryptedData>,
+    ) {
         store.push(&record).await.unwrap();
         let fetched = store.get(record.id).await.expect("failed to fetch record");
         assert_eq!(fetched, record, "records are not equal");
@@ -432,7 +447,7 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn last(#[future(awt)] store: SqliteStore, record: Record<EncryptedData>) {
+    async fn last(#[future(awt)] store: SqliteStore, record: Record<paseto_v4::EncryptedData>) {
         store.push(&record).await.unwrap();
         let last = store
             .last(record.host.id, record.tag.as_str())
@@ -447,7 +462,7 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn first(#[future(awt)] store: SqliteStore, record: Record<EncryptedData>) {
+    async fn first(#[future(awt)] store: SqliteStore, record: Record<paseto_v4::EncryptedData>) {
         store.push(&record).await.unwrap();
         let first = store
             .first(record.host.id, record.tag.as_str())
@@ -462,7 +477,7 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn len(#[future(awt)] store: SqliteStore, record: Record<EncryptedData>) {
+    async fn len(#[future(awt)] store: SqliteStore, record: Record<paseto_v4::EncryptedData>) {
         store.push(&record).await.unwrap();
         let len = store
             .len(record.host.id, record.tag.as_str())
@@ -473,7 +488,7 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn len_tag(#[future(awt)] store: SqliteStore, record: Record<EncryptedData>) {
+    async fn len_tag(#[future(awt)] store: SqliteStore, record: Record<paseto_v4::EncryptedData>) {
         store.push(&record).await.unwrap();
         let len = store.len_tag(record.tag.as_str()).await.unwrap();
         assert_eq!(len, 1, "expected length of 1 after insert");
@@ -509,9 +524,7 @@ mod tests {
         store.push(&tail).await.expect("failed to push record");
 
         for _ in 1..100 {
-            tail = tail
-                .append(vec![1, 2, 3, 4])
-                .encrypt::<PasetoV4>(&[0; 32].into());
+            tail = tail.append(vec![1, 2, 3, 4]).encrypt(&[0; 32].into());
             store.push(&tail).await.unwrap();
         }
 
@@ -530,14 +543,12 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn append_a_big_bunch(#[future(awt)] store: SqliteStore) {
-        let mut records: Vec<Record<EncryptedData>> = Vec::with_capacity(10000);
+        let mut records: Vec<Record<paseto_v4::EncryptedData>> = Vec::with_capacity(10000);
 
         let mut tail = record();
         records.push(tail.clone());
         for _ in 1..10000 {
-            tail = tail
-                .append(vec![1, 2, 3])
-                .encrypt::<PasetoV4>(&[0; 32].into());
+            tail = tail.append(vec![1, 2, 3]).encrypt(&[0; 32].into());
             records.push(tail.clone());
         }
 
@@ -553,7 +564,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn re_encrypt(#[future(awt)] store: SqliteStore) {
-        let (key, _) = generate_encoded_key().unwrap();
+        let key = paseto_v4::Key::generate();
         let data = vec![0u8, 1u8, 2u8, 3u8];
         let host_id = HostId(uuid_v7());
 
@@ -565,7 +576,7 @@ mod tests {
                 .idx(i)
                 .data(DecryptedData(data.clone()))
                 .build()
-                .encrypt::<PasetoV4>(&key);
+                .encrypt(&key);
             store
                 .push(&record)
                 .await
@@ -576,12 +587,12 @@ mod tests {
         let all = store.all_tagged("test").await.unwrap();
         assert_eq!(all.len(), 10, "failed to fetch all records");
         for record in all {
-            let decrypted = record.decrypt::<PasetoV4>(&key).unwrap();
+            let decrypted = record.decrypt(&key).unwrap();
             assert_eq!(decrypted.data.0, data);
         }
 
         // after re-encrypting: the old key fails, the new key works
-        let (new_key, _) = generate_encoded_key().unwrap();
+        let new_key = paseto_v4::Key::generate();
         store
             .re_encrypt(&key, &new_key)
             .await
@@ -590,12 +601,12 @@ mod tests {
         let all = store.all_tagged("test").await.unwrap();
         for record in all.iter() {
             assert!(
-                record.clone().decrypt::<PasetoV4>(&key).is_err(),
+                record.clone().decrypt(&key).is_err(),
                 "old key still decrypts after re-encrypt"
             );
         }
         for record in all {
-            let decrypted = record.decrypt::<PasetoV4>(&new_key).unwrap();
+            let decrypted = record.decrypt(&new_key).unwrap();
             assert_eq!(decrypted.data.0, data);
         }
 

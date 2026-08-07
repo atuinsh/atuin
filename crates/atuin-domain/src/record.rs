@@ -1,18 +1,13 @@
 use std::collections::HashMap;
 
-use eyre::Result;
+pub use atuin_common::encryption::paseto_v4::{self, EncryptedData};
+use eyre::WrapErr;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, derive_more::Deref, derive_more::From)]
 pub struct DecryptedData(pub Vec<u8>);
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EncryptedData {
-    pub data: String,
-    pub content_encryption_key: String,
-}
 
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq)]
 pub struct Diff {
@@ -33,6 +28,28 @@ impl Host {
         Host {
             id,
             name: String::new(),
+        }
+    }
+}
+
+/// Note that the order of items matters here -- `serde` serializes in order.
+#[derive(Debug, Copy, Clone, Serialize)]
+pub struct AdditionalData<'a> {
+    pub id: RecordId,
+    pub idx: u64,
+    pub version: &'a str,
+    pub tag: &'a str,
+    pub host: HostId,
+}
+
+impl<'a, Data> From<&'a Record<Data>> for AdditionalData<'a> {
+    fn from(value: &'a Record<Data>) -> Self {
+        Self {
+            id: value.id,
+            idx: value.idx,
+            host: value.host.id,
+            tag: &value.tag,
+            version: &value.version,
         }
     }
 }
@@ -73,16 +90,6 @@ pub struct Record<Data> {
     pub data: Data,
 }
 
-/// Extra data from the record that should be encoded in the data
-#[derive(Debug, Copy, Clone)]
-pub struct AdditionalData<'a> {
-    pub id: &'a RecordId,
-    pub idx: &'a u64,
-    pub version: &'a str,
-    pub tag: &'a str,
-    pub host: &'a HostId,
-}
-
 impl<Data> Record<Data> {
     pub fn append(&self, data: Vec<u8>) -> Record<DecryptedData> {
         Record::builder()
@@ -92,6 +99,38 @@ impl<Data> Record<Data> {
             .tag(self.tag.clone())
             .data(DecryptedData(data))
             .build()
+    }
+
+    pub fn with_data<New>(&self, data: New) -> Record<New> {
+        Record {
+            id: self.id,
+            idx: self.idx,
+            host: self.host.clone(),
+            timestamp: self.timestamp,
+            version: self.version.clone(),
+            tag: self.tag.clone(),
+            data,
+        }
+    }
+}
+
+impl Record<DecryptedData> {
+    pub fn encrypt(&self, key: &paseto_v4::Key) -> Record<paseto_v4::EncryptedData> {
+        let ad = serde_json::to_string(&AdditionalData::from(self))
+            .expect("could not serialize implicit assertions");
+        let assertion = paseto_v4::ImplicitAssertion::from(ad.as_str());
+        self.with_data(paseto_v4::encrypt_sync(&self.data, Some(assertion), key).unwrap())
+    }
+}
+
+impl Record<paseto_v4::EncryptedData> {
+    pub fn decrypt(&self, key: &paseto_v4::Key) -> eyre::Result<Record<DecryptedData>> {
+        let ad = serde_json::to_string(&AdditionalData::from(self))
+            .expect("could not serialize implicit assertions");
+        let assertion = paseto_v4::ImplicitAssertion::from(ad.as_str());
+        let data = paseto_v4::decrypt_sync(&self.data, Some(assertion), key)
+            .context("could not decrypt entry")?;
+        Ok(self.with_data(data.into()))
     }
 }
 
@@ -199,96 +238,41 @@ impl RecordStatus {
     }
 }
 
-pub trait Encryption {
-    /// The key type this encryption scheme uses to wrap and unwrap records.
-    type Key;
-
-    fn re_encrypt(
-        data: EncryptedData,
-        ad: AdditionalData,
-        old_key: &Self::Key,
-        new_key: &Self::Key,
-    ) -> Result<EncryptedData> {
-        let data = Self::decrypt(data, ad, old_key)?;
-        Ok(Self::encrypt(data, ad, new_key))
-    }
-    fn encrypt(data: DecryptedData, ad: AdditionalData, key: &Self::Key) -> EncryptedData;
-    fn decrypt(data: EncryptedData, ad: AdditionalData, key: &Self::Key) -> Result<DecryptedData>;
-}
-
-impl Record<DecryptedData> {
-    pub fn encrypt<E: Encryption>(self, key: &E::Key) -> Record<EncryptedData> {
-        let ad = AdditionalData {
-            id: &self.id,
-            version: &self.version,
-            tag: &self.tag,
-            host: &self.host.id,
-            idx: &self.idx,
-        };
-        Record {
-            data: E::encrypt(self.data, ad, key),
-            id: self.id,
-            host: self.host,
-            idx: self.idx,
-            timestamp: self.timestamp,
-            version: self.version,
-            tag: self.tag,
-        }
-    }
-}
-
-impl Record<EncryptedData> {
-    pub fn decrypt<E: Encryption>(self, key: &E::Key) -> Result<Record<DecryptedData>> {
-        let ad = AdditionalData {
-            id: &self.id,
-            version: &self.version,
-            tag: &self.tag,
-            host: &self.host.id,
-            idx: &self.idx,
-        };
-        Ok(Record {
-            data: E::decrypt(self.data, ad, key)?,
-            id: self.id,
-            host: self.host,
-            idx: self.idx,
-            timestamp: self.timestamp,
-            version: self.version,
-            tag: self.tag,
-        })
-    }
-
-    pub fn re_encrypt<E: Encryption>(
-        self,
-        old_key: &E::Key,
-        new_key: &E::Key,
-    ) -> Result<Record<EncryptedData>> {
-        let ad = AdditionalData {
-            id: &self.id,
-            version: &self.version,
-            tag: &self.tag,
-            host: &self.host.id,
-            idx: &self.idx,
-        };
-        Ok(Record {
-            data: E::re_encrypt(self.data, ad, old_key, new_key)?,
-            id: self.id,
-            host: self.host,
-            idx: self.idx,
-            timestamp: self.timestamp,
-            version: self.version,
-            tag: self.tag,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::record::{Host, HostId};
+    use super::*;
+    use atuin_common::encryption::paseto_v4;
+    use atuin_common::utils::uuid_v7;
 
     use super::{DecryptedData, Diff, Record, RecordStatus};
     use pretty_assertions::assert_eq;
     use rstest::{fixture, rstest};
     use uuid::Uuid;
+
+    use paseto_v4::ImplicitAssertion;
+
+    /// Serialize `AdditionalData` into the JSON used as the paseto implicit assertion.
+    ///
+    /// The returned `String` must outlive any `ImplicitAssertion` borrowed from it, so callers
+    /// bind it to a local before constructing the assertion.
+    fn assertion(ad: &AdditionalData) -> String {
+        serde_json::to_string(ad).expect("failed to serialize additional data")
+    }
+
+    #[fixture]
+    fn key() -> paseto_v4::Key {
+        paseto_v4::Key::new_os_random()
+    }
+
+    #[fixture]
+    fn data() -> DecryptedData {
+        DecryptedData(vec![1, 2, 3, 4])
+    }
+
+    #[fixture]
+    fn ad_parts() -> (RecordId, HostId) {
+        (RecordId(uuid_v7()), HostId(uuid_v7()))
+    }
 
     #[fixture]
     fn test_record() -> Record<DecryptedData> {
@@ -299,6 +283,52 @@ mod tests {
             .data(DecryptedData(vec![0, 1, 2, 3]))
             .idx(0)
             .build()
+    }
+
+    #[test]
+    fn additional_data_assertion_is_stable() {
+        // The JSON below is the PASETO v4 implicit assertion, byte-for-byte. It is part of the
+        // on-disk and on-wire format: serde emits fields in declaration order, so the field order
+        // of `AdditionalData` (`id, idx, version, tag, host`) is frozen by this assertion. If this
+        // string ever changes, every record encrypted by a prior atuin release fails to decrypt.
+        let ad = AdditionalData {
+            id: RecordId(Uuid::from_u128(1)),
+            idx: 7,
+            version: "v1",
+            tag: "history",
+            host: HostId(Uuid::from_u128(2)),
+        };
+        assert_eq!(
+            serde_json::to_string(&ad).unwrap(),
+            r#"{"id":"00000000-0000-0000-0000-000000000001","idx":7,"version":"v1","tag":"history","host":"00000000-0000-0000-0000-000000000002"}"#
+        );
+    }
+
+    #[test]
+    fn decrypts_frozen_record_blob() {
+        // A record produced by atuin's envelope encryption (PASETO v4 payload + PIE-wrapped CEK),
+        // frozen here as a golden fixture. Any change to the encryption format, the implicit
+        // assertion bytes, or the `EncryptedData` wire field names shows up as a decryption
+        // failure of this blob rather than as silent data loss for existing users. Regenerate this
+        // ONLY when the format is *intentionally* migrated.
+        let key = paseto_v4::Key::from([0x55u8; 32]);
+        let record = Record {
+            id: RecordId(Uuid::from_u128(1)),
+            idx: 7,
+            host: Host::new(HostId(Uuid::from_u128(2))),
+            timestamp: 1_687_244_806_000_000,
+            version: "v1".to_owned(),
+            tag: "history".to_owned(),
+            data: paseto_v4::EncryptedData {
+                raw: "v4.local.cSFhI9n30MfwkZrRAt-YAoxp6DrAMMybmLury7svdFMkapmxQmLQaRzqCfIdanPaQ55VbJjGjqwjst2AnLiBQE9cAQAyH69u2HVHrkaKv7rGtQ".to_owned(),
+                cek: r#"{"wpk":"k4.local-wrap.pie.8xXPgrNyliEUy_PnbM3S88Yk8tQQA0HN2o6jyUkGHK5duUEfW-zSCI1kSYRpyPESCK7-5822hPzRAbyZXPRVAbCkoLqqwPJ8_oi8clKEr6u8nJuIQQLHVClvYJmZyZIu","kid":"k4.lid.2LzCmxDtbwu2tK5T1X1VLEth8umaI9vbKgTDkkt7ARR0"}"#.to_owned(),
+            },
+        };
+
+        let decrypted = record
+            .decrypt(&key)
+            .expect("frozen record blob must still decrypt");
+        assert_eq!(decrypted.data.0, [1, 2, 3, 4, 5]);
     }
 
     #[rstest]
@@ -423,5 +453,219 @@ mod tests {
         // diffing with yourself = no diff
         assert_eq!(index1.diff(&index1).len(), 0);
         assert_eq!(index2.diff(&index2).len(), 0);
+    }
+
+    #[rstest]
+    fn round_trip(key: paseto_v4::Key, data: DecryptedData, ad_parts: (RecordId, HostId)) {
+        let (rid, hid) = ad_parts;
+        let ad = AdditionalData {
+            id: rid,
+            version: "v0",
+            tag: "kv",
+            host: hid,
+            idx: 0,
+        };
+        let aj = assertion(&ad);
+
+        let encrypted =
+            paseto_v4::encrypt_sync(&data.0, Some(ImplicitAssertion::from(aj.as_str())), &key)
+                .unwrap();
+        let decrypted =
+            paseto_v4::decrypt_sync(&encrypted, Some(ImplicitAssertion::from(aj.as_str())), &key)
+                .unwrap();
+        assert_eq!(DecryptedData(decrypted), data);
+    }
+
+    #[rstest]
+    fn same_entry_different_output(
+        key: paseto_v4::Key,
+        data: DecryptedData,
+        ad_parts: (RecordId, HostId),
+    ) {
+        let (rid, hid) = ad_parts;
+        let ad = AdditionalData {
+            id: rid,
+            version: "v0",
+            tag: "kv",
+            host: hid,
+            idx: 0,
+        };
+        let aj = assertion(&ad);
+
+        let encrypted =
+            paseto_v4::encrypt_sync(&data.0, Some(ImplicitAssertion::from(aj.as_str())), &key)
+                .unwrap();
+        let encrypted2 =
+            paseto_v4::encrypt_sync(&data.0, Some(ImplicitAssertion::from(aj.as_str())), &key)
+                .unwrap();
+
+        assert_ne!(
+            encrypted.raw, encrypted2.raw,
+            "re-encrypting the same contents should have different output due to key randomization"
+        );
+    }
+
+    #[rstest]
+    fn cannot_decrypt_different_key(
+        key: paseto_v4::Key,
+        data: DecryptedData,
+        ad_parts: (RecordId, HostId),
+    ) {
+        let fake_key = paseto_v4::Key::new_os_random();
+
+        let (rid, hid) = ad_parts;
+        let ad = AdditionalData {
+            id: rid,
+            version: "v0",
+            tag: "kv",
+            host: hid,
+            idx: 0,
+        };
+        let aj = assertion(&ad);
+
+        let encrypted =
+            paseto_v4::encrypt_sync(&data.0, Some(ImplicitAssertion::from(aj.as_str())), &key)
+                .unwrap();
+        let error = paseto_v4::decrypt_sync(
+            &encrypted,
+            Some(ImplicitAssertion::from(aj.as_str())),
+            &fake_key,
+        )
+        .unwrap_err();
+        let message = error.to_string();
+
+        assert!(
+            message.contains("bad key"),
+            "unexpected error message: {message}"
+        );
+        assert!(
+            message.contains(&format!(
+                "encrypted key id: {}, given decryption key: {}",
+                key.key_id(),
+                fake_key.key_id()
+            )),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[rstest]
+    fn cannot_decrypt_cek_with_missing_footer_contents() {
+        let key = paseto_v4::Key::new_os_random();
+
+        // A CEK JSON that is valid JSON but missing the required `wpk`/`kid` fields. Routed
+        // through the public `decrypt_sync`, which decrypts the CEK before it touches `raw`.
+        let encrypted = paseto_v4::EncryptedData {
+            raw: String::new(),
+            cek: "{}".to_owned(),
+        };
+
+        let error =
+            paseto_v4::decrypt_sync(&encrypted, None::<ImplicitAssertion>, &key).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to deserialize the given key"),
+            "unexpected error message: {error}"
+        );
+    }
+
+    #[rstest]
+    fn cannot_decrypt_different_id(
+        key: paseto_v4::Key,
+        data: DecryptedData,
+        ad_parts: (RecordId, HostId),
+    ) {
+        let (rid, hid) = ad_parts;
+        let ad = AdditionalData {
+            id: rid,
+            version: "v0",
+            tag: "kv",
+            host: hid,
+            idx: 0,
+        };
+        let aj = assertion(&ad);
+
+        let encrypted =
+            paseto_v4::encrypt_sync(&data.0, Some(ImplicitAssertion::from(aj.as_str())), &key)
+                .unwrap();
+
+        let ad = AdditionalData {
+            id: RecordId(uuid_v7()),
+            ..ad
+        };
+        let aj = assertion(&ad);
+        let _ =
+            paseto_v4::decrypt_sync(&encrypted, Some(ImplicitAssertion::from(aj.as_str())), &key)
+                .unwrap_err();
+    }
+
+    #[rstest]
+    fn re_encrypt_round_trip(
+        key: paseto_v4::Key,
+        data: DecryptedData,
+        ad_parts: (RecordId, HostId),
+    ) {
+        let key1 = key;
+        let key2 = paseto_v4::Key::new_os_random();
+
+        let (rid, hid) = ad_parts;
+        let ad = AdditionalData {
+            id: rid,
+            version: "v0",
+            tag: "kv",
+            host: hid,
+            idx: 0,
+        };
+        let aj = assertion(&ad);
+
+        let encrypted1 =
+            paseto_v4::encrypt_sync(&data.0, Some(ImplicitAssertion::from(aj.as_str())), &key1)
+                .unwrap();
+        let encrypted2 = paseto_v4::reencrypt_sync(&encrypted1, &key1, &key2).unwrap();
+
+        // we only re-encrypt the content keys
+        assert_eq!(encrypted1.raw, encrypted2.raw);
+        assert_ne!(encrypted1.cek, encrypted2.cek);
+
+        let decrypted = paseto_v4::decrypt_sync(
+            &encrypted2,
+            Some(ImplicitAssertion::from(aj.as_str())),
+            &key2,
+        )
+        .unwrap();
+
+        assert_eq!(DecryptedData(decrypted), data);
+    }
+
+    #[rstest]
+    fn full_record_round_trip(test_record: Record<DecryptedData>) {
+        let key = paseto_v4::Key::from([0x55; 32]);
+        let encrypted = test_record.encrypt(&key);
+
+        assert!(!encrypted.data.raw.is_empty());
+        assert!(!encrypted.data.cek.is_empty());
+
+        let decrypted = encrypted.decrypt(&key).unwrap();
+
+        assert_eq!(decrypted.data.0, [0, 1, 2, 3]);
+    }
+
+    #[rstest]
+    fn full_record_round_trip_fail(test_record: Record<DecryptedData>) {
+        let key = paseto_v4::Key::from([0x55; 32]);
+        let encrypted = test_record.encrypt(&key);
+
+        let mut enc1 = encrypted.clone();
+        enc1.host = Host::new(HostId(uuid_v7()));
+        let _ = enc1
+            .decrypt(&key)
+            .expect_err("tampering with the host should result in auth failure");
+
+        let mut enc2 = encrypted;
+        enc2.id = RecordId(uuid_v7());
+        let _ = enc2
+            .decrypt(&key)
+            .expect_err("tampering with the id should result in auth failure");
     }
 }
