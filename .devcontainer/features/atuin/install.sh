@@ -8,8 +8,11 @@ USER_HOME="/root"
 # bash-isms ("Bad substitution"). Pipe to bash explicitly.
 curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | bash
 
-# shell hooks
+# shell hooks. The $(atuin init …) must stay literal so it runs when the shell
+# starts, not here; only $USER_HOME is spliced in.
+# shellcheck disable=SC2016
 echo 'eval "$('"$USER_HOME"'/.atuin/bin/atuin init zsh)"' >>"$USER_HOME/.zshrc"
+# shellcheck disable=SC2016
 echo 'eval "$('"$USER_HOME"'/.atuin/bin/atuin init bash)"' >>"$USER_HOME/.bashrc"
 
 # PATH for non-login shells (kubectl exec)
