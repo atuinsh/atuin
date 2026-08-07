@@ -1746,7 +1746,11 @@ mod tests {
             "responded line should clear on new turn:\n{screen}"
         );
         assert!(
-            screen.contains("└ Tip: /model switches models"),
+            screen.contains("└ Tip:"),
+            "second turn should show a tip\n{screen}"
+        );
+        assert!(
+            !screen.contains("└ Tip: press Esc to interrupt a response"),
             "second turn should pull the next tip:\n{screen}"
         );
     }
