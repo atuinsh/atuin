@@ -10,9 +10,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/* && \
     mkdir -p /run/sshd
 
-# --- tailscale ---
-RUN curl -fsSL https://tailscale.com/install.sh | sh
-
 # --- rust conveniences ---
 RUN rustup component add rust-analyzer clippy rustfmt && \
     cargo install cargo-nextest --locked || true
@@ -20,7 +17,7 @@ RUN rustup component add rust-analyzer clippy rustfmt && \
 # Use mold by default
 RUN mkdir -p /root/.cargo && printf '[target.x86_64-unknown-linux-gnu]\nlinker = "clang"\nrustflags = ["-C", "link-arg=-fuse-ld=mold"]\n' >> /root/.cargo/config.toml
 
-# --- shell setup (atuin itself is installed by the local feature) ---
+# --- shell setup ---
 RUN chsh -s /usr/bin/zsh root
 
 COPY entrypoint.sh /entrypoint.sh
