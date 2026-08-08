@@ -31,6 +31,20 @@ impl Drop for TestProxy {
     }
 }
 
+fn disable_echo(master: &dyn MasterPty) {
+    use nix::sys::termios;
+    use std::os::fd::BorrowedFd;
+
+    let raw_fd = master.as_raw_fd().expect("MasterPty::as_raw_fd");
+    // SAFETY: The file descriptor is owned by `master`, which cannot get dropped during the life
+    // of the `BorrowedFd` because we hold a shared reference to it.
+    let fd = unsafe { BorrowedFd::borrow_raw(raw_fd) };
+
+    let mut attrs = termios::tcgetattr(fd).expect("tcgetattr");
+    attrs.local_flags.remove(termios::LocalFlags::ECHO);
+    termios::tcsetattr(fd, termios::SetArg::TCSANOW, &attrs).expect("tcsetattr");
+}
+
 fn spawn_proxy(rows: u16, cols: u16) -> TestProxy {
     let pty = native_pty_system();
     let pair = pty
@@ -41,6 +55,10 @@ fn spawn_proxy(rows: u16, cols: u16) -> TestProxy {
             pixel_height: 0,
         })
         .expect("openpty");
+    // Terminal echo is unreliable; under load, characters can be dropped, which results in lines
+    // that don't stretch the full width of the screen, causing certain tests to fail. Disable echo
+    // so we're only testing the output of `cat`, which is reliable.
+    disable_echo(&*pair.master);
     let child = pair
         .slave
         .spawn_command(CommandBuilder::new("/bin/cat"))
@@ -143,7 +161,7 @@ fn authenticated_input_roundtrips_through_the_shell() {
         .write_all(&protocol::input_frame(&line))
         .expect("write input");
 
-    // cat's echo (and the pty line discipline's) comes back as Output.
+    // Wait for `cat`'s output.
     let mut seen = Vec::new();
     let deadline = Instant::now() + DEADLINE;
     while !contains(&seen, marker) {
@@ -215,8 +233,8 @@ fn flooded_subscriber_is_disconnected_and_can_resync() {
     let mut stalled = Client::connect(&proxy.sock, false, b"");
 
     // Flood the PTY through the input path (what the stdin pump uses):
-    // ~2.5 MiB in, echoed back by the line discipline and by cat, far
-    // beyond the 128-frame queue and every socket buffer in between.
+    // ~2.5 MiB in, echoed back by cat, far beyond the 128-frame queue
+    // and every socket buffer in between.
     let input_tx = proxy.core.input_sender();
     let line = [b"x".repeat(512), b"\n".to_vec()].concat();
     for _ in 0..5000 {
@@ -267,13 +285,14 @@ fn legacy_one_shot_snapshot_still_works() {
 
 /// Paint every cell of the proxy's screen model, so its snapshot blob is
 /// bigger than any socket buffer between the two ends. Written through the
-/// input path (what the stdin pump uses); `/bin/cat` and the line discipline
-/// echo it back as PTY output, which is what the parser thread sees.
+/// input path (what the stdin pump uses); `/bin/cat` echoes it back as PTY
+/// output, which is what the parser thread sees.
 fn paint_screen(proxy: &TestProxy, rows: u16, cols: u16) {
     let input_tx = proxy.core.input_sender();
     let line = [b"x".repeat(cols as usize), b"\n".to_vec()].concat();
-    // Twice the screen height: the echo and cat's copy both land, and the
-    // last screenful is edge-to-edge text whatever the line discipline did.
+    // Twice the screen height: `rows` is enough to fill the screen; `rows * 2`
+    // is extra margin. One row at the bottom will always be blank due to the
+    // trailing newline after the last row.
     for _ in 0..(rows as usize * 2) {
         input_tx.send(line.clone()).expect("paint send");
     }
