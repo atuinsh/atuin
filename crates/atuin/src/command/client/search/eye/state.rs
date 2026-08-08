@@ -406,11 +406,21 @@ impl Inspector {
         self.nav.reset();
     }
 
+    // The moves install the neighbor entry immediately — it rides along in
+    // the current stats — so rendering and AcceptInspecting track the
+    // target without waiting for the fetch. `nav` and `stats` come from
+    // the same `apply`, so the neighbor matches the id nav moves to.
     pub fn move_to_previous(&mut self) {
+        if let Some(previous) = self.stats.as_ref().and_then(|s| s.previous.clone()) {
+            self.entry = Some(previous);
+        }
         self.nav.move_to_previous();
     }
 
     pub fn move_to_next(&mut self) {
+        if let Some(next) = self.stats.as_ref().and_then(|s| s.next.clone()) {
+            self.entry = Some(next);
+        }
         self.nav.move_to_next();
     }
 
@@ -439,6 +449,14 @@ impl Inspector {
         let target = inspected.clone().unwrap_or_else(|| fallback.id.clone());
         if self.stats_for.as_ref() == Some(&target) {
             return;
+        }
+        // When the target is the selection, the entry is already in hand —
+        // only the stats need the database. Install it now so rendering
+        // and AcceptInspecting see the current target while the fetch is
+        // in flight: an accept must never run the previously inspected
+        // command. (For navigated ids, move_to_* installed the entry.)
+        if inspected.is_none() {
+            self.entry = Some(fallback.clone());
         }
         let backend = Arc::clone(backend);
         // Replacing the task cancels a fetch for a stale target.

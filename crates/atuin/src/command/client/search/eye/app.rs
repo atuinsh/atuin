@@ -1683,6 +1683,30 @@ mod tests {
             );
         }
 
+        /// Accepting from the inspector while its fetch is still in flight
+        /// must run the currently targeted command, not the previously
+        /// inspected one.
+        #[tokio::test]
+        async fn accept_during_inspector_fetch_uses_the_current_target() {
+            let (mut rt, mut term) = seeded_session().await;
+            // Inspect "ls -la" and let its fetch land.
+            let (bytes, _) = rt.handle(InputEvent::Key(ctrl('o')));
+            term.feed(&bytes);
+            drive_effects(&mut rt, &mut term).await;
+
+            // Back to search, select "git status", reopen the inspector,
+            // and accept before the new fetch delivers.
+            for event in [ctrl('o'), key(KeyCode::Up), ctrl('o')] {
+                let (bytes, _) = rt.handle(InputEvent::Key(event));
+                term.feed(&bytes);
+            }
+            let (_, exit) = rt.handle(InputEvent::Key(key(KeyCode::Enter)));
+            assert!(
+                matches!(exit, Some(Output::Selection { ref command, .. }) if command == "git status"),
+                "accept must target the current selection, got {exit:?}"
+            );
+        }
+
         /// The mirror image of the stale-in-flight case: a query spawned
         /// AFTER the optimistic deletion carries a fresh generation, so
         /// `accept` cannot reject it — and it can still read the sqlite
