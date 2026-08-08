@@ -9,8 +9,6 @@ pub(crate) struct TipContext<'a> {
     pub settings: &'a Settings,
     /// A model is pinned — via `ai.model` or /model this session.
     pub model_set: bool,
-    /// A suggested command is present in the current conversation.
-    pub has_command: bool,
     /// Whether context files (`TERMINAL.md`) were gathered for this
     /// invocation. `None` = not gathered yet (first request still in flight).
     pub has_context_files: Option<bool>,
@@ -144,7 +142,6 @@ mod tests {
         TipContext {
             settings,
             model_set: false,
-            has_command: false,
             has_context_files: None,
         }
     }
@@ -191,7 +188,6 @@ mod tests {
             .next(&TipContext {
                 settings: &settings,
                 model_set: true,
-                has_command: false,
                 has_context_files: None,
             })
             .unwrap();

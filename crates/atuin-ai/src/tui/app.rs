@@ -982,7 +982,6 @@ impl AiApp {
         let tip_ctx = TipContext {
             settings: &self.settings,
             model_set: self.fsm.ctx.model.is_some(),
-            has_command: self.has_command(),
             has_context_files,
         };
         self.tips.next(&tip_ctx)
