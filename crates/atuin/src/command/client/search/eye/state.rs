@@ -290,7 +290,13 @@ pub(super) struct QueryBackend {
 pub(super) struct Querying {
     backend: Arc<Mutex<QueryBackend>>,
     task: Option<Task>,
-    pending_engine: Option<AnySearchEngine>,
+    /// The engine swap requested by `CycleSearchMode`, parked in a shared
+    /// slot rather than moved into a query task: query tasks are
+    /// cancel-on-drop, so an engine a cancelled task had taken with it
+    /// would be lost — the UI would show the new mode while searches kept
+    /// using the old engine. Whichever query task next holds the backend
+    /// lock drains the slot.
+    pending_engine: Arc<std::sync::Mutex<Option<AnySearchEngine>>>,
 }
 
 impl Querying {
@@ -298,7 +304,7 @@ impl Querying {
         Self {
             backend: Arc::new(Mutex::new(QueryBackend { engine, db })),
             task: None,
-            pending_engine: None,
+            pending_engine: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -309,9 +315,9 @@ impl Querying {
     }
 
     /// `CycleSearchMode` can't replace the engine synchronously (it lives
-    /// behind the async lock); the next spawned query installs it.
+    /// behind the async lock); the next query to run installs it.
     pub fn swap_engine(&mut self, engine: AnySearchEngine) {
-        self.pending_engine = Some(engine);
+        *self.pending_engine.lock().expect("engine slot poisoned") = Some(engine);
     }
 
     // The lock is deliberately held across the query await: it serializes
@@ -325,11 +331,12 @@ impl Querying {
         smart_sort: bool,
     ) {
         let backend = Arc::clone(&self.backend);
-        let new_engine = self.pending_engine.take();
+        let pending_engine = Arc::clone(&self.pending_engine);
         // Replacing the task drops (cancels) the previous query.
         self.task = Some(ctx.perform(async move {
             let results = {
                 let mut backend = backend.lock().await;
+                let new_engine = pending_engine.lock().expect("engine slot poisoned").take();
                 if let Some(engine) = new_engine {
                     backend.engine = engine;
                 }
@@ -359,7 +366,10 @@ impl Querying {
 #[cfg(test)]
 impl Querying {
     pub fn has_pending_engine(&self) -> bool {
-        self.pending_engine.is_some()
+        self.pending_engine
+            .lock()
+            .expect("engine slot poisoned")
+            .is_some()
     }
 }
 

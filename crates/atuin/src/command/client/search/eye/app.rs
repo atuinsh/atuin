@@ -1507,7 +1507,10 @@ mod tests {
 
         /// Run every queued effect to completion, feeding produced
         /// messages back through the runtime (and any effects those
-        /// updates queue in turn), mirroring the async driver.
+        /// updates queue in turn), mirroring the async driver — including
+        /// its cancellation check, so an effect whose `Task` was dropped
+        /// never runs (cancellation is enforced by the driver, not the
+        /// stream).
         async fn drive_effects(rt: &mut Runtime<SearchApp<'static>>, term: &mut TestTerminal) {
             loop {
                 let effects = rt.take_effects();
@@ -1515,7 +1518,10 @@ mod tests {
                     break;
                 }
                 for effect in effects {
-                    let Effect::Spawn { mut stream, .. } = effect;
+                    let Effect::Spawn { mut stream, cancel } = effect;
+                    if cancel.is_cancelled() {
+                        continue;
+                    }
                     while let Some(msg) = stream.next().await {
                         let (bytes, _) = rt.process(msg);
                         term.feed(&bytes);
@@ -1659,6 +1665,37 @@ mod tests {
             assert!(
                 screen.contains("git status"),
                 "unrelated entries remain\n{screen}"
+            );
+        }
+
+        /// A query task cancelled before it ran must not take a pending
+        /// engine swap down with it: the swap parks in a shared slot that
+        /// whichever query next runs drains.
+        #[tokio::test]
+        async fn a_cancelled_query_does_not_lose_an_engine_swap() {
+            let (mut rt, mut term) = seeded_session().await;
+            // Cycle the search mode; the requery-diff spawns a query that
+            // would install the new engine.
+            let (bytes, _) = rt.handle(InputEvent::Key(ctrl('s')));
+            term.feed(&bytes);
+            let expected = rt.app().search_mode.closest_db_mode();
+            // Two keystrokes: each replaces (cancels) the previous query
+            // task, so the one spawned by the cycle never runs.
+            for c in "ca".chars() {
+                let (bytes, _) = rt.handle(InputEvent::Key(key(KeyCode::Char(c))));
+                term.feed(&bytes);
+            }
+            drive_effects(&mut rt, &mut term).await;
+
+            assert!(!rt.app().query.has_pending_engine(), "slot drained");
+            let backend = Arc::clone(rt.app().query.backend());
+            let backend = backend.lock().await;
+            assert!(
+                matches!(
+                    &backend.engine,
+                    engines::AnySearchEngine::Db(engines::db::Search(mode)) if *mode == expected
+                ),
+                "the backend engine must match the cycled mode"
             );
         }
 
