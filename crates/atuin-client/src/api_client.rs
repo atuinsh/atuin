@@ -10,10 +10,12 @@ use reqwest::{
 
 use atuin_common::url::UrlAppendExt;
 use atuin_domain::api::{
-    ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION, ChangePasswordRequest, ErrorResponse,
-    LoginRequest, LoginResponse, MeResponse, RegisterResponse,
+    ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION, BundleDownloadResponse,
+    BundleResponse, ChangePasswordRequest, ErrorResponse, LoginRequest, LoginResponse, MeResponse,
+    RegisterResponse,
 };
-use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
+use atuin_domain::caps::{CapClient, PackfileCap};
+use atuin_domain::record::{EncryptedData, HostId, Record, RecordId, RecordIdx, RecordStatus};
 
 use semver::Version;
 
@@ -48,6 +50,13 @@ impl AuthToken {
 pub struct Client<'a> {
     sync_addr: &'a Url,
     client: reqwest::Client,
+    /// Carries no default headers: S3 rejects presigned requests that also carry an
+    /// Authorization header.
+    upload_client: reqwest::Client,
+    /// Read-only capability negotiation against this server. Populated by
+    /// [`Client::refresh_capabilities`] once per sync, then consulted offline by
+    /// [`Client::packfiles_enabled`] to gate the packfile path.
+    caps: std::sync::Arc<CapClient>,
 }
 
 /// A [`reqwest::ClientBuilder`] appropriate for the given extra headers.
@@ -255,6 +264,15 @@ impl<'a> Client<'a> {
         // used for semver server check
         headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
 
+        // Read-only capability client over this server's capabilities endpoint. Registering our own
+        // PackfileCap is currently cosmetic for the read-gate -- `add` only reaches the wire via
+        // CapMiddleware's `x-atuin-capabilities-known` header, which this seam deliberately does not
+        // install -- but kept for forward-compatible negotiation. A fresh bundle per client can
+        // never duplicate.
+        let caps = CapClient::new(sync_addr.append_path("api/v0/capabilities")?);
+        caps.add(PackfileCap { version: 1 })
+            .expect("packfile cap registered once");
+
         Ok(Client {
             sync_addr,
             client: client_builder(extra_headers)
@@ -262,7 +280,31 @@ impl<'a> Client<'a> {
                 .connect_timeout(Duration::from_secs(connect_timeout))
                 .timeout(Duration::from_secs(timeout))
                 .build()?,
+            upload_client: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(connect_timeout))
+                .timeout(Duration::from_secs(timeout))
+                .build()?,
+            caps,
         })
+    }
+
+    /// Refresh the server's advertised capabilities over the existing authenticated client.
+    ///
+    /// `/api/v0/capabilities` is public and unnegotiated, so reusing `self.client` -- with its
+    /// Authorization header, extra headers, and timeouts -- is harmless.
+    pub async fn refresh_capabilities(&self) -> reqwest::Result<()> {
+        self.caps.refresh(&self.client).await
+    }
+
+    /// Whether the server has confirmed it supports packfiles.
+    ///
+    /// Gate-safe by construction: only `Ok(Some(_))` (fetched, and the cap advertised and
+    /// well-formed) enables packfiles. `Ok(None)` (definitively not advertised),
+    /// `Err(NotFetched)` (never/failed refresh), and `Err(Malformed)` (version/shape skew) all
+    /// collapse to `false`, so the client never publishes or consumes packfiles a server has not
+    /// confirmed.
+    pub fn packfiles_enabled(&self) -> bool {
+        matches!(self.caps.get_server::<PackfileCap>(), Ok(Some(_)))
     }
 
     pub async fn me(&self) -> Result<MeResponse> {
@@ -295,6 +337,64 @@ impl<'a> Client<'a> {
         handle_resp_error(resp).await?;
 
         Ok(())
+    }
+
+    /// Ask the server to create a bundle for a manifest from already-uploaded records; returns
+    /// the presigned upload URL and the server's bundle id. `manifest_id` is the id the bundle is
+    /// later fetched by ([`Self::download_bundle`]), so the server keys the object to it.
+    pub async fn create_bundle(
+        &self,
+        manifest_id: RecordId,
+        record_ids: &[RecordId],
+        bundle_size_bytes: usize,
+    ) -> Result<(Url, RecordId)> {
+        let url = self.sync_addr.append_path("api/v0/bundles")?;
+        let body = serde_json::json!({
+            "manifest_id": manifest_id,
+            "records": record_ids,
+            "bundle_size_bytes": bundle_size_bytes,
+        });
+        let resp = self.client.post(url).json(&body).send().await?;
+        let resp = handle_resp_error(resp).await?;
+
+        let parsed: BundleResponse = resp.json().await?;
+        Ok((parsed.upload_url, parsed.bundle_id))
+    }
+
+    /// Upload a packfile body to a presigned URL. Unauthenticated by design.
+    pub async fn put_packfile(&self, upload_url: &Url, body: Vec<u8>) -> Result<()> {
+        // Not self.client: S3 rejects presigned requests that also carry an Authorization header.
+        let resp = self
+            .upload_client
+            .put(upload_url.clone())
+            .body(body)
+            .send()
+            .await?;
+        handle_resp_error(resp).await?;
+        Ok(())
+    }
+
+    /// Ask the server for the presigned URL to download a bundle, addressed by its
+    /// manifest's record id.
+    pub async fn download_bundle(&self, manifest_id: RecordId) -> Result<Url> {
+        // `append_path` takes `&'static str`; the manifest id is dynamic, so inline its logic.
+        let path = format!("api/v0/bundles/{}", manifest_id.0);
+        let url = self
+            .sync_addr
+            .append(path.split('/').filter(|s| !s.is_empty()))?;
+        let resp = self.client.get(url).send().await?;
+        let resp = handle_resp_error(resp).await?;
+
+        let parsed: BundleDownloadResponse = resp.json().await?;
+        Ok(parsed.download_url)
+    }
+
+    /// Download a packfile body from a presigned URL. Unauthenticated by design (S3 rejects
+    /// presigned requests that also carry an Authorization header).
+    pub async fn get_packfile(&self, download_url: &Url) -> Result<Vec<u8>> {
+        let resp = self.upload_client.get(download_url.clone()).send().await?;
+        let resp = handle_resp_error(resp).await?;
+        Ok(resp.bytes().await?.to_vec())
     }
 
     pub async fn next_records(

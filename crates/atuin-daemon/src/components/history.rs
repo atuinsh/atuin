@@ -6,7 +6,8 @@ use std::{pin::Pin, sync::Arc};
 
 use atuin_client::{
     database::Database,
-    history::{History, HistoryId, store::HistoryStore},
+    history::{HISTORY_TAG, History, HistoryId, store::HistoryStore},
+    packfile,
     settings::Settings,
 };
 use atuin_common::time::OffsetDateTimeExt;
@@ -29,6 +30,12 @@ use crate::{
 };
 
 const DAEMON_PROTOCOL_VERSION: u32 = 1;
+
+// Placeholder pack-size bounds. Packing kicks in once `PACK_MIN` history records have accumulated
+// past the last manifest, emitting manifests of up to `PACK_MAX` records each.
+// TODO: source these from the server's `PackfileCap` rather than hardcoding.
+const PACK_MIN: u64 = 100;
+const PACK_MAX: u64 = 1000;
 
 /// History component - manages command history lifecycle.
 ///
@@ -230,6 +237,19 @@ impl HistorySvc for HistoryGrpcService {
                 .push(history.clone())
                 .await
                 .map_err(|e| Status::internal(format!("failed to push record to store: {e:?}")))?;
+
+            // Pack accumulated history into manifest records on every addition. Best-effort:
+            // a packing failure must not fail the history write.
+            if let Err(e) = packfile::try_pack(
+                &history_store.store,
+                history_store.host_id,
+                PACK_MIN..=PACK_MAX,
+                HISTORY_TAG,
+            )
+            .await
+            {
+                tracing::warn!("packing failed: {e}");
+            }
 
             // Emit the event
             handle.emit(DaemonEvent::HistoryEnded(history));

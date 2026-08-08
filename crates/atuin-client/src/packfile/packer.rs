@@ -1,0 +1,260 @@
+//! Turns accumulated history into plaintext `packfile` manifest records.
+
+use std::ops::RangeInclusive;
+
+use atuin_domain::record::{EncryptedData, Host, HostId, Record};
+use thiserror::Error;
+use tracing::{instrument, trace};
+
+use crate::record::sqlite_store::SqliteStore;
+
+use super::record::{
+    LoadingError, PACKFILE_TAG, PACKFILE_VERSION, PackManifestData, PackManifestDataV1,
+    StoringError,
+};
+
+#[derive(Debug, Error)]
+pub enum PackingError {
+    #[error("error accessing the record store: {0}")]
+    Store(eyre::Report),
+
+    #[error("corrupt packfile manifest in the store: {0}")]
+    ManifestLoad(#[from] LoadingError),
+
+    #[error("failed to encode a packfile manifest: {0}")]
+    ManifestStore(#[from] StoringError),
+}
+
+/// Write a `packfile` manifest record for each contiguous history run that has reached `min`.
+#[instrument(skip(store))]
+pub async fn try_pack(
+    store: &SqliteStore,
+    host: HostId,
+    bounds: RangeInclusive<u64>,
+    tag: &str,
+) -> Result<(), PackingError> {
+    debug_assert!(tag != PACKFILE_TAG);
+
+    let (min, max) = bounds.into_inner();
+
+    // Floor comes from the manifest (`packfile`) stream, not the source `tag`: the newest
+    // manifest's `end_idx` is the highest source idx already packed.
+    let last_pack = store
+        .last(host, PACKFILE_TAG)
+        .await
+        .map_err(PackingError::Store)?;
+
+    // `start` is the first unpacked source idx; `pack_idx` is the next idx in the *packfile*
+    // stream (a separate sequence). Both come from the same latest manifest record.
+    let start = match &last_pack {
+        Some(record) => match PackManifestData::try_from(record)? {
+            PackManifestData::V1(v1) => v1.end_idx + 1,
+        },
+        None => 0,
+    };
+    let mut pack_idx = last_pack.map_or(0, |record| record.idx + 1);
+
+    let Some(ceiling) = store
+        .last(host, tag)
+        .await
+        .map_err(PackingError::Store)?
+        .map(|record| record.idx)
+    else {
+        trace!("no history yet; nothing to pack");
+        return Ok(());
+    };
+
+    if ceiling < start {
+        trace!(ceiling, start, "history already packed up to the floor");
+        return Ok(());
+    }
+
+    let mut cursor = start;
+    while cursor <= ceiling && ceiling - cursor + 1 >= min {
+        let want = (ceiling - cursor + 1).min(max);
+        let run = store
+            .next(host, tag, cursor, want)
+            .await
+            .map_err(PackingError::Store)?;
+
+        let Some(end) = run.last().map(|record| record.idx) else {
+            break;
+        };
+
+        let manifest = PackManifestDataV1 {
+            start_idx: cursor,
+            end_idx: end,
+        };
+        let record = Record::builder()
+            .host(Host::new(host))
+            .version(PACKFILE_VERSION.to_owned())
+            .tag(PACKFILE_TAG.to_owned())
+            .idx(pack_idx)
+            .data(EncryptedData::try_from(&manifest)?)
+            .build();
+
+        store.push(&record).await.map_err(PackingError::Store)?;
+        trace!(pack_idx, start = cursor, end, "wrote packfile manifest");
+
+        pack_idx += 1;
+        cursor = end + 1;
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use atuin_common::utils::uuid_v7;
+    use proptest::prelude::*;
+    use rstest::{fixture, rstest};
+
+    use crate::{history::HISTORY_TAG, settings::test_local_timeout};
+
+    #[fixture]
+    async fn store() -> SqliteStore {
+        SqliteStore::new(":memory:", test_local_timeout())
+            .await
+            .unwrap()
+    }
+
+    #[fixture]
+    fn host() -> HostId {
+        HostId(uuid_v7())
+    }
+
+    /// Push a single history record at `idx` (only its idx matters to the packer).
+    async fn push_history(store: &SqliteStore, host: HostId, idx: u64) {
+        let record = Record::builder()
+            .host(Host::new(host))
+            .version("v1".into())
+            .tag(HISTORY_TAG.to_owned())
+            .idx(idx)
+            .data(EncryptedData {
+                raw: "d".into(),
+                cek: "k".into(),
+            })
+            .build();
+        store.push(&record).await.unwrap();
+    }
+
+    /// Seed a contiguous run of `count` history records, idx `0..count`.
+    async fn seed_history(store: &SqliteStore, host: HostId, count: u64) {
+        for idx in 0..count {
+            push_history(store, host, idx).await;
+        }
+    }
+
+    /// The `[start_idx, end_idx]` ranges of the manifest records currently in the store.
+    async fn manifest_ranges(store: &SqliteStore, host: HostId) -> Vec<(u64, u64)> {
+        store
+            .next(host, PACKFILE_TAG, 0, 1000)
+            .await
+            .unwrap()
+            .iter()
+            .map(|record| match PackManifestData::try_from(record).unwrap() {
+                PackManifestData::V1(v1) => (v1.start_idx, v1.end_idx),
+            })
+            .collect()
+    }
+
+    async fn pack(store: &SqliteStore, host: HostId, min: u64, max: u64) {
+        try_pack(store, host, min..=max, HISTORY_TAG).await.unwrap();
+    }
+
+    /// One concrete example for readability; the proptests below prove the general invariants.
+    #[rstest]
+    #[tokio::test]
+    async fn packs_multiple_and_leaves_remainder(#[future(awt)] store: SqliteStore, host: HostId) {
+        seed_history(&store, host, 5).await; // idx 0..=4
+        pack(&store, host, 2, 2).await;
+        // Runs of 2: (0,1) and (2,3); idx 4 alone is below min, so it waits.
+        assert_eq!(manifest_ranges(&store, host).await, vec![(0, 1), (2, 3)]);
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        /// For any history size and any `min <= max`, a single `try_pack` produces manifests that
+        /// tile `[0, packed)` exactly -- contiguous, no gaps or overlaps -- each sized in
+        /// `[min, max]`, never reaching past the records that exist, and leaving fewer than `min`
+        /// records unpacked.
+        #[test]
+        fn packing_tiles_a_maximal_prefix(count in 0u64..=40, min in 1u64..=8, span in 0u64..=8) {
+            let max = min + span;
+            runtime().block_on(async move {
+                let store = SqliteStore::new(":memory:", test_local_timeout()).await.unwrap();
+                let host = HostId(uuid_v7());
+                seed_history(&store, host, count).await;
+
+                pack(&store, host, min, max).await;
+                let ranges = manifest_ranges(&store, host).await;
+
+                let mut next = 0u64;
+                for (start, end) in ranges {
+                    assert_eq!(start, next, "manifests must tile contiguously from 0");
+                    assert!(end >= start, "manifest range is inverted");
+                    let size = end - start + 1;
+                    assert!((min..=max).contains(&size), "pack size {size} outside [{min}, {max}]");
+                    next = end + 1;
+                }
+
+                assert!(next <= count, "packed {next} records beyond the {count} that exist");
+                assert!(count - next < min, "left {} unpacked, but min is {min}", count - next);
+            });
+        }
+
+        /// Packing is idempotent and monotonic: a second call with no new history changes nothing,
+        /// and packing again after more history arrives only extends coverage -- it never rewrites
+        /// or drops an existing manifest.
+        #[test]
+        fn packing_is_idempotent_and_monotonic(
+            first in 0u64..=25,
+            extra in 0u64..=25,
+            min in 1u64..=6,
+            span in 0u64..=6,
+        ) {
+            let max = min + span;
+            runtime().block_on(async move {
+                let store = SqliteStore::new(":memory:", test_local_timeout()).await.unwrap();
+                let host = HostId(uuid_v7());
+
+                seed_history(&store, host, first).await;
+                pack(&store, host, min, max).await;
+                let after_first = manifest_ranges(&store, host).await;
+
+                // A second pass with nothing new must be a no-op.
+                pack(&store, host, min, max).await;
+                assert_eq!(
+                    manifest_ranges(&store, host).await,
+                    after_first,
+                    "re-pack was not a no-op"
+                );
+
+                // More history arrives; existing manifests must survive verbatim as a prefix.
+                for idx in first..first + extra {
+                    push_history(&store, host, idx).await;
+                }
+                pack(&store, host, min, max).await;
+                let after_more = manifest_ranges(&store, host).await;
+                assert!(
+                    after_more.starts_with(&after_first),
+                    "existing manifests were rewritten"
+                );
+
+                let total = first + extra;
+                let packed = after_more.last().map_or(0, |&(_, end)| end + 1);
+                assert!(packed <= total);
+                assert!(total - packed < min, "left {} unpacked, but min is {min}", total - packed);
+            });
+        }
+    }
+}

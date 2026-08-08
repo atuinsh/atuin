@@ -78,6 +78,8 @@ crossterm = { workspace = true, features = ["serde"] }
 palette = { version = "0.7.5", features = ["serializing"] }
 strum_macros = "0.28"
 strum = { version = "0.27", features = ["strum_macros"] }
+zstd = "0.13"
+rmp-serde = "1"
 
 [dependencies.atuin-common]
 path = "../atuin-common"
@@ -90,10 +92,12 @@ version = "18.20.0-beta.3"
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 pretty_assertions = { workspace = true }
+proptest = { workspace = true }
 rstest = { workspace = true }
 divan = { version = "5.0.1", package = "codspeed-divan-compat" }
 tempfile = "3"
 toml = "1.1"
+wiremock = "0.6"
 
 # This crate's tests require the `test-utils` feature in atuin-common.
 [dev-dependencies.atuin-common]
