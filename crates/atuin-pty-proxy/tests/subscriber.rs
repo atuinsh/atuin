@@ -233,7 +233,7 @@ fn flooded_subscriber_is_disconnected_and_can_resync() {
     let mut stalled = Client::connect(&proxy.sock, false, b"");
 
     // Flood the PTY through the input path (what the stdin pump uses):
-    // ~2.5 MiB in, echoed back by cat, far  beyond the 128-frame queue
+    // ~2.5 MiB in, echoed back by cat, far beyond the 128-frame queue
     // and every socket buffer in between.
     let input_tx = proxy.core.input_sender();
     let line = [b"x".repeat(512), b"\n".to_vec()].concat();
