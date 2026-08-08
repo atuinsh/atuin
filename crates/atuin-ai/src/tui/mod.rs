@@ -6,6 +6,7 @@ pub(crate) mod recall;
 pub(crate) mod select;
 pub(crate) mod slash;
 pub(crate) mod state;
+pub(crate) mod tips;
 pub(crate) mod tools_exec;
 pub(crate) mod view;
 

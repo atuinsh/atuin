@@ -334,6 +334,7 @@ async fn run_inline_tui(
         cached_usage,
         initial_prompt,
         !usage_is_fresh,
+        settings.clone(),
     );
     let options =
         eye_declare::RunOptions::default().keyboard(eye_declare::KeyboardProtocol::Enhanced);

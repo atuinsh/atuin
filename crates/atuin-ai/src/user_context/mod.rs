@@ -80,6 +80,14 @@ impl UserContextCache {
         slot.contexts = None;
     }
 
+    /// Whether context files have been gathered and cached for this
+    /// invocation. `None` when nothing has been gathered yet (no request has
+    /// completed). Doesn't trigger a gather.
+    pub fn has_gathered(&self) -> Option<bool> {
+        let slot = self.lock();
+        slot.contexts.as_ref().map(|ctxs| !ctxs.is_empty())
+    }
+
     /// A poisoned lock means another thread panicked while holding it, but
     /// the cached value is only ever replaced wholesale — it can't be torn.
     /// Recover with the inner value rather than propagating the panic.

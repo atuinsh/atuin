@@ -76,6 +76,11 @@ pub(crate) enum Effect {
     /// Archive current session and start fresh (IO only — state already updated by FSM).
     ArchiveSession,
 
+    // ─── Turn lifecycle ─────────────────────────────────────────
+    /// A turn finished cleanly (stream done and all tools resolved, or the
+    /// turn ended in a suggested command). Not emitted on cancel or error.
+    TurnEnded,
+
     // ─── Timers ─────────────────────────────────────────────────
     /// Schedule a timer that fires an event after the given delay.
     ScheduleTimeout {
