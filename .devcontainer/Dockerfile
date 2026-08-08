@@ -14,8 +14,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN rustup component add rust-analyzer clippy rustfmt && \
     cargo install cargo-nextest --locked || true
 
-# Use mold by default
-RUN mkdir -p /root/.cargo && printf '[target.x86_64-unknown-linux-gnu]\nlinker = "clang"\nrustflags = ["-C", "link-arg=-fuse-ld=mold"]\n' >> /root/.cargo/config.toml
+# Use mold by default. This has to live in $CARGO_HOME (/usr/local/cargo in this
+# base image), NOT ~/.cargo: cargo reads $CARGO_HOME/config.toml and ignores
+# ~/.cargo/config.toml whenever CARGO_HOME points elsewhere, so the old
+# /root/.cargo/config.toml was silently dead. Here it also applies to every
+# user (root, dev, vscode) rather than just root.
+RUN printf '[target.x86_64-unknown-linux-gnu]\nlinker = "clang"\nrustflags = ["-C", "link-arg=-fuse-ld=mold"]\n' >> "${CARGO_HOME:-/usr/local/cargo}/config.toml"
 
 # --- claude code ---
 # Binary only. Credentials are NEVER baked in: this image is published to a
