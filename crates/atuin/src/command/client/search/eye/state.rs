@@ -316,7 +316,7 @@ impl Querying {
 
     /// `CycleSearchMode` can't replace the engine synchronously (it lives
     /// behind the async lock); the next query to run installs it.
-    pub fn swap_engine(&mut self, engine: AnySearchEngine) {
+    pub fn swap_engine(&self, engine: AnySearchEngine) {
         *self.pending_engine.lock().expect("engine slot poisoned") = Some(engine);
     }
 

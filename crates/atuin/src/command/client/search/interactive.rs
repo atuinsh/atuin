@@ -1607,12 +1607,18 @@ impl Drop for Stdout {
             // of reports still queued or in flight; anything the terminal
             // emitted before processing the disable would land in the
             // shell's input as escape garbage. Drain until quiet — bounded,
-            // and while raw mode is still on so reads work.
+            // and while raw mode is still on so reads work. The spray is
+            // contiguous, so stop at the first non-mouse event rather than
+            // eating keystrokes typed during the window; that one event is
+            // already consumed, which is the price of not being able to
+            // push it back.
             let deadline = std::time::Instant::now() + Duration::from_millis(50);
             while std::time::Instant::now() < deadline
                 && matches!(event::poll(Duration::from_millis(5)), Ok(true))
             {
-                let _ = event::read();
+                if !matches!(event::read(), Ok(Event::Mouse(_))) {
+                    break;
+                }
             }
         }
 

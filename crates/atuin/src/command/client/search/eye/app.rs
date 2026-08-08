@@ -1728,7 +1728,7 @@ mod tests {
             tracker.wait().await;
         }
 
-        /// An in-flight (or failed — the error path's OpDone re-enters
+        /// An in-flight (or failed — the error path's `OpDone` re-enters
         /// update just like this) inspector fetch must not be respawned on
         /// every update; that would hammer a failing database in a tight
         /// loop.
@@ -1818,6 +1818,7 @@ mod tests {
         /// A query task cancelled before it ran must not take a pending
         /// engine swap down with it: the swap parks in a shared slot that
         /// whichever query next runs drains.
+        #[allow(clippy::significant_drop_tightening)]
         #[tokio::test]
         async fn a_cancelled_query_does_not_lose_an_engine_swap() {
             let (mut rt, mut term) = seeded_session().await;
