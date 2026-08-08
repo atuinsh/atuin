@@ -714,8 +714,10 @@ impl<'a> SearchApp<'a> {
         }
     }
 
-    // The lock guard spans the rebuild await on purpose: it keeps the delete
-    // from interleaving with an in-flight query on the shared db handle.
+    // The lock guard spans the whole effect — tombstone write and rebuild —
+    // on purpose: it keeps the delete from interleaving with queries on the
+    // shared db handle, and makes queries ordered after it see the rebuilt
+    // index.
     #[allow(clippy::significant_drop_tightening)]
     fn delete_single(&mut self, index: usize, ctx: &mut Ctx<'_, Self>) {
         if self.listing.entries.is_empty() || index >= self.listing.entries.len() {
@@ -733,6 +735,13 @@ impl<'a> SearchApp<'a> {
         let store = self.history_store.clone();
         let backend = Arc::clone(self.query.backend());
         ctx.perform(async move {
+            // The lock is taken before the tombstone write and held through
+            // the rebuild: a query spawned after the optimistic removal
+            // serializes behind the delete instead of reading the
+            // pre-tombstone index. One can still win the lock before this
+            // effect runs and resurrect the entry — the final Requery
+            // reconverges that.
+            let backend = backend.lock().await;
             let ids = match store.delete_entries([entry]).await {
                 Ok(ids) => ids,
                 Err(e) => {
@@ -741,20 +750,21 @@ impl<'a> SearchApp<'a> {
                 }
             };
             // The tombstone is persisted from here on: the optimistic
-            // removal is the truth, and requerying would resurrect the
-            // entry from a stale sqlite index (it would then vanish again
-            // on the next successful rebuild). Retry once — the likely
+            // removal is the truth, and requerying against a stale sqlite
+            // index would resurrect the entry. Retry once — the likely
             // failure is a transient SQLITE_BUSY from the daemon — then
             // accept the stale index; any later incremental build heals it.
-            let backend = backend.lock().await;
             if let Err(e) = store.build_all(&*backend.db, &ids).await {
                 tracing::warn!(?e, "history rebuild after delete failed; retrying");
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 if let Err(e) = store.build_all(&*backend.db, &ids).await {
                     tracing::error!(?e, "history rebuild after delete failed; index is stale");
+                    return Msg::OpDone;
                 }
             }
-            Msg::OpDone
+            // Index rebuilt: requery so anything a concurrent query showed
+            // from the pre-tombstone index is replaced.
+            Msg::Requery
         })
         .detach();
     }
@@ -811,9 +821,12 @@ impl<'a> SearchApp<'a> {
                         ?e,
                         "history rebuild after delete-all failed; index is stale"
                     );
+                    return Msg::OpDone;
                 }
             }
-            Msg::OpDone
+            // See delete_single: replace anything a concurrent query
+            // showed from the pre-tombstone index.
+            Msg::Requery
         })
         .detach();
     }
@@ -1662,9 +1675,55 @@ mod tests {
                 !screen.contains("ls -la"),
                 "stale results must not resurrect the deleted entry\n{screen}"
             );
+            // The delete's requery applies the live filter ("l"), matching
+            // the ratatui path's post-delete refresh.
             assert!(
-                screen.contains("git status"),
-                "unrelated entries remain\n{screen}"
+                screen.contains("cargo build"),
+                "matching entries remain\n{screen}"
+            );
+        }
+
+        /// The mirror image of the stale-in-flight case: a query spawned
+        /// AFTER the optimistic deletion carries a fresh generation, so
+        /// `accept` cannot reject it — and it can still read the sqlite
+        /// index before the tombstone lands. The delete's final requery
+        /// must reconverge the listing.
+        #[tokio::test]
+        async fn deletion_survives_a_query_spawned_after_it() {
+            let (mut rt, mut term) = seeded_session().await;
+
+            // Delete the selected entry ("ls -la") through the inspector,
+            // then type: the keystroke's query mints a post-edit stamp.
+            for event in [ctrl('o'), ctrl('d'), key(KeyCode::Char('l'))] {
+                let (bytes, _) = rt.handle(InputEvent::Key(event));
+                term.feed(&bytes);
+            }
+
+            // Queued effects, in order: inspector sync, delete, query.
+            // Drive them in reverse so the query reads the pre-tombstone
+            // index first and its (resurrecting) results are accepted.
+            let effects = rt.take_effects();
+            for effect in effects.into_iter().rev() {
+                let Effect::Spawn { mut stream, cancel } = effect;
+                if cancel.is_cancelled() {
+                    continue;
+                }
+                while let Some(msg) = stream.next().await {
+                    let (bytes, _) = rt.process(msg);
+                    term.feed(&bytes);
+                }
+            }
+            // The delete's requery (and anything else) settles here.
+            drive_effects(&mut rt, &mut term).await;
+
+            let screen = screen(&term);
+            assert!(
+                !screen.contains("ls -la"),
+                "a post-delete query must not permanently resurrect the entry\n{screen}"
+            );
+            assert!(
+                screen.contains("cargo build"),
+                "matching entries remain\n{screen}"
             );
         }
 
