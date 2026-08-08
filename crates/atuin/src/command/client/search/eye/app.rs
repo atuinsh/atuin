@@ -30,7 +30,7 @@ use super::super::interactive::InputAction;
 use super::super::keybindings::key::{KeyCodeValue, KeyInput, SingleKey};
 use super::super::keybindings::{Action, EvalContext};
 use super::state::{
-    self, Inspector, KeymapState, Launch, Listing, Querying, Status, Tab, Viewport,
+    self, Generation, Inspector, KeymapState, Launch, Listing, Querying, Status, Tab, Viewport,
 };
 use super::view::SearchFrame;
 
@@ -52,7 +52,7 @@ pub(super) enum Output {
 pub(super) enum Msg {
     Raw(InputEvent),
     Results {
-        generation: u64,
+        generation: Generation,
         results: Vec<History>,
     },
     /// The inspector fetch effect finished: the inspected entry and its
@@ -177,8 +177,13 @@ impl<'a> SearchApp<'a> {
     }
 
     fn spawn_query(&mut self, ctx: &mut Ctx<'_, Self>) {
-        self.query
-            .spawn(ctx, state::snapshot(&self.search), self.settings.smart_sort);
+        let generation = self.listing.entries.begin_refresh();
+        self.query.spawn(
+            ctx,
+            generation,
+            state::snapshot(&self.search),
+            self.settings.smart_sort,
+        );
     }
 
     fn finish(&mut self, output: Output, ctx: &mut Ctx<'_, Self>) {
@@ -721,7 +726,7 @@ impl<'a> SearchApp<'a> {
         if selected == self.listing.entries.len() - 1 {
             state.select(selected.saturating_sub(1));
         }
-        let entry = self.listing.entries.remove(index);
+        let entry = self.listing.entries.edit(|entries| entries.remove(index));
         self.inspector.reset_nav();
         self.tab = Tab::Search;
 
@@ -763,7 +768,9 @@ impl<'a> SearchApp<'a> {
         let command = self.listing.entries[index].command.clone();
 
         // Remove matching entries from the visible results
-        self.listing.entries.retain(|e| e.command != command);
+        self.listing
+            .entries
+            .edit(|entries| entries.retain(|e| e.command != command));
         self.listing.reset_window();
         self.inspector.reset_nav();
         self.tab = Tab::Search;
@@ -872,8 +879,9 @@ impl App for SearchApp<'_> {
                 generation,
                 results,
             } => {
-                if self.query.is_current(generation) {
-                    self.listing.entries = results;
+                // `accept` rejects results superseded by a newer query or
+                // by a local edit (a delete) since the query started.
+                if self.listing.entries.accept(generation, results) {
                     // New results reset the selection, matching query_results.
                     self.listing.select(0);
                     self.inspector.reset_nav();
@@ -1036,7 +1044,9 @@ mod tests {
         );
         app.keymap.mode = keymap_mode;
         app.launch.original_input_empty = false;
-        app.listing.entries = dummy_results(results_len);
+        app.listing
+            .entries
+            .edit(|entries| *entries = dummy_results(results_len));
         app.listing.select(selected);
         app
     }
@@ -1606,6 +1616,50 @@ mod tests {
             term.feed(&bytes);
             drive_effects(&mut rt, &mut term).await;
             assert!(screen(&term).contains("GLOBAL"), "back to search");
+        }
+
+        /// A query still in flight when the user deletes must not
+        /// resurrect the deleted entry when its results finally arrive:
+        /// the optimistic removal advances the listing's generation, so
+        /// `accept` drops them.
+        #[tokio::test]
+        async fn deletion_survives_a_stale_in_flight_query() {
+            let (mut rt, mut term) = seeded_session().await;
+
+            // Start a query and hold its effect: it is now "in flight".
+            let (bytes, _) = rt.handle(InputEvent::Key(key(KeyCode::Char('l'))));
+            term.feed(&bytes);
+            let stale_query = rt.take_effects();
+
+            // Delete the selected entry ("ls -la") through the inspector
+            // while that query has not yet delivered.
+            let (bytes, _) = rt.handle(InputEvent::Key(ctrl('o')));
+            term.feed(&bytes);
+            let (bytes, _) = rt.handle(InputEvent::Key(ctrl('d')));
+            term.feed(&bytes);
+
+            // Deliver the stale results first: they were computed before
+            // the delete tombstone reached the index, so they still
+            // contain "ls -la".
+            for effect in stale_query {
+                let Effect::Spawn { mut stream, .. } = effect;
+                while let Some(msg) = stream.next().await {
+                    let (bytes, _) = rt.process(msg);
+                    term.feed(&bytes);
+                }
+            }
+            // Then let the delete (and inspector) effects finish.
+            drive_effects(&mut rt, &mut term).await;
+
+            let screen = screen(&term);
+            assert!(
+                !screen.contains("ls -la"),
+                "stale results must not resurrect the deleted entry\n{screen}"
+            );
+            assert!(
+                screen.contains("git status"),
+                "unrelated entries remain\n{screen}"
+            );
         }
 
         #[tokio::test]

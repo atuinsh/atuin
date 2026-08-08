@@ -44,12 +44,77 @@ impl Tab {
     }
 }
 
+/// A value that is refreshed from an async source but also edited
+/// locally. Every local edit and every newer refresh advances the
+/// generation, so an in-flight refresh can only land if nothing changed
+/// since [`begin_refresh`](Self::begin_refresh) minted its [`Generation`].
+///
+/// This exists because the result list has two writers with no ordering
+/// guarantee between them: query results arriving from the async task,
+/// and optimistic edits (deletes) applied synchronously. Routing every
+/// write through `edit`/`accept` makes "a stale query resurrects a
+/// deleted entry" unrepresentable rather than a discipline.
+///
+/// Reads go through `Deref`; there is deliberately no `DerefMut`.
+pub(super) struct Generational<T> {
+    value: T,
+    generation: u64,
+}
+
+/// Proof of when a refresh began. Only mintable by
+/// [`Generational::begin_refresh`] and only consumable by
+/// [`Generational::accept`], so a refresh can't skip the staleness check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Generation(u64);
+
+impl<T> Generational<T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            value,
+            generation: 0,
+        }
+    }
+
+    /// A local mutation. Advances the generation, so every outstanding
+    /// refresh goes stale.
+    pub fn edit<R>(&mut self, f: impl FnOnce(&mut T) -> R) -> R {
+        self.generation += 1;
+        f(&mut self.value)
+    }
+
+    /// Start a refresh. Also advances the generation: a newer refresh
+    /// supersedes any older one still in flight.
+    pub fn begin_refresh(&mut self) -> Generation {
+        self.generation += 1;
+        Generation(self.generation)
+    }
+
+    /// Land a refresh, unless a local edit or a newer refresh intervened.
+    /// Returns whether the value was replaced.
+    pub fn accept(&mut self, generation: Generation, value: T) -> bool {
+        if generation.0 == self.generation {
+            self.value = value;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl<T> std::ops::Deref for Generational<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+
 /// The result list: entries plus the windowed selection state the
 /// `HistoryList` widget scrolls. The `RefCell` exists because rendering
 /// updates the scroll window (offset, visible count) behind `&self`;
 /// update code uses `get_mut` and pays no runtime check.
 pub(super) struct Listing {
-    pub entries: Vec<History>,
+    pub entries: Generational<Vec<History>>,
     pub state: RefCell<ListState>,
     /// Set when entering/leaving a custom context with an empty input: the
     /// next results delivery re-selects the context's anchor entry.
@@ -59,7 +124,7 @@ pub(super) struct Listing {
 impl Listing {
     pub fn new() -> Self {
         Self {
-            entries: Vec::new(),
+            entries: Generational::new(Vec::new()),
             state: RefCell::new(ListState::default()),
             highlight_context_anchor: false,
         }
@@ -217,12 +282,13 @@ pub(super) struct QueryBackend {
     pub db: Box<dyn Database>,
 }
 
-/// The async search machinery: the backend lock, the generation guard
-/// that drops results a newer keystroke superseded, the cancel-on-drop
+/// The async search machinery: the backend lock, the cancel-on-drop
 /// task slot, and the engine swap requested by `CycleSearchMode`.
+/// Staleness lives with the data it protects: the caller mints a
+/// [`Generation`] from the listing and results only land through
+/// [`Generational::accept`].
 pub(super) struct Querying {
     backend: Arc<Mutex<QueryBackend>>,
-    generation: u64,
     task: Option<Task>,
     pending_engine: Option<AnySearchEngine>,
 }
@@ -231,7 +297,6 @@ impl Querying {
     pub fn new(engine: AnySearchEngine, db: Box<dyn Database>) -> Self {
         Self {
             backend: Arc::new(Mutex::new(QueryBackend { engine, db })),
-            generation: 0,
             task: None,
             pending_engine: None,
         }
@@ -241,11 +306,6 @@ impl Querying {
     /// inspector fetch) and must serialize against in-flight queries.
     pub fn backend(&self) -> &Arc<Mutex<QueryBackend>> {
         &self.backend
-    }
-
-    /// Whether a delivered result set is from the newest query.
-    pub fn is_current(&self, generation: u64) -> bool {
-        generation == self.generation
     }
 
     /// `CycleSearchMode` can't replace the engine synchronously (it lives
@@ -260,11 +320,10 @@ impl Querying {
     pub fn spawn(
         &mut self,
         ctx: &mut Ctx<'_, SearchApp<'_>>,
+        generation: Generation,
         state: SearchState,
         smart_sort: bool,
     ) {
-        self.generation += 1;
-        let generation = self.generation;
         let backend = Arc::clone(&self.backend);
         let new_engine = self.pending_engine.take();
         // Replacing the task drops (cancels) the previous query.
@@ -434,5 +493,37 @@ pub(super) fn snapshot(search: &SearchState) -> SearchState {
         context: search.context.clone(),
         custom_context: search.custom_context.clone(),
         shells: search.shells.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Generational;
+
+    #[test]
+    fn a_refresh_lands_when_nothing_intervened() {
+        let mut value = Generational::new(vec![1]);
+        let generation = value.begin_refresh();
+        assert!(value.accept(generation, vec![2]));
+        assert_eq!(*value, vec![2]);
+    }
+
+    #[test]
+    fn a_local_edit_stales_an_in_flight_refresh() {
+        let mut value = Generational::new(vec![1, 2]);
+        let generation = value.begin_refresh();
+        value.edit(|v| v.remove(0));
+        assert!(!value.accept(generation, vec![1, 2, 3]));
+        assert_eq!(*value, vec![2]);
+    }
+
+    #[test]
+    fn a_newer_refresh_supersedes_an_older_one() {
+        let mut value = Generational::new(vec![1]);
+        let older = value.begin_refresh();
+        let newer = value.begin_refresh();
+        assert!(!value.accept(older, vec![2]));
+        assert!(value.accept(newer, vec![3]));
+        assert_eq!(*value, vec![3]);
     }
 }
