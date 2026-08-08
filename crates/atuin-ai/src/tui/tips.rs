@@ -9,6 +9,11 @@ pub(crate) struct TipContext<'a> {
     pub settings: &'a Settings,
     /// A model is pinned — via `ai.model` or /model this session.
     pub model_set: bool,
+    /// A suggested command is present in the current conversation.
+    pub has_command: bool,
+    /// Whether context files (`TERMINAL.md`) were gathered for this
+    /// invocation. `None` = not gathered yet (first request still in flight).
+    pub has_context_files: Option<bool>,
 }
 
 pub(crate) struct Tip {
@@ -28,18 +33,34 @@ pub(crate) const TIPS: &[Tip] = &[
         relevant: None,
     },
     Tip {
+        id: "ctrl-c-interrupt",
+        text: "Ctrl+C interrupts a running command",
+        relevant: Some(|ctx| {
+            ctx.settings
+                .ai
+                .capabilities
+                .enable_command_execution
+                .unwrap_or(true)
+        }),
+    },
+    Tip {
         id: "model",
-        text: "Atuin AI offers multiple models; try a new one with /model",
+        text: "Atuin AI supports multiple models; try a new one with /model",
         relevant: Some(|ctx| !ctx.model_set),
     },
     Tip {
         id: "recall",
-        text: "Up/Down recall messages you've sent this session",
+        text: "Press Up/Down to recall messages you've sent this session",
+        relevant: None,
+    },
+    Tip {
+        id: "tab-insert",
+        text: "Press Tab to place a suggested command in your prompt instead of running it",
         relevant: None,
     },
     Tip {
         id: "send-cwd",
-        text: "You can ensure Atuin AI always knows your cwd with `atuin config set ai.opening.send_cwd true`",
+        text: "You can include your working directory in AI requests automatically: `atuin config set ai.opening.send_cwd true`",
         relevant: Some(|ctx| {
             let ai = &ctx.settings.ai;
             !ai.opening.send_cwd.or(ai.send_cwd).unwrap_or(false)
@@ -54,6 +75,16 @@ pub(crate) const TIPS: &[Tip] = &[
         id: "send-last-command",
         text: "Send your last command to Atuin AI automatically with `atuin config set ai.opening.send_last_command true`",
         relevant: Some(|ctx| !ctx.settings.ai.opening.send_last_command.unwrap_or(false)),
+    },
+    Tip {
+        id: "reload-context",
+        text: "Run /reload to re-read your TERMINAL.md files mid-session",
+        relevant: Some(|ctx| ctx.has_context_files == Some(true)),
+    },
+    Tip {
+        id: "add-terminal-md",
+        text: "Add a TERMINAL.md to your project to give Atuin AI persistent context",
+        relevant: Some(|ctx| ctx.has_context_files == Some(false)),
     },
     Tip {
         id: "newline",
@@ -113,6 +144,8 @@ mod tests {
         TipContext {
             settings,
             model_set: false,
+            has_command: false,
+            has_context_files: None,
         }
     }
 
@@ -127,16 +160,25 @@ mod tests {
     #[test]
     fn rotation_walks_in_order_and_wraps() {
         let settings = settings();
-        let mut rotation = TipRotation::starting_at(0);
-        let first = rotation.next(&ctx(&settings)).unwrap().id;
-        for _ in 1..TIPS.len() {
-            rotation.next(&ctx(&settings)).unwrap();
-        }
-        assert_eq!(
-            rotation.next(&ctx(&settings)).unwrap().id,
-            first,
-            "should wrap to the start"
+        let c = ctx(&settings);
+        // Some tips are context-gated, so the rotation only cycles through
+        // the ones that apply to this context.
+        let relevant_ids: Vec<&str> = TIPS
+            .iter()
+            .filter(|t| t.relevant.is_none_or(|applies| applies(&c)))
+            .map(|t| t.id)
+            .collect();
+        assert!(
+            relevant_ids.len() >= 2,
+            "test needs at least two relevant tips"
         );
+
+        let mut rotation = TipRotation::starting_at(0);
+        // Pull two full cycles: tips come back in order, then wrap.
+        for &expected in relevant_ids.iter().chain(&relevant_ids) {
+            let tip = rotation.next(&c).unwrap();
+            assert_eq!(tip.id, expected);
+        }
     }
 
     #[test]
@@ -149,6 +191,8 @@ mod tests {
             .next(&TipContext {
                 settings: &settings,
                 model_set: true,
+                has_command: false,
+                has_context_files: None,
             })
             .unwrap();
         assert_ne!(tip.id, "model", "model tip should be skipped when set");

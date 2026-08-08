@@ -974,9 +974,16 @@ impl AiApp {
 
     /// Pull the next relevant tip for a starting turn.
     fn pull_tip(&mut self) -> Option<&'static Tip> {
+        let has_context_files = self
+            .io
+            .as_ref()
+            .map(|io| io.user_context_cache.has_gathered())
+            .unwrap_or(None);
         let tip_ctx = TipContext {
             settings: &self.settings,
             model_set: self.fsm.ctx.model.is_some(),
+            has_command: self.has_command(),
+            has_context_files,
         };
         self.tips.next(&tip_ctx)
     }
