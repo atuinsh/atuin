@@ -51,9 +51,14 @@ __atuin_osc133_prompt_start=$'%{\033]133;A;cl=line\a%}'
 __atuin_osc133_prompt_end=$'%{\033]133;B\a%}'
 
 __atuin_osc133_wrap_prompt() {
-    local __atuin_prompt="${PROMPT-}"
-    local __atuin_rprompt="${RPROMPT-}"
+    # RPS1 and RPROMPT share a value buffer but track "assigned" separately
+    # (zsh 5.0.6+), so for a user who only ever set RPS1, RPROMPT expands as
+    # unset. Fall back to RPS1 so we don't clobber the shared value (#3758).
+    local __atuin_orig_prompt="${PROMPT-}"
+    local __atuin_orig_rprompt="${RPROMPT-${RPS1-}}"
 
+    local __atuin_prompt="$__atuin_orig_prompt"
+    local __atuin_rprompt="$__atuin_orig_rprompt"
     __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_start/}"
     __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_end/}"
     __atuin_rprompt="${__atuin_rprompt//$__atuin_osc133_prompt_start/}"
@@ -63,8 +68,10 @@ __atuin_osc133_wrap_prompt() {
         PROMPT="${__atuin_osc133_prompt_start}${__atuin_prompt}"
         RPROMPT="${__atuin_rprompt}${__atuin_osc133_prompt_end}"
     else
-        PROMPT="$__atuin_prompt"
-        RPROMPT="$__atuin_rprompt"
+        # Skip no-op writes: assigning RPROMPT marks it (and RPS1) as set,
+        # which we shouldn't do unless we have markers to strip.
+        [[ "$__atuin_orig_prompt" == "$__atuin_prompt" ]] || PROMPT="$__atuin_prompt"
+        [[ "$__atuin_orig_rprompt" == "$__atuin_rprompt" ]] || RPROMPT="$__atuin_rprompt"
     fi
 }
 
@@ -243,3 +250,5 @@ zle -N atuin-up-search-viins _atuin_up_search_viins
 # These are compatibility widget names for "atuin <= 17.2.1" users.
 zle -N _atuin_search_widget _atuin_search
 zle -N _atuin_up_search_widget _atuin_up_search
+
+(ATUIN_SHELL=zsh atuin __internal prepare-search-index >/dev/null 2>&1 &)

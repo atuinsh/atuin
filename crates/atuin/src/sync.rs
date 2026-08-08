@@ -6,6 +6,7 @@ use atuin_client::{
     database::Database, history::store::HistoryStore, record::sqlite_store::SqliteStore,
     settings::Settings,
 };
+use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::RecordId;
 use atuin_kv::store::KvStore;
 
@@ -21,9 +22,8 @@ pub async fn build(
     db: &dyn Database,
     downloaded: Option<&[RecordId]>,
 ) -> Result<()> {
-    let encryption_key: [u8; 32] = atuin_client::encryption::load_key(settings)
-        .context("could not load encryption key")?
-        .into();
+    let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+        .context("could not load encryption key")?;
 
     let host_id = Settings::host_id().await?;
 
@@ -31,10 +31,10 @@ pub async fn build(
 
     let kv_db = atuin_kv::database::Database::new(settings.kv.db_path.clone(), 1.0).await?;
 
-    let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
-    let alias_store = AliasStore::new(store.clone(), host_id, encryption_key);
-    let var_store = VarStore::new(store.clone(), host_id, encryption_key);
-    let kv_store = KvStore::new(store.clone(), kv_db, host_id, encryption_key);
+    let history_store = HistoryStore::new(store.clone(), host_id, encryption_key.clone());
+    let alias_store = AliasStore::new(store.clone(), host_id, encryption_key.clone());
+    let var_store = VarStore::new(store.clone(), host_id, encryption_key.clone());
+    let kv_store = KvStore::new(store.clone(), kv_db, host_id, encryption_key.clone());
     let script_store = ScriptStore::new(store.clone(), host_id, encryption_key);
 
     // A failure in one store should not stop the others from building - build as much as

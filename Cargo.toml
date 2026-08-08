@@ -8,7 +8,7 @@ resolver = "2"
 exclude = ["ui/backend", "crates/atuin-nucleo/matcher/fuzz"]
 
 [workspace.package]
-version = "18.20.0-beta.1"
+version = "18.20.0-beta.3"
 authors = ["Ellie Huxtable <ellie@atuin.sh>"]
 rust-version = "1.97.0"
 license = "MIT"
@@ -19,18 +19,18 @@ readme = "README.md"
 [workspace.dependencies]
 async-trait = "0.1.58"
 enum_dispatch = "0.3"
-atuin-client = { path = "crates/atuin-client", version = "18.20.0-beta.1" }
-atuin-common = { path = "crates/atuin-common", version = "18.20.0-beta.1" }
-atuin-daemon = { path = "crates/atuin-daemon", version = "18.20.0-beta.1" }
-atuin-domain = { path = "crates/atuin-domain", version = "18.20.0-beta.1" }
-atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.20.0-beta.1" }
-atuin-history = { path = "crates/atuin-history", version = "18.20.0-beta.1" }
-atuin-kv = { path = "crates/atuin-kv", version = "18.20.0-beta.1" }
-atuin-scripts = { path = "crates/atuin-scripts", version = "18.20.0-beta.1" }
-atuin-server = { path = "crates/atuin-server", version = "18.20.0-beta.1" }
-atuin-server-database = { path = "crates/atuin-server-database", version = "18.20.0-beta.1" }
-atuin-server-postgres = { path = "crates/atuin-server-postgres", version = "18.20.0-beta.1" }
-atuin-server-sqlite = { path = "crates/atuin-server-sqlite", version = "18.20.0-beta.1" }
+atuin-client = { path = "crates/atuin-client", version = "18.20.0-beta.3" }
+atuin-common = { path = "crates/atuin-common", version = "18.20.0-beta.3" }
+atuin-daemon = { path = "crates/atuin-daemon", version = "18.20.0-beta.3" }
+atuin-domain = { path = "crates/atuin-domain", version = "18.20.0-beta.3" }
+atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.20.0-beta.3" }
+atuin-history = { path = "crates/atuin-history", version = "18.20.0-beta.3" }
+atuin-kv = { path = "crates/atuin-kv", version = "18.20.0-beta.3" }
+atuin-scripts = { path = "crates/atuin-scripts", version = "18.20.0-beta.3" }
+atuin-server = { path = "crates/atuin-server", version = "18.20.0-beta.3" }
+atuin-server-database = { path = "crates/atuin-server-database", version = "18.20.0-beta.3" }
+atuin-server-postgres = { path = "crates/atuin-server-postgres", version = "18.20.0-beta.3" }
+atuin-server-sqlite = { path = "crates/atuin-server-sqlite", version = "18.20.0-beta.3" }
 atuin-nucleo = { path = "crates/atuin-nucleo", version = "0.6.0" }
 atuin-nucleo-matcher = { path = "crates/atuin-nucleo/matcher", version = "0.3.1" }
 frizbee = "0.12.0"
@@ -43,7 +43,7 @@ time = { version = "0.3.47", features = [
 ] }
 clap = { version = "4.5.7", features = ["derive"] }
 config = { version = "0.15.8", default-features = false, features = ["toml"] }
-derive_more = { version = "2", features = ["as_ref", "deref", "display", "error", "from", "into"] }
+derive_more = { version = "2", features = ["as_ref", "deref", "display", "error", "from", "into", "debug"] }
 directories = "6.0.0"
 eyre = "0.6"
 fs-err = "3.1"
@@ -64,6 +64,7 @@ typed-builder = "0.23.2"
 pretty_assertions = "1.3.0"
 proptest = "1.11.0"
 parking_lot = "0.12.5"
+zeroize = "1"
 rstest = "0.26.1"
 thiserror = "2"
 rustix = { version = "1.1.4", features = ["process", "fs", "stdio"] }
@@ -71,7 +72,10 @@ tower = "0.5"
 tracing = "0.1"
 tree-sitter = "0.26.8"
 tree-sitter-bash = "0.25.1"
+crypto_secretbox = "0.1.1"
+tiny-bip39 = "2"
 tree-sitter-fish = "3.6.0"
+rmp = { version = "0.8.14" }
 ratatui = "0.30.0"
 sql-builder = "3"
 tempfile = { version = "3.19" }
@@ -83,6 +87,12 @@ vt100 = "0.16"
 regex = "1.10.5"
 toml_edit = "0.25.4"
 url = { version = "2.5", features = ["serde"] }
+# rusty_paserk 0.5.0 (latest) requires rusty_paseto 0.8.0 unfortunately
+rusty_paseto = { version = "0.8.0", default-features = false }
+rusty_paserk = { version = "0.5.0", default-features = false, features = [
+  "v4",
+  "serde",
+] }
 
 [workspace.dependencies.tracing-subscriber]
 version = "0.3"

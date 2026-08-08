@@ -96,12 +96,11 @@ fn paint_and_wait(proxy: &TestProxy, rows: u16, cols: u16, min_bytes: usize) {
 
     let deadline = Instant::now() + PAINT_DEADLINE;
     loop {
-        // Repaint every round rather than once up front. A tty's input queue is
-        // finite: when the echoing child cannot keep up — which is the norm on a
-        // loaded CI box, not an anomaly — the kernel drops the overflow, so a
-        // one-shot paint leaves the screen permanently short of the target and
-        // the wait below spins until the deadline against a size that will never
-        // grow. Resending is what makes the loop a wait rather than a gamble.
+        // Repaint every round rather than once up front. Terminal echo is
+        // unreliable under load, so a one-shot paint leaves the screen
+        // permanently short of the target and the wait below spins until the
+        // deadline against a size that will never grow. Resending is what makes
+        // the loop a wait rather than a gamble.
         for _ in 0..(rows as usize * 2) {
             input_tx.send(line.clone()).expect("paint send");
         }

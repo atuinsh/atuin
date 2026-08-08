@@ -1020,7 +1020,7 @@ mod tests {
         let settings: &'static Settings = Box::leak(Box::new(settings));
         let db = Sqlite::new("sqlite::memory:", 30.0).await.unwrap();
         let store = SqliteStore::new(":memory:", 30.0).await.unwrap();
-        let history_store = HistoryStore::new(store, HostId(uuid_v7()), [0u8; 32]);
+        let history_store = HistoryStore::new(store, HostId(uuid_v7()), [0u8; 32].into());
 
         let mut app = SearchApp::new(
             input.to_string(),
@@ -1448,7 +1448,7 @@ mod tests {
         let settings_ref: &'static Settings = Box::leak(Box::new(settings));
         let db = Sqlite::new("sqlite::memory:", 30.0).await.unwrap();
         let store = SqliteStore::new(":memory:", 30.0).await.unwrap();
-        let history_store = HistoryStore::new(store, HostId(uuid_v7()), [0u8; 32]);
+        let history_store = HistoryStore::new(store, HostId(uuid_v7()), [0u8; 32].into());
         let app = SearchApp::new(
             String::new(),
             settings_ref,

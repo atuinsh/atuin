@@ -8,7 +8,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_domain::record::{DecryptedData, Host, HostId};
 use eyre::{Result, bail, ensure, eyre};
 
-use atuin_client::record::encryption::PASETO_V4;
+use atuin_common::encryption::paseto_v4;
 
 use crate::shell::Var;
 
@@ -101,12 +101,12 @@ impl VarRecord {
 pub struct VarStore {
     pub store: SqliteStore,
     pub host_id: HostId,
-    pub encryption_key: [u8; 32],
+    pub encryption_key: paseto_v4::Key,
 }
 
 impl VarStore {
     // will want to init the actual kv store when that is done
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: [u8; 32]) -> VarStore {
+    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> VarStore {
         VarStore {
             store,
             host_id,
@@ -294,7 +294,7 @@ impl VarStore {
             .build();
 
         self.store
-            .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
+            .push(&record.encrypt(&self.encryption_key))
             .await?;
 
         // set mutates shell config, so build again
@@ -330,7 +330,7 @@ impl VarStore {
             .build();
 
         self.store
-            .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
+            .push(&record.encrypt(&self.encryption_key))
             .await?;
 
         // delete mutates shell config, so build again
@@ -350,15 +350,14 @@ impl VarStore {
             let version = record.version.clone();
 
             // Skip records we can't decrypt or decode, rather than failing the entire build.
-            let ar =
-                match version.as_str() {
-                    DOTFILES_VAR_VERSION => record
-                        .decrypt::<PASETO_V4>(&self.encryption_key)
-                        .and_then(|decrypted| {
-                            VarRecord::deserialize(&decrypted.data, version.as_str())
-                        }),
-                    version => Err(eyre!("unknown version {version:?}")),
-                };
+            let ar = match version.as_str() {
+                DOTFILES_VAR_VERSION => {
+                    record.decrypt(&self.encryption_key).and_then(|decrypted| {
+                        VarRecord::deserialize(&decrypted.data, version.as_str())
+                    })
+                }
+                version => Err(eyre!("unknown version {version:?}")),
+            };
 
             let ar = match ar {
                 Ok(ar) => ar,
@@ -408,10 +407,10 @@ mod tests {
         let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
         let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
 
-        VarStore::new(store, host_id, key)
+        VarStore::new(store, host_id, key.into())
     }
 
-    #[test]
+    #[rstest]
     fn encode_decode() {
         let record = Var {
             name: "BEEP".to_owned(),

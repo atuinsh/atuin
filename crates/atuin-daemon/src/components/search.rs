@@ -19,7 +19,8 @@ use crate::{
     daemon::{Component, DaemonHandle},
     events::DaemonEvent,
     search::{
-        FilterMode, IndexFilterMode, SearchIndex, SearchRequest, SearchResponse,
+        FilterMode, IndexFilterMode, PrepareIndexRequest, PrepareIndexResponse, SearchIndex,
+        SearchRequest, SearchResponse,
         search_server::{Search as SearchSvc, SearchServer},
     },
 };
@@ -410,6 +411,22 @@ impl SearchSvc for SearchGrpcService {
         // Convert receiver to stream
         let out_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
         Ok(Response::new(Box::pin(out_stream)))
+    }
+
+    async fn prepare_index(
+        &self,
+        request: Request<PrepareIndexRequest>,
+    ) -> Result<Response<PrepareIndexResponse>, Status> {
+        // Same as `SearchRequest::shells` -- empty list means "all".
+        let shells = OrFilter::from_list(request.into_inner().shells).unwrap_or_default();
+        if let Some(index) = self
+            .maybe_rebuild_index(shells)
+            .await
+            .map_err(|()| Status::internal("failed to build index"))?
+        {
+            *self.index.write().await = index;
+        }
+        Ok(Response::new(PrepareIndexResponse {}))
     }
 }
 

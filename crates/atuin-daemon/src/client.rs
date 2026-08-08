@@ -28,8 +28,8 @@ use crate::history::{
     TailHistoryRequest, history_client::HistoryClient as HistoryServiceClient,
 };
 use crate::search::{
-    FilterMode as RpcFilterMode, SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
-    search_client::SearchClient as SearchServiceClient,
+    FilterMode as RpcFilterMode, PrepareIndexRequest, SearchContext as RpcSearchContext,
+    SearchRequest, SearchResponse, search_client::SearchClient as SearchServiceClient,
 };
 use crate::semantic::{
     CommandCapture, CommandOutputReply, CommandOutputRequest, OutputRange, RecordCommandsReply,
@@ -260,6 +260,19 @@ impl SearchClient {
             .await?;
 
         Ok(response.into_inner())
+    }
+
+    /// Tell the daemon to build the search index for the given list of shells.
+    pub async fn prepare_index(&mut self, shells: OrFilter<Vec<String>>) -> Result<()> {
+        let request = PrepareIndexRequest {
+            // Same as `SearchRequest::shells` -- empty list means "all".
+            shells: match shells.into_list() {
+                filter::Items::All => vec![],
+                filter::Items::Some(vec) => vec,
+            },
+        };
+        self.client.prepare_index(request).await?;
+        Ok(())
     }
 }
 

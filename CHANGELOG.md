@@ -4,9 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [unreleased]
 
-### Features
+### Bug Fixes
 
-- Add agent hooks for opencode ([#3844](https://github.com/atuinsh/atuin/issues/3844))
+- *(docs)* Don't say `enter_accept` defaults to true in example config.toml ([#3865](https://github.com/atuinsh/atuin/issues/3865))
+- *(search)* Prepare daemon search index in shell init scripts ([#3864](https://github.com/atuinsh/atuin/issues/3864))
+- *(zsh)* Don't clobber RPS1 when wrapping the prompt for OSC 133 ([#3861](https://github.com/atuinsh/atuin/issues/3861))
+
+
+### Refactor
+
+- *(encryption)* Introduce PasetoV4Key newtype for the encryption key ([#3860](https://github.com/atuinsh/atuin/issues/3860))
+- *(encryption)* Move encryption into atuin-common. ([#3863](https://github.com/atuinsh/atuin/issues/3863))
 
 
 

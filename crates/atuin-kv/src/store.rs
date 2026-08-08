@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use eyre::{Result, eyre};
 
-use atuin_client::record::encryption::PASETO_V4;
 use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx};
 use entry::KvEntry;
 use record::{KV_TAG, KV_VERSION, KvRecord};
@@ -18,7 +18,7 @@ pub struct KvStore {
     pub record_store: SqliteStore,
     pub kv_db: Database,
     pub host_id: HostId,
-    pub encryption_key: [u8; 32],
+    pub encryption_key: paseto_v4::Key,
 }
 
 impl KvStore {
@@ -26,7 +26,7 @@ impl KvStore {
         record_store: SqliteStore,
         kv_db: Database,
         host_id: HostId,
-        encryption_key: [u8; 32],
+        encryption_key: paseto_v4::Key,
     ) -> Self {
         KvStore {
             record_store,
@@ -101,7 +101,7 @@ impl KvStore {
         let id = record.id;
 
         self.record_store
-            .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
+            .push(&record.encrypt(&self.encryption_key))
             .await?;
 
         Ok((id, idx))
@@ -120,15 +120,12 @@ impl KvStore {
         // only visit each KV once, inserting or deleting based on the first time we see it
         for record in tagged {
             // Skip records we can't decrypt or decode, rather than failing the entire build.
-            let kv =
-                match record.version.as_str() {
-                    "v0" | KV_VERSION => record
-                        .decrypt::<PASETO_V4>(&self.encryption_key)
-                        .and_then(|decrypted| {
-                            KvRecord::deserialize(&decrypted.data, &decrypted.version)
-                        }),
-                    version => Err(eyre!("unknown version {version:?}")),
-                };
+            let kv = match record.version.as_str() {
+                "v0" | KV_VERSION => record.decrypt(&self.encryption_key).and_then(|decrypted| {
+                    KvRecord::deserialize(&decrypted.data, &decrypted.version)
+                }),
+                version => Err(eyre!("unknown version {version:?}")),
+            };
 
             let kv = match kv {
                 Ok(kv) => kv,
@@ -186,19 +183,20 @@ impl KvStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::{fixture, rstest};
 
-    async fn setup() -> Result<KvStore> {
+    #[fixture]
+    async fn store() -> KvStore {
         let record_store = SqliteStore::new("sqlite::memory:", 1.0).await.unwrap();
         let kv_db = Database::new("sqlite::memory:", 1.0).await.unwrap();
         let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
-        let encryption_key = [0; 32];
-        Ok(KvStore::new(record_store, kv_db, host_id, encryption_key))
+        let encryption_key = paseto_v4::Key::from([0; 32]);
+        KvStore::new(record_store, kv_db, host_id, encryption_key)
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_kv_store() -> Result<()> {
-        let store = setup().await?;
-
+    async fn test_kv_store(#[future(awt)] store: KvStore) -> Result<()> {
         store.set("test", "key", "value").await.unwrap();
         let value = store.get("test", "key").await.unwrap();
         assert_eq!(value, Some("value".to_string()));

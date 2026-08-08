@@ -249,7 +249,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "atuin"
-version = "18.20.0-beta.1"
+version = "18.20.0-beta.3"
 dependencies = [
  "arboard",
  "async-trait",
@@ -317,7 +317,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-ai"
-version = "18.20.0-beta.1"
+version = "18.20.0-beta.3"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -375,7 +375,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-client"
-version = "18.20.0-beta.1"
+version = "18.20.0-beta.3"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -385,7 +385,6 @@ dependencies = [
  "codspeed-divan-compat",
  "config",
  "crossterm",
- "crypto_secretbox",
  "derive_more",
  "directories",
  "enum_dispatch",
@@ -429,27 +428,35 @@ dependencies = [
  "url",
  "uuid",
  "whoami",
+ "zeroize",
 ]
 
 [[package]]
 name = "atuin-common"
-version = "18.20.0-beta.1"
+version = "18.20.0-beta.3"
 dependencies = [
  "base64",
+ "crypto_secretbox",
  "derive_more",
  "directories",
  "eyre",
+ "fs-err",
  "getrandom 0.4.3",
  "itertools 0.15.0",
  "pretty_assertions",
  "proptest",
+ "rmp",
  "rstest",
+ "rusty_paserk",
+ "rusty_paseto",
  "serde",
  "serde_json",
  "serde_with",
  "sysinfo",
  "thiserror 2.0.19",
  "time",
+ "tiny-bip39",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "unicode-segmentation",
@@ -457,11 +464,12 @@ dependencies = [
  "url",
  "uuid",
  "vt100",
+ "zeroize",
 ]
 
 [[package]]
 name = "atuin-daemon"
-version = "18.20.0-beta.1"
+version = "18.20.0-beta.3"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -498,7 +506,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-domain"
-version = "18.20.0-beta.1"
+version = "18.20.0-beta.3"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -529,7 +537,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-dotfiles"
-version = "18.20.0-beta.1"
+version = "18.20.0-beta.3"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -547,7 +555,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-history"
-version = "18.20.0-beta.1"
+version = "18.20.0-beta.3"
 dependencies = [
  "atuin-client",
  "codspeed-divan-compat",
@@ -561,7 +569,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-kv"
-version = "18.20.0-beta.1"
+version = "18.20.0-beta.3"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -580,7 +588,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-lab-share"
-version = "18.20.0-beta.1"
+version = "18.20.0-beta.3"
 dependencies = [
  "aes-gcm",
  "atuin-common",
@@ -623,7 +631,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-pty-proxy"
-version = "18.20.0-beta.1"
+version = "18.20.0-beta.3"
 dependencies = [
  "atuin-common",
  "clap",
@@ -640,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-scripts"
-version = "18.20.0-beta.1"
+version = "18.20.0-beta.3"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -677,7 +685,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server"
-version = "18.20.0-beta.1"
+version = "18.20.0-beta.3"
 dependencies = [
  "argon2",
  "atuin-client",
@@ -709,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-database"
-version = "18.20.0-beta.1"
+version = "18.20.0-beta.3"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -725,7 +733,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-postgres"
-version = "18.20.0-beta.1"
+version = "18.20.0-beta.3"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -744,7 +752,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-sqlite"
-version = "18.20.0-beta.1"
+version = "18.20.0-beta.3"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -1138,9 +1146,9 @@ dependencies = [
 
 [[package]]
 name = "clap_complete"
-version = "4.6.0"
+version = "4.6.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19c9f1dde76b736e3681f28cec9d5a61299cbaae0fce80a68e43724ad56031eb"
+checksum = "3be2ad0423bdbbb0e25bc89add796f3559706d4a95e1bc98e4d9662a957b6a19"
 dependencies = [
  "clap",
 ]
@@ -5620,7 +5628,7 @@ dependencies = [
 
 [[package]]
 name = "tests-database"
-version = "18.20.0-beta.1"
+version = "18.20.0-beta.3"
 dependencies = [
  "async-trait",
  "atuin-common",

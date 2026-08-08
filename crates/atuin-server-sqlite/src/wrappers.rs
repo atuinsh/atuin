@@ -37,8 +37,8 @@ impl<'a> ::sqlx::FromRow<'a, SqliteRow> for DbRecord {
         let timestamp: i64 = row.try_get("timestamp")?;
 
         let data = EncryptedData {
-            data: row.try_get("data")?,
-            content_encryption_key: row.try_get("cek")?,
+            raw: row.try_get("data")?,
+            cek: row.try_get("cek")?,
         };
 
         Ok(Self(Record {

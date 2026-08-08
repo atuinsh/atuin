@@ -719,3 +719,5 @@ if command -v __atuin_load_builtin_preexec > /dev/null; then
     # Free the function from memory
     unset -f __atuin_load_builtin_preexec
 fi
+
+(ATUIN_SHELL=bash atuin __internal prepare-search-index >/dev/null 2>&1 &)

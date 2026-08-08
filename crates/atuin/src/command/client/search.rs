@@ -9,12 +9,12 @@ use eyre::Result;
 use atuin_client::{
     database::Database,
     database::{OptFilters, current_context},
-    encryption,
     history::{AuthorPattern, History, store::HistoryStore},
     record::sqlite_store::SqliteStore,
     settings::{FilterMode, KeymapMode, RequestedSearchMode, Settings},
     theme::Theme,
 };
+use atuin_common::encryption::paseto_v4;
 
 use super::history::ListMode;
 
@@ -242,7 +242,7 @@ impl Cmd {
         };
         settings.keymap_mode_shell = self.keymap_mode;
 
-        let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
+        let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
 
         let host_id = Settings::host_id().await?;
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
@@ -368,6 +368,15 @@ async fn run_non_interactive(
     Ok(results)
 }
 
+pub async fn prepare_index(settings: &Settings) -> Result<()> {
+    use engines::AnySearchEngine;
+    #[cfg(feature = "daemon")]
+    if let AnySearchEngine::Daemon(mut search) = engines::engine(settings.search_mode(), settings) {
+        search.prepare_index().await?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AuthorPattern, Cmd};
@@ -397,7 +406,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn search_author_cli_flag_parses_the_special_values() {
         let cmd = Cmd::try_parse_from([
             "search",
