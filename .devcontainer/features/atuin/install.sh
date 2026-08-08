@@ -9,7 +9,9 @@ USER_HOME="/root"
 curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | bash
 
 # shell hooks
+# shellcheck disable=SC2016  # we are intentionally writing shell code
 echo 'eval "$('"$USER_HOME"'/.atuin/bin/atuin init zsh)"' >>"$USER_HOME/.zshrc"
+# shellcheck disable=SC2016  # we are intentionally writing shell code
 echo 'eval "$('"$USER_HOME"'/.atuin/bin/atuin init bash)"' >>"$USER_HOME/.bashrc"
 
 # PATH for non-login shells (kubectl exec)
