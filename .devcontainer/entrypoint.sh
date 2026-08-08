@@ -9,6 +9,31 @@ set -e
 # ---- sshd: access path ----
 /usr/sbin/sshd
 
+# ---- repos: clone into the workspace ----
+# SBX_REPOS is a space-separated list of owner/name (set via template env).
+# Cloned in the background so the shell is usable immediately — watch progress
+# with `tail -f /workspaces/.clone.log`. Private repos need GH_TOKEN; gh acts as
+# the git credential helper so the token is never written to disk.
+if [ -n "${SBX_REPOS:-}" ]; then
+  if [ -n "${GH_TOKEN:-}" ]; then
+    gh auth setup-git || echo "WARN: gh auth setup-git failed; private clones will fail"
+  fi
+  read -ra _repos <<<"$SBX_REPOS"
+  (
+    for repo in "${_repos[@]}"; do
+      dest="/workspaces/${repo##*/}"
+      if [ -e "$dest" ]; then
+        echo "skip ${repo} (already present)"
+        continue
+      fi
+      echo "cloning ${repo}..."
+      git clone "https://github.com/${repo}.git" "$dest" ||
+        echo "WARN: clone ${repo} failed"
+    done
+    echo "clone pass complete"
+  ) >/workspaces/.clone.log 2>&1 &
+fi
+
 # ---- optional: dotfiles ----
 # If DOTFILES_REPO is set (via template env), clone + run install script once.
 if [ -n "${DOTFILES_REPO:-}" ] && [ ! -d /root/.dotfiles ]; then
