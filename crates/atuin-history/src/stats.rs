@@ -239,40 +239,69 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
     println!("Unique commands:  {}", stats.unique_commands);
 }
 
+fn resolve_alias(alias_keys: &[(&String, &String)], command: &str) -> String {
+    // try longest alias first
+    for (key, value) in alias_keys {
+        if command == key.as_str() {
+            return value.to_string();
+        }
+        if let Some(rest) = command.strip_prefix(key.as_str())
+            && rest.starts_with(char::is_whitespace)
+        {
+            return format!("{value}{rest}");
+        }
+    }
+    command.to_string()
+}
+
 pub fn compute(
     settings: &Settings,
     history: &[History],
     count: usize,
     ngram_size: usize,
 ) -> Option<Stats> {
-    let mut commands = HashSet::<&str>::with_capacity(history.len());
+    let mut commands = HashSet::<String>::with_capacity(history.len());
     let mut total_unignored = 0;
-    let mut prefixes = HashMap::<Vec<&str>, usize>::with_capacity(history.len());
+    let mut prefixes = HashMap::<Vec<String>, usize>::with_capacity(history.len());
+
+    let mut alias_keys: Vec<(&String, &String)> = settings.stats.command_aliases.iter().collect();
+    alias_keys.sort_by_key(|(k, _)| std::cmp::Reverse(k.len()));
 
     for i in history {
         // just in case it somehow has a leading tab or space or something (legacy atuin didn't ignore space prefixes)
         let command = strip_leading_env_vars(i.command.trim());
-        let prefix = interesting_command(settings, command);
+
+        // resolve aliases first
+        let command = resolve_alias(&alias_keys, command);
+
+        let prefix = interesting_command(settings, &command);
 
         if settings.stats.ignored_commands.iter().any(|c| c == prefix) {
             continue;
         }
 
         total_unignored += 1;
-        commands.insert(command);
+        commands.insert(command.clone());
 
-        split_at_pipe(command)
+        split_at_pipe(&command)
             .iter()
             .map(|l| {
-                let command = l.trim();
-                commands.insert(command);
+                let command = resolve_alias(&alias_keys, l.trim());
+                commands.insert(command.clone());
                 command
             })
+            .collect::<Vec<_>>()
+            .iter()
+            .map(|s| s.as_str())
             .collect::<Vec<_>>()
             .windows(ngram_size)
             .for_each(|w| {
                 *prefixes
-                    .entry(w.iter().map(|c| interesting_command(settings, c)).collect())
+                    .entry(
+                        w.iter()
+                            .map(|c| interesting_command(settings, c).to_string())
+                            .collect(),
+                    )
                     .or_default() += 1;
             });
     }
@@ -292,7 +321,7 @@ pub fn compute(
         total_commands: total_unignored,
         top: top
             .into_iter()
-            .map(|t| (t.0.into_iter().map(|s| s.to_string()).collect(), t.1))
+            .map(|t| (t.0.into_iter().collect(), t.1))
             .collect(),
     })
 }
