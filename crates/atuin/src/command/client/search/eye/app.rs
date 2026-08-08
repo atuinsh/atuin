@@ -1683,6 +1683,25 @@ mod tests {
             );
         }
 
+        /// An in-flight (or failed — the error path's OpDone re-enters
+        /// update just like this) inspector fetch must not be respawned on
+        /// every update; that would hammer a failing database in a tight
+        /// loop.
+        #[tokio::test]
+        async fn inspector_fetch_is_not_respawned_while_in_flight() {
+            let (mut rt, mut term) = seeded_session().await;
+            let (bytes, _) = rt.handle(InputEvent::Key(ctrl('o')));
+            term.feed(&bytes);
+            assert_eq!(rt.take_effects().len(), 1, "the fetch itself");
+
+            let (bytes, _) = rt.process(Msg::OpDone);
+            term.feed(&bytes);
+            assert!(
+                rt.take_effects().is_empty(),
+                "no duplicate fetch while one is in flight"
+            );
+        }
+
         /// Accepting from the inspector while its fetch is still in flight
         /// must run the currently targeted command, not the previously
         /// inspected one.

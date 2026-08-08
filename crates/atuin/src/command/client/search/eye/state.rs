@@ -458,6 +458,13 @@ impl Inspector {
         if inspected.is_none() {
             self.entry = Some(fallback.clone());
         }
+        // Recorded before the fetch, not on delivery: every update
+        // re-enters sync, so an unrecorded attempt would respawn while one
+        // is in flight — and a failing fetch (whose error message itself
+        // triggers an update) would hammer the database in a tight loop.
+        // `apply` overwrites this with the delivered id, so a fetch that
+        // raced a target change still reconverges on the next pass.
+        self.stats_for = Some(target);
         let backend = Arc::clone(backend);
         // Replacing the task cancels a fetch for a stale target.
         self.task = Some(ctx.perform(async move {
