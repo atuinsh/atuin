@@ -112,6 +112,10 @@ impl<'a> SearchApp<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         search_input: String,
+        // Not derivable from `search_input`: command chaining clears the
+        // input while the original query stays non-empty, and keybinding
+        // conditions key off the original (matching the ratatui path).
+        original_input_empty: bool,
         settings: &'a Settings,
         theme: &'a Theme,
         db: Box<dyn Database>,
@@ -124,7 +128,6 @@ impl<'a> SearchApp<'a> {
         initial_height: u16,
         fullscreen: bool,
     ) -> Self {
-        let original_input_empty = search_input.is_empty();
         let mut input = Cursor::from(search_input);
         input.end();
 
@@ -1037,6 +1040,8 @@ mod tests {
 
         let mut app = SearchApp::new(
             input.to_string(),
+            // Matching the ratatui suite's fixture: forced to false.
+            false,
             settings,
             test_theme(),
             Box::new(db),
@@ -1056,7 +1061,6 @@ mod tests {
             false,
         );
         app.keymap.mode = keymap_mode;
-        app.launch.original_input_empty = false;
         app.listing
             .entries
             .edit(|entries| *entries = dummy_results(results_len));
@@ -1464,6 +1468,7 @@ mod tests {
         let history_store = HistoryStore::new(store, HostId(uuid_v7()), [0u8; 32].into());
         let app = SearchApp::new(
             String::new(),
+            true,
             settings_ref,
             test_theme(),
             Box::new(db),

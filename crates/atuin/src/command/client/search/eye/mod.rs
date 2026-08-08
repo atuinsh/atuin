@@ -152,6 +152,7 @@ pub async fn history(
 
     let search_app = app::SearchApp::new(
         search_input,
+        original_query.is_empty(),
         settings,
         theme,
         Box::new(db),
