@@ -996,6 +996,9 @@ impl App for AiApp {
                     InputEvent::Paste(s) => {
                         self.input.get_mut().insert_str(s);
                     }
+                    // InputEvent is non-exhaustive (0.7 adds Mouse); this
+                    // app doesn't capture mouse events.
+                    _ => {}
                 }
                 self.refresh_slash();
             }
