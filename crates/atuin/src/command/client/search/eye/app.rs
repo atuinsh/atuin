@@ -98,6 +98,9 @@ pub(super) struct SearchApp<'a> {
     pub(super) highlight_engine: AnySearchEngine,
     pub(super) now: Box<dyn Fn() -> OffsetDateTime + Send>,
     pub(super) query: Querying,
+    /// A handle independent of the backend lock, so the startup count's
+    /// full-table scan can't stall the first typed queries behind it.
+    count_db: Box<dyn Database>,
     launch: Launch,
     history_store: HistoryStore,
     /// Set by `Action::Accept`/`AcceptNth`; distinguishes accept-and-run
@@ -128,6 +131,7 @@ impl<'a> SearchApp<'a> {
         initial_height: u16,
         fullscreen: bool,
     ) -> Self {
+        let count_db = db.clone_boxed();
         let mut input = Cursor::from(search_input);
         input.end();
 
@@ -166,6 +170,7 @@ impl<'a> SearchApp<'a> {
             highlight_engine,
             now,
             query: Querying::new(engine, db),
+            count_db,
             launch: Launch {
                 initial_context: context,
                 default_filter_mode: filter_mode,
@@ -870,11 +875,13 @@ impl App for SearchApp<'_> {
         self.spawn_query(ctx);
 
         // Counting history is a full table scan, which can take a while on a
-        // large, cold database — don't hold up the first frame for it.
-        let backend = Arc::clone(self.query.backend());
+        // large, cold database — don't hold up the first frame for it, and
+        // use an independent handle so it doesn't hold the backend lock and
+        // stall the first queries either (the ratatui path clones for the
+        // same reason).
+        let count_db = self.count_db.clone_boxed();
         ctx.perform(async move {
-            let backend = backend.lock().await;
-            match backend.db.history_count(false).await {
+            match count_db.history_count(false).await {
                 Ok(count) => Msg::HistoryCount(count),
                 Err(e) => {
                     tracing::error!(?e, "failed to count history");
