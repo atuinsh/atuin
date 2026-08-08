@@ -26,6 +26,16 @@ RUN mkdir -p /root/.cargo && printf '[target.x86_64-unknown-linux-gnu]\nlinker =
 RUN curl -fsSL https://claude.ai/install.sh | bash
 ENV PATH="/root/.local/bin:${PATH}"
 
+# --- dev user ---
+# The base image already ships `vscode` at uid 1000, so `dev` lands on 1001.
+# Passwordless sudo is granted via sudoers.d, mirroring how the base image
+# grants it to vscode; visudo -c validates the file at build time so a typo
+# fails the build rather than locking sudo at runtime.
+RUN useradd --create-home --shell /usr/bin/zsh --groups sudo dev && \
+    echo 'dev ALL=(root) NOPASSWD:ALL' > /etc/sudoers.d/dev && \
+    chmod 0440 /etc/sudoers.d/dev && \
+    visudo -c -f /etc/sudoers.d/dev
+
 # --- shell setup ---
 RUN chsh -s /usr/bin/zsh root
 
