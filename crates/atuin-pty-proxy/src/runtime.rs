@@ -14,6 +14,20 @@ use crate::debug::{Osc133DebugHighlighter, RESET};
 use crate::pty_proxy::RuntimeOptions;
 use crate::screen::{self, Msg};
 
+/// Environment for the spawned shell: the socket path for screen requests,
+/// an active flag so nested shells don't start another proxy, and the PTY
+/// slave device so shells and clients can tell whether the proxy still owns
+/// their terminal surface. When the slave device is unknown, any inherited
+/// `ATUIN_PTY_PROXY_TTY` is removed so children never see a stale value.
+fn apply_proxy_env(cmd: &mut CommandBuilder, sock_path: &Path, tty_name: Option<&Path>) {
+    cmd.env("ATUIN_PTY_PROXY_SOCKET", sock_path.as_os_str());
+    cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
+    match tty_name {
+        Some(tty) => cmd.env("ATUIN_PTY_PROXY_TTY", tty.as_os_str()),
+        None => cmd.env_remove("ATUIN_PTY_PROXY_TTY"),
+    }
+}
+
 pub(crate) fn main(options: RuntimeOptions) {
     if let Err(e) = run(options) {
         let _ = terminal::disable_raw_mode();
@@ -57,8 +71,7 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
     if let Some(ref path) = options.shell {
         cmd.env("SHELL", path);
     }
-    cmd.env("ATUIN_PTY_PROXY_SOCKET", sock_path.as_os_str());
-    cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
+    apply_proxy_env(&mut cmd, &sock_path, pair.master.tty_name().as_deref());
     // Atuin sets a restrictive process-wide umask on startup to protect the
     // files it creates. The shell must not inherit it (#3695) — restore the
     // umask the user launched us with. Applied in the child between fork and
@@ -355,6 +368,20 @@ fn spawn_stdin_pump(input_tx: SyncSender<Vec<u8>>) {
     });
 }
 
+/// Read the current terminal size and propagate it to the child pty, the
+/// column tracker, and the screen parser.
+fn apply_terminal_size(master: &dyn portable_pty::MasterPty, handle: &ProxyHandle) {
+    if let Ok((cols, rows)) = terminal::size() {
+        let _ = master.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+        handle.resize(rows, cols);
+    }
+}
+
 fn spawn_resize_handler(
     master: Box<dyn portable_pty::MasterPty + Send>,
     handle: ProxyHandle,
@@ -362,19 +389,21 @@ fn spawn_resize_handler(
     use signal_hook::consts::SIGWINCH;
     use signal_hook::iterator::Signals;
 
+    // Register for SIGWINCH before spawning the thread, so any resize that
+    // arrives once this returns is queued rather than lost.
     let mut signals = Signals::new([SIGWINCH])?;
 
     std::thread::spawn(move || {
+        // The terminal may have been resized between the initial size query in
+        // `run` and this handler being armed — a multiplexer settling its pane
+        // layout right after spawning the shell does exactly this. That resize
+        // predates the SIGWINCH registration above, so no signal is waiting for
+        // it; apply the current size once up front so we don't stay stuck at a
+        // stale startup size until the next resize.
+        apply_terminal_size(&*master, &handle);
+
         for _ in signals.forever() {
-            if let Ok((cols, rows)) = terminal::size() {
-                let _ = master.resize(PtySize {
-                    rows,
-                    cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                });
-                handle.resize(rows, cols);
-            }
+            apply_terminal_size(&*master, &handle);
         }
     });
 
@@ -387,8 +416,63 @@ fn process_exit_code(code: u32) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::process_exit_code;
+    use std::ffi::OsStr;
+    use std::path::Path;
+
+    use portable_pty::CommandBuilder;
     use rstest::rstest;
+
+    use super::{apply_proxy_env, process_exit_code};
+
+    #[test]
+    fn proxy_env_exports_socket_active_flag_and_tty() {
+        let mut cmd = CommandBuilder::new("sh");
+        apply_proxy_env(
+            &mut cmd,
+            Path::new("/tmp/test.sock"),
+            Some(Path::new("/dev/ttys009")),
+        );
+
+        assert_eq!(
+            cmd.get_env("ATUIN_PTY_PROXY_SOCKET"),
+            Some(OsStr::new("/tmp/test.sock"))
+        );
+        assert_eq!(cmd.get_env("ATUIN_PTY_PROXY_ACTIVE"), Some(OsStr::new("1")));
+        assert_eq!(
+            cmd.get_env("ATUIN_PTY_PROXY_TTY"),
+            Some(OsStr::new("/dev/ttys009"))
+        );
+    }
+
+    #[test]
+    fn proxy_env_overrides_inherited_tty() {
+        let mut cmd = CommandBuilder::new("sh");
+        // Simulate a value inherited from an outer proxy's environment.
+        cmd.env("ATUIN_PTY_PROXY_TTY", "/dev/ttys001");
+        apply_proxy_env(
+            &mut cmd,
+            Path::new("/tmp/test.sock"),
+            Some(Path::new("/dev/ttys009")),
+        );
+
+        assert_eq!(
+            cmd.get_env("ATUIN_PTY_PROXY_TTY"),
+            Some(OsStr::new("/dev/ttys009"))
+        );
+    }
+
+    #[test]
+    fn proxy_env_removes_inherited_tty_when_unknown() {
+        let mut cmd = CommandBuilder::new("sh");
+        // Simulate a value inherited from an outer proxy's environment. If
+        // this proxy cannot name its own slave device, the stale path must
+        // not leak through — a wrong value would make shells and popup
+        // clients misjudge which terminal surface they are on.
+        cmd.env("ATUIN_PTY_PROXY_TTY", "/dev/ttys001");
+        apply_proxy_env(&mut cmd, Path::new("/tmp/test.sock"), None);
+
+        assert_eq!(cmd.get_env("ATUIN_PTY_PROXY_TTY"), None);
+    }
 
     #[rstest]
     #[case::zero(0, 0)]
