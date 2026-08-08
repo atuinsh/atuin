@@ -1,24 +1,13 @@
 #!/bin/bash
 set -e
 
-# ---- tailscale: userspace networking, ephemeral node, tailscale ssh ----
-tailscaled --tun=userspace-networking --statedir=/var/lib/ts-state &
-tailscale up \
-  --authkey="${TS_AUTHKEY}" \
-  --ssh \
-  --hostname="sbx-${SANDBOX_NAME:-$(hostname)}" \
-  || echo "WARN: tailscale up failed; falling back to sshd/exec"
+# NOTE: tailscale and atuin are temporarily removed. Tailscale blocked here
+# waiting on tailnet device approval, and `atuin login` blocked prompting for a
+# 2FA code — both hung the entrypoint before it reached sshd, so the pod came up
+# Ready but with nothing running. Access is via `kubectl exec` / sshd meanwhile.
 
-# ---- sshd: editor/fallback path alongside tailscale ssh ----
+# ---- sshd: access path ----
 /usr/sbin/sshd
-
-# ---- atuin: login + daemon on the fixed socket ----
-mkdir -p /root/.local/run
-if ! atuin status >/dev/null 2>&1; then
-  atuin login -u "${ATUIN_USER}" -p "${ATUIN_PASS}" -k "${ATUIN_KEY}" \
-    || echo "WARN: atuin login failed; check atuin-creds secret"
-fi
-nohup atuin daemon > /root/.local/run/daemon.log 2>&1 &
 
 # ---- optional: dotfiles ----
 # If DOTFILES_REPO is set (via template env), clone + run install script once.
