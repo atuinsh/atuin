@@ -7,7 +7,10 @@ set -e
 # Ready but with nothing running. Access is via `kubectl exec` / sshd meanwhile.
 
 # ---- sshd: access path ----
-/usr/sbin/sshd
+# This entrypoint now runs as `dev`, and sshd needs root to bind :22 and read
+# the host keys — hence sudo (passwordless, see the Dockerfile). Non-fatal: a
+# sandbox is still reachable via `kubectl exec` without it.
+sudo /usr/sbin/sshd || echo "WARN: sshd failed to start; use kubectl exec"
 
 # ---- repos: clone into the workspace ----
 # SBX_REPOS is a space-separated list of owner/name (set via template env).
@@ -36,9 +39,9 @@ fi
 
 # ---- optional: dotfiles ----
 # If DOTFILES_REPO is set (via template env), clone + run install script once.
-if [ -n "${DOTFILES_REPO:-}" ] && [ ! -d /root/.dotfiles ]; then
-  git clone --depth 1 "${DOTFILES_REPO}" /root/.dotfiles && \
-    ( cd /root/.dotfiles && ( ./install.sh || ./setup.sh || true ) )
+if [ -n "${DOTFILES_REPO:-}" ] && [ ! -d "$HOME/.dotfiles" ]; then
+  git clone --depth 1 "${DOTFILES_REPO}" "$HOME/.dotfiles" && \
+    ( cd "$HOME/.dotfiles" && ( ./install.sh || ./setup.sh || true ) )
 fi
 
 # ---- main process ----
