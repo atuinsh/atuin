@@ -302,6 +302,7 @@ dependencies = [
  "time",
  "tiny-bip39",
  "tokio",
+ "tokio-util",
  "toml_edit",
  "tracing",
  "tracing-appender",
@@ -5847,6 +5848,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

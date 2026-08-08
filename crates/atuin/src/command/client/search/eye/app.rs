@@ -22,6 +22,7 @@ use eye_declare::{
 };
 use semver::Version;
 use time::OffsetDateTime;
+use tokio_util::task::TaskTracker;
 use unicode_width::UnicodeWidthStr;
 
 use super::super::cursor::Cursor;
@@ -101,6 +102,12 @@ pub(super) struct SearchApp<'a> {
     /// A handle independent of the backend lock, so the startup count's
     /// full-table scan can't stall the first typed queries behind it.
     count_db: Box<dyn Database>,
+    /// Tracks detached persistence effects (deletes). The driver returns
+    /// the moment the app exits without joining effects, and the process
+    /// gives the runtime only 50ms to shut down — `eye::history` waits on
+    /// this tracker after the run so a tombstone write is never killed
+    /// mid-flight.
+    persistence: TaskTracker,
     launch: Launch,
     history_store: HistoryStore,
     /// Set by `Action::Accept`/`AcceptNth`; distinguishes accept-and-run
@@ -171,6 +178,7 @@ impl<'a> SearchApp<'a> {
             now,
             query: Querying::new(engine, db),
             count_db,
+            persistence: TaskTracker::new(),
             launch: Launch {
                 initial_context: context,
                 default_filter_mode: filter_mode,
@@ -182,6 +190,12 @@ impl<'a> SearchApp<'a> {
             _focus: focus,
             input_focus,
         }
+    }
+
+    /// A handle for waiting on detached persistence effects after the run
+    /// loop returns (see the `persistence` field).
+    pub fn persistence_tracker(&self) -> TaskTracker {
+        self.persistence.clone()
     }
 
     fn spawn_query(&mut self, ctx: &mut Ctx<'_, Self>) {
@@ -742,7 +756,7 @@ impl<'a> SearchApp<'a> {
 
         let store = self.history_store.clone();
         let backend = Arc::clone(self.query.backend());
-        ctx.perform(async move {
+        ctx.perform(self.persistence.track_future(async move {
             // The lock is taken before the tombstone write and held through
             // the rebuild: a query spawned after the optimistic removal
             // serializes behind the delete instead of reading the
@@ -773,7 +787,7 @@ impl<'a> SearchApp<'a> {
             // Index rebuilt: requery so anything a concurrent query showed
             // from the pre-tombstone index is replaced.
             Msg::Requery
-        })
+        }))
         .detach();
     }
 
@@ -796,7 +810,7 @@ impl<'a> SearchApp<'a> {
         // Query the DB for ALL entries with this command and delete them
         let store = self.history_store.clone();
         let backend = Arc::clone(self.query.backend());
-        ctx.perform(async move {
+        ctx.perform(self.persistence.track_future(async move {
             let backend = backend.lock().await;
             let all_matching = match backend
                 .db
@@ -835,7 +849,7 @@ impl<'a> SearchApp<'a> {
             // See delete_single: replace anything a concurrent query
             // showed from the pre-tombstone index.
             Msg::Requery
-        })
+        }))
         .detach();
     }
 
@@ -1693,6 +1707,25 @@ mod tests {
                 screen.contains("cargo build"),
                 "matching entries remain\n{screen}"
             );
+        }
+
+        /// Deletes must register with the persistence tracker so
+        /// `eye::history` can wait for them after the run loop returns —
+        /// otherwise the process's 50ms runtime shutdown can kill a
+        /// tombstone write mid-flight.
+        #[tokio::test]
+        async fn delete_effects_are_tracked_for_teardown() {
+            let (mut rt, mut term) = seeded_session().await;
+            let tracker = rt.app().persistence_tracker();
+            for event in [ctrl('o'), ctrl('d')] {
+                let (bytes, _) = rt.handle(InputEvent::Key(event));
+                term.feed(&bytes);
+            }
+            assert_eq!(tracker.len(), 1, "the delete effect is tracked");
+            drive_effects(&mut rt, &mut term).await;
+            tracker.close();
+            // Completes only because the delete ran to completion.
+            tracker.wait().await;
         }
 
         /// An in-flight (or failed — the error path's OpDone re-enters
