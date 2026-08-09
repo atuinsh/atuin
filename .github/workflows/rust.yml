@@ -71,6 +71,7 @@ jobs:
           envs: "CARGO_TERM_COLOR"
           usesh: true
           mem: 4096
+          copyback: false
           prepare: |
             pkg install pkg-config openssl
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.97.0
@@ -82,8 +83,6 @@ jobs:
 
             banner server
             cargo build -p atuin-server --locked --release
-
-            rm -rf target
 
   unit-test:
     strategy:
