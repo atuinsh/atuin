@@ -235,6 +235,7 @@ End.",
     )]
     #[case::multiple("A: !`echo one` B: !`echo two`", "A: one B: two")]
     #[tokio::test]
+    #[cfg(not(target_os = "windows"))]
     async fn interpolate_cases(#[case] source: &str, #[case] expected: &str) {
         assert_eq!(interpolate(source, "sh").await, expected);
     }
