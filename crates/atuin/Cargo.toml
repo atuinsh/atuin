@@ -136,7 +136,7 @@ daemonize = "0.5.0"
 # Enable tree-sitter shell parsing on platforms where tree-sitter's bundled C
 # compiles cleanly. tree-sitter 0.26's portable/endian.h fails on illumos,
 # Windows cross-compiles, and potentially other exotic targets.
-[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "illumos"))'.dependencies]
 atuin-ai = { path = "../atuin-ai", version = "18.20.0-beta.3", optional = true, default-features = false, features = ["tree-sitter"] }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
