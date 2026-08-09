@@ -63,14 +63,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/cache@v6
-        with:
-          path: |
-            .cargo-home
-            .rustup-home
-          key: illumos-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: illumos-cargo-
-
       - name: Test on illumos
         uses: vmactions/omnios-vm@027e3ec08fed6fb740ab5f300c2605f9de02997a # v1.3.4
         with:
@@ -81,22 +73,17 @@ jobs:
           mem: 4096
           prepare: |
             pkg install pkg-config openssl
-            export CARGO_HOME="$PWD/.cargo-home"
-            export RUSTUP_HOME="$PWD/.rustup-home"
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.97.0 --no-modify-path
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.97.0
           run: |
-            export CARGO_HOME="$PWD/.cargo-home"
-            export RUSTUP_HOME="$PWD/.rustup-home"
-            export PATH="$CARGO_HOME/bin:$PATH"
-
-            banner check
-            cargo check --all --locked
+            . "$HOME/.cargo/env"
 
             banner client
             cargo build -p atuin-client --locked --release
 
             banner server
             cargo build -p atuin-server --locked --release
+
+            rm -rf target
 
   unit-test:
     strategy:
