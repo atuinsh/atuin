@@ -89,8 +89,14 @@ jobs:
             export RUSTUP_HOME="$PWD/.rustup-home"
             export PATH="$CARGO_HOME/bin:$PATH"
 
-            banner main
-            cargo build --all --locked --release
+            banner check
+            cargo check --all --locked
+
+            banner client
+            cargo build -p atuin-client --locked --release
+
+            banner server
+            cargo build -p atuin-server --locked --release
 
   unit-test:
     strategy:
