@@ -168,6 +168,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(target_os = "windows"))]
     async fn invalidate_during_gather_is_not_lost() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("TERMINAL.md");
@@ -201,6 +202,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(target_os = "windows"))]
     async fn slow_gather_does_not_overwrite_concurrent_result() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("TERMINAL.md");

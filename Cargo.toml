@@ -75,6 +75,7 @@ tree-sitter-bash = "0.25.1"
 crypto_secretbox = "0.1.1"
 tiny-bip39 = "2"
 tree-sitter-fish = "3.6.0"
+tree-sitter-powershell = "0.26.4"
 rmp = { version = "0.8.14" }
 ratatui = "0.30.0"
 sql-builder = "3"
