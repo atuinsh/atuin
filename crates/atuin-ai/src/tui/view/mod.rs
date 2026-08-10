@@ -203,7 +203,7 @@ fn tool_status_view(name: &str, status: &ToolResultStatus) -> AnyElement<'static
         ToolResultStatus::Success => tool_spinner(format!("Ran: {name}"), true).any(),
         ToolResultStatus::Error => text("✗ ")
             .style(Style::default().fg(Color::Red))
-            .span(format!("{name}: denied"), Style::default().fg(Color::Red))
+            .span(format!("{name}: failed"), Style::default().fg(Color::Red))
             .any(),
     }
 }

@@ -809,11 +809,26 @@ impl AgentFsm {
         // Parse the tool call
         let tool = match crate::tools::ClientToolCall::try_from((name.as_str(), &input)) {
             Ok(tool) => tool,
-            Err(_) => {
-                // Unknown tool — push as event but don't track
-                self.ctx
-                    .events
-                    .push(ConversationEvent::ToolCall { id, name, input });
+            Err(err) => {
+                // Unknown tool or malformed input — answer with an error
+                // result rather than leaving the tool_use dangling. Some
+                // providers reject a history where a tool call has no
+                // result, and the error text lets the model correct itself.
+                self.ctx.events.push(ConversationEvent::ToolCall {
+                    id: id.clone(),
+                    name,
+                    input,
+                });
+                self.ctx.events.push(ConversationEvent::ToolResult {
+                    tool_use_id: id.clone(),
+                    content: format!("Error: {err}"),
+                    is_error: true,
+                    remote: false,
+                    content_length: None,
+                });
+                // Counts toward the turn like any resolved tool, so the
+                // continuation fires and the model can retry immediately.
+                self.ctx.current_turn_tool_ids.push(id);
                 return vec![];
             }
         };
@@ -828,7 +843,7 @@ impl AgentFsm {
                 input,
             });
             self.ctx.events.push(ConversationEvent::ToolResult {
-                tool_use_id: id,
+                tool_use_id: id.clone(),
                 content: format!(
                     "Tool not enabled: capability '{required_cap}' was not advertised by this client"
                 ),
@@ -836,6 +851,7 @@ impl AgentFsm {
                 remote: false,
                 content_length: None,
             });
+            self.ctx.current_turn_tool_ids.push(id);
             return vec![];
         }
 
