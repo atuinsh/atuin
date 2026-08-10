@@ -69,8 +69,7 @@ pub enum ServerSupportError {
 }
 
 impl CapClient {
-    /// Create a client that will negotiate against the given capabilities endpoint, using `http`
-    /// (a bare, ideally authenticated client) for its own capability fetches.
+    /// Create a client that will negotiate against the given capabilities endpoint.
     pub fn new(capabilities_url: Url, http: reqwest::Client) -> Arc<Self> {
         let (tx, rx) = tokio::sync::watch::channel(false);
         let new = Arc::new(Self {
