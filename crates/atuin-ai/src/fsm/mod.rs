@@ -28,6 +28,14 @@ use tools::{ToolManager, ToolState};
 // State
 // ============================================================================
 
+/// Result contents for tool calls the FSM resolves without executing them.
+/// These are persisted in the event log, and the transcript view matches on
+/// them to label the failure ("denied", "cancelled"), so they live as
+/// constants rather than inline strings.
+pub(crate) const RESULT_USER_CANCELLED: &str = "Error: user cancelled this operation";
+pub(crate) const RESULT_DENIED_BY_RULES: &str = "Permission denied on the user's system";
+pub(crate) const RESULT_DENIED_BY_USER: &str = "Permission denied by the user";
+
 /// The discrete states of the agent FSM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AgentState {
@@ -626,7 +634,7 @@ impl AgentFsm {
                     }
                     self.ctx.events.push(ConversationEvent::ToolResult {
                         tool_use_id: id.clone(),
-                        content: "Error: user cancelled this operation".to_string(),
+                        content: RESULT_USER_CANCELLED.to_string(),
                         is_error: true,
                         remote: false,
                         content_length: None,
@@ -925,7 +933,7 @@ impl AgentFsm {
                 tracked.state = ToolState::Denied;
                 self.ctx.events.push(ConversationEvent::ToolResult {
                     tool_use_id: tool_id,
-                    content: "Permission denied on the user's system".to_string(),
+                    content: RESULT_DENIED_BY_RULES.to_string(),
                     is_error: true,
                     remote: false,
                     content_length: None,
@@ -1001,7 +1009,7 @@ impl AgentFsm {
                 tracked.state = ToolState::Denied;
                 self.ctx.events.push(ConversationEvent::ToolResult {
                     tool_use_id: tool_id,
-                    content: "Permission denied by the user".to_string(),
+                    content: RESULT_DENIED_BY_USER.to_string(),
                     is_error: true,
                     remote: false,
                     content_length: None,

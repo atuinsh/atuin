@@ -200,7 +200,11 @@ pub(crate) struct OutOfBandOutputDetails {
 pub(crate) enum ToolResultStatus {
     Pending,
     Success,
-    Error,
+    /// Carries the result content so the view can label the failure
+    /// (user denial vs. anything else).
+    Error {
+        content: String,
+    },
 }
 
 #[derive(Debug)]
@@ -487,7 +491,7 @@ impl<'a> TurnBuilder<'a> {
         }
     }
 
-    fn add_tool_result(&mut self, tool_use_id: &str, _content: &str, is_error: bool) {
+    fn add_tool_result(&mut self, tool_use_id: &str, content: &str, is_error: bool) {
         self.start_agent_turn();
         let events = self.current_events_mut();
         let event = events.iter_mut().find(|e| match e {
@@ -498,7 +502,9 @@ impl<'a> TurnBuilder<'a> {
         });
         if let Some(UiEvent::ToolCall(ToolCallDetails { status, .. })) = event {
             *status = if is_error {
-                ToolResultStatus::Error
+                ToolResultStatus::Error {
+                    content: content.to_string(),
+                }
             } else {
                 ToolResultStatus::Success
             };
