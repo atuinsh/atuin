@@ -5,10 +5,7 @@
 //! [`ExactSizeIterator`] is enough, so the caller can stream elements out of an
 //! iterator adapter without an intermediate allocation.
 
-use serde::{
-    Serialize,
-    ser::{SerializeSeq, Serializer},
-};
+use serde::ser::{Serialize, SerializeSeq, Serializer};
 
 #[derive(Debug, thiserror::Error)]
 pub enum TryToVecError<E: std::error::Error> {
