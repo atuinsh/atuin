@@ -1608,10 +1608,11 @@ impl Drop for Stdout {
             // emitted before processing the disable would land in the
             // shell's input as escape garbage. Drain until quiet — bounded,
             // and while raw mode is still on so reads work. The spray is
-            // contiguous, so stop at the first non-mouse event rather than
-            // eating keystrokes typed during the window; that one event is
-            // already consumed, which is the price of not being able to
-            // push it back.
+            // contiguous, so stop at the first non-mouse event, leaving
+            // unread bytes in the tty for the shell. Crossterm reads the
+            // tty in 1KiB chunks and queues everything it parses, so the
+            // real cap is one buffered chunk, not one event — a
+            // byte-granular drain needs an eye-owned input path (ATU-580).
             let deadline = std::time::Instant::now() + Duration::from_millis(50);
             while std::time::Instant::now() < deadline
                 && matches!(event::poll(Duration::from_millis(5)), Ok(true))
