@@ -58,9 +58,9 @@ pub enum Operation {
     },
 }
 
-pub async fn build_client(settings: &Settings) -> Result<Client<'_>, SyncError> {
+pub async fn build_client(settings: &Settings) -> Result<Client, SyncError> {
     Client::new(
-        &settings.sync_address,
+        settings.sync_address.clone(),
         settings
             .sync_auth_token()
             .await
@@ -73,7 +73,7 @@ pub async fn build_client(settings: &Settings) -> Result<Client<'_>, SyncError> 
 }
 
 pub async fn diff(
-    client: &Client<'_>,
+    client: &Client,
     store: &SqliteStore,
 ) -> Result<(Vec<Diff>, RecordStatus), SyncError> {
     let local_index = store
@@ -170,7 +170,7 @@ pub async fn operations(
 
 async fn sync_upload(
     store: &SqliteStore,
-    client: &Client<'_>,
+    client: &Client,
     host: HostId,
     tag: String,
     local: RecordIdx,
@@ -229,7 +229,7 @@ async fn sync_upload(
 
 async fn sync_download(
     store: &SqliteStore,
-    client: &Client<'_>,
+    client: &Client,
     host: HostId,
     tag: String,
     local: Option<RecordIdx>,
@@ -285,7 +285,7 @@ async fn sync_download(
 }
 
 pub async fn sync_remote(
-    client: &Client<'_>,
+    client: &Client,
     operations: Vec<Operation>,
     local_store: &SqliteStore,
     page_size: u64,
@@ -325,7 +325,7 @@ pub async fn sync_remote(
 }
 
 pub async fn check_encryption_key(
-    client: &Client<'_>,
+    client: &Client,
     remote_index: &RecordStatus,
     encryption_key: &paseto_v4::Key,
 ) -> Result<(), SyncError> {
