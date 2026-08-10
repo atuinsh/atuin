@@ -39,7 +39,7 @@ tokio = { workspace = true }
 axum = "0.8"
 fs-err = { workspace = true }
 tower = { workspace = true }
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.7", features = ["trace"] }
 reqwest = { workspace = true }
 url = { workspace = true }
 argon2 = "0.5"
