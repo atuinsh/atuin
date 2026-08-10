@@ -123,6 +123,7 @@ pub struct State {
     switched_search_mode: bool,
     search_mode: SearchMode,
     results_len: usize,
+    query_error: Option<String>,
     accept: bool,
     keymap_mode: KeymapMode,
     prefix: bool,
@@ -154,12 +155,17 @@ struct StyleState {
 }
 
 impl State {
-    async fn query_results(
-        &mut self,
-        db: &mut dyn Database,
-        smart_sort: bool,
-    ) -> Result<Vec<History>> {
-        let results = self.engine.query(&self.search, db).await?;
+    async fn query_results(&mut self, db: &mut dyn Database, smart_sort: bool) -> Vec<History> {
+        let results = match self.engine.query(&self.search, db).await {
+            Ok(results) => {
+                self.query_error = None;
+                results
+            }
+            Err(err) => {
+                self.query_error = Some(err.to_string());
+                Vec::new()
+            }
+        };
 
         self.inspecting_state = InspectingState {
             current: None,
@@ -170,12 +176,9 @@ impl State {
         self.results_len = results.len();
 
         if smart_sort {
-            Ok(atuin_history::sort::sort(
-                self.search.input.as_str(),
-                results,
-            ))
+            atuin_history::sort::sort(self.search.input.as_str(), results)
         } else {
-            Ok(results)
+            results
         }
     }
 
@@ -858,7 +861,15 @@ impl State {
         );
 
         let show_help = settings.show_help && (compactness == Compactness::Full || area.height > 1);
-        let warnings = Self::build_warnings(settings, theme);
+        let mut warnings = Self::build_warnings(settings, theme);
+        if let Some(error) = &self.query_error {
+            let style = Style::from_crossterm(theme.as_style(Meaning::AlertError))
+                .add_modifier(Modifier::BOLD);
+            warnings.lines.insert(
+                0,
+                Span::styled(format!("Search error: {error}"), style).into(),
+            );
+        }
         let warning_height = u16::try_from(warnings.height()).unwrap_or(u16::MAX);
 
         // This is an OR, as it seems more likely for someone to wish to override
@@ -1841,6 +1852,7 @@ pub async fn history(
         },
         engine: engines::engine(search_mode, settings),
         results_len: 0,
+        query_error: None,
         accept: false,
         keymap_mode: match settings.keymap_mode {
             KeymapMode::Auto => KeymapMode::Emacs,
@@ -1871,7 +1883,7 @@ pub async fn history(
         app.draw(f, &[], None, None, settings, theme, popup_mode);
     })?;
 
-    let mut results = app.query_results(&mut db, settings.smart_sort).await?;
+    let mut results = app.query_results(&mut db, settings.smart_sort).await;
 
     let mut stats: Option<HistoryStats> = None;
     // The id of the history entry `stats` was computed for, so the render loop
@@ -1996,7 +2008,7 @@ pub async fn history(
             || initial_search_mode != app.search_mode
             || initial_custom_context != app.search.custom_context
         {
-            results = app.query_results(&mut db, settings.smart_sort).await?;
+            results = app.query_results(&mut db, settings.smart_sort).await;
         }
 
         // In custom context mode, when no filter is applied, highlight the entry which was used
@@ -2162,6 +2174,8 @@ mod tests {
     use rstest::{fixture, rstest};
 
     use atuin_client::database::Context;
+    #[cfg(feature = "daemon")]
+    use atuin_client::database::Sqlite;
     use atuin_client::history::History;
     use atuin_client::settings::{
         FilterMode, KeymapMode, Preview, PreviewStrategy, SearchMode, Settings, Shells,
@@ -2196,6 +2210,7 @@ mod tests {
             switched_search_mode: false,
             search_mode: SearchMode::Fuzzy,
             results_len,
+            query_error: None,
             accept: false,
             keymap_mode,
             prefix: false,
@@ -2227,6 +2242,44 @@ mod tests {
         };
         state.results_state.select(selected);
         state
+    }
+
+    #[cfg(feature = "daemon")]
+    #[rstest]
+    #[tokio::test]
+    async fn unavailable_daemon_keeps_search_open_with_error(
+        #[with(KeymapMode::Emacs, 0, 0, FilterMode::Global, "echo")] mut state: State,
+    ) {
+        let mut settings = Settings::utc();
+        settings.daemon.autostart = false;
+        #[cfg(unix)]
+        {
+            settings.daemon.socket_path = tempfile::tempdir()
+                .unwrap()
+                .path()
+                .join("missing.sock")
+                .to_string_lossy()
+                .into_owned();
+        }
+        #[cfg(not(unix))]
+        {
+            settings.daemon.tcp_port = 0;
+        }
+
+        state.search_mode = SearchMode::DaemonFuzzy;
+        state.engine = engines::engine(SearchMode::DaemonFuzzy, &settings);
+        let mut db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
+
+        let results = state.query_results(&mut db, false).await;
+
+        assert!(results.is_empty());
+        assert_eq!(state.results_len, 0);
+        assert_eq!(
+            state.query_error.as_deref(),
+            Some(
+                "daemon unavailable; start it, enable daemon.autostart, or use search_mode = \"fuzzy\""
+            )
+        );
     }
 
     /// Build a read-only history corpus (60, 124 and 200 character commands) for

@@ -195,7 +195,7 @@ impl SearchEngine for Search {
         let span =
             span!(Level::TRACE, "daemon_search.req_resp", query = %query, query_id = query_id);
 
-        let mut stream = self
+        let stream = self
             .client
             .try_with_autostart(&self.params, async |client| {
                 let search_params = SearchParams {
@@ -207,7 +207,18 @@ impl SearchEngine for Search {
                 };
                 client.search(search_params).await
             })
-            .await?;
+            .await;
+
+        let mut stream = match stream {
+            Ok(stream) => stream,
+            Err(err) if LazyClient::should_retry(&err) => {
+                self.client.0 = None;
+                return Err(err.wrap_err(
+                    "daemon unavailable; start it, enable daemon.autostart, or use search_mode = \"fuzzy\"",
+                ));
+            }
+            Err(err) => return Err(err),
+        };
 
         let mut ids = Vec::with_capacity(200);
         span!(Level::TRACE, "daemon_search.resp")
