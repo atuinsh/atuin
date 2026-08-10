@@ -1255,7 +1255,7 @@ The default colors are ANSI palette colors, so they automatically match your
 terminal's color scheme. They can also be customized via the `Syntax*` keys in
 a [theme](../guide/theming.md).
 
-Not available on platforms where tree-sitter doesn't build (for example, Windows),
+Not available on platforms where tree-sitter doesn't build,
 so commands are shown unhighlighted there.
 
 ```toml
