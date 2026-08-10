@@ -3,7 +3,6 @@ use eyre::{Result, bail, ensure, eyre};
 use typed_builder::TypedBuilder;
 
 pub const KV_VERSION: &str = "v1";
-pub const KV_TAG: &str = "kv";
 pub const KV_VAL_MAX_LEN: usize = 100 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, TypedBuilder)]
