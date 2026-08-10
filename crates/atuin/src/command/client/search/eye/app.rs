@@ -8,11 +8,12 @@
 //! stays identical by construction; `InputAction` is reused as the interface
 //! between them, with the old event loop's arms living in
 //! `apply_input_action` (async arms become detached effects).
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use atuin_client::database::{Context, Database};
 use atuin_client::history::store::HistoryStore;
-use atuin_client::history::{History, HistoryStats};
+use atuin_client::history::{History, HistoryId, HistoryStats};
 use atuin_client::settings::{ExitMode, FilterMode, KeymapMode, SearchMode, Settings};
 use atuin_client::theme::Theme;
 use crossterm::event::{KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
@@ -66,8 +67,8 @@ pub(super) enum Msg {
     Resize {
         height: u16,
     },
-    /// A detached background operation (delete, rebuild) finished; carries
-    /// nothing — the model was already updated optimistically.
+    /// A detached background operation (a count, an inspector fetch)
+    /// finished without anything to apply.
     OpDone,
     /// A background operation failed *before anything was persisted*:
     /// re-run the query so the list reconverges with the database (the
@@ -76,6 +77,15 @@ pub(super) enum Msg {
     /// in the record store — at that point the optimistic removal IS the
     /// truth and the sqlite query index is merely stale.
     Requery,
+    /// A delete's tombstones reached the record store. The ids join
+    /// [`SearchApp::tombstoned`] so no later result set can resurrect
+    /// them; `rebuilt` says whether the sqlite index was rebuilt too
+    /// (requery and converge) or is stale (keep the optimistic state and
+    /// rely on the filter).
+    Deleted {
+        ids: Vec<HistoryId>,
+        rebuilt: bool,
+    },
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -101,6 +111,13 @@ pub(super) struct SearchApp<'a> {
     /// A handle independent of the backend lock, so the startup count's
     /// full-table scan can't stall the first typed queries behind it.
     count_db: Box<dyn Database>,
+    /// Entries whose delete tombstones reached the record store this
+    /// session. The record store is truth and sqlite merely indexes it:
+    /// when a post-delete rebuild fails, the stale index keeps returning
+    /// these entries, so every result set is filtered against this set.
+    /// Ids join only once persistence is confirmed — a delete that failed
+    /// before the tombstone was written must honestly reappear.
+    tombstoned: HashSet<HistoryId>,
     launch: Launch,
     history_store: HistoryStore,
     /// Set by `Action::Accept`/`AcceptNth`; distinguishes accept-and-run
@@ -171,6 +188,7 @@ impl<'a> SearchApp<'a> {
             now,
             query: Querying::new(engine, db),
             count_db,
+            tombstoned: HashSet::new(),
             launch: Launch {
                 initial_context: context,
                 default_filter_mode: filter_mode,
@@ -742,16 +760,17 @@ impl<'a> SearchApp<'a> {
 
         let store = self.history_store.clone();
         let backend = Arc::clone(self.query.backend());
+        let history_id = entry.id.clone();
         ctx.persist(async move {
             // The lock is taken before the tombstone write and held through
             // the rebuild: a query spawned after the optimistic removal
             // serializes behind the delete instead of reading the
             // pre-tombstone index. One can still win the lock before this
-            // effect runs and resurrect the entry — the final Requery
+            // effect runs and resurrect the entry — the final requery
             // reconverges that.
             let backend = backend.lock().await;
-            let ids = match store.delete_entries([entry]).await {
-                Ok(ids) => ids,
+            let record_ids = match store.delete_entries([entry]).await {
+                Ok(record_ids) => record_ids,
                 Err(e) => {
                     tracing::error!(?e, "failed to delete history entry");
                     return Msg::Requery;
@@ -761,18 +780,22 @@ impl<'a> SearchApp<'a> {
             // removal is the truth, and requerying against a stale sqlite
             // index would resurrect the entry. Retry once — the likely
             // failure is a transient SQLITE_BUSY from the daemon — then
-            // accept the stale index; any later incremental build heals it.
-            if let Err(e) = store.build_all(&*backend.db, &ids).await {
+            // accept the stale index; Msg::Deleted's tombstone filter
+            // keeps it from resurrecting anything this session, and later
+            // incremental builds heal it.
+            let mut rebuilt = true;
+            if let Err(e) = store.build_all(&*backend.db, &record_ids).await {
                 tracing::warn!(?e, "history rebuild after delete failed; retrying");
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                if let Err(e) = store.build_all(&*backend.db, &ids).await {
+                if let Err(e) = store.build_all(&*backend.db, &record_ids).await {
                     tracing::error!(?e, "history rebuild after delete failed; index is stale");
-                    return Msg::OpDone;
+                    rebuilt = false;
                 }
             }
-            // Index rebuilt: requery so anything a concurrent query showed
-            // from the pre-tombstone index is replaced.
-            Msg::Requery
+            Msg::Deleted {
+                ids: vec![history_id],
+                rebuilt,
+            }
         });
     }
 
@@ -811,8 +834,9 @@ impl<'a> SearchApp<'a> {
                     return Msg::Requery;
                 }
             };
-            let ids = match store.delete_entries(all_matching).await {
-                Ok(ids) => ids,
+            let history_ids: Vec<HistoryId> = all_matching.iter().map(|e| e.id.clone()).collect();
+            let record_ids = match store.delete_entries(all_matching).await {
+                Ok(record_ids) => record_ids,
                 Err(e) => {
                     tracing::error!(?e, "failed to delete history entries");
                     return Msg::Requery;
@@ -820,20 +844,22 @@ impl<'a> SearchApp<'a> {
             };
             // Tombstones persisted: keep the optimistic state (see
             // delete_single); retry once for transient sqlite contention.
-            if let Err(e) = store.build_all(&*backend.db, &ids).await {
+            let mut rebuilt = true;
+            if let Err(e) = store.build_all(&*backend.db, &record_ids).await {
                 tracing::warn!(?e, "history rebuild after delete-all failed; retrying");
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                if let Err(e) = store.build_all(&*backend.db, &ids).await {
+                if let Err(e) = store.build_all(&*backend.db, &record_ids).await {
                     tracing::error!(
                         ?e,
                         "history rebuild after delete-all failed; index is stale"
                     );
-                    return Msg::OpDone;
+                    rebuilt = false;
                 }
             }
-            // See delete_single: replace anything a concurrent query
-            // showed from the pre-tombstone index.
-            Msg::Requery
+            Msg::Deleted {
+                ids: history_ids,
+                rebuilt,
+            }
         });
     }
 
@@ -898,8 +924,14 @@ impl App for SearchApp<'_> {
         match msg {
             Msg::Results {
                 generation,
-                results,
+                mut results,
             } => {
+                // The record store is truth: entries whose tombstones
+                // persisted are dropped even when a stale index (a failed
+                // post-delete rebuild) still returns them.
+                if !self.tombstoned.is_empty() {
+                    results.retain(|e| !self.tombstoned.contains(&e.id));
+                }
                 // `accept` rejects results superseded by a newer query or
                 // by a local edit (a delete) since the query started.
                 if self.listing.entries.accept(generation, results) {
@@ -932,6 +964,14 @@ impl App for SearchApp<'_> {
             Msg::UpdateNeeded(version) => self.status.update_needed = version,
             Msg::OpDone => {}
             Msg::Requery => self.spawn_query(ctx),
+            Msg::Deleted { ids, rebuilt } => {
+                self.tombstoned.extend(ids);
+                // A rebuilt index converges via requery; a stale one keeps
+                // the optimistic state, guarded by the filter above.
+                if rebuilt {
+                    self.spawn_query(ctx);
+                }
+            }
             Msg::Raw(event) => {
                 // The old event loop re-queried when an input pass changed
                 // anything the engine reads; mirror that by diffing the
@@ -1690,6 +1730,39 @@ mod tests {
             assert!(
                 screen.contains("cargo build"),
                 "matching entries remain\n{screen}"
+            );
+        }
+
+        /// A persisted tombstone whose index rebuild failed leaves sqlite
+        /// returning the deleted entry — the tombstone filter must keep
+        /// any later result set from resurrecting it. The db here still
+        /// contains the entry, standing in for exactly that stale index.
+        #[tokio::test]
+        async fn a_stale_index_cannot_resurrect_persisted_deletions() {
+            let (mut rt, mut term) = seeded_session().await;
+            let ids = vec![rt.app().listing.entries[0].id.clone()];
+
+            // A delete whose tombstone persisted but whose rebuild failed.
+            let (bytes, _) = rt.process(Msg::Deleted {
+                ids,
+                rebuilt: false,
+            });
+            term.feed(&bytes);
+
+            // A fresh query reads the stale index and gets the entry back;
+            // its stamp is current, so only the filter stands in the way.
+            let (bytes, _) = rt.handle(InputEvent::Key(key(KeyCode::Char('l'))));
+            term.feed(&bytes);
+            drive_effects(&mut rt, &mut term).await;
+
+            let screen = screen(&term);
+            assert!(
+                !screen.contains("ls -la"),
+                "a stale index must not resurrect a persisted delete\n{screen}"
+            );
+            assert!(
+                screen.contains("cargo build"),
+                "other matches still render\n{screen}"
             );
         }
 
