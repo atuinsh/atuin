@@ -68,8 +68,14 @@ pub type RecordIdx = u64;
 /// synced off other/newer clients) are preserved losslessly in [`RecordTag::Other`] so
 /// sync stays forward-compatible.
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash,
-    strum_macros::AsRefStr, strum_macros::Display, strum_macros::EnumString,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    strum_macros::AsRefStr,
+    strum_macros::Display,
+    strum_macros::EnumString,
 )]
 pub enum RecordTag {
     #[strum(serialize = "history")]
@@ -771,18 +777,30 @@ mod tests {
         assert_eq!(t.to_string(), "banana");
         // A known string never lands in Other.
         assert_eq!(RecordTag::from("history"), RecordTag::History);
-        assert_ne!(RecordTag::from("history"), RecordTag::Other("history".to_owned()));
+        assert_ne!(
+            RecordTag::from("history"),
+            RecordTag::Other("history".to_owned())
+        );
     }
 
     #[test]
     fn record_tag_serializes_as_a_bare_string() {
-        assert_eq!(serde_json::to_string(&RecordTag::History).unwrap(), r#""history""#);
-        assert_eq!(serde_json::to_string(&RecordTag::DotfilesVar).unwrap(), r#""dotfiles-var""#);
+        assert_eq!(
+            serde_json::to_string(&RecordTag::History).unwrap(),
+            r#""history""#
+        );
+        assert_eq!(
+            serde_json::to_string(&RecordTag::DotfilesVar).unwrap(),
+            r#""dotfiles-var""#
+        );
         assert_eq!(
             serde_json::to_string(&RecordTag::Other("x".to_owned())).unwrap(),
             r#""x""#
         );
-        assert_eq!(serde_json::from_str::<RecordTag>(r#""kv""#).unwrap(), RecordTag::Kv);
+        assert_eq!(
+            serde_json::from_str::<RecordTag>(r#""kv""#).unwrap(),
+            RecordTag::Kv
+        );
         assert_eq!(
             serde_json::from_str::<RecordTag>(r#""nope""#).unwrap(),
             RecordTag::Other("nope".to_owned())
