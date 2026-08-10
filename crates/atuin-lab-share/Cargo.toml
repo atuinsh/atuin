@@ -27,7 +27,7 @@ base64 = { workspace = true }
 # The backgrounded `--active` lifecycle (`lifecycle` module): the pidfile
 # lock that means "a share is running", and the fork step of the re-exec'd
 # child. Both follow the atuin daemon's precedent, which pins these versions.
-fs4 = "0.13.1"
+fs4 = "1.1.0"
 daemonize = "0.5.0"
 atuin-common = { workspace = true, features = ["unicode"] }
 # The `--active` tap speaks the proxy's subscriber protocol; no cycle —
