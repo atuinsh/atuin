@@ -180,27 +180,17 @@ pub async fn history(
     #[cfg(windows)]
     let keyboard = eye_declare::KeyboardProtocol::Enhanced;
 
+    // Deletes go through ctx.persist, and main gives the runtime only 50ms
+    // to shut down after the command future returns — the grace period lets
+    // the driver wait out an in-flight tombstone write at teardown, bounded
+    // so a wedged database can't hang the shell (the ratatui path awaited
+    // deletes inline, unbounded).
     let options = eye_declare::RunOptions::default()
         .keyboard(keyboard)
         .screen(screen)
-        .mouse_capture(!settings.no_mouse);
-    let persistence = search_app.persistence_tracker();
+        .mouse_capture(!settings.no_mouse)
+        .persist_grace(std::time::Duration::from_secs(5));
     let output = eye_declare::driver_tokio::run_with(search_app, options).await?;
-
-    // The driver returns the moment the app exits, without joining effects,
-    // and main gives the runtime only 50ms to shut down — enough to kill a
-    // delete whose tombstone hasn't persisted yet. Wait for persistence
-    // effects here (the ratatui path awaited deletes inline, unbounded;
-    // the cap only guards a wedged database from hanging the shell).
-    persistence.close();
-    if tokio::time::timeout(std::time::Duration::from_secs(5), persistence.wait())
-        .await
-        .is_err()
-    {
-        tracing::error!(
-            "timed out waiting for a pending history delete; it may not have persisted"
-        );
-    }
 
     let accept_shell = matches!(
         Shell::from_env(),

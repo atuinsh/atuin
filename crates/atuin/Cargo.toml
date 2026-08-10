@@ -91,7 +91,6 @@ crossterm = { workspace = true, features = ["use-dev-tty"] }
 unicode-width = "0.2"
 itertools = { workspace = true }
 tokio = { workspace = true }
-tokio-util = { workspace = true }
 enum_dispatch = { workspace = true }
 async-trait = { workspace = true }
 interim = { workspace = true }
@@ -108,7 +107,7 @@ futures-util = "0.3"
 colored = "2.0.4"
 open = "5"
 ratatui = { workspace = true }
-eye_declare = "0.7"
+eye_declare = "0.7.1"
 ratatui-core = "0.1"
 tracing = "0.1"
 tracing-subscriber = { workspace = true }

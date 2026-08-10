@@ -302,7 +302,6 @@ dependencies = [
  "time",
  "tiny-bip39",
  "tokio",
- "tokio-util",
  "toml_edit",
  "tracing",
  "tracing-appender",
@@ -1939,9 +1938,9 @@ dependencies = [
 
 [[package]]
 name = "eye_declare"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5c2aabdbced3a638a5d0f73edb20def451612b1fc68358216af63ddddbd4bc7"
+checksum = "c9d82f1f1422761dc7630fa2b8c52f4e11f87dc2308fd2e577176d0542d0eacd"
 dependencies = [
  "crossterm",
  "eye_declare_engine",
@@ -5848,7 +5847,6 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
- "futures-util",
  "pin-project-lite",
  "tokio",
 ]
