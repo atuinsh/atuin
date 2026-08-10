@@ -137,10 +137,14 @@ impl ToolManager {
 
     /// True if all tools from the given set of IDs have reached a terminal state.
     /// Returns true for an empty set (vacuously — no tools to wait for).
+    ///
+    /// IDs with no tracker entry count as resolved: those calls were answered
+    /// synchronously at receipt (unknown tool, missing capability) and never
+    /// enter the execution lifecycle.
     pub fn all_resolved(&self, tool_ids: &[String]) -> bool {
         tool_ids
             .iter()
-            .all(|id| self.get(id).is_some_and(|t| t.is_resolved()))
+            .all(|id| self.get(id).is_none_or(|t| t.is_resolved()))
     }
 
     /// Find the first tool awaiting user permission.

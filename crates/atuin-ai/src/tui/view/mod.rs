@@ -201,10 +201,24 @@ fn tool_status_view(name: &str, status: &ToolResultStatus) -> AnyElement<'static
     match status {
         ToolResultStatus::Pending => tool_spinner(format!("Running: {name}"), false).any(),
         ToolResultStatus::Success => tool_spinner(format!("Ran: {name}"), true).any(),
-        ToolResultStatus::Error => text("✗ ")
+        ToolResultStatus::Error { content } => text("✗ ")
             .style(Style::default().fg(Color::Red))
-            .span(format!("{name}: denied"), Style::default().fg(Color::Red))
+            .span(
+                format!("{name}: {}", error_label(content)),
+                Style::default().fg(Color::Red),
+            )
             .any(),
+    }
+}
+
+/// Label for a failed tool call, derived from the result content. The FSM's
+/// no-execution results are stable constants, so exact matches are safe;
+/// anything else (execution errors, unknown tools) is a generic failure.
+fn error_label(content: &str) -> &'static str {
+    match content {
+        crate::fsm::RESULT_DENIED_BY_USER | crate::fsm::RESULT_DENIED_BY_RULES => "denied",
+        crate::fsm::RESULT_USER_CANCELLED => "cancelled",
+        _ => "failed",
     }
 }
 
@@ -400,10 +414,10 @@ fn tool_status_line(
         ToolResultStatus::Success => {
             tool_spinner(format!("{did}: {display_path}{suffix}"), true).any()
         }
-        ToolResultStatus::Error => text("✗ ")
+        ToolResultStatus::Error { content } => text("✗ ")
             .style(Style::default().fg(Color::Red))
             .span(
-                format!("{noun} {display_path}: failed"),
+                format!("{noun} {display_path}: {}", error_label(content)),
                 Style::default().fg(Color::Red),
             )
             .any(),
@@ -431,7 +445,7 @@ fn status_marker_view(status: &ToolResultStatus) -> AnyElement<'static> {
     match status {
         ToolResultStatus::Pending => text("  ").any(),
         ToolResultStatus::Success => text("✓ ").style(Style::default().fg(Color::Green)).any(),
-        ToolResultStatus::Error => text("✗ ").style(Style::default().fg(Color::Red)).any(),
+        ToolResultStatus::Error { .. } => text("✗ ").style(Style::default().fg(Color::Red)).any(),
     }
 }
 
