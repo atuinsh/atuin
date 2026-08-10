@@ -49,7 +49,7 @@ impl<'a, Data> From<&'a Record<Data>> for AdditionalData<'a> {
             id: value.id,
             idx: value.idx,
             host: value.host.id,
-            tag: &value.tag,
+            tag: value.tag.as_ref(),
             version: &value.version,
         }
     }
@@ -154,8 +154,8 @@ pub struct Record<Data> {
     // However we want to track versions for this tag, eg v2
     pub version: String,
 
-    /// The type of data we are storing here. Eg, "history"
-    pub tag: String,
+    /// The type of data we are storing here. Eg, RecordTag::History
+    pub tag: RecordTag,
 
     /// Some data. This can be anything you wish to store. Use the tag field to know how to handle it.
     pub data: Data,
@@ -248,7 +248,7 @@ impl RecordStatus {
 
     /// Insert a new tail record into the store
     pub fn set(&mut self, tail: Record<DecryptedData>) {
-        self.set_raw(tail.host.id, tail.tag, tail.idx)
+        self.set_raw(tail.host.id, tail.tag.to_string(), tail.idx)
     }
 
     pub fn set_raw(&mut self, host: HostId, tag: String, tail_id: RecordIdx) {
@@ -362,7 +362,7 @@ mod tests {
         Record::builder()
             .host(Host::new(HostId(Uuid::now_v7())))
             .version("v1".into())
-            .tag(Uuid::now_v7().simple().to_string())
+            .tag(RecordTag::Other(Uuid::now_v7().simple().to_string()))
             .data(DecryptedData(vec![0, 1, 2, 3]))
             .idx(0)
             .build()
@@ -401,7 +401,7 @@ mod tests {
             host: Host::new(HostId(Uuid::from_u128(2))),
             timestamp: 1_687_244_806_000_000,
             version: "v1".to_owned(),
-            tag: "history".to_owned(),
+            tag: RecordTag::History,
             data: paseto_v4::EncryptedData {
                 raw: "v4.local.cSFhI9n30MfwkZrRAt-YAoxp6DrAMMybmLury7svdFMkapmxQmLQaRzqCfIdanPaQ55VbJjGjqwjst2AnLiBQE9cAQAyH69u2HVHrkaKv7rGtQ".to_owned(),
                 cek: r#"{"wpk":"k4.local-wrap.pie.8xXPgrNyliEUy_PnbM3S88Yk8tQQA0HN2o6jyUkGHK5duUEfW-zSCI1kSYRpyPESCK7-5822hPzRAbyZXPRVAbCkoLqqwPJ8_oi8clKEr6u8nJuIQQLHVClvYJmZyZIu","kid":"k4.lid.2LzCmxDtbwu2tK5T1X1VLEth8umaI9vbKgTDkkt7ARR0"}"#.to_owned(),
@@ -420,7 +420,7 @@ mod tests {
 
         index.set(record.clone());
 
-        let tail = index.get(record.host.id, record.tag);
+        let tail = index.get(record.host.id, record.tag.to_string());
 
         assert_eq!(
             record.idx,
@@ -437,7 +437,7 @@ mod tests {
         index.set(record.clone());
         index.set(child.clone());
 
-        let tail = index.get(record.host.id, record.tag);
+        let tail = index.get(record.host.id, record.tag.to_string());
 
         assert_eq!(
             child.idx,
@@ -480,7 +480,7 @@ mod tests {
             diff[0],
             Diff {
                 host: record2.host.id,
-                tag: record2.tag,
+                tag: record2.tag.to_string(),
                 remote: Some(1),
                 local: Some(0)
             }
