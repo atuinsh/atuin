@@ -1,5 +1,5 @@
 //! [`rmp`]-related utilities.
 //!
-//! As it turns out, the crate lacks a lot of seemingly basic features, so here we are.
+//! Small helpers that fill gaps in the upstream `rmp` and `rmp_serde` crates.
 
 pub mod serde;

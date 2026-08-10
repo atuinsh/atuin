@@ -17,14 +17,14 @@ pub enum TryToVecError<E: std::error::Error> {
     BadLength,
 }
 
-/// The same as [`to_vec`] except accepts an [`ExactSizeIterator`] of [`Result`].
+/// The same as [`to_vec`] except its items are [`Result`]s.
 ///
-/// Eagerly returns the error, if one is found in the [`ExactSizeIterator`].
+/// Eagerly returns the error, if one is found in the iterator.
 pub fn try_to_vec<T, E, It>(it: It) -> Result<Vec<u8>, TryToVecError<E>>
 where
     T: Serialize,
     E: std::error::Error,
-    It: ExactSizeIterator<Item = Result<T, E>>,
+    It: IntoIterator<IntoIter: ExactSizeIterator<Item = Result<T, E>>>,
 {
     let mut buf = Vec::new();
     let mut ser = rmp_serde::Serializer::new(&mut buf);
@@ -32,6 +32,7 @@ where
     // The array header is written up front from `len()`, so a misbehaving
     // `ExactSizeIterator` whose `len()` disagrees with what it yields would emit a
     // corrupt array. Count the elements actually serialized and reject a mismatch.
+    let it = it.into_iter();
     let expected = it.len();
     let mut seq = ser.serialize_seq(Some(expected))?;
     let mut count = 0usize;
@@ -67,7 +68,8 @@ impl From<TryToVecError<std::convert::Infallible>> for ToVecError {
     }
 }
 
-/// Given an [`ExactSizeIterator`], serialize it into an `rmp`-encoded vector of bytes.
+/// Given anything convertible into an [`ExactSizeIterator`], serialize it into an
+/// `rmp`-encoded vector of bytes.
 ///
 /// Note that unlike [`rmp_serde::to_vec`] which requires that the argument passed is
 /// [`serde::Serialize`], this makes no such requirement, only requiring an [`ExactSizeIterator`]
@@ -75,9 +77,9 @@ impl From<TryToVecError<std::convert::Infallible>> for ToVecError {
 pub fn to_vec<T, It>(it: It) -> Result<Vec<u8>, ToVecError>
 where
     T: Serialize + Sized,
-    It: ExactSizeIterator<Item = T>,
+    It: IntoIterator<IntoIter: ExactSizeIterator<Item = T>>,
 {
-    try_to_vec(it.map(Ok::<T, std::convert::Infallible>)).map_err(ToVecError::from)
+    try_to_vec(it.into_iter().map(Ok::<T, std::convert::Infallible>)).map_err(ToVecError::from)
 }
 
 #[cfg(test)]
@@ -171,6 +173,15 @@ mod tests {
         let decoded: Vec<Sample> =
             rmp_serde::from_slice(&streamed).expect("round-trip should decode");
         assert_eq!(decoded, samples);
+    }
+
+    #[rstest]
+    fn to_vec_accepts_borrowed_collection() {
+        let items = vec![10u64, 20, 30];
+        // The `IntoIterator` bound lets callers pass a `&Vec` directly, without `.iter()`.
+        let streamed = to_vec(&items).expect("to_vec should accept a &Vec");
+        let standard = rmp_serde::to_vec(&items).expect("rmp_serde::to_vec should succeed");
+        assert_eq!(streamed, standard);
     }
 
     #[rstest]
