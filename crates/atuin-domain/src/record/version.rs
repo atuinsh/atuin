@@ -51,8 +51,8 @@ impl Serialize for RecordVersion {
 
 impl<'de> Deserialize<'de> for RecordVersion {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        // TODO(markovejnovic): Figure out a better way to avoid the implicit `Clone` in here.
         let s = Cow::<'de, str>::deserialize(deserializer)?;
+        // TODO(markovejnovic): Figure out a better way to avoid the implicit `Clone` in here.
         Ok(Self::from(s.as_ref()))
     }
 }
