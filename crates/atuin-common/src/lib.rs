@@ -7,6 +7,7 @@ pub mod encryption;
 pub mod filter;
 pub mod logs;
 pub mod path;
+pub mod rmp;
 pub mod shell;
 pub mod slice;
 pub mod string;
