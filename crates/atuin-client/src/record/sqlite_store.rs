@@ -18,7 +18,9 @@ use sqlx::{
 
 use atuin_common::encryption::paseto_v4;
 use atuin_common::utils;
-use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx, RecordStatus, RecordTag};
+use atuin_domain::record::{
+    Host, HostId, Record, RecordId, RecordIdx, RecordStatus, RecordTag, RecordVersion,
+};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -107,7 +109,7 @@ impl SqliteStore {
             host: Host::new(HostId(host)),
             timestamp: timestamp as u64,
             tag: RecordTag::from(row.get::<String, _>("tag")),
-            version: row.get("version"),
+            version: RecordVersion::from(row.get::<String, _>("version")),
             data: paseto_v4::EncryptedData {
                 raw: row.get("data"),
                 cek: row.get("cek"),
@@ -392,7 +394,7 @@ impl SqliteStore {
 mod tests {
     use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
-    use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordTag};
+    use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordTag, RecordVersion};
     use rstest::{fixture, rstest};
 
     use crate::settings::test_local_timeout;
@@ -556,7 +558,7 @@ mod tests {
         for i in 0..10 {
             let record = Record::builder()
                 .host(Host::new(host_id))
-                .version(String::from("test"))
+                .version(RecordVersion::Other("test".to_owned()))
                 .tag(RecordTag::Other("test".to_owned()))
                 .idx(i)
                 .data(DecryptedData(data.clone()))

@@ -6,14 +6,13 @@ use atuin_client::record::sqlite_store::SqliteStore;
 // While we will support a range of shell config, I'd rather have a larger number of small records
 // + stores, rather than one mega config store.
 use atuin_common::utils::unquote;
-use atuin_domain::record::{DecryptedData, Host, HostId, RecordTag};
+use atuin_domain::record::{DecryptedData, Host, HostId, RecordTag, RecordVersion};
 use eyre::{Result, bail, ensure, eyre};
 
 use atuin_common::encryption::paseto_v4;
 
 use crate::shell::Alias;
 
-const CONFIG_SHELL_ALIAS_VERSION: &str = "v0";
 const CONFIG_SHELL_ALIAS_FIELD_MAX_LEN: usize = 20000; // 20kb max total len, way more than should be needed.
 
 mod alias;
@@ -50,7 +49,7 @@ impl AliasRecord {
         Ok(DecryptedData(output))
     }
 
-    pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
+    pub fn deserialize(data: &DecryptedData, version: &RecordVersion) -> Result<Self> {
         use rmp::decode;
 
         fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
@@ -58,7 +57,7 @@ impl AliasRecord {
         }
 
         match version {
-            CONFIG_SHELL_ALIAS_VERSION => {
+            RecordVersion::V0 => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
                 let record_type = decode::read_u8(&mut bytes).map_err(error_report)?;
@@ -114,8 +113,8 @@ impl AliasRecord {
                     }
                 }
             }
-            _ => {
-                bail!("unknown version {version:?}");
+            other => {
+                bail!("unknown alias record version {other:?}");
             }
         }
     }
@@ -239,7 +238,7 @@ impl AliasStore {
 
         let record = atuin_domain::record::Record::builder()
             .host(Host::new(self.host_id))
-            .version(CONFIG_SHELL_ALIAS_VERSION.to_string())
+            .version(RecordVersion::V0)
             .tag(RecordTag::ConfigShellAlias)
             .idx(idx)
             .data(bytes)
@@ -275,7 +274,7 @@ impl AliasStore {
 
         let record = atuin_domain::record::Record::builder()
             .host(Host::new(self.host_id))
-            .version(CONFIG_SHELL_ALIAS_VERSION.to_string())
+            .version(RecordVersion::V0)
             .tag(RecordTag::ConfigShellAlias)
             .idx(idx)
             .data(bytes)
@@ -302,13 +301,11 @@ impl AliasStore {
             let version = record.version.clone();
 
             // Skip records we can't decrypt or decode, rather than failing the entire build.
-            let ar = match version.as_str() {
-                CONFIG_SHELL_ALIAS_VERSION => {
-                    record.decrypt(&self.encryption_key).and_then(|decrypted| {
-                        AliasRecord::deserialize(&decrypted.data, version.as_str())
-                    })
-                }
-                version => Err(eyre!("unknown version {version:?}")),
+            let ar = match version {
+                RecordVersion::V0 => record.decrypt(&self.encryption_key).and_then(|decrypted| {
+                    AliasRecord::deserialize(&decrypted.data, &RecordVersion::V0)
+                }),
+                ref version => Err(eyre!("unknown version {version:?}")),
             };
 
             let ar = match ar {
@@ -360,8 +357,8 @@ mod tests {
 
     use crate::shell::Alias;
 
-    use super::{AliasRecord, AliasStore, CONFIG_SHELL_ALIAS_VERSION, test_local_timeout};
-    use atuin_domain::record::RecordTag;
+    use super::{AliasRecord, AliasStore, test_local_timeout};
+    use atuin_domain::record::{RecordTag, RecordVersion};
     use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
 
     #[fixture]
@@ -386,7 +383,7 @@ mod tests {
         let snapshot = [204, 0, 146, 161, 107, 167, 107, 117, 98, 101, 99, 116, 108];
 
         let encoded = record.serialize().unwrap();
-        let decoded = AliasRecord::deserialize(&encoded, CONFIG_SHELL_ALIAS_VERSION).unwrap();
+        let decoded = AliasRecord::deserialize(&encoded, &RecordVersion::V0).unwrap();
 
         assert_eq!(encoded.0, &snapshot);
         assert_eq!(decoded, record);
@@ -459,7 +456,7 @@ alias kgap='kubectl get pods --all-namespaces'
         let corrupt_key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
         let corrupt = atuin_domain::record::Record::builder()
             .host(Host::new(alias.host_id))
-            .version(CONFIG_SHELL_ALIAS_VERSION.to_string())
+            .version(RecordVersion::V0)
             .tag(RecordTag::ConfigShellAlias)
             .idx(1)
             .data(DecryptedData(vec![1, 2, 3]))

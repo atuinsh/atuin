@@ -10,7 +10,9 @@ use crate::{
     record::sqlite_store::SqliteStore,
 };
 use atuin_common::encryption::paseto_v4;
-use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag};
+use atuin_domain::record::{
+    DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag, RecordVersion,
+};
 
 use super::{History, HistoryId, Version};
 
@@ -134,7 +136,7 @@ impl HistoryStore {
 
         let record = Record::builder()
             .host(Host::new(self.host_id))
-            .version(Version::LATEST.name().to_owned())
+            .version(RecordVersion::from(Version::LATEST.name()))
             .tag(RecordTag::History)
             .idx(idx)
             .data(bytes)
@@ -165,7 +167,7 @@ impl HistoryStore {
 
             let record = Record::builder()
                 .host(Host::new(self.host_id))
-                .version(Version::LATEST.name().to_owned())
+                .version(RecordVersion::from(Version::LATEST.name()))
                 .tag(RecordTag::History)
                 .idx(idx + n as u64)
                 .data(bytes)
@@ -405,7 +407,7 @@ impl HistoryStore {
 
 #[cfg(test)]
 mod tests {
-    use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordTag};
+    use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordTag, RecordVersion};
     use futures::TryStreamExt;
     use rstest::*;
     use time::macros::datetime;
@@ -523,7 +525,7 @@ mod tests {
         // or "mixed". it should be skipped, rather than breaking loading entirely.
         let corrupt = Record::builder()
             .host(Host::new(host_id))
-            .version(Version::LATEST.name().to_owned())
+            .version(RecordVersion::from(Version::LATEST.name()))
             .tag(RecordTag::History)
             .idx(1)
             .data(DecryptedData(vec![1, 2, 3]))

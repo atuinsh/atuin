@@ -2,9 +2,9 @@ use eyre::{Result, eyre};
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4;
-use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx, RecordTag};
+use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx, RecordTag, RecordVersion};
 use record::ScriptRecord;
-use script::{SCRIPT_VERSION, Script};
+use script::Script;
 
 use crate::database::Database;
 
@@ -37,7 +37,7 @@ impl ScriptStore {
 
         let record = Record::builder()
             .host(Host::new(self.host_id))
-            .version(SCRIPT_VERSION.to_string())
+            .version(RecordVersion::V0)
             .tag(RecordTag::Script)
             .idx(idx)
             .data(bytes)
@@ -77,11 +77,11 @@ impl ScriptStore {
 
         for record in records.into_iter() {
             // Skip records we can't decrypt or decode, rather than failing the entire build.
-            let script = match record.version.as_str() {
-                SCRIPT_VERSION => record.decrypt(&self.encryption_key).and_then(|decrypted| {
-                    ScriptRecord::deserialize(&decrypted.data, SCRIPT_VERSION)
+            let script = match record.version {
+                RecordVersion::V0 => record.decrypt(&self.encryption_key).and_then(|decrypted| {
+                    ScriptRecord::deserialize(&decrypted.data, &RecordVersion::V0)
                 }),
-                version => Err(eyre!("unknown script version {version:?}")),
+                ref version => Err(eyre!("unknown script version {version:?}")),
             };
 
             match script {
