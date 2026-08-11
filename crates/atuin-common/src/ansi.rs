@@ -21,6 +21,9 @@ pub fn to_plain_text(input: impl AsRef<[u8]>, cols: NonZeroU16) -> String {
     // vt100 assumes at least two columns when a double-width character
     // arrives (`size.cols - width` underflows, panicking in debug builds),
     // so never emulate a one-column screen.
+    //
+    // TODO: Remove this once upstream issue is fixed:
+    // https://github.com/doy/vt100-rust/issues/37
     let cols = cols.get().max(2);
 
     let mut newlines = 0usize;
