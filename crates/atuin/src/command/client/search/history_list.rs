@@ -297,7 +297,7 @@ impl DrawState<'_> {
         self.draw(&display, Style::from_crossterm(style));
     }
 
-    fn command(&mut self, h: &History, _width: u16) {
+    fn command(&mut self, h: &History, width: u16) {
         let mut style = self.theme.as_style(Meaning::Base);
         let mut row_highlighted = false;
         if !self.alternate_highlight
@@ -322,19 +322,25 @@ impl DrawState<'_> {
             Vec::new()
         };
 
-        // Calculate the available width for the command text.
-        // `self.x` is already past the indicator and any preceding columns,
-        // so the remaining width is how far we can draw.
-        let avail = usize::conv(self.list_area.width.saturating_sub(self.x));
+        // Keep the command inside its allocated column so later columns remain visible.
+        let start_x = self.x;
+        let avail = width.min(self.list_area.width.saturating_sub(start_x));
+        if avail == 0 {
+            return;
+        }
+        let column_end = start_x + avail;
 
         // Truncate long commands from the middle to show both start and end,
         // so users can identify commands even in narrow terminals (issue #3596).
-        let ellipsized =
-            normalized.ellipsize(Measure::Columns(avail), Pos::Middle, Indicator::UNICODE);
+        let ellipsized = normalized.ellipsize(
+            Measure::Columns(usize::conv(avail)),
+            Pos::Middle,
+            Indicator::UNICODE,
+        );
         let display = ellipsized.to_string();
         for (i, ch) in display.char_indices() {
-            if self.x > self.list_area.width {
-                return;
+            if self.x >= column_end {
+                break;
             }
             // Map each output cell back to its source byte and test the existing
             // highlight set; a cell on the spliced ellipsis maps to None and is
@@ -352,6 +358,10 @@ impl DrawState<'_> {
             }
             self.draw(&ch.to_string(), Style::from_crossterm(char_style));
         }
+
+        // A short command still occupies the full column so the next column aligns.
+        let padding = " ".repeat(usize::conv(column_end.saturating_sub(self.x)));
+        self.draw(&padding, Style::from_crossterm(style));
     }
 
     /// Render the absolute datetime column (e.g., "2025-01-22 14:35")
@@ -435,5 +445,74 @@ impl DrawState<'_> {
 
         let w = usize::conv(self.list_area.width - self.x);
         self.x += self.buf.set_stringn(cx, cy, s, w, style).0 - cx;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::settings::{SearchMode, Settings};
+    use atuin_client::theme::ThemeManager;
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    fn command_column_honors_width_before_expanding_directory() {
+        let columns = [
+            UiColumn::new(UiColumnType::Time),
+            UiColumn::new(UiColumnType::Duration),
+            UiColumn::new(UiColumnType::Exit),
+            UiColumn {
+                column_type: UiColumnType::Command,
+                width: UiColumnType::Command.default_width(),
+                expand: false,
+            },
+            UiColumn {
+                column_type: UiColumnType::Directory,
+                width: UiColumnType::Directory.default_width(),
+                expand: true,
+            },
+        ];
+        let settings = Settings::utc();
+        let engine = super::super::engines::engine(SearchMode::Fuzzy, &settings);
+        let mut theme_manager = ThemeManager::new(Some(false), Some(String::new()));
+        let theme = theme_manager.load_theme("default", None);
+        let area = Rect::new(0, 0, 70, 1);
+        let directory_x = 3 + columns[..4].iter().map(|column| column.width).sum::<u16>() + 4;
+
+        for command in ["echo ok", "cargo run --release -- a-command-that-does-not-fit"] {
+            let history: History = History::import()
+                .timestamp(OffsetDateTime::UNIX_EPOCH)
+                .command(command)
+                .cwd("/work/project")
+                .exit(0)
+                .duration(1_000_000)
+                .build()
+                .into();
+            let history = [history];
+            let mut buf = Buffer::empty(area);
+            let mut state = ListState::default();
+            let now = || OffsetDateTime::UNIX_EPOCH;
+
+            HistoryList::new(
+                &history,
+                true,
+                false,
+                &now,
+                UtcOffset::UTC,
+                " > ",
+                theme,
+                HistoryHighlighter {
+                    engine: &engine,
+                    search_input: "",
+                },
+                false,
+                false,
+                &columns,
+            )
+            .render(area, &mut buf, &mut state);
+
+            assert_eq!(buf[(directory_x, 0)].symbol(), "/", "rendered row for {command:?}");
+        }
     }
 }
