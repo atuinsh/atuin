@@ -2,9 +2,9 @@ use eyre::{Result, eyre};
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4;
-use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx};
+use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx, RecordTag};
 use record::ScriptRecord;
-use script::{SCRIPT_TAG, SCRIPT_VERSION, Script};
+use script::{SCRIPT_VERSION, Script};
 
 use crate::database::Database;
 
@@ -31,14 +31,14 @@ impl ScriptStore {
         let bytes = record.serialize()?;
         let idx = self
             .store
-            .last(self.host_id, SCRIPT_TAG)
+            .last(self.host_id, &RecordTag::Script)
             .await?
             .map_or(0, |p| p.idx + 1);
 
         let record = Record::builder()
             .host(Host::new(self.host_id))
             .version(SCRIPT_VERSION.to_string())
-            .tag(SCRIPT_TAG.to_string())
+            .tag(RecordTag::Script)
             .idx(idx)
             .data(bytes)
             .build();
@@ -71,7 +71,7 @@ impl ScriptStore {
     }
 
     pub async fn scripts(&self) -> Result<Vec<ScriptRecord>> {
-        let records = self.store.all_tagged(SCRIPT_TAG).await?;
+        let records = self.store.all_tagged(&RecordTag::Script).await?;
         let mut ret = Vec::with_capacity(records.len());
         let mut skipped = 0;
 

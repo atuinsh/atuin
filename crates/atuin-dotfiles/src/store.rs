@@ -6,7 +6,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 // While we will support a range of shell config, I'd rather have a larger number of small records
 // + stores, rather than one mega config store.
 use atuin_common::utils::unquote;
-use atuin_domain::record::{DecryptedData, Host, HostId};
+use atuin_domain::record::{DecryptedData, Host, HostId, RecordTag};
 use eyre::{Result, bail, ensure, eyre};
 
 use atuin_common::encryption::paseto_v4;
@@ -14,7 +14,6 @@ use atuin_common::encryption::paseto_v4;
 use crate::shell::Alias;
 
 const CONFIG_SHELL_ALIAS_VERSION: &str = "v0";
-const CONFIG_SHELL_ALIAS_TAG: &str = "config-shell-alias";
 const CONFIG_SHELL_ALIAS_FIELD_MAX_LEN: usize = 20000; // 20kb max total len, way more than should be needed.
 
 mod alias;
@@ -234,14 +233,14 @@ impl AliasStore {
 
         let idx = self
             .store
-            .last(self.host_id, CONFIG_SHELL_ALIAS_TAG)
+            .last(self.host_id, &RecordTag::ConfigShellAlias)
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
         let record = atuin_domain::record::Record::builder()
             .host(Host::new(self.host_id))
             .version(CONFIG_SHELL_ALIAS_VERSION.to_string())
-            .tag(CONFIG_SHELL_ALIAS_TAG.to_string())
+            .tag(RecordTag::ConfigShellAlias)
             .idx(idx)
             .data(bytes)
             .build();
@@ -270,14 +269,14 @@ impl AliasStore {
 
         let idx = self
             .store
-            .last(self.host_id, CONFIG_SHELL_ALIAS_TAG)
+            .last(self.host_id, &RecordTag::ConfigShellAlias)
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
         let record = atuin_domain::record::Record::builder()
             .host(Host::new(self.host_id))
             .version(CONFIG_SHELL_ALIAS_VERSION.to_string())
-            .tag(CONFIG_SHELL_ALIAS_TAG.to_string())
+            .tag(RecordTag::ConfigShellAlias)
             .idx(idx)
             .data(bytes)
             .build();
@@ -296,7 +295,7 @@ impl AliasStore {
         let mut build = BTreeMap::new();
 
         // this is sorted, oldest to newest
-        let tagged = self.store.all_tagged(CONFIG_SHELL_ALIAS_TAG).await?;
+        let tagged = self.store.all_tagged(&RecordTag::ConfigShellAlias).await?;
         let mut skipped = 0;
 
         for record in tagged {
@@ -362,6 +361,7 @@ mod tests {
     use crate::shell::Alias;
 
     use super::{AliasRecord, AliasStore, CONFIG_SHELL_ALIAS_VERSION, test_local_timeout};
+    use atuin_domain::record::RecordTag;
     use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
 
     #[fixture]
@@ -450,8 +450,6 @@ alias kgap='kubectl get pods --all-namespaces'
     async fn build_aliases_skips_corrupt_records(#[future] alias_store: (AliasStore, SqliteStore)) {
         use atuin_domain::record::{DecryptedData, Host};
 
-        use super::CONFIG_SHELL_ALIAS_TAG;
-
         let (alias, store) = alias_store.await;
 
         alias.set("k", "kubectl").await.unwrap();
@@ -462,7 +460,7 @@ alias kgap='kubectl get pods --all-namespaces'
         let corrupt = atuin_domain::record::Record::builder()
             .host(Host::new(alias.host_id))
             .version(CONFIG_SHELL_ALIAS_VERSION.to_string())
-            .tag(CONFIG_SHELL_ALIAS_TAG.to_string())
+            .tag(RecordTag::ConfigShellAlias)
             .idx(1)
             .data(DecryptedData(vec![1, 2, 3]))
             .build();

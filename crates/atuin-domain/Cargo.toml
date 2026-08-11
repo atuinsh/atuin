@@ -33,6 +33,8 @@ http = { workspace = true }
 xxhash-rust = { workspace = true }
 tokio = { workspace = true }
 axum = { version = "0.8", optional = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
 
 [features]
 # Feature-gated axum integration for the server-side capability handlers (`caps::axum`).

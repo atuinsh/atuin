@@ -1,6 +1,6 @@
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::utils::uuid_v7;
-use atuin_domain::record::{EncryptedData, Host, HostId, Record};
+use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordTag};
 use rand::Rng;
 use rand::distributions::Alphanumeric;
 use tempfile::TempDir;
@@ -51,7 +51,7 @@ impl BenchRecord {
                 Record::builder()
                     .host(host.clone())
                     .version(version.clone())
-                    .tag(tag.clone())
+                    .tag(RecordTag::Other(tag.clone()))
                     .data(EncryptedData {
                         raw: data.clone(),
                         cek: key.clone(),

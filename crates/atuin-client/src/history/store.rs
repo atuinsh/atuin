@@ -10,9 +10,9 @@ use crate::{
     record::sqlite_store::SqliteStore,
 };
 use atuin_common::encryption::paseto_v4;
-use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
+use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag};
 
-use super::{HISTORY_TAG, History, HistoryId, Version};
+use super::{History, HistoryId, Version};
 
 #[derive(Debug, Clone)]
 pub struct HistoryStore {
@@ -128,14 +128,14 @@ impl HistoryStore {
         let bytes = record.serialize()?;
         let idx = self
             .store
-            .last(self.host_id, HISTORY_TAG)
+            .last(self.host_id, &RecordTag::History)
             .await?
             .map_or(0, |p| p.idx + 1);
 
         let record = Record::builder()
             .host(Host::new(self.host_id))
             .version(Version::LATEST.name().to_owned())
-            .tag(HISTORY_TAG.to_owned())
+            .tag(RecordTag::History)
             .idx(idx)
             .data(bytes)
             .build();
@@ -154,7 +154,7 @@ impl HistoryStore {
 
         let idx = self
             .store
-            .last(self.host_id, HISTORY_TAG)
+            .last(self.host_id, &RecordTag::History)
             .await?
             .map_or(0, |p| p.idx + 1);
 
@@ -166,7 +166,7 @@ impl HistoryStore {
             let record = Record::builder()
                 .host(Host::new(self.host_id))
                 .version(Version::LATEST.name().to_owned())
-                .tag(HISTORY_TAG.to_owned())
+                .tag(RecordTag::History)
                 .idx(idx + n as u64)
                 .data(bytes)
                 .build();
@@ -212,7 +212,7 @@ impl HistoryStore {
     pub async fn history(&self) -> Result<Vec<HistoryRecord>> {
         // Atm this loads all history into memory
         // Not ideal as that is potentially quite a lot, although history will be small.
-        let records = self.store.all_tagged(HISTORY_TAG).await?;
+        let records = self.store.all_tagged(&RecordTag::History).await?;
         let mut ret = Vec::with_capacity(records.len());
         let mut skipped = 0;
 
@@ -292,7 +292,7 @@ impl HistoryStore {
                     return Ok(None);
                 };
 
-                if record.tag != HISTORY_TAG {
+                if record.tag != RecordTag::History {
                     return Ok(None);
                 }
 
@@ -405,14 +405,14 @@ impl HistoryStore {
 
 #[cfg(test)]
 mod tests {
-    use atuin_domain::record::{DecryptedData, Host, HostId, Record};
+    use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordTag};
     use futures::TryStreamExt;
     use rstest::*;
     use time::macros::datetime;
 
     use crate::{
         database::Sqlite,
-        history::{HISTORY_TAG, Version, store::HistoryRecord, store::HistoryStore},
+        history::{Version, store::HistoryRecord, store::HistoryStore},
         record::sqlite_store::SqliteStore,
         settings::test_local_timeout,
     };
@@ -524,7 +524,7 @@ mod tests {
         let corrupt = Record::builder()
             .host(Host::new(host_id))
             .version(Version::LATEST.name().to_owned())
-            .tag(HISTORY_TAG.to_owned())
+            .tag(RecordTag::History)
             .idx(1)
             .data(DecryptedData(vec![1, 2, 3]))
             .build();

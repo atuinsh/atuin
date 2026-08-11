@@ -4,9 +4,9 @@ use eyre::{Result, eyre};
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4;
-use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx};
+use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx, RecordTag};
 use entry::KvEntry;
-use record::{KV_TAG, KV_VERSION, KvRecord};
+use record::{KV_VERSION, KvRecord};
 
 use crate::database::Database;
 
@@ -86,14 +86,14 @@ impl KvStore {
         let bytes = record.serialize()?;
         let idx = self
             .record_store
-            .last(self.host_id, KV_TAG)
+            .last(self.host_id, &RecordTag::Kv)
             .await?
             .map_or(0, |p| p.idx + 1);
 
         let record = Record::builder()
             .host(Host::new(self.host_id))
             .version(KV_VERSION.to_string())
-            .tag(KV_TAG.to_string())
+            .tag(RecordTag::Kv)
             .idx(idx)
             .data(bytes)
             .build();
@@ -108,7 +108,7 @@ impl KvStore {
     }
 
     pub async fn build(&self) -> Result<()> {
-        let mut tagged = self.record_store.all_tagged(KV_TAG).await?;
+        let mut tagged = self.record_store.all_tagged(&RecordTag::Kv).await?;
         tagged.reverse();
 
         let cached = self.kv_db.list(None).await?;
@@ -201,7 +201,7 @@ mod tests {
         let value = store.get("test", "key").await.unwrap();
         assert_eq!(value, Some("value".to_string()));
 
-        let records = store.record_store.all_tagged(KV_TAG).await?;
+        let records = store.record_store.all_tagged(&RecordTag::Kv).await?;
         assert_eq!(records.len(), 1);
 
         let list = store.list(Some("test")).await.unwrap();
@@ -221,7 +221,7 @@ mod tests {
         let value = store.get("test", "key").await.unwrap();
         assert_eq!(value, None);
 
-        let records = store.record_store.all_tagged(KV_TAG).await?;
+        let records = store.record_store.all_tagged(&RecordTag::Kv).await?;
         assert_eq!(records.len(), 2);
 
         Ok(())

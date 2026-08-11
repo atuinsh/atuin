@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_domain::record::{DecryptedData, Host, HostId};
+use atuin_domain::record::{DecryptedData, Host, HostId, RecordTag};
 use eyre::{Result, bail, ensure, eyre};
 
 use atuin_common::encryption::paseto_v4;
@@ -13,7 +13,6 @@ use atuin_common::encryption::paseto_v4;
 use crate::shell::Var;
 
 const DOTFILES_VAR_VERSION: &str = "v0";
-const DOTFILES_VAR_TAG: &str = "dotfiles-var";
 const DOTFILES_VAR_LEN: usize = 20000; // 20kb max total len, way more than should be needed.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -281,14 +280,14 @@ impl VarStore {
 
         let idx = self
             .store
-            .last(self.host_id, DOTFILES_VAR_TAG)
+            .last(self.host_id, &RecordTag::DotfilesVar)
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
         let record = atuin_domain::record::Record::builder()
             .host(Host::new(self.host_id))
             .version(DOTFILES_VAR_VERSION.to_string())
-            .tag(DOTFILES_VAR_TAG.to_string())
+            .tag(RecordTag::DotfilesVar)
             .idx(idx)
             .data(bytes)
             .build();
@@ -317,14 +316,14 @@ impl VarStore {
 
         let idx = self
             .store
-            .last(self.host_id, DOTFILES_VAR_TAG)
+            .last(self.host_id, &RecordTag::DotfilesVar)
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
         let record = atuin_domain::record::Record::builder()
             .host(Host::new(self.host_id))
             .version(DOTFILES_VAR_VERSION.to_string())
-            .tag(DOTFILES_VAR_TAG.to_string())
+            .tag(RecordTag::DotfilesVar)
             .idx(idx)
             .data(bytes)
             .build();
@@ -343,7 +342,7 @@ impl VarStore {
         let mut build = BTreeMap::new();
 
         // this is sorted, oldest to newest
-        let tagged = self.store.all_tagged(DOTFILES_VAR_TAG).await?;
+        let tagged = self.store.all_tagged(&RecordTag::DotfilesVar).await?;
         let mut skipped = 0;
 
         for record in tagged {

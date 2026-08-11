@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
+use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus, RecordTag};
 use atuin_server_database::{
     Database, DbError, DbResult, DbSettings,
     models::{NewSession, NewUser, Session, User},
@@ -187,7 +187,7 @@ impl Database for Sqlite {
             .bind(i.idx as i64)
             .bind(i.timestamp as i64) // throwing away some data, but i64 is still big in terms of time
             .bind(&i.version)
-            .bind(&i.tag)
+            .bind(i.tag.as_str())
             .bind(&i.data.raw)
             .bind(&i.data.cek)
             .bind(user.id)
@@ -205,7 +205,7 @@ impl Database for Sqlite {
         &self,
         user: &User,
         host: HostId,
-        tag: String,
+        tag: RecordTag,
         start: Option<RecordIdx>,
         count: u64,
     ) -> DbResult<Vec<Record<EncryptedData>>> {
@@ -222,7 +222,7 @@ impl Database for Sqlite {
                     limit $5",
         )
         .bind(user.id)
-        .bind(tag.clone())
+        .bind(tag.as_str())
         .bind(host)
         .bind(start as i64)
         .bind(count as i64)
@@ -264,7 +264,7 @@ impl Database for Sqlite {
         let mut status = RecordStatus::new();
 
         for i in res {
-            status.set_raw(HostId(i.0), i.1, i.2 as u64);
+            status.set_raw(HostId(i.0), RecordTag::from(i.1), i.2 as u64);
         }
 
         Ok(status)

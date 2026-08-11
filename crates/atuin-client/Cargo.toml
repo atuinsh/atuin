@@ -76,8 +76,8 @@ tiny-bip39 = { workspace = true }
 # theme
 crossterm = { workspace = true, features = ["serde"] }
 palette = { version = "0.7.5", features = ["serializing"] }
-strum_macros = "0.28"
-strum = { version = "0.27", features = ["strum_macros"] }
+strum = { workspace = true }
+strum_macros = { workspace = true }
 
 [dependencies.atuin-common]
 path = "../atuin-common"

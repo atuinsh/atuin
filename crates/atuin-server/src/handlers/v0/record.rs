@@ -9,7 +9,7 @@ use crate::{
 };
 use atuin_server_database::Database;
 
-use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
+use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus, RecordTag};
 
 #[instrument(skip_all, err(level = "warn"), fields(user.id = user.id, record.count = records.len()))]
 pub async fn post<DB: Database>(
@@ -77,7 +77,7 @@ pub async fn index<DB: Database>(
 #[derive(Deserialize)]
 pub struct NextParams {
     host: HostId,
-    tag: String,
+    tag: RecordTag,
     start: Option<RecordIdx>,
     count: u64,
 }
