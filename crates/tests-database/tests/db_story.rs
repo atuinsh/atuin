@@ -1,5 +1,5 @@
 use atuin_common::utils::{crypto_random_string, uuid_v7};
-use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordIdx};
+use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordIdx, RecordTag};
 use atuin_server_database::{
     Database, DbSettings, DbType,
     models::{NewSession, NewUser, User},
@@ -167,7 +167,7 @@ fn generate_record(host: &Host, idx: RecordIdx) -> Record<EncryptedData> {
         .idx(idx)
         .host(host.clone())
         .version("2".into())
-        .tag("history".into())
+        .tag(RecordTag::History)
         .data(data)
         .build()
 }
