@@ -8,6 +8,8 @@ use uuid::Uuid;
 
 mod tag;
 pub use tag::RecordTag;
+mod version;
+pub use version::RecordVersion;
 
 #[derive(Clone, Debug, PartialEq, derive_more::Deref, derive_more::From)]
 pub struct DecryptedData(pub Vec<u8>);
