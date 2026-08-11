@@ -140,7 +140,7 @@ mod tests {
 
     use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
-    use atuin_domain::record::{DecryptedData, Host, HostId, Record};
+    use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordVersion};
     use rstest::*;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -207,7 +207,7 @@ mod tests {
         #[case] start_idx: u64,
         #[case] end_idx: u64,
     ) {
-        use crate::packfile::record::{PACKFILE_VERSION, PackManifestDataV1};
+        use crate::packfile::record::PackManifestDataV1;
 
         let host = HostId(uuid_v7());
 
@@ -216,7 +216,7 @@ mod tests {
         let data = EncryptedData::try_from(&PackManifestDataV1 { start_idx, end_idx }).unwrap();
         let manifest = Record::builder()
             .host(Host::new(host))
-            .version(PACKFILE_VERSION.to_owned())
+            .version(RecordVersion::V1)
             .tag(RecordTag::Packfile)
             .idx(0)
             .data(data)
@@ -417,8 +417,6 @@ mod tests {
         key: paseto_v4::Key,
         #[case] bad_data: EncryptedData,
     ) {
-        use crate::packfile::record::PACKFILE_VERSION;
-
         let host = HostId(uuid_v7());
 
         // A VALID packfile for `host` over three history records, built exactly like
@@ -462,7 +460,7 @@ mod tests {
         // no mock of its own.
         let bad = Record::builder()
             .host(Host::new(host))
-            .version(PACKFILE_VERSION.to_owned())
+            .version(RecordVersion::V1)
             .tag(RecordTag::Packfile)
             .idx(0)
             .data(bad_data)
@@ -503,7 +501,7 @@ mod tests {
         // A VALID manifest that parses to V1 over a non-empty range.
         let manifest = Record::builder()
             .host(Host::new(host))
-            .version(crate::packfile::record::PACKFILE_VERSION.to_owned())
+            .version(RecordVersion::V1)
             .tag(RecordTag::Packfile)
             .idx(0)
             .data(
