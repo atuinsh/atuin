@@ -54,7 +54,7 @@ impl<'a, Data> From<&'a Record<Data>> for AdditionalData<'a> {
             idx: value.idx,
             host: value.host.id,
             tag: value.tag.as_ref(),
-            version: &value.version,
+            version: value.version.as_ref(),
         }
     }
 }
@@ -86,7 +86,7 @@ pub struct Record<Data> {
 
     /// The version the data in the entry conforms to
     // However we want to track versions for this tag, eg v2
-    pub version: String,
+    pub version: RecordVersion,
 
     /// The type of data we are storing here. Eg, RecordTag::History
     pub tag: RecordTag,
@@ -295,7 +295,7 @@ mod tests {
     fn test_record() -> Record<DecryptedData> {
         Record::builder()
             .host(Host::new(HostId(Uuid::now_v7())))
-            .version("v1".into())
+            .version(RecordVersion::V1)
             .tag(RecordTag::Other(Uuid::now_v7().simple().to_string()))
             .data(DecryptedData(vec![0, 1, 2, 3]))
             .idx(0)
@@ -334,7 +334,7 @@ mod tests {
             idx: 7,
             host: Host::new(HostId(Uuid::from_u128(2))),
             timestamp: 1_687_244_806_000_000,
-            version: "v1".to_owned(),
+            version: RecordVersion::V1,
             tag: RecordTag::History,
             data: paseto_v4::EncryptedData {
                 raw: "v4.local.cSFhI9n30MfwkZrRAt-YAoxp6DrAMMybmLury7svdFMkapmxQmLQaRzqCfIdanPaQ55VbJjGjqwjst2AnLiBQE9cAQAyH69u2HVHrkaKv7rGtQ".to_owned(),
