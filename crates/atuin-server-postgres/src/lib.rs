@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use rand::Rng;
 
 use async_trait::async_trait;
-use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
+use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus, RecordTag};
 use atuin_server_database::models::{NewSession, NewUser, Session, User};
 use atuin_server_database::{Database, DbError, DbResult, DbSettings};
 use sqlx::postgres::PgPoolOptions;
@@ -322,7 +322,7 @@ impl Database for Postgres {
         &self,
         user: &User,
         host: HostId,
-        tag: String,
+        tag: RecordTag,
         start: Option<RecordIdx>,
         count: u64,
     ) -> DbResult<Vec<Record<EncryptedData>>> {
@@ -339,7 +339,7 @@ impl Database for Postgres {
                     limit $5",
         )
         .bind(user.id)
-        .bind(tag.clone())
+        .bind(tag.as_str())
         .bind(host)
         .bind(start as i64)
         .bind(count as i64)
@@ -402,7 +402,7 @@ impl Database for Postgres {
         let mut status = RecordStatus::new();
 
         for i in res.iter() {
-            status.set_raw(HostId(i.0), i.1.clone(), i.2 as u64);
+            status.set_raw(HostId(i.0), RecordTag::from(i.1.clone()), i.2 as u64);
         }
 
         Ok(status)

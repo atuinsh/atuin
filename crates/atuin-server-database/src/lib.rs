@@ -6,7 +6,7 @@ use std::fmt::Debug;
 
 use self::models::{NewSession, NewUser, Session, User};
 use async_trait::async_trait;
-use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
+use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus, RecordTag};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, derive_more::Display, derive_more::Error, derive_more::From)]
@@ -105,7 +105,7 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
         &self,
         user: &User,
         host: HostId,
-        tag: String,
+        tag: RecordTag,
         start: Option<RecordIdx>,
         count: u64,
     ) -> DbResult<Vec<Record<EncryptedData>>>;
