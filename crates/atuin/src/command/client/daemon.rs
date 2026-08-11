@@ -159,15 +159,20 @@ fn daemon_mismatch_message(version: &str, protocol: u32) -> String {
 }
 
 fn is_legacy_daemon_error(err: &eyre::Report) -> bool {
-    matches!(classify_error(err), DaemonClientErrorKind::Unimplemented)
+    matches!(
+        classify_error(err),
+        Some(DaemonClientErrorKind::Unimplemented)
+    )
 }
 
 pub(super) fn should_retry_after_error(err: &eyre::Report) -> bool {
     matches!(
         classify_error(err),
-        DaemonClientErrorKind::Connect
-            | DaemonClientErrorKind::Unavailable
-            | DaemonClientErrorKind::Unimplemented
+        Some(
+            DaemonClientErrorKind::Connect
+                | DaemonClientErrorKind::Unavailable
+                | DaemonClientErrorKind::Unimplemented
+        )
     )
 }
 

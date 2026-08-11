@@ -97,11 +97,11 @@ impl SearchMode {
         }
     }
 
-    pub fn next(self, configured_mode: Self) -> Self {
+    pub fn next(&self, settings: &Settings) -> Self {
         match self {
             SearchMode::Prefix => SearchMode::FullText,
             // if the user is using daemon-fuzzy, we go to daemon-fuzzy
-            SearchMode::FullText if configured_mode == SearchMode::DaemonFuzzy => {
+            SearchMode::FullText if settings.search_mode() == SearchMode::DaemonFuzzy => {
                 SearchMode::DaemonFuzzy
             }
             // otherwise fuzzy.

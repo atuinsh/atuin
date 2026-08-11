@@ -125,7 +125,7 @@ impl Search {
         db: &dyn Database,
     ) -> Result<Vec<History>> {
         let shells = state.shells.to_filter();
-        let results = db
+        Ok(db
             .search(
                 DbSearchMode::FullText,
                 state.filter_mode,
@@ -138,9 +138,9 @@ impl Search {
                     ..Default::default()
                 },
             )
-            .await
-            .map_or(Vec::new(), |r| r.into_iter().collect());
-        Ok(results)
+            .await?
+            .into_iter()
+            .collect())
     }
 
     #[instrument(skip_all, level = Level::TRACE, name = "hydrate_from_db", fields(count = ids.len()))]

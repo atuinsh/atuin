@@ -154,13 +154,6 @@ struct StyleState {
     inner_width: usize,
 }
 
-fn configured_search_mode(settings: &Settings) -> SearchMode {
-    settings
-        .search_mode_shell_up_key_binding()
-        .filter(|_| settings.shell_up_key_binding)
-        .unwrap_or_else(|| settings.search_mode())
-}
-
 impl State {
     async fn query_results(
         &mut self,
@@ -172,7 +165,7 @@ impl State {
             #[cfg(feature = "daemon")]
             Err(error)
                 if self.search_mode == SearchMode::DaemonFuzzy
-                    && crate::command::client::daemon::should_retry_after_error(&error) =>
+                    && atuin_daemon::client::classify_error(&error).is_some() =>
             {
                 tracing::warn!(?error, "daemon-fuzzy search failed; using fuzzy search");
                 self.search_mode = SearchMode::Fuzzy;
@@ -681,12 +674,10 @@ impl State {
             }
             Action::CycleSearchMode => {
                 self.switched_search_mode = true;
-                let configured_mode = if self.daemon_fuzzy_fallback {
-                    SearchMode::Fuzzy
-                } else {
-                    configured_search_mode(settings)
+                self.search_mode = match self.search_mode.next(settings) {
+                    SearchMode::DaemonFuzzy if self.daemon_fuzzy_fallback => SearchMode::Fuzzy,
+                    mode => mode,
                 };
-                self.search_mode = self.search_mode.next(configured_mode);
                 self.engine = engines::engine(self.search_mode, settings);
                 InputAction::Continue
             }
@@ -1196,11 +1187,7 @@ impl State {
         let style =
             Style::from_crossterm(theme.as_style(Meaning::AlertWarn)).add_modifier(Modifier::BOLD);
         if daemon_fallback {
-            #[cfg(feature = "daemon")]
-            let warning = "Daemon unavailable; using fuzzy. Try atuin daemon restart";
-            #[cfg(not(feature = "daemon"))]
-            let warning = "Daemon support unavailable; using fuzzy. Configure fuzzy search";
-            return Text::styled(warning, style);
+            return Text::styled("Daemon search failed; using fuzzy.", style);
         }
 
         let code_style = Style::from_crossterm(theme.as_style(Meaning::SyntaxCommand))
@@ -1844,7 +1831,13 @@ pub async fn history(
 
     let initial_context = current_context().await?;
 
-    let configured_mode = configured_search_mode(settings);
+    let configured_mode = if settings.shell_up_key_binding {
+        settings
+            .search_mode_shell_up_key_binding()
+            .unwrap_or_else(|| settings.search_mode())
+    } else {
+        settings.search_mode()
+    };
     let daemon_fuzzy_fallback =
         cfg!(not(feature = "daemon")) && configured_mode == SearchMode::DaemonFuzzy;
     let search_mode = if daemon_fuzzy_fallback {
