@@ -1,5 +1,5 @@
 use atuin_common::utils::{crypto_random_string, uuid_v7};
-use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordIdx};
+use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordIdx, RecordTag};
 use atuin_server_database::{
     Database, DbSettings, DbType,
     models::{NewSession, NewUser, User},
@@ -116,7 +116,7 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
             .hosts
             .get(&host_a.id)
             .unwrap()
-            .get("history")
+            .get(&RecordTag::History)
             .unwrap()
             .clone(),
         6
@@ -126,7 +126,7 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
             .hosts
             .get(&host_b.id)
             .unwrap()
-            .get("history")
+            .get(&RecordTag::History)
             .unwrap()
             .clone(),
         2
@@ -134,7 +134,7 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
 
     // Get 3 records from the beginning
     let recs = db
-        .next_records(&user, host_a.id, "history".into(), None, 3)
+        .next_records(&user, host_a.id, RecordTag::History, None, 3)
         .await?;
     assert_eq!(recs.len(), 3);
     assert_eq!(recs[0].idx, 1);
@@ -142,7 +142,7 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
 
     // Get from the end, for host a. Get more than exists
     let recs = db
-        .next_records(&user, host_a.id, "history".into(), Some(4), 10)
+        .next_records(&user, host_a.id, RecordTag::History, Some(4), 10)
         .await?;
     assert_eq!(recs.len(), 3);
     assert_eq!(recs[0].idx, 4); // check the head record is idx 4
@@ -151,7 +151,7 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
     // delete_store
     db.delete_store(&user).await?;
     let recs = db
-        .next_records(&user, host_a.id, "history".into(), Some(4), 10)
+        .next_records(&user, host_a.id, RecordTag::History, Some(4), 10)
         .await?;
     assert_eq!(recs.len(), 0);
 
@@ -167,7 +167,7 @@ fn generate_record(host: &Host, idx: RecordIdx) -> Record<EncryptedData> {
         .idx(idx)
         .host(host.clone())
         .version("2".into())
-        .tag("history".into())
+        .tag(RecordTag::History)
         .data(data)
         .build()
 }

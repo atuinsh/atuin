@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::env;
+use std::sync::Arc;
 use std::time::Duration;
 
 use eyre::{Result, bail};
@@ -13,7 +14,7 @@ use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION, ChangePasswordRequest, ErrorResponse,
     LoginRequest, LoginResponse, MeResponse, RegisterResponse,
 };
-use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
+use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus, RecordTag};
 
 use semver::Version;
 
@@ -45,8 +46,9 @@ impl AuthToken {
     }
 }
 
-pub struct Client<'a> {
-    sync_addr: &'a Url,
+#[derive(Debug, Clone)]
+pub struct Client {
+    sync_addr: Arc<Url>,
     client: reqwest::Client,
 }
 
@@ -240,9 +242,9 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
     Ok(resp)
 }
 
-impl<'a> Client<'a> {
+impl Client {
     pub fn new(
-        sync_addr: &'a Url,
+        sync_addr: impl Into<Arc<Url>>,
         auth: AuthToken,
         connect_timeout: u64,
         timeout: u64,
@@ -256,7 +258,7 @@ impl<'a> Client<'a> {
         headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
 
         Ok(Client {
-            sync_addr,
+            sync_addr: sync_addr.into(),
             client: client_builder(extra_headers)
                 .default_headers(headers)
                 .connect_timeout(Duration::from_secs(connect_timeout))
@@ -300,7 +302,7 @@ impl<'a> Client<'a> {
     pub async fn next_records(
         &self,
         host: HostId,
-        tag: String,
+        tag: RecordTag,
         start: RecordIdx,
         count: u64,
     ) -> Result<Vec<Record<EncryptedData>>> {
@@ -309,7 +311,7 @@ impl<'a> Client<'a> {
         let mut url = self.sync_addr.append_path("api/v0/record/next")?;
         url.query_pairs_mut()
             .append_pair("host", &host.0.to_string())
-            .append_pair("tag", &tag)
+            .append_pair("tag", tag.as_str())
             .append_pair("count", &count.to_string())
             .append_pair("start", &start.to_string());
 

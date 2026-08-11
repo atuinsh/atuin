@@ -69,11 +69,11 @@ pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHan
     (url, shutdown_tx, server)
 }
 
-pub async fn register_inner<'a>(
-    address: &'a url::Url,
+pub async fn register_inner(
+    address: &url::Url,
     username: &str,
     password: &str,
-) -> api_client::Client<'a> {
+) -> api_client::Client {
     let email = format!("{}@example.com", uuid_v7().as_simple());
 
     // registration works
@@ -83,7 +83,7 @@ pub async fn register_inner<'a>(
             .unwrap();
 
     api_client::Client::new(
-        address,
+        address.clone(),
         api_client::AuthToken::Token(registration_response.session),
         5,
         30,
@@ -93,11 +93,7 @@ pub async fn register_inner<'a>(
 }
 
 #[allow(dead_code)]
-pub async fn login(
-    address: &url::Url,
-    username: String,
-    password: String,
-) -> api_client::Client<'_> {
+pub async fn login(address: &url::Url, username: String, password: String) -> api_client::Client {
     // registration works
     let login_response = api_client::login(
         address,
@@ -108,7 +104,7 @@ pub async fn login(
     .unwrap();
 
     api_client::Client::new(
-        address,
+        address.clone(),
         api_client::AuthToken::Token(login_response.session),
         5,
         30,
@@ -118,7 +114,7 @@ pub async fn login(
 }
 
 #[allow(dead_code)]
-pub async fn register(address: &url::Url) -> api_client::Client<'_> {
+pub async fn register(address: &url::Url) -> api_client::Client {
     let username = uuid_v7().as_simple().to_string();
     let password = uuid_v7().as_simple().to_string();
     register_inner(address, &username, &password).await

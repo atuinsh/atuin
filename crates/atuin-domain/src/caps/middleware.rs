@@ -40,8 +40,6 @@ pub enum CapMismatch {
 pub struct CapMiddleware {
     /// Source of the known token and the `/api/v0/capabilities` refresh.
     caps: Arc<CapClient>,
-    /// Client used to request the capabilities from the server.
-    http: Client,
     /// How to react to a capability-token mismatch with the server.
     #[builder(default = CapMismatch::Continue)]
     on_mismatch: CapMismatch,
@@ -87,9 +85,8 @@ impl Middleware for CapMiddleware {
                 // Coalesced and idempotent, so a burst drives exactly one fetch. Best-effort: a
                 // refresh failure must not fail the request the server already served.
                 let caps = self.caps.clone();
-                let http = self.http.clone();
                 tokio::spawn(async move {
-                    let _ = caps.refresh_if_stale(&http, &available).await;
+                    let _ = caps.refresh_if_stale(&available).await;
                 });
             }
         }
@@ -117,7 +114,6 @@ impl CapabilitiesExt for Client {
     ) -> ClientWithMiddleware {
         let middleware = CapMiddleware::builder()
             .caps(caps)
-            .http(self.clone())
             .on_mismatch(on_mismatch)
             .build();
         ClientBuilder::new(self).with(middleware).build()
@@ -210,7 +206,7 @@ mod tests {
         let caps_url = format!("{}/api/v0/capabilities", server.uri())
             .parse()
             .unwrap();
-        CapClient::new(caps_url)
+        CapClient::new(caps_url, reqwest::Client::new())
     }
 
     #[rstest]
@@ -252,8 +248,9 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), 412);
 
-        // `Error` mode never refreshes; the caller handles the 412.
-        assert_eq!(caps_hits(&server).await, 0);
+        // The only caps fetch is the eager warm-up on construction; `Error` mode adds no refresh.
+        await_caps_hit(&server).await;
+        assert_eq!(caps_hits(&server).await, 1);
     }
 
     #[rstest]
@@ -270,8 +267,7 @@ mod tests {
             .unwrap();
 
         let middleware = CapMiddleware::builder()
-            .caps(CapClient::new(caps_url))
-            .http(http_client.clone())
+            .caps(CapClient::new(caps_url, http_client.clone()))
             .on_mismatch(CapMismatch::Continue)
             .build();
         let client = ClientBuilder::new(http_client).with(middleware).build();
@@ -283,14 +279,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), 404);
-        let caps_hits = server
-            .received_requests()
-            .await
-            .unwrap()
-            .iter()
-            .filter(|r| r.url.path() == "/api/v0/capabilities")
-            .count();
-        assert_eq!(caps_hits, 0, "a plain 404 must not trigger a refresh");
+        // The eager warm-up is the only caps fetch; a plain 404 adds no further refresh.
+        await_caps_hit(&server).await;
+        assert_eq!(
+            caps_hits(&server).await,
+            1,
+            "a plain 404 must not trigger a refresh beyond the eager warm-up"
+        );
     }
 
     #[rstest]
@@ -309,8 +304,7 @@ mod tests {
             .unwrap();
 
         let middleware = CapMiddleware::builder()
-            .caps(CapClient::new(caps_url))
-            .http(http_client.clone())
+            .caps(CapClient::new(caps_url, http_client.clone()))
             .on_mismatch(CapMismatch::Continue)
             .build();
         let client = ClientBuilder::new(http_client).with(middleware).build();
@@ -322,16 +316,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), 412);
-        let caps_hits = server
-            .received_requests()
-            .await
-            .unwrap()
-            .iter()
-            .filter(|r| r.url.path() == "/api/v0/capabilities")
-            .count();
+        // The eager warm-up is the only caps fetch; a 412 without the caps header adds no refresh.
+        await_caps_hit(&server).await;
         assert_eq!(
-            caps_hits, 0,
-            "a 412 without the caps header must not trigger a refresh"
+            caps_hits(&server).await,
+            1,
+            "a 412 without the caps header must not trigger a refresh beyond the eager warm-up"
         );
     }
 

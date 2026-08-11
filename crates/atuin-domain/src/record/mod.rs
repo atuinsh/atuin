@@ -6,13 +6,18 @@ use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
+mod tag;
+pub use tag::RecordTag;
+mod version;
+pub use version::RecordVersion;
+
 #[derive(Clone, Debug, PartialEq, derive_more::Deref, derive_more::From)]
 pub struct DecryptedData(pub Vec<u8>);
 
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq)]
 pub struct Diff {
     pub host: HostId,
-    pub tag: String,
+    pub tag: RecordTag,
     pub local: Option<RecordIdx>,
     pub remote: Option<RecordIdx>,
 }
@@ -48,8 +53,8 @@ impl<'a, Data> From<&'a Record<Data>> for AdditionalData<'a> {
             id: value.id,
             idx: value.idx,
             host: value.host.id,
-            tag: &value.tag,
-            version: &value.version,
+            tag: value.tag.as_ref(),
+            version: value.version.as_ref(),
         }
     }
 }
@@ -81,10 +86,10 @@ pub struct Record<Data> {
 
     /// The version the data in the entry conforms to
     // However we want to track versions for this tag, eg v2
-    pub version: String,
+    pub version: RecordVersion,
 
-    /// The type of data we are storing here. Eg, "history"
-    pub tag: String,
+    /// The type of data we are storing here. Eg, RecordTag::History
+    pub tag: RecordTag,
 
     /// Some data. This can be anything you wish to store. Use the tag field to know how to handle it.
     pub data: Data,
@@ -101,7 +106,19 @@ impl<Data> Record<Data> {
             .build()
     }
 
-    pub fn with_data<New>(&self, data: New) -> Record<New> {
+    pub fn with_data<New>(self, data: New) -> Record<New> {
+        Record {
+            id: self.id,
+            idx: self.idx,
+            host: self.host,
+            timestamp: self.timestamp,
+            version: self.version,
+            tag: self.tag,
+            data,
+        }
+    }
+
+    pub fn with_data_clone<New>(&self, data: New) -> Record<New> {
         Record {
             id: self.id,
             idx: self.idx,
@@ -119,7 +136,7 @@ impl Record<DecryptedData> {
         let ad = serde_json::to_string(&AdditionalData::from(self))
             .expect("could not serialize implicit assertions");
         let assertion = paseto_v4::ImplicitAssertion::from(ad.as_str());
-        self.with_data(paseto_v4::encrypt_sync(&self.data, Some(assertion), key).unwrap())
+        self.with_data_clone(paseto_v4::encrypt_sync(&self.data, Some(assertion), key).unwrap())
     }
 }
 
@@ -130,7 +147,7 @@ impl Record<paseto_v4::EncryptedData> {
         let assertion = paseto_v4::ImplicitAssertion::from(ad.as_str());
         let data = paseto_v4::decrypt_sync(&self.data, Some(assertion), key)
             .context("could not decrypt entry")?;
-        Ok(self.with_data(data.into()))
+        Ok(self.with_data_clone(data.into()))
     }
 }
 
@@ -139,7 +156,7 @@ impl Record<paseto_v4::EncryptedData> {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecordStatus {
     // A map of host -> tag -> max(idx)
-    pub hosts: HashMap<HostId, HashMap<String, RecordIdx>>,
+    pub hosts: HashMap<HostId, HashMap<RecordTag, RecordIdx>>,
 }
 
 impl Default for RecordStatus {
@@ -148,8 +165,8 @@ impl Default for RecordStatus {
     }
 }
 
-impl Extend<(HostId, String, RecordIdx)> for RecordStatus {
-    fn extend<T: IntoIterator<Item = (HostId, String, RecordIdx)>>(&mut self, iter: T) {
+impl Extend<(HostId, RecordTag, RecordIdx)> for RecordStatus {
+    fn extend<T: IntoIterator<Item = (HostId, RecordTag, RecordIdx)>>(&mut self, iter: T) {
         for (host, tag, tail_idx) in iter {
             self.set_raw(host, tag, tail_idx);
         }
@@ -168,12 +185,12 @@ impl RecordStatus {
         self.set_raw(tail.host.id, tail.tag, tail.idx)
     }
 
-    pub fn set_raw(&mut self, host: HostId, tag: String, tail_id: RecordIdx) {
+    pub fn set_raw(&mut self, host: HostId, tag: RecordTag, tail_id: RecordIdx) {
         self.hosts.entry(host).or_default().insert(tag, tail_id);
     }
 
-    pub fn get(&self, host: HostId, tag: String) -> Option<RecordIdx> {
-        self.hosts.get(&host).and_then(|v| v.get(&tag)).cloned()
+    pub fn get(&self, host: HostId, tag: &RecordTag) -> Option<RecordIdx> {
+        self.hosts.get(&host).and_then(|v| v.get(tag)).cloned()
     }
 
     /// Diff this index with another, likely remote index.
@@ -189,7 +206,7 @@ impl RecordStatus {
         // First, we check if other has everything that self has
         for (host, tag_map) in self.hosts.iter() {
             for (tag, idx) in tag_map.iter() {
-                match other.get(*host, tag.clone()) {
+                match other.get(*host, tag) {
                     // The other store is all up to date! No diff.
                     Some(t) if t.eq(idx) => continue,
 
@@ -218,7 +235,7 @@ impl RecordStatus {
         // account for that!
         for (host, tag_map) in other.hosts.iter() {
             for (tag, idx) in tag_map.iter() {
-                match self.get(*host, tag.clone()) {
+                match self.get(*host, tag) {
                     // If we have this host/tag combo, the comparison and diff will have already happened above
                     Some(_) => continue,
 
@@ -278,8 +295,8 @@ mod tests {
     fn test_record() -> Record<DecryptedData> {
         Record::builder()
             .host(Host::new(HostId(Uuid::now_v7())))
-            .version("v1".into())
-            .tag(Uuid::now_v7().simple().to_string())
+            .version(RecordVersion::V1)
+            .tag(RecordTag::Other(Uuid::now_v7().simple().to_string()))
             .data(DecryptedData(vec![0, 1, 2, 3]))
             .idx(0)
             .build()
@@ -317,8 +334,8 @@ mod tests {
             idx: 7,
             host: Host::new(HostId(Uuid::from_u128(2))),
             timestamp: 1_687_244_806_000_000,
-            version: "v1".to_owned(),
-            tag: "history".to_owned(),
+            version: RecordVersion::V1,
+            tag: RecordTag::History,
             data: paseto_v4::EncryptedData {
                 raw: "v4.local.cSFhI9n30MfwkZrRAt-YAoxp6DrAMMybmLury7svdFMkapmxQmLQaRzqCfIdanPaQ55VbJjGjqwjst2AnLiBQE9cAQAyH69u2HVHrkaKv7rGtQ".to_owned(),
                 cek: r#"{"wpk":"k4.local-wrap.pie.8xXPgrNyliEUy_PnbM3S88Yk8tQQA0HN2o6jyUkGHK5duUEfW-zSCI1kSYRpyPESCK7-5822hPzRAbyZXPRVAbCkoLqqwPJ8_oi8clKEr6u8nJuIQQLHVClvYJmZyZIu","kid":"k4.lid.2LzCmxDtbwu2tK5T1X1VLEth8umaI9vbKgTDkkt7ARR0"}"#.to_owned(),
@@ -337,7 +354,7 @@ mod tests {
 
         index.set(record.clone());
 
-        let tail = index.get(record.host.id, record.tag);
+        let tail = index.get(record.host.id, &record.tag);
 
         assert_eq!(
             record.idx,
@@ -354,7 +371,7 @@ mod tests {
         index.set(record.clone());
         index.set(child.clone());
 
-        let tail = index.get(record.host.id, record.tag);
+        let tail = index.get(record.host.id, &record.tag);
 
         assert_eq!(
             child.idx,
@@ -443,9 +460,9 @@ mod tests {
 
         // both diffs should be ALMOST the same. They will agree on which hosts and tags
         // require updating, but the "other" value will not be the same.
-        let smol_diff_1: Vec<(HostId, String)> =
+        let smol_diff_1: Vec<(HostId, RecordTag)> =
             diff1.iter().map(|v| (v.host, v.tag.clone())).collect();
-        let smol_diff_2: Vec<(HostId, String)> =
+        let smol_diff_2: Vec<(HostId, RecordTag)> =
             diff1.iter().map(|v| (v.host, v.tag.clone())).collect();
 
         assert_eq!(smol_diff_1, smol_diff_2);
@@ -667,5 +684,25 @@ mod tests {
         let _ = enc2
             .decrypt(&key)
             .expect_err("tampering with the id should result in auth failure");
+    }
+
+    #[test]
+    fn record_status_serializes_with_bare_string_tag_keys() {
+        let host = HostId(Uuid::from_u128(0xabc));
+        let mut status = RecordStatus::new();
+        status.set_raw(host, RecordTag::History, 6);
+        status.set_raw(host, RecordTag::Other("custom".to_owned()), 2);
+
+        let json = serde_json::to_string(&status).unwrap();
+        // Tag keys are bare strings, identical to the pre-refactor String-keyed shape.
+        assert!(json.contains(r#""history":6"#), "got {json}");
+        assert!(json.contains(r#""custom":2"#), "got {json}");
+
+        let round: RecordStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(round.get(host, &RecordTag::History), Some(6));
+        assert_eq!(
+            round.get(host, &RecordTag::Other("custom".to_owned())),
+            Some(2)
+        );
     }
 }

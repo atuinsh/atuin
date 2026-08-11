@@ -1,12 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
-
-use parking_lot::RwLock;
-use serde::de::DeserializeOwned;
-use tokio::sync::Mutex;
-use url::Url;
-
 use super::{CapKey, Capability, CapsBundle, DuplicateCapability};
 use crate::api::CapabilitiesResponse;
+use parking_lot::RwLock;
+use serde::de::DeserializeOwned;
+use std::{collections::HashMap, sync::Arc};
+use tokio;
+use url::Url;
 
 /// Client-side capability set: advertises its own capabilities and can read the server's.
 ///
@@ -22,10 +20,13 @@ pub struct CapClient {
     /// reads; writes are serialized by `fetching`.
     server: RwLock<Option<ServerCaps>>,
     /// Serializes capability fetches so a burst of stale callers makes a single network hop.
-    fetching: Mutex<()>,
+    fetching: tokio::sync::Mutex<()>,
     /// The server's capabilities endpoint. Passed in by the caller so this crate stays agnostic of
     /// the route (eg `/api/v0/capabilities`).
     capabilities_url: Url,
+    /// Bare client used to fetch `capabilities_url`.
+    http: reqwest::Client,
+    warmed: tokio::sync::watch::Receiver<bool>,
 }
 
 /// The capabilities a server advertises, as last fetched from its capabilities endpoint.
@@ -69,13 +70,24 @@ pub enum ServerSupportError {
 
 impl CapClient {
     /// Create a client that will negotiate against the given capabilities endpoint.
-    pub fn new(capabilities_url: Url) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn new(capabilities_url: Url, http: reqwest::Client) -> Arc<Self> {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let new = Arc::new(Self {
             own: CapsBundle::default(),
             server: RwLock::new(None),
-            fetching: Mutex::new(()),
+            fetching: tokio::sync::Mutex::new(()),
             capabilities_url,
-        })
+            http,
+            warmed: rx,
+        });
+
+        let this = new.clone();
+        tokio::spawn(async move {
+            let _ = this.refresh().await;
+            let _ = tx.send(true);
+        });
+
+        new
     }
 
     /// Register a capability this client advertises.
@@ -90,12 +102,12 @@ impl CapClient {
         self.own.get()
     }
 
-    /// Fetch the server's capabilities over the caller's client and patch the local cache.
+    /// Fetch the server's capabilities over the internal client and patch the local cache.
     ///
     /// Fetches are serialized so parallel callers never overlap; this one always fetches.
-    pub async fn refresh(&self, client: &reqwest::Client) -> reqwest::Result<()> {
+    pub async fn refresh(&self) -> reqwest::Result<()> {
         let _fetching = self.fetching.lock().await;
-        let caps = self.fetch_server_caps(client).await?;
+        let caps = self.fetch_server_caps().await?;
         *self.server.write() = Some(caps);
         Ok(())
     }
@@ -104,11 +116,7 @@ impl CapClient {
     ///
     /// Double-checked so a burst of stale callers makes a single fetch, and a caller whose token
     /// already matches `available` does no work.
-    pub async fn refresh_if_stale(
-        &self,
-        client: &reqwest::Client,
-        available: &str,
-    ) -> reqwest::Result<()> {
+    pub async fn refresh_if_stale(&self, available: &str) -> reqwest::Result<()> {
         if !self.is_stale(available) {
             return Ok(());
         }
@@ -116,7 +124,7 @@ impl CapClient {
         if !self.is_stale(available) {
             return Ok(());
         }
-        let caps = self.fetch_server_caps(client).await?;
+        let caps = self.fetch_server_caps().await?;
         *self.server.write() = Some(caps);
         Ok(())
     }
@@ -131,8 +139,9 @@ impl CapClient {
     }
 
     /// Fetch and decode the server's capabilities document.
-    async fn fetch_server_caps(&self, client: &reqwest::Client) -> reqwest::Result<ServerCaps> {
-        let resp: CapabilitiesResponse = client
+    async fn fetch_server_caps(&self) -> reqwest::Result<ServerCaps> {
+        let resp: CapabilitiesResponse = self
+            .http
             .get(self.capabilities_url.clone())
             .send()
             .await?
@@ -148,9 +157,11 @@ impl CapClient {
     /// - `Err(ServerSupportError::NotFetched)` - capabilities have not been fetched yet.
     /// - `Err(ServerSupportError::Malformed)` - advertised, but its value did not deserialize into
     ///   `C`. The caller decides whether that is fatal or a reason to fall back.
-    pub fn get_server<C: Capability + DeserializeOwned>(
+    pub async fn get_server<C: Capability + DeserializeOwned>(
         &self,
     ) -> Result<Option<C>, ServerSupportError> {
+        let _ = self.warmed.clone().wait_for(|&done| done).await;
+
         let server = self.server.read();
         let Some(server) = server.as_ref() else {
             return Err(ServerSupportError::NotFetched);
@@ -165,6 +176,11 @@ impl CapClient {
                 name: C::static_name(),
                 source,
             })
+    }
+
+    /// Whether the server's capabilities have been fetched at least once.
+    pub fn is_fetched(&self) -> bool {
+        self.server.read().is_some()
     }
 
     /// The capability token this client currently knows, or `None` if it has never fetched.
@@ -206,12 +222,12 @@ mod tests {
         let caps_url: Url = format!("{}/api/v0/capabilities", server.uri())
             .parse()
             .unwrap();
-        let client = CapClient::new(caps_url);
+        let client = CapClient::new(caps_url, http_client);
 
         // Nothing fetched yet.
         assert_eq!(client.known_token(), None);
 
-        client.refresh(&http_client).await.unwrap();
+        client.refresh().await.unwrap();
 
         // The token is the server's version, opaque and echoed verbatim.
         assert_eq!(client.known_token(), Some("7".to_string()));
@@ -234,19 +250,10 @@ mod tests {
         let caps_url: Url = format!("{}/api/v0/capabilities", server.uri())
             .parse()
             .unwrap();
-        let client = CapClient::new(caps_url);
+        let client = CapClient::new(caps_url, http_client);
 
-        // Nothing fetched yet, so the capability cannot be observed.
-        assert!(matches!(
-            client.get_server::<CapabilitiesCap>(),
-            Err(ServerSupportError::NotFetched)
-        ));
-
-        client.refresh(&http_client).await.unwrap();
-
-        // Having refreshed, the client observes the capability the server advertised.
         assert_eq!(
-            client.get_server::<CapabilitiesCap>().unwrap(),
+            client.get_server::<CapabilitiesCap>().await.unwrap(),
             Some(CapabilitiesCap { version: 1 })
         );
     }

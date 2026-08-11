@@ -8,7 +8,7 @@ use super::sqlite_store::SqliteStore;
 use crate::{api_client::Client, settings::Settings};
 
 use atuin_common::encryption::paseto_v4;
-use atuin_domain::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus};
+use atuin_domain::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus, RecordTag};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 
 #[derive(Error, Debug)]
@@ -44,23 +44,23 @@ pub enum Operation {
         local: RecordIdx,
         remote: Option<RecordIdx>,
         host: HostId,
-        tag: String,
+        tag: RecordTag,
     },
     Download {
         local: Option<RecordIdx>,
         remote: RecordIdx,
         host: HostId,
-        tag: String,
+        tag: RecordTag,
     },
     Noop {
         host: HostId,
-        tag: String,
+        tag: RecordTag,
     },
 }
 
-pub async fn build_client(settings: &Settings) -> Result<Client<'_>, SyncError> {
+pub async fn build_client(settings: &Settings) -> Result<Client, SyncError> {
     Client::new(
-        &settings.sync_address,
+        settings.sync_address.clone(),
         settings
             .sync_auth_token()
             .await
@@ -73,7 +73,7 @@ pub async fn build_client(settings: &Settings) -> Result<Client<'_>, SyncError> 
 }
 
 pub async fn diff(
-    client: &Client<'_>,
+    client: &Client,
     store: &SqliteStore,
 ) -> Result<(Vec<Diff>, RecordStatus), SyncError> {
     let local_index = store
@@ -170,9 +170,9 @@ pub async fn operations(
 
 async fn sync_upload(
     store: &SqliteStore,
-    client: &Client<'_>,
+    client: &Client,
     host: HostId,
-    tag: String,
+    tag: RecordTag,
     local: RecordIdx,
     remote: Option<RecordIdx>,
     page_size: u64,
@@ -196,7 +196,7 @@ async fn sync_upload(
 
     loop {
         let page = store
-            .next(host, tag.as_str(), remote + progress, page_size)
+            .next(host, &tag, remote + progress, page_size)
             .await
             .map_err(|e| {
                 error!("failed to read upload page: {e:?}");
@@ -229,9 +229,9 @@ async fn sync_upload(
 
 async fn sync_download(
     store: &SqliteStore,
-    client: &Client<'_>,
+    client: &Client,
     host: HostId,
-    tag: String,
+    tag: RecordTag,
     local: Option<RecordIdx>,
     remote: RecordIdx,
     page_size: u64,
@@ -285,7 +285,7 @@ async fn sync_download(
 }
 
 pub async fn sync_remote(
-    client: &Client<'_>,
+    client: &Client,
     operations: Vec<Operation>,
     local_store: &SqliteStore,
     page_size: u64,
@@ -325,7 +325,7 @@ pub async fn sync_remote(
 }
 
 pub async fn check_encryption_key(
-    client: &Client<'_>,
+    client: &Client,
     remote_index: &RecordStatus,
     encryption_key: &paseto_v4::Key,
 ) -> Result<(), SyncError> {
@@ -374,7 +374,7 @@ pub async fn sync(
 
 #[cfg(test)]
 mod tests {
-    use atuin_domain::record::{Diff, EncryptedData, HostId, Record};
+    use atuin_domain::record::{Diff, EncryptedData, HostId, Record, RecordTag};
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
@@ -392,7 +392,9 @@ mod tests {
                 atuin_common::utils::uuid_v7(),
             )))
             .version("v1".into())
-            .tag(atuin_common::utils::uuid_v7().simple().to_string())
+            .tag(RecordTag::Other(
+                atuin_common::utils::uuid_v7().simple().to_string(),
+            ))
             .data(EncryptedData {
                 raw: String::new(),
                 cek: String::new(),
@@ -449,7 +451,7 @@ mod tests {
             operations[0],
             Operation::Upload {
                 host: record.host.id,
-                tag: record.tag,
+                tag: record.tag.clone(),
                 local: record.idx,
                 remote: None,
             }
@@ -483,14 +485,14 @@ mod tests {
                 // Or in otherwords, local is ahead by one
                 Operation::Upload {
                     host: local_ahead.host.id,
-                    tag: local_ahead.tag,
+                    tag: local_ahead.tag.clone(),
                     local: 1,
                     remote: Some(0),
                 },
                 // Or in other words, remote knows of a record in an entirely new store (tag)
                 Operation::Download {
                     host: remote_ahead.host.id,
-                    tag: remote_ahead.tag,
+                    tag: remote_ahead.tag.clone(),
                     local: None,
                     remote: 0,
                 },
@@ -596,49 +598,49 @@ mod tests {
                 local: Some(0),
                 remote: 2,
                 host: second_shared_remote_ahead.host.id,
-                tag: second_shared_remote_ahead.tag,
+                tag: second_shared_remote_ahead.tag.clone(),
             },
             // We have a shared record, local knows of the first two but not the last
             Operation::Download {
                 local: Some(1),
                 remote: 2,
                 host: fourth_shared_remote_ahead2.host.id,
-                tag: fourth_shared_remote_ahead2.tag,
+                tag: fourth_shared_remote_ahead2.tag.clone(),
             },
             // Remote knows of a store with a single record that local does not have
             Operation::Download {
                 local: None,
                 remote: 0,
                 host: remote_only.host.id,
-                tag: remote_only.tag,
+                tag: remote_only.tag.clone(),
             },
             // Remote knows of a store with a bunch of records that local does not have
             Operation::Download {
                 local: None,
                 remote: 4,
                 host: remote_only_20.host.id,
-                tag: remote_only_20.tag,
+                tag: remote_only_20.tag.clone(),
             },
             // Local knows of a record in a store that remote does not have
             Operation::Upload {
                 local: 0,
                 remote: None,
                 host: local_only.host.id,
-                tag: local_only.tag,
+                tag: local_only.tag.clone(),
             },
             // Local knows of 4 records in a store that remote does not have
             Operation::Upload {
                 local: 3,
                 remote: None,
                 host: local_only_20.host.id,
-                tag: local_only_20.tag,
+                tag: local_only_20.tag.clone(),
             },
             // Local knows of 2 more records in a shared store that remote only has one of
             Operation::Upload {
                 local: 2,
                 remote: Some(0),
                 host: third_shared.host.id,
-                tag: third_shared.tag,
+                tag: third_shared.tag.clone(),
             },
         ];
 

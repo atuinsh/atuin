@@ -77,7 +77,6 @@ pub fn all_user_author_filter() -> OrFilter<&'static [AuthorPattern]> {
     FILTER.as_slice_filter()
 }
 
-pub const HISTORY_TAG: &str = "history";
 const HISTORY_AUTHOR_ENV: &str = "ATUIN_HISTORY_AUTHOR";
 const HISTORY_INTENT_ENV: &str = "ATUIN_HISTORY_INTENT";
 

@@ -1,5 +1,5 @@
 use ::sqlx::{FromRow, Result};
-use atuin_domain::record::{EncryptedData, Host, Record};
+use atuin_domain::record::{EncryptedData, Host, Record, RecordTag, RecordVersion};
 use atuin_server_database::models::{Session, User};
 use sqlx::{Row, sqlite::SqliteRow};
 
@@ -46,8 +46,8 @@ impl<'a> ::sqlx::FromRow<'a, SqliteRow> for DbRecord {
             host: Host::new(row.try_get("host")?),
             idx: idx as u64,
             timestamp: timestamp as u64,
-            version: row.try_get("version")?,
-            tag: row.try_get("tag")?,
+            version: RecordVersion::from(row.try_get::<String, _>("version")?),
+            tag: RecordTag::from(row.try_get::<String, _>("tag")?),
             data,
         }))
     }

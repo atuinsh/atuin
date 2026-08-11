@@ -8,6 +8,7 @@ use atuin_client::{
     settings::Settings,
 };
 use atuin_common::encryption::paseto_v4;
+use atuin_domain::record::RecordTag;
 
 mod status;
 
@@ -92,7 +93,7 @@ async fn run(
     println!("{uploaded}/{} up/down to record store", downloaded.len());
 
     let history_length = db.history_count(true).await?;
-    let store_history_length = store.len_tag("history").await?;
+    let store_history_length = store.len_tag(&RecordTag::History).await?;
 
     #[allow(clippy::cast_sign_loss)]
     if history_length as u64 > store_history_length {

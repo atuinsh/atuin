@@ -18,7 +18,9 @@ use sqlx::{
 
 use atuin_common::encryption::paseto_v4;
 use atuin_common::utils;
-use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx, RecordStatus};
+use atuin_domain::record::{
+    Host, HostId, Record, RecordId, RecordIdx, RecordStatus, RecordTag, RecordVersion,
+};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -106,8 +108,8 @@ impl SqliteStore {
             idx: idx as u64,
             host: Host::new(HostId(host)),
             timestamp: timestamp as u64,
-            tag: row.get("tag"),
-            version: row.get("version"),
+            tag: RecordTag::from(row.get::<String, _>("tag")),
+            version: RecordVersion::from(row.get::<String, _>("version")),
             data: paseto_v4::EncryptedData {
                 raw: row.get("data"),
                 cek: row.get("cek"),
@@ -171,12 +173,12 @@ impl SqliteStore {
     pub async fn last(
         &self,
         host: HostId,
-        tag: &str,
+        tag: &RecordTag,
     ) -> Result<Option<Record<paseto_v4::EncryptedData>>> {
         let res =
             sqlx::query("select * from store where host=?1 and tag=?2 order by idx desc limit 1")
                 .bind(host.0.as_hyphenated().to_string())
-                .bind(tag)
+                .bind(tag.as_str())
                 .map(Self::query_row)
                 .fetch_one(&self.pool)
                 .await;
@@ -191,7 +193,7 @@ impl SqliteStore {
     pub async fn first(
         &self,
         host: HostId,
-        tag: &str,
+        tag: &RecordTag,
     ) -> Result<Option<Record<paseto_v4::EncryptedData>>> {
         self.idx(host, tag, 0).await
     }
@@ -206,10 +208,10 @@ impl SqliteStore {
         }
     }
 
-    pub async fn len_tag(&self, tag: &str) -> Result<u64> {
+    pub async fn len_tag(&self, tag: &RecordTag) -> Result<u64> {
         let res: Result<(i64,), sqlx::Error> =
             sqlx::query_as("select count(*) from store where tag=?1")
-                .bind(tag)
+                .bind(tag.as_str())
                 .fetch_one(&self.pool)
                 .await;
         match res {
@@ -218,7 +220,7 @@ impl SqliteStore {
         }
     }
 
-    pub async fn len(&self, host: HostId, tag: &str) -> Result<u64> {
+    pub async fn len(&self, host: HostId, tag: &RecordTag) -> Result<u64> {
         let last = self.last(host, tag).await?;
 
         if let Some(last) = last {
@@ -231,7 +233,7 @@ impl SqliteStore {
     pub async fn next(
         &self,
         host: HostId,
-        tag: &str,
+        tag: &RecordTag,
         idx: RecordIdx,
         limit: u64,
     ) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
@@ -240,7 +242,7 @@ impl SqliteStore {
         )
         .bind(idx as i64)
         .bind(host.0.as_hyphenated().to_string())
-        .bind(tag)
+        .bind(tag.as_str())
         .bind(limit as i64)
         .map(Self::query_row)
         .fetch_all(&self.pool)
@@ -252,13 +254,13 @@ impl SqliteStore {
     pub async fn idx(
         &self,
         host: HostId,
-        tag: &str,
+        tag: &RecordTag,
         idx: RecordIdx,
     ) -> Result<Option<Record<paseto_v4::EncryptedData>>> {
         let res = sqlx::query("select * from store where idx = ?1 and host = ?2 and tag = ?3")
             .bind(idx as i64)
             .bind(host.0.as_hyphenated().to_string())
-            .bind(tag)
+            .bind(tag.as_str())
             .map(Self::query_row)
             .fetch_one(&self.pool)
             .await;
@@ -288,15 +290,18 @@ impl SqliteStore {
                 Uuid::from_str(i.0.as_str()).expect("failed to parse uuid for local store status"),
             );
 
-            status.set_raw(host, i.1, i.2 as u64);
+            status.set_raw(host, RecordTag::from(i.1), i.2 as u64);
         }
 
         Ok(status)
     }
 
-    pub async fn all_tagged(&self, tag: &str) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
+    pub async fn all_tagged(
+        &self,
+        tag: &RecordTag,
+    ) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
         let res = sqlx::query("select * from store where tag = ?1 order by timestamp asc")
-            .bind(tag)
+            .bind(tag.as_str())
             .map(Self::query_row)
             .fetch_all(&self.pool)
             .await?;
@@ -389,7 +394,7 @@ impl SqliteStore {
 mod tests {
     use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
-    use atuin_domain::record::{DecryptedData, Host, HostId, Record};
+    use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordTag, RecordVersion};
     use rstest::{fixture, rstest};
 
     use crate::settings::test_local_timeout;
@@ -408,7 +413,7 @@ mod tests {
         Record::builder()
             .host(Host::new(HostId(uuid_v7())))
             .version("v1".into())
-            .tag(uuid_v7().simple().to_string())
+            .tag(RecordTag::Other(uuid_v7().simple().to_string()))
             .data(paseto_v4::EncryptedData {
                 raw: "1234".into(),
                 cek: "1234".into(),
@@ -449,10 +454,7 @@ mod tests {
     #[tokio::test]
     async fn last(#[future(awt)] store: SqliteStore, record: Record<paseto_v4::EncryptedData>) {
         store.push(&record).await.unwrap();
-        let last = store
-            .last(record.host.id, record.tag.as_str())
-            .await
-            .unwrap();
+        let last = store.last(record.host.id, &record.tag).await.unwrap();
         assert_eq!(
             last.unwrap().id,
             record.id,
@@ -464,10 +466,7 @@ mod tests {
     #[tokio::test]
     async fn first(#[future(awt)] store: SqliteStore, record: Record<paseto_v4::EncryptedData>) {
         store.push(&record).await.unwrap();
-        let first = store
-            .first(record.host.id, record.tag.as_str())
-            .await
-            .unwrap();
+        let first = store.first(record.host.id, &record.tag).await.unwrap();
         assert_eq!(
             first.unwrap().id,
             record.id,
@@ -479,10 +478,7 @@ mod tests {
     #[tokio::test]
     async fn len(#[future(awt)] store: SqliteStore, record: Record<paseto_v4::EncryptedData>) {
         store.push(&record).await.unwrap();
-        let len = store
-            .len(record.host.id, record.tag.as_str())
-            .await
-            .unwrap();
+        let len = store.len(record.host.id, &record.tag).await.unwrap();
         assert_eq!(len, 1, "expected length of 1 after insert");
     }
 
@@ -490,7 +486,7 @@ mod tests {
     #[tokio::test]
     async fn len_tag(#[future(awt)] store: SqliteStore, record: Record<paseto_v4::EncryptedData>) {
         store.push(&record).await.unwrap();
-        let len = store.len_tag(record.tag.as_str()).await.unwrap();
+        let len = store.len_tag(&record.tag).await.unwrap();
         assert_eq!(len, 1, "expected length of 1 after insert");
     }
 
@@ -504,17 +500,8 @@ mod tests {
         store.push(&first).await.unwrap();
         store.push(&second).await.unwrap();
 
-        assert_eq!(
-            store.len(first.host.id, first.tag.as_str()).await.unwrap(),
-            1
-        );
-        assert_eq!(
-            store
-                .len(second.host.id, second.tag.as_str())
-                .await
-                .unwrap(),
-            1
-        );
+        assert_eq!(store.len(first.host.id, &first.tag).await.unwrap(), 1);
+        assert_eq!(store.len(second.host.id, &second.tag).await.unwrap(), 1);
     }
 
     #[rstest]
@@ -529,12 +516,12 @@ mod tests {
         }
 
         assert_eq!(
-            store.len(tail.host.id, tail.tag.as_str()).await.unwrap(),
+            store.len(tail.host.id, &tail.tag).await.unwrap(),
             100,
             "failed to insert 100 records"
         );
         assert_eq!(
-            store.len_tag(tail.tag.as_str()).await.unwrap(),
+            store.len_tag(&tail.tag).await.unwrap(),
             100,
             "failed to insert 100 records"
         );
@@ -555,7 +542,7 @@ mod tests {
         store.push_batch(records.iter()).await.unwrap();
 
         assert_eq!(
-            store.len(tail.host.id, tail.tag.as_str()).await.unwrap(),
+            store.len(tail.host.id, &tail.tag).await.unwrap(),
             10000,
             "failed to insert 10k records"
         );
@@ -571,8 +558,8 @@ mod tests {
         for i in 0..10 {
             let record = Record::builder()
                 .host(Host::new(host_id))
-                .version(String::from("test"))
-                .tag(String::from("test"))
+                .version(RecordVersion::Other("test".to_owned()))
+                .tag(RecordTag::Other("test".to_owned()))
                 .idx(i)
                 .data(DecryptedData(data.clone()))
                 .build()
@@ -584,7 +571,10 @@ mod tests {
         }
 
         // the data decrypts with the current key
-        let all = store.all_tagged("test").await.unwrap();
+        let all = store
+            .all_tagged(&RecordTag::Other("test".to_owned()))
+            .await
+            .unwrap();
         assert_eq!(all.len(), 10, "failed to fetch all records");
         for record in all {
             let decrypted = record.decrypt(&key).unwrap();
@@ -598,7 +588,10 @@ mod tests {
             .await
             .expect("failed to re-encrypt store");
 
-        let all = store.all_tagged("test").await.unwrap();
+        let all = store
+            .all_tagged(&RecordTag::Other("test".to_owned()))
+            .await
+            .unwrap();
         for record in all.iter() {
             assert!(
                 record.clone().decrypt(&key).is_err(),
@@ -610,6 +603,12 @@ mod tests {
             assert_eq!(decrypted.data.0, data);
         }
 
-        assert_eq!(store.len(host_id, "test").await.unwrap(), 10);
+        assert_eq!(
+            store
+                .len(host_id, &RecordTag::Other("test".to_owned()))
+                .await
+                .unwrap(),
+            10
+        );
     }
 }

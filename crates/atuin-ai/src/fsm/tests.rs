@@ -548,6 +548,96 @@ fn permission_deny_completes_turn_and_continues(#[from(new_fsm)] mut fsm: AgentF
 }
 
 // ============================================================================
+// Unknown tools
+// ============================================================================
+
+#[rstest]
+fn unknown_tool_call_gets_error_result(#[from(new_fsm)] mut fsm: AgentFsm) {
+    fsm.handle(Event::UserSubmit("hello".into()));
+    fsm.handle(Event::StreamStarted);
+    fsm.handle(Event::StreamToolCall {
+        id: "t1".into(),
+        name: "execute_socket_command".into(),
+        input: json!({"command": "ls"}),
+    });
+    let effects = fsm.handle(Event::StreamDone {
+        session_id: "".into(),
+    });
+
+    // Both the call and an error result are recorded, so the history sent
+    // upstream never contains a dangling tool_use.
+    assert!(fsm.ctx.events.iter().any(|e| matches!(
+        e,
+        ConversationEvent::ToolCall { id, name, .. } if id == "t1" && name == "execute_socket_command"
+    )));
+    assert!(fsm.ctx.events.iter().any(|e| matches!(
+        e,
+        ConversationEvent::ToolResult { tool_use_id, is_error: true, .. } if tool_use_id == "t1"
+    )));
+
+    // The tool never enters the execution lifecycle, but it resolves the
+    // turn like a completed tool: the continuation starts immediately so
+    // the model sees the error and can retry.
+    assert!(fsm.ctx.tools.get("t1").is_none());
+    assert!(matches!(
+        fsm.state,
+        AgentState::Turn {
+            stream: StreamPhase::Connecting
+        }
+    ));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::StartStream { .. }))
+    );
+}
+
+#[rstest]
+fn unknown_tool_alongside_real_tool_waits_for_both(#[from(new_fsm)] mut fsm: AgentFsm) {
+    fsm.handle(Event::UserSubmit("hello".into()));
+    fsm.handle(Event::StreamStarted);
+    fsm.handle(Event::StreamToolCall {
+        id: "t1".into(),
+        name: "read_file".into(),
+        input: json!({"file_path": "/tmp/test.txt"}),
+    });
+    fsm.handle(Event::StreamToolCall {
+        id: "t2".into(),
+        name: "execute_socket_command".into(),
+        input: json!({"command": "ls"}),
+    });
+    fsm.handle(Event::PermissionResolved {
+        tool_id: "t1".into(),
+        response: PermissionResponse::Allowed,
+    });
+    fsm.handle(Event::StreamDone {
+        session_id: "".into(),
+    });
+
+    // Still waiting on the real tool — the pre-answered unknown call must
+    // not complete the turn early.
+    assert!(matches!(
+        fsm.state,
+        AgentState::Turn {
+            stream: StreamPhase::Done
+        }
+    ));
+
+    let effects = fsm.handle(Event::ToolExecutionDone {
+        tool_id: "t1".into(),
+        outcome: crate::tools::ToolOutcome::Success("contents".into()),
+        preview: None,
+    });
+
+    // Both results now ride the same continuation.
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::StartStream { .. }))
+    );
+}
+
+// ============================================================================
 // Shell execution timeouts
 // ============================================================================
 
