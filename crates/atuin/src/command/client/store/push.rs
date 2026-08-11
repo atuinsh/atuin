@@ -1,4 +1,4 @@
-use atuin_domain::record::HostId;
+use atuin_domain::record::{HostId, RecordTag};
 use clap::Args;
 use eyre::Result;
 use uuid::Uuid;
@@ -15,7 +15,7 @@ use atuin_common::encryption::paseto_v4;
 pub struct Push {
     /// The tag to push (eg, 'history'). Defaults to all tags
     #[arg(long, short)]
-    pub tag: Option<String>,
+    pub tag: Option<RecordTag>,
 
     /// The host to push, in the form of a UUID host ID. Defaults to the current host.
     #[arg(long)]

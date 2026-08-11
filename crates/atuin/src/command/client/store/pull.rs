@@ -8,12 +8,13 @@ use atuin_client::{
     settings::Settings,
 };
 use atuin_common::encryption::paseto_v4;
+use atuin_domain::record::RecordTag;
 
 #[derive(Args, Debug)]
 pub struct Pull {
     /// The tag to push (eg, 'history'). Defaults to all tags
     #[arg(long, short)]
-    pub tag: Option<String>,
+    pub tag: Option<RecordTag>,
 
     /// Force push records
     ///

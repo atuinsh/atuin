@@ -93,7 +93,7 @@ async fn run(
     println!("{uploaded}/{} up/down to record store", downloaded.len());
 
     let history_length = db.history_count(true).await?;
-    let store_history_length = store.len_tag(RecordTag::History.as_ref()).await?;
+    let store_history_length = store.len_tag(&RecordTag::History).await?;
 
     #[allow(clippy::cast_sign_loss)]
     if history_length as u64 > store_history_length {
