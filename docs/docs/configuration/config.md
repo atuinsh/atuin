@@ -1215,7 +1215,7 @@ Each column can be specified as:
 | `host`      | 15             | Hostname where command was run                  |
 | `user`      | 10             | Username                                        |
 | `exit`      | 3              | Exit code (colored by success/failure)          |
-| `command`   | *              | The command itself (expands by default)         |
+| `command`   | 20             | The command itself (expands by default; width applies when fixed) |
 
 #### Column options
 

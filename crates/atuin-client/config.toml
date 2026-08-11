@@ -373,7 +373,7 @@ enter_accept = true
 ##   host      (15) - Hostname where command was run
 ##   user      (10) - Username
 ##   exit      (3)  - Exit code (colored by success/failure)
-##   command   (*)  - The command itself (expands by default)
+##   command   (20) - The command itself (expands by default; 20 when fixed)
 ##
 ## The "expand" option (default: true for command, false for others) makes a
 ## column fill remaining space. Only one column should have expand = true.
