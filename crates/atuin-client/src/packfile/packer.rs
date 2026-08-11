@@ -1,15 +1,11 @@
 //! Turns accumulated history into plaintext `packfile` manifest records.
 
+use super::record::{LoadingError, PackManifestData, PackManifestDataV1, StoringError};
+use crate::record::sqlite_store::SqliteStore;
 use atuin_domain::caps::PackfileCap;
-use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordTag};
+use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordTag, RecordVersion};
 use thiserror::Error;
 use tracing::{instrument, trace};
-
-use crate::record::sqlite_store::SqliteStore;
-
-use super::record::{
-    LoadingError, PACKFILE_VERSION, PackManifestData, PackManifestDataV1, StoringError,
-};
 
 #[derive(Debug, Error)]
 pub enum PackingError {
@@ -92,7 +88,7 @@ pub async fn try_pack(
         };
         let record = Record::builder()
             .host(Host::new(host))
-            .version(PACKFILE_VERSION.to_owned())
+            .version(RecordVersion::V1)
             .tag(RecordTag::Packfile)
             .idx(pack_idx)
             .data(EncryptedData::try_from(&manifest)?)

@@ -12,9 +12,6 @@ use thiserror::Error;
 
 use crate::record::sqlite_store::SqliteStore;
 
-/// Version string of a packfile manifest record.
-pub const PACKFILE_VERSION: &str = "packfile-v1";
-
 /// Structure encoded within the `data` column of the packfile-encoded records.
 #[derive(Debug, Clone)]
 pub enum PackManifestData {
@@ -211,14 +208,14 @@ pub(crate) struct PackManifestRecordView<'a> {
 
 /// An implicit assertion that matches this [`PackManifestRecordView`].
 #[derive(Debug, Serialize, Deserialize)]
-struct PackIA {
+struct PackIA<'a> {
     pub manifest_id: RecordId,
     pub manifest_idx: RecordIdx,
-    pub manifest_version: String,
+    pub manifest_version: &'a str,
     pub host: HostId,
 }
 
-impl PackIA {
+impl PackIA<'_> {
     /// The JSON an [`paseto_v4::ImplicitAssertion`] is built from.
     fn json(&self) -> String {
         serde_json::to_string(self).expect("fixed-layout structure cannot fail serialization")
@@ -329,11 +326,11 @@ impl<'a> PackManifestRecordView<'a> {
     }
 
     /// Grab the implicit assertion corresponding to
-    fn ia(&self) -> PackIA {
+    fn ia(&self) -> PackIA<'a> {
         PackIA {
             manifest_id: self.record.id,
             manifest_idx: self.record.idx,
-            manifest_version: self.record.version.clone(),
+            manifest_version: self.record.version.as_str(),
             host: self.record.host.id,
         }
     }
