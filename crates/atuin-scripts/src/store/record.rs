@@ -1,8 +1,6 @@
-use atuin_domain::record::DecryptedData;
-use eyre::{Result, eyre};
+use atuin_domain::record::{DecryptedData, RecordVersion};
+use eyre::{Result, bail, eyre};
 use uuid::Uuid;
-
-use crate::store::script::SCRIPT_VERSION;
 
 use super::script::Script;
 
@@ -46,7 +44,7 @@ impl ScriptRecord {
         Ok(DecryptedData(output))
     }
 
-    pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
+    pub fn deserialize(data: &DecryptedData, version: &RecordVersion) -> Result<Self> {
         use rmp::decode;
 
         fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
@@ -54,7 +52,7 @@ impl ScriptRecord {
         }
 
         match version {
-            SCRIPT_VERSION => {
+            RecordVersion::V0 => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
                 let record_type = decode::read_u8(&mut bytes).map_err(error_report)?;
@@ -86,7 +84,7 @@ impl ScriptRecord {
                     _ => Err(eyre!("unknown script record type {record_type}")),
                 }
             }
-            _ => Err(eyre!("unknown version {version:?}")),
+            other => bail!("unknown script record version {other:?}"),
         }
     }
 }
@@ -190,7 +188,7 @@ mod tests {
     ))]
     fn serialize_deserialize(#[case] record: ScriptRecord) {
         let serialized = record.serialize().unwrap();
-        let deserialized = ScriptRecord::deserialize(&serialized, SCRIPT_VERSION).unwrap();
+        let deserialized = ScriptRecord::deserialize(&serialized, &RecordVersion::V0).unwrap();
 
         assert_eq!(record, deserialized);
     }
