@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 use tokio::time::{self, MissedTickBehavior};
 
 use atuin_client::{
+    api_client::caps_client,
     history::{HistoryId, store::HistoryStore},
     record::sync,
     settings::Settings,
@@ -216,8 +217,16 @@ async fn do_sync_tick(
         return SyncState::Idle;
     }
 
-    // Perform the sync
-    let res = sync::sync(settings, handle.store(), handle.encryption_key()).await;
+    // Perform the sync. The capability reader is built per tick (a background warm on a public
+    // endpoint); a build failure just skips this tick.
+    let caps = match caps_client(&settings.sync_address, &settings.extra_headers) {
+        Ok(caps) => caps,
+        Err(e) => {
+            tracing::error!("failed to build capability reader, skipping sync tick: {e}");
+            return SyncState::Idle;
+        }
+    };
+    let res = sync::sync(settings, handle.store(), handle.encryption_key(), caps).await;
 
     match res {
         Err(e) => {

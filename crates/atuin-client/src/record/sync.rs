@@ -1,5 +1,5 @@
 // do a sync :O
-use std::{cmp::Ordering, fmt::Write};
+use std::{cmp::Ordering, fmt::Write, sync::Arc};
 
 use eyre::Result;
 use thiserror::Error;
@@ -8,6 +8,7 @@ use super::sqlite_store::SqliteStore;
 use crate::{api_client::Client, settings::Settings};
 
 use atuin_common::encryption::paseto_v4;
+use atuin_domain::caps::CapClient;
 use atuin_domain::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 
@@ -58,7 +59,10 @@ pub enum Operation {
     },
 }
 
-pub async fn build_client(settings: &Settings) -> Result<Client, SyncError> {
+pub async fn build_client(
+    settings: &Settings,
+    caps: Arc<CapClient>,
+) -> Result<Client, SyncError> {
     Client::new(
         settings.sync_address.clone(),
         settings
@@ -68,6 +72,7 @@ pub async fn build_client(settings: &Settings) -> Result<Client, SyncError> {
         settings.network_connect_timeout,
         settings.network_timeout,
         &settings.extra_headers,
+        caps,
     )
     .map_err(|e| SyncError::OperationalError { msg: e.to_string() })
 }
@@ -359,8 +364,9 @@ pub async fn sync(
     settings: &Settings,
     store: &SqliteStore,
     encryption_key: &paseto_v4::Key,
+    caps: Arc<CapClient>,
 ) -> Result<(i64, Vec<RecordId>), SyncError> {
-    let client = build_client(settings).await?;
+    let client = build_client(settings, caps).await?;
     let (diff, remote_index) = diff(&client, store).await?;
 
     // Bail before mutating either side if the local key can't read the remote.

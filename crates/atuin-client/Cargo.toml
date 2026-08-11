@@ -15,7 +15,7 @@ repository = { workspace = true }
 
 [features]
 default = ["sync", "hub", "daemon"]
-sync = ["reqwest"]
+sync = ["reqwest", "reqwest-middleware"]
 hub = ["reqwest"]
 daemon = []
 check-update = []
@@ -70,6 +70,7 @@ rusty_paserk = { version = "0.5.0", default-features = false, features = [
 
 # sync
 reqwest = { workspace = true, optional = true }
+reqwest-middleware = { workspace = true, optional = true, features = ["json"] }
 indicatif = "0.18.0"
 tiny-bip39 = { workspace = true }
 

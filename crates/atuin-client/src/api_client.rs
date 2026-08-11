@@ -14,8 +14,10 @@ use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION, ChangePasswordRequest, ErrorResponse,
     LoginRequest, LoginResponse, MeResponse, RegisterResponse,
 };
+use atuin_domain::caps::{CapClient, CapMismatch, CapabilitiesExt};
 use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 
+use reqwest_middleware::ClientWithMiddleware;
 use semver::Version;
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
@@ -46,10 +48,15 @@ impl AuthToken {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Client {
     sync_addr: Arc<Url>,
-    client: reqwest::Client,
+    /// Wraps the authenticated client in the capability-negotiation middleware (the capability-token
+    /// handshake); built from `caps`.
+    client: ClientWithMiddleware,
+    /// Read-only capability negotiation against this server. Injected (see [`caps_client`]) so one
+    /// reader is shared across every `Client` for the same server.
+    caps: Arc<CapClient>,
 }
 
 /// A [`reqwest::ClientBuilder`] appropriate for the given extra headers.
@@ -242,6 +249,29 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
     Ok(resp)
 }
 
+/// Build the capability reader for a sync server.
+///
+/// `/api/v0/capabilities` is public (unauthenticated), so no auth token is attached -- but the
+/// configured `extra_headers` (e.g. a Cloudflare Access secret) and the usual user-agent/version
+/// headers are, so the fetch reaches the server like any other request. The returned reader warms
+/// itself in the background; share one `Arc` across every `Client` for the same server rather than
+/// building one per `Client`.
+pub fn caps_client(
+    sync_addr: &Url,
+    extra_headers: &HashMap<String, String>,
+) -> Result<Arc<CapClient>> {
+    let mut headers = extra_headers_map(extra_headers)?;
+    headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
+    headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
+
+    let http = client_builder(extra_headers).default_headers(headers).build()?;
+
+    Ok(CapClient::new(
+        sync_addr.append_path("api/v0/capabilities")?,
+        http,
+    ))
+}
+
 impl Client {
     pub fn new(
         sync_addr: impl Into<Arc<Url>>,
@@ -249,6 +279,7 @@ impl Client {
         connect_timeout: u64,
         timeout: u64,
         extra_headers: &HashMap<String, String>,
+        caps: Arc<CapClient>,
     ) -> Result<Self> {
         let mut headers = extra_headers_map(extra_headers)?;
         headers.insert(AUTHORIZATION, auth.to_header_value().parse()?);
@@ -257,14 +288,26 @@ impl Client {
         // used for semver server check
         headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
 
+        // Wrap the authenticated client in the capability-negotiation middleware. `caps` is injected
+        // so a single reader is shared by every `Client` for the same server.
+        let client = client_builder(extra_headers)
+            .default_headers(headers)
+            .connect_timeout(Duration::from_secs(connect_timeout))
+            .timeout(Duration::from_secs(timeout))
+            .build()?
+            .with_capabilities(caps.clone(), CapMismatch::Continue);
+
         Ok(Client {
             sync_addr: sync_addr.into(),
-            client: client_builder(extra_headers)
-                .default_headers(headers)
-                .connect_timeout(Duration::from_secs(connect_timeout))
-                .timeout(Duration::from_secs(timeout))
-                .build()?,
+            client,
+            caps,
         })
+    }
+
+    /// The capability reader this client negotiates against, for capability-gated features to
+    /// consult (e.g. `client.caps().get_server::<SomeCap>()`).
+    pub fn caps(&self) -> &Arc<CapClient> {
+        &self.caps
     }
 
     pub async fn me(&self) -> Result<MeResponse> {

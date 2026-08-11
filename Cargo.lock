@@ -401,6 +401,7 @@ dependencies = [
  "rand 0.8.7",
  "regex",
  "reqwest",
+ "reqwest-middleware",
  "rmp",
  "rstest",
  "rusty_paserk",
@@ -4536,6 +4537,7 @@ dependencies = [
  "async-trait",
  "http",
  "reqwest",
+ "serde",
  "thiserror 2.0.19",
  "tower-service",
 ]

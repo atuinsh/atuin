@@ -48,7 +48,9 @@ impl Pull {
         // 3. Filter operations by
         //  a) are they a download op?
         //  b) are they for the host/tag we are pushing here?
-        let client = sync::build_client(settings).await?;
+        let caps =
+            atuin_client::api_client::caps_client(&settings.sync_address, &settings.extra_headers)?;
+        let client = sync::build_client(settings, caps).await?;
         let (diff, remote_index) = sync::diff(&client, &store).await?;
 
         // Skip on --force: local was already wiped above, mismatch is the user's call.

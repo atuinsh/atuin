@@ -544,8 +544,12 @@ async fn handle_end(
     if settings.should_sync().await? {
         #[cfg(feature = "sync")]
         {
+            let caps = atuin_client::api_client::caps_client(
+                &settings.sync_address,
+                &settings.extra_headers,
+            )?;
             let (_, downloaded) =
-                record::sync::sync(settings, &store, &history_store.encryption_key).await?;
+                record::sync::sync(settings, &store, &history_store.encryption_key, caps).await?;
             Settings::save_sync_time().await?;
 
             crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
