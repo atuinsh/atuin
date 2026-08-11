@@ -107,14 +107,29 @@ impl<Data> Record<Data> {
     }
 
     pub fn with_data<New>(self, data: New) -> Record<New> {
-        Record {
-            id: self.id,
-            idx: self.idx,
-            host: self.host,
-            timestamp: self.timestamp,
-            version: self.version,
-            tag: self.tag,
+        self.map_data(|_| data)
+    }
+
+    /// Apply a transformation to the data, creating a new record with it.
+    pub fn map_data<New>(self, f: impl FnOnce(Data) -> New) -> Record<New> {
+        let Record {
+            id,
+            idx,
+            host,
+            timestamp,
+            version,
+            tag,
             data,
+        } = self;
+
+        Record {
+            id,
+            idx,
+            host,
+            timestamp,
+            version,
+            tag,
+            data: f(data),
         }
     }
 

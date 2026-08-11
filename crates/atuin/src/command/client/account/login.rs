@@ -257,7 +257,9 @@ async fn verify_key_against_remote(settings: &Settings) -> Result<()> {
     let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
         .context("could not load encryption key for verification")?;
 
-    let client = sync::build_client(settings).await?;
+    let caps =
+        atuin_client::api_client::caps_client(&settings.sync_address, &settings.extra_headers)?;
+    let client = sync::build_client(settings, caps).await?;
     let remote_index = match client.record_status().await {
         Ok(idx) => idx,
         Err(e) => {

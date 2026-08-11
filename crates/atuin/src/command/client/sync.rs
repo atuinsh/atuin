@@ -84,7 +84,10 @@ async fn run(
     let host_id = Settings::host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key.clone());
 
-    let (uploaded, downloaded) = sync::sync(settings, &store, &encryption_key)
+    let caps =
+        atuin_client::api_client::caps_client(&settings.sync_address, &settings.extra_headers)?;
+
+    let (uploaded, downloaded) = sync::sync(settings, &store, &encryption_key, caps.clone())
         .await
         .map_err(crate::print_error::format_sync_error)?;
 
@@ -107,7 +110,7 @@ async fn run(
         println!("Re-running sync due to new records locally");
 
         // we'll want to run sync once more, as there will now be stuff to upload
-        let (uploaded, downloaded) = sync::sync(settings, &store, &encryption_key)
+        let (uploaded, downloaded) = sync::sync(settings, &store, &encryption_key, caps.clone())
             .await
             .map_err(crate::print_error::format_sync_error)?;
 

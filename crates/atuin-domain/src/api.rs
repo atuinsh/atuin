@@ -4,6 +4,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use url::Url;
+
 // the usage of X- has been deprecated for quite along time, it turns out
 pub static ATUIN_HEADER_VERSION: &str = "Atuin-Version";
 pub static ATUIN_CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -83,6 +85,20 @@ pub struct CapabilitiesResponse {
 
     /// The list of capabilities this server supports, as a map of capability name to its value.
     pub capabilities: HashMap<String, serde_json::Value>,
+}
+
+/// Response to `POST /api/v0/packfiles`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PackfileResponse {
+    /// The presigned-URL to upload the packfile to.
+    pub upload_url: Url,
+}
+
+/// Response to `GET /api/v0/packfiles/{manifest_id}`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PackfileDownloadResponse {
+    /// The presigned-URL to download the packfile from.
+    pub download_url: Url,
 }
 
 // Hub CLI authentication types
