@@ -217,8 +217,6 @@ async fn do_sync_tick(
         return SyncState::Idle;
     }
 
-    // Perform the sync. The capability reader is built per tick (a background warm on a public
-    // endpoint); a build failure just skips this tick.
     let caps = match caps_client(&settings.sync_address, &settings.extra_headers) {
         Ok(caps) => caps,
         Err(e) => {

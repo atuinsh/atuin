@@ -51,11 +51,7 @@ impl AuthToken {
 #[derive(Clone)]
 pub struct Client {
     sync_addr: Arc<Url>,
-    /// Wraps the authenticated client in the capability-negotiation middleware (the capability-token
-    /// handshake); built from `caps`.
     client: ClientWithMiddleware,
-    /// Read-only capability negotiation against this server. Injected (see [`caps_client`]) so one
-    /// reader is shared across every `Client` for the same server.
     caps: Arc<CapClient>,
 }
 
@@ -250,12 +246,6 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
 }
 
 /// Build the capability reader for a sync server.
-///
-/// `/api/v0/capabilities` is public (unauthenticated), so no auth token is attached -- but the
-/// configured `extra_headers` (e.g. a Cloudflare Access secret) and the usual user-agent/version
-/// headers are, so the fetch reaches the server like any other request. The returned reader warms
-/// itself in the background; share one `Arc` across every `Client` for the same server rather than
-/// building one per `Client`.
 pub fn caps_client(
     sync_addr: &Url,
     extra_headers: &HashMap<String, String>,
@@ -288,8 +278,6 @@ impl Client {
         // used for semver server check
         headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
 
-        // Wrap the authenticated client in the capability-negotiation middleware. `caps` is injected
-        // so a single reader is shared by every `Client` for the same server.
         let client = client_builder(extra_headers)
             .default_headers(headers)
             .connect_timeout(Duration::from_secs(connect_timeout))
@@ -304,8 +292,7 @@ impl Client {
         })
     }
 
-    /// The capability reader this client negotiates against, for capability-gated features to
-    /// consult (e.g. `client.caps().get_server::<SomeCap>()`).
+    /// The capability reader this client negotiates against.
     pub fn caps(&self) -> &Arc<CapClient> {
         &self.caps
     }
