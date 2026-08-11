@@ -13,7 +13,7 @@ pub struct DecryptedData(pub Vec<u8>);
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq)]
 pub struct Diff {
     pub host: HostId,
-    pub tag: String,
+    pub tag: RecordTag,
     pub local: Option<RecordIdx>,
     pub remote: Option<RecordIdx>,
 }
@@ -100,8 +100,40 @@ impl RecordTag {
     pub fn as_str(&self) -> &str {
         self.as_ref()
     }
+
+    /// Stable rank per variant, used only to make [`Ord`] total and consistent with [`Eq`]
+    /// when two values share an `as_str()` (only reachable if `Other` is hand-built with a
+    /// known tag string — the `From`/`FromStr` constructors never produce that).
+    fn variant_rank(&self) -> u8 {
+        match self {
+            RecordTag::History => 0,
+            RecordTag::Kv => 1,
+            RecordTag::Script => 2,
+            RecordTag::DotfilesVar => 3,
+            RecordTag::ConfigShellAlias => 4,
+            RecordTag::Other(_) => 5,
+        }
+    }
 }
 
+impl Ord for RecordTag {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Order by the canonical string so sync diffs/operations sort exactly as the former
+        // `String` tags did; tie-break by variant so the order is total and Eq-consistent.
+        self.as_str()
+            .cmp(other.as_str())
+            .then_with(|| self.variant_rank().cmp(&other.variant_rank()))
+    }
+}
+
+impl PartialOrd for RecordTag {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+// Relies on the `strum`-derived `From<&str>` (the `#[strum(default)]` `Other` variant makes it
+// infallible). Reuses the owned allocation when the tag is unknown.
 impl From<String> for RecordTag {
     fn from(s: String) -> Self {
         // The strum attributes on the variants are the single source of truth for the
@@ -219,7 +251,7 @@ impl Record<paseto_v4::EncryptedData> {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecordStatus {
     // A map of host -> tag -> max(idx)
-    pub hosts: HashMap<HostId, HashMap<String, RecordIdx>>,
+    pub hosts: HashMap<HostId, HashMap<RecordTag, RecordIdx>>,
 }
 
 impl Default for RecordStatus {
@@ -228,8 +260,8 @@ impl Default for RecordStatus {
     }
 }
 
-impl Extend<(HostId, String, RecordIdx)> for RecordStatus {
-    fn extend<T: IntoIterator<Item = (HostId, String, RecordIdx)>>(&mut self, iter: T) {
+impl Extend<(HostId, RecordTag, RecordIdx)> for RecordStatus {
+    fn extend<T: IntoIterator<Item = (HostId, RecordTag, RecordIdx)>>(&mut self, iter: T) {
         for (host, tag, tail_idx) in iter {
             self.set_raw(host, tag, tail_idx);
         }
@@ -245,15 +277,15 @@ impl RecordStatus {
 
     /// Insert a new tail record into the store
     pub fn set(&mut self, tail: Record<DecryptedData>) {
-        self.set_raw(tail.host.id, tail.tag.to_string(), tail.idx)
+        self.set_raw(tail.host.id, tail.tag, tail.idx)
     }
 
-    pub fn set_raw(&mut self, host: HostId, tag: String, tail_id: RecordIdx) {
+    pub fn set_raw(&mut self, host: HostId, tag: RecordTag, tail_id: RecordIdx) {
         self.hosts.entry(host).or_default().insert(tag, tail_id);
     }
 
-    pub fn get(&self, host: HostId, tag: String) -> Option<RecordIdx> {
-        self.hosts.get(&host).and_then(|v| v.get(&tag)).cloned()
+    pub fn get(&self, host: HostId, tag: &RecordTag) -> Option<RecordIdx> {
+        self.hosts.get(&host).and_then(|v| v.get(tag)).cloned()
     }
 
     /// Diff this index with another, likely remote index.
@@ -269,7 +301,7 @@ impl RecordStatus {
         // First, we check if other has everything that self has
         for (host, tag_map) in self.hosts.iter() {
             for (tag, idx) in tag_map.iter() {
-                match other.get(*host, tag.clone()) {
+                match other.get(*host, tag) {
                     // The other store is all up to date! No diff.
                     Some(t) if t.eq(idx) => continue,
 
@@ -298,7 +330,7 @@ impl RecordStatus {
         // account for that!
         for (host, tag_map) in other.hosts.iter() {
             for (tag, idx) in tag_map.iter() {
-                match self.get(*host, tag.clone()) {
+                match self.get(*host, tag) {
                     // If we have this host/tag combo, the comparison and diff will have already happened above
                     Some(_) => continue,
 
@@ -417,7 +449,7 @@ mod tests {
 
         index.set(record.clone());
 
-        let tail = index.get(record.host.id, record.tag.to_string());
+        let tail = index.get(record.host.id, &record.tag);
 
         assert_eq!(
             record.idx,
@@ -434,7 +466,7 @@ mod tests {
         index.set(record.clone());
         index.set(child.clone());
 
-        let tail = index.get(record.host.id, record.tag.to_string());
+        let tail = index.get(record.host.id, &record.tag);
 
         assert_eq!(
             child.idx,
@@ -477,7 +509,7 @@ mod tests {
             diff[0],
             Diff {
                 host: record2.host.id,
-                tag: record2.tag.to_string(),
+                tag: record2.tag,
                 remote: Some(1),
                 local: Some(0)
             }
@@ -523,9 +555,9 @@ mod tests {
 
         // both diffs should be ALMOST the same. They will agree on which hosts and tags
         // require updating, but the "other" value will not be the same.
-        let smol_diff_1: Vec<(HostId, String)> =
+        let smol_diff_1: Vec<(HostId, RecordTag)> =
             diff1.iter().map(|v| (v.host, v.tag.clone())).collect();
-        let smol_diff_2: Vec<(HostId, String)> =
+        let smol_diff_2: Vec<(HostId, RecordTag)> =
             diff1.iter().map(|v| (v.host, v.tag.clone())).collect();
 
         assert_eq!(smol_diff_1, smol_diff_2);
@@ -801,6 +833,61 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<RecordTag>(r#""nope""#).unwrap(),
             RecordTag::Other("nope".to_owned())
+        );
+    }
+
+    #[test]
+    fn record_tag_orders_lexicographically_by_str() {
+        // Matches the former `String` tag sort so sync diffs/operations are unchanged.
+        let mut tags = [
+            RecordTag::Kv,
+            RecordTag::History,
+            RecordTag::Other("zzz".to_owned()),
+            RecordTag::ConfigShellAlias,
+            RecordTag::DotfilesVar,
+            RecordTag::Script,
+        ];
+        tags.sort();
+        let as_strs: Vec<&str> = tags.iter().map(RecordTag::as_str).collect();
+        assert_eq!(
+            as_strs,
+            vec![
+                "config-shell-alias",
+                "dotfiles-var",
+                "history",
+                "kv",
+                "script",
+                "zzz"
+            ]
+        );
+        // Ord is consistent with Eq: equal values compare Equal, distinct values never Equal.
+        assert_eq!(
+            RecordTag::History.cmp(&RecordTag::History),
+            std::cmp::Ordering::Equal
+        );
+        assert_ne!(
+            RecordTag::History.cmp(&RecordTag::Other("history".to_owned())),
+            std::cmp::Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn record_status_serializes_with_bare_string_tag_keys() {
+        let host = HostId(Uuid::from_u128(0xabc));
+        let mut status = RecordStatus::new();
+        status.set_raw(host, RecordTag::History, 6);
+        status.set_raw(host, RecordTag::Other("custom".to_owned()), 2);
+
+        let json = serde_json::to_string(&status).unwrap();
+        // Tag keys are bare strings, identical to the pre-refactor String-keyed shape.
+        assert!(json.contains(r#""history":6"#), "got {json}");
+        assert!(json.contains(r#""custom":2"#), "got {json}");
+
+        let round: RecordStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(round.get(host, &RecordTag::History), Some(6));
+        assert_eq!(
+            round.get(host, &RecordTag::Other("custom".to_owned())),
+            Some(2)
         );
     }
 }
