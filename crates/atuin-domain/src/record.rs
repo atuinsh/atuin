@@ -102,9 +102,6 @@ impl RecordTag {
     }
 }
 
-// `strum_macros::EnumString` already derives an infallible `impl From<&str> for RecordTag`
-// (because `Other` carries `#[strum(default)]`), so no hand-written impl is needed here.
-
 impl From<String> for RecordTag {
     fn from(s: String) -> Self {
         // The strum attributes on the variants are the single source of truth for the
