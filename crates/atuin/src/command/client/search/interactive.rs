@@ -674,10 +674,7 @@ impl State {
             }
             Action::CycleSearchMode => {
                 self.switched_search_mode = true;
-                self.search_mode = match self.search_mode.next(settings) {
-                    SearchMode::DaemonFuzzy if self.daemon_fuzzy_fallback => SearchMode::Fuzzy,
-                    mode => mode,
-                };
+                self.search_mode = self.search_mode.next(settings);
                 self.engine = engines::engine(self.search_mode, settings);
                 InputAction::Continue
             }
@@ -1831,20 +1828,12 @@ pub async fn history(
 
     let initial_context = current_context().await?;
 
-    let configured_mode = if settings.shell_up_key_binding {
-        settings
-            .search_mode_shell_up_key_binding()
-            .unwrap_or_else(|| settings.search_mode())
-    } else {
-        settings.search_mode()
-    };
-    let daemon_fuzzy_fallback =
-        cfg!(not(feature = "daemon")) && configured_mode == SearchMode::DaemonFuzzy;
-    let search_mode = if daemon_fuzzy_fallback {
-        SearchMode::Fuzzy
-    } else {
-        configured_mode
-    };
+    let mut search_mode = settings.active_search_mode();
+    let daemon_fuzzy_fallback = !cfg!(feature = "daemon") && search_mode == SearchMode::DaemonFuzzy;
+    if daemon_fuzzy_fallback {
+        search_mode = SearchMode::Fuzzy;
+    }
+
     let default_filter_mode = settings
         .filter_mode_shell_up_key_binding
         .filter(|_| settings.shell_up_key_binding)
