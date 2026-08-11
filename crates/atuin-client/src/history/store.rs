@@ -128,7 +128,7 @@ impl HistoryStore {
         let bytes = record.serialize()?;
         let idx = self
             .store
-            .last(self.host_id, RecordTag::History.as_ref())
+            .last(self.host_id, &RecordTag::History)
             .await?
             .map_or(0, |p| p.idx + 1);
 
@@ -154,7 +154,7 @@ impl HistoryStore {
 
         let idx = self
             .store
-            .last(self.host_id, RecordTag::History.as_ref())
+            .last(self.host_id, &RecordTag::History)
             .await?
             .map_or(0, |p| p.idx + 1);
 
@@ -212,7 +212,7 @@ impl HistoryStore {
     pub async fn history(&self) -> Result<Vec<HistoryRecord>> {
         // Atm this loads all history into memory
         // Not ideal as that is potentially quite a lot, although history will be small.
-        let records = self.store.all_tagged(RecordTag::History.as_ref()).await?;
+        let records = self.store.all_tagged(&RecordTag::History).await?;
         let mut ret = Vec::with_capacity(records.len());
         let mut skipped = 0;
 
