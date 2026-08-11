@@ -18,7 +18,13 @@ pub fn to_plain_text(input: impl AsRef<[u8]>, cols: NonZeroU16) -> String {
         return String::new();
     }
 
-    let cols = cols.get();
+    // vt100 assumes at least two columns when a double-width character
+    // arrives (`size.cols - width` underflows, panicking in debug builds),
+    // so never emulate a one-column screen.
+    //
+    // TODO: Remove this once upstream issue is fixed:
+    // https://github.com/doy/vt100-rust/issues/37
+    let cols = cols.get().max(2);
 
     let mut newlines = 0usize;
     let normalized: Vec<u8> = onlcr(bytes)
@@ -117,6 +123,14 @@ mod tests {
         #[values(nz(1), nz(80), nz(u16::MAX))] cols: NonZeroU16,
     ) {
         assert_eq!(to_plain_text(b"", cols), "");
+    }
+
+    #[test]
+    fn wide_characters_survive_a_one_column_screen() {
+        // A double-width character on a one-column screen used to panic
+        // inside vt100 ("attempt to subtract with overflow"); found by
+        // never_panics_and_strips_controls.
+        assert_eq!(to_plain_text("⺀".as_bytes(), nz(1)), "⺀");
     }
 
     #[test]
