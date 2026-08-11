@@ -101,7 +101,19 @@ impl<Data> Record<Data> {
             .build()
     }
 
-    pub fn with_data<New>(&self, data: New) -> Record<New> {
+    pub fn with_data<New>(self, data: New) -> Record<New> {
+        Record {
+            id: self.id,
+            idx: self.idx,
+            host: self.host,
+            timestamp: self.timestamp,
+            version: self.version,
+            tag: self.tag,
+            data,
+        }
+    }
+
+    pub fn with_data_clone<New>(&self, data: New) -> Record<New> {
         Record {
             id: self.id,
             idx: self.idx,
@@ -119,7 +131,7 @@ impl Record<DecryptedData> {
         let ad = serde_json::to_string(&AdditionalData::from(self))
             .expect("could not serialize implicit assertions");
         let assertion = paseto_v4::ImplicitAssertion::from(ad.as_str());
-        self.with_data(paseto_v4::encrypt_sync(&self.data, Some(assertion), key).unwrap())
+        self.with_data_clone(paseto_v4::encrypt_sync(&self.data, Some(assertion), key).unwrap())
     }
 }
 
@@ -130,7 +142,7 @@ impl Record<paseto_v4::EncryptedData> {
         let assertion = paseto_v4::ImplicitAssertion::from(ad.as_str());
         let data = paseto_v4::decrypt_sync(&self.data, Some(assertion), key)
             .context("could not decrypt entry")?;
-        Ok(self.with_data(data.into()))
+        Ok(self.with_data_clone(data.into()))
     }
 }
 
