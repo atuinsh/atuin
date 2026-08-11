@@ -1,8 +1,7 @@
-use atuin_domain::record::DecryptedData;
+use atuin_domain::record::{DecryptedData, RecordVersion};
 use eyre::{Result, bail, ensure, eyre};
 use typed_builder::TypedBuilder;
 
-pub const KV_VERSION: &str = "v1";
 pub const KV_VAL_MAX_LEN: usize = 100 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, TypedBuilder)]
@@ -32,7 +31,7 @@ impl KvRecord {
         Ok(DecryptedData(output))
     }
 
-    pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
+    pub fn deserialize(data: &DecryptedData, version: &RecordVersion) -> Result<Self> {
         use rmp::decode;
 
         fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
@@ -40,7 +39,7 @@ impl KvRecord {
         }
 
         match version {
-            "v0" => {
+            RecordVersion::V0 => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
                 let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
@@ -63,7 +62,7 @@ impl KvRecord {
                     value: Some(value.to_owned()),
                 })
             }
-            KV_VERSION => {
+            RecordVersion::V1 => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
                 let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
@@ -94,8 +93,8 @@ impl KvRecord {
                     value,
                 })
             }
-            _ => {
-                bail!("unknown version {version:?}");
+            other => {
+                bail!("unknown kv record version {other:?}");
             }
         }
     }
@@ -103,7 +102,8 @@ impl KvRecord {
 
 #[cfg(test)]
 mod tests {
-    use super::{DecryptedData, KV_VERSION, KvRecord};
+    use super::{DecryptedData, KvRecord};
+    use atuin_domain::record::RecordVersion;
     use rstest::rstest;
 
     #[rstest]
@@ -120,7 +120,7 @@ mod tests {
         };
 
         let encoded = kv.serialize().unwrap();
-        let decoded = KvRecord::deserialize(&encoded, KV_VERSION).unwrap();
+        let decoded = KvRecord::deserialize(&encoded, &RecordVersion::V1).unwrap();
 
         assert_eq!(encoded.0.as_slice(), snapshot);
         assert_eq!(decoded, kv);
@@ -138,7 +138,7 @@ mod tests {
             0x93, 0xa3, b'f', b'o', b'o', 0xa3, b'b', b'a', b'r', 0xa3, b'b', b'a', b'z',
         ];
 
-        let decoded = KvRecord::deserialize(&DecryptedData(snapshot), "v0").unwrap();
+        let decoded = KvRecord::deserialize(&DecryptedData(snapshot), &RecordVersion::V0).unwrap();
 
         assert_eq!(decoded, kv);
     }

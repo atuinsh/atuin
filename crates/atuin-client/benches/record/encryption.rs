@@ -1,7 +1,9 @@
 use atuin_client::history::Version;
 use atuin_client::history::store::HistoryRecord;
 use atuin_common::utils::uuid_v7;
-use atuin_domain::record::{DecryptedData, EncryptedData, Host, HostId, Record, RecordTag};
+use atuin_domain::record::{
+    DecryptedData, EncryptedData, Host, HostId, Record, RecordTag, RecordVersion,
+};
 
 use crate::_util::context::BenchCtx;
 use crate::history::BenchHistory;
@@ -57,7 +59,7 @@ fn decrypted_records(n: usize) -> Vec<Record<DecryptedData>> {
 
             Record::builder()
                 .host(host.clone())
-                .version(Version::LATEST.name().to_owned())
+                .version(RecordVersion::from(Version::LATEST.name()))
                 .tag(RecordTag::History)
                 .data(data)
                 .idx(idx as u64)

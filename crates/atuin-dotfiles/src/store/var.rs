@@ -5,14 +5,13 @@
 use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_domain::record::{DecryptedData, Host, HostId, RecordTag};
+use atuin_domain::record::{DecryptedData, Host, HostId, RecordTag, RecordVersion};
 use eyre::{Result, bail, ensure, eyre};
 
 use atuin_common::encryption::paseto_v4;
 
 use crate::shell::Var;
 
-const DOTFILES_VAR_VERSION: &str = "v0";
 const DOTFILES_VAR_LEN: usize = 20000; // 20kb max total len, way more than should be needed.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,7 +43,7 @@ impl VarRecord {
         Ok(DecryptedData(output))
     }
 
-    pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
+    pub fn deserialize(data: &DecryptedData, version: &RecordVersion) -> Result<Self> {
         use rmp::decode;
 
         fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
@@ -52,7 +51,7 @@ impl VarRecord {
         }
 
         match version {
-            DOTFILES_VAR_VERSION => {
+            RecordVersion::V0 => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
                 let record_type = decode::read_u8(&mut bytes).map_err(error_report)?;
@@ -89,8 +88,8 @@ impl VarRecord {
                     }
                 }
             }
-            _ => {
-                bail!("unknown version {version:?}");
+            other => {
+                bail!("unknown var record version {other:?}");
             }
         }
     }
@@ -286,7 +285,7 @@ impl VarStore {
 
         let record = atuin_domain::record::Record::builder()
             .host(Host::new(self.host_id))
-            .version(DOTFILES_VAR_VERSION.to_string())
+            .version(RecordVersion::V0)
             .tag(RecordTag::DotfilesVar)
             .idx(idx)
             .data(bytes)
@@ -322,7 +321,7 @@ impl VarStore {
 
         let record = atuin_domain::record::Record::builder()
             .host(Host::new(self.host_id))
-            .version(DOTFILES_VAR_VERSION.to_string())
+            .version(RecordVersion::V0)
             .tag(RecordTag::DotfilesVar)
             .idx(idx)
             .data(bytes)
@@ -349,13 +348,11 @@ impl VarStore {
             let version = record.version.clone();
 
             // Skip records we can't decrypt or decode, rather than failing the entire build.
-            let ar = match version.as_str() {
-                DOTFILES_VAR_VERSION => {
-                    record.decrypt(&self.encryption_key).and_then(|decrypted| {
-                        VarRecord::deserialize(&decrypted.data, version.as_str())
-                    })
-                }
-                version => Err(eyre!("unknown version {version:?}")),
+            let ar = match version {
+                RecordVersion::V0 => record.decrypt(&self.encryption_key).and_then(|decrypted| {
+                    VarRecord::deserialize(&decrypted.data, &RecordVersion::V0)
+                }),
+                ref version => Err(eyre!("unknown version {version:?}")),
             };
 
             let ar = match ar {
@@ -394,7 +391,8 @@ mod tests {
 
     use crate::{shell::Var, store::test_local_timeout};
 
-    use super::{DOTFILES_VAR_VERSION, VarRecord, VarStore};
+    use super::{VarRecord, VarStore};
+    use atuin_domain::record::RecordVersion;
     use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
     use rstest::*;
 
@@ -423,7 +421,7 @@ mod tests {
         ];
 
         let encoded = record.serialize().unwrap();
-        let decoded = VarRecord::deserialize(&encoded, DOTFILES_VAR_VERSION).unwrap();
+        let decoded = VarRecord::deserialize(&encoded, &RecordVersion::V0).unwrap();
 
         assert_eq!(encoded.0, &snapshot);
         assert_eq!(decoded, record);

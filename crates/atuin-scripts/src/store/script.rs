@@ -8,7 +8,6 @@ use rmp::{
 };
 use typed_builder::TypedBuilder;
 
-pub const SCRIPT_VERSION: &str = "v0";
 pub const SCRIPT_LEN: usize = 20000; // 20kb max total len
 
 #[derive(Debug, Clone, PartialEq, Eq, TypedBuilder)]
