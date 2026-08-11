@@ -187,7 +187,7 @@ impl Database for Sqlite {
             .bind(i.idx as i64)
             .bind(i.timestamp as i64) // throwing away some data, but i64 is still big in terms of time
             .bind(&i.version)
-            .bind(&i.tag)
+            .bind(i.tag.as_str())
             .bind(&i.data.raw)
             .bind(&i.data.cek)
             .bind(user.id)
