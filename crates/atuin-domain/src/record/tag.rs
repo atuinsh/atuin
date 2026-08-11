@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
-/// The type of data a [`Record`] stores (e.g. history, kv).
+/// The type of data a [`super::Record`] stores (e.g. history, kv).
 #[derive(
     Debug,
     Clone,
