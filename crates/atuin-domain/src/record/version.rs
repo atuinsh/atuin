@@ -38,12 +38,8 @@ impl RecordVersion {
 
 impl From<String> for RecordVersion {
     fn from(s: String) -> Self {
-        // The strum attributes are the single source of truth for the strings; reuse the owned
-        // allocation when the version is unknown.
-        match Self::from(s.as_str()) {
-            Self::Other(_) => Self::Other(s),
-            known => known,
-        }
+        // TODO(markovejnovic): Figure out a better way to avoid the implicit `Clone` in here.
+        Self::from(s.as_str())
     }
 }
 

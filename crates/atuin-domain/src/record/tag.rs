@@ -63,12 +63,8 @@ impl PartialOrd for RecordTag {
 
 impl From<String> for RecordTag {
     fn from(s: String) -> Self {
-        // The strum attributes on the variants are the single source of truth for the
-        // strings; reuse the owned allocation when the tag is unknown.
-        match Self::from(s.as_str()) {
-            Self::Other(_) => Self::Other(s),
-            known => known,
-        }
+        // TODO(markovejnovic): Figure out a better way to avoid the implicit `Clone` in here.
+        Self::from(s.as_str())
     }
 }
 
