@@ -233,7 +233,7 @@ impl AliasStore {
 
         let idx = self
             .store
-            .last(self.host_id, RecordTag::ConfigShellAlias.as_ref())
+            .last(self.host_id, &RecordTag::ConfigShellAlias)
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
@@ -269,7 +269,7 @@ impl AliasStore {
 
         let idx = self
             .store
-            .last(self.host_id, RecordTag::ConfigShellAlias.as_ref())
+            .last(self.host_id, &RecordTag::ConfigShellAlias)
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
@@ -295,10 +295,7 @@ impl AliasStore {
         let mut build = BTreeMap::new();
 
         // this is sorted, oldest to newest
-        let tagged = self
-            .store
-            .all_tagged(RecordTag::ConfigShellAlias.as_ref())
-            .await?;
+        let tagged = self.store.all_tagged(&RecordTag::ConfigShellAlias).await?;
         let mut skipped = 0;
 
         for record in tagged {

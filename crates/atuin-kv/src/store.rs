@@ -86,7 +86,7 @@ impl KvStore {
         let bytes = record.serialize()?;
         let idx = self
             .record_store
-            .last(self.host_id, RecordTag::Kv.as_ref())
+            .last(self.host_id, &RecordTag::Kv)
             .await?
             .map_or(0, |p| p.idx + 1);
 
@@ -108,7 +108,7 @@ impl KvStore {
     }
 
     pub async fn build(&self) -> Result<()> {
-        let mut tagged = self.record_store.all_tagged(RecordTag::Kv.as_ref()).await?;
+        let mut tagged = self.record_store.all_tagged(&RecordTag::Kv).await?;
         tagged.reverse();
 
         let cached = self.kv_db.list(None).await?;
@@ -201,10 +201,7 @@ mod tests {
         let value = store.get("test", "key").await.unwrap();
         assert_eq!(value, Some("value".to_string()));
 
-        let records = store
-            .record_store
-            .all_tagged(RecordTag::Kv.as_ref())
-            .await?;
+        let records = store.record_store.all_tagged(&RecordTag::Kv).await?;
         assert_eq!(records.len(), 1);
 
         let list = store.list(Some("test")).await.unwrap();
@@ -224,10 +221,7 @@ mod tests {
         let value = store.get("test", "key").await.unwrap();
         assert_eq!(value, None);
 
-        let records = store
-            .record_store
-            .all_tagged(RecordTag::Kv.as_ref())
-            .await?;
+        let records = store.record_store.all_tagged(&RecordTag::Kv).await?;
         assert_eq!(records.len(), 2);
 
         Ok(())

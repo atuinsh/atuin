@@ -280,7 +280,7 @@ impl VarStore {
 
         let idx = self
             .store
-            .last(self.host_id, RecordTag::DotfilesVar.as_ref())
+            .last(self.host_id, &RecordTag::DotfilesVar)
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
@@ -316,7 +316,7 @@ impl VarStore {
 
         let idx = self
             .store
-            .last(self.host_id, RecordTag::DotfilesVar.as_ref())
+            .last(self.host_id, &RecordTag::DotfilesVar)
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
@@ -342,10 +342,7 @@ impl VarStore {
         let mut build = BTreeMap::new();
 
         // this is sorted, oldest to newest
-        let tagged = self
-            .store
-            .all_tagged(RecordTag::DotfilesVar.as_ref())
-            .await?;
+        let tagged = self.store.all_tagged(&RecordTag::DotfilesVar).await?;
         let mut skipped = 0;
 
         for record in tagged {
