@@ -4,9 +4,9 @@ use eyre::{Result, eyre};
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4;
-use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx, RecordTag};
+use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx, RecordTag, RecordVersion};
 use entry::KvEntry;
-use record::{KV_VERSION, KvRecord};
+use record::KvRecord;
 
 use crate::database::Database;
 
@@ -92,7 +92,7 @@ impl KvStore {
 
         let record = Record::builder()
             .host(Host::new(self.host_id))
-            .version(KV_VERSION.to_string())
+            .version(RecordVersion::V1)
             .tag(RecordTag::Kv)
             .idx(idx)
             .data(bytes)
@@ -120,11 +120,13 @@ impl KvStore {
         // only visit each KV once, inserting or deleting based on the first time we see it
         for record in tagged {
             // Skip records we can't decrypt or decode, rather than failing the entire build.
-            let kv = match record.version.as_str() {
-                "v0" | KV_VERSION => record.decrypt(&self.encryption_key).and_then(|decrypted| {
-                    KvRecord::deserialize(&decrypted.data, &decrypted.version)
-                }),
-                version => Err(eyre!("unknown version {version:?}")),
+            let kv = match record.version {
+                RecordVersion::V0 | RecordVersion::V1 => {
+                    record.decrypt(&self.encryption_key).and_then(|decrypted| {
+                        KvRecord::deserialize(&decrypted.data, &decrypted.version)
+                    })
+                }
+                ref version => Err(eyre!("unknown kv version {version:?}")),
             };
 
             let kv = match kv {
