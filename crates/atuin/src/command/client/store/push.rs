@@ -67,9 +67,7 @@ impl Push {
         // 3. Filter operations by
         //  a) are they an upload op?
         //  b) are they for the host/tag we are pushing here?
-        let caps =
-            atuin_client::api_client::caps_client(&settings.sync_address, &settings.extra_headers)?;
-        let client = sync::build_client(settings, caps).await?;
+        let client = sync::build_client(settings).await?;
         let (diff, remote_index) = sync::diff(&client, &store).await?;
 
         let key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;

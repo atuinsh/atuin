@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use super::sqlite_store::SqliteStore;
 use crate::{
-    api_client::Client,
+    api_client::{Client, caps_client},
     packfile::{download_packed, upload_packed},
     settings::Settings,
 };
@@ -63,7 +63,10 @@ pub enum Operation {
     },
 }
 
-pub async fn build_client(settings: &Settings, caps: Arc<CapClient>) -> Result<Client, SyncError> {
+pub async fn build_client_with_caps(
+    settings: &Settings,
+    caps: Arc<CapClient>,
+) -> Result<Client, SyncError> {
     Client::new(
         settings.sync_address.clone(),
         settings
@@ -76,6 +79,12 @@ pub async fn build_client(settings: &Settings, caps: Arc<CapClient>) -> Result<C
         caps,
     )
     .map_err(|e| SyncError::OperationalError { msg: e.to_string() })
+}
+
+pub async fn build_client(settings: &Settings) -> Result<Client, SyncError> {
+    let caps = caps_client(&settings.sync_address, &settings.extra_headers)
+        .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?;
+    build_client_with_caps(settings, caps).await
 }
 
 pub async fn diff(
@@ -458,7 +467,7 @@ pub async fn sync(
     encryption_key: &paseto_v4::Key,
     caps: Arc<CapClient>,
 ) -> Result<(i64, Vec<RecordId>), SyncError> {
-    let client = build_client(settings, caps).await?;
+    let client = build_client_with_caps(settings, caps).await?;
     let (diff, remote_index) = diff(&client, store).await?;
 
     // Bail before mutating either side if the local key can't read the remote.
