@@ -86,6 +86,65 @@ fn stream_done_without_tools_goes_idle(#[from(new_fsm)] mut fsm: AgentFsm) {
     )));
 }
 
+#[rstest]
+fn stream_done_without_tools_emits_turn_ended(#[from(new_fsm)] mut fsm: AgentFsm) {
+    fsm.handle(Event::UserSubmit("hello".into()));
+    fsm.handle(Event::StreamStarted);
+
+    let effects = fsm.handle(Event::StreamDone {
+        session_id: "s1".into(),
+    });
+
+    assert!(effects.iter().any(|e| matches!(e, Effect::TurnEnded)));
+}
+
+#[rstest]
+fn suggest_command_emits_turn_ended(#[from(new_fsm)] mut fsm: AgentFsm) {
+    fsm.handle(Event::UserSubmit("list files".into()));
+    fsm.handle(Event::StreamStarted);
+
+    let effects = fsm.handle(Event::SuggestCommand {
+        id: "t1".into(),
+        input: json!({"command": "ls"}),
+    });
+
+    assert_eq!(fsm.state, AgentState::Idle { confirmation: None });
+    assert!(effects.iter().any(|e| matches!(e, Effect::TurnEnded)));
+}
+
+#[rstest]
+fn turn_ended_waits_for_the_continuation_stream(#[from(new_fsm)] mut fsm: AgentFsm) {
+    fsm.handle(Event::UserSubmit("read".into()));
+    fsm.handle(Event::StreamStarted);
+    fsm.handle(Event::StreamToolCall {
+        id: "t1".into(),
+        name: "read_file".into(),
+        input: json!({"file_path": "/tmp/test.txt"}),
+    });
+    fsm.handle(Event::StreamDone {
+        session_id: "".into(),
+    });
+    fsm.handle(Event::PermissionResolved {
+        tool_id: "t1".into(),
+        response: PermissionResponse::Allowed,
+    });
+
+    // Tool completes → continuation starts; the turn is not over yet.
+    let effects = fsm.handle(Event::ToolExecutionDone {
+        tool_id: "t1".into(),
+        outcome: crate::tools::ToolOutcome::Success("contents".into()),
+        preview: None,
+    });
+    assert!(!effects.iter().any(|e| matches!(e, Effect::TurnEnded)));
+
+    // The continuation stream finishing ends the turn.
+    fsm.handle(Event::StreamStarted);
+    let effects = fsm.handle(Event::StreamDone {
+        session_id: "".into(),
+    });
+    assert!(effects.iter().any(|e| matches!(e, Effect::TurnEnded)));
+}
+
 // ============================================================================
 // Tool lifecycle
 // ============================================================================
@@ -301,6 +360,10 @@ fn cancel_during_streaming_goes_idle(#[from(new_fsm)] mut fsm: AgentFsm) {
     assert_eq!(fsm.state, AgentState::Idle { confirmation: None });
     assert!(effects.iter().any(|e| matches!(e, Effect::AbortStream)));
     assert!(effects.iter().any(|e| matches!(e, Effect::Persist)));
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::TurnEnded)),
+        "cancel is not a clean turn end"
+    );
     // Partial text committed with cancel suffix
     assert!(fsm.ctx.events.iter().any(|e| matches!(
         e,
