@@ -1233,10 +1233,12 @@ impl State {
         };
 
         if self.search_mode_state.is_failed_daemon_fuzzy() {
-            return Text::styled(
-                "Warning: daemon-fuzzy search failed; falling back to fuzzy",
-                get_style(),
-            );
+            let msg = if cfg!(feature = "daemon") {
+                "Warning: daemon-fuzzy search failed; falling back to fuzzy"
+            } else {
+                "Warning: no daemon support; falling back to fuzzy search"
+            };
+            return Text::styled(msg, get_style());
         }
 
         if settings.requested_search_mode != RequestedSearchMode::Skim {
