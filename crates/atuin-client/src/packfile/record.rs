@@ -306,13 +306,13 @@ impl<'a> PackManifestRecordView<'a> {
 
     pub async fn unpack_records(
         &self,
-        packed_bytes: Vec<u8>,
+        packed_bytes: impl AsRef<[u8]> + Send + 'static,
         key: paseto_v4::Key,
     ) -> Result<impl Iterator<Item = Record<DecryptedData>>, UnpackError> {
         let ia = self.ia().json();
 
         tokio::task::spawn_blocking(move || {
-            let encrypted: paseto_v4::EncryptedData = rmp_serde::from_slice(&packed_bytes)?;
+            let encrypted: paseto_v4::EncryptedData = rmp_serde::from_slice(packed_bytes.as_ref())?;
             let decrypted = paseto_v4::decrypt_sync(
                 &encrypted,
                 Some(paseto_v4::ImplicitAssertion::from(ia.as_str())),
