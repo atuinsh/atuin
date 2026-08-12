@@ -230,6 +230,25 @@ impl SqliteStore {
         Ok(0)
     }
 
+    /// The smallest `idx >= 0` with no record for `(host, tag)`: Unlike `last().idx + 1`, this
+    /// points at an interior hole when one exists.
+    pub async fn first_gap(&self, host: HostId, tag: &RecordTag) -> Result<RecordIdx> {
+        let gap: Option<i64> = sqlx::query_scalar(
+            "select min(idx) from (
+                 select idx + 1 as idx from store where host = ?1 and tag = ?2
+                 union
+                 select 0
+             ) as candidates
+             where idx not in (select idx from store where host = ?1 and tag = ?2)",
+        )
+        .bind(host.0.as_hyphenated().to_string())
+        .bind(tag.as_str())
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(gap.unwrap_or(0) as u64)
+    }
+
     pub async fn next(
         &self,
         host: HostId,
@@ -472,6 +491,41 @@ mod tests {
             record.id,
             "did not get the inserted record"
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn first_gap_finds_the_contiguous_frontier(#[future(awt)] store: SqliteStore) {
+        let host = HostId(uuid_v7());
+        let tag = RecordTag::History;
+
+        let at = |idx: u64| {
+            Record::builder()
+                .host(Host::new(host))
+                .version("v1".into())
+                .tag(tag.clone())
+                .idx(idx)
+                .data(paseto_v4::EncryptedData {
+                    raw: "x".into(),
+                    cek: "x".into(),
+                })
+                .build()
+        };
+
+        // Empty stream -> frontier is 0.
+        assert_eq!(store.first_gap(host, &tag).await.unwrap(), 0);
+
+        // Contiguous 0,1,2 -> frontier is the next idx, 3.
+        for idx in [0, 1, 2] {
+            store.push(&at(idx)).await.unwrap();
+        }
+        assert_eq!(store.first_gap(host, &tag).await.unwrap(), 3);
+
+        // Add 4,5 but not 3: the frontier drops back to the hole, not the head + 1.
+        for idx in [4, 5] {
+            store.push(&at(idx)).await.unwrap();
+        }
+        assert_eq!(store.first_gap(host, &tag).await.unwrap(), 3);
     }
 
     #[rstest]

@@ -52,7 +52,6 @@ pub enum Operation {
         tag: RecordTag,
     },
     Download {
-        local: Option<RecordIdx>,
         remote: RecordIdx,
         host: HostId,
         tag: RecordTag,
@@ -131,7 +130,6 @@ pub async fn operations(
                     tag: diff.tag,
                 },
                 Ordering::Less => Operation::Download {
-                    local: Some(local),
                     remote,
                     host: diff.host,
                     tag: diff.tag,
@@ -140,7 +138,6 @@ pub async fn operations(
 
             // Remote has it, we don't. Gotta be download
             (None, Some(remote)) => Operation::Download {
-                local: None,
                 remote,
                 host: diff.host,
                 tag: diff.tag,
@@ -276,18 +273,18 @@ async fn sync_download(
     client: &Client,
     host: HostId,
     tag: RecordTag,
-    local: Option<RecordIdx>,
     remote: RecordIdx,
     page_size: u64,
     key: &paseto_v4::Key,
 ) -> Result<Vec<RecordId>, SyncError> {
-    // Re-query the current state of the store. A previous `sync_download` with `tag == MANIFEST`
-    // may have downloaded new records that we now need to skip downloading.
-    let local = match store.last(host, &tag).await {
-        Ok(Some(record)) => record.idx.max(local.unwrap_or(0)),
-        Ok(None) => local.unwrap_or(0),
-        Err(e) => return Err(SyncError::LocalStoreError { msg: e.to_string() }),
-    };
+    // Resume from the first missing idx, not the head. A prior packfile op for this host may have
+    // expanded a pack whose history landed ABOVE a still-missing idx; keying off the head would
+    // size `expected` past that hole and never fetch it. The frontier refetches from the hole --
+    // records already present above it upsert idempotently.
+    let local = store
+        .first_gap(host, &tag)
+        .await
+        .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
 
     let expected = remote.saturating_sub(local);
     let mut progress = 0;
@@ -399,29 +396,15 @@ pub async fn sync_remote(
                 .await?
             }
 
-            Operation::Download {
-                host,
-                tag,
-                local,
-                remote,
-            } => {
+            Operation::Download { host, tag, remote } => {
                 if tag == RecordTag::Packfile && !packfiles_enabled {
                     debug!(
                         "server does not advertise PackfileCap; skipping packfile {tag} download op, loose history covers it"
                     );
                     continue;
                 }
-                let mut d = sync_download(
-                    local_store,
-                    client,
-                    host,
-                    tag,
-                    local,
-                    remote,
-                    page_size,
-                    key,
-                )
-                .await?;
+                let mut d =
+                    sync_download(local_store, client, host, tag, remote, page_size, key).await?;
                 downloaded.append(&mut d)
             }
 
@@ -603,7 +586,6 @@ mod tests {
                 Operation::Download {
                     host: remote_ahead.host.id,
                     tag: remote_ahead.tag.clone(),
-                    local: None,
                     remote: 0,
                 },
             ]
@@ -705,28 +687,24 @@ mod tests {
             // We started with a shared record, but the remote knows of two newer records in the
             // same store
             Operation::Download {
-                local: Some(0),
                 remote: 2,
                 host: second_shared_remote_ahead.host.id,
                 tag: second_shared_remote_ahead.tag.clone(),
             },
             // We have a shared record, local knows of the first two but not the last
             Operation::Download {
-                local: Some(1),
                 remote: 2,
                 host: fourth_shared_remote_ahead2.host.id,
                 tag: fourth_shared_remote_ahead2.tag.clone(),
             },
             // Remote knows of a store with a single record that local does not have
             Operation::Download {
-                local: None,
                 remote: 0,
                 host: remote_only.host.id,
                 tag: remote_only.tag.clone(),
             },
             // Remote knows of a store with a bunch of records that local does not have
             Operation::Download {
-                local: None,
                 remote: 4,
                 host: remote_only_20.host.id,
                 tag: remote_only_20.tag.clone(),
@@ -918,18 +896,9 @@ mod packfile_download_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        sync_download(
-            &down,
-            &client,
-            host,
-            RecordTag::Packfile,
-            None,
-            1,
-            100,
-            &key,
-        )
-        .await
-        .unwrap();
+        sync_download(&down, &client, host, RecordTag::Packfile, 1, 100, &key)
+            .await
+            .unwrap();
 
         // The manifest is stored AND the history it covers was populated.
         assert!(
@@ -961,18 +930,9 @@ mod packfile_download_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let returned = sync_download(
-            &down,
-            &client,
-            host,
-            RecordTag::Packfile,
-            None,
-            1,
-            100,
-            &key,
-        )
-        .await
-        .unwrap();
+        let returned = sync_download(&down, &client, host, RecordTag::Packfile, 1, 100, &key)
+            .await
+            .unwrap();
 
         for id in &history_ids {
             assert!(
@@ -1031,19 +991,10 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
 
         // Packfile op first (populates history 0..=2), then the history op.
-        sync_download(
-            &down,
-            &client,
-            host,
-            RecordTag::Packfile,
-            None,
-            1,
-            100,
-            &key,
-        )
-        .await
-        .unwrap();
-        sync_download(&down, &client, host, RecordTag::History, None, 3, 100, &key)
+        sync_download(&down, &client, host, RecordTag::Packfile, 1, 100, &key)
+            .await
+            .unwrap();
+        sync_download(&down, &client, host, RecordTag::History, 3, 100, &key)
             .await
             .unwrap();
 
@@ -1085,18 +1036,9 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
 
         // remote (2) is BEHIND the live local head (4) -- must not underflow/panic.
-        let got = sync_download(
-            &down,
-            &client,
-            host,
-            RecordTag::History,
-            Some(0),
-            2,
-            100,
-            &key,
-        )
-        .await
-        .unwrap();
+        let got = sync_download(&down, &client, host, RecordTag::History, 2, 100, &key)
+            .await
+            .unwrap();
         assert!(
             got.is_empty(),
             "nothing to download when local head already exceeds remote"
@@ -1148,7 +1090,6 @@ mod packfile_capability_tests {
     /// A single PACKFILE download op covering `remote` manifests from `host`.
     fn packfile_download_op(host: HostId, remote: RecordIdx) -> Operation {
         Operation::Download {
-            local: None,
             remote,
             host,
             tag: RecordTag::Packfile,
@@ -1264,7 +1205,6 @@ mod packfile_capability_tests {
             vec![
                 packfile_download_op(host, 3),
                 Operation::Download {
-                    local: None,
                     remote: 3,
                     host,
                     tag: RecordTag::History,
