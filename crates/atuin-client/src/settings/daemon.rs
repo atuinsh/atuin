@@ -83,8 +83,8 @@ impl Daemon {
             return SocketPath::UserDefined(path);
         }
 
-        // A socket-activated systemd unit conventionally listens on `%t/atuin.sock`, so that is
-        // where clients should look first once socket activation is turned on.
+        // systemd units typically listen on `%t/atuin.sock`, which is `$XDG_RUNTIME_DIR/atuin.sock`
+        // for user units, so we should default to that path `systemd_socket` is true.
         if self.systemd_socket
             && let Some(path) = ctx.runtime_socket_path()
         {
