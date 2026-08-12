@@ -43,9 +43,7 @@ pub async fn try_pack(
     // `start` is the first unpacked source idx; `pack_idx` is the next idx in the *packfile*
     // stream (a separate sequence). Both come from the same latest manifest record.
     let start = match &last_pack {
-        Some(record) => match PackManifestData::parse(record)? {
-            PackManifestData::V1(v1) => v1.end_idx + 1,
-        },
+        Some(record) => PackManifestData::parse(record)?.range().end,
         None => 0,
     };
     let mut pack_idx = last_pack.map_or(0, |record| record.idx + 1);

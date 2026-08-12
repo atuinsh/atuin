@@ -53,6 +53,13 @@ impl PackManifestData {
             Err(ParsingError::UnknownVersion)
         }
     }
+
+    /// The half-open range of history indices this manifest covers.
+    #[must_use]
+    pub const fn range(&self) -> std::ops::Range<RecordIdx> {
+        let PackManifestData::V1(v1) = self;
+        v1.start_idx..v1.end_idx + 1
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,8 +220,7 @@ impl<'a> PackManifestRecordView<'a> {
     /// The range of history this manifest covers. Validated when the view was built.
     #[must_use]
     pub const fn range(&self) -> std::ops::Range<RecordIdx> {
-        let PackManifestData::V1(range) = &self.manifest;
-        range.start_idx..range.end_idx + 1
+        self.manifest.range()
     }
 
     pub async fn load_encrypted_packed_records(
