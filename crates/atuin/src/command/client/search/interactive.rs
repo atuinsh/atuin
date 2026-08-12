@@ -57,6 +57,7 @@ use windows_sys::Win32::System::Console::{GetConsoleOutputCP, SetConsoleOutputCP
 
 const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
 
+#[derive(Clone, Copy)]
 pub enum InputAction {
     Accept(usize),
     AcceptInspecting,
@@ -72,22 +73,27 @@ pub enum InputAction {
 
 #[derive(Clone)]
 pub struct InspectingState {
-    current: Option<HistoryId>,
-    next: Option<HistoryId>,
-    previous: Option<HistoryId>,
+    pub(super) current: Option<HistoryId>,
+    pub(super) next: Option<HistoryId>,
+    pub(super) previous: Option<HistoryId>,
 }
 
 impl InspectingState {
+    // Boundary moves are no-ops: clearing the state instead (as this used
+    // to) left `previous`/`next` empty with the stats cache still warm, so
+    // no refresh ever repopulated them and navigation went dead.
     pub fn move_to_previous(&mut self) {
-        let previous = self.previous.clone();
-        self.reset();
-        self.current = previous;
+        if let Some(previous) = self.previous.clone() {
+            self.reset();
+            self.current = Some(previous);
+        }
     }
 
     pub fn move_to_next(&mut self) {
-        let next = self.next.clone();
-        self.reset();
-        self.current = next;
+        if let Some(next) = self.next.clone() {
+            self.reset();
+            self.current = Some(next);
+        }
     }
 
     pub fn reset(&mut self) {
@@ -113,7 +119,9 @@ pub fn to_compactness(f: &Frame, settings: &Settings) -> Compactness {
     }
 }
 
-struct SearchModeState {
+/// Shared with the eye path so daemon-failure fallback semantics cannot
+/// drift between the two TUIs.
+pub(super) struct SearchModeState {
     mode: SearchMode,
     pub daemon_failed: bool,
 }
@@ -803,6 +811,10 @@ impl State {
         border_size: u16,
         preview_width: u16,
     ) -> u16 {
+        // Wrapped-line math: rows = ceil(len / usable). Clamped so narrow
+        // terminals (below the border + ellipsis budget) degrade to tall
+        // previews instead of underflowing or dividing by zero.
+        let usable = preview_width.saturating_sub(border_size).max(1);
         if settings.show_preview
             && settings.preview.strategy == PreviewStrategy::Auto
             && tab_index == 0
@@ -822,18 +834,16 @@ impl State {
                         .command
                         .split('\n')
                         .map(|line| {
-                            (line.len() as u16 + preview_width - 1 - border_size)
-                                / (preview_width - border_size)
+                            (line.len() as u16).saturating_add(usable).saturating_sub(1) / usable
                         })
                         .sum(),
                 ) + border_size * 2
             }
             // The '- 19' takes the characters before the command (duration and time) into account
-            else if length_current_cmd > preview_width - 19 {
+            else if length_current_cmd > preview_width.saturating_sub(19) {
                 std::cmp::min(
                     settings.max_preview_height,
-                    (length_current_cmd + preview_width - 1 - border_size)
-                        / (preview_width - border_size),
+                    length_current_cmd.saturating_add(usable).saturating_sub(1) / usable,
                 ) + border_size * 2
             } else {
                 1
@@ -851,8 +861,7 @@ impl State {
                     v.command
                         .split('\n')
                         .map(|line| {
-                            (line.len() as u16 + preview_width - 1 - border_size)
-                                / (preview_width - border_size)
+                            (line.len() as u16).saturating_add(usable).saturating_sub(1) / usable
                         })
                         .sum(),
                 )
@@ -1082,11 +1091,11 @@ impl State {
                         None => &results[self.results_state.selected()],
                     };
                     super::inspector::draw(
-                        f,
+                        f.buffer_mut(),
                         results_list_chunk,
                         inspecting,
                         &stats.expect("Drawing inspector, but no stats"),
-                        settings,
+                        compactness,
                         theme,
                         settings.timezone,
                     );
@@ -1671,10 +1680,28 @@ impl Drop for Stdout {
             tracing::error!(?e, "Failed to leave alt screen mode");
         }
 
-        if !self.no_mouse
-            && let Err(e) = execute!(self.writer, event::DisableMouseCapture)
-        {
-            tracing::error!(?e, "Failed to disable mouse capture");
+        if !self.no_mouse {
+            if let Err(e) = execute!(self.writer, event::DisableMouseCapture) {
+                tracing::error!(?e, "Failed to disable mouse capture");
+            }
+            // A fast wheel can exit the TUI (keys.scroll_exits) with dozens
+            // of reports still queued or in flight; anything the terminal
+            // emitted before processing the disable would land in the
+            // shell's input as escape garbage. Drain until quiet — bounded,
+            // and while raw mode is still on so reads work. The spray is
+            // contiguous, so stop at the first non-mouse event, leaving
+            // unread bytes in the tty for the shell. Crossterm reads the
+            // tty in 1KiB chunks and queues everything it parses, so the
+            // real cap is one buffered chunk, not one event — a
+            // byte-granular drain needs an eye-owned input path (ATU-580).
+            let deadline = std::time::Instant::now() + Duration::from_millis(50);
+            while std::time::Instant::now() < deadline
+                && matches!(event::poll(Duration::from_millis(5)), Ok(true))
+            {
+                if !matches!(event::read(), Ok(Event::Mouse(_))) {
+                    break;
+                }
+            }
         }
 
         if let Err(e) = execute!(self.writer, event::DisableBracketedPaste) {
@@ -2214,7 +2241,7 @@ pub async fn history(
     feature = "clipboard",
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 ))]
-fn set_clipboard(s: String) -> Result<(), arboard::Error> {
+pub(super) fn set_clipboard(s: String) -> Result<(), arboard::Error> {
     let mut ctx = arboard::Clipboard::new()?;
     ctx.set_text(s)?;
     // Use the clipboard context to make sure it is saved
@@ -2226,7 +2253,7 @@ fn set_clipboard(s: String) -> Result<(), arboard::Error> {
     feature = "clipboard",
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 )))]
-fn set_clipboard(_s: String) -> Result<(), std::convert::Infallible> {
+pub(super) fn set_clipboard(_s: String) -> Result<(), std::convert::Infallible> {
     Ok(())
 }
 
@@ -2356,6 +2383,11 @@ mod tests {
     #[case::static_h3(PreviewStrategy::Static, Some(4), 1, 80, 5)]
     #[case::static_limit_4(PreviewStrategy::Static, Some(4), 1, 20, 6)]
     #[case::fixed(PreviewStrategy::Fixed, Some(15), 1, 20, 17)]
+    // Narrow terminals: below the border + ellipsis budget the math
+    // saturates instead of underflowing (debug panic) — issue found by
+    // review on the eye port, present here since the original.
+    #[case::narrow_auto(PreviewStrategy::Auto, None, 1, 8, 6)]
+    #[case::tiny_auto(PreviewStrategy::Auto, None, 0, 2, 6)]
     fn calc_preview_height_cases(
         #[from(preview_corpus)] results: &[History],
         #[case] strategy: PreviewStrategy,
@@ -2481,6 +2513,36 @@ mod tests {
         );
         settings.keys.accept_with_backspace = false;
         state.keymaps = KeymapSet::defaults(&settings);
+    }
+
+    #[rstest]
+    fn inspecting_boundary_moves_are_noops() {
+        use atuin_client::history::HistoryId;
+
+        let mut state = InspectingState {
+            current: Some(HistoryId::from("b".to_string())),
+            next: Some(HistoryId::from("a".to_string())),
+            previous: Some(HistoryId::from("c".to_string())),
+        };
+
+        // Move to the newest entry: no next beyond it.
+        state.move_to_next();
+        assert_eq!(state.current, Some(HistoryId::from("a".to_string())));
+        assert_eq!(state.next, None);
+
+        // Past the boundary: the state must survive, not clear — clearing
+        // left navigation dead because the stats cache never refreshed it.
+        state.move_to_next();
+        assert_eq!(state.current, Some(HistoryId::from("a".to_string())));
+
+        state.previous = Some(HistoryId::from("b".to_string()));
+        state.move_to_previous();
+        assert_eq!(state.current, Some(HistoryId::from("b".to_string())));
+
+        // And past the oldest end likewise.
+        state.previous = None;
+        state.move_to_previous();
+        assert_eq!(state.current, Some(HistoryId::from("b".to_string())));
     }
 
     #[rstest]

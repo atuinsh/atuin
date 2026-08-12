@@ -44,21 +44,18 @@ impl LazyClient {
         SearchClient::new(params.tcp_port).await
     }
 
-    /// Call a method on [`SearchClient`], autostarting the daemon and retrying if necessary.
+    /// After a failed connect or [`SearchClient`] call, decide whether an
+    /// autostart is worth a retry. On `Ok(())` the connection has been
+    /// reset and the daemon started: `get` a fresh client and retry the
+    /// call once. Otherwise hands `err` back, annotated with the
+    /// auto-start failure if there was one.
     ///
-    /// `f` should call the appropriate method on the provided [`SearchClient`].
-    async fn try_with_autostart<F, R>(&mut self, params: &ClientParams, mut f: F) -> Result<R>
-    where
-        F: AsyncFnMut(&mut SearchClient) -> Result<R>,
-    {
-        let err = match self.get(params).await {
-            Ok(client) => match f(client).await {
-                Ok(result) => return Ok(result),
-                Err(err) => err,
-            },
-            Err(err) => err,
-        };
-
+    /// This used to be a `try_with_autostart` helper taking an
+    /// `AsyncFnMut(&mut SearchClient)` callback, but rustc cannot prove
+    /// such a higher-ranked closure's future `Send` ("implementation of
+    /// `Send` is not general enough"), which the eye-declare search path
+    /// requires when it spawns queries onto tokio.
+    async fn recover(&mut self, params: &ClientParams, err: eyre::Report) -> Result<()> {
         if !(params.settings.daemon.autostart && daemon::should_retry_after_error(&err)) {
             return Err(err);
         }
@@ -68,8 +65,7 @@ impl LazyClient {
         if let Err(start_error) = daemon::ensure_daemon_running(&params.settings).await {
             return Err(err.wrap_err(format!("failed to auto-start daemon: {start_error:#}")));
         }
-        let client = self.get(params).await?;
-        f(client).await
+        Ok(())
     }
 }
 
@@ -155,18 +151,25 @@ impl Search {
 
     /// Tell the daemon to build the search index.
     pub async fn prepare_index(&mut self) -> Result<()> {
-        self.client
-            .try_with_autostart(&self.params, async |client| {
-                let shells = self
-                    .params
-                    .settings
-                    .search
-                    .shells
-                    .to_filter()
-                    .to_vec_filter();
+        let shells = self
+            .params
+            .settings
+            .search
+            .shells
+            .to_filter()
+            .to_vec_filter();
+        let first_try = match self.client.get(&self.params).await {
+            Ok(client) => client.prepare_index(shells.clone()).await,
+            Err(err) => Err(err),
+        };
+        match first_try {
+            Ok(result) => Ok(result),
+            Err(err) => {
+                self.client.recover(&self.params, err).await?;
+                let client = self.client.get(&self.params).await?;
                 client.prepare_index(shells).await
-            })
-            .await
+            }
+        }
     }
 }
 
@@ -190,19 +193,25 @@ impl SearchEngine for Search {
         let span =
             span!(Level::TRACE, "daemon_search.req_resp", query = %query, query_id = query_id);
 
-        let mut stream = self
-            .client
-            .try_with_autostart(&self.params, async |client| {
-                let search_params = SearchParams {
-                    query: query.clone(),
-                    query_id,
-                    filter_mode: state.filter_mode,
-                    context: Some(state.context.clone()),
-                    shells: state.shells.to_filter().to_vec_filter(),
-                };
-                client.search(search_params).await
-            })
-            .await?;
+        let search_params = SearchParams {
+            query: query.clone(),
+            query_id,
+            filter_mode: state.filter_mode,
+            context: Some(state.context.clone()),
+            shells: state.shells.to_filter().to_vec_filter(),
+        };
+        let first_try = match self.client.get(&self.params).await {
+            Ok(client) => client.search(search_params.clone()).await,
+            Err(err) => Err(err),
+        };
+        let mut stream = match first_try {
+            Ok(stream) => stream,
+            Err(err) => {
+                self.client.recover(&self.params, err).await?;
+                let client = self.client.get(&self.params).await?;
+                client.search(search_params).await?
+            }
+        };
 
         let mut ids = Vec::with_capacity(200);
         span!(Level::TRACE, "daemon_search.resp")

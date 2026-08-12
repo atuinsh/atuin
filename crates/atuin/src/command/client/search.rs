@@ -20,6 +20,7 @@ use super::history::ListMode;
 
 mod cursor;
 mod engines;
+mod eye;
 mod history_list;
 mod inspector;
 mod interactive;
@@ -171,7 +172,9 @@ impl Cmd {
     // clippy: please write this instead
     // clippy: now it has too many lines
     // me: I'll do it later OKAY
-    #[allow(clippy::too_many_lines)]
+    // (future_not_send: the eye search path holds the stdout lock across
+    // awaits; the CLI drives this single-threaded, like client::Cmd::run.)
+    #[allow(clippy::too_many_lines, clippy::future_not_send)]
     pub async fn run(
         self,
         db: impl Database,
@@ -245,7 +248,11 @@ impl Cmd {
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         if self.interactive {
-            let item = interactive::history(&query, settings, db, &history_store, theme).await?;
+            let item = if let Some(mode) = eye::mode(settings) {
+                eye::history(&query, settings, db, &history_store, theme, mode).await?
+            } else {
+                interactive::history(&query, settings, db, &history_store, theme).await?
+            };
 
             if let Some(result_file) = self.result_file {
                 let mut file = File::create(result_file)?;
