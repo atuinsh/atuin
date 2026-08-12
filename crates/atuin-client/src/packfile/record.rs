@@ -12,11 +12,47 @@ use thiserror::Error;
 
 use crate::record::sqlite_store::SqliteStore;
 
+#[derive(Debug, Error)]
+pub enum ParsingError {
+    #[error("\"{_0}\" is not a packfile tag")]
+    WrongTag(RecordTag),
+    #[error("failed to find version bytes.")]
+    UnknownVersion,
+    #[error("invalid body: {_0}")]
+    MalformedBody(Box<dyn std::error::Error + Send + Sync>),
+    #[error("packfile manifest range is invalid: {_0}")]
+    InvalidRange(#[from] InvalidRangeError),
+}
+
 /// Structure encoded within the `data` column of the packfile-encoded records.
 #[derive(Debug, Clone)]
 pub enum PackManifestData {
     /// Version 1 of the manifest.
     V1(PackManifestDataV1),
+}
+
+impl PackManifestData {
+    pub fn parse(record: &Record<EncryptedData>) -> Result<Self, ParsingError> {
+        if record.tag != RecordTag::Packfile {
+            return Err(ParsingError::WrongTag(record.tag.clone()));
+        }
+
+        let data: &String = &record.data.raw;
+
+        // When deserializing, the first three bytes are always reserved to identify the version of
+        // the manifest.
+        if data.starts_with("001") {
+            let body = data.get(3..).ok_or(ParsingError::UnknownVersion)?;
+            let body: PackManifestDataV1 =
+                serde_json::from_str(body).map_err(|e| ParsingError::MalformedBody(Box::new(e)))?;
+            // Untrusted data -- let's validate the count so it doesn't bubble down.
+            let _ = body.record_count()?;
+
+            Ok(PackManifestData::V1(body))
+        } else {
+            Err(ParsingError::UnknownVersion)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,76 +82,17 @@ impl PackManifestDataV1 {
             })
             .map(|c| c + 1)
     }
-}
 
-#[derive(Debug, Error)]
-pub enum LoadingError {
-    #[error("\"{_0}\" is not a packfile tag")]
-    WrongTag(RecordTag),
-    #[error("failed to find version bytes.")]
-    UnknownVersion,
-    #[error("invalid body: {_0}")]
-    MalformedBody(Box<dyn std::error::Error + Send + Sync>),
-    #[error("packfile manifest range is invalid: {_0}")]
-    InvalidRange(#[from] InvalidRangeError),
-}
-
-impl TryFrom<&Record<EncryptedData>> for PackManifestData {
-    type Error = LoadingError;
-
-    fn try_from(value: &Record<EncryptedData>) -> Result<Self, Self::Error> {
-        if value.tag != RecordTag::Packfile {
-            return Err(LoadingError::WrongTag(value.tag.clone()));
-        }
-
-        let data: &String = &value.data.raw;
-
-        // When deserializing, the first three bytes are always reserved to identify the version of
-        // the manifest.
-        if data.starts_with("001") {
-            let body = data.get(3..).ok_or(LoadingError::UnknownVersion)?;
-            let body: PackManifestDataV1 =
-                serde_json::from_str(body).map_err(|e| LoadingError::MalformedBody(Box::new(e)))?;
-            // Untrusted data -- let's validate the count so it doesn't bubble down.
-            let _ = body.record_count()?;
-
-            Ok(PackManifestData::V1(body))
-        } else {
-            Err(LoadingError::UnknownVersion)
-        }
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum StoringError {
-    #[error("invalid body: {_0}")]
-    InvalidBody(Box<dyn std::error::Error + Send + Sync>),
-}
-
-impl TryFrom<&PackManifestDataV1> for EncryptedData {
-    type Error = StoringError;
-
-    fn try_from(value: &PackManifestDataV1) -> Result<Self, Self::Error> {
+    pub fn encode(&self) -> Result<EncryptedData, Box<dyn std::error::Error + Send + Sync>> {
         let mut buf: Vec<u8> = Vec::new();
         buf.extend_from_slice(b"001");
-        serde_json::to_writer(&mut buf, value)
-            .map_err(|e| StoringError::InvalidBody(Box::new(e)))?;
+        serde_json::to_writer(&mut buf, self).map_err(Box::new)?;
         let data = String::from_utf8(buf).unwrap();
 
-        Ok(Self {
+        Ok(EncryptedData {
             raw: data,
             cek: String::new(),
         })
-    }
-}
-
-impl TryFrom<&PackManifestData> for EncryptedData {
-    type Error = StoringError;
-
-    fn try_from(value: &PackManifestData) -> Result<Self, Self::Error> {
-        match value {
-            PackManifestData::V1(v1) => v1.try_into(),
-        }
     }
 }
 
@@ -228,8 +205,8 @@ impl<'a> PackManifestRecordView<'a> {
     /// between compression size and compression speed and would be optimal for DSL/Fiber networks.
     const ZSTD_ENCODING_LEVEL: NonZeroU8 = NonZeroU8::new(12).unwrap();
 
-    pub fn new(record: &'a Record<EncryptedData>) -> Result<Self, LoadingError> {
-        let manifest = PackManifestData::try_from(record)?;
+    pub fn new(record: &'a Record<EncryptedData>) -> Result<Self, ParsingError> {
+        let manifest = PackManifestData::parse(record)?;
         Ok(Self { record, manifest })
     }
 

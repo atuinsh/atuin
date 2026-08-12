@@ -18,14 +18,16 @@ use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::{EncryptedData, Record, RecordId, RecordTag};
 use thiserror::Error;
 
-use crate::{api_client::Client, record::sqlite_store::SqliteStore};
+use crate::{
+    api_client::Client, packfile::record::ParsingError, record::sqlite_store::SqliteStore,
+};
 
-use super::record::{LoadingError, PackManifestRecordView, PackingError, UnpackError};
+use super::record::{PackManifestRecordView, PackingError, UnpackError};
 
 #[derive(Debug, Error)]
 pub enum UploadError {
     #[error("failed to load the packfile manifest: {0}")]
-    PackManifest(#[from] LoadingError),
+    PackManifest(#[from] ParsingError),
 
     #[error(transparent)]
     Pack(#[from] PackingError),
@@ -57,7 +59,7 @@ pub async fn upload_packed(
 #[derive(Debug, Error)]
 pub enum DownloadError {
     #[error("failed to load the packfile manifest: {0}")]
-    PackManifest(#[from] LoadingError),
+    PackManifest(#[from] ParsingError),
 
     #[error("packfile download failed: {0}")]
     Api(eyre::Report),
@@ -206,7 +208,7 @@ mod tests {
 
         // A corrupt/tampered manifest whose plaintext range is inverted (start_idx > end_idx). The
         // packer never emits this, so craft the record directly.
-        let data = EncryptedData::try_from(&PackManifestDataV1 { start_idx, end_idx }).unwrap();
+        let data = PackManifestDataV1 { start_idx, end_idx }.encode().unwrap();
         let manifest = Record::builder()
             .host(Host::new(host))
             .version(RecordVersion::V1)
@@ -292,7 +294,7 @@ mod tests {
         .await
         .unwrap();
         let manifest = up.last(host, &RecordTag::Packfile).await.unwrap().unwrap();
-        let blob = PackManifestRecordView::new(&manifest)
+        let (blob, _) = PackManifestRecordView::new(&manifest)
             .unwrap()
             .pack_records(&up, key.clone())
             .await

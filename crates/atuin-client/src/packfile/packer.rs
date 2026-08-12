@@ -1,9 +1,9 @@
 //! Turns accumulated history into plaintext `packfile` manifest records.
 
-use super::record::{LoadingError, PackManifestData, PackManifestDataV1, StoringError};
+use super::record::{PackManifestData, PackManifestDataV1, ParsingError};
 use crate::record::sqlite_store::SqliteStore;
 use atuin_domain::caps::PackfileCap;
-use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordTag, RecordVersion};
+use atuin_domain::record::{Host, HostId, Record, RecordTag, RecordVersion};
 use thiserror::Error;
 use tracing::{instrument, trace};
 
@@ -13,10 +13,10 @@ pub enum PackingError {
     Store(eyre::Report),
 
     #[error("corrupt packfile manifest in the store: {0}")]
-    ManifestLoad(#[from] LoadingError),
+    ManifestLoad(#[from] ParsingError),
 
     #[error("failed to encode a packfile manifest: {0}")]
-    ManifestStore(#[from] StoringError),
+    ManifestStore(Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// Write a `packfile` manifest record for each contiguous history run of `count` records.
@@ -48,7 +48,7 @@ pub async fn try_pack(
     // `start` is the first unpacked source idx; `pack_idx` is the next idx in the *packfile*
     // stream (a separate sequence). Both come from the same latest manifest record.
     let start = match &last_pack {
-        Some(record) => match PackManifestData::try_from(record)? {
+        Some(record) => match PackManifestData::parse(record)? {
             PackManifestData::V1(v1) => v1.end_idx + 1,
         },
         None => 0,
@@ -91,7 +91,7 @@ pub async fn try_pack(
             .version(RecordVersion::V1)
             .tag(RecordTag::Packfile)
             .idx(pack_idx)
-            .data(EncryptedData::try_from(&manifest)?)
+            .data(manifest.encode().map_err(PackingError::ManifestStore)?)
             .build();
 
         store.push(&record).await.map_err(PackingError::Store)?;
@@ -154,7 +154,7 @@ mod tests {
             .await
             .unwrap()
             .iter()
-            .map(|record| match PackManifestData::try_from(record).unwrap() {
+            .map(|record| match PackManifestData::parse(record).unwrap() {
                 PackManifestData::V1(v1) => (v1.start_idx, v1.end_idx),
             })
             .collect()
