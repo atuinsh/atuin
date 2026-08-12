@@ -176,9 +176,10 @@ async fn sync_upload(
     local: RecordIdx,
     remote: Option<RecordIdx>,
     page_size: u64,
-) -> Result<i64, SyncError> {
-    let remote = remote.unwrap_or(0);
-    let expected = local - remote;
+) -> Result<u64, SyncError> {
+    // The first record the remote *doesn't* have.
+    let first_missing_remote = remote.map_or(0, |n| n + 1);
+    let expected = local + 1 - first_missing_remote;
     let mut progress = 0;
 
     let pb = ProgressBar::new(expected);
@@ -194,9 +195,9 @@ async fn sync_upload(
         tag
     );
 
-    loop {
+    while progress < expected {
         let page = store
-            .next(host, &tag, remote + progress, page_size)
+            .next(host, &tag, first_missing_remote + progress, page_size)
             .await
             .map_err(|e| {
                 error!("failed to read upload page: {e:?}");
@@ -216,15 +217,11 @@ async fn sync_upload(
 
         progress += page.len() as u64;
         pb.set_position(progress);
-
-        if progress >= expected {
-            break;
-        }
     }
 
     pb.finish_with_message("Uploaded records");
 
-    Ok(progress as i64)
+    Ok(progress)
 }
 
 async fn sync_download(
@@ -236,8 +233,9 @@ async fn sync_download(
     remote: RecordIdx,
     page_size: u64,
 ) -> Result<Vec<RecordId>, SyncError> {
-    let local = local.unwrap_or(0);
-    let expected = remote - local;
+    // The first record the local store *doesn't* have.
+    let first_missing_local = local.map_or(0, |n| n + 1);
+    let expected = remote + 1 - first_missing_local;
     let mut progress = 0;
     let mut ret = Vec::new();
 
@@ -254,9 +252,9 @@ async fn sync_download(
         .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
         .progress_chars("#>-"));
 
-    loop {
+    while progress < expected {
         let page = client
-            .next_records(host, tag.clone(), local + progress, page_size)
+            .next_records(host, tag.clone(), first_missing_local + progress, page_size)
             .await
             .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
 
@@ -273,10 +271,6 @@ async fn sync_download(
 
         progress += page.len() as u64;
         pb.set_position(progress);
-
-        if progress >= expected {
-            break;
-        }
     }
 
     pb.finish_with_message("Downloaded records");
@@ -289,7 +283,7 @@ pub async fn sync_remote(
     operations: Vec<Operation>,
     local_store: &SqliteStore,
     page_size: u64,
-) -> Result<(i64, Vec<RecordId>), SyncError> {
+) -> Result<(u64, Vec<RecordId>), SyncError> {
     let mut uploaded = 0;
     let mut downloaded = Vec::new();
 
@@ -359,7 +353,7 @@ pub async fn sync(
     settings: &Settings,
     store: &SqliteStore,
     encryption_key: &paseto_v4::Key,
-) -> Result<(i64, Vec<RecordId>), SyncError> {
+) -> Result<(u64, Vec<RecordId>), SyncError> {
     let client = build_client(settings).await?;
     let (diff, remote_index) = diff(&client, store).await?;
 
