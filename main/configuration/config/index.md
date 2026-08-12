@@ -915,15 +915,15 @@ sync_frequency = 300
 
 ### `socket_path`
 
-Default:
+Default if \[`systemd_socket`\] is false: `$TMPDIR/atuin-$UID/atuin.sock`, where `$UID` is your [user ID](https://en.wikipedia.org/wiki/User_identifier). `$TMPDIR` defaults to `/tmp` if unset.
 
-```
-socket_path = "~/.local/share/atuin/atuin.sock"
-```
+Default if \[`systemd_socket`\] is true: `$XDG_RUNTIME_DIR/atuin.sock` if `$XDG_RUNTIME_DIR` is set, otherwise `$TMPDIR/atuin-$UID/atuin.sock`.
 
-Where to bind a Unix socket for client -> daemon communication
+[`systemd_socket`](#systemd_socket)
 
-If XDG_RUNTIME_DIR is available, Atuin uses this directory instead.
+Where to bind a Unix socket for client -> daemon communication.
+
+Older versions of Atuin used to listen on `$XDG_RUNTIME_DIR/atuin.sock` if `$XDG_RUNTIME_DIR` was set, otherwise `$XDG_DATA_HOME/atuin/atuin.sock` if `$XDG_DATA_HOME` was set, otherwise `~/.local/share/atuin/atuin.sock`. If you don't manually set `socket_path` in your config, Atuin will still look for an existing socket at the old path, as an older version of the daemon may be running there.
 
 ### `pidfile_path`
 
@@ -944,6 +944,8 @@ Use a socket passed via systemd socket activation protocol instead of the path
 ```
 systemd_socket = false
 ```
+
+Note: setting this to true changes the default value of [`socket_path`](#socket_path).
 
 ### `tcp_port`
 
