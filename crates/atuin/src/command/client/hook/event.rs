@@ -32,13 +32,13 @@ pub enum ParseError {
 /// An agent hook event Atuin cares about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookEvent {
-    /// A Bash command is about to run; open a history entry.
+    /// A shell command is about to run; open a history entry.
     Start {
         command: NonNulStr,
         intent: Option<String>,
         tool_use_id: String,
     },
-    /// A Bash command finished; close the matching history entry.
+    /// A shell command finished; close the matching history entry.
     End { tool_use_id: String, exit: i64 },
 }
 
@@ -47,7 +47,7 @@ impl From<WireHookEvent> for Option<HookEvent> {
     /// event.
     ///
     /// We **don't** care about:
-    ///   - Non-`Bash` tool invocations.
+    ///   - Tool invocations that aren't a shell tool (`Bash`, `PowerShell`).
     ///   - Tool invocations which are missing a `tool_use_id`.
     fn from(wire: WireHookEvent) -> Self {
         if matches!(wire.tool_name, WireToolName::Other) {
@@ -191,8 +191,46 @@ mod tests {
         }),
         Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: 1 })
     )]
-    // Non-Bash tools are never recorded.
-    #[case::non_bash_tool_skipped(
+    // Claude Code on Windows runs shell commands through a `PowerShell` tool
+    // rather than `Bash`; those are recorded the same way.
+    #[case::powershell_pre_tool_use(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "PowerShell",
+            "tool_input": {"command": "Get-ChildItem", "description": "List files"},
+            "tool_use_id": "toolu_abc123"
+        }),
+        Some(HookEvent::Start {
+            command: non_nul("Get-ChildItem"),
+            intent: Some("List files".into()),
+            tool_use_id: "toolu_abc123".into()
+        })
+    )]
+    // A PowerShell completion closes the entry just like a Bash one. Claude
+    // Code's PowerShell `tool_response` carries no `exitCode`, so this is the
+    // default-zero path.
+    #[case::powershell_post_tool_use(
+        json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "PowerShell",
+            "tool_input": {"command": "Get-ChildItem"},
+            "tool_response": {"stdout": "", "stderr": "", "interrupted": false},
+            "tool_use_id": "toolu_abc123"
+        }),
+        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: 0 })
+    )]
+    // A failed PowerShell command still forces exit 1.
+    #[case::powershell_failure_forces_exit_one(
+        json!({
+            "hook_event_name": "PostToolUseFailure",
+            "tool_name": "PowerShell",
+            "tool_input": {"command": "throw 'boom'"},
+            "tool_use_id": "toolu_abc123"
+        }),
+        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: 1 })
+    )]
+    // Tools that aren't a shell are never recorded.
+    #[case::non_shell_tool_skipped(
         json!({
             "hook_event_name": "PreToolUse",
             "tool_name": "Write",
@@ -324,11 +362,13 @@ mod tests {
     }
 
     proptest! {
-        /// Any Bash `PreToolUse` with a non-empty command becomes a `Start`
-        /// carrying that command, the tool id, and the optional description as
-        /// intent — regardless of the surrounding fields.
+        /// Any shell-tool `PreToolUse` with a non-empty command becomes a
+        /// `Start` carrying that command, the tool id, and the optional
+        /// description as intent — regardless of the surrounding fields, and
+        /// identically for every shell tool.
         #[test]
-        fn bash_pre_tool_use_yields_start(
+        fn shell_pre_tool_use_yields_start(
+            tool_name in proptest::sample::select(vec!["Bash", "PowerShell"]),
             command in r"[^\p{Cc}]+",
             tool_use_id in r"[^\p{Cc}]+",
             description in proptest::option::of(r"[^\p{Cc}]*"),
@@ -340,7 +380,7 @@ mod tests {
             }
             let input = json!({
                 "hook_event_name": "PreToolUse",
-                "tool_name": "Bash",
+                "tool_name": tool_name,
                 "tool_input": serde_json::Value::Object(tool_input),
                 "tool_use_id": tool_use_id,
             });
@@ -355,15 +395,17 @@ mod tests {
             );
         }
 
-        /// Any Bash `PostToolUse` reports the exit code verbatim, for every i64.
+        /// Any shell-tool `PostToolUse` reports the exit code verbatim, for
+        /// every i64.
         #[test]
-        fn bash_post_tool_use_reports_exit_code(
+        fn shell_post_tool_use_reports_exit_code(
+            tool_name in proptest::sample::select(vec!["Bash", "PowerShell"]),
             exit in any::<i64>(),
             tool_use_id in r"[^\p{Cc}]+",
         ) {
             let input = json!({
                 "hook_event_name": "PostToolUse",
-                "tool_name": "Bash",
+                "tool_name": tool_name,
                 "tool_response": {"exitCode": exit},
                 "tool_use_id": tool_use_id,
             });
@@ -378,12 +420,13 @@ mod tests {
         /// claims.
         #[test]
         fn failure_event_always_exits_one(
+            tool_name in proptest::sample::select(vec!["Bash", "PowerShell"]),
             reported_exit in any::<i64>(),
             tool_use_id in r"[^\p{Cc}]+",
         ) {
             let input = json!({
                 "hook_event_name": "PostToolUseFailure",
-                "tool_name": "Bash",
+                "tool_name": tool_name,
                 "tool_response": {"exitCode": reported_exit},
                 "tool_use_id": tool_use_id,
             });
@@ -394,10 +437,16 @@ mod tests {
             );
         }
 
-        /// Any tool other than Bash is skipped, whatever the event or fields.
+        /// Any tool that isn't a shell tool is skipped, whatever the event or
+        /// fields. Both shell tools must be excluded from the generator: the
+        /// strategy can produce any printable string, so leaving `PowerShell`
+        /// in would make this a rare flake rather than a stable failure.
         #[test]
-        fn non_bash_tool_is_always_skipped(
-            tool_name in r"[^\p{Cc}]+".prop_filter("must not be Bash", |s| s.as_str() != "Bash"),
+        fn non_shell_tool_is_always_skipped(
+            tool_name in r"[^\p{Cc}]+".prop_filter(
+                "must not be a shell tool",
+                |s| !matches!(s.as_str(), "Bash" | "PowerShell"),
+            ),
             event in proptest::sample::select(vec![
                 "PreToolUse", "PostToolUse", "PostToolUseFailure", "Frobnicate",
             ]),

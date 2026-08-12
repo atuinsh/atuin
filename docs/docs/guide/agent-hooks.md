@@ -37,10 +37,10 @@ When `atuin hook install` runs, it writes the agent's config file or extension t
 
 The hook lifecycle:
 
-1. **PreToolUse** -- the agent is about to run a Bash command. Atuin records the command, working directory, and timestamp (same as `history start`).
+1. **PreToolUse** -- the agent is about to run a shell command. Atuin records the command, working directory, and timestamp (same as `history start`).
 2. **PostToolUse / PostToolUseFailure** -- the command finished. Atuin records the exit code and duration (same as `history end`).
 
-Atuin only captures `Bash` tool invocations. It ignores other tool types (file writes, web fetches, etc.).
+Atuin only captures shell tool invocations -- `Bash`, plus the `PowerShell` tool Claude Code uses on Windows. It ignores other tool types (file writes, web fetches, etc.).
 
 Agents that load extensions rather than shelling out to a hook command -- opencode and pi -- call `atuin history start` and `atuin history end` directly instead, but record the same thing.
 
@@ -88,7 +88,9 @@ For support tiers, see [Supported platforms](../support.md).
 atuin hook install claude-code
 ```
 
-This adds hook entries to `~/.claude/settings.json`. Claude Code calls `atuin hook claude-code` on each `Bash` tool use, passing the event as JSON on `stdin`.
+This adds hook entries to `~/.claude/settings.json`. Claude Code calls `atuin hook claude-code` on each `Bash` or `PowerShell` tool use, passing the event as JSON on `stdin`. On Windows Claude Code runs most shell commands through its `PowerShell` tool, so the matcher covers both.
+
+If you installed the hooks with an earlier version of Atuin, re-run the command above: it rewrites the existing entry's matcher in place rather than reporting "already installed."
 
 ### Codex
 

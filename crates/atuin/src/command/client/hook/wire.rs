@@ -11,6 +11,12 @@ use atuin_common::string::NonNulStr;
 pub enum WireToolName {
     /// The tool the agent requested is a Bash command.
     Bash,
+    /// The tool the agent requested is a PowerShell command.
+    ///
+    /// Claude Code on Windows exposes a separate `PowerShell` tool alongside
+    /// `Bash`, and routes most shell calls through it. Without this variant
+    /// those commands decode to [`WireToolName::Other`] and are dropped.
+    PowerShell,
     /// Unrecognized wire tool name.
     #[serde(other)]
     Other,
@@ -21,7 +27,7 @@ pub enum WireToolName {
 pub struct WireHookEvent {
     /// The lifecycle stage. An unrecognized value decodes to [`HookEventName::Other`].
     pub hook_event_name: HookEventName,
-    /// The tool that ran; we only record `Bash`.
+    /// The tool that ran; we only record shell tools (`Bash`, `PowerShell`).
     pub tool_name: WireToolName,
     /// Correlates a command's start and end across two `atuin hook` invocations.
     pub tool_use_id: String,
