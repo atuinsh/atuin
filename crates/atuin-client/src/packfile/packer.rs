@@ -103,6 +103,7 @@ pub async fn try_pack(
 mod tests {
     use super::*;
     use atuin_common::utils::uuid_v7;
+    use atuin_domain::record::EncryptedData;
     use proptest::prelude::*;
     use rstest::{fixture, rstest};
 

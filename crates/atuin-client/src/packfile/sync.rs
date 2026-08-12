@@ -401,10 +401,10 @@ mod tests {
         cek: String::new(),
     })]
     #[case::inverted_range(
-        EncryptedData::try_from(&crate::packfile::record::PackManifestDataV1 {
+        crate::packfile::record::PackManifestDataV1 {
             start_idx: 100,
             end_idx: 5,
-        })
+        }.encode()
         .unwrap()
     )]
     #[tokio::test]
@@ -500,10 +500,11 @@ mod tests {
             .tag(RecordTag::Packfile)
             .idx(0)
             .data(
-                EncryptedData::try_from(&crate::packfile::record::PackManifestDataV1 {
+                crate::packfile::record::PackManifestDataV1 {
                     start_idx: 0,
                     end_idx: 2,
-                })
+                }
+                .encode()
                 .unwrap(),
             )
             .build();
