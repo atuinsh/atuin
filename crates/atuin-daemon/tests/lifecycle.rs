@@ -104,9 +104,7 @@ mod unix {
         // Give the server a moment to bind.
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let client = HistoryClient::new(socket_path.to_string_lossy().to_string())
-            .await
-            .unwrap();
+        let client = HistoryClient::new(socket_path.clone()).await.unwrap();
 
         (client, handle, tmp)
     }

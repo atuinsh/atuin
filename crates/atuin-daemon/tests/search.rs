@@ -123,9 +123,7 @@ mod unix {
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let client = SearchClient::new(socket_path.to_string_lossy().to_string())
-            .await
-            .unwrap();
+        let client = SearchClient::new(socket_path.clone()).await.unwrap();
 
         (client, handle, tmp)
     }

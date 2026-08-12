@@ -14,5 +14,7 @@ pub mod string;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
 pub mod time;
+#[cfg(all(unix, feature = "unix"))]
+pub mod unix;
 pub mod url;
 pub mod utils;

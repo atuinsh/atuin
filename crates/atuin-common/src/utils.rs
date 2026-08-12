@@ -1,4 +1,5 @@
 use std::env;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use eyre::{Result, eyre};
@@ -106,21 +107,24 @@ pub fn home_dir() -> PathBuf {
         .expect("could not determine home directory")
 }
 
+/// Read an environment variable that must be nonempty.
+///
+/// This function will never return an empty string: if the environment variable is set but empty,
+/// [`None`] is returned.
+pub fn env_nonempty(name: &str) -> Option<OsString> {
+    std::env::var_os(name).filter(|value| !value.is_empty())
+}
+
 pub fn config_dir() -> PathBuf {
-    let config_dir =
-        std::env::var("XDG_CONFIG_HOME").map_or_else(|_| home_dir().join(".config"), PathBuf::from);
+    let config_dir: PathBuf =
+        env_nonempty("XDG_CONFIG_HOME").map_or_else(|| home_dir().join(".config"), Into::into);
     config_dir.join("atuin")
 }
 
 pub fn data_dir() -> PathBuf {
-    let data_dir = std::env::var("XDG_DATA_HOME")
-        .map_or_else(|_| home_dir().join(".local").join("share"), PathBuf::from);
-
+    let data_dir: PathBuf = env_nonempty("XDG_DATA_HOME")
+        .map_or_else(|| home_dir().join(".local").join("share"), Into::into);
     data_dir.join("atuin")
-}
-
-pub fn runtime_dir() -> PathBuf {
-    std::env::var("XDG_RUNTIME_DIR").map_or_else(|_| data_dir(), PathBuf::from)
 }
 
 pub fn logs_dir() -> PathBuf {
@@ -129,10 +133,7 @@ pub fn logs_dir() -> PathBuf {
 
 pub fn dotfiles_cache_dir() -> PathBuf {
     // In most cases, this will be  ~/.local/share/atuin/dotfiles/cache
-    let data_dir = std::env::var("XDG_DATA_HOME")
-        .map_or_else(|_| home_dir().join(".local").join("share"), PathBuf::from);
-
-    data_dir.join("atuin").join("dotfiles").join("cache")
+    data_dir().join("dotfiles").join("cache")
 }
 
 pub fn get_current_dir() -> String {
@@ -207,8 +208,10 @@ mod tests {
     fn test_dirs() {
         // these tests need to be run sequentially to prevent race condition
         test_config_dir_xdg();
+        test_config_dir_xdg_empty();
         test_config_dir();
         test_data_dir_xdg();
+        test_data_dir_xdg_empty();
         test_data_dir();
     }
 
@@ -224,6 +227,20 @@ mod tests {
         );
         // TODO: Audit that the environment access only happens in single-threaded code.
         unsafe { env::remove_var("XDG_CONFIG_HOME") };
+    }
+
+    /// An empty `XDG_CONFIG_HOME` has to be treated as unset: the alternative is a relative path.
+    #[cfg(not(windows))]
+    fn test_config_dir_xdg_empty() {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("HOME", "/home/user") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("XDG_CONFIG_HOME", "") };
+        assert_eq!(config_dir(), PathBuf::from("/home/user/.config/atuin"));
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("XDG_CONFIG_HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("HOME") };
     }
 
     #[cfg(not(windows))]
@@ -248,6 +265,20 @@ mod tests {
         assert_eq!(data_dir(), PathBuf::from("/home/user/custom_data/atuin"));
         // TODO: Audit that the environment access only happens in single-threaded code.
         unsafe { env::remove_var("XDG_DATA_HOME") };
+    }
+
+    /// An empty `XDG_DATA_HOME` has to be treated as unset: the alternative is a relative path.
+    #[cfg(not(windows))]
+    fn test_data_dir_xdg_empty() {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("HOME", "/home/user") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("XDG_DATA_HOME", "") };
+        assert_eq!(data_dir(), PathBuf::from("/home/user/.local/share/atuin"));
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("XDG_DATA_HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("HOME") };
     }
 
     #[cfg(not(windows))]
