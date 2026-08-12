@@ -58,6 +58,12 @@ Enables YOLO mode, which automatically allows all permission checks. **Use this 
 
 This setting _doesn't_ enable any capabilities. Instead, it only bypasses any permission checks.
 
+### `tips`
+
+Default: `true`
+
+Display tips in Atuin AI at the bottom of agent turns.
+
 ## Capabilities
 
 Settings that control what capabilities are sent to the LLM, which the LLM uses to understand what features the client has available. These are specified under `[ai.capabilities]`.

@@ -4,6 +4,9 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use atuin_client::settings::Settings;
 
 use crossterm::event::{KeyCode, KeyEventKind};
 use eye_declare::{
@@ -26,6 +29,7 @@ use crate::tui::recall::RecallState;
 use crate::tui::select::{SelectMsg, SelectState};
 use crate::tui::slash::{SlashCommandRegistry, SlashCommandSearchResult};
 use crate::tui::state::ConversationEvent;
+use crate::tui::tips::{Tip, TipContext, TipRotation};
 use crate::tui::view;
 use crate::tui::view::turn::{TurnBuilder, UiTurn, UiTurnKind};
 use crate::usage::UsageSnapshot;
@@ -138,6 +142,22 @@ pub(crate) struct AiApp {
     /// leading blank row).
     pushed_turns: usize,
     exiting: bool,
+    /// Config snapshot from startup; tip relevance predicates read it.
+    settings: Settings,
+    tips: TipRotation,
+    /// When the in-flight turn started; survives continuation streams.
+    turn_started_at: Option<Instant>,
+    /// The tip pulled for the in-flight turn, shown under the spinner.
+    turn_tip: Option<&'static Tip>,
+    /// The last turn's clean completion — "Responded in …" plus its tip.
+    /// Cleared when a new turn starts and on /new.
+    responded: Option<Responded>,
+}
+
+/// A completed turn's summary, rendered where the spinner used to be.
+struct Responded {
+    elapsed: Duration,
+    tip: Option<&'static Tip>,
 }
 
 impl AiApp {
@@ -151,6 +171,7 @@ impl AiApp {
         usage: Option<UsageSnapshot>,
         initial_prompt: Option<String>,
         usage_stale: bool,
+        settings: Settings,
     ) -> Self {
         Self {
             in_git_project: io.app_ctx.git_root.is_some(),
@@ -158,6 +179,8 @@ impl AiApp {
             usage,
             initial_prompt,
             usage_stale,
+            settings,
+            tips: TipRotation::new(),
             ..Self::headless(fsm, resume_notice, slash_registry, skill_names)
         }
     }
@@ -195,6 +218,11 @@ impl AiApp {
             pushed_events: 0,
             pushed_turns: 0,
             exiting: false,
+            settings: Settings::utc(),
+            tips: TipRotation::starting_at(0),
+            turn_started_at: None,
+            turn_tip: None,
+            responded: None,
         }
     }
 
@@ -307,8 +335,14 @@ impl AiApp {
         if let Event::ToolExecutionDone { tool_id, .. } = &event {
             self.tool_interrupts.remove(tool_id);
         }
+        let was_busy = self.is_busy();
         let effects = self.fsm.handle(event);
         tracing::trace!(?effects, state = ?self.fsm.state, "FSM transition");
+        if !was_busy && self.is_busy() {
+            self.turn_started_at = Some(Instant::now());
+            self.responded = None;
+            self.turn_tip = self.pull_tip();
+        }
         // The event list only shrinks when the FSM resets the session
         // (/new archives and clears it). What was pushed stays in
         // scrollback; the frontier restarts for the new list — a stale
@@ -341,7 +375,20 @@ impl AiApp {
                 // drops the HTTP stream. Esc-cancels-generation is this.
                 Effect::AbortStream => self.streaming = None,
                 Effect::Persist => self.persist(),
+                Effect::TurnEnded => {
+                    let elapsed = self
+                        .turn_started_at
+                        .take()
+                        .map(|t| t.elapsed())
+                        .unwrap_or_default();
+                    self.responded = Some(Responded {
+                        elapsed,
+                        tip: self.turn_tip.take(),
+                    });
+                }
                 Effect::ArchiveSession => {
+                    self.responded = None;
+                    self.turn_tip = None;
                     if let Some(io) = &self.io {
                         let _ = io.persist.send(PersistJob::Archive);
                     }
@@ -817,8 +864,6 @@ impl AiApp {
             ctx.push(view::turn_view(
                 turn,
                 self.pushed_turns == 0 && i == 0,
-                false,
-                false,
                 None,
             ));
             self.pushed_turns += 1;
@@ -925,6 +970,21 @@ impl AiApp {
             editor.clear();
             editor.insert_str(text);
         }
+    }
+
+    /// Pull the next relevant tip for a starting turn.
+    fn pull_tip(&mut self) -> Option<&'static Tip> {
+        let has_context_files = self
+            .io
+            .as_ref()
+            .map(|io| io.user_context_cache.has_gathered())
+            .unwrap_or(None);
+        let tip_ctx = TipContext {
+            settings: &self.settings,
+            model_set: self.fsm.ctx.model.is_some(),
+            has_context_files,
+        };
+        self.tips.next(&tip_ctx)
     }
 
     fn submit(&mut self, ctx: &mut Ctx<'_, Self>) {
@@ -1129,23 +1189,22 @@ impl App for AiApp {
                 },
             )
             .children(turns.iter().enumerate().map(|(i, turn)| {
-                let status_text = ((i == last).then_some(status_text.as_deref())).flatten();
+                let working = (busy && i == last && asking.is_none()).then_some(view::Working {
+                    status: status_text.as_deref(),
+                    tip: self.turn_tip,
+                });
 
-                view::turn_view(
-                    turn,
-                    self.pushed_turns == 0 && i == 0,
-                    busy && i == last,
-                    asking.is_some(),
-                    status_text,
-                )
+                view::turn_view(turn, self.pushed_turns == 0 && i == 0, working)
             }))
             .when(needs_pending_banner, |c| {
-                c.child(view::agent_turn_view(
-                    &[],
-                    true,
-                    asking.is_some(),
-                    status_text.as_deref(),
-                ))
+                let working = asking.is_none().then_some(view::Working {
+                    status: status_text.as_deref(),
+                    tip: self.turn_tip,
+                });
+                c.child(view::agent_turn_view(&[], working))
+            })
+            .when_some(self.responded.as_ref(), |c, responded| {
+                c.child(view::responded_view(responded.elapsed, responded.tip))
             })
             .when_some(
                 match &self.fsm.state {
@@ -1645,6 +1704,98 @@ mod tests {
         let all = h.all_lines();
         assert!(all.contains("Atuin is a shell history tool."));
         assert!(!h.app().fsm.ctx.current_response.contains("Atuin"));
+    }
+
+    #[rstest]
+    fn tip_hangs_off_the_spinner_while_streaming() {
+        let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
+        h.type_str("hello");
+        h.press(KeyCode::Enter);
+        h.stream(Event::StreamStarted);
+
+        let screen = h.screen();
+        // Headless apps start the rotation at tip 0.
+        assert!(
+            screen.contains("└ Tip: press Esc to interrupt a response"),
+            "tip dropper missing under spinner:\n{screen}"
+        );
+    }
+
+    #[rstest]
+    fn responded_line_replaces_the_spinner_on_done() {
+        let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
+        h.type_str("hello");
+        h.press(KeyCode::Enter);
+        h.stream(Event::StreamStarted);
+        h.stream(Event::StreamChunk("Hi!".into()));
+        h.stream(Event::StreamDone {
+            session_id: "s1".into(),
+        });
+
+        let screen = h.screen();
+        assert!(
+            screen.contains("Responded in"),
+            "responded line missing:\n{screen}"
+        );
+        assert!(
+            screen.contains("└ Tip: press Esc to interrupt a response"),
+            "turn's tip should ride along onto the responded line:\n{screen}"
+        );
+
+        // The next submit clears it and rotates to a fresh tip.
+        h.type_str("more");
+        h.press(KeyCode::Enter);
+        h.stream(Event::StreamStarted);
+        let screen = h.screen();
+        assert!(
+            !screen.contains("Responded in"),
+            "responded line should clear on new turn:\n{screen}"
+        );
+        assert!(
+            screen.contains("└ Tip:"),
+            "second turn should show a tip\n{screen}"
+        );
+        assert!(
+            !screen.contains("└ Tip: press Esc to interrupt a response"),
+            "second turn should pull the next tip:\n{screen}"
+        );
+    }
+
+    #[rstest]
+    fn cancelled_turn_shows_no_responded_line() {
+        let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
+        h.type_str("hello");
+        h.press(KeyCode::Enter);
+        h.stream(Event::StreamStarted);
+        h.stream(Event::StreamChunk("partial".into()));
+        h.press(KeyCode::Esc);
+
+        assert!(!h.app().is_busy());
+        assert!(
+            !h.all_lines().contains("Responded in"),
+            "cancel is not a clean completion:\n{}",
+            h.all_lines()
+        );
+    }
+
+    #[rstest]
+    fn tips_disabled_in_settings_suppresses_the_tip_line() {
+        let mut app = app_with(AgentFsm::new(vec![], "t".into()));
+        app.settings.ai.tips = Some(false);
+        let mut h = Harness::new(app);
+        h.type_str("hello");
+        h.press(KeyCode::Enter);
+        h.stream(Event::StreamStarted);
+        h.stream(Event::StreamDone {
+            session_id: "s1".into(),
+        });
+
+        let all = h.all_lines();
+        assert!(!all.contains("Tip:"), "tips disabled but shown:\n{all}");
+        assert!(
+            all.contains("Responded in"),
+            "responded line should still show:\n{all}"
+        );
     }
 
     #[rstest]

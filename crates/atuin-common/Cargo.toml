@@ -22,6 +22,8 @@ unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
 # sequences, backspaces, carriage returns, cursor motion) into clean plain text
 # via a `vt100` terminal emulator. Compiled only when enabled.
 ansi = ["dep:vt100"]
+# Enables OS-specific utilities.
+os = ["dep:rustix"]
 
 [dependencies]
 derive_more = { workspace = true }
@@ -53,8 +55,12 @@ rmp = { workspace = true }
 rmp-serde = { workspace = true }
 fs-err = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, optional = true }
+
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }

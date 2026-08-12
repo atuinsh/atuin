@@ -3,7 +3,7 @@ use atuin_client::{
     history::{History, all_user_author_filter},
     settings::Settings,
 };
-use atuin_daemon::client::{DaemonClientErrorKind, SearchClient, SearchParams, classify_error};
+use atuin_daemon::client::{SearchClient, SearchParams};
 use atuin_daemon::search::{normalize_diacritics, truncate_query};
 use eyre::Result;
 use tracing::{Level, debug, instrument, span};
@@ -19,81 +19,63 @@ struct LazyClient(Option<SearchClient>);
 impl LazyClient {
     /// Get the [`SearchClient`].
     #[instrument(skip_all, level = Level::TRACE, name = "get_daemon_client")]
-    pub async fn get(&mut self, params: &ClientParams) -> Result<&mut SearchClient> {
+    pub async fn get(&mut self, settings: &Settings) -> Result<&mut SearchClient> {
         // TODO: Ideally we would write this as follows, to avoid an `unwrap`:
         //
         //     Ok(match self.0.as_mut() {
         //         Some(client) => client,
-        //         None => self.0.insert(self.connect(params).await?),
+        //         None => self.0.insert(self.connect(settings).await?),
         //     })
         //
         // However, Rust's borrow checker incorrectly rejects this code. This will be fixed by
         // Polonius; see https://rust-lang.github.io/rust-project-goals/2026/polonius.html.
 
         if self.0.is_none() {
-            return Ok(self.0.insert(self.connect(params).await?));
+            return Ok(self.0.insert(self.connect(settings).await?));
         }
         Ok(self.0.as_mut().unwrap())
     }
 
-    async fn connect(&self, params: &ClientParams) -> Result<SearchClient> {
+    async fn connect(&self, settings: &Settings) -> Result<SearchClient> {
         #[cfg(unix)]
-        return SearchClient::new(params.socket_path.clone()).await;
+        return SearchClient::new(settings.daemon.existing_socket_path().into_owned()).await;
 
         #[cfg(not(unix))]
-        SearchClient::new(params.tcp_port).await
-    }
-
-    fn should_retry(err: &eyre::Report) -> bool {
-        matches!(
-            classify_error(err),
-            DaemonClientErrorKind::Connect
-                | DaemonClientErrorKind::Unavailable
-                | DaemonClientErrorKind::Unimplemented
-        )
+        SearchClient::new(settings.daemon.tcp_port).await
     }
 
     /// Call a method on [`SearchClient`], autostarting the daemon and retrying if necessary.
     ///
     /// `f` should call the appropriate method on the provided [`SearchClient`].
-    async fn try_with_autostart<F, R>(&mut self, params: &ClientParams, mut f: F) -> Result<R>
+    async fn try_with_autostart<F, R>(&mut self, settings: &Settings, mut f: F) -> Result<R>
     where
         F: AsyncFnMut(&mut SearchClient) -> Result<R>,
     {
-        let client = self.get(params).await?;
-        let err = match f(client).await {
-            Ok(result) => return Ok(result),
+        let err = match self.get(settings).await {
+            Ok(client) => match f(client).await {
+                Ok(result) => return Ok(result),
+                Err(err) => err,
+            },
             Err(err) => err,
         };
 
-        if !(params.settings.daemon.autostart && Self::should_retry(&err)) {
+        if !(settings.daemon.autostart && daemon::should_retry_after_error(&err)) {
             return Err(err);
         }
 
         debug!("daemon not available, attempting auto-start");
         self.0 = None;
-        daemon::ensure_daemon_running(&params.settings).await?;
-        let client = self.get(params).await?;
+        if let Err(start_error) = daemon::ensure_daemon_running(settings).await {
+            return Err(err.wrap_err(format!("failed to auto-start daemon: {start_error:#}")));
+        }
+        let client = self.get(settings).await?;
         f(client).await
     }
 }
 
-/// Required parameters to create a [`SearchClient`].
-///
-/// This is a separate type so that the params can be immutably borrowed multiple times
-/// concurrently; in particular, so that the params can be accessed even when [`LazyClient`] is
-/// mutably borrowed (see [`Search::prepare_index`]).
-struct ClientParams {
-    settings: Settings,
-    #[cfg(unix)]
-    socket_path: String,
-    #[cfg(not(unix))]
-    tcp_port: u64,
-}
-
 pub struct Search {
     client: LazyClient,
-    params: ClientParams,
+    settings: Settings,
     query_id: u64,
 }
 
@@ -101,13 +83,7 @@ impl Search {
     pub fn new(settings: &Settings) -> Self {
         Search {
             client: LazyClient::default(),
-            params: ClientParams {
-                settings: settings.clone(),
-                #[cfg(unix)]
-                socket_path: settings.daemon.socket_path.clone(),
-                #[cfg(not(unix))]
-                tcp_port: settings.daemon.tcp_port,
-            },
+            settings: settings.clone(),
             query_id: 0,
         }
     }
@@ -130,7 +106,7 @@ impl Search {
         db: &dyn Database,
     ) -> Result<Vec<History>> {
         let shells = state.shells.to_filter();
-        let results = db
+        Ok(db
             .search(
                 DbSearchMode::FullText,
                 state.filter_mode,
@@ -143,9 +119,9 @@ impl Search {
                     ..Default::default()
                 },
             )
-            .await
-            .map_or(Vec::new(), |r| r.into_iter().collect());
-        Ok(results)
+            .await?
+            .into_iter()
+            .collect())
     }
 
     #[instrument(skip_all, level = Level::TRACE, name = "hydrate_from_db", fields(count = ids.len()))]
@@ -161,14 +137,8 @@ impl Search {
     /// Tell the daemon to build the search index.
     pub async fn prepare_index(&mut self) -> Result<()> {
         self.client
-            .try_with_autostart(&self.params, async |client| {
-                let shells = self
-                    .params
-                    .settings
-                    .search
-                    .shells
-                    .to_filter()
-                    .to_vec_filter();
+            .try_with_autostart(&self.settings, async |client| {
+                let shells = self.settings.search.shells.to_filter().to_vec_filter();
                 client.prepare_index(shells).await
             })
             .await
@@ -197,7 +167,7 @@ impl SearchEngine for Search {
 
         let mut stream = self
             .client
-            .try_with_autostart(&self.params, async |client| {
+            .try_with_autostart(&self.settings, async |client| {
                 let search_params = SearchParams {
                     query: query.clone(),
                     query_id,
@@ -211,8 +181,8 @@ impl SearchEngine for Search {
 
         let mut ids = Vec::with_capacity(200);
         span!(Level::TRACE, "daemon_search.resp")
-            .in_scope(async || {
-                while let Ok(Some(response)) = stream.message().await {
+            .in_scope(async || -> Result<()> {
+                while let Some(response) = stream.message().await? {
                     let span2 = span!(
                         Level::TRACE,
                         "daemon_search.resp.item",
@@ -235,8 +205,9 @@ impl SearchEngine for Search {
                     drop(span2_guard);
                     drop(span2);
                 }
+                Ok(())
             })
-            .await;
+            .await?;
         drop(span);
 
         if ids.is_empty() {

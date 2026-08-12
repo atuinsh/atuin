@@ -162,7 +162,7 @@ fn is_legacy_daemon_error(err: &eyre::Report) -> bool {
     matches!(classify_error(err), DaemonClientErrorKind::Unimplemented)
 }
 
-fn should_retry_after_error(err: &eyre::Report) -> bool {
+pub(super) fn should_retry_after_error(err: &eyre::Report) -> bool {
     matches!(
         classify_error(err),
         DaemonClientErrorKind::Connect
@@ -225,7 +225,7 @@ async fn connect_client(settings: &Settings) -> Result<HistoryClient> {
         #[cfg(not(unix))]
         settings.daemon.tcp_port,
         #[cfg(unix)]
-        settings.daemon.socket_path.clone(),
+        settings.daemon.existing_socket_path().into_owned(),
     )
     .await
 }
@@ -277,34 +277,59 @@ fn startup_timeout(settings: &Settings) -> Result<Duration> {
         .wrap_err("invalid local_timeout setting")
 }
 
+/// An error that occurred while trying to remove a socket.
 #[cfg(unix)]
-fn remove_stale_socket_if_present(settings: &Settings) -> Result<()> {
+#[derive(Debug, thiserror::Error)]
+#[error("failed to remove daemon socket {}: {source}", .path.display())]
+struct RemoveSocketError {
+    path: PathBuf,
+    source: std::io::Error,
+}
+
+/// Remove the daemon's socket from every path it may be at, subject to `should_remove`.
+#[cfg(unix)]
+fn remove_sockets(
+    settings: &Settings,
+    should_remove: impl Fn(&Path) -> bool,
+) -> Result<(), RemoveSocketError> {
     if settings.daemon.systemd_socket {
         return Ok(());
     }
 
-    let socket_path = Path::new(&settings.daemon.socket_path);
-    if !socket_path.exists() {
-        return Ok(());
+    let mut error = None;
+    for socket_path in settings.daemon.potential_socket_paths() {
+        if !socket_path.exists() || !should_remove(&socket_path) {
+            continue;
+        }
+
+        if let Err(e) = fs::remove_file(&socket_path)
+            && e.kind() != ErrorKind::NotFound
+        {
+            // Log the error because we only return the first error when multiple occur.
+            tracing::error!(
+                "failed to remove daemon socket {}: {e}",
+                socket_path.display()
+            );
+            error.get_or_insert_with(|| RemoveSocketError {
+                path: socket_path.into_owned(),
+                source: e,
+            });
+        }
     }
 
-    match StdUnixStream::connect(socket_path) {
-        Ok(stream) => {
-            drop(stream);
-            Ok(())
-        }
-        Err(err) if err.kind() == ErrorKind::ConnectionRefused => {
-            fs::remove_file(socket_path).wrap_err_with(|| {
-                format!(
-                    "failed to remove stale daemon socket {}",
-                    socket_path.display()
-                )
-            })?;
-            Ok(())
-        }
-        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
-        Err(_) => Ok(()),
-    }
+    error.map_or(Ok(()), Err)
+}
+
+/// Remove any socket left behind by a daemon that is no longer listening.
+#[cfg(unix)]
+fn remove_stale_socket_if_present(settings: &Settings) -> Result<(), RemoveSocketError> {
+    remove_sockets(settings, |socket_path| {
+        // A refused connection means the socket is left over from a daemon that is gone.
+        matches!(
+            StdUnixStream::connect(socket_path),
+            Err(e) if e.kind() == ErrorKind::ConnectionRefused
+        )
+    })
 }
 
 async fn wait_until_ready(settings: &Settings, timeout: Duration) -> Result<HistoryClient> {
@@ -568,7 +593,10 @@ async fn status_cmd(settings: &Settings) -> Result<()> {
             println!("  Protocol: {}", status.protocol);
             println!("  Healthy:  {}", status.healthy);
             #[cfg(unix)]
-            println!("  Socket:   {}", settings.daemon.socket_path);
+            println!(
+                "  Socket:   {}",
+                settings.daemon.existing_socket_path().display()
+            );
             #[cfg(not(unix))]
             println!("  Port:     {}", settings.daemon.tcp_port);
         }
@@ -699,16 +727,10 @@ fn force_cleanup(settings: &Settings) {
         }
     }
 
-    // Remove the socket file
+    // Remove the socket files
     #[cfg(unix)]
-    {
-        let socket_path = Path::new(&settings.daemon.socket_path);
-        if socket_path.exists()
-            && let Err(e) = fs::remove_file(socket_path)
-            && e.kind() != ErrorKind::NotFound
-        {
-            tracing::warn!("failed to remove socket: {e}");
-        }
+    if let Err(e) = remove_sockets(settings, |_| true) {
+        tracing::warn!("{e}");
     }
 }
 

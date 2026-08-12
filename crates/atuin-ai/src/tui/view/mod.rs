@@ -16,6 +16,7 @@ use crate::fsm::tools::{InterruptReason, TrackedTool};
 use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview};
 use crate::tui::events::PermissionResult;
 use crate::tui::select;
+use crate::tui::tips::Tip;
 
 pub(crate) mod input;
 mod trunc;
@@ -69,19 +70,24 @@ fn md(source: impl Into<String>) -> Markdown {
         .streaming(true)
 }
 
-/// Render one turn. `first` suppresses the leading blank row; `busy` shows
-/// the working spinner on the last agent turn; `showing_ui` suppresses it
-/// while a prompt (e.g. permission select) is on screen.
+/// The in-flight indicator hung off the last agent turn: the streaming
+/// status label plus an optional feature tip. `None` = no spinner (turn
+/// sealed, idle, or a prompt like the permission select is on screen).
+pub(crate) struct Working<'a> {
+    pub status: Option<&'a str>,
+    pub tip: Option<&'static Tip>,
+}
+
+/// Render one turn. `first` suppresses the leading blank row; `working`
+/// shows the spinner (and tip) on the last agent turn while streaming.
 pub(crate) fn turn_view(
     turn: &UiTurn,
     first: bool,
-    busy: bool,
-    showing_ui: bool,
-    status_text: Option<&str>,
+    working: Option<Working<'_>>,
 ) -> AnyElement<'static> {
     match &turn.kind {
         UiTurnKind::User { events } => user_turn_view(events, first),
-        UiTurnKind::Agent { events } => agent_turn_view(events, busy, showing_ui, status_text),
+        UiTurnKind::Agent { events } => agent_turn_view(events, working),
         UiTurnKind::OutOfBand { events } => out_of_band_turn_view(events),
     }
 }
@@ -104,9 +110,7 @@ pub(crate) fn user_turn_view(events: &[UiEvent], first_turn: bool) -> AnyElement
 
 pub(crate) fn agent_turn_view(
     events: &[UiEvent],
-    busy: bool,
-    showing_ui: bool,
-    status_text: Option<&str>,
+    working: Option<Working<'_>>,
 ) -> AnyElement<'static> {
     let label_style = Style::default()
         .fg(Color::Yellow)
@@ -120,9 +124,9 @@ pub(crate) fn agent_turn_view(
                 .when(i > 0, |c| c.child(text("")))
                 .child(event_view(event))
         }))
-        .when(busy && !showing_ui, |c| {
+        .when_some(working, |c, working| {
             c.child(
-                spinner(status_text.unwrap_or(""))
+                spinner(working.status.unwrap_or(""))
                     .spinner_style(
                         Style::default()
                             .fg(Color::Yellow)
@@ -136,8 +140,47 @@ pub(crate) fn agent_turn_view(
                     .pad_left(2)
                     .pad_top(1),
             )
+            .when_some(working.tip, |c, tip| c.child(tip_line(tip).pad_left(2)))
         })
         .any()
+}
+
+/// The post-turn line that takes the spinner's place once a turn completes:
+/// how long the response took, with the turn's tip dropped underneath.
+pub(crate) fn responded_view(
+    elapsed: std::time::Duration,
+    tip: Option<&'static Tip>,
+) -> AnyElement<'static> {
+    let dim = Style::default().fg(Color::DarkGray);
+    col()
+        .child(text(format!("Responded in {}", format_elapsed(elapsed))).style(dim))
+        .when_some(tip, |c, tip| c.child(tip_line(tip)))
+        .pad_left(2)
+        .pad_top(1)
+        .any()
+}
+
+/// Tree-connector row for a tip: `└ Tip: …`. Callers pad to align it under
+/// the line it hangs off.
+fn tip_line(tip: &'static Tip) -> impl Element + 'static {
+    let dim = Style::default().fg(Color::DarkGray);
+    row()
+        .fixed(2, text("└ ").style(dim))
+        .fill(text(format!("Tip: {}", tip.text)).style(dim))
+}
+
+/// Humanized elapsed time: sub-minute in seconds ("3.2 seconds",
+/// "42 seconds"), longer as "2m 05s".
+fn format_elapsed(elapsed: std::time::Duration) -> String {
+    let secs = elapsed.as_secs_f64();
+    if secs < 10.0 {
+        format!("{secs:.1} seconds")
+    } else if secs < 60.0 {
+        format!("{} seconds", secs.round() as u64)
+    } else {
+        let total = elapsed.as_secs();
+        format!("{}m {:02}s", total / 60, total % 60)
+    }
 }
 
 pub(crate) fn out_of_band_turn_view(events: &[UiEvent]) -> AnyElement<'static> {
@@ -843,4 +886,19 @@ pub(crate) fn status_bar_view(
 /// `~`-abbreviated).
 fn format_path_for_display(path: &std::path::Path) -> String {
     path.display_rich().relative_to_cwd().tilde_me().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_elapsed;
+    use std::time::Duration;
+
+    #[test]
+    fn elapsed_formats_by_magnitude() {
+        assert_eq!(format_elapsed(Duration::from_millis(600)), "0.6 seconds");
+        assert_eq!(format_elapsed(Duration::from_millis(3240)), "3.2 seconds");
+        assert_eq!(format_elapsed(Duration::from_millis(42600)), "43 seconds");
+        assert_eq!(format_elapsed(Duration::from_secs(65)), "1m 05s");
+        assert_eq!(format_elapsed(Duration::from_secs(154)), "2m 34s");
+    }
 }

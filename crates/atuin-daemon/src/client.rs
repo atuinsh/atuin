@@ -11,6 +11,8 @@ use tower::service_fn;
 use hyper_util::rt::TokioIo;
 
 #[cfg(unix)]
+use std::path::PathBuf;
+#[cfg(unix)]
 use tokio::net::UnixStream;
 
 use atuin_client::history::History;
@@ -45,7 +47,8 @@ pub enum DaemonClientErrorKind {
     Connect,
     Unavailable,
     Unimplemented,
-    Other,
+    OtherGrpc,
+    NonGrpc,
 }
 
 #[must_use]
@@ -59,36 +62,37 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
             return match status.code() {
                 Code::Unavailable => DaemonClientErrorKind::Unavailable,
                 Code::Unimplemented => DaemonClientErrorKind::Unimplemented,
-                _ => DaemonClientErrorKind::Other,
+                _ => DaemonClientErrorKind::OtherGrpc,
             };
         }
     }
 
-    DaemonClientErrorKind::Other
+    DaemonClientErrorKind::NonGrpc
 }
 
 // Wrap the grpc client
 impl HistoryClient {
     #[cfg(unix)]
-    pub async fn new(path: String) -> Result<Self> {
+    pub async fn new(path: PathBuf) -> Result<Self> {
         use eyre::Context;
 
         let log_path = path.clone();
-        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let path = path.clone();
+        let channel =
+            Endpoint::try_from("http://atuin_local_daemon:0")?
+                .connect_with_connector(service_fn(move |_: Uri| {
+                    let path = path.clone();
 
-                async move {
-                    Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path.clone()).await?))
-                }
-            }))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to connect to local atuin daemon at {}. Is it running?",
-                    log_path
-                )
-            })?;
+                    async move {
+                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
+                    }
+                }))
+                .await
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to connect to local atuin daemon at {}. Is it running?",
+                        log_path.display()
+                    )
+                })?;
 
         let client = HistoryServiceClient::new(channel);
 
@@ -198,23 +202,24 @@ pub struct SearchClient {
 
 impl SearchClient {
     #[cfg(unix)]
-    pub async fn new(path: String) -> Result<Self> {
+    pub async fn new(path: PathBuf) -> Result<Self> {
         let log_path = path.clone();
-        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let path = path.clone();
+        let channel =
+            Endpoint::try_from("http://atuin_local_daemon:0")?
+                .connect_with_connector(service_fn(move |_: Uri| {
+                    let path = path.clone();
 
-                async move {
-                    Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path.clone()).await?))
-                }
-            }))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to connect to local atuin daemon at {}. Is it running?",
-                    log_path
-                )
-            })?;
+                    async move {
+                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
+                    }
+                }))
+                .await
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to connect to local atuin daemon at {}. Is it running?",
+                        log_path.display()
+                    )
+                })?;
 
         let client = SearchServiceClient::new(channel);
 
@@ -309,23 +314,24 @@ pub struct SemanticClient {
 
 impl SemanticClient {
     #[cfg(unix)]
-    pub async fn new(path: String) -> Result<Self> {
+    pub async fn new(path: PathBuf) -> Result<Self> {
         let log_path = path.clone();
-        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let path = path.clone();
+        let channel =
+            Endpoint::try_from("http://atuin_local_daemon:0")?
+                .connect_with_connector(service_fn(move |_: Uri| {
+                    let path = path.clone();
 
-                async move {
-                    Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path.clone()).await?))
-                }
-            }))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to connect to local atuin daemon at {}. Is it running?",
-                    log_path
-                )
-            })?;
+                    async move {
+                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
+                    }
+                }))
+                .await
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to connect to local atuin daemon at {}. Is it running?",
+                        log_path.display()
+                    )
+                })?;
 
         let client = SemanticServiceClient::new(channel);
 
@@ -356,7 +362,7 @@ impl SemanticClient {
 
     #[cfg(unix)]
     pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.socket_path.clone()).await
+        Self::new(settings.daemon.existing_socket_path().into_owned()).await
     }
 
     #[cfg(not(unix))]
@@ -403,23 +409,24 @@ pub struct ControlClient {
 impl ControlClient {
     /// Connect to the daemon's control service.
     #[cfg(unix)]
-    pub async fn new(path: String) -> Result<Self> {
+    pub async fn new(path: PathBuf) -> Result<Self> {
         let log_path = path.clone();
-        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let path = path.clone();
+        let channel =
+            Endpoint::try_from("http://atuin_local_daemon:0")?
+                .connect_with_connector(service_fn(move |_: Uri| {
+                    let path = path.clone();
 
-                async move {
-                    Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path.clone()).await?))
-                }
-            }))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to connect to local atuin daemon at {}. Is it running?",
-                    log_path
-                )
-            })?;
+                    async move {
+                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
+                    }
+                }))
+                .await
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to connect to local atuin daemon at {}. Is it running?",
+                        log_path.display()
+                    )
+                })?;
 
         let client = ControlServiceClient::new(channel);
 
@@ -452,7 +459,7 @@ impl ControlClient {
     /// Connect using settings.
     #[cfg(unix)]
     pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.socket_path.clone()).await
+        Self::new(settings.daemon.existing_socket_path().into_owned()).await
     }
 
     /// Connect using settings.
@@ -558,4 +565,23 @@ pub async fn emit_event_with_settings(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn internal_status_is_a_daemon_error_but_not_unavailable() {
+        let error = eyre::Report::new(tonic::Status::internal("failed to build index"));
+
+        assert_eq!(classify_error(&error), DaemonClientErrorKind::OtherGrpc);
+    }
+
+    #[test]
+    fn unrelated_error_is_not_a_daemon_error() {
+        let error = eyre::eyre!("local database failed");
+
+        assert_eq!(classify_error(&error), DaemonClientErrorKind::NonGrpc);
+    }
 }
