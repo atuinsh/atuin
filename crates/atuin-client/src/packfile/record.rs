@@ -325,7 +325,7 @@ impl<'a> PackManifestRecordView<'a> {
         .unwrap()
     }
 
-    /// Grab the implicit assertion corresponding to
+    /// Grab the implicit assertion corresponding to this manifest.
     fn ia(&self) -> PackIA<'a> {
         PackIA {
             manifest_id: self.record.id,
