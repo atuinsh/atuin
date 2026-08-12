@@ -162,7 +162,7 @@ fn is_legacy_daemon_error(err: &eyre::Report) -> bool {
     matches!(classify_error(err), DaemonClientErrorKind::Unimplemented)
 }
 
-fn should_retry_after_error(err: &eyre::Report) -> bool {
+pub(super) fn should_retry_after_error(err: &eyre::Report) -> bool {
     matches!(
         classify_error(err),
         DaemonClientErrorKind::Connect

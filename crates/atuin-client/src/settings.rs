@@ -88,7 +88,7 @@ impl From<RequestedSearchMode> for SearchMode {
 }
 
 impl SearchMode {
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             SearchMode::Prefix => "PREFIX",
             SearchMode::FullText => "FULLTXT",
@@ -97,11 +97,11 @@ impl SearchMode {
         }
     }
 
-    pub fn next(&self, settings: &Settings) -> Self {
+    pub fn next(self, settings: &Settings) -> Self {
         match self {
             SearchMode::Prefix => SearchMode::FullText,
             // if the user is using daemon-fuzzy, we go to daemon-fuzzy
-            SearchMode::FullText if settings.search_mode() == SearchMode::DaemonFuzzy => {
+            SearchMode::FullText if settings.active_search_mode() == SearchMode::DaemonFuzzy => {
                 SearchMode::DaemonFuzzy
             }
             // otherwise fuzzy.
@@ -1036,6 +1036,9 @@ pub struct Settings {
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
     #[serde(rename = "search_mode_shell_up_key_binding")]
     pub requested_search_mode_shell_up_key_binding: Option<RequestedSearchMode>,
+
+    /// This is not a real setting. Instead, `atuin search` manually sets this field to true if
+    /// the hidden `--shell-up-key-binding` option was passed.
     pub shell_up_key_binding: bool,
     pub inline_height: u16,
     pub inline_height_shell_up_key_binding: Option<u16>,
@@ -1152,6 +1155,19 @@ impl Settings {
     pub fn search_mode_shell_up_key_binding(&self) -> Option<SearchMode> {
         self.requested_search_mode_shell_up_key_binding
             .map(Into::into)
+    }
+
+    /// Return the active search mode depending on whether Atuin was invoked from the "up"
+    /// keybinding.
+    ///
+    /// If Atuin was invoked from the "up" keybinding, this returns
+    /// [`Self::search_mode_shell_up_key_binding`], falling back to [`Self::search_mode`] if that
+    /// binding isn't defined. Otherwise, [`Self::search_mode`] is returned.
+    pub fn active_search_mode(&self) -> SearchMode {
+        self.shell_up_key_binding
+            .then(|| self.search_mode_shell_up_key_binding())
+            .flatten()
+            .unwrap_or_else(|| self.search_mode())
     }
 
     pub(crate) fn effective_data_dir() -> PathBuf {

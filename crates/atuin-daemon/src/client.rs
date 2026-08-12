@@ -45,7 +45,8 @@ pub enum DaemonClientErrorKind {
     Connect,
     Unavailable,
     Unimplemented,
-    Other,
+    OtherGrpc,
+    NonGrpc,
 }
 
 #[must_use]
@@ -59,12 +60,12 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
             return match status.code() {
                 Code::Unavailable => DaemonClientErrorKind::Unavailable,
                 Code::Unimplemented => DaemonClientErrorKind::Unimplemented,
-                _ => DaemonClientErrorKind::Other,
+                _ => DaemonClientErrorKind::OtherGrpc,
             };
         }
     }
 
-    DaemonClientErrorKind::Other
+    DaemonClientErrorKind::NonGrpc
 }
 
 // Wrap the grpc client
@@ -558,4 +559,23 @@ pub async fn emit_event_with_settings(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn internal_status_is_a_daemon_error_but_not_unavailable() {
+        let error = eyre::Report::new(tonic::Status::internal("failed to build index"));
+
+        assert_eq!(classify_error(&error), DaemonClientErrorKind::OtherGrpc);
+    }
+
+    #[test]
+    fn unrelated_error_is_not_a_daemon_error() {
+        let error = eyre::eyre!("local database failed");
+
+        assert_eq!(classify_error(&error), DaemonClientErrorKind::NonGrpc);
+    }
 }
