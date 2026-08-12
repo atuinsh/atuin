@@ -20,11 +20,6 @@ pub enum PackingError {
 }
 
 /// Write a `packfile` manifest record for each contiguous history run of `count` records.
-///
-/// `count` is the pack size. Packing waits until at least `count` unpacked records have
-/// accumulated, then emits manifests of exactly `count` records each, leaving the trailing
-/// remainder (fewer than `count`) loose until it fills. The value is server-authoritative -- it
-/// comes from `PackfileCap::record_count`, not a client-side default.
 #[instrument(skip(store))]
 pub async fn try_pack(
     store: &SqliteStore,
@@ -34,6 +29,8 @@ pub async fn try_pack(
 ) -> Result<(), PackingError> {
     debug_assert!(*tag != RecordTag::Packfile);
 
+    // Count is the pack size. Packing waits until at least `count` unpacked records have
+    // accumulated and then emits manifests of exactly that many records.
     let Some(count) = cap.map(|c| c.record_count).filter(|&n| n > 0) else {
         return Ok(());
     };
