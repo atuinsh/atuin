@@ -424,7 +424,9 @@ pub async fn check_encryption_key(
         .hosts
         .iter()
         .flat_map(|(host, tags)| tags.keys().map(move |tag| (*host, tag.clone())))
-        .next();
+        // Note we have to skip `Packfile`s here because packfiles _aren't_ actually encrypted, so
+        // using the default CEK would fail decryption.
+        .find(|(_, tag)| *tag != RecordTag::Packfile);
 
     let Some((host, tag)) = sample else {
         return Ok(());
@@ -879,6 +881,73 @@ mod packfile_download_tests {
             .respond_with(ResponseTemplate::new(200).set_body_bytes(blob))
             .mount(server)
             .await;
+    }
+
+    /// REGRESSION: packfile manifests are stored plaintext (no `cek`), so `check_encryption_key`
+    /// must never sample one and mis-report `WrongKey`. Before the fix it sampled the first
+    /// `(host, tag)` from a HashMap; a `packfile` sample "failed" to decrypt the manifest and
+    /// logged the user out on login / aborted sync ~half the time. A remote index whose only tag
+    /// is the manifest makes the old sampler deterministically pick it.
+    #[rstest]
+    #[tokio::test]
+    async fn check_encryption_key_ignores_plaintext_packfile_manifests(key: paseto_v4::Key) {
+        let host = HostId(uuid_v7());
+        let (manifest, _blob) = packed_packfile(host, &key, 5).await;
+
+        let mut tags = HashMap::new();
+        tags.insert(RecordTag::Packfile, manifest.idx);
+        let mut hosts = HashMap::new();
+        hosts.insert(host, tags);
+        let remote_index = RecordStatus { hosts };
+
+        // Serve the manifest if the sampler (wrongly) tries to fetch it.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v0/record/next"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(vec![manifest.clone()]))
+            .mount(&server)
+            .await;
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        check_encryption_key(&client, &remote_index, &key)
+            .await
+            .expect("a plaintext packfile manifest must not be treated as a wrong key");
+    }
+
+    /// GUARD: excluding the packfile tag must not weaken real detection -- a genuinely wrong key
+    /// against an encrypted history record must still surface as `WrongKey`.
+    #[rstest]
+    #[tokio::test]
+    async fn check_encryption_key_still_detects_a_wrong_key_on_history(key: paseto_v4::Key) {
+        let host = HostId(uuid_v7());
+        let store = memory_store().await;
+        seed_history(&store, host, &key, 1).await;
+        let rec = store.next(host, &RecordTag::History, 0, 1).await.unwrap()[0].clone();
+
+        let mut tags = HashMap::new();
+        tags.insert(RecordTag::History, rec.idx);
+        let mut hosts = HashMap::new();
+        hosts.insert(host, tags);
+        let remote_index = RecordStatus { hosts };
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v0/record/next"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(vec![rec]))
+            .mount(&server)
+            .await;
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let wrong = paseto_v4::Key::from([9u8; 32]);
+        let err = check_encryption_key(&client, &remote_index, &wrong)
+            .await
+            .expect_err("a wrong key on an encrypted record must still be detected");
+        assert!(
+            matches!(err, SyncError::WrongKey),
+            "expected WrongKey, got {err:?}"
+        );
     }
 
     #[rstest]
