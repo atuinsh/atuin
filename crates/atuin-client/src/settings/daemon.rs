@@ -84,7 +84,7 @@ impl Daemon {
         }
 
         // systemd units typically listen on `%t/atuin.sock`, which is `$XDG_RUNTIME_DIR/atuin.sock`
-        // for user units, so we should default to that path `systemd_socket` is true.
+        // for user units, so we should default to that path when `systemd_socket` is true.
         if self.systemd_socket
             && let Some(path) = ctx.runtime_socket_path()
         {
