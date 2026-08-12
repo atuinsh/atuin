@@ -186,8 +186,9 @@ pub enum PackingError {
 #[serde(transparent)]
 struct PackedData(#[serde(with = "serde_bytes")] Vec<u8>);
 
-impl From<DecryptedData> for PackedData {
-    fn from(value: DecryptedData) -> Self {
+impl PackedData {
+    /// **Dangerous**. See docs for [`PackedData`].
+    pub fn dangerous_from_decrypted_data(value: DecryptedData) -> Self {
         Self(value.0)
     }
 }
@@ -278,7 +279,7 @@ impl<'a> PackManifestRecordView<'a> {
                 .map(|r| r.decrypt(&key).map_err(PackError::Decrypt))
                 // We now need to convert this into a [`PackedData`] record, which, you will note,
                 // is `Serialize` and `Deserialize` unlike the `DecryptedData`.
-                .map(|r| r.map(|r| r.map_data(PackedData::from)));
+                .map(|r| r.map(|r| r.map_data(PackedData::dangerous_from_decrypted_data)));
 
             let packed = atuin_common::rmp::serde::try_to_vec(decrypted_records)?;
             let compressed = zstd::stream::encode_all(
