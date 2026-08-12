@@ -54,8 +54,8 @@ impl AuthToken {
 pub struct Client {
     sync_addr: Arc<Url>,
     client: ClientWithMiddleware,
-    /// Carries no default headers, unlike [`Self::client`]. Used for uploading stuff to S3.
-    upload_client: reqwest::Client,
+    /// Used for uploading "LFS" data to S3. Carries no default headers, unlike [`Self::client`].
+    lfs_client: reqwest::Client,
     caps: Arc<CapClient>,
 }
 
@@ -297,7 +297,7 @@ impl Client {
         Ok(Client {
             sync_addr,
             client,
-            upload_client: reqwest::Client::builder()
+            lfs_client: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(connect_timeout))
                 .timeout(Duration::from_secs(timeout))
                 .build()?,
@@ -375,7 +375,7 @@ impl Client {
     ) -> Result<()> {
         // Not self.client: S3 rejects presigned requests that also carry an Authorization header.
         let resp = self
-            .upload_client
+            .lfs_client
             .put(upload_url.clone())
             .body(packfile)
             .send()
@@ -400,7 +400,7 @@ impl Client {
     /// Download the packfile for the given manifest id.
     pub async fn download_packfile(&self, manifest_id: RecordId) -> Result<Vec<u8>> {
         let download_url = self.get_packfile_download_url(manifest_id).await?;
-        let resp = self.upload_client.get(download_url).send().await?;
+        let resp = self.lfs_client.get(download_url).send().await?;
         let resp = handle_resp_error(resp).await?;
         Ok(resp.bytes().await?.to_vec())
     }
