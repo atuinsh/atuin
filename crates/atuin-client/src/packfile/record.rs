@@ -364,17 +364,4 @@ mod tests {
             })
             .collect()
     }
-
-    // TODO(codec-merge): re-home the round-trip coverage from the deleted `codec` module onto the
-    // view's `pack_records`/`unpack_records` (was `ManifestRef::{pack,unpack}`). Unlike the old
-    // `ManifestRef` fixture, the view needs a real `packfile` manifest record built via
-    // `packer::try_pack` over a seeded `SqliteStore`, then wrapped with
-    // `PackManifestRecordView::new` -- so a `#[fixture]`-based `manifest`/`view` harness is needed
-    // first. Behaviors to preserve:
-    //   - round_trips: pack then unpack yields the original records (property test over arbitrary
-    //     history payloads)
-    //   - wrong_assertion_fails: unpacking under a different manifest identity fails authentication
-    //   - wrong_key_fails: unpacking under a different key fails
-    //   - record_ciphertext_is_not_a_valid_body: a record ciphertext is rejected by the body codec
-    //   - compresses_repetitive_records: repetitive input packs far smaller than raw msgpack
 }
