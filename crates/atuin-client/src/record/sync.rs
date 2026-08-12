@@ -190,6 +190,7 @@ pub async fn operations(
     Ok(operations)
 }
 
+// TODO(markovejnovic): Seriously revisit the syncing logic and coupling.
 #[allow(
     clippy::too_many_arguments,
     reason = "threading the key for packfile uploads pushes this one param over the limit"
@@ -240,7 +241,7 @@ async fn sync_upload(
                 upload_packed(manifest, store, key, client)
                     .await
                     .map_err(|e| {
-                        error!("failed to upload packfile: {e:?}");
+                        error!("failed to upload packfile: {e}");
                         SyncError::RemoteRequestError { msg: e.to_string() }
                     })?;
             }
@@ -265,6 +266,7 @@ async fn sync_upload(
     Ok(progress as i64)
 }
 
+// TODO(markovejnovic): Seriously revisit the syncing logic and coupling.
 #[allow(
     clippy::too_many_arguments,
     reason = "threading the key for packfile downloads pushes this one param over the limit"
@@ -863,13 +865,7 @@ mod packfile_download_tests {
         .unwrap();
         let manifest = up.last(host, &RecordTag::Packfile).await.unwrap().unwrap();
         let view = PackManifestRecordView::new(&manifest).unwrap();
-        let ids: Vec<RecordId> = view
-            .load_encrypted_packed_records(&up)
-            .await
-            .unwrap()
-            .map(|record| record.id)
-            .collect();
-        let blob = view.pack_records(&up, key.clone()).await.unwrap();
+        let (blob, ids) = view.pack_records(&up, key.clone()).await.unwrap();
         (manifest, blob, ids)
     }
 

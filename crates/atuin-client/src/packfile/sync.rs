@@ -46,14 +46,7 @@ pub async fn upload_packed(
 ) -> Result<(), UploadError> {
     let view = PackManifestRecordView::new(manifest)?;
 
-    let ids: Vec<RecordId> = view
-        .load_encrypted_packed_records(store)
-        .await
-        .map_err(|e| UploadError::Load(e.into()))?
-        .map(|record| record.id)
-        .collect();
-
-    let blob = view.pack_records(store, key.clone()).await?;
+    let (blob, ids) = view.pack_records(store, key.clone()).await?;
 
     client
         .upload_packfile(view.record.id, &ids, blob)
@@ -112,7 +105,7 @@ pub async fn download_packed(
             .load_encrypted_packed_records(store)
             .await
             .map_err(|e| DownloadError::Store(e.into()))?;
-        return Ok(existing.map(|r| r.id).collect());
+        return Ok(existing.iter().map(|r| r.id).collect());
     }
 
     let blob = client
@@ -435,7 +428,7 @@ mod tests {
         .await
         .unwrap();
         let good = up.last(host, &RecordTag::Packfile).await.unwrap().unwrap();
-        let blob = PackManifestRecordView::new(&good)
+        let (blob, _) = PackManifestRecordView::new(&good)
             .unwrap()
             .pack_records(&up, key.clone())
             .await

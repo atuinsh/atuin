@@ -244,7 +244,7 @@ impl<'a> PackManifestRecordView<'a> {
     pub async fn load_encrypted_packed_records(
         &self,
         store: &SqliteStore,
-    ) -> Result<std::vec::IntoIter<Record<EncryptedData>>, RecordLoadingError> {
+    ) -> Result<Vec<Record<EncryptedData>>, RecordLoadingError> {
         let range = self.range();
         // The range was validated when the view was built, so this shouldn't fail.
         let count = range.record_count()?;
@@ -259,7 +259,7 @@ impl<'a> PackManifestRecordView<'a> {
             .await
             .map_err(RecordLoadingError::StoreError)?;
 
-        Ok(run.into_iter())
+        Ok(run)
     }
 
     /// Asynchronously pack the records enclosed by this manifest.
@@ -267,13 +267,16 @@ impl<'a> PackManifestRecordView<'a> {
         &self,
         store: &SqliteStore,
         key: paseto_v4::Key,
-    ) -> Result<Vec<u8>, PackingError> {
+    ) -> Result<(Vec<u8>, Vec<RecordId>), PackingError> {
         let encrypted_records = self.load_encrypted_packed_records(store).await?;
         let ia = self.ia().json();
 
         tokio::task::spawn_blocking(move || {
             // First we need to decrypt the encrypted records. Order of magnitude is about 1000 records.
+            let record_ids = encrypted_records.iter().map(|r| r.id);
+
             let decrypted_records = encrypted_records
+                .iter()
                 .map(|r| r.decrypt(&key).map_err(PackError::Decrypt))
                 // We now need to convert this into a [`PackedData`] record, which, you will note,
                 // is `Serialize` and `Deserialize` unlike the `DecryptedData`.
@@ -291,7 +294,9 @@ impl<'a> PackManifestRecordView<'a> {
                 &key,
             )?;
 
-            Ok::<_, PackError>(rmp_serde::to_vec(&encrypted_data)?)
+            let packed = rmp_serde::to_vec(&encrypted_data).map_err(PackError::from)?;
+
+            Ok((packed, record_ids.collect()))
         })
         .await
         // The child task should never panic -- if it does, we may as well panic ourselves.
