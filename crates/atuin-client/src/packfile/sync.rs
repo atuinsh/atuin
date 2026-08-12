@@ -116,7 +116,7 @@ pub async fn download_packed(
     }
 
     let blob = client
-        .get_packfile(view.record.id)
+        .download_packfile(view.record.id)
         .await
         .map_err(DownloadError::Api)?;
 

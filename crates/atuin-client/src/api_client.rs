@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::env;
-use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -349,13 +348,13 @@ impl Client {
         &self,
         manifest_id: RecordId,
         record_ids: &[RecordId],
-        packfile: impl Deref<Target = [u8]> + Into<reqwest::Body>,
+        packfile: impl AsRef<[u8]> + Into<reqwest::Body>,
     ) -> Result<()> {
         let url = self.sync_addr.append_path("api/v0/packfiles")?;
         let body = serde_json::json!({
             "manifest_id": manifest_id,
             "records": record_ids,
-            "packfile_size_bytes": packfile.len(),
+            "packfile_size_bytes": packfile.as_ref().len(),
         });
         let resp = self.client.post(url).json(&body).send().await?;
         let resp = handle_resp_error(resp).await?;
@@ -399,7 +398,7 @@ impl Client {
     }
 
     /// Download the packfile for the given manifest id.
-    pub async fn get_packfile(&self, manifest_id: RecordId) -> Result<Vec<u8>> {
+    pub async fn download_packfile(&self, manifest_id: RecordId) -> Result<Vec<u8>> {
         let download_url = self.get_packfile_download_url(manifest_id).await?;
         let resp = self.upload_client.get(download_url).send().await?;
         let resp = handle_resp_error(resp).await?;
