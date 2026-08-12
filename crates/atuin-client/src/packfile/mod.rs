@@ -29,9 +29,9 @@
 //!
 //! # Design
 //!
-//! The solution is to create a _packfile_ -- a collection of shared records. Naively, you'd expect to
-//! be able to combine this data together in the server and call it a day, but that doesn't work. As
-//! it turns out, compressing already encrypted data is ineffective.
+//! The solution is to create a _packfile_ -- a collection of shared records. Naively, you'd expect
+//! to be able to combine this data together in the server and call it a day, but that doesn't
+//! work. As it turns out, compressing already encrypted data is ineffective.
 //!
 //! Rather, we need to compress data first, and then encrypt it after the fact. Consequently, it
 //! must be the client (as only the client has access to the key), which performs the compression.
@@ -42,7 +42,10 @@
 //! table, the local client invokes [`packer::try_pack`] which is responsible for finding the last
 //! pack point, and then deducing whether further packing should be done.
 //!
-//! Consider the aforementioned example. Adding a new `idx = 5` causes [`packer::try_pack`] to be
+//! Note that the server advertises the packfile size through [`atuin_domain::caps::PackfileCap`].
+//!
+//! Consider the aforementioned example. Assuming that indices `[1, 4]` were already in the records
+//! from before packfiles were merged, adding a new `idx = 5` causes [`packer::try_pack`] to be
 //! invoked, which will identify that no previous pack exists. This will cause it to perform a
 //! packing operation, which will create a new `PackManifestData` record in the table.
 //!
@@ -53,12 +56,13 @@
 //! |   3 | history  | ...                      |
 //! |   4 | history  | ...                      |
 //! |   5 | history  | ...                      |
-//! |   6 | packfile | { "start": 1, "end": 4 } |
+//! |   6 | packfile | { "start": 1, "end": 2 } |
+//! |   7 | packfile | { "start": 3, "end": 4 } |
 //! ```
 //!
 //! **No negotiation with the server has occurred up until this point.** We consider the packing
 //! phase to be complete. Subsequent `history` additions will invoke [`packer::try_pack`] which will
-//! skip adding entries until the minimum number of records in a packfile has been reached (in the
+//! hold off on adding entries until the server-advertised record count has been reached (in the
 //! following example -- `2`):
 //!
 //! ```txt
@@ -68,10 +72,10 @@
 //! |   3 | history  | ...                      |
 //! |   4 | history  | ...                      |
 //! |   5 | history  | ...                      |
-//! |   6 | packfile | { "start": 1, "end": 4 } |
-//! |   7 | history  | ...                      |
+//! |   6 | packfile | { "start": 1, "end": 2 } |
+//! |   7 | packfile | { "start": 3, "end": 4 } |
 //! |   8 | history  | ...                      |
-//! |   9 | packfile | { "start": 7, "end": 8 } |
+//! |   9 | packfile | { "start": 5, "end": 8 } |
 //! |  10 | history  | ...                      |
 //! ```
 //!
@@ -88,8 +92,8 @@
 //!
 //! This operation will open up the manifest in the packfile, read the `"start"` and `"end"` values,
 //! and scan the record table for these entries. For each of these entries, it will decrypt them,
-//! tar them, compress them and then encrypt them. With this now encrypted packfile, it will upload
-//! it to the server.
+//! bundle them, compress them and then encrypt them. With this now encrypted packfile, it will
+//! upload it to the server.
 //!
 //! ### Downloading
 //!
