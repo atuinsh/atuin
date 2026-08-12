@@ -225,9 +225,7 @@ impl PackIA<'_> {
 impl<'a> PackManifestRecordView<'a> {
     /// Decided on `12` because that's what Claude's experiments showed to be the good trade-off
     /// between compression size and compression speed and would be optimal for DSL/Fiber networks.
-    #[allow(unsafe_code)]
-    const ZSTD_ENCODING_LEVEL: Option<NonZeroU8> =
-        Some(unsafe { NonZeroU8::new(12).unwrap_unchecked() });
+    const ZSTD_ENCODING_LEVEL: NonZeroU8 = NonZeroU8::new(12).unwrap();
 
     pub fn new(record: &'a Record<EncryptedData>) -> Result<Self, LoadingError> {
         let manifest = PackManifestData::try_from(record)?;
@@ -285,7 +283,7 @@ impl<'a> PackManifestRecordView<'a> {
             let packed = atuin_common::rmp::serde::try_to_vec(decrypted_records)?;
             let compressed = zstd::stream::encode_all(
                 packed.as_slice(),
-                Self::ZSTD_ENCODING_LEVEL.map_or(0, |r| i32::from(r.get())),
+                Self::ZSTD_ENCODING_LEVEL.get().into(),
             )?;
 
             let encrypted_data = paseto_v4::encrypt_sync(
