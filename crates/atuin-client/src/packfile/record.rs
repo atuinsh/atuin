@@ -212,9 +212,9 @@ impl<'a> PackManifestRecordView<'a> {
 
     /// The range of history this manifest covers. Validated when the view was built.
     #[must_use]
-    pub const fn range(&self) -> &PackManifestDataV1 {
+    pub const fn range(&self) -> std::ops::Range<RecordIdx> {
         let PackManifestData::V1(range) = &self.manifest;
-        range
+        range.start_idx..range.end_idx + 1
     }
 
     pub async fn load_encrypted_packed_records(
@@ -222,16 +222,10 @@ impl<'a> PackManifestRecordView<'a> {
         store: &SqliteStore,
     ) -> Result<Vec<Record<EncryptedData>>, RecordLoadingError> {
         let range = self.range();
-        // The range was validated when the view was built, so this shouldn't fail.
-        let count = range.record_count()?;
+        let count = range.end - range.start;
 
         let run = store
-            .next(
-                self.record.host.id,
-                &RecordTag::History,
-                range.start_idx,
-                count,
-            )
+            .next(self.record.host.id, &RecordTag::History, range.start, count)
             .await
             .map_err(RecordLoadingError::StoreError)?;
 

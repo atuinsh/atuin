@@ -100,7 +100,7 @@ pub async fn download_packed(
         .await
         .map_err(DownloadError::Store)?;
     if let Some(head) = head
-        && head.idx >= view.range().end_idx
+        && head.idx >= view.range().end - 1
     {
         // Range already available locally. Return the IDs.
         let existing = view

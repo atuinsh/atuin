@@ -35,8 +35,6 @@ pub async fn try_pack(
         return Ok(());
     };
 
-    // Floor comes from the manifest (`packfile`) stream, not the source `tag`: the newest
-    // manifest's `end_idx` is the highest source idx already packed.
     let last_pack = store
         .last(host, &RecordTag::Packfile)
         .await
