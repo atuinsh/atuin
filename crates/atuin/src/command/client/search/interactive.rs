@@ -2836,11 +2836,7 @@ mod tests {
         settings.daemon.enabled = true;
         settings.daemon.autostart = true;
         settings.daemon.systemd_socket = true;
-        settings.daemon.socket_path = temp
-            .path()
-            .join("missing.sock")
-            .to_string_lossy()
-            .into_owned();
+        settings.daemon.socket_path = Some(temp.path().join("missing.sock"));
 
         let mut state = state(KeymapMode::Emacs, 0, 0, FilterMode::Global, "query");
         state.search_mode_state = SearchModeState::new(&settings);

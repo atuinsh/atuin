@@ -282,15 +282,18 @@ enter_accept = true
 # sync_frequency = 300
 
 ## The path to the unix socket used by the daemon (on unix systems)
-## linux/mac: ~/.local/share/atuin/atuin.sock
+## linux/mac default:
+## - if systemd_socket is false: $TMPDIR/atuin-$UID/atuin.sock
+## - if systemd_socket is true: $XDG_RUNTIME_DIR/atuin.sock
 ## windows: Not Supported
-# socket_path = "~/.local/share/atuin/atuin.sock"
+# socket_path = "/custom/path/to/atuin.sock"
 
 ## The daemon pidfile used for lifecycle management.
 ## Defaults to the Atuin data directory.
 # pidfile_path = "~/.local/share/atuin/atuin-daemon.pid"
 
-## Use systemd socket activation rather than opening the given path (the path must still be correct for the client)
+## Use systemd socket activation rather than opening the given path (the path must still be correct).
+## Note: setting this to true changes the default value of socket_path; see above.
 ## linux: false
 ## mac/windows: Not Supported
 # systemd_socket = false

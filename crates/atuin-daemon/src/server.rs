@@ -11,6 +11,11 @@ use crate::semantic::semantic_server::SemanticServer;
 
 use atuin_client::settings::Settings;
 
+/// How often to update the socket's modification time so it doesn't get automatically deleted by
+/// temporary file cleaners.
+#[cfg(unix)]
+const SOCKET_KEEPALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_mins(1);
+
 /// Run the gRPC server with the given services.
 ///
 /// This starts the gRPC server in the background and returns immediately.
@@ -27,9 +32,9 @@ pub async fn run_grpc_server(
     use tokio::net::UnixListener;
     use tokio_stream::wrappers::UnixListenerStream;
 
-    let socket_path = settings.daemon.socket_path.clone();
+    let socket_path = settings.daemon.socket_path();
 
-    let (uds, cleanup) = if cfg!(target_os = "linux") && settings.daemon.systemd_socket {
+    let (uds, cleanup_path) = if cfg!(target_os = "linux") && settings.daemon.systemd_socket {
         #[cfg(target_os = "linux")]
         {
             use eyre::{OptionExt, WrapErr};
@@ -51,28 +56,50 @@ pub async fn run_grpc_server(
             match actual_path {
                 Ok(actual_path) => {
                     tracing::info!("listening on systemd socket: {actual_path:?}");
-                    if actual_path != std::path::Path::new(&socket_path) {
+                    if actual_path != socket_path.as_path() {
                         tracing::warn!(
-                            "systemd socket is not at configured client path: {socket_path:?}"
+                            "systemd socket is not at configured client path: {:?}",
+                            socket_path.as_path(),
                         );
                     }
                 }
                 Err(err) => {
                     tracing::warn!(
-                        "could not detect systemd socket path, ensure that it's at the configured path: {socket_path:?}, error: {err:?}"
+                        "could not detect systemd socket path, ensure that it's at the configured \
+                        path: {:?}, error: {err:?}",
+                        socket_path.as_path(),
                     );
                 }
             }
-            (UnixListener::from_std(listener)?, false)
+            (UnixListener::from_std(listener)?, None)
         }
         #[cfg(not(target_os = "linux"))]
         unreachable!()
     } else {
-        tracing::info!("listening on unix socket {socket_path:?}");
-        (UnixListener::bind(socket_path.clone())?, true)
+        socket_path.create_default_dir_if_needed()?;
+        tracing::info!("listening on unix socket {:?}", socket_path.as_path());
+        (
+            UnixListener::bind(&socket_path)?,
+            Some(socket_path.into_owned()),
+        )
     };
 
     let uds_stream = UnixListenerStream::new(uds);
+
+    // Periodically update the socket's modification time so it doesn't get automatically deleted by
+    // temporary file cleaners.
+    #[cfg(unix)]
+    let socket_updater = cleanup_path.clone().map(|path| {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(SOCKET_KEEPALIVE_INTERVAL);
+            loop {
+                interval.tick().await;
+                if let Err(e) = atuin_common::os::unix::touch_file(&path) {
+                    tracing::warn!("failed to refresh {}: {e}", path.display());
+                }
+            }
+        })
+    });
 
     // Create shutdown signal from daemon handle
     let shutdown_signal = async move {
@@ -86,9 +113,13 @@ pub async fn run_grpc_server(
                 Err(_) => break, // Channel closed
             }
         }
-        if cleanup {
+        #[cfg(unix)]
+        if let Some(handle) = socket_updater {
+            handle.abort();
+        }
+        if let Some(path) = cleanup_path {
             eprintln!("Removing socket...");
-            if let Err(e) = std::fs::remove_file(&socket_path)
+            if let Err(e) = std::fs::remove_file(path)
                 && e.kind() != std::io::ErrorKind::NotFound
             {
                 eprintln!("failed to remove socket: {e}");

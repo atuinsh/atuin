@@ -28,6 +28,7 @@ static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 static META_CONFIG: OnceLock<(String, f64)> = OnceLock::new();
 static META_STORE: OnceCell<crate::meta::MetaStore> = OnceCell::const_new();
 
+pub mod daemon;
 mod dotfiles;
 mod kv;
 pub(crate) mod meta;
@@ -35,6 +36,7 @@ mod scripts;
 pub mod shells;
 pub mod watcher;
 
+pub use daemon::Daemon;
 pub use shells::Shells;
 
 /// Default sync address for Atuin's hosted service, parsed once.
@@ -498,32 +500,6 @@ pub struct Theme {
     pub max_depth: Option<u8>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Daemon {
-    /// Use the daemon to sync
-    /// If enabled, history hooks are routed through the daemon.
-    #[serde(alias = "enable")]
-    pub enabled: bool,
-
-    /// Automatically start and manage a local daemon when needed.
-    pub autostart: bool,
-
-    /// The daemon will handle sync on an interval. How often to sync, in seconds.
-    pub sync_frequency: u64,
-
-    /// The path to the unix socket used by the daemon
-    pub socket_path: String,
-
-    /// Path to the daemon pidfile used for process coordination.
-    pub pidfile_path: String,
-
-    /// Use a socket passed via systemd's socket activation protocol, instead of the path
-    pub systemd_socket: bool,
-
-    /// The port that should be used for TCP on non unix systems
-    pub tcp_port: u64,
-}
-
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct PtyProxy {
     /// If enabled, `atuin init` emits shell code that re-execs the shell
@@ -725,20 +701,6 @@ impl Default for Theme {
             name: "".to_string(),
             debug: None::<bool>,
             max_depth: Some(10),
-        }
-    }
-}
-
-impl Default for Daemon {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            autostart: false,
-            sync_frequency: 300,
-            socket_path: "".to_string(),
-            pidfile_path: "".to_string(),
-            systemd_socket: false,
-            tcp_port: 8889,
         }
     }
 }
@@ -1465,7 +1427,6 @@ impl Settings {
         let kv_path = data_dir.join("kv.db");
         let scripts_path = data_dir.join("scripts.db");
         let ai_sessions_path = data_dir.join("ai_sessions.db");
-        let socket_path = atuin_common::utils::runtime_dir().join("atuin.sock");
         let pidfile_path = data_dir.join("atuin-daemon.pid");
         let logs_dir = atuin_common::utils::logs_dir();
 
@@ -1533,7 +1494,7 @@ impl Settings {
             .set_default("daemon.sync_frequency", 300)?
             .set_default("daemon.enabled", false)?
             .set_default("daemon.autostart", false)?
-            .set_default("daemon.socket_path", socket_path.to_str())?
+            .set_default("daemon.socket_path", None::<String>)?
             .set_default("daemon.pidfile_path", pidfile_path.to_str())?
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
@@ -1686,6 +1647,9 @@ impl Settings {
         ]
         .iter()
         .map(|key| (key, built.get_string(key).unwrap_or_default()))
+        // An unset optional path (`daemon.socket_path`) must stay unset rather
+        // than be overridden with an empty one.
+        .filter(|(_, value)| !value.is_empty())
         .filter_map(|(key, value)| match Self::expand_path(value) {
             Ok(expanded) => Some((key, expanded)),
             Err(e) => {
@@ -1708,10 +1672,33 @@ impl Settings {
     /// environment — without the side-effects of full `Settings` construction
     /// (meta store init, path expansion, etc.).
     pub fn get_config_value(key: &str) -> Result<String> {
-        let config = Self::build_config()?;
-        let value: config::Value = config
+        use config::{Value, ValueKind};
+
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut config = Self::build_config()?;
+
+        // When unset, `daemon.socket_path` is calculated dynamically by [`Daemon::socket_path`] and
+        // wouldn't show up in `atuin config get --resolved daemon.socket_path`. However, it may be
+        // useful for users to see the path when debugging socket issues, so we manually insert it
+        // into the config map here.
+        #[cfg(unix)]
+        if (key == "daemon" || key == "daemon.socket_path")
+            && let Ok(daemon) = config.get::<Daemon>("daemon")
+            && daemon.socket_path.is_none()
+            && let ValueKind::Table(root_map) = &mut config.cache.kind
+            && let Some(daemon_value) = root_map.get_mut("daemon")
+            && let ValueKind::Table(daemon_map) = &mut daemon_value.kind
+        {
+            daemon_map.insert(
+                "socket_path".into(),
+                daemon.socket_path().as_path().display().to_string().into(),
+            );
+        }
+
+        let value: Value = config
             .get(key)
             .map_err(|e| eyre!("failed to get config value '{}': {}", key, e))?;
+
         Ok(Self::format_resolved_value(&value, key))
     }
 
@@ -1983,7 +1970,7 @@ mod tests {
         let kv_db_path: String = config.get("kv.db_path")?;
         let scripts_db_path: String = config.get("scripts.db_path")?;
         let meta_db_path: String = config.get("meta.db_path")?;
-        let daemon_socket_path: String = config.get("daemon.socket_path")?;
+        let daemon_socket_path: Option<String> = config.get("daemon.socket_path")?;
         let daemon_pidfile_path: String = config.get("daemon.pidfile_path")?;
         let daemon_autostart: bool = config.get("daemon.autostart")?;
 
@@ -1999,13 +1986,7 @@ mod tests {
             custom_dir.join("scripts.db").to_str().unwrap()
         );
         assert_eq!(meta_db_path, custom_dir.join("meta.db").to_str().unwrap());
-        assert_eq!(
-            daemon_socket_path,
-            atuin_common::utils::runtime_dir()
-                .join("atuin.sock")
-                .to_str()
-                .unwrap()
-        );
+        assert_eq!(daemon_socket_path, None);
         assert_eq!(
             daemon_pidfile_path,
             custom_dir.join("atuin-daemon.pid").to_str().unwrap()

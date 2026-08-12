@@ -15,7 +15,6 @@ readme.workspace = true
 
 [dependencies]
 atuin-client = { path = "../atuin-client", version = "18.20.0-beta.3" }
-atuin-common = { path = "../atuin-common", version = "18.20.0-beta.3" }
 enum_dispatch = { workspace = true }
 derive_more = { workspace = true }
 atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.20.0-beta.3" }
@@ -43,6 +42,10 @@ hyper-util = "0.1"
 rand.workspace = true
 frizbee = { workspace = true }
 
+[dependencies.atuin-common]
+path = "../atuin-common"
+version = "18.20.0-beta.3"
+features = ["os"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 listenfd = "1.0.1"

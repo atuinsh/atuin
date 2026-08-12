@@ -6,6 +6,8 @@ pub mod docs;
 pub mod encryption;
 pub mod filter;
 pub mod logs;
+#[cfg(feature = "os")]
+pub mod os;
 pub mod path;
 pub mod rmp;
 pub mod shell;
