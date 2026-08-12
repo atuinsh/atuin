@@ -22,8 +22,8 @@ unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
 # sequences, backspaces, carriage returns, cursor motion) into clean plain text
 # via a `vt100` terminal emulator. Compiled only when enabled.
 ansi = ["dep:vt100"]
-# Enables Unix-specific utilities.
-unix = ["dep:rustix"]
+# Enables OS-specific utilities.
+os = ["dep:rustix"]
 
 [dependencies]
 derive_more = { workspace = true }

@@ -94,7 +94,7 @@ pub async fn run_grpc_server(
             let mut interval = tokio::time::interval(SOCKET_KEEPALIVE_INTERVAL);
             loop {
                 interval.tick().await;
-                if let Err(e) = atuin_common::unix::touch_file(&path) {
+                if let Err(e) = atuin_common::os::unix::touch_file(&path) {
                     tracing::warn!("failed to refresh {}: {e}", path.display());
                 }
             }

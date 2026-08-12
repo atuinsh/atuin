@@ -165,7 +165,7 @@ trait SocketCtx: Copy + Sized {
     }
 
     fn uid(&self) -> std::ffi::c_uint {
-        atuin_common::unix::uid()
+        atuin_common::os::unix::uid()
     }
 
     fn default_socket_path(&self) -> PathBuf {
@@ -251,7 +251,7 @@ impl<'a> SocketPath<'a> {
             return Err(CreateSocketDirError::NotADirectory(dir.into()));
         }
 
-        let expected_uid = atuin_common::unix::uid();
+        let expected_uid = atuin_common::os::unix::uid();
         let actual_uid = meta.uid();
         if !std::ffi::c_uint::try_from(actual_uid).is_ok_and(|actual| actual == expected_uid) {
             // Reject the directory if it's owned by another user.
