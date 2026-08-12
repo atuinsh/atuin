@@ -3,7 +3,7 @@ use atuin_client::{
     history::{History, all_user_author_filter},
     settings::Settings,
 };
-use atuin_daemon::client::{DaemonClientErrorKind, SearchClient, SearchParams, classify_error};
+use atuin_daemon::client::{SearchClient, SearchParams};
 use atuin_daemon::search::{normalize_diacritics, truncate_query};
 use eyre::Result;
 use tracing::{Level, debug, instrument, span};
@@ -44,15 +44,6 @@ impl LazyClient {
         SearchClient::new(params.tcp_port).await
     }
 
-    fn should_retry(err: &eyre::Report) -> bool {
-        matches!(
-            classify_error(err),
-            DaemonClientErrorKind::Connect
-                | DaemonClientErrorKind::Unavailable
-                | DaemonClientErrorKind::Unimplemented
-        )
-    }
-
     /// Call a method on [`SearchClient`], autostarting the daemon and retrying if necessary.
     ///
     /// `f` should call the appropriate method on the provided [`SearchClient`].
@@ -60,19 +51,23 @@ impl LazyClient {
     where
         F: AsyncFnMut(&mut SearchClient) -> Result<R>,
     {
-        let client = self.get(params).await?;
-        let err = match f(client).await {
-            Ok(result) => return Ok(result),
+        let err = match self.get(params).await {
+            Ok(client) => match f(client).await {
+                Ok(result) => return Ok(result),
+                Err(err) => err,
+            },
             Err(err) => err,
         };
 
-        if !(params.settings.daemon.autostart && Self::should_retry(&err)) {
+        if !(params.settings.daemon.autostart && daemon::should_retry_after_error(&err)) {
             return Err(err);
         }
 
         debug!("daemon not available, attempting auto-start");
         self.0 = None;
-        daemon::ensure_daemon_running(&params.settings).await?;
+        if let Err(start_error) = daemon::ensure_daemon_running(&params.settings).await {
+            return Err(err.wrap_err(format!("failed to auto-start daemon: {start_error:#}")));
+        }
         let client = self.get(params).await?;
         f(client).await
     }
@@ -130,7 +125,7 @@ impl Search {
         db: &dyn Database,
     ) -> Result<Vec<History>> {
         let shells = state.shells.to_filter();
-        let results = db
+        Ok(db
             .search(
                 DbSearchMode::FullText,
                 state.filter_mode,
@@ -143,9 +138,9 @@ impl Search {
                     ..Default::default()
                 },
             )
-            .await
-            .map_or(Vec::new(), |r| r.into_iter().collect());
-        Ok(results)
+            .await?
+            .into_iter()
+            .collect())
     }
 
     #[instrument(skip_all, level = Level::TRACE, name = "hydrate_from_db", fields(count = ids.len()))]
@@ -211,8 +206,8 @@ impl SearchEngine for Search {
 
         let mut ids = Vec::with_capacity(200);
         span!(Level::TRACE, "daemon_search.resp")
-            .in_scope(async || {
-                while let Ok(Some(response)) = stream.message().await {
+            .in_scope(async || -> Result<()> {
+                while let Some(response) = stream.message().await? {
                     let span2 = span!(
                         Level::TRACE,
                         "daemon_search.resp.item",
@@ -235,8 +230,9 @@ impl SearchEngine for Search {
                     drop(span2_guard);
                     drop(span2);
                 }
+                Ok(())
             })
-            .await;
+            .await?;
         drop(span);
 
         if ids.is_empty() {

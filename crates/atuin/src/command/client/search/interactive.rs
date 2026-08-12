@@ -113,6 +113,45 @@ pub fn to_compactness(f: &Frame, settings: &Settings) -> Compactness {
     }
 }
 
+struct SearchModeState {
+    mode: SearchMode,
+    pub daemon_failed: bool,
+}
+
+impl SearchModeState {
+    pub fn new(settings: &Settings) -> Self {
+        Self {
+            mode: settings.active_search_mode(),
+            daemon_failed: !cfg!(feature = "daemon"),
+        }
+    }
+
+    /// Return the current search mode.
+    ///
+    /// If [`Self::daemon_failed`] is true and the requested mode is [`SearchMode::DaemonFuzzy`],
+    /// this method will return [`SearchMode::Fuzzy`] instead.
+    pub fn mode(&self) -> SearchMode {
+        if self.is_failed_daemon_fuzzy() {
+            SearchMode::Fuzzy
+        } else {
+            self.mode
+        }
+    }
+
+    /// Return the raw mode, without correcting for unavailable modes.
+    pub fn raw_mode(&self) -> SearchMode {
+        self.mode
+    }
+
+    pub fn advance_to_next_mode(&mut self, settings: &Settings) {
+        self.mode = self.mode.next(settings);
+    }
+
+    pub fn is_failed_daemon_fuzzy(&self) -> bool {
+        self.mode == SearchMode::DaemonFuzzy && self.daemon_failed
+    }
+}
+
 #[allow(clippy::struct_field_names)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct State {
@@ -121,7 +160,7 @@ pub struct State {
     update_needed: Option<Version>,
     results_state: ListState,
     switched_search_mode: bool,
-    search_mode: SearchMode,
+    search_mode_state: SearchModeState,
     results_len: usize,
     accept: bool,
     keymap_mode: KeymapMode,
@@ -154,12 +193,32 @@ struct StyleState {
 }
 
 impl State {
+    fn search_mode(&self) -> SearchMode {
+        self.search_mode_state.mode()
+    }
+
     async fn query_results(
         &mut self,
         db: &mut dyn Database,
-        smart_sort: bool,
+        settings: &Settings,
     ) -> Result<Vec<History>> {
-        let results = self.engine.query(&self.search, db).await?;
+        #[cfg(feature = "daemon")]
+        use atuin_daemon::client::{DaemonClientErrorKind, classify_error};
+
+        let results = match self.engine.query(&self.search, db).await {
+            Ok(results) => results,
+            #[cfg(feature = "daemon")]
+            Err(error)
+                if self.search_mode() == SearchMode::DaemonFuzzy
+                    && classify_error(&error) != DaemonClientErrorKind::NonGrpc =>
+            {
+                tracing::warn!("daemon-fuzzy search failed: {error:#}");
+                self.search_mode_state.daemon_failed = true;
+                self.engine = engines::engine(self.search_mode(), settings);
+                self.engine.query(&self.search, db).await?
+            }
+            Err(error) => return Err(error),
+        };
 
         self.inspecting_state = InspectingState {
             current: None,
@@ -169,7 +228,7 @@ impl State {
         self.results_state.select(0);
         self.results_len = results.len();
 
-        if smart_sort {
+        if settings.smart_sort {
             Ok(atuin_history::sort::sort(
                 self.search.input.as_str(),
                 results,
@@ -659,8 +718,8 @@ impl State {
             }
             Action::CycleSearchMode => {
                 self.switched_search_mode = true;
-                self.search_mode = self.search_mode.next(settings);
-                self.engine = engines::engine(self.search_mode, settings);
+                self.search_mode_state.advance_to_next_mode(settings);
+                self.engine = engines::engine(self.search_mode(), settings);
                 InputAction::Continue
             }
             Action::SwitchContext => {
@@ -858,7 +917,7 @@ impl State {
         );
 
         let show_help = settings.show_help && (compactness == Compactness::Full || area.height > 1);
-        let warnings = Self::build_warnings(settings, theme);
+        let warnings = self.build_warnings(settings, theme);
         let warning_height = u16::try_from(warnings.height()).unwrap_or(u16::MAX);
 
         // This is an OR, as it seems more likely for someone to wish to override
@@ -959,7 +1018,15 @@ impl State {
         let indicator: String = match compactness {
             Compactness::Ultracompact => {
                 if self.switched_search_mode {
-                    format!("S{}>", self.search_mode.as_str().chars().next().unwrap())
+                    format!(
+                        "S{}>",
+                        self.search_mode_state
+                            .raw_mode()
+                            .as_str()
+                            .chars()
+                            .next()
+                            .unwrap()
+                    )
                 } else if self.search.custom_context.is_some() {
                     format!(
                         "C{}>",
@@ -1160,13 +1227,25 @@ impl State {
         .alignment(Alignment::Center)
     }
 
-    fn build_warnings(settings: &Settings, theme: &Theme) -> Text<'static> {
+    fn build_warnings(&self, settings: &Settings, theme: &Theme) -> Text<'static> {
+        let get_style = || {
+            Style::from_crossterm(theme.as_style(Meaning::AlertWarn)).add_modifier(Modifier::BOLD)
+        };
+
+        if self.search_mode_state.is_failed_daemon_fuzzy() {
+            let msg = if cfg!(feature = "daemon") {
+                "Warning: daemon-fuzzy search failed; falling back to fuzzy"
+            } else {
+                "Warning: no daemon support; falling back to fuzzy search"
+            };
+            return Text::styled(msg, get_style());
+        }
+
         if settings.requested_search_mode != RequestedSearchMode::Skim {
             return Text::default();
         }
 
-        let style =
-            Style::from_crossterm(theme.as_style(Meaning::AlertWarn)).add_modifier(Modifier::BOLD);
+        let style = get_style();
         let code_style = Style::from_crossterm(theme.as_style(Meaning::SyntaxCommand))
             .add_modifier(Modifier::BOLD);
 
@@ -1248,7 +1327,7 @@ impl State {
         let (pref, mode) = if self.prefix {
             ("", "PREFIX")
         } else if self.switched_search_mode {
-            (" SRCH:", self.search_mode.as_str())
+            (" SRCH:", self.search_mode_state.raw_mode().as_str())
         } else if self.search.custom_context.is_some() {
             (" CTX:", self.search.filter_mode.as_str())
         } else {
@@ -1807,24 +1886,17 @@ pub async fn history(
     tokio::pin!(history_count);
 
     let initial_context = current_context().await?;
-
-    let search_mode = if settings.shell_up_key_binding {
-        settings
-            .search_mode_shell_up_key_binding()
-            .unwrap_or_else(|| settings.search_mode())
-    } else {
-        settings.search_mode()
-    };
+    let search_mode_state = SearchModeState::new(settings);
     let default_filter_mode = settings
         .filter_mode_shell_up_key_binding
         .filter(|_| settings.shell_up_key_binding)
         .unwrap_or_else(|| settings.default_filter_mode(initial_context.git_root.is_some()));
+
     let mut app = State {
         history_count: None,
         results_state: ListState::default(),
         update_needed: None,
         switched_search_mode: false,
-        search_mode,
         tab_index: 0,
         inspecting_state: InspectingState {
             current: None,
@@ -1839,7 +1911,8 @@ pub async fn history(
             custom_context: None,
             shells: settings.search.shells.clone(),
         },
-        engine: engines::engine(search_mode, settings),
+        engine: engines::engine(search_mode_state.mode(), settings),
+        search_mode_state,
         results_len: 0,
         accept: false,
         keymap_mode: match settings.keymap_mode {
@@ -1871,7 +1944,7 @@ pub async fn history(
         app.draw(f, &[], None, None, settings, theme, popup_mode);
     })?;
 
-    let mut results = app.query_results(&mut db, settings.smart_sort).await?;
+    let mut results = app.query_results(&mut db, settings).await?;
 
     let mut stats: Option<HistoryStats> = None;
     // The id of the history entry `stats` was computed for, so the render loop
@@ -1894,7 +1967,7 @@ pub async fn history(
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
-        let initial_search_mode = app.search_mode;
+        let initial_search_mode = app.search_mode();
         let initial_custom_context = app.search.custom_context.clone();
 
         let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
@@ -1993,10 +2066,10 @@ pub async fn history(
 
         if initial_input != app.search.input.as_str()
             || initial_filter_mode != app.search.filter_mode
-            || initial_search_mode != app.search_mode
+            || initial_search_mode != app.search_mode()
             || initial_custom_context != app.search.custom_context
         {
-            results = app.query_results(&mut db, settings.smart_sort).await?;
+            results = app.query_results(&mut db, settings).await?;
         }
 
         // In custom context mode, when no filter is applied, highlight the entry which was used
@@ -2164,7 +2237,8 @@ mod tests {
     use atuin_client::database::Context;
     use atuin_client::history::History;
     use atuin_client::settings::{
-        FilterMode, KeymapMode, Preview, PreviewStrategy, SearchMode, Settings, Shells,
+        FilterMode, KeymapMode, Preview, PreviewStrategy, RequestedSearchMode, SearchMode,
+        Settings, Shells,
     };
     use time::OffsetDateTime;
 
@@ -2172,7 +2246,7 @@ mod tests {
     use crate::command::client::search::history_list::ListState;
     use crate::command::client::search::keybindings::Action;
 
-    use super::{Compactness, InputAction, InspectingState, KeymapSet, State};
+    use super::{Compactness, InputAction, InspectingState, KeymapSet, SearchModeState, State};
 
     #[fixture]
     fn settings() -> Settings {
@@ -2194,7 +2268,10 @@ mod tests {
             update_needed: None,
             results_state: ListState::default(),
             switched_search_mode: false,
-            search_mode: SearchMode::Fuzzy,
+            search_mode_state: SearchModeState {
+                mode: SearchMode::DaemonFuzzy,
+                daemon_failed: false,
+            },
             results_len,
             accept: false,
             keymap_mode,
@@ -2741,11 +2818,56 @@ mod tests {
     ) {
         use crate::command::client::search::keybindings::Action;
 
-        let original_mode = state.search_mode;
+        let original_mode = state.search_mode();
         let result = state.execute_action(&Action::CycleSearchMode, &settings);
         assert!(matches!(result, super::InputAction::Continue));
         assert!(state.switched_search_mode);
-        assert_ne!(state.search_mode, original_mode);
+        assert_ne!(state.search_mode(), original_mode);
+    }
+
+    #[cfg(all(feature = "daemon", unix))]
+    #[tokio::test]
+    async fn unavailable_daemon_fuzzy_retries_with_local_fuzzy() {
+        use atuin_client::database::{Database, Sqlite};
+
+        let temp = tempfile::tempdir().unwrap();
+        let mut settings = Settings::utc();
+        settings.requested_search_mode = RequestedSearchMode::DaemonFuzzy;
+        settings.daemon.enabled = true;
+        settings.daemon.autostart = true;
+        settings.daemon.systemd_socket = true;
+        settings.daemon.socket_path = temp
+            .path()
+            .join("missing.sock")
+            .to_string_lossy()
+            .into_owned();
+
+        let mut state = state(KeymapMode::Emacs, 0, 0, FilterMode::Global, "query");
+        state.search_mode_state = SearchModeState::new(&settings);
+        assert_eq!(state.search_mode(), SearchMode::DaemonFuzzy);
+        state.engine = engines::engine(SearchMode::DaemonFuzzy, &settings);
+        let mut db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
+        let history: History = History::capture()
+            .timestamp(OffsetDateTime::now_utc())
+            .command("echo query match")
+            .cwd("/tmp")
+            .build()
+            .into();
+        db.save(&history).await.unwrap();
+
+        let results = state.query_results(&mut db, &settings).await.unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].command, "echo query match");
+        assert_eq!(state.search_mode(), SearchMode::Fuzzy);
+        assert_eq!(state.search_mode_state.raw_mode(), SearchMode::DaemonFuzzy);
+        assert!(state.search_mode_state.daemon_failed);
+        assert!(state.search_mode_state.is_failed_daemon_fuzzy());
+
+        state.search_mode_state.mode = SearchMode::FullText;
+        state.execute_action(&Action::CycleSearchMode, &settings);
+        assert_eq!(state.search_mode_state.raw_mode(), SearchMode::DaemonFuzzy);
+        assert_eq!(state.search_mode(), SearchMode::Fuzzy);
     }
 
     #[rstest]
