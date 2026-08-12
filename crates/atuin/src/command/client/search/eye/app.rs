@@ -27,7 +27,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::super::cursor::Cursor;
 use super::super::engines::{self, AnySearchEngine, SearchState};
-use super::super::interactive::InputAction;
+use super::super::interactive::{InputAction, SearchModeState};
 use super::super::keybindings::key::{KeyCodeValue, KeyInput, SingleKey};
 use super::super::keybindings::{Action, EvalContext};
 use super::state::{
@@ -55,6 +55,15 @@ pub(super) enum Msg {
     Results {
         generation: Generation,
         results: Vec<History>,
+    },
+    /// A query effect failed. `daemon_error` is true when the failure came
+    /// from the daemon transport/RPC layer (not a local error): in
+    /// daemon-fuzzy mode that triggers the fallback to local fuzzy search,
+    /// mirroring the ratatui path. Any other failure lands as an empty
+    /// result set for its generation.
+    QueryFailed {
+        generation: Generation,
+        daemon_error: bool,
     },
     /// The inspector fetch effect finished: the inspected entry and its
     /// stats, boxed to keep the message small.
@@ -99,7 +108,7 @@ pub(super) struct SearchApp<'a> {
     pub(super) inspector: Inspector,
     pub(super) status: Status,
     pub(super) tab: Tab,
-    pub(super) search_mode: SearchMode,
+    pub(super) search_mode_state: SearchModeState,
     pub(super) switched_search_mode: bool,
     /// A second engine instance used only for match highlighting at render
     /// time — the query engine lives behind an async lock the synchronous
@@ -144,7 +153,7 @@ impl<'a> SearchApp<'a> {
         history_store: HistoryStore,
         context: Context,
         filter_mode: FilterMode,
-        search_mode: SearchMode,
+        search_mode_state: SearchModeState,
         initial_height: u16,
         fullscreen: bool,
     ) -> Self {
@@ -182,7 +191,7 @@ impl<'a> SearchApp<'a> {
             inspector: Inspector::new(),
             status: Status::default(),
             tab: Tab::Search,
-            search_mode,
+            search_mode_state,
             switched_search_mode: false,
             highlight_engine,
             now,
@@ -202,6 +211,13 @@ impl<'a> SearchApp<'a> {
         }
     }
 
+    /// The active search mode, corrected for daemon failure: after the
+    /// daemon-fuzzy fallback fires this reads `Fuzzy`, and everything that
+    /// displays the mode or constructs an engine goes through here.
+    pub(super) fn search_mode(&self) -> SearchMode {
+        self.search_mode_state.mode()
+    }
+
     fn spawn_query(&mut self, ctx: &mut Ctx<'_, Self>) {
         let generation = self.listing.entries.begin_refresh();
         self.query.spawn(
@@ -210,6 +226,32 @@ impl<'a> SearchApp<'a> {
             state::snapshot(&self.search),
             self.settings.smart_sort,
         );
+    }
+
+    fn apply_results(&mut self, generation: Generation, mut results: Vec<History>) {
+        // The record store is truth: entries whose tombstones persisted are
+        // dropped even when a stale index (a failed post-delete rebuild)
+        // still returns them.
+        if !self.tombstoned.is_empty() {
+            results.retain(|e| !self.tombstoned.contains(&e.id));
+        }
+        // `accept` rejects results superseded by a newer query or by a
+        // local edit (a delete) since the query started.
+        if self.listing.entries.accept(generation, results) {
+            // New results reset the selection, matching query_results.
+            self.listing.select(0);
+            self.inspector.reset_nav();
+            // In custom context mode with no filter, highlight the entry
+            // that was used to enter the context.
+            if self.listing.highlight_context_anchor {
+                self.listing.highlight_context_anchor = false;
+                if let Some(id) = self.search.custom_context.clone()
+                    && let Some(pos) = self.listing.entries.iter().position(|e| e.id == id)
+                {
+                    self.listing.select(pos);
+                }
+            }
+        }
     }
 
     fn finish(&mut self, output: Output, ctx: &mut Ctx<'_, Self>) {
@@ -616,10 +658,10 @@ impl<'a> SearchApp<'a> {
             }
             Action::CycleSearchMode => {
                 self.switched_search_mode = true;
-                self.search_mode = self.search_mode.next(settings);
+                self.search_mode_state.advance_to_next_mode(settings);
                 self.query
-                    .swap_engine(engines::engine(self.search_mode, settings));
-                self.highlight_engine = engines::engine(self.search_mode, settings);
+                    .swap_engine(engines::engine(self.search_mode(), settings));
+                self.highlight_engine = engines::engine(self.search_mode(), settings);
                 InputAction::Continue
             }
             Action::SwitchContext => {
@@ -924,30 +966,27 @@ impl App for SearchApp<'_> {
         match msg {
             Msg::Results {
                 generation,
-                mut results,
+                results,
+            } => self.apply_results(generation, results),
+            Msg::QueryFailed {
+                generation,
+                daemon_error,
             } => {
-                // The record store is truth: entries whose tombstones
-                // persisted are dropped even when a stale index (a failed
-                // post-delete rebuild) still returns them.
-                if !self.tombstoned.is_empty() {
-                    results.retain(|e| !self.tombstoned.contains(&e.id));
-                }
-                // `accept` rejects results superseded by a newer query or
-                // by a local edit (a delete) since the query started.
-                if self.listing.entries.accept(generation, results) {
-                    // New results reset the selection, matching query_results.
-                    self.listing.select(0);
-                    self.inspector.reset_nav();
-                    // In custom context mode with no filter, highlight the
-                    // entry that was used to enter the context.
-                    if self.listing.highlight_context_anchor {
-                        self.listing.highlight_context_anchor = false;
-                        if let Some(id) = self.search.custom_context.clone()
-                            && let Some(pos) = self.listing.entries.iter().position(|e| e.id == id)
-                        {
-                            self.listing.select(pos);
-                        }
-                    }
+                if daemon_error && self.search_mode() == SearchMode::DaemonFuzzy {
+                    // Mirror the ratatui path: keep the search open on a
+                    // broken daemon by falling back to local fuzzy. The
+                    // flag corrects `search_mode()` (and the warning row),
+                    // so mode cycling can't land on the daemon again.
+                    self.search_mode_state.daemon_failed = true;
+                    self.query
+                        .swap_engine(engines::engine(self.search_mode(), self.settings));
+                    self.highlight_engine = engines::engine(self.search_mode(), self.settings);
+                    self.spawn_query(ctx);
+                } else {
+                    // A local failure (or a stale daemon failure arriving
+                    // after the fallback already fired) lands as an empty
+                    // result set; `accept` discards it if superseded.
+                    self.apply_results(generation, Vec::new());
                 }
             }
             Msg::Inspected { entry, stats } => {
@@ -978,7 +1017,7 @@ impl App for SearchApp<'_> {
                 // query-relevant state around the key handling.
                 let initial_input = self.search.input.as_str().to_owned();
                 let initial_filter_mode = self.search.filter_mode;
-                let initial_search_mode = self.search_mode;
+                let initial_search_mode = self.search_mode();
                 let initial_custom_context = self.search.custom_context.clone();
 
                 match event {
@@ -999,7 +1038,7 @@ impl App for SearchApp<'_> {
                 if !self.exiting
                     && (initial_input != self.search.input.as_str()
                         || initial_filter_mode != self.search.filter_mode
-                        || initial_search_mode != self.search_mode
+                        || initial_search_mode != self.search_mode()
                         || initial_custom_context != self.search.custom_context)
                 {
                     // The anchor re-select fires when a context change (or
@@ -1041,7 +1080,7 @@ mod tests {
 
     use atuin_client::database::Sqlite;
     use atuin_client::record::sqlite_store::SqliteStore;
-    use atuin_client::settings::{ExitMode, KeyBindingConfig, Keys};
+    use atuin_client::settings::{ExitMode, KeyBindingConfig, Keys, RequestedSearchMode};
     use atuin_client::theme::ThemeManager;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::HostId;
@@ -1101,7 +1140,7 @@ mod tests {
                 git_root: None,
             },
             FilterMode::Global,
-            SearchMode::Fuzzy,
+            SearchModeState::new(settings),
             20,
             false,
         );
@@ -1405,13 +1444,13 @@ mod tests {
     #[tokio::test]
     async fn execute_cycle_search_mode() {
         let mut app = test_app(KeymapMode::Emacs, 100, 0, "", Settings::utc()).await;
-        let original_mode = app.search_mode;
+        let original_mode = app.search_mode();
         assert!(matches!(
             app.execute_action(&Action::CycleSearchMode),
             InputAction::Continue
         ));
         assert!(app.switched_search_mode);
-        assert_ne!(app.search_mode, original_mode);
+        assert_ne!(app.search_mode(), original_mode);
         assert!(
             app.query.has_pending_engine(),
             "the next query must install the new engine"
@@ -1528,7 +1567,7 @@ mod tests {
                 git_root: None,
             },
             FilterMode::Global,
-            SearchMode::Fuzzy,
+            SearchModeState::new(settings_ref),
             20,
             false,
         );
@@ -1593,9 +1632,15 @@ mod tests {
             }
         }
 
-        #[allow(clippy::significant_drop_tightening, clippy::cast_possible_wrap)]
         async fn seeded_session() -> (Runtime<SearchApp<'static>>, TestTerminal) {
-            let app = test_app(KeymapMode::Emacs, 0, 0, "", Settings::utc()).await;
+            seeded_session_with(Settings::utc()).await
+        }
+
+        #[allow(clippy::significant_drop_tightening, clippy::cast_possible_wrap)]
+        async fn seeded_session_with(
+            settings: Settings,
+        ) -> (Runtime<SearchApp<'static>>, TestTerminal) {
+            let app = test_app(KeymapMode::Emacs, 0, 0, "", settings).await;
             {
                 let backend = Arc::clone(app.query.backend());
                 let backend = backend.lock().await;
@@ -1766,6 +1811,97 @@ mod tests {
             );
         }
 
+        /// Drain the in-flight query effect and return the generation its
+        /// results would have carried, discarding the results — so a test
+        /// can deliver a failure in that query's place.
+        async fn swallow_query_generation(rt: &mut Runtime<SearchApp<'static>>) -> Generation {
+            let mut generation = None;
+            for effect in rt.take_effects() {
+                let Effect::Spawn { mut stream, cancel } = effect;
+                if cancel.is_cancelled() {
+                    continue;
+                }
+                while let Some(msg) = stream.next().await {
+                    if let Msg::Results { generation: g, .. } = &msg {
+                        generation = Some(*g);
+                    }
+                }
+            }
+            generation.expect("a query effect was in flight")
+        }
+
+        /// A daemon transport failure in daemon-fuzzy mode must not leave
+        /// the user with a dead search: the app swaps to local fuzzy,
+        /// requeries, and shows the warning — mirroring the ratatui path's
+        /// fallback (#3895).
+        #[tokio::test]
+        async fn a_daemon_error_falls_back_to_local_fuzzy() {
+            let mut settings = Settings::utc();
+            settings.requested_search_mode = RequestedSearchMode::DaemonFuzzy;
+            let (mut rt, mut term) = seeded_session_with(settings).await;
+            assert_eq!(rt.app().search_mode(), SearchMode::DaemonFuzzy);
+
+            // A typed query whose effect fails at the daemon layer.
+            let (bytes, _) = rt.handle(InputEvent::Key(key(KeyCode::Char('l'))));
+            term.feed(&bytes);
+            let generation = swallow_query_generation(&mut rt).await;
+            let (bytes, _) = rt.process(Msg::QueryFailed {
+                generation,
+                daemon_error: true,
+            });
+            term.feed(&bytes);
+
+            assert_eq!(
+                rt.app().search_mode(),
+                SearchMode::Fuzzy,
+                "fallback corrects the mode"
+            );
+            assert!(
+                rt.app().query.has_pending_engine(),
+                "the local engine is posted for the next query"
+            );
+            drive_effects(&mut rt, &mut term).await;
+
+            let screen = screen(&term);
+            assert!(
+                screen.contains("Warning: daemon-fuzzy search failed"),
+                "warning row\n{screen}"
+            );
+            assert!(
+                screen.contains("ls -la"),
+                "the fallback requery repopulates the list\n{screen}"
+            );
+        }
+
+        /// A local (non-daemon) query failure keeps the pre-fallback
+        /// behavior: the list empties for that generation, the mode is
+        /// untouched, and no daemon warning appears.
+        #[tokio::test]
+        async fn a_local_query_failure_empties_the_list() {
+            let (mut rt, mut term) = seeded_session().await;
+
+            let (bytes, _) = rt.handle(InputEvent::Key(key(KeyCode::Char('l'))));
+            term.feed(&bytes);
+            let generation = swallow_query_generation(&mut rt).await;
+            let (bytes, _) = rt.process(Msg::QueryFailed {
+                generation,
+                daemon_error: false,
+            });
+            term.feed(&bytes);
+            drive_effects(&mut rt, &mut term).await;
+
+            let screen = screen(&term);
+            assert!(
+                !screen.contains("ls -la"),
+                "the failed query lands as empty results\n{screen}"
+            );
+            assert!(
+                !screen.contains("Warning:"),
+                "local failures do not trigger the daemon warning\n{screen}"
+            );
+            assert_eq!(rt.app().search_mode(), SearchMode::Fuzzy);
+        }
+
         /// Deletes must go through `ctx.persist` so the driver waits for
         /// them at teardown — otherwise the process's 50ms runtime
         /// shutdown can kill a tombstone write mid-flight.
@@ -1881,7 +2017,7 @@ mod tests {
             // would install the new engine.
             let (bytes, _) = rt.handle(InputEvent::Key(ctrl('s')));
             term.feed(&bytes);
-            let expected = rt.app().search_mode.closest_db_mode();
+            let expected = rt.app().search_mode().closest_db_mode();
             // Two keystrokes: each replaces (cancels) the previous query
             // task, so the one spawned by the cycle never runs.
             for c in "ca".chars() {

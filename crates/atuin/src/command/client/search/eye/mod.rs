@@ -130,13 +130,7 @@ pub async fn history(
 
     let context = current_context().await?;
 
-    let search_mode = if settings.shell_up_key_binding {
-        settings
-            .search_mode_shell_up_key_binding()
-            .unwrap_or_else(|| settings.search_mode())
-    } else {
-        settings.search_mode()
-    };
+    let search_mode_state = super::interactive::SearchModeState::new(settings);
     let filter_mode = settings
         .filter_mode_shell_up_key_binding
         .filter(|_| settings.shell_up_key_binding)
@@ -156,12 +150,12 @@ pub async fn history(
         settings,
         theme,
         Box::new(db),
-        engines::engine(search_mode, settings),
-        engines::engine(search_mode, settings),
+        engines::engine(search_mode_state.mode(), settings),
+        engines::engine(search_mode_state.mode(), settings),
         history_store.clone(),
         context,
         filter_mode,
-        search_mode,
+        search_mode_state,
         initial_height,
         mode == EyeMode::Fullscreen,
     );

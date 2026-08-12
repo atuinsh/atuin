@@ -119,7 +119,9 @@ pub fn to_compactness(f: &Frame, settings: &Settings) -> Compactness {
     }
 }
 
-struct SearchModeState {
+/// Shared with the eye path so daemon-failure fallback semantics cannot
+/// drift between the two TUIs.
+pub(super) struct SearchModeState {
     mode: SearchMode,
     pub daemon_failed: bool,
 }

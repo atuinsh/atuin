@@ -345,7 +345,10 @@ impl Querying {
                 Ok(results) => results,
                 Err(e) => {
                     tracing::error!(?e, "search query failed");
-                    Vec::new()
+                    return Msg::QueryFailed {
+                        generation,
+                        daemon_error: is_daemon_error(&e),
+                    };
                 }
             };
             let results = if smart_sort {
@@ -366,6 +369,20 @@ impl Querying {
     pub fn has_pending_engine(&self) -> bool {
         !self.pending_engine.is_empty()
     }
+}
+
+/// Whether a query failure came from the daemon transport/RPC layer, as
+/// opposed to a local error — the trigger for the daemon-fuzzy fallback,
+/// classified the same way as the ratatui path's `query_results`.
+#[cfg(feature = "daemon")]
+fn is_daemon_error(err: &eyre::Report) -> bool {
+    use atuin_daemon::client::{DaemonClientErrorKind, classify_error};
+    classify_error(err) != DaemonClientErrorKind::NonGrpc
+}
+
+#[cfg(not(feature = "daemon"))]
+fn is_daemon_error(_err: &eyre::Report) -> bool {
+    false
 }
 
 /// The inspector tab's data and its fetch machinery.

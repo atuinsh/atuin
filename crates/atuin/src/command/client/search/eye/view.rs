@@ -95,7 +95,7 @@ impl SearchFrame<'_, '_> {
 
         let show_help = settings.show_help && (compactness == Compactness::Full || area.height > 1);
         let warning_height =
-            u16::try_from(build_warnings(settings, self.app.theme).height()).unwrap_or(u16::MAX);
+            u16::try_from(build_warnings(self.app, self.app.theme).height()).unwrap_or(u16::MAX);
         let show_tabs = settings.show_tabs && !matches!(compactness, Compactness::Ultracompact);
 
         let chunks = Layout::default()
@@ -216,7 +216,7 @@ impl Element for SearchFrame<'_, '_> {
         }
 
         if chunks.warning.height > 0 {
-            Paragraph::new(build_warnings(settings, theme)).render(chunks.warning, buf);
+            Paragraph::new(build_warnings(app, theme)).render(chunks.warning, buf);
         }
 
         if app.tab == Tab::Inspect {
@@ -268,7 +268,7 @@ impl Element for SearchFrame<'_, '_> {
         let indicator: String = match compactness {
             Compactness::Ultracompact => {
                 if app.switched_search_mode {
-                    format!("S{}>", app.search_mode.as_str().chars().next().unwrap())
+                    format!("S{}>", app.search_mode().as_str().chars().next().unwrap())
                 } else if app.search.custom_context.is_some() {
                     format!(
                         "C{}>",
@@ -527,13 +527,25 @@ fn build_help(tab_index: usize, settings: &Settings, theme: &Theme) -> Paragraph
     .alignment(Alignment::Center)
 }
 
-fn build_warnings(settings: &Settings, theme: &Theme) -> Text<'static> {
+fn build_warnings(app: &SearchApp<'_>, theme: &Theme) -> Text<'static> {
+    let settings = app.settings;
+    let warn_style =
+        Style::from_crossterm(theme.as_style(Meaning::AlertWarn)).add_modifier(Modifier::BOLD);
+
+    if app.search_mode_state.is_failed_daemon_fuzzy() {
+        let msg = if cfg!(feature = "daemon") {
+            "Warning: daemon-fuzzy search failed; falling back to fuzzy"
+        } else {
+            "Warning: no daemon support; falling back to fuzzy search"
+        };
+        return Text::styled(msg, warn_style);
+    }
+
     if settings.requested_search_mode != RequestedSearchMode::Skim {
         return Text::default();
     }
 
-    let style =
-        Style::from_crossterm(theme.as_style(Meaning::AlertWarn)).add_modifier(Modifier::BOLD);
+    let style = warn_style;
     let code_style =
         Style::from_crossterm(theme.as_style(Meaning::SyntaxCommand)).add_modifier(Modifier::BOLD);
 
@@ -563,7 +575,7 @@ fn build_input<'a>(
     let (pref, mode) = if app.keymap.prefix {
         ("", "PREFIX")
     } else if app.switched_search_mode {
-        (" SRCH:", app.search_mode.as_str())
+        (" SRCH:", app.search_mode().as_str())
     } else if app.search.custom_context.is_some() {
         (" CTX:", app.search.filter_mode.as_str())
     } else {
