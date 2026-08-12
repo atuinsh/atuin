@@ -294,7 +294,7 @@ impl<'a> PackManifestRecordView<'a> {
             Ok::<_, PackError>(rmp_serde::to_vec(&encrypted_data)?)
         })
         .await
-        // SAFETY: The child task should never panic -- if it does, we may as well panic ourselves.
+        // The child task should never panic -- if it does, we may as well panic ourselves.
         .unwrap()
         .map_err(PackingError::Pack)
     }
@@ -321,7 +321,7 @@ impl<'a> PackManifestRecordView<'a> {
                 .map(|r| r.map_data(DecryptedData::from)))
         })
         .await
-        // SAFETY: The child task should never panic -- if it does, we may as well panic ourselves.
+        // The child task should never panic -- if it does, we may as well panic ourselves.
         .unwrap()
     }
 
