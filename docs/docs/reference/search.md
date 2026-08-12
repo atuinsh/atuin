@@ -29,9 +29,9 @@ Both accept absolute dates (`2021-04-01`, `2021-04-01T15:00:00`) and relative
 ones (`yesterday 3pm`, `2 hours ago`).
 
 Slash-separated dates are read **day first**, so `01/04/2021` means 1 April
-2021, not 4 January. This is fixed, and is not affected by the
-[`dialect`](../configuration/config.md#dialect) setting — `dialect` applies to
-the [`stats`](stats.md) command only. Prefer the unambiguous `YYYY-MM-DD` form.
+2021, not 4 January. This isn't configurable: the
+[`dialect`](../configuration/config.md#dialect) setting applies to the
+[`stats`](stats.md) command only. Prefer the unambiguous `YYYY-MM-DD` form.
 
 ## `atuin search -i`
 
