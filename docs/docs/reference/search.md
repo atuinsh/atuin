@@ -23,6 +23,16 @@ appended with a wildcard).
 | `--inline-height`    | Set the maximum number of lines Atuin's interface should take up              |
 | `--help`/`-h`        | Print help                                                                    |
 
+## Dates for `--before` and `--after`
+
+Both accept absolute dates (`2021-04-01`, `2021-04-01T15:00:00`) and relative
+ones (`yesterday 3pm`, `2 hours ago`).
+
+Slash-separated dates are read **day first**, so `01/04/2021` means 1 April
+2021, not 4 January. This is fixed, and is not affected by the
+[`dialect`](../configuration/config.md#dialect) setting — `dialect` applies to
+the [`stats`](stats.md) command only. Prefer the unambiguous `YYYY-MM-DD` form.
+
 ## `atuin search -i`
 
 Use Atuin's interactive search TUI to fuzzy search through your history.
@@ -46,7 +56,7 @@ atuin search -i atuin
 atuin search --exit 0 cargo
 
 # Search for all commands, that failed, from the current dir, and were ran before April 1st 2021
-atuin search --exclude-exit 0 --before 01/04/2021 --cwd .
+atuin search --exclude-exit 0 --before 2021-04-01 --cwd .
 
 # Search for all commands, beginning with cargo, that exited successfully, and were ran after yesterday at 3pm
 atuin search --exit 0 --after "yesterday 3pm" cargo
