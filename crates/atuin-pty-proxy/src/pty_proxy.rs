@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 
 use clap::{Args, Subcommand, ValueEnum};
 
@@ -55,6 +57,11 @@ pub struct RunOptions {
     /// 133), i.e. when its startup has finished — the moment to warm
     /// caches without competing with it. Requires a suggestion provider.
     pub session_ready: Option<Box<dyn FnOnce() + Send>>,
+    /// Filled in with the session shell's pid once it is spawned, and left
+    /// at zero if the platform doesn't report one. The shell is the only
+    /// thing that knows where the session has `cd`'d to, so a suggestion
+    /// provider that ranks by directory reads the cwd from this process.
+    pub shell_pid: Option<Arc<AtomicU32>>,
     /// Umask to restore in the spawned shell — atuin tightens its own
     /// process-wide umask early, which the shell must not inherit (#3695).
     pub child_umask: Option<u32>,

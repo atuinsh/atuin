@@ -45,10 +45,16 @@ message PrepareIndexResponse {}
 message SuggestRequest {
   string query = 1;
   uint32 limit = 2;
-  // Which shells' commands to consider. Empty means all, matching
-  // SearchRequest.shells; the index is rebuilt when this differs from the
-  // filter it currently holds.
-  repeated string shells = 3;
+  // No shell filter: unlike Search, a suggestion is served from the index
+  // as it stands rather than rebuilding it to match, so there is nothing to
+  // honour a filter with. See the Suggest implementation.
+  reserved 3;
+  // Where the shell is. Unlike SearchRequest, this ranks rather than
+  // filters: commands run in this directory come first, then those run
+  // elsewhere in the same workspace. Only cwd and git_root are read.
+  SearchContext context = 4;
+  // Drop commands that have failed and never succeeded.
+  bool filter_failed = 5;
 }
 
 message Suggestion {

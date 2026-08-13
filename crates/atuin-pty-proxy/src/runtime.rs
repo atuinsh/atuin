@@ -272,6 +272,15 @@ fn start(mut options: RuntimeOptions) -> eyre::Result<Session> {
             .map_err(|e| eyre::eyre!("{e:#}"))
             .wrap_err("spawn shell")?,
     ));
+    // Published before anything can query it: the suggestion provider reads
+    // the session's cwd from this process, and the shell is the only thing
+    // that knows where the user has `cd`'d to.
+    if let (Some(slot), Some(pid)) = (
+        options.hooks.shell_pid.as_ref(),
+        child.0.as_ref().and_then(|child| child.process_id()),
+    ) {
+        slot.store(pid, Ordering::Relaxed);
+    }
     trace.step("spawn shell");
 
     drop(pair.slave);

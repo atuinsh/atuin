@@ -99,6 +99,13 @@ pub struct CommandData {
     most_recent_timestamp: i64,
     /// Pre-computed global frecency.
     pub global_frecency: FrecencyData,
+    /// Whether any invocation exited zero, and whether any exited non-zero.
+    /// The `-1` sentinel — a command still running, an end hook that never
+    /// fired, or history imported from a shell that records no status —
+    /// counts as neither, so an unknown outcome is never held against a
+    /// command.
+    succeeded: bool,
+    failed: bool,
 
     // Pre-computed indexes for O(1) filter lookups
     // Using HashSet instead of DashSet since CommandData lives inside DashMap (already synchronized)
@@ -141,6 +148,8 @@ impl CommandData {
             most_recent_id: history_id,
             most_recent_timestamp: timestamp,
             global_frecency,
+            succeeded: history.exit == 0,
+            failed: history.exit > 0,
             directories: HashSet::from([dir_key]),
             hosts: HashSet::from([host_key]),
             sessions: HashSet::from([session]),
@@ -162,6 +171,8 @@ impl CommandData {
 
         // Update global frecency
         self.global_frecency.record_use(timestamp);
+        self.succeeded |= history.exit == 0;
+        self.failed |= history.exit > 0;
 
         // Update pre-computed indexes for O(1) filter lookups
         let dir_key =
@@ -187,6 +198,13 @@ impl CommandData {
     /// History ID of the most recent invocation of this command.
     pub fn most_recent_id(&self) -> [u8; 16] {
         self.most_recent_id
+    }
+
+    /// This command has failed and has never succeeded: a typo, or something
+    /// that no longer works. A command whose every invocation has an unknown
+    /// exit status is not one of these.
+    pub fn only_ever_failed(&self) -> bool {
+        self.failed && !self.succeeded
     }
 
     /// Check if any invocation matches an interned directory (exact match).
@@ -231,6 +249,31 @@ pub enum IndexFilterMode {
     Host(String),
     /// Filter to commands run in a specific session.
     Session(String),
+}
+
+/// Where the user is, for scoping [`SearchIndex::suggest`].
+///
+/// The same directory and workspace notions [`IndexFilterMode`] filters by.
+/// Once a directory is known, suggestions are confined to commands actually
+/// run *there*: a command from anywhere else is offered against a directory
+/// whose files it has never seen, and `cat Dockerfile` where there is no
+/// Dockerfile is worse than no suggestion at all. Ranking alone could not fix
+/// that — a wrong suggestion ranked second is still wrong, and still the ghost
+/// text once the right one is absent.
+///
+/// The workspace is no exception: a sibling crate holds a different set of
+/// files, so its commands are as misplaced here as any others. It survives
+/// only to rank what is left, and to scope suggestions when no directory is
+/// known at all. Both paths are strings normalized the way [`CommandData`]
+/// interns a history entry's `cwd`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SuggestScope<'a> {
+    /// The shell's current directory.
+    pub directory: Option<&'a str>,
+    /// Workspace (git) root containing `directory`.
+    pub workspace: Option<&'a str>,
+    /// Drop commands that have failed and never succeeded.
+    pub filter_failed: bool,
 }
 
 /// A "compiled" form of [`IndexFilterMode`], with most of the strings interned and parsed.
@@ -545,11 +588,15 @@ impl SearchIndex {
 
     /// Prefix completions, best first. Matching is literal — fuzzy would
     /// admit mid-word hits, noise under an in-progress line — but smart-cased
-    /// and diacritic-normalized like search, and ranked by the same frecency
-    /// map (recency tiebreak covers commands newer than the last rebuild).
-    /// Multiline commands are excluded: the UI can't render or type them.
+    /// and diacritic-normalized like search. Multiline commands are excluded:
+    /// the UI can't render or type them.
+    ///
+    /// Ranking is not search's: a suggestion is offered rather than browsed,
+    /// so it leads with where you are ([`SuggestScope`]) and then with what
+    /// you run most, where search leads with match quality and lets frecency
+    /// — which recency dominates — break ties.
     #[instrument(skip_all, level = tracing::Level::TRACE, name = "index_suggest", fields(query = %query))]
-    pub fn suggest(&self, query: &str, limit: usize) -> Vec<String> {
+    pub fn suggest(&self, query: &str, limit: usize, scope: SuggestScope<'_>) -> Vec<String> {
         if query.is_empty() || limit == 0 {
             return Vec::new();
         }
@@ -558,7 +605,9 @@ impl SearchIndex {
         // matches case-insensitively, any capital makes it exact.
         let fold_case = !query.chars().any(char::is_uppercase);
 
-        let frecency_map = self.frecency_map.read().unwrap().clone();
+        // Interned once per query. A directory the index has never seen
+        // resolves to nothing, and every command tiers as "elsewhere".
+        let directory = scope.directory.and_then(|dir| self.interner.get(dir));
         let haystack = self.haystack.read().unwrap();
 
         let mut matches: Vec<SuggestMatch> = haystack
@@ -570,16 +619,41 @@ impl SearchIndex {
                 starts_with_folded(&entry.normalized, &query, fold_case)
                     && !entry.original.contains('\n')
             })
-            .map(|(haystack_index, entry)| SuggestMatch {
-                frecency: frecency_map
-                    .as_ref()
-                    .and_then(|map| map.get(haystack_index).copied())
-                    .unwrap_or(0),
-                recency: self
-                    .commands
-                    .get(entry.original.as_ref())
-                    .map_or(0, |data| data.most_recent_timestamp()),
-                haystack_index,
+            .filter_map(|(haystack_index, entry)| {
+                let data = self.commands.get(entry.original.as_ref())?;
+                if scope.filter_failed && data.only_ever_failed() {
+                    return None;
+                }
+                // The exact-directory test is an integer-set lookup, so it
+                // runs first and spares most commands the workspace scan,
+                // which resolves every directory they have run in.
+                let locality = if directory.is_some_and(|dir| data.has_invocation_in_dir(dir)) {
+                    Locality::Directory
+                } else if scope
+                    .workspace
+                    .is_some_and(|root| data.has_invocation_in_workspace(root, &self.interner))
+                {
+                    Locality::Workspace
+                } else {
+                    Locality::Elsewhere
+                };
+                // A command that has never run in *this* directory is dropped,
+                // not merely ranked below the ones that have. Elsewhere in the
+                // same workspace is still elsewhere: a sibling crate is a
+                // different set of files, so its commands are offered against
+                // files they have never seen, which is the whole complaint.
+                // Only once we know where the user is, though — with no
+                // directory nothing can be judged, and filtering on that would
+                // suggest nothing at all.
+                if scope.directory.is_some() && locality != Locality::Directory {
+                    return None;
+                }
+                Some(SuggestMatch {
+                    locality,
+                    count: data.global_frecency.count,
+                    recency: data.most_recent_timestamp(),
+                    haystack_index,
+                })
             })
             .collect();
 
@@ -644,16 +718,34 @@ impl Default for SearchIndex {
 
 /// A prefix-matched command with everything needed to rank it.
 struct SuggestMatch {
-    frecency: u32,
+    locality: Locality,
+    /// Total invocations of this command.
+    count: u32,
     /// Unix timestamp of the most recent invocation.
     recency: i64,
     haystack_index: usize,
 }
 
+/// How close a command's history is to where the user is now. Ordered, and
+/// ranked before everything else: among commands that all start with what
+/// has been typed, having run this one *here* is the strongest evidence
+/// there is.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Locality {
+    Elsewhere,
+    Workspace,
+    Directory,
+}
+
 impl SuggestMatch {
-    /// Best first: frecency, then most recent invocation.
-    fn rank(&self) -> (Reverse<u32>, Reverse<i64>) {
-        (Reverse(self.frecency), Reverse(self.recency))
+    /// Best first: where you are, then what you run most, then what you ran
+    /// most recently.
+    fn rank(&self) -> (Reverse<Locality>, Reverse<u32>, Reverse<i64>) {
+        (
+            Reverse(self.locality),
+            Reverse(self.count),
+            Reverse(self.recency),
+        )
     }
 }
 
@@ -682,6 +774,23 @@ mod tests {
             .timestamp(timestamp)
             .command(command)
             .cwd(cwd)
+            .build()
+            .into()
+    }
+
+    /// As [`make_history`], with a recorded exit status — the import builder
+    /// otherwise defaults to the "unknown" sentinel.
+    fn make_history_exit(
+        command: &str,
+        cwd: &str,
+        timestamp: OffsetDateTime,
+        exit: i64,
+    ) -> History {
+        History::import()
+            .timestamp(timestamp)
+            .command(command)
+            .cwd(cwd)
+            .exit(exit)
             .build()
             .into()
     }
@@ -909,6 +1018,23 @@ mod tests {
         assert_eq!(results.len(), 2); // git status and git commit
     }
 
+    /// A scope that ranks nothing and filters nothing, for the tests that
+    /// are about matching rather than ranking.
+    fn anywhere() -> SuggestScope<'static> {
+        SuggestScope::default()
+    }
+
+    /// `cwd` as the index interns it, which is how a caller must pass it.
+    fn scope_in(cwd: &str, workspace: Option<&'static str>) -> SuggestScope<'static> {
+        // Leaked so the returned scope can be `'static`, as tests are short.
+        let directory: &'static str = Box::leak(format!("{cwd}/").into_boxed_str());
+        SuggestScope {
+            directory: Some(directory),
+            workspace,
+            filter_failed: false,
+        }
+    }
+
     #[test]
     fn suggest_returns_prefix_matches_only() {
         let index = SearchIndex::default();
@@ -921,16 +1047,17 @@ mod tests {
             index.add_history(&make_history(command, "/home/user", ts));
         }
 
-        let results = index.suggest("git st", 10);
+        let results = index.suggest("git st", 10, anywhere());
         assert_eq!(results.len(), 2, "no mid-string matches: {results:?}");
         assert!(results.iter().all(|c| c.starts_with("git st")));
     }
 
     #[test]
-    fn suggest_ranks_by_frecency_then_recency() {
+    fn suggest_ranks_by_count_then_recency() {
         let index = SearchIndex::default();
         // "git status" run three times, "git stash pop" once but most
-        // recently.
+        // recently. Unlike search, the suggestion the user runs most wins:
+        // it is about to be accepted, not read.
         for ts in [
             datetime!(2024-01-01 10:00 UTC),
             datetime!(2024-01-02 10:00 UTC),
@@ -944,14 +1071,147 @@ mod tests {
             datetime!(2024-01-04 10:00 UTC),
         ));
 
-        // Before a frecency rebuild, ranking falls back to recency.
-        let results = index.suggest("git st", 10);
-        assert_eq!(results[0], "git stash pop");
+        assert_eq!(index.suggest("git st", 10, anywhere())[0], "git status");
 
-        // After the rebuild, the frequent command wins.
-        index.rebuild_frecency(&Search::default());
-        let results = index.suggest("git st", 10);
-        assert_eq!(results[0], "git status");
+        // Recency only breaks a tie in count.
+        index.add_history(&make_history(
+            "git stash pop",
+            "/home/user",
+            datetime!(2024-01-05 10:00 UTC),
+        ));
+        index.add_history(&make_history(
+            "git stash pop",
+            "/home/user",
+            datetime!(2024-01-06 10:00 UTC),
+        ));
+        assert_eq!(index.suggest("git st", 10, anywhere())[0], "git stash pop");
+    }
+
+    /// A command that has never run in this exact directory gets dropped,
+    /// however often it has run elsewhere — it would be offered against files
+    /// it has never seen (`cat Dockerfile` where there is no Dockerfile).
+    /// A sibling directory in the same workspace counts as elsewhere: it holds
+    /// different files, so its commands are just as misplaced.
+    #[test]
+    fn suggest_keeps_only_commands_run_in_this_directory() {
+        let index = SearchIndex::default();
+
+        // Run a great deal, but never anywhere near the user.
+        for _ in 0..50 {
+            index.add_history(&make_history(
+                "cargo build --release",
+                "/home/user/other",
+                datetime!(2024-01-01 10:00 UTC),
+            ));
+        }
+        // Run twice elsewhere in the workspace.
+        for _ in 0..2 {
+            index.add_history(&make_history(
+                "cargo test --workspace",
+                "/home/user/atuin/crates",
+                datetime!(2024-01-02 10:00 UTC),
+            ));
+        }
+        // Run once, right here.
+        index.add_history(&make_history(
+            "cargo clippy",
+            "/home/user/atuin",
+            datetime!(2024-01-03 10:00 UTC),
+        ));
+
+        let results = index.suggest(
+            "cargo",
+            10,
+            scope_in("/home/user/atuin", Some("/home/user/atuin/")),
+        );
+        assert_eq!(
+            results,
+            vec!["cargo clippy".to_string()],
+            "only what has run in this exact directory: the 50-invocation \
+             command from outside is gone, and so is the one from a sibling \
+             directory of the same workspace"
+        );
+
+        // Somewhere none of them has ever run, nothing is offered — better
+        // than three commands that do not belong to this directory.
+        assert!(
+            index
+                .suggest("cargo", 10, scope_in("/tmp", None))
+                .is_empty()
+        );
+
+        // With no directory to scope by, nothing can be judged, so the old
+        // ranking stands and every command is still offered.
+        let results = index.suggest("cargo", 10, anywhere());
+        assert_eq!(results.len(), 3, "{results:?}");
+        assert_eq!(results[0], "cargo build --release", "ranked by count");
+    }
+
+    #[test]
+    fn suggest_ranks_by_count_within_the_current_directory() {
+        let index = SearchIndex::default();
+        for _ in 0..5 {
+            index.add_history(&make_history(
+                "make test",
+                "/home/user/atuin",
+                datetime!(2024-01-01 10:00 UTC),
+            ));
+        }
+        index.add_history(&make_history(
+            "make clean",
+            "/home/user/atuin",
+            datetime!(2024-01-09 10:00 UTC),
+        ));
+
+        // Both are local, so the one run most wins despite being older.
+        let results = index.suggest("make", 10, scope_in("/home/user/atuin", None));
+        assert_eq!(results[0], "make test");
+    }
+
+    #[test]
+    fn suggest_drops_commands_that_only_ever_failed() {
+        let index = SearchIndex::default();
+        let cwd = "/home/user";
+        // A typo: run once, never worked.
+        index.add_history(&make_history_exit(
+            "gti status",
+            cwd,
+            datetime!(2024-01-01 10:00 UTC),
+            127,
+        ));
+        // Failed once, then fixed.
+        index.add_history(&make_history_exit(
+            "git push",
+            cwd,
+            datetime!(2024-01-01 10:05 UTC),
+            1,
+        ));
+        index.add_history(&make_history_exit(
+            "git push",
+            cwd,
+            datetime!(2024-01-01 10:06 UTC),
+            0,
+        ));
+        // Imported history records no status at all (`exit == -1`), which
+        // must not be read as failure.
+        index.add_history(&make_history(
+            "git log",
+            cwd,
+            datetime!(2024-01-01 10:07 UTC),
+        ));
+
+        let scope = SuggestScope {
+            filter_failed: true,
+            ..SuggestScope::default()
+        };
+        let results = index.suggest("g", 10, scope);
+        assert!(!results.iter().any(|c| c == "gti status"), "{results:?}");
+        assert!(results.iter().any(|c| c == "git push"), "{results:?}");
+        assert!(results.iter().any(|c| c == "git log"), "{results:?}");
+
+        // The knob is honored: with it off, the typo is back.
+        let results = index.suggest("g", 10, anywhere());
+        assert!(results.iter().any(|c| c == "gti status"), "{results:?}");
     }
 
     #[test]
@@ -970,19 +1230,19 @@ mod tests {
         }
 
         // Lowercase query folds case; the multiline entry never appears.
-        let results = index.suggest("git st", 10);
+        let results = index.suggest("git st", 10, anywhere());
         assert!(results.iter().any(|c| c == "Git Status --Long"));
         assert!(results.iter().all(|c| !c.contains('\n')));
 
         // A capital in the query makes matching exact.
-        let results = index.suggest("Git", 10);
+        let results = index.suggest("Git", 10, anywhere());
         assert_eq!(results, vec!["Git Status --Long".to_string()]);
 
         // Limit is respected.
-        assert_eq!(index.suggest("git", 2).len(), 2);
+        assert_eq!(index.suggest("git", 2, anywhere()).len(), 2);
 
         // Empty queries suggest nothing.
-        assert!(index.suggest("", 10).is_empty());
+        assert!(index.suggest("", 10, anywhere()).is_empty());
     }
 
     /// Regression test for #3702: a frequently-run command whose match is

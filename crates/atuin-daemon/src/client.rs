@@ -282,7 +282,8 @@ impl SearchClient {
     }
 
     /// Prefix completions for the pty-proxy suggestion UI: suggestions whose
-    /// command starts with `query`, best first.
+    /// command starts with `query`, best first. `context` ranks rather than
+    /// filters — its cwd and git root pull commands run there to the top.
     #[instrument(
         skip_all,
         level = Level::TRACE,
@@ -293,18 +294,16 @@ impl SearchClient {
         &mut self,
         query: &str,
         limit: u32,
-        shells: OrFilter<Vec<String>>,
+        context: Context,
+        filter_failed: bool,
     ) -> Result<Vec<Suggestion>> {
         let response = self
             .client
             .suggest(SuggestRequest {
                 query: query.to_string(),
                 limit,
-                // An empty list means "all", as in `SearchRequest::shells`.
-                shells: match shells.into_list() {
-                    filter::Items::All => vec![],
-                    filter::Items::Some(vec) => vec,
-                },
+                context: Some(context.into()),
+                filter_failed,
             })
             .await?;
 

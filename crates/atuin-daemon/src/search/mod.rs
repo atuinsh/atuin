@@ -42,4 +42,4 @@ pub fn normalize_diacritics(s: &str) -> Cow<'_, str> {
 }
 
 // Re-export the index and related types
-pub use index::{IndexFilterMode, SearchIndex};
+pub use index::{IndexFilterMode, SearchIndex, SuggestScope};

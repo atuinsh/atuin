@@ -692,7 +692,14 @@ impl<W: Write> KeyFilter<W> {
 
         match span {
             AcceptSpan::Full => {
-                st.dismissed_for = Some(selected.clone());
+                // Accepting normally means "this line is what I wanted", so
+                // the popup stays down until the line changes again. A path
+                // ending in `/` is the exception: it is half an answer, and
+                // the next level down is what the user is reaching for, so
+                // let the echo re-query and put the popup straight back up.
+                if !selected.ends_with('/') {
+                    st.dismissed_for = Some(selected.clone());
+                }
                 st.suggestions = Vec::new().into();
                 st.selected = 0;
                 drop(st);
@@ -1474,6 +1481,30 @@ mod tests {
         let out = fx.filter.process(b"\t", &mut fx.stdin);
         assert_eq!(&*out, b"atus");
         assert!(!fx.filter.visible(), "overlay hidden after accept");
+    }
+
+    /// Accepting a directory is half an answer: the popup must come back for
+    /// the level below rather than staying suppressed until the user types a
+    /// character to wake it. `dismissed_for` is what suppresses the re-query,
+    /// so a trailing `/` must leave it unset.
+    #[rstest]
+    fn accepting_a_directory_leaves_the_popup_free_to_requery() {
+        let mut fx = fixture("cd cra", &["cd crates/"], 0);
+        let out = fx.filter.process(b"\t", &mut fx.stdin);
+        assert_eq!(&*out, b"tes/");
+        assert_eq!(
+            lock_unpoisoned(&fx.filter.state).dismissed_for,
+            None,
+            "a completed directory must not suppress the next query"
+        );
+
+        // A command is a whole answer, and still suppresses it.
+        let mut fx = fixture("git st", &["git status"], 0);
+        fx.filter.process(b"\t", &mut fx.stdin);
+        assert_eq!(
+            lock_unpoisoned(&fx.filter.state).dismissed_for.as_deref(),
+            Some("git status")
+        );
     }
 
     #[rstest]

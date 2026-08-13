@@ -28,12 +28,21 @@ const SPAWN_TIMEOUT_HERMETIC: Duration = Duration::from_secs(5);
 const QUERY_DEADLINE: Duration = Duration::from_secs(2);
 /// Wedged-oracle respawns before completions are given up for the session.
 const RESPAWN_LIMIT: u32 = 3;
+/// Moves the captive zsh to the session's directory. ZLE executes nothing —
+/// `^M` is unbound — so a widget is the only way in; see [`INIT_SCRIPT`].
+const ZSH_CHDIR: &[u8] = b"\x18";
 /// How long the oracle stays unspawned after proxy start unless a warm
 /// nudge (the session's first prompt) or a query arrives first: its
 /// rc-loading captive shell must not compete with the session shell's
 /// own startup.
 const WARM_SPAWN_DELAY: Duration = Duration::from_secs(5);
 const KILL_WHOLE_LINE: &[u8] = b"\x15";
+/// How long each [ZLE readiness](probe_zle) attempt waits before trying
+/// again. Short, because the probe repeats until the spawn deadline.
+const ZLE_PROBE_INTERVAL: Duration = Duration::from_millis(250);
+/// A word nothing completes to, so the readiness probe is answered by the
+/// protocol's empty-result frames rather than by a real candidate list.
+const ZLE_PROBE_WORD: &[u8] = b"__atuin_zle_probe\t";
 
 /// Turns the captive zsh into a completion driver: Tab is the only live
 /// binding, atuin's own hooks and autosuggestions are stripped, candidates
@@ -56,6 +65,18 @@ fi
 bindkey '^M' undefined
 bindkey '^J' undefined
 bindkey '^I' complete-word
+
+# The session shell's directory is not the oracle's: the tab `cd`s and this
+# captive shell does not, so without this every relative path would complete
+# against wherever the proxy was started. The reader types the directory into
+# the buffer and presses ^X. `-q` because the user's chpwd hooks have no
+# business running in here.
+_atuin_chdir() {
+    [[ -n $BUFFER ]] && builtin cd -q -- $BUFFER 2>/dev/null
+    zle kill-whole-line
+}
+zle -N _atuin_chdir
+bindkey '^X' _atuin_chdir
 
 # zsh clears these arrays after every completion, so each hook re-arms itself.
 _atuin_pre()  { print -r -- $'\0'; compprefuncs=(_atuin_pre); }
@@ -189,6 +210,13 @@ __atuin_complete() {
             mapfile -t COMPREPLY < <(compgen -c -- "$cur" 2>/dev/null)
         else
             mapfile -t COMPREPLY < <(compgen -f -- "$cur" 2>/dev/null)
+            # This branch is file completion, so directories can be marked as
+            # the zsh and fish engines already mark theirs: the trailing / is
+            # what lets accepting one descend into it instead of ending there.
+            local j
+            for j in "${!COMPREPLY[@]}"; do
+                [[ -d ${COMPREPLY[j]} ]] && COMPREPLY[j]+=/
+            done
         fi
     fi
     local i
@@ -256,14 +284,19 @@ impl OracleProc {
         }
     }
 
-    fn complete(&mut self, line: &str, timeout: Duration) -> Option<Vec<Candidate>> {
+    fn complete(
+        &mut self,
+        line: &str,
+        cwd: Option<&Path>,
+        timeout: Duration,
+    ) -> Option<Vec<Candidate>> {
         match self {
-            Self::Zsh(oracle) => oracle.complete(line, timeout),
-            Self::Bash(oracle) => oracle.complete(line, timeout),
+            Self::Zsh(oracle) => oracle.complete(line, cwd, timeout),
+            Self::Bash(oracle) => oracle.complete(line, cwd, timeout),
             Self::Fish {
                 bin,
                 load_user_config,
-            } => fish_complete(bin, line, *load_user_config, timeout),
+            } => fish_complete(bin, line, cwd, *load_user_config, timeout),
         }
     }
 
@@ -285,10 +318,11 @@ impl OracleProc {
 fn fish_complete(
     fish: &Path,
     line: &str,
+    cwd: Option<&Path>,
     load_user_config: bool,
     timeout: Duration,
 ) -> Option<Vec<Candidate>> {
-    let mut command = fish_command(fish, line, load_user_config);
+    let mut command = fish_command(fish, line, cwd, load_user_config);
     let output = command_stdout_with_timeout(&mut command, timeout)?;
 
     Some(
@@ -299,10 +333,19 @@ fn fish_complete(
     )
 }
 
-fn fish_command(fish: &Path, line: &str, load_user_config: bool) -> std::process::Command {
+fn fish_command(
+    fish: &Path,
+    line: &str,
+    cwd: Option<&Path>,
+    load_user_config: bool,
+) -> std::process::Command {
     use std::os::unix::process::CommandExt;
 
     let mut command = std::process::Command::new(fish);
+    // Per-query process, so the session's directory is simply where it runs.
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
     if !load_user_config {
         command.arg("--no-config");
     }
@@ -430,6 +473,10 @@ enum OracleRequest {
 struct OracleQuery {
     id: u64,
     line: String,
+    /// Where the session shell is, so relative paths in `line` complete
+    /// against the directory the user is actually in. `None` leaves the
+    /// engine wherever it was, which is the proxy's own directory.
+    cwd: Option<std::path::PathBuf>,
 }
 
 struct OracleAnswer {
@@ -513,7 +560,7 @@ impl CompletionOracleHandle {
                     continue;
                 };
 
-                match oracle.complete(&query.line, QUERY_DEADLINE) {
+                match oracle.complete(&query.line, query.cwd.as_deref(), QUERY_DEADLINE) {
                     Some(candidates) => {
                         if answer_tx.send(answer(candidates)).is_err() {
                             return;
@@ -545,7 +592,7 @@ impl CompletionOracleHandle {
     /// (e.g. the history lookup) before collecting. `None` means the query
     /// was not accepted: an unread one is already queued, or the oracle
     /// thread has exited.
-    pub fn enqueue(&mut self, line: &str) -> Option<u64> {
+    pub fn enqueue(&mut self, line: &str, cwd: Option<&Path>) -> Option<u64> {
         while self.answer_rx.try_recv().is_ok() {}
 
         self.next_id += 1;
@@ -554,6 +601,7 @@ impl CompletionOracleHandle {
             .try_send(OracleRequest::Query(OracleQuery {
                 id,
                 line: line.to_string(),
+                cwd: cwd.map(Path::to_path_buf),
             }))
             .ok()?;
         Some(id)
@@ -582,8 +630,8 @@ impl CompletionOracleHandle {
     }
 
     /// [`Self::enqueue`] + [`Self::collect`] in one step.
-    pub fn complete(&mut self, line: &str, wait: Duration) -> Vec<Candidate> {
-        match self.enqueue(line) {
+    pub fn complete(&mut self, line: &str, cwd: Option<&Path>, wait: Duration) -> Vec<Candidate> {
+        match self.enqueue(line, cwd) {
             Some(id) => self.collect(id, wait),
             None => Vec::new(),
         }
@@ -690,6 +738,16 @@ pub(crate) struct ZshOracle {
     writer: Box<dyn Write + Send>,
     lines: Receiver<String>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
+    /// Where this shell was last moved to, so a burst of keystrokes in one
+    /// directory pays for a single chdir rather than one per query.
+    ///
+    /// `None` until we have moved it ourselves. It is spawned in the proxy's
+    /// directory, but it then runs the user's rc, which is free to `cd`
+    /// anywhere — and some do. Seeding this with the spawn directory would
+    /// claim knowledge we do not have, and the first query would skip its
+    /// chdir whenever the session happened to agree with the proxy, leaving
+    /// every relative path completing against wherever the rc landed.
+    cwd: Option<std::path::PathBuf>,
     /// Holds the completion dump for the shell's lifetime; dropping it
     /// removes the directory.
     _dir: OracleDir,
@@ -753,20 +811,45 @@ impl ZshOracle {
             kill_pty_process_group(child.as_mut());
             return None;
         }
+        // The ready marker says the init script ran, not that ZLE is reading
+        // keys yet, and with a user's rc loaded that gap runs to hundreds of
+        // milliseconds. Bytes written into it are swallowed outright — the
+        // chdir below is one keystroke and a path, so losing it silently
+        // completes the first query against the wrong directory.
+        probe_zle(&mut writer, &lines, load_user_config);
 
         Some(Self {
             writer,
             lines,
             child,
+            cwd: None,
             _dir: dir,
         })
     }
 
-    /// Complete `line`. `None` means the oracle is desynced or dead: drop
-    /// and respawn.
-    pub(crate) fn complete(&mut self, line: &str, timeout: Duration) -> Option<Vec<Candidate>> {
+    /// Complete `line`, from `cwd` if given. `None` means the oracle is
+    /// desynced or dead: drop and respawn.
+    pub(crate) fn complete(
+        &mut self,
+        line: &str,
+        cwd: Option<&Path>,
+        timeout: Duration,
+    ) -> Option<Vec<Candidate>> {
         // Stale output would misattribute results to this query.
         while self.lines.try_recv().is_ok() {}
+
+        // Typed into ZLE as literal keys, so a control byte in the path would
+        // fire whatever it is bound to. No such directory is worth the risk of
+        // driving the captive shell with it; complete from where we are.
+        if let Some(cwd) = cwd.filter(|cwd| Some(*cwd) != self.cwd.as_deref()) {
+            let path = cwd.as_os_str().as_encoded_bytes();
+            if !path.iter().any(|byte| byte.is_ascii_control()) {
+                self.writer.write_all(KILL_WHOLE_LINE).ok()?;
+                self.writer.write_all(path).ok()?;
+                self.writer.write_all(ZSH_CHDIR).ok()?;
+                self.cwd = Some(cwd.to_path_buf());
+            }
+        }
 
         self.writer.write_all(KILL_WHOLE_LINE).ok()?;
         self.writer.write_all(line.as_bytes()).ok()?;
@@ -792,6 +875,8 @@ pub(crate) struct BashOracle {
     stdin: std::process::ChildStdin,
     lines: Receiver<String>,
     child: std::process::Child,
+    /// Where this shell was last moved to; see [`ZshOracle::cwd`].
+    cwd: Option<std::path::PathBuf>,
     /// Removes the private init-script directory when the shell goes away.
     _dir: OracleDir,
 }
@@ -856,14 +941,29 @@ impl BashOracle {
             stdin,
             lines,
             child,
+            cwd: None,
             _dir: dir,
         })
     }
 
-    /// Complete `line`. `None` means the oracle is desynced or dead: drop
-    /// and respawn.
-    pub(crate) fn complete(&mut self, line: &str, timeout: Duration) -> Option<Vec<Candidate>> {
+    /// Complete `line`, from `cwd` if given. `None` means the oracle is
+    /// desynced or dead: drop and respawn.
+    pub(crate) fn complete(
+        &mut self,
+        line: &str,
+        cwd: Option<&Path>,
+        timeout: Duration,
+    ) -> Option<Vec<Candidate>> {
         while self.lines.try_recv().is_ok() {}
+
+        // This shell executes what we write, so the chdir is just a command.
+        // It prints nothing and the DEBUG trap is gone, so it stays outside
+        // the NUL framing without disturbing it.
+        if let Some(cwd) = cwd.filter(|cwd| Some(*cwd) != self.cwd.as_deref()) {
+            let quoted = single_quoted(&cwd.to_string_lossy());
+            writeln!(self.stdin, "builtin cd -- {quoted} 2>/dev/null").ok()?;
+            self.cwd = Some(cwd.to_path_buf());
+        }
 
         writeln!(self.stdin, "__atuin_complete {}", single_quoted(line)).ok()?;
         self.stdin.flush().ok()?;
@@ -882,6 +982,39 @@ impl Drop for BashOracle {
 /// Quote for a bash single-quoted context; the only special byte is `'`.
 fn single_quoted(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
+}
+
+/// Wait until the captive zsh's line editor is demonstrably processing
+/// keystrokes, by completing a word nothing matches until the protocol
+/// answers. A completion that comes back is proof ZLE read the Tab, so
+/// anything written afterwards lands in the editor rather than the void.
+///
+/// Best-effort: a shell that never answers is left to the caller, whose
+/// queries will miss their deadline and respawn it through the usual path.
+fn probe_zle(writer: &mut impl Write, lines: &Receiver<String>, load_user_config: bool) {
+    let deadline = spawn_deadline(load_user_config);
+    let probe_started = Instant::now();
+
+    while Instant::now() < deadline {
+        // Anything still arriving is startup noise, not an answer to this.
+        while lines.try_recv().is_ok() {}
+
+        let sent = writer
+            .write_all(KILL_WHOLE_LINE)
+            .and_then(|()| writer.write_all(ZLE_PROBE_WORD))
+            .and_then(|()| writer.flush());
+        if sent.is_err() {
+            return;
+        }
+        if collect_candidates(lines, Instant::now() + ZLE_PROBE_INTERVAL).is_some() {
+            trace(&format!(
+                "oracle zle ready after {:?}",
+                probe_started.elapsed()
+            ));
+            return;
+        }
+    }
+    trace("oracle zle never answered the readiness probe");
 }
 
 fn spawn_deadline(load_user_config: bool) -> Instant {
@@ -978,9 +1111,19 @@ fn parse_candidate(line: &str) -> Option<Candidate> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     fn completions(candidates: &[Candidate]) -> Vec<&str> {
         candidates.iter().map(|c| c.completion.as_str()).collect()
+    }
+
+    /// A directory the proxy is certainly not running in, holding one
+    /// distinctively-named subdirectory. Completing `./atuin-marker` there
+    /// can only succeed if the engine was actually moved to it.
+    fn marker_dir() -> OracleDir {
+        let dir = OracleDir::new().expect("private temp directory");
+        std::fs::create_dir(dir.join("atuin-marker-dir")).expect("marker directory");
+        dir
     }
 
     #[test]
@@ -996,7 +1139,7 @@ mod tests {
         let mut oracle = BashOracle::spawn(&bash, false).expect("oracle spawns");
 
         let candidates = oracle
-            .complete("git ch", Duration::from_secs(3))
+            .complete("git ch", None, Duration::from_secs(3))
             .expect("oracle answers");
         assert!(
             completions(&candidates).contains(&"checkout"),
@@ -1006,7 +1149,7 @@ mod tests {
         // Persistence and quoting: a second query containing a single quote
         // must not desync the protocol.
         let candidates = oracle
-            .complete("echo 'a b' /tm", Duration::from_secs(3))
+            .complete("echo 'a b' /tm", None, Duration::from_secs(3))
             .expect("oracle answers again");
         assert!(
             completions(&candidates).iter().any(|c| c.contains("tmp")),
@@ -1041,12 +1184,136 @@ mod tests {
         assert_eq!(single_quoted("echo 'hi'"), r"'echo '\''hi'\'''");
     }
 
+    /// The session `cd`s and the captive shell does not, so relative paths
+    /// have to be completed from a directory the oracle is told about. Also
+    /// pins the trailing `/` that lets an accepted directory be descended
+    /// into rather than ending the completion there.
+    #[test]
+    fn zsh_completes_relative_paths_from_the_session_directory() {
+        let Some(zsh) = find_in_path("zsh") else {
+            eprintln!("zsh not installed; skipping oracle test");
+            return;
+        };
+        let dir = marker_dir();
+        let mut oracle = ZshOracle::spawn(&zsh, false).expect("oracle spawns");
+
+        // Without a directory the oracle stays where the proxy is, which is
+        // not where the marker lives.
+        let candidates = oracle
+            .complete("ls ./atuin-marker", None, Duration::from_secs(5))
+            .expect("oracle answers");
+        assert!(completions(&candidates).is_empty(), "{candidates:?}");
+
+        let candidates = oracle
+            .complete("ls ./atuin-marker", Some(&dir.0), Duration::from_secs(5))
+            .expect("oracle answers");
+        assert!(
+            completions(&candidates).contains(&"./atuin-marker-dir/"),
+            "relative path completes from the session directory: {candidates:?}"
+        );
+
+        // The move persists, and a later query in a new directory follows.
+        let candidates = oracle
+            .complete("ls atuin-marker", None, Duration::from_secs(5))
+            .expect("oracle answers");
+        assert!(
+            completions(&candidates).contains(&"atuin-marker-dir/"),
+            "{candidates:?}"
+        );
+    }
+
+    /// A freshly spawned oracle must claim to know nothing about where it is.
+    /// It is spawned in the proxy's directory, but it then runs the user's rc,
+    /// which is free to `cd` anywhere — and some do. Seeding the belief with
+    /// the spawn directory made the first query skip its chdir whenever the
+    /// session shell happened to agree with the proxy, which is the common
+    /// case: every relative path then completed against wherever the rc had
+    /// landed, usually `$HOME`.
+    #[rstest]
+    fn a_new_oracle_believes_nothing_about_its_directory() {
+        let Some(zsh) = find_in_path("zsh") else {
+            eprintln!("zsh not installed; skipping oracle test");
+            return;
+        };
+        let oracle = ZshOracle::spawn(&zsh, false).expect("oracle spawns");
+        assert!(
+            oracle.cwd.is_none(),
+            "spawning tells us where we put it, not where its rc left it"
+        );
+
+        let Some(bash) = find_in_path("bash") else {
+            return;
+        };
+        let oracle = BashOracle::spawn(&bash, false).expect("oracle spawns");
+        assert!(oracle.cwd.is_none());
+    }
+
+    /// The chdir is one keystroke and a path, and the very first query is
+    /// where it is most likely to be lost: the ready marker only says the
+    /// init script ran, so before [`probe_zle`] those bytes went into a line
+    /// editor that was not reading yet and the query silently completed in
+    /// the proxy's directory. Loads the user's real rc, which is what opens
+    /// the window wide enough to see (hermetic zsh has almost nothing to do).
+    #[rstest]
+    fn zsh_chdirs_on_the_very_first_query_under_a_user_config(
+        #[values(false, true)] load_user_config: bool,
+    ) {
+        let Some(zsh) = find_in_path("zsh") else {
+            eprintln!("zsh not installed; skipping oracle test");
+            return;
+        };
+        let dir = marker_dir();
+        let mut oracle = ZshOracle::spawn(&zsh, load_user_config).expect("oracle spawns");
+
+        let candidates = oracle
+            .complete("ls ./atuin-marker", Some(&dir.0), Duration::from_secs(8))
+            .expect("oracle answers");
+        assert!(
+            completions(&candidates).contains(&"./atuin-marker-dir/"),
+            "first query must complete in the session directory: {candidates:?}"
+        );
+    }
+
+    /// As above for bash, whose driver appends the directory marker itself.
+    #[test]
+    fn bash_completes_relative_paths_from_the_session_directory() {
+        let Some(bash) = find_in_path("bash") else {
+            eprintln!("bash not installed; skipping oracle test");
+            return;
+        };
+        let dir = marker_dir();
+        let mut oracle = BashOracle::spawn(&bash, false).expect("oracle spawns");
+
+        let candidates = oracle
+            .complete("ls ./atuin-marker", None, Duration::from_secs(5))
+            .expect("oracle answers");
+        assert!(completions(&candidates).is_empty(), "{candidates:?}");
+
+        let candidates = oracle
+            .complete("ls ./atuin-marker", Some(&dir.0), Duration::from_secs(5))
+            .expect("oracle answers");
+        assert!(
+            completions(&candidates).contains(&"./atuin-marker-dir/"),
+            "relative path completes from the session directory: {candidates:?}"
+        );
+    }
+
+    #[test]
+    fn fish_runs_in_the_session_directory() {
+        let cwd = Path::new("/marker");
+        let command = fish_command(Path::new("/fish"), "ls ./", Some(cwd), false);
+        assert_eq!(command.get_current_dir(), Some(cwd));
+
+        let command = fish_command(Path::new("/fish"), "ls ./", None, false);
+        assert_eq!(command.get_current_dir(), None);
+    }
+
     #[test]
     fn fish_config_flag_matches_the_session() {
-        let configured = fish_command(Path::new("/fish"), "git ch", true);
+        let configured = fish_command(Path::new("/fish"), "git ch", None, true);
         assert!(!configured.get_args().any(|arg| arg == "--no-config"));
 
-        let hermetic = fish_command(Path::new("/fish"), "git ch", false);
+        let hermetic = fish_command(Path::new("/fish"), "git ch", None, false);
         assert!(hermetic.get_args().any(|arg| arg == "--no-config"));
     }
 
@@ -1076,7 +1343,7 @@ mod tests {
         let mut oracle = ZshOracle::spawn(&zsh, false).expect("oracle spawns");
 
         let candidates = oracle
-            .complete("git ch", Duration::from_secs(3))
+            .complete("git ch", None, Duration::from_secs(3))
             .expect("oracle answers");
         assert!(
             completions(&candidates).contains(&"checkout"),
@@ -1086,7 +1353,7 @@ mod tests {
         // The oracle is persistent: a second, unrelated query must work and
         // not leak results from the first.
         let candidates = oracle
-            .complete("cd /tm", Duration::from_secs(3))
+            .complete("cd /tm", None, Duration::from_secs(3))
             .expect("oracle answers again");
         assert!(
             completions(&candidates).iter().any(|c| c.contains("tmp")),

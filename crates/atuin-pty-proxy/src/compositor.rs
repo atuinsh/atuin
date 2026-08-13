@@ -474,9 +474,22 @@ impl<W: Write> Compositor<W> {
         }
 
         let selected = content.selected.min(content.suggestions.len() - 1);
-        let ghost_suffix = content.suggestions[selected]
-            .text
-            .strip_prefix(content.line.as_str())
+        let selection = &content.suggestions[selected];
+        // With no word started, a shell completion is the shell listing the
+        // directory rather than finishing something the user typed — every
+        // file, in the order the engine happened to emit them. That belongs in
+        // the dropdown to browse, not appended to the line as ghost text the
+        // next Right arrow would accept. History is unaffected: it completes
+        // the whole line, so it is an answer even when the word is empty.
+        let word_started = content
+            .line
+            .chars()
+            .last()
+            .is_some_and(|c| !c.is_whitespace());
+        let ghostable = word_started || selection.source != SuggestionSource::Completion;
+        let ghost_suffix = ghostable
+            .then(|| selection.text.strip_prefix(content.line.as_str()))
+            .flatten()
             .filter(|suffix| !suffix.is_empty());
 
         // A lone suggestion already shown in full as ghost text needs no dropdown.
@@ -1247,6 +1260,22 @@ mod tests {
         }
     }
 
+    /// As [`content`], but the suggestions came from the shell's completions.
+    fn completion_content(line: &str, suggestions: &[&str]) -> OverlayContent {
+        OverlayContent {
+            line: line.to_string(),
+            suggestions: suggestions
+                .iter()
+                .map(|s| Suggestion {
+                    text: (*s).to_string(),
+                    source: SuggestionSource::Completion,
+                    syntax: Vec::new(),
+                })
+                .collect(),
+            selected: 0,
+        }
+    }
+
     /// Replay everything the compositor wrote into a fresh checker terminal
     /// and return its screen contents.
     fn displayed(compositor: &Compositor<Vec<u8>>) -> vt100::Parser {
@@ -1339,6 +1368,53 @@ mod tests {
         let shown = screen_text(&displayed(&c));
         assert_eq!(shown.trim_end(), "$ git st");
         assert!(!c.flags.popup.load(Ordering::Acquire));
+    }
+
+    /// Typing a space leaves the shell nothing to filter on, so its
+    /// completions become the whole directory. Appending the first of those
+    /// to the line as ghost text offers a file the user never asked for, and
+    /// the next Right arrow would take it. The dropdown still lists them.
+    #[rstest]
+    fn completions_for_an_empty_word_list_without_ghosting() {
+        let mut c = compositor();
+        c.apply_pty(b"$ echo hello ").unwrap();
+        c.set_overlay(Some(completion_content(
+            "echo hello ",
+            &["echo hello alpha-dir/", "echo hello beta-dir/"],
+        )));
+
+        assert!(
+            !c.flags.ghost.load(Ordering::Acquire),
+            "a directory listing must not be pre-appended to the line"
+        );
+        assert!(
+            c.flags.popup.load(Ordering::Acquire),
+            "but it is still there to browse"
+        );
+        let shown = screen_text(&displayed(&c));
+        assert!(
+            shown
+                .lines()
+                .next()
+                .is_some_and(|l| l.trim_end() == "$ echo hello"),
+            "the typed line is untouched: {shown:?}"
+        );
+
+        // One character of a word, and the shell is finishing what was
+        // started — ghost text is exactly what is wanted.
+        let mut c = compositor();
+        c.apply_pty(b"$ echo hello a").unwrap();
+        c.set_overlay(Some(completion_content(
+            "echo hello a",
+            &["echo hello alpha-dir/"],
+        )));
+        assert!(c.flags.ghost.load(Ordering::Acquire));
+
+        // History completes a whole line, so it ghosts even on an empty word.
+        let mut c = compositor();
+        c.apply_pty(b"$ echo hello ").unwrap();
+        c.set_overlay(Some(content("echo hello ", &["echo hello world"], 0)));
+        assert!(c.flags.ghost.load(Ordering::Acquire));
     }
 
     #[rstest]

@@ -527,6 +527,12 @@ pub struct Suggest {
 
     /// Minimum typed characters before suggestions appear.
     pub min_chars: usize,
+
+    /// Hide commands that have failed and never succeeded — typos, and
+    /// things that no longer work. Turn it off if you routinely re-run a
+    /// command that has yet to exit zero (a test suite that is always red);
+    /// a command whose exit status was never recorded is never hidden.
+    pub filter_failed: bool,
 }
 
 impl Default for Suggest {
@@ -535,6 +541,7 @@ impl Default for Suggest {
             enabled: false,
             limit: 8,
             min_chars: 1,
+            filter_failed: true,
         }
     }
 }
@@ -1526,6 +1533,7 @@ impl Settings {
             .set_default("suggest.enabled", false)?
             .set_default("suggest.limit", 8)?
             .set_default("suggest.min_chars", 1)?
+            .set_default("suggest.filter_failed", true)?
             .set_default("daemon.sync_frequency", 300)?
             .set_default("daemon.autostart", false)?
             .set_default("daemon.socket_path", None::<String>)?

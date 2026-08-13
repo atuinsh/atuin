@@ -14,7 +14,9 @@ mod gen_completions;
 
 mod external;
 
-#[cfg(all(feature = "client", feature = "pty-proxy", unix))]
+// Suggestions are served from the daemon's search index and nowhere else,
+// so a build without it has no suggestion provider at all.
+#[cfg(all(feature = "client", feature = "daemon", feature = "pty-proxy", unix))]
 mod suggest;
 
 #[derive(Subcommand)]
@@ -105,7 +107,9 @@ fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
         }
     };
 
-    #[cfg(any(feature = "daemon", feature = "client"))]
+    // Both readers of the settings — the command capture sink and the
+    // suggestion provider — need the daemon.
+    #[cfg(feature = "daemon")]
     let settings = atuin_client::settings::Settings::new().ok();
     trace("load settings");
 
@@ -115,20 +119,25 @@ fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
     let command_capture_sink = None;
     trace("command capture sink");
 
-    #[cfg(feature = "client")]
-    let (suggestion_provider, session_ready) = settings
+    #[cfg(all(feature = "client", feature = "daemon"))]
+    let (suggestion_provider, session_ready, shell_pid) = settings
         .and_then(|settings| suggest::history_suggestion_provider(settings, proxy.shell()))
-        .map_or((None, None), |hooks| {
-            (Some(hooks.provider), hooks.session_ready)
+        .map_or((None, None, None), |hooks| {
+            (
+                Some(hooks.provider),
+                hooks.session_ready,
+                Some(hooks.shell_pid),
+            )
         });
-    #[cfg(not(feature = "client"))]
-    let (suggestion_provider, session_ready) = (None, None);
+    #[cfg(not(all(feature = "client", feature = "daemon")))]
+    let (suggestion_provider, session_ready, shell_pid) = (None, None, None);
     trace("suggestion provider");
 
     proxy.run(atuin_pty_proxy::RunOptions {
         command_capture_sink,
         suggestion_provider,
         session_ready,
+        shell_pid,
         child_umask,
     });
 }
