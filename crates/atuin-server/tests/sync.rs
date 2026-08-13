@@ -230,6 +230,7 @@ async fn upload(
     // The PR that added these tests also changed the type of `uploaded` from `i64` to `u64`; the
     // redundant `as u64` here is just to make it convenient to run these tests before the PR's
     // fixes, by temporarily reverting all the non-test files.
+    #[allow(clippy::unnecessary_cast)]
     (uploaded as u64, remote_idx)
 }
 
