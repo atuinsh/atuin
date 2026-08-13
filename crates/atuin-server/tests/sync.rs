@@ -1,6 +1,7 @@
 use atuin_client::api_client;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync;
+use atuin_common::encryption::paseto_v4;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag};
 use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
@@ -45,6 +46,7 @@ impl TestServer {
             5,
             30,
             &Default::default(),
+            api_client::caps_client(&self.address, &Default::default()).unwrap(),
         )
         .unwrap()
     }
@@ -112,6 +114,11 @@ async fn server() -> TestServer {
     }
 }
 
+fn key() -> paseto_v4::Key {
+    // Arbitrary key; doesn't matter for these tests.
+    paseto_v4::Key::from([7u8; 32])
+}
+
 fn record(host: HostId, tag: &RecordTag, idx: RecordIdx) -> Record<EncryptedData> {
     Record::builder()
         .host(Host::new(host))
@@ -157,7 +164,7 @@ async fn download(
 
     let (diff, _) = sync::diff(&client, &store).await.unwrap();
     let operations = sync::operations(diff, &store).await.unwrap();
-    let (_, downloaded) = sync::sync_remote(&client, operations, &store, page_size)
+    let (_, downloaded) = sync::sync_remote(&client, operations, &store, page_size, &key())
         .await
         .unwrap();
 
@@ -220,7 +227,7 @@ async fn upload(
 
     let (diff, _) = sync::diff(&client, &store).await.unwrap();
     let operations = sync::operations(diff, &store).await.unwrap();
-    let (uploaded, _) = sync::sync_remote(&client, operations, &store, page_size)
+    let (uploaded, _) = sync::sync_remote(&client, operations, &store, page_size, &key())
         .await
         .unwrap();
 
