@@ -407,12 +407,11 @@ impl SuggestionBackend {
     /// session is and by how often each command has been run.
     async fn fetch_history(&mut self, query: &str) -> Vec<String> {
         if self.daemon.is_none() {
-            self.daemon =
-                atuin_daemon::client::SearchClient::new(
-                    self.settings.daemon.existing_socket_path().into_owned(),
-                )
-                    .await
-                    .ok();
+            self.daemon = atuin_daemon::client::SearchClient::new(
+                self.settings.daemon.existing_socket_path().into_owned(),
+            )
+            .await
+            .ok();
         }
         let Some(context) = self.query_context().await else {
             return Vec::new();
