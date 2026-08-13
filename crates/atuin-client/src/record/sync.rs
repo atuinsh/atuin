@@ -284,6 +284,30 @@ async fn sync_download(
         .await
         .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
 
+    // One higher than the latest record index we have locally. The case described above where we
+    // have a hole in the sequence of record indices should not happen in practice; this variable is
+    // used to detect that situation so we can print a warning.
+    //
+    // TODO: This adds a slight runtime cost, but while the packfile feature is new, let's err on
+    // the side of catching potential problems.
+    let latest = store
+        .last(host, &tag)
+        .await
+        .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?
+        .map(|record| record.idx);
+
+    if first_missing_local != latest.map_or(0, |n| n + 1) {
+        tracing::warn!(
+            "first missing record index is {first_missing_local}, but latest record is {}",
+            std::fmt::from_fn(|f| {
+                match latest {
+                    Some(n) => write!(f, "{n}"),
+                    None => write!(f, "(none)"),
+                }
+            }),
+        );
+    }
+
     let expected = (remote + 1).saturating_sub(first_missing_local);
     let mut progress = 0;
     let mut ret = Vec::new();
