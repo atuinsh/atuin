@@ -5,9 +5,6 @@ on:
     tags:
       - "v*"
 
-permissions:
-  contents: write
-
 concurrency:
   group: docs-pages
   cancel-in-progress: false
@@ -15,15 +12,20 @@ concurrency:
 jobs:
   stable:
     if: ${{ !contains(github.ref_name, '-') }}
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     env:
       MKDOCS_GIT_COMMITTERS_ENABLED: true
       MKDOCS_GIT_COMMITTERS_APIKEY: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          # mike (`--push`) and docs-root-files push to gh-pages with plain
+          # `git push`; neither takes a token, so they need these credentials.
+          persist-credentials: true
       - uses: ./.github/actions/docs-setup
       - uses: ./.github/actions/docs-deploy-stable
         with:
@@ -32,15 +34,20 @@ jobs:
 
   prerelease:
     if: ${{ contains(github.ref_name, '-') }}
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     env:
       MKDOCS_GIT_COMMITTERS_ENABLED: true
       MKDOCS_GIT_COMMITTERS_APIKEY: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          # mike (`--push`) and docs-root-files push to gh-pages with plain
+          # `git push`; neither takes a token, so they need these credentials.
+          persist-credentials: true
       - uses: ./.github/actions/docs-setup
       - uses: ./.github/actions/docs-deploy-prerelease
         with:
