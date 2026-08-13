@@ -65,14 +65,19 @@ pub enum HubError {
 }
 
 fn status_message(status: StatusCode, reason: Option<&str>) -> String {
-    if status == StatusCode::SERVICE_UNAVAILABLE {
-        "Service unavailable: check https://status.atuin.sh".to_string()
-    } else if status == StatusCode::TOO_MANY_REQUESTS {
-        "Rate limited; please wait before trying again".to_string()
-    } else if let Some(reason) = reason {
-        format!("Hub error: {status} - {reason}")
-    } else {
-        format!("Hub request failed with status: {status}")
+    match status {
+        StatusCode::SERVICE_UNAVAILABLE => {
+            "Service unavailable: check https://status.atuin.sh".to_string()
+        }
+        StatusCode::TOO_MANY_REQUESTS => {
+            "Rate limited; please wait before trying again".to_string()
+        }
+        status if let Some(reason) = reason => {
+            format!("Hub error: {status} - {reason}")
+        }
+        status => {
+            format!("Hub request failed with status: {status}")
+        }
     }
 }
 
