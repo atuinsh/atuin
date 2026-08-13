@@ -208,7 +208,14 @@ mod tests {
 
         // A corrupt/tampered manifest whose plaintext range is inverted (start_idx > end_idx). The
         // packer never emits this, so craft the record directly.
-        let data = PackManifestDataV1 { start_idx, end_idx }.encode().unwrap();
+        let data = PackManifestDataV1 {
+            host,
+            tag: RecordTag::History,
+            start_idx,
+            end_idx,
+        }
+        .encode()
+        .unwrap();
         let manifest = Record::builder()
             .host(Host::new(host))
             .version(RecordVersion::V1)
@@ -392,25 +399,27 @@ mod tests {
     /// `PackManifestData::try_from` before any network I/O, and reports itself PERMANENT so the
     /// caller skips it rather than failing the tick. A valid manifest still expands afterwards.
     #[rstest]
-    #[case::unknown_version(EncryptedData {
+    #[case::unknown_version(|_| EncryptedData {
         raw: "999{}".into(),
         cek: String::new(),
     })]
-    #[case::malformed_body(EncryptedData {
+    #[case::malformed_body(|_| EncryptedData {
         raw: "001{not json".into(),
         cek: String::new(),
     })]
-    #[case::inverted_range(
+    #[case::inverted_range(|host| {
         crate::packfile::record::PackManifestDataV1 {
+            tag: RecordTag::History,
+            host,
             start_idx: 100,
             end_idx: 5,
         }.encode()
         .unwrap()
-    )]
+    })]
     #[tokio::test]
     async fn a_malformed_manifest_fails_permanently_and_does_not_block_a_valid_one(
         key: paseto_v4::Key,
-        #[case] bad_data: EncryptedData,
+        #[case] bad_data: impl FnOnce(HostId) -> EncryptedData,
     ) {
         let host = HostId(uuid_v7());
 
@@ -458,7 +467,7 @@ mod tests {
             .version(RecordVersion::V1)
             .tag(RecordTag::Packfile)
             .idx(0)
-            .data(bad_data)
+            .data(bad_data(host))
             .build();
 
         let down = memory_store().await;
@@ -501,6 +510,8 @@ mod tests {
             .idx(0)
             .data(
                 crate::packfile::record::PackManifestDataV1 {
+                    host,
+                    tag: RecordTag::History,
                     start_idx: 0,
                     end_idx: 2,
                 }
