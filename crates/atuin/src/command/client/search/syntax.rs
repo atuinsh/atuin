@@ -10,7 +10,12 @@ use atuin_client::theme::Meaning;
 ///
 /// Rows are re-classified on every redraw while typing or scrolling, so
 /// results are memoized; repeat frames cost a hash lookup, not a parse.
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "illumos"
+))]
 pub fn classify(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -31,7 +36,12 @@ pub fn classify(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
     })
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "illumos"
+))]
 fn parse(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
     let mut meanings = vec![Meaning::Base; cmd.len()];
 
@@ -58,12 +68,22 @@ fn parse(cmd: &str, shell: Option<&str>) -> Vec<Meaning> {
     meanings
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "illumos"
+)))]
 pub fn classify(cmd: &str, _shell: Option<&str>) -> Vec<Meaning> {
     vec![Meaning::Base; cmd.len()]
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "illumos"
+))]
 fn walk(node: tree_sitter::Node, src: &[u8], meanings: &mut [Meaning]) {
     let meaning = match node.kind() {
         "comment" => Some(Meaning::SyntaxComment),
@@ -119,7 +139,12 @@ fn walk(node: tree_sitter::Node, src: &[u8], meanings: &mut [Meaning]) {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "illumos"
+))]
 fn highlight_powershell(node: tree_sitter::Node, src: &[u8], meanings: &mut [Meaning]) {
     // PowerShell has a different syntax than most shells, so it's handled separately.
 
@@ -156,7 +181,12 @@ fn highlight_powershell(node: tree_sitter::Node, src: &[u8], meanings: &mut [Mea
 
 #[cfg(all(
     test,
-    any(target_os = "linux", target_os = "macos", target_os = "windows")
+    any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "illumos"
+    )
 ))]
 mod tests {
     use super::{Meaning, classify};
