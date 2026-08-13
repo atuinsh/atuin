@@ -64,21 +64,21 @@ pub enum HubError {
     Url(#[from] atuin_common::url::UrlAppendError),
 }
 
-fn status_message(status: StatusCode, reason: Option<&str>) -> String {
-    match status {
+fn status_message(status: StatusCode, reason: Option<&str>) -> impl std::fmt::Display {
+    std::fmt::from_fn(move |f| match status {
         StatusCode::SERVICE_UNAVAILABLE => {
-            "Service unavailable: check https://status.atuin.sh".to_string()
+            write!(f, "Service unavailable: check https://status.atuin.sh")
         }
         StatusCode::TOO_MANY_REQUESTS => {
-            "Rate limited; please wait before trying again".to_string()
+            write!(f, "Rate limited; please wait before trying again")
         }
         status if let Some(reason) = reason => {
-            format!("Hub error: {status} - {reason}")
+            write!(f, "Hub error: {status} - {reason}")
         }
         status => {
-            format!("Hub request failed with status: {status}")
+            write!(f, "Hub request failed with status: {status}")
         }
-    }
+    })
 }
 
 /// Default poll interval for checking auth status
