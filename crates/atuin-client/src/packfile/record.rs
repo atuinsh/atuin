@@ -194,12 +194,17 @@ pub(crate) struct PackManifestRecordView<'a> {
 }
 
 /// An implicit assertion that matches this [`PackManifestRecordView`].
-#[derive(Debug, Serialize, Deserialize)]
+///
+/// Do *not* modify this struct. Just like `atuin_domain::record::AdditionalData`, it gets
+/// serialized to JSON during encryption, and we rely on the serialization staying the same across
+/// versions. Field order, types, and even names all must stay the same!
+#[derive(Debug, Serialize)]
 struct PackIA<'a> {
     pub manifest_id: RecordId,
     pub manifest_idx: RecordIdx,
     pub manifest_version: &'a str,
     pub host: HostId,
+    pub tag: &'a RecordTag,
 }
 
 impl PackIA<'_> {
@@ -315,6 +320,7 @@ impl<'a> PackManifestRecordView<'a> {
             manifest_idx: self.record.idx,
             manifest_version: self.record.version.as_str(),
             host: self.record.host.id,
+            tag: &self.record.tag,
         }
     }
 }
@@ -324,7 +330,8 @@ mod tests {
     use super::*;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::Host;
-    use rstest::fixture;
+    use rstest::{fixture, rstest};
+    use uuid::Uuid;
 
     #[fixture]
     fn key() -> paseto_v4::Key {
@@ -346,5 +353,26 @@ mod tests {
                     .build()
             })
             .collect()
+    }
+
+    /// Do *not* modify this test if it fails! It means the serialization of [`PackIA`] changed
+    /// which **must not happen**.
+    #[rstest]
+    #[case(
+        PackIA {
+            manifest_id: RecordId(Uuid::from_bytes([
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+            ])),
+            manifest_idx: 12345678910111213141_u64,
+            manifest_version: "  this is the \0\0\0 manifest version\n",
+            host: HostId(Uuid::from_bytes([
+                10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160,
+            ])),
+            tag: &RecordTag::Other("@@ \0 TAG\0".to_owned()),
+        },
+        r#"{"manifest_id":"01020304-0506-0708-090a-0b0c0d0e0f10","manifest_idx":12345678910111213141,"manifest_version":"  this is the \u0000\u0000\u0000 manifest version\n","host":"0a141e28-323c-4650-5a64-6e78828c96a0","tag":"@@ \u0000 TAG\u0000"}"#
+    )]
+    fn pack_ia_serialization_is_stable(#[case] value: PackIA, #[case] expected: &str) {
+        assert_eq!(serde_json::to_string(&value).unwrap(), expected);
     }
 }
