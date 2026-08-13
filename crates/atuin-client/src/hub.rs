@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use eyre::{Context, Result, bail};
 use reqwest::{StatusCode, Url, header::USER_AGENT};
+use thiserror::Error;
 
 use atuin_common::url::UrlAppendExt;
 use atuin_domain::api::{
@@ -44,6 +45,42 @@ pub enum HubAuthStatus {
     Failed(String),
 }
 
+/// An error from a Hub HTTP request.
+///
+/// Requests never log; they return this and the caller decides how (or
+/// whether) to surface it. The auth poll loop depends on that: the Hub
+/// answers 401 until the user authorizes in the browser, and those must
+/// stay silent.
+#[derive(Debug, Error)]
+pub enum HubError {
+    #[error("{}", status_message(*status, reason.as_deref()))]
+    Status {
+        status: StatusCode,
+        reason: Option<String>,
+    },
+    #[error("hub request failed: {0}")]
+    Request(#[from] reqwest::Error),
+    #[error("invalid hub URL: {0}")]
+    Url(#[from] atuin_common::url::UrlAppendError),
+}
+
+fn status_message(status: StatusCode, reason: Option<&str>) -> impl std::fmt::Display {
+    std::fmt::from_fn(move |f| match status {
+        StatusCode::SERVICE_UNAVAILABLE => {
+            write!(f, "Service unavailable: check https://status.atuin.sh")
+        }
+        StatusCode::TOO_MANY_REQUESTS => {
+            write!(f, "Rate limited; please wait before trying again")
+        }
+        status if let Some(reason) = reason => {
+            write!(f, "Hub error: {status} - {reason}")
+        }
+        status => {
+            write!(f, "Hub request failed with status: {status}")
+        }
+    })
+}
+
 /// Default poll interval for checking auth status
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -57,9 +94,7 @@ impl HubAuthSession {
     pub async fn start(hub_address: &Url) -> Result<Self> {
         debug!("Starting Hub authentication process...");
 
-        let code_response = request_code(hub_address)
-            .await
-            .context("Failed to request authentication code from Hub")?;
+        let code_response = request_code(hub_address).await?;
 
         debug!("Received code from Hub");
 
@@ -84,15 +119,21 @@ impl HubAuthSession {
                     debug!("Authentication complete, received token");
                     Ok(HubAuthStatus::Complete(token))
                 } else if let Some(error) = response.error {
-                    error!("Authentication failed: {}", error);
+                    debug!("Authentication failed: {}", error);
                     Ok(HubAuthStatus::Failed(error))
                 } else {
                     Ok(HubAuthStatus::Pending)
                 }
             }
+            // The Hub answers 401 until the user authorizes in the browser.
+            Err(HubError::Status { status, .. }) if status == StatusCode::UNAUTHORIZED => {
+                Ok(HubAuthStatus::Pending)
+            }
             Err(e) => {
-                // Transient errors shouldn't fail the whole flow
-                tracing::debug!("Verification poll failed: {}", e);
+                // Tolerate transient errors (proxy blips, brief outages) rather
+                // than failing the flow, but stay visible so a genuinely broken
+                // Hub doesn't masquerade as an authentication timeout.
+                warn!("Verification poll failed: {}", e);
                 Ok(HubAuthStatus::Pending)
             }
         }
@@ -218,33 +259,23 @@ pub async fn link_account(hub_address: &Url, cli_token: &str) -> Result<()> {
 
 // --- Internal HTTP functions ---
 
-async fn handle_resp_error(resp: reqwest::Response) -> Result<reqwest::Response> {
+async fn handle_resp_error(resp: reqwest::Response) -> Result<reqwest::Response, HubError> {
     let status = resp.status();
 
-    if status == StatusCode::SERVICE_UNAVAILABLE {
-        error!("Service unavailable: check https://status.atuin.sh");
-        bail!("Service unavailable: check https://status.atuin.sh");
+    if status.is_success() {
+        return Ok(resp);
     }
 
-    if status == StatusCode::TOO_MANY_REQUESTS {
-        error!("Rate limited; please wait before trying again");
-        bail!("Rate limited; please wait before trying again");
-    }
-
-    if !status.is_success() {
-        if let Ok(error) = resp.json::<ErrorResponse>().await {
-            error!("Hub error: {} - {}", status, error.reason);
-            bail!("Hub error: {} - {}", status, error.reason);
-        }
-        error!("Hub request failed with status: {}", status);
-        bail!("Hub request failed with status: {}", status);
-    }
-
-    Ok(resp)
+    let reason = resp
+        .json::<ErrorResponse>()
+        .await
+        .ok()
+        .map(|e| e.reason.into_owned());
+    Err(HubError::Status { status, reason })
 }
 
 /// Request a CLI auth code from the Atuin Hub
-async fn request_code(address: &Url) -> Result<CliCodeResponse> {
+async fn request_code(address: &Url) -> Result<CliCodeResponse, HubError> {
     let url = address.append_path("auth/cli/code")?;
     let client = reqwest::Client::new();
 
@@ -263,7 +294,7 @@ async fn request_code(address: &Url) -> Result<CliCodeResponse> {
 }
 
 /// Poll to verify the CLI auth code and get the session token
-async fn verify_code(address: &Url, code: &str) -> Result<CliVerifyResponse> {
+async fn verify_code(address: &Url, code: &str) -> Result<CliVerifyResponse, HubError> {
     let mut url = address.append_path("auth/cli/verify")?;
     let client = reqwest::Client::new();
 
