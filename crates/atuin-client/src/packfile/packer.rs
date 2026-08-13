@@ -76,6 +76,8 @@ pub async fn try_pack(
         };
 
         let manifest = PackManifestDataV1 {
+            host,
+            tag: tag.clone(),
             start_idx: cursor,
             end_idx: end,
         };

@@ -64,6 +64,8 @@ impl PackManifestData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackManifestDataV1 {
+    pub host: HostId,
+    pub tag: RecordTag,
     /// The first record which is encoded within the packfile, ie. **inclusive** lower bound.
     pub start_idx: RecordIdx,
     /// The last record which is encoded within the packfile, ie. **inclusive** upper bound.
