@@ -408,7 +408,9 @@ impl SuggestionBackend {
     async fn fetch_history(&mut self, query: &str) -> Vec<String> {
         if self.daemon.is_none() {
             self.daemon =
-                atuin_daemon::client::SearchClient::new(self.settings.daemon.socket_path.clone())
+                atuin_daemon::client::SearchClient::new(
+                    self.settings.daemon.existing_socket_path().into_owned(),
+                )
                     .await
                     .ok();
         }
