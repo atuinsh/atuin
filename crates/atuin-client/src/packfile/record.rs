@@ -271,6 +271,8 @@ impl<'a> PackManifestRecordView<'a> {
                 Self::ZSTD_ENCODING_LEVEL.get().into(),
             )?;
 
+            // TODO: One huge PASETO may not be the best choice. @ellie suggests switching to
+            // xchacha20-poly1305.
             let encrypted_data = paseto_v4::encrypt_sync(
                 &compressed,
                 Some(paseto_v4::ImplicitAssertion::from(ia.as_str())),
