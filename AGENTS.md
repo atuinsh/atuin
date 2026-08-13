@@ -59,6 +59,7 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 
 - Unit tests inline with `#[cfg(test)]`, async via `#[tokio::test]`.
 - Integration tests in `crates/atuin/tests/` need Postgres (`ATUIN_DB_URI` env var).
+- Use `rstest` for tests, especially when they can be made simpler using `case`s and `fixture`s.
 - Use `":memory:"` SQLite for unit tests needing a database.
 - Runner: `cargo nextest`.
 - Benchmarks: `divan` in `atuin-client`, `atuin-history` and `atuin-nucleo-matcher`, tracked in CI

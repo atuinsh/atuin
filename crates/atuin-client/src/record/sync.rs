@@ -201,9 +201,10 @@ async fn sync_upload(
     remote: Option<RecordIdx>,
     page_size: u64,
     key: &paseto_v4::Key,
-) -> Result<i64, SyncError> {
-    let remote = remote.unwrap_or(0);
-    let expected = local - remote;
+) -> Result<u64, SyncError> {
+    // The first record the remote *doesn't* have.
+    let first_missing_remote = remote.map_or(0, |n| n + 1);
+    let expected = local + 1 - first_missing_remote;
     let mut progress = 0;
 
     let pb = ProgressBar::new(expected);
@@ -219,9 +220,9 @@ async fn sync_upload(
         tag
     );
 
-    loop {
+    while progress < expected {
         let page = store
-            .next(host, &tag, remote + progress, page_size)
+            .next(host, &tag, first_missing_remote + progress, page_size)
             .await
             .map_err(|e| {
                 error!("failed to read upload page: {e:?}");
@@ -252,15 +253,11 @@ async fn sync_upload(
 
         progress += page.len() as u64;
         pb.set_position(progress);
-
-        if progress >= expected {
-            break;
-        }
     }
 
     pb.finish_with_message("Uploaded records");
 
-    Ok(progress as i64)
+    Ok(progress)
 }
 
 // TODO(markovejnovic): Seriously revisit the syncing logic and coupling.
@@ -277,16 +274,17 @@ async fn sync_download(
     page_size: u64,
     key: &paseto_v4::Key,
 ) -> Result<Vec<RecordId>, SyncError> {
-    // Resume from the first missing idx, not the head. A prior packfile op for this host may have
-    // expanded a pack whose history landed ABOVE a still-missing idx; keying off the head would
-    // size `expected` past that hole and never fetch it. The frontier refetches from the hole --
-    // records already present above it upsert idempotently.
-    let local = store
+    // Scan the database to find the first missing local index, rather than assuming it's one more
+    // than the highest local index. A prior packfile op for this host may have expanded a pack
+    // whose history landed ABOVE a still-missing index; keying off the highest index would never
+    // fetch the hole before it. Start from the actual missing index; records already present above
+    // it will be "unnecessarily" redownloaded, but this is a no-op.
+    let first_missing_local = store
         .first_gap(host, &tag)
         .await
         .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
 
-    let expected = remote.saturating_sub(local);
+    let expected = (remote + 1).saturating_sub(first_missing_local);
     let mut progress = 0;
     let mut ret = Vec::new();
 
@@ -303,9 +301,9 @@ async fn sync_download(
         .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
         .progress_chars("#>-"));
 
-    loop {
+    while progress < expected {
         let page = client
-            .next_records(host, tag.clone(), local + progress, page_size)
+            .next_records(host, tag.clone(), first_missing_local + progress, page_size)
             .await
             .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
 
@@ -342,10 +340,6 @@ async fn sync_download(
 
         progress += page.len() as u64;
         pb.set_position(progress);
-
-        if progress >= expected {
-            break;
-        }
     }
 
     pb.finish_with_message("Downloaded records");
@@ -359,7 +353,7 @@ pub async fn sync_remote(
     local_store: &SqliteStore,
     page_size: u64,
     key: &paseto_v4::Key,
-) -> Result<(i64, Vec<RecordId>), SyncError> {
+) -> Result<(u64, Vec<RecordId>), SyncError> {
     let mut uploaded = 0;
     let mut downloaded = Vec::new();
 
@@ -453,7 +447,7 @@ pub async fn sync(
     store: &SqliteStore,
     encryption_key: &paseto_v4::Key,
     caps: Arc<CapClient>,
-) -> Result<(i64, Vec<RecordId>), SyncError> {
+) -> Result<(u64, Vec<RecordId>), SyncError> {
     let client = build_client_with_caps(settings, caps).await?;
     let (diff, remote_index) = diff(&client, store).await?;
 
