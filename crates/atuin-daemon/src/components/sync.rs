@@ -217,7 +217,13 @@ async fn do_sync_tick(
     }
 
     // Perform the sync
-    let res = sync::sync(settings, handle.store(), handle.encryption_key()).await;
+    let res = sync::sync(
+        settings,
+        handle.store(),
+        handle.encryption_key(),
+        handle.caps().clone(),
+    )
+    .await;
 
     match res {
         Err(e) => {

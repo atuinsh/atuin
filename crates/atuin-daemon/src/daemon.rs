@@ -12,9 +12,11 @@
 use std::sync::Arc;
 
 use atuin_client::{
-    database::Sqlite as HistoryDatabase, record::sqlite_store::SqliteStore, settings::Settings,
+    api_client::caps_client, database::Sqlite as HistoryDatabase,
+    record::sqlite_store::SqliteStore, settings::Settings,
 };
 use atuin_common::encryption::paseto_v4;
+use atuin_domain::caps::CapClient;
 use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result};
 use tokio::sync::{RwLock, broadcast};
@@ -43,6 +45,9 @@ pub struct DaemonState {
     // Database handles
     history_db: HistoryDatabase,
     store: SqliteStore,
+
+    // Reads the server's advertised capabilities (e.g. the packfile record count).
+    caps: Arc<CapClient>,
 }
 
 // ============================================================================
@@ -151,6 +156,13 @@ impl DaemonHandle {
     /// Get a reference to the record store.
     pub fn store(&self) -> &SqliteStore {
         &self.state.store
+    }
+
+    // ---- Capabilities ----
+
+    /// Get the capability reader for the configured sync server.
+    pub fn caps(&self) -> &Arc<CapClient> {
+        &self.state.caps
     }
 }
 
@@ -452,6 +464,12 @@ impl DaemonBuilder {
         // Create the event bus
         let (event_tx, _) = broadcast::channel(64);
 
+        // One capability reader for the whole daemon: shared by the history component's packing
+        // path and injected into every sync tick's client, so the server is only polled by one
+        // warmer.
+        let caps = caps_client(&self.settings.sync_address, &self.settings.extra_headers)
+            .context("failed to build the capability reader")?;
+
         // Create the shared state
         let state = Arc::new(DaemonState {
             event_tx,
@@ -459,6 +477,7 @@ impl DaemonBuilder {
             encryption_key,
             history_db,
             store,
+            caps,
         });
 
         // Create the handle (just a reference to the state)

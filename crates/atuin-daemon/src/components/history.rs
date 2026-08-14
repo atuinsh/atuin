@@ -7,9 +7,12 @@ use std::{pin::Pin, sync::Arc};
 use atuin_client::{
     database::Database,
     history::{History, HistoryId, store::HistoryStore},
+    packfile,
     settings::Settings,
 };
 use atuin_common::time::OffsetDateTimeExt;
+use atuin_domain::caps::PackfileCap;
+use atuin_domain::record::RecordTag;
 use dashmap::DashMap;
 use eyre::Result;
 use time::OffsetDateTime;
@@ -230,6 +233,22 @@ impl HistorySvc for HistoryGrpcService {
                 .push(history.clone())
                 .await
                 .map_err(|e| Status::internal(format!("failed to push record to store: {e:?}")))?;
+
+            if let Err(e) = packfile::try_pack(
+                &history_store.store,
+                history_store.host_id,
+                handle
+                    .caps()
+                    .get_server::<PackfileCap>()
+                    .await
+                    .ok()
+                    .flatten(),
+                &RecordTag::History,
+            )
+            .await
+            {
+                tracing::warn!("packing failed: {e}");
+            }
 
             // Emit the event
             handle.emit(DaemonEvent::HistoryEnded(history));

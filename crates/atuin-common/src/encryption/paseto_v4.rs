@@ -36,7 +36,7 @@ pub enum KeyDecodingError {
     #[error("encryption key is empty")]
     EmptyKey,
     #[error("unexpected decoding error: {_0}")]
-    DecodingError(String),
+    DecodingError(crate::rmp::decode::DecodeError<'static>),
     #[error("encryption key is not the correct size")]
     InvalidSize,
     #[error("failed to parse the slice: {_0}")]
@@ -181,7 +181,7 @@ impl Key {
                 match rmp::Marker::from_u8(buf[0]) {
                     rmp::Marker::Bin8 => {
                         let len = rmp::decode::read_bin_len(&mut bytes)
-                            .map_err(|e| KeyDecodingError::DecodingError(format!("{e:?}")))?;
+                            .map_err(|e| KeyDecodingError::DecodingError(e.into()))?;
                         if len != 32 {
                             return Err(KeyDecodingError::InvalidSize);
                         }
@@ -192,7 +192,7 @@ impl Key {
                     }
                     rmp::Marker::Array16 => {
                         let len = rmp::decode::read_array_len(&mut bytes)
-                            .map_err(|e| KeyDecodingError::DecodingError(format!("{e:?}")))?;
+                            .map_err(|e| KeyDecodingError::DecodingError(e.into()))?;
                         if len != 32 {
                             return Err(KeyDecodingError::InvalidSize);
                         }
@@ -200,7 +200,7 @@ impl Key {
                         let mut key = [0u8; 32];
                         for i in &mut key {
                             *i = rmp::decode::read_int(&mut bytes)
-                                .map_err(|e| KeyDecodingError::DecodingError(format!("{e:?}")))?;
+                                .map_err(|e| KeyDecodingError::DecodingError(e.into()))?;
                         }
                         Ok(key.into())
                     }

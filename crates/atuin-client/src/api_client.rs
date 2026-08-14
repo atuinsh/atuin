@@ -12,10 +12,15 @@ use reqwest::{
 use atuin_common::url::UrlAppendExt;
 use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION, ChangePasswordRequest, ErrorResponse,
-    LoginRequest, LoginResponse, MeResponse, RegisterResponse,
+    LoginRequest, LoginResponse, MeResponse, PackfileDownloadResponse, PackfileResponse,
+    RegisterResponse,
 };
-use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus, RecordTag};
+use atuin_domain::caps::{CapClient, CapMismatch, CapabilitiesExt};
+use atuin_domain::record::{
+    EncryptedData, HostId, Record, RecordId, RecordIdx, RecordStatus, RecordTag,
+};
 
+use reqwest_middleware::ClientWithMiddleware;
 use semver::Version;
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
@@ -46,10 +51,12 @@ impl AuthToken {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct Client {
     sync_addr: Arc<Url>,
-    client: reqwest::Client,
+    client: ClientWithMiddleware,
+    /// Used for uploading "LFS" data to S3. Carries no default headers, unlike [`Self::client`].
+    lfs_client: reqwest::Client,
+    caps: Arc<CapClient>,
 }
 
 /// A [`reqwest::ClientBuilder`] appropriate for the given extra headers.
@@ -242,6 +249,25 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
     Ok(resp)
 }
 
+/// Build the capability reader for a sync server.
+pub fn caps_client(
+    sync_addr: &Url,
+    extra_headers: &HashMap<String, String>,
+) -> Result<Arc<CapClient>> {
+    let mut headers = extra_headers_map(extra_headers)?;
+    headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
+    headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
+
+    let http = client_builder(extra_headers)
+        .default_headers(headers)
+        .build()?;
+
+    Ok(CapClient::new(
+        sync_addr.append_path("api/v0/capabilities")?,
+        http,
+    ))
+}
+
 impl Client {
     pub fn new(
         sync_addr: impl Into<Arc<Url>>,
@@ -249,7 +275,10 @@ impl Client {
         connect_timeout: u64,
         timeout: u64,
         extra_headers: &HashMap<String, String>,
+        caps: Arc<CapClient>,
     ) -> Result<Self> {
+        let sync_addr: Arc<Url> = sync_addr.into();
+
         let mut headers = extra_headers_map(extra_headers)?;
         headers.insert(AUTHORIZATION, auth.to_header_value().parse()?);
         headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
@@ -257,14 +286,29 @@ impl Client {
         // used for semver server check
         headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
 
+        // Wrap the authenticated client in the capability-negotiation middleware.
+        let client = client_builder(extra_headers)
+            .default_headers(headers)
+            .connect_timeout(Duration::from_secs(connect_timeout))
+            .timeout(Duration::from_secs(timeout))
+            .build()?
+            .with_capabilities(caps.clone(), CapMismatch::Continue);
+
         Ok(Client {
-            sync_addr: sync_addr.into(),
-            client: client_builder(extra_headers)
-                .default_headers(headers)
+            sync_addr,
+            client,
+            lfs_client: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(connect_timeout))
                 .timeout(Duration::from_secs(timeout))
                 .build()?,
+            caps,
         })
+    }
+
+    /// The capability reader this client negotiates against, for capability-gated features to
+    /// consult (e.g. `client.caps().get_server::<SomeCap>()`).
+    pub fn caps(&self) -> &Arc<CapClient> {
+        &self.caps
     }
 
     pub async fn me(&self) -> Result<MeResponse> {
@@ -297,6 +341,68 @@ impl Client {
         handle_resp_error(resp).await?;
 
         Ok(())
+    }
+
+    /// Upload the given packfile.
+    pub async fn upload_packfile(
+        &self,
+        manifest_id: RecordId,
+        record_ids: &[RecordId],
+        packfile: impl AsRef<[u8]> + Into<reqwest::Body>,
+    ) -> Result<()> {
+        let url = self.sync_addr.append_path("api/v0/packfiles")?;
+        let body = serde_json::json!({
+            "manifest_id": manifest_id,
+            "records": record_ids,
+            "packfile_size_bytes": packfile.as_ref().len(),
+        });
+        let resp = self.client.post(url).json(&body).send().await?;
+        let resp = handle_resp_error(resp).await?;
+
+        let parsed: PackfileResponse = resp.json().await?;
+
+        // Awesome, we got the packfile response, let's proceed uploading it up now.
+        self.put_packfile(parsed.upload_url, packfile).await?;
+
+        Ok(())
+    }
+
+    /// Upload a packfile body to a presigned URL. Unauthenticated by design.
+    async fn put_packfile(
+        &self,
+        upload_url: Url,
+        packfile: impl Into<reqwest::Body>,
+    ) -> Result<()> {
+        // Not self.client: S3 rejects presigned requests that also carry an Authorization header.
+        let resp = self
+            .lfs_client
+            .put(upload_url.clone())
+            .body(packfile)
+            .send()
+            .await?;
+        handle_resp_error(resp).await?;
+        Ok(())
+    }
+
+    async fn get_packfile_download_url(&self, manifest_id: RecordId) -> Result<Url> {
+        // `append_path` takes `&'static str`; the manifest id is dynamic, so inline its logic.
+        let path = format!("api/v0/packfiles/{}", manifest_id.0);
+        let url = self
+            .sync_addr
+            .append(path.split('/').filter(|s| !s.is_empty()))?;
+        let resp = self.client.get(url).send().await?;
+        let resp = handle_resp_error(resp).await?;
+
+        let parsed: PackfileDownloadResponse = resp.json().await?;
+        Ok(parsed.download_url)
+    }
+
+    /// Download the packfile for the given manifest id.
+    pub async fn download_packfile(&self, manifest_id: RecordId) -> Result<Vec<u8>> {
+        let download_url = self.get_packfile_download_url(manifest_id).await?;
+        let resp = self.lfs_client.get(download_url).send().await?;
+        let resp = handle_resp_error(resp).await?;
+        Ok(resp.bytes().await?.to_vec())
     }
 
     pub async fn next_records(
@@ -495,5 +601,60 @@ mod tests {
 
         assert_eq!(resp.status(), 200);
         assert_eq!(resp.url().path(), "/ok");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn bootstrap_enables_packfiles_then_is_idempotent() {
+        use atuin_domain::caps::{CapServer, CapabilitiesCap, PackfileCap};
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // A server advertising PackfileCap; serve its exact wire document.
+        let advertised = CapServer::new()
+            .add(CapabilitiesCap { version: 1 })
+            .unwrap()
+            .add(PackfileCap {
+                version: 1,
+                record_count: 500,
+            })
+            .unwrap();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v0/capabilities"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(advertised.body().to_owned()))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let addr: Url = server.uri().parse().unwrap();
+        let caps = caps_client(&addr, &HashMap::new()).unwrap();
+        let client = Client::new(
+            addr,
+            AuthToken::Token("t".into()),
+            30,
+            30,
+            &HashMap::new(),
+            caps,
+        )
+        .unwrap();
+
+        // The client observes the server's advertised packfile cap; a second read stays warm
+        // (the mock expects a single capabilities fetch).
+        assert_eq!(
+            client.caps().get_server::<PackfileCap>().await.unwrap(),
+            Some(PackfileCap {
+                version: 1,
+                record_count: 500,
+            })
+        );
+        assert_eq!(
+            client.caps().get_server::<PackfileCap>().await.unwrap(),
+            Some(PackfileCap {
+                version: 1,
+                record_count: 500,
+            })
+        );
     }
 }

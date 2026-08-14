@@ -37,7 +37,9 @@ impl Host {
     }
 }
 
-/// Note that the order of items matters here -- `serde` serializes in order.
+/// Do *not* modify this struct. It gets serialized to JSON during encryption, and we rely on the
+/// serialization staying the same across versions. Field order, types, and even names all must stay
+/// the same!
 #[derive(Debug, Copy, Clone, Serialize)]
 pub struct AdditionalData<'a> {
     pub id: RecordId,
@@ -107,14 +109,29 @@ impl<Data> Record<Data> {
     }
 
     pub fn with_data<New>(self, data: New) -> Record<New> {
-        Record {
-            id: self.id,
-            idx: self.idx,
-            host: self.host,
-            timestamp: self.timestamp,
-            version: self.version,
-            tag: self.tag,
+        self.map_data(|_| data)
+    }
+
+    /// Apply a transformation to the data, creating a new record with it.
+    pub fn map_data<New>(self, f: impl FnOnce(Data) -> New) -> Record<New> {
+        let Record {
+            id,
+            idx,
+            host,
+            timestamp,
+            version,
+            tag,
             data,
+        } = self;
+
+        Record {
+            id,
+            idx,
+            host,
+            timestamp,
+            version,
+            tag,
+            data: f(data),
         }
     }
 
@@ -704,5 +721,29 @@ mod tests {
             round.get(host, &RecordTag::Other("custom".to_owned())),
             Some(2)
         );
+    }
+
+    /// Do *not* modify this test if it fails! It means the serialization of [`AdditionalData`]
+    /// changed which **must not happen**.
+    #[rstest]
+    #[case(
+        AdditionalData {
+            id: RecordId(Uuid::from_bytes([
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+            ])),
+            idx: 12345678910111213141_u64,
+            version: "  this is the \0\0\0 version\n",
+            tag: "@@ \0 TAG\0",
+            host: HostId(Uuid::from_bytes([
+                10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160,
+            ])),
+        },
+        r#"{"id":"01020304-0506-0708-090a-0b0c0d0e0f10","idx":12345678910111213141,"version":"  this is the \u0000\u0000\u0000 version\n","tag":"@@ \u0000 TAG\u0000","host":"0a141e28-323c-4650-5a64-6e78828c96a0"}"#
+    )]
+    fn additional_data_serialization_is_stable(
+        #[case] value: AdditionalData,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(serde_json::to_string(&value).unwrap(), expected);
     }
 }

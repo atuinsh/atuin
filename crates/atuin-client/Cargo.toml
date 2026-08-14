@@ -15,7 +15,7 @@ repository = { workspace = true }
 
 [features]
 default = ["sync", "hub", "daemon"]
-sync = ["reqwest"]
+sync = ["reqwest", "dep:reqwest-middleware"]
 hub = ["reqwest"]
 daemon = []
 check-update = []
@@ -52,7 +52,6 @@ serde_regex = "1.1.0"
 fs-err = { workspace = true }
 sql-builder = { workspace = true }
 memchr = "2.7"
-rmp = { workspace = true }
 typed-builder = { workspace = true }
 tokio = { workspace = true }
 semver = { workspace = true }
@@ -70,6 +69,7 @@ rusty_paserk = { version = "0.5.0", default-features = false, features = [
 
 # sync
 reqwest = { workspace = true, optional = true }
+reqwest-middleware = { workspace = true, optional = true, features = ["json"] }
 indicatif = "0.18.0"
 tiny-bip39 = { workspace = true }
 
@@ -78,6 +78,10 @@ crossterm = { workspace = true, features = ["serde"] }
 palette = { version = "0.7.5", features = ["serializing"] }
 strum = { workspace = true }
 strum_macros = { workspace = true }
+
+# packfile
+zstd = "0.13"
+serde_bytes = "0.11"
 
 [dependencies.atuin-common]
 path = "../atuin-common"
@@ -91,10 +95,12 @@ version = "18.20.0-beta.3"
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 pretty_assertions = { workspace = true }
+proptest = { workspace = true }
 rstest = { workspace = true }
 divan = { version = "5.0.1", package = "codspeed-divan-compat" }
 tempfile = "3"
 toml = "1.1"
+wiremock = "0.6"
 
 # This crate's tests require the `test-utils` feature in atuin-common.
 [dev-dependencies.atuin-common]

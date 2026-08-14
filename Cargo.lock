@@ -398,15 +398,17 @@ dependencies = [
  "notify",
  "palette",
  "pretty_assertions",
+ "proptest",
  "rand 0.8.7",
  "regex",
  "reqwest",
- "rmp",
+ "reqwest-middleware",
  "rstest",
  "rusty_paserk",
  "rusty_paseto",
  "semver",
  "serde",
+ "serde_bytes",
  "serde_json",
  "serde_regex",
  "serde_with",
@@ -426,7 +428,9 @@ dependencies = [
  "url",
  "uuid",
  "whoami",
+ "wiremock",
  "zeroize",
+ "zstd",
 ]
 
 [[package]]
@@ -444,7 +448,6 @@ dependencies = [
  "pretty_assertions",
  "proptest",
  "rmp",
- "rmp-serde",
  "rstest",
  "rustix",
  "rusty_paserk",
@@ -474,6 +477,7 @@ version = "18.20.0-beta.3"
 dependencies = [
  "atuin-client",
  "atuin-common",
+ "atuin-domain",
  "atuin-dotfiles",
  "atuin-history",
  "dashmap",
@@ -489,6 +493,7 @@ dependencies = [
  "prost-types",
  "protox",
  "rand 0.8.7",
+ "reqwest",
  "rstest",
  "tempfile",
  "time",
@@ -1047,6 +1052,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dad887fd958be91b5098c0248def011f4523ab786cd411be668777e55063501f"
 dependencies = [
  "find-msvc-tools",
+ "jobserver",
+ "libc",
  "shlex 2.0.1",
 ]
 
@@ -2916,6 +2923,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "jobserver"
+version = "0.1.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c00acbd29eabad4a2392fa0e921c874934dbbf4194312ad20f04a0ed67a3cb3"
+dependencies = [
+ "getrandom 0.4.3",
+ "libc",
+]
+
+[[package]]
 name = "js-sys"
 version = "0.3.100"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4540,6 +4557,7 @@ dependencies = [
  "async-trait",
  "http",
  "reqwest",
+ "serde",
  "thiserror 2.0.19",
  "tower-service",
 ]
@@ -4585,16 +4603,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ba8be72d372b2c9b35542551678538b562e7cf86c3315773cae48dfbfe7790c"
 dependencies = [
  "num-traits",
-]
-
-[[package]]
-name = "rmp-serde"
-version = "1.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72f81bee8c8ef9b577d1681a70ebbc962c232461e397b22c208c43c04b67a155"
-dependencies = [
- "rmp",
- "serde",
 ]
 
 [[package]]
@@ -4880,6 +4888,16 @@ checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
  "serde_derive",
+]
+
+[[package]]
+name = "serde_bytes"
+version = "0.11.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8"
+dependencies = [
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -7371,3 +7389,31 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zstd"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "7.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f49c4d5f0abb602a93fb8736af2a4f4dd9512e36f7f570d66e65ff867ed3b9d"
+dependencies = [
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.0.16+zstd.1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91e19ebc2adc8f83e43039e79776e3fda8ca919132d68a1fed6a5faca2683748"
+dependencies = [
+ "cc",
+ "pkg-config",
+]
