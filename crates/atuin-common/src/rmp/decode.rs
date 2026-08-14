@@ -16,6 +16,8 @@ pub use rmp::decode::{read_u8, read_u16, read_u32, read_u64};
 /// Conversion to [`eyre::Report`] is supported. This cannot be done by implementing
 /// [`std::error::Error`] because this type is not, in general, `'static`, so a manual
 /// implementation is provided.
+///
+/// [`Display`]: std::fmt::Display
 #[derive(Debug, derive_more::Display, derive_more::From)]
 #[display("could not decode MessagePack value: {_0:?}")]
 pub enum DecodeError<'a, E: RmpReadErr = BytesReadError> {

@@ -111,7 +111,7 @@ impl<E: RmpWriteErr> From<TryEncodeError<E, Infallible>> for EncodeError<E> {
 ///
 /// The difference from [`write_array`] is that this function accepts an iterator of [`Result`]s
 /// rather than an iterator of elements. If any of the [`Result`]s is an [`Err`], this function will
-/// return [`EncodeError::Inner`] with that error.
+/// return [`TryEncodeError::Inner`] with that error.
 ///
 /// `write` is a function that writes a single element.
 pub fn try_write_array<W, S, T, E, F, WrErr>(
