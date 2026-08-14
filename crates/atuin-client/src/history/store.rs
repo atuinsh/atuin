@@ -1,9 +1,9 @@
 use std::{collections::HashSet, fmt::Write, time::Duration};
 
+use atuin_common::rmp::decode::Bytes;
 use eyre::{Result, bail, eyre};
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
-use rmp::decode::Bytes;
 
 use crate::{
     database::{Database, current_context},
@@ -50,7 +50,7 @@ impl HistoryRecord {
     pub fn serialize(&self) -> Result<DecryptedData> {
         // probably don't actually need to use rmp here, but if we ever need to extend it, it's a
         // nice wrapper around raw byte stuff
-        use rmp::encode;
+        use atuin_common::rmp::encode;
 
         let mut output = vec![];
 
@@ -74,7 +74,7 @@ impl HistoryRecord {
     }
 
     pub fn deserialize(bytes: &DecryptedData, version: &str) -> Result<Self> {
-        use rmp::decode;
+        use atuin_common::rmp::decode;
 
         fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
             eyre!("{err:?}")

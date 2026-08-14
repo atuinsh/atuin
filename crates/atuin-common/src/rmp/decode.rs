@@ -2,8 +2,8 @@ use rmp::Marker;
 pub use rmp::decode::bytes::{Bytes, BytesReadError};
 pub use rmp::decode::{DecodeStringError, NumValueReadError, RmpRead, RmpReadErr, ValueReadError};
 pub use rmp::decode::{read_array_len, read_bin_len, read_map_len, read_str_len};
+pub use rmp::decode::{read_bool, read_int, read_str_from_slice};
 pub use rmp::decode::{read_i8, read_i16, read_i32, read_i64};
-pub use rmp::decode::{read_int, read_str_from_slice};
 pub use rmp::decode::{read_u8, read_u16, read_u32, read_u64};
 
 /// An error encountered while trying to decode a message with [`rmp`].
@@ -16,8 +16,6 @@ pub use rmp::decode::{read_u8, read_u16, read_u32, read_u64};
 /// Conversion to [`eyre::Report`] is supported. This cannot be done by implementing
 /// [`std::error::Error`] because this type is not, in general, `'static`, so a manual
 /// implementation is provided.
-///
-/// [`Display`]: std::fmt::Display
 #[derive(Debug, derive_more::Display, derive_more::From)]
 #[display("could not decode MessagePack value: {_0:?}")]
 pub enum DecodeError<'a, E: RmpReadErr = BytesReadError> {
@@ -29,9 +27,33 @@ pub enum DecodeError<'a, E: RmpReadErr = BytesReadError> {
         expected: usize,
         actual: u32,
     },
+    #[display("{_0}")]
+    Custom(String),
 }
 
 impl<E: RmpReadErr> DecodeError<'_, E> {
+    pub fn into_static(self) -> DecodeError<'static, E> {
+        match self {
+            Self::DecodeString(e) => DecodeError::DecodeString(match e {
+                DecodeStringError::InvalidMarkerRead(e) => DecodeStringError::InvalidMarkerRead(e),
+                DecodeStringError::InvalidDataRead(e) => DecodeStringError::InvalidDataRead(e),
+                DecodeStringError::TypeMismatch(m) => DecodeStringError::TypeMismatch(m),
+                DecodeStringError::BufferSizeTooSmall(n) => {
+                    DecodeStringError::BufferSizeTooSmall(n)
+                }
+                DecodeStringError::InvalidUtf8(_, e) => {
+                    DecodeStringError::InvalidUtf8(b"[elided]", e)
+                }
+            }),
+            Self::NumValueRead(e) => DecodeError::NumValueRead(e),
+            Self::ValueRead(e) => DecodeError::ValueRead(e),
+            Self::WrongArrayLength { expected, actual } => {
+                DecodeError::WrongArrayLength { expected, actual }
+            }
+            Self::Custom(s) => DecodeError::Custom(s),
+        }
+    }
+
     pub fn type_mismatch(&self) -> Option<Marker> {
         match self {
             Self::DecodeString(DecodeStringError::TypeMismatch(m)) => Some(*m),

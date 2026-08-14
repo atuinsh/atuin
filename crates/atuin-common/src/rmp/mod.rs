@@ -1,9 +1,6 @@
-//! [`rmp`]-related utilities.
-//!
-//! Small helpers that fill gaps in the upstream `rmp` and `rmp_serde` crates.
+//! A wrapper around [`rmp`], with additional utilities and better error types.
 
 pub use rmp::Marker;
 
 pub mod decode;
 pub mod encode;
-pub mod serde;

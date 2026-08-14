@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 
 use atuin_common::filter::OrFilter;
 use atuin_common::rmp::decode::{self, Bytes, DecodeError};
-use atuin_common::rmp::encode::{self, EncodeError};
+use atuin_common::rmp::encode::{self, ByteBuf, EncodeError};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::{normalize_optional_string, uuid_v7};
 use atuin_domain::record::DecryptedData;
@@ -256,7 +256,7 @@ impl History {
     /// accommodate this because its deserialization routine errors if more than 11 fields are
     /// provided.
     pub fn serialize(&self) -> Result<DecryptedData, EncodeError> {
-        let mut output = vec![];
+        let mut output = ByteBuf::new();
 
         // write the version
         encode::write_u16(&mut output, Version::LATEST.as_int())?;
@@ -279,7 +279,7 @@ impl History {
         encode::write_str(&mut output, self.author.as_str())?;
         encode::write_optional(&mut output, self.intent.as_deref(), encode::write_str)?;
         encode::write_optional(&mut output, self.shell.as_deref(), encode::write_str)?;
-        Ok(DecryptedData(output))
+        Ok(DecryptedData(output.into_vec()))
     }
 
     pub fn deserialize(bytes: &[u8], version: &str) -> Result<History> {

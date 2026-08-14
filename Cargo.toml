@@ -17,7 +17,6 @@ repository = "https://github.com/atuinsh/atuin"
 readme = "README.md"
 
 [workspace.dependencies]
-rmp-serde = "1"
 async-trait = "0.1.58"
 enum_dispatch = "0.3"
 atuin-client = { path = "crates/atuin-client", version = "18.20.0-beta.3" }
@@ -77,7 +76,7 @@ crypto_secretbox = "0.1.1"
 tiny-bip39 = "2"
 tree-sitter-fish = "3.6.0"
 tree-sitter-powershell = "0.26.4"
-rmp = { version = "0.8.14" }
+rmp = "0.8.14"
 ratatui = "0.30.0"
 sql-builder = "3"
 tempfile = { version = "3.19" }

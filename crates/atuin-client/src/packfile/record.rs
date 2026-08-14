@@ -3,9 +3,8 @@
 use std::num::NonZeroU8;
 
 use atuin_common::encryption::paseto_v4;
-use atuin_common::rmp::decode::{self, Bytes, DecodeError};
-use atuin_common::rmp::encode::{self, ByteBuf, EncodeError, RmpWrite};
-use atuin_common::rmp::serde::TryToVecError;
+use atuin_common::rmp::decode::{self, Bytes, DecodeError, RmpRead};
+use atuin_common::rmp::encode::{self, ByteBuf, EncodeError, RmpWrite, TryEncodeError};
 use atuin_domain::record::{
     DecryptedData, EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag,
     RecordVersion,
@@ -16,8 +15,11 @@ use uuid::Uuid;
 
 use crate::record::sqlite_store::SqliteStore;
 
-fn read_uuid<'a>(bytes: &mut Bytes<'a>) -> Result<Uuid, DecodeError<'a>> {
-    let uuid_bytes = decode::read_fixed_binary_array(bytes)?;
+fn read_uuid<'a, R>(reader: &mut R) -> Result<Uuid, DecodeError<'a, R::Error>>
+where
+    R: RmpRead,
+{
+    let uuid_bytes = decode::read_fixed_binary_array(reader)?;
     Ok(Uuid::from_bytes(uuid_bytes))
 }
 
@@ -29,7 +31,7 @@ where
 }
 
 fn read_record<'a>(bytes: &mut Bytes<'a>) -> Result<Record<DecryptedData>, DecodeError<'a>> {
-    // Do not reorder these fields; the evaluation order matters.
+    // Do not reorder these field expressions; the evaluation order matters.
     Ok(Record {
         id: RecordId(read_uuid(bytes)?),
         idx: decode::read_u64(bytes)?,
@@ -59,6 +61,26 @@ where
     encode::write_str(writer, record.version.as_str())?;
     encode::write_str(writer, record.tag.as_str())?;
     encode::write_binary_array(writer, record.data.0.iter().copied())?;
+    Ok(())
+}
+
+fn read_encrypted_data<'a>(bytes: &mut Bytes<'a>) -> Result<EncryptedData, DecodeError<'a>> {
+    // Do not reorder these field expressions; the evaluation order matters.
+    Ok(EncryptedData {
+        raw: decode::read_string(bytes)?,
+        cek: decode::read_string(bytes)?,
+    })
+}
+
+fn write_encrypted_data<W>(
+    writer: &mut W,
+    data: &EncryptedData,
+) -> Result<(), EncodeError<W::Error>>
+where
+    W: RmpWrite,
+{
+    encode::write_str(writer, &data.raw)?;
+    encode::write_str(writer, &data.cek)?;
     Ok(())
 }
 
@@ -162,7 +184,7 @@ pub enum PackError {
     #[error("failed to decrypt a history record: {0}")]
     Decrypt(eyre::Report),
     #[error("failed to serialize the records: {0}")]
-    Serialize(#[from] rmp_serde::encode::Error),
+    Serialize(#[from] EncodeError),
     #[error("the record run yielded a different number of records than it reported")]
     BadLength,
     #[error("failed to compress the packfile: {0}")]
@@ -173,27 +195,23 @@ pub enum PackError {
     Join(#[from] tokio::task::JoinError),
 }
 
-impl From<TryToVecError<PackError>> for PackError {
-    fn from(value: TryToVecError<PackError>) -> Self {
-        match value {
-            TryToVecError::Encoding(e) => Self::Serialize(e),
-            TryToVecError::Given(e) => e,
-            TryToVecError::BadLength => Self::BadLength,
-        }
-    }
-}
-
 /// Why unpacking a body blob back into records failed. Moved here from the former `codec` module.
 #[derive(Debug, Error)]
 pub enum UnpackError {
     #[error("failed to deserialize the packfile: {0}")]
-    Deserialize(#[from] rmp_serde::decode::Error),
+    Deserialize(DecodeError<'static>),
     #[error("failed to authenticate and decrypt the packfile: {0}")]
     Decrypt(#[from] paseto_v4::DecryptionError),
     #[error("failed to decompress the packfile: {0}")]
     Decompress(#[from] std::io::Error),
     #[error("the unpacking task panicked: {0}")]
     Join(#[from] tokio::task::JoinError),
+}
+
+impl From<DecodeError<'_>> for UnpackError {
+    fn from(e: DecodeError<'_>) -> Self {
+        Self::Deserialize(e.into_static())
+    }
 }
 
 #[derive(Debug, Error)]
@@ -210,29 +228,6 @@ pub enum PackingError {
     Loading(#[from] RecordLoadingError),
     #[error(transparent)]
     Pack(#[from] PackError),
-}
-
-/// Helper structure which is equivalent to DecryptedData, but implements `Serialize`.
-///
-/// **Careful**: Ensure this never travels over the wire. To prevent this happening in the future,
-/// ensure you never directly use this structure and rather you use the explicit conversion functions.
-///
-/// Furthermore, keep this structure WITHIN this module and **never** leak it as a public interface.
-#[derive(Serialize, Deserialize)]
-#[serde(transparent)]
-struct PackedData(#[serde(with = "serde_bytes")] Vec<u8>);
-
-impl PackedData {
-    /// **Dangerous**. See docs for [`PackedData`].
-    pub fn dangerous_from_decrypted_data(value: DecryptedData) -> Self {
-        Self(value.0)
-    }
-}
-
-impl From<PackedData> for DecryptedData {
-    fn from(value: PackedData) -> Self {
-        Self(value.0)
-    }
 }
 
 /// A parsed, validated view of a `packfile` manifest record. The manifest body is decoded once at
@@ -308,16 +303,20 @@ impl<'a> PackManifestRecordView<'a> {
             // First we need to decrypt the encrypted records. Order of magnitude is about 1000 records.
             let record_ids = encrypted_records.iter().map(|r| r.id);
 
-            let decrypted_records = encrypted_records
-                .iter()
-                .map(|r| r.decrypt(&key).map_err(PackError::Decrypt))
-                // We now need to convert this into a [`PackedData`] record, which, you will note,
-                // is `Serialize` and `Deserialize` unlike the `DecryptedData`.
-                .map(|r| r.map(|r| r.map_data(PackedData::dangerous_from_decrypted_data)));
+            let mut buf = ByteBuf::new();
+            encode::try_write_array(
+                &mut buf,
+                encrypted_records.iter().map(|r| r.decrypt(&key)),
+                |writer, record| write_record(writer, &record),
+            )
+            .map_err(|e| match e {
+                TryEncodeError::Encode(e) => PackError::Serialize(e),
+                TryEncodeError::Inner(e) => PackError::Decrypt(e),
+            })?;
 
-            let packed = atuin_common::rmp::serde::try_to_vec(decrypted_records)?;
+            let packed_decrypted = buf.into_vec();
             let compressed = zstd::stream::encode_all(
-                packed.as_slice(),
+                packed_decrypted.as_slice(),
                 Self::ZSTD_ENCODING_LEVEL.get().into(),
             )?;
 
@@ -329,9 +328,10 @@ impl<'a> PackManifestRecordView<'a> {
                 &key,
             )?;
 
-            let packed = rmp_serde::to_vec(&encrypted_data).map_err(PackError::from)?;
-
-            Ok((packed, record_ids.collect()))
+            let mut buf = ByteBuf::new();
+            write_encrypted_data(&mut buf, &encrypted_data)?;
+            let packed_encrypted = buf.into_vec();
+            Ok((packed_encrypted, record_ids.collect()))
         })
         .await
         // The child task should never panic -- if it does, we may as well panic ourselves.
@@ -343,22 +343,27 @@ impl<'a> PackManifestRecordView<'a> {
         &self,
         packed_bytes: impl AsRef<[u8]> + Send + 'static,
         key: paseto_v4::Key,
-    ) -> Result<impl Iterator<Item = Record<DecryptedData>>, UnpackError> {
+    ) -> Result<Vec<Record<EncryptedData>>, UnpackError> {
         let ia = self.ia().json();
 
         tokio::task::spawn_blocking(move || {
-            let encrypted: paseto_v4::EncryptedData = rmp_serde::from_slice(packed_bytes.as_ref())?;
+            let mut bytes = Bytes::new(packed_bytes.as_ref());
+            let encrypted: paseto_v4::EncryptedData = read_encrypted_data(&mut bytes)?;
+
             let decrypted = paseto_v4::decrypt_sync(
                 &encrypted,
                 Some(paseto_v4::ImplicitAssertion::from(ia.as_str())),
                 &key,
             )?;
-            let decompressed = zstd::stream::decode_all(decrypted.as_slice())?;
-            let record_data: Vec<Record<PackedData>> = rmp_serde::from_slice(&decompressed)?;
 
-            Ok(record_data
-                .into_iter()
-                .map(|r| r.map_data(DecryptedData::from)))
+            let decompressed = zstd::stream::decode_all(decrypted.as_slice())?;
+            let mut bytes = Bytes::new(decompressed.as_slice());
+            let records = decode::read_array(&mut bytes, read_record)
+                .map(|result| {
+                    result.map(|record| record.map_data(DecryptedData::from).encrypt(&key))
+                })
+                .collect::<Result<_, _>>()?;
+            Ok(records)
         })
         .await
         // The child task should never panic -- if it does, we may as well panic ourselves.

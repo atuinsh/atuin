@@ -52,7 +52,6 @@ tokio = { workspace = true }
 serde_json = { workspace = true }
 zeroize = { workspace = true }
 rmp = { workspace = true }
-rmp-serde = { workspace = true }
 fs-err = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]

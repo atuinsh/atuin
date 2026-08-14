@@ -115,14 +115,11 @@ pub async fn download_packed(
         .await
         .map_err(DownloadError::Api)?;
 
-    let decrypted = view.unpack_records(blob, key.clone()).await?;
-
-    let encrypted: Vec<Record<EncryptedData>> =
-        decrypted.map(|record| record.encrypt(key)).collect();
-    let ids: Vec<RecordId> = encrypted.iter().map(|record| record.id).collect();
+    let records = view.unpack_records(blob, key.clone()).await?;
+    let ids: Vec<RecordId> = records.iter().map(|record| record.id).collect();
 
     store
-        .push_batch(encrypted.iter())
+        .push_batch(records.iter())
         .await
         .map_err(DownloadError::Store)?;
 

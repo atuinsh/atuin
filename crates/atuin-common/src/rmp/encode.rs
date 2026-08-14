@@ -3,8 +3,9 @@ use std::convert::Infallible;
 use rmp::Marker;
 pub use rmp::encode::{ByteBuf, RmpWrite, RmpWriteErr, ValueWriteError};
 pub use rmp::encode::{write_array_len, write_bin_len, write_map_len, write_str_len};
+pub use rmp::encode::{write_bin, write_bool, write_nil, write_str};
 pub use rmp::encode::{write_i8, write_i16, write_i32, write_i64};
-pub use rmp::encode::{write_nil, write_sint, write_str, write_uint, write_uint8};
+pub use rmp::encode::{write_sint, write_uint, write_uint8};
 pub use rmp::encode::{write_u8, write_u16, write_u32, write_u64};
 
 /// An error encountered while trying to encode a message with [`rmp`].
@@ -13,14 +14,13 @@ pub use rmp::encode::{write_u8, write_u16, write_u32, write_u64};
 /// [`rmp`]'s error message does not indicate which variant the error is (`InvalidMarkerWrite` or
 /// `InvalidDataWrite`) and does not print anything about the inner I/O error of type `E`.
 #[derive(Debug, thiserror::Error)]
-pub enum EncodeError<E: RmpWriteErr = std::io::Error, Inner = Infallible> {
+pub enum EncodeError<E: RmpWriteErr = Infallible> {
     #[error("could not write MessagePack value: {0:?}")]
     ValueWrite(#[from] ValueWriteError<E>),
     #[error("cannot encode array larger than {}", u32::MAX)]
     ArrayOverflow,
-    /// An inner error from the iterator passed to [`try_write_array`].
-    #[error(transparent)]
-    Inner(Inner),
+    #[error("{0}")]
+    Custom(String),
 }
 
 /// Write an optional value to the stream.
@@ -61,7 +61,7 @@ where
     F: FnMut(&mut W, T) -> Result<(), E>,
     E: Into<EncodeError<W::Error>>,
 {
-    try_write_array(writer, iter.into_iter().map(Ok::<_, Infallible>), write)
+    try_write_array(writer, iter.into_iter().map(Ok::<_, Infallible>), write).map_err(Into::into)
 }
 
 /// Write an iterator of bytes as a MessagePack binary array.
@@ -80,6 +80,31 @@ where
                 .map_err(ValueWriteError::InvalidDataWrite)
         },
     )
+    .map_err(Into::into)
+}
+
+/// Error returned by [`try_write_array`].
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub enum TryEncodeError<E: RmpWriteErr, Inner> {
+    #[error("encoding error: {0}")]
+    Encode(EncodeError<E>),
+    #[error("iterator yielded an error: {0}")]
+    Inner(Inner),
+}
+
+impl<E: RmpWriteErr, Inner> From<EncodeError<E>> for TryEncodeError<E, Inner> {
+    fn from(e: EncodeError<E>) -> Self {
+        Self::Encode(e)
+    }
+}
+
+impl<E: RmpWriteErr> From<TryEncodeError<E, Infallible>> for EncodeError<E> {
+    fn from(e: TryEncodeError<E, Infallible>) -> Self {
+        match e {
+            TryEncodeError::Encode(e) => e,
+        }
+    }
 }
 
 /// Tries to write an iterator of [`Result`]s as a MessagePack array.
@@ -93,12 +118,12 @@ pub fn try_write_array<W, S, T, E, F, WrErr>(
     writer: &mut W,
     iter: S,
     write: F,
-) -> Result<(), EncodeError<W::Error, E>>
+) -> Result<(), TryEncodeError<W::Error, E>>
 where
     W: RmpWrite,
     S: IntoIterator<IntoIter: ExactSizeIterator<Item = Result<T, E>>>,
     F: FnMut(&mut W, T) -> Result<(), WrErr>,
-    WrErr: Into<EncodeError<W::Error, E>>,
+    WrErr: Into<EncodeError<W::Error>>,
 {
     try_write_array_impl(writer, iter, write_array_len, write)
 }
@@ -109,18 +134,18 @@ fn try_write_array_impl<W, S, T, E, L, F, WrErr>(
     iter: S,
     write_len: L,
     write: F,
-) -> Result<(), EncodeError<W::Error, E>>
+) -> Result<(), TryEncodeError<W::Error, E>>
 where
     W: RmpWrite,
     // Ideally we would require `TrustedLen`, but that's unstable.
     S: IntoIterator<IntoIter: ExactSizeIterator<Item = Result<T, E>>>,
     L: FnOnce(&mut W, u32) -> Result<Marker, ValueWriteError<W::Error>>,
     F: FnMut(&mut W, T) -> Result<(), WrErr>,
-    WrErr: Into<EncodeError<W::Error, E>>,
+    WrErr: Into<EncodeError<W::Error>>,
 {
     let iter = iter.into_iter();
     let len = u32::try_from(iter.len()).map_err(|_| EncodeError::ArrayOverflow)?;
-    write_len(writer, len)?;
+    write_len(writer, len).map_err(EncodeError::from)?;
 
     // The "incorrect implementation of ExactSizeIterator" panics are not expected to happen in
     // practice. To trigger them, we would have to write a custom implementation of
@@ -150,14 +175,14 @@ fn try_write_raw_seq<W, S, T, E, F, WrErr>(
     writer: &mut W,
     sequence: S,
     mut write: F,
-) -> Result<(), EncodeError<W::Error, E>>
+) -> Result<(), TryEncodeError<W::Error, E>>
 where
     W: RmpWrite,
     S: IntoIterator<Item = Result<T, E>>,
     F: FnMut(&mut W, T) -> Result<(), WrErr>,
-    WrErr: Into<EncodeError<W::Error, E>>,
+    WrErr: Into<EncodeError<W::Error>>,
 {
-    sequence
-        .into_iter()
-        .try_for_each(|item| write(writer, item.map_err(EncodeError::Inner)?).map_err(Into::into))
+    sequence.into_iter().try_for_each(|item| {
+        write(writer, item.map_err(TryEncodeError::Inner)?).map_err(|e| e.into().into())
+    })
 }
