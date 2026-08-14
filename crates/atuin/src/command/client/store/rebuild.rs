@@ -63,6 +63,14 @@ impl Rebuild {
 
         history_store.build(database).await?;
 
+        // The write path stores UUIDs in their compact binary form, but the rebuild
+        // above inserts-or-ignores and so leaves rows written by older versions as
+        // text. Rewrite them, reclaiming the disk space.
+        let converted = database.convert_uuids_to_binary().await?;
+        if converted > 0 {
+            println!("Converted {converted} history UUIDs to their binary form");
+        }
+
         #[cfg(feature = "daemon")]
         daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryRebuilt).await;
 

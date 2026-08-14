@@ -14,7 +14,7 @@ use fs_err as fs;
 use itertools::Itertools;
 use sql_builder::{SqlBuilder, SqlName, bind::Bind, esc, quote};
 use sqlx::{
-    Result, Row,
+    Result, Row, TypeInfo, ValueRef,
     sqlite::{
         SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
         SqliteSynchronous,
@@ -178,6 +178,79 @@ fn apply_shell_filter(sql: &mut SqlBuilder, shells: OrFilter<&[String]>) {
     sql.and_where(cond.expect("nonempty list of shells must result in at least one condition"));
 }
 
+/// The 16-byte form in which a UUID string is stored in the database, or `None` if the
+/// string should be stored as text.
+///
+/// UUIDs (`history.id` and `history.session`) are stored as 16-byte blobs rather than
+/// 32-character hex strings, halving their disk footprint. Only strings in the one
+/// format atuin generates - 32 lowercase hex characters (`Uuid::as_simple`) - are
+/// converted, so that decoding a blob always round-trips to the original string.
+/// Anything else (e.g. an arbitrary user-set `ATUIN_SESSION`) is stored as text.
+fn uuid_bytes(value: &str) -> Option<[u8; 16]> {
+    if value.len() != 32
+        || !value
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return None;
+    }
+
+    Uuid::try_parse(value).ok().map(Uuid::into_bytes)
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+
+    bytes.iter().fold(
+        String::with_capacity(bytes.len() * 2),
+        |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        },
+    )
+}
+
+/// Read a UUID column that may be stored either as a 16-byte blob (written by current
+/// versions) or as text (written before UUIDs were stored in binary), returning the
+/// hex string form either way.
+fn uuid_column(row: &SqliteRow, col: &str) -> String {
+    let is_blob = row
+        .try_get_raw(col)
+        .is_ok_and(|value| value.type_info().name() == "BLOB");
+
+    if is_blob {
+        let bytes: &[u8] = row.get(col);
+        Uuid::from_slice(bytes).map_or_else(|_| to_hex(bytes), |u| u.as_simple().to_string())
+    } else {
+        row.get(col)
+    }
+}
+
+/// A SQL condition matching `value` against a UUID column, whichever form (binary or
+/// legacy text) the row was written in. `value` is inlined, for use with [`SqlBuilder`]
+/// queries that inline every operand.
+fn uuid_match_expr(col: &str, value: &str) -> String {
+    match uuid_bytes(value) {
+        Some(bytes) => format!("{col} in ({}, x'{}')", quote(value), to_hex(&bytes)),
+        None => format!("{col} = {}", quote(value)),
+    }
+}
+
+trait QueryExt: Sized {
+    /// Bind a UUID-ish string in the form the write path stores it: binary when it is a
+    /// simple-format UUID, text otherwise. See [`uuid_bytes`].
+    fn bind_uuid(self, value: &str) -> Self;
+}
+
+impl QueryExt for sqlx::query::Query<'_, sqlx::Sqlite, sqlx::sqlite::SqliteArguments> {
+    fn bind_uuid(self, value: &str) -> Self {
+        match uuid_bytes(value) {
+            Some(bytes) => self.bind(bytes.to_vec()),
+            None => self.bind(value.to_owned()),
+        }
+    }
+}
+
 fn get_session_start_time(session_id: &str) -> Option<i64> {
     if let Ok(uuid) = Uuid::parse_str(session_id)
         && let Some(timestamp) = uuid.get_timestamp()
@@ -282,6 +355,11 @@ pub trait Database: Send + Sync + 'static {
 
     async fn get_dups(&self, before: i64, dupkeep: u32) -> Result<Vec<History>>;
 
+    /// Rewrite UUIDs stored as text (`id` and `session` on rows written by older
+    /// versions) into the compact 16-byte binary form the write path now uses.
+    /// Returns the number of column values converted.
+    async fn convert_uuids_to_binary(&self) -> Result<u64>;
+
     fn clone_boxed(&self) -> Box<dyn Database + 'static>;
 }
 
@@ -349,13 +427,13 @@ impl Sqlite {
                 deleted_at, shell
             ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         )
-        .bind(h.id.0.as_str())
+        .bind_uuid(&h.id.0)
         .bind(h.timestamp.unix_timestamp_nanos() as i64)
         .bind(h.duration)
         .bind(h.exit)
         .bind(h.command.as_str())
         .bind(h.cwd.as_str())
-        .bind(h.session.as_str())
+        .bind_uuid(&h.session)
         .bind(h.hostname.as_str())
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
@@ -371,7 +449,9 @@ impl Sqlite {
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         id: HistoryId,
     ) -> Result<()> {
-        sqlx::query("delete from history where id = ?1")
+        // Match the id in whichever form (binary or legacy text) the row was written.
+        sqlx::query("delete from history where id in (?1, ?2)")
+            .bind_uuid(&id.0)
             .bind(id.0.as_str())
             .execute(&mut **tx)
             .await?;
@@ -391,13 +471,13 @@ impl Sqlite {
         let shell: Option<String> = row.try_get("shell").ok().flatten();
 
         History::from_db()
-            .id(row.get("id"))
+            .id(uuid_column(&row, "id"))
             .timestamp(OffsetDateTime::from_unix_nanos_i64(row.get("timestamp")))
             .duration(row.get("duration"))
             .exit(row.get("exit"))
             .command(row.get("command"))
             .cwd(row.get("cwd"))
-            .session(row.get("session"))
+            .session(uuid_column(&row, "session"))
             .hostname(hostname)
             .author(author)
             .intent(intent)
@@ -436,7 +516,8 @@ impl Database for Sqlite {
     async fn load(&self, id: &str) -> Result<Option<History>> {
         debug!("loading history item {}", id);
 
-        let res = sqlx::query("select * from history where id = ?1")
+        let res = sqlx::query("select * from history where id in (?1, ?2)")
+            .bind_uuid(id)
             .bind(id)
             .map(Self::query_history)
             .fetch_optional(&self.pool)
@@ -446,23 +527,24 @@ impl Database for Sqlite {
     }
 
     async fn load_active(&self, ids: &[HistoryId]) -> Result<Vec<History>> {
-        // sqlite caps bound parameters per statement (SQLITE_MAX_VARIABLE_NUMBER, as low as 999).
-        // Chunk well under that.
-        const CHUNK: usize = 500;
+        // sqlite caps bound parameters per statement (SQLITE_MAX_VARIABLE_NUMBER, as low
+        // as 999). Each id binds two parameters (its binary and legacy text forms), so
+        // chunk well under half of that.
+        const CHUNK: usize = 400;
 
         debug!("loading {} history items", ids.len());
 
         let mut out = Vec::with_capacity(ids.len());
 
         for chunk in ids.chunks(CHUNK) {
-            let placeholders = ["?"].repeat(chunk.len()).join(",");
+            let placeholders = ["?"].repeat(chunk.len() * 2).join(",");
             let sql = format!(
                 "select * from history where id in ({placeholders}) and deleted_at is null"
             );
 
             let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
             for id in chunk {
-                query = query.bind(id.0.as_str());
+                query = query.bind_uuid(&id.0).bind(id.0.as_str());
             }
 
             let rows = query.map(Self::query_history).fetch_all(&self.pool).await?;
@@ -478,19 +560,20 @@ impl Database for Sqlite {
         sqlx::query(
             "update history
                 set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = ?7, hostname = ?8, author = ?9, intent = ?10, deleted_at = ?11
-                where id = ?1",
+                where id in (?1, ?12)",
         )
-        .bind(h.id.0.as_str())
+        .bind_uuid(&h.id.0)
         .bind(h.timestamp.unix_timestamp_nanos() as i64)
         .bind(h.duration)
         .bind(h.exit)
         .bind(h.command.as_str())
         .bind(h.cwd.as_str())
-        .bind(h.session.as_str())
+        .bind_uuid(&h.session)
         .bind(h.hostname.as_str())
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
         .bind(h.deleted_at.map(|t|t.unix_timestamp_nanos() as i64))
+        .bind(h.id.0.as_str())
         .execute(&self.pool)
         .await?;
 
@@ -532,9 +615,11 @@ impl Database for Sqlite {
                     "lower(hostname)",
                     quote(context.hostname.to_lowercase()),
                 ),
-                FilterMode::Session => query.and_where_eq("session", quote(&context.session)),
+                FilterMode::Session => {
+                    query.and_where(uuid_match_expr("session", &context.session))
+                }
                 FilterMode::SessionPreload => {
-                    query.and_where_eq("session", quote(&context.session));
+                    query.and_where(uuid_match_expr("session", &context.session));
                     if let Some(session_start) = session_start {
                         query.or_where_lt("timestamp", session_start);
                     }
@@ -647,9 +732,9 @@ impl Database for Sqlite {
             FilterMode::Host => {
                 sql.and_where_eq("lower(hostname)", quote(context.hostname.to_lowercase()))
             }
-            FilterMode::Session => sql.and_where_eq("session", quote(&context.session)),
+            FilterMode::Session => sql.and_where(uuid_match_expr("session", &context.session)),
             FilterMode::SessionPreload => {
-                sql.and_where_eq("session", quote(&context.session));
+                sql.and_where(uuid_match_expr("session", &context.session));
                 if let Some(session_start) = session_start {
                     sql.or_where_lt("timestamp", session_start);
                 }
@@ -845,7 +930,9 @@ impl Database for Sqlite {
                 "null as author",
                 "null as intent",
                 "group_concat(cwd, ':') as cwd",
-                "group_concat(session) as session",
+                // Binary session values must be hex-encoded before concatenation; raw
+                // UUID bytes would be concatenated as garbage text.
+                "group_concat(case when typeof(session) = 'blob' then lower(hex(session)) else session end) as session",
                 "group_concat(hostname, ',') as hostname",
                 "count(*) as count",
             ])
@@ -896,10 +983,12 @@ impl Database for Sqlite {
         // We select the previous in the session by time. Excluding deleted
         // history matches every other read path, and lets the query use the
         // partial (session, timestamp) index.
+        // The session is matched against both its binary and legacy text forms; see
+        // `uuid_bytes`.
         let mut prev = SqlBuilder::select_from("history");
         prev.field("*")
             .and_where("timestamp < ?1")
-            .and_where("session = ?2")
+            .and_where("session in (?2, ?3)")
             .and_where_is_null("deleted_at")
             .order_by("timestamp", true)
             .limit(1);
@@ -907,7 +996,7 @@ impl Database for Sqlite {
         let mut next = SqlBuilder::select_from("history");
         next.field("*")
             .and_where("timestamp > ?1")
-            .and_where("session = ?2")
+            .and_where("session in (?2, ?3)")
             .and_where_is_null("deleted_at")
             .order_by("timestamp", false)
             .limit(1);
@@ -970,11 +1059,13 @@ impl Database for Sqlite {
         ) = tokio::try_join!(
             sqlx::query(sqlx::AssertSqlSafe(prev))
                 .bind(h.timestamp.unix_timestamp_nanos() as i64)
+                .bind_uuid(&h.session)
                 .bind(&h.session)
                 .map(Self::query_history)
                 .fetch_optional(&self.pool),
             sqlx::query(sqlx::AssertSqlSafe(next))
                 .bind(h.timestamp.unix_timestamp_nanos() as i64)
+                .bind_uuid(&h.session)
                 .bind(&h.session)
                 .map(Self::query_history)
                 .fetch_optional(&self.pool),
@@ -1031,15 +1122,57 @@ impl Database for Sqlite {
         Ok(res)
     }
 
+    async fn convert_uuids_to_binary(&self) -> Result<u64> {
+        let mut tx = self.pool.begin().await?;
+        let mut converted = 0;
+
+        for col in ["id", "session"] {
+            // Convert exactly the strings `uuid_bytes` would: 32 lowercase hex chars.
+            // `unhex` requires sqlite >= 3.41; sqlx bundles 3.46+. `or ignore` guards the
+            // pathological case of the same UUID already existing as a binary row, where
+            // converting the text row would violate the primary key.
+            let sql = format!(
+                "update or ignore history set {col} = unhex({col})
+                    where typeof({col}) = 'text'
+                        and length({col}) = 32
+                        and {col} not glob '*[^0-9a-f]*'"
+            );
+
+            let res = sqlx::query(sqlx::AssertSqlSafe(sql))
+                .execute(&mut *tx)
+                .await?;
+            converted += res.rows_affected();
+        }
+
+        tx.commit().await?;
+
+        Ok(converted)
+    }
+
     fn clone_boxed(&self) -> Box<dyn Database + 'static> {
         Box::new(self.clone())
     }
+}
+
+/// Which storage form of `id` a [`Paged`] iterator is currently scanning.
+///
+/// `id` is stored as a 16-byte blob on rows written by current versions, and as text on
+/// rows written by older versions. In sqlite's ordering every blob sorts after every
+/// text value, but the cursor we keep between pages is the decoded hex string, which no
+/// longer says which form the row was stored in. Paging the mixed order with a single
+/// string cursor would therefore skip rows, so iterate in two phases: all binary ids
+/// first, then all text ids.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PagedPhase {
+    Binary,
+    Text,
 }
 
 pub struct Paged {
     database: Box<dyn Database + 'static>,
     page_size: usize,
     last_id: Option<String>,
+    phase: PagedPhase,
     include_deleted: bool,
     unique: bool,
 }
@@ -1055,43 +1188,66 @@ impl Paged {
             database,
             page_size,
             last_id: None,
+            phase: PagedPhase::Binary,
             include_deleted,
             unique,
         }
     }
 
     pub async fn next(&mut self) -> Result<Option<Vec<History>>> {
-        let mut query = SqlBuilder::select_from(SqlName::new("history").alias("h").baquoted());
+        loop {
+            let mut query = SqlBuilder::select_from(SqlName::new("history").alias("h").baquoted());
 
-        query.field("*").order_desc("id");
+            query.field("*").order_desc("id");
 
-        if !self.include_deleted {
-            query.and_where_is_null("deleted_at");
-        }
+            // `x''` (the empty blob) sorts above every text value and below every
+            // non-empty blob, making both phase conditions sargable range scans on the
+            // primary key. In the binary phase the decoded cursor is hex, so it can be
+            // spliced back into a blob literal.
+            match self.phase {
+                PagedPhase::Binary => {
+                    query.and_where("id > x''");
+                    if let Some(last_id) = &self.last_id {
+                        query.and_where_lt("id", format!("x'{last_id}'"));
+                    }
+                }
+                PagedPhase::Text => {
+                    query.and_where("id < x''");
+                    if let Some(last_id) = &self.last_id {
+                        query.and_where_lt("id", quote(last_id));
+                    }
+                }
+            }
 
-        if self.unique {
-            // We want to deduplicate on command, but the user can search via cwd, hostname, and session.
-            // Without those fields, filter modes won't work right. With those fields, we get duplicates.
-            // This must be handled upstream.
-            query
-                .group_by("command, cwd, hostname, session")
-                .having("max(timestamp)");
-        }
+            if !self.include_deleted {
+                query.and_where_is_null("deleted_at");
+            }
 
-        query.limit(self.page_size);
+            if self.unique {
+                // We want to deduplicate on command, but the user can search via cwd, hostname, and session.
+                // Without those fields, filter modes won't work right. With those fields, we get duplicates.
+                // This must be handled upstream.
+                query
+                    .group_by("command, cwd, hostname, session")
+                    .having("max(timestamp)");
+            }
 
-        if let Some(last_id) = &self.last_id {
-            query.and_where_lt("id", quote(last_id));
-        }
+            query.limit(self.page_size);
 
-        let query = query.sql().expect("bug in list query. please report");
-        let res = self.database.query_history(&query).await?;
+            let query = query.sql().expect("bug in list query. please report");
+            let res = self.database.query_history(&query).await?;
 
-        if res.is_empty() {
-            Ok(None)
-        } else {
+            if res.is_empty() {
+                if self.phase == PagedPhase::Binary {
+                    self.phase = PagedPhase::Text;
+                    self.last_id = None;
+                    continue;
+                }
+                return Ok(None);
+            }
+
             self.last_id = Some(res.last().unwrap().id.0.clone());
-            Ok(Some(res))
+            return Ok(Some(res));
         }
     }
 }
@@ -2189,5 +2345,283 @@ mod test {
             .unwrap();
 
         assert_eq!(results.len(), expected_count, "{results:?}");
+    }
+
+    fn history_with(id: &str, session: &str, command: &str, timestamp: OffsetDateTime) -> History {
+        History {
+            id: id.to_owned().into(),
+            timestamp,
+            duration: 1,
+            exit: 0,
+            command: command.to_owned(),
+            cwd: "/home/ellie".to_owned(),
+            session: session.to_owned(),
+            hostname: "host:ellie".to_owned(),
+            author: "ellie".to_owned(),
+            intent: None,
+            deleted_at: None,
+            shell: None,
+        }
+    }
+
+    /// Insert a row the way versions that stored UUIDs as text did.
+    async fn insert_legacy_text_row(db: &Sqlite, h: &History) {
+        sqlx::query(
+            "insert into history(
+                id, timestamp, duration, exit, command, cwd, session, hostname, author, intent,
+                deleted_at, shell
+            ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        )
+        .bind(h.id.0.as_str())
+        .bind(h.timestamp.unix_timestamp_nanos() as i64)
+        .bind(h.duration)
+        .bind(h.exit)
+        .bind(h.command.as_str())
+        .bind(h.cwd.as_str())
+        .bind(h.session.as_str())
+        .bind(h.hostname.as_str())
+        .bind(h.author.as_str())
+        .bind(h.intent.as_deref())
+        .bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
+        .bind(h.shell.as_deref())
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    async fn column_types(db: &Sqlite, id: &str) -> (String, String) {
+        let query =
+            sqlx::query_as("select typeof(id), typeof(session) from history where id in (?1, ?2)");
+        let query = match uuid_bytes(id) {
+            Some(bytes) => query.bind(bytes.to_vec()),
+            None => query.bind(id.to_owned()),
+        };
+        query.bind(id).fetch_one(&db.pool).await.unwrap()
+    }
+
+    fn new_uuid() -> String {
+        atuin_common::utils::uuid_v7().as_simple().to_string()
+    }
+
+    #[rstest]
+    #[case::simple_lowercase("018cd4fe81757cd2aee65cd7861f9c81", true)]
+    #[case::uppercase("018CD4FE81757CD2AEE65CD7861F9C81", false)]
+    #[case::hyphenated("018cd4fe-8175-7cd2-aee6-5cd7861f9c81", false)]
+    #[case::not_hex("beep boop", false)]
+    #[case::hexish_but_short("beef", false)]
+    #[case::empty("", false)]
+    fn uuid_bytes_only_converts_simple_lowercase_uuids(
+        #[case] value: &str,
+        #[case] converts: bool,
+    ) {
+        match uuid_bytes(value) {
+            Some(bytes) => {
+                assert!(converts, "{value:?} should not have been converted");
+                // must round-trip exactly, or a row would decode to a different id
+                assert_eq!(to_hex(&bytes), value);
+            }
+            None => assert!(!converts, "{value:?} should have been converted"),
+        }
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_save_stores_uuids_as_binary(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let h = history_with(&new_uuid(), &new_uuid(), "echo hi", OffsetDateTime::now_utc());
+        db.save(&h).await.unwrap();
+
+        let (id_type, session_type) = column_types(&db, &h.id.0).await;
+        assert_eq!(id_type, "blob");
+        assert_eq!(session_type, "blob");
+
+        // and the row decodes back to the original strings
+        let loaded = db.load(&h.id.0).await.unwrap().unwrap();
+        assert_eq!(loaded, h);
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_non_uuid_session_stored_as_text(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let h = history_with(&new_uuid(), "beep boop", "echo hi", OffsetDateTime::now_utc());
+        db.save(&h).await.unwrap();
+
+        let (id_type, session_type) = column_types(&db, &h.id.0).await;
+        assert_eq!(id_type, "blob");
+        assert_eq!(session_type, "text");
+
+        let loaded = db.load(&h.id.0).await.unwrap().unwrap();
+        assert_eq!(loaded, h);
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_legacy_text_rows_load_update_delete(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let mut legacy = history_with(
+            &new_uuid(),
+            &new_uuid(),
+            "echo legacy",
+            OffsetDateTime::now_utc(),
+        );
+        insert_legacy_text_row(&db, &legacy).await;
+
+        let loaded = db.load(&legacy.id.0).await.unwrap().unwrap();
+        assert_eq!(loaded, legacy);
+
+        legacy.exit = 130;
+        db.update(&legacy).await.unwrap();
+        let loaded = db.load(&legacy.id.0).await.unwrap().unwrap();
+        assert_eq!(loaded.exit, 130);
+
+        db.delete_rows(&[legacy.id.clone()]).await.unwrap();
+        assert!(db.load(&legacy.id.0).await.unwrap().is_none());
+    }
+
+    // The session filter must match rows whichever form their session was stored in;
+    // a session can span an atuin upgrade.
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_session_filter_spans_text_and_binary_rows(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let session = new_uuid();
+        let now = OffsetDateTime::now_utc();
+
+        let legacy = history_with(&new_uuid(), &session, "echo old", now - time::Duration::minutes(1));
+        insert_legacy_text_row(&db, &legacy).await;
+
+        let new = history_with(&new_uuid(), &session, "echo new", now);
+        db.save(&new).await.unwrap();
+
+        let context = Context {
+            session: session.clone(),
+            ..new_context()
+        };
+
+        let listed = db
+            .list(&[FilterMode::Session], &context, None, false, false, None)
+            .await
+            .unwrap();
+        assert_eq!(listed.len(), 2);
+
+        let found = db
+            .search(
+                DbSearchMode::FullText,
+                FilterMode::Session,
+                &context,
+                "echo",
+                OptFilters::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 2);
+
+        // stats walks the session for the previous/next command
+        let stats = db.stats(&new).await.unwrap();
+        assert_eq!(stats.previous.unwrap().command, "echo old");
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_convert_uuids_to_binary(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let now = OffsetDateTime::now_utc();
+        let uuid_session = history_with(&new_uuid(), &new_uuid(), "echo one", now);
+        let text_session = history_with(
+            &new_uuid(),
+            "beep boop",
+            "echo two",
+            now + time::Duration::seconds(1),
+        );
+        insert_legacy_text_row(&db, &uuid_session).await;
+        insert_legacy_text_row(&db, &text_session).await;
+
+        // two ids and one UUID session; "beep boop" is not a UUID and must stay text
+        let converted = db.convert_uuids_to_binary().await.unwrap();
+        assert_eq!(converted, 3);
+
+        assert_eq!(
+            column_types(&db, &uuid_session.id.0).await,
+            ("blob".to_owned(), "blob".to_owned())
+        );
+        assert_eq!(
+            column_types(&db, &text_session.id.0).await,
+            ("blob".to_owned(), "text".to_owned())
+        );
+
+        // the rows decode back to exactly what was stored as text
+        assert_eq!(
+            db.load(&uuid_session.id.0).await.unwrap().unwrap(),
+            uuid_session
+        );
+        assert_eq!(
+            db.load(&text_session.id.0).await.unwrap().unwrap(),
+            text_session
+        );
+
+        // converting again is a no-op
+        assert_eq!(db.convert_uuids_to_binary().await.unwrap(), 0);
+    }
+
+    // Binary ids sort after text ids, so a naive descending id cursor would skip every
+    // text row once it moved past the smallest binary id. Each row must be returned
+    // exactly once regardless of which form its id was stored in.
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_paged_mixed_id_forms(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let now = OffsetDateTime::now_utc();
+        let mut expected = Vec::new();
+
+        for i in 0..3 {
+            let h = history_with(
+                &new_uuid(),
+                &new_uuid(),
+                &format!("echo legacy{i}"),
+                now + time::Duration::seconds(i),
+            );
+            insert_legacy_text_row(&db, &h).await;
+            expected.push(h.id.0.clone());
+        }
+        for i in 0..3 {
+            let h = history_with(
+                &new_uuid(),
+                &new_uuid(),
+                &format!("echo new{i}"),
+                now + time::Duration::seconds(10 + i),
+            );
+            db.save(&h).await.unwrap();
+            expected.push(h.id.0.clone());
+        }
+
+        let mut seen = Vec::new();
+        let mut paged = db.all_paged(2, false, false);
+        while let Some(page) = paged.next().await.unwrap() {
+            assert!(page.len() <= 2);
+            seen.extend(page.into_iter().map(|h| h.id.0));
+        }
+
+        seen.sort();
+        expected.sort();
+        assert_eq!(seen, expected);
     }
 }
