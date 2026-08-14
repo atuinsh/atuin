@@ -1,11 +1,11 @@
 use std::ffi::OsString;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use atuin_client::settings::Settings;
 use atuin_common::utils::home_dir;
 use clap::{Parser, Subcommand};
-use eyre::{Result, bail};
+use eyre::{Context, Result, bail};
 use serde_json::Value;
 
 use super::history;
@@ -22,7 +22,8 @@ const OPENCODE_PLUGIN_SOURCE: &str = include_str!("../../../contrib/opencode/atu
 enum InstallKind {
     JsonHooks {
         config_path: &'static [&'static str],
-        hook_command: &'static str,
+        /// Agent name passed to `atuin hook <agent>`.
+        hook_agent: &'static str,
         matcher: &'static str,
     },
     /// An agent that loads TypeScript extensions from a directory, rather than
@@ -63,7 +64,7 @@ const CLAUDE_CODE: AgentSpec = AgentSpec {
     path_root: PathRoot::Home,
     install_kind: InstallKind::JsonHooks {
         config_path: &[".claude", "settings.json"],
-        hook_command: "atuin hook claude-code",
+        hook_agent: "claude-code",
         matcher: "Bash",
     },
 };
@@ -74,7 +75,7 @@ const CODEX: AgentSpec = AgentSpec {
     path_root: PathRoot::Home,
     install_kind: InstallKind::JsonHooks {
         config_path: &[".codex", "hooks.json"],
-        hook_command: "atuin hook codex",
+        hook_agent: "codex",
         matcher: "^Bash$",
     },
 };
@@ -162,7 +163,15 @@ impl Cmd {
     pub async fn run(self, settings: &Settings) -> Result<()> {
         match (self.action, self.agent) {
             (Some(Action::Install { agent }), None) => install(&agent),
-            (None, Some(agent)) => handle(&agent, settings).await,
+            // Recording is best-effort: agents read a hook's exit code as a
+            // verdict on the command it wrapped, so a failure here must never
+            // stop the agent from running the command.
+            (None, Some(agent)) => {
+                if let Err(err) = handle(&agent, settings).await {
+                    tracing::warn!(error = %err, agent, "agent hook failed");
+                }
+                Ok(())
+            }
             (None, None) => {
                 bail!("expected `atuin hook <agent>` or `atuin hook install <agent>`");
             }
@@ -233,8 +242,8 @@ fn install(agent_name: &str) -> Result<()> {
     match agent.install_kind() {
         InstallKind::JsonHooks {
             config_path,
-            hook_command: _,
-            matcher: _,
+            hook_agent,
+            matcher,
         } => {
             let config_path = agent.path(config_path);
 
@@ -255,15 +264,17 @@ fn install(agent_name: &str) -> Result<()> {
                 .entry("hooks")
                 .or_insert_with(|| Value::Object(serde_json::Map::new()));
 
-            add_hook_entries(hooks, &agent)?;
+            let hook = ManagedHook::new(hook_agent, matcher)?;
+            add_hook_entries(hooks, &hook)?;
 
             let content = serde_json::to_string_pretty(&root)?;
             std::fs::write(&config_path, content)?;
 
             eprintln!(
-                "\nAtuin hooks installed for {}. Config: {}",
+                "\nAtuin hooks installed for {}. Config: {}\nHook command: {}",
                 agent.actor_name(),
-                config_path.display()
+                config_path.display(),
+                hook.command
             );
         }
         InstallKind::Extension {
@@ -298,16 +309,71 @@ fn install(agent_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
-    let InstallKind::JsonHooks {
-        config_path: _,
-        hook_command,
-        matcher,
-    } = agent.install_kind()
-    else {
-        bail!("agent does not use JSON hooks");
-    };
+/// The hook entry Atuin installs into a JSON-hook agent's config.
+struct ManagedHook {
+    agent: &'static str,
+    matcher: &'static str,
+    command: String,
+}
 
+impl ManagedHook {
+    /// Build the command for `agent`, pinned to the running binary and shielded
+    /// from its own failures.
+    ///
+    /// Both parts matter. Agents spawn hooks with a minimal `PATH`, where a bare
+    /// `atuin` can miss or resolve to an older build without `hook` — and clap
+    /// exits 2 for an unknown subcommand, which Claude Code reads as "deny this
+    /// Bash call". `|| true` keeps any other failure from doing the same.
+    fn new(agent: &'static str, matcher: &'static str) -> Result<Self> {
+        let exe = std::env::current_exe()
+            .wrap_err("could not locate the atuin executable to install hooks with")?;
+
+        Ok(Self {
+            agent,
+            matcher,
+            command: hook_command(&exe, agent),
+        })
+    }
+
+    /// Whether `command` is an Atuin hook for this agent, so reinstalling can
+    /// claim it: a bare `atuin hook <agent>` from an older installer, an
+    /// absolute path to an `atuin` binary, with or without `|| true`.
+    fn owns(&self, command: &str) -> bool {
+        let command = command.trim();
+        let command = command
+            .strip_suffix("|| true")
+            .map_or(command, str::trim_end);
+
+        let Some(binary) = command.strip_suffix(&format!(" hook {}", self.agent)) else {
+            return false;
+        };
+
+        let binary = binary.trim().trim_matches(['\'', '"']);
+        let name = binary.rsplit(['/', '\\']).next().unwrap_or(binary);
+
+        name == "atuin" || name.eq_ignore_ascii_case("atuin.exe")
+    }
+
+    fn entry(&self) -> Value {
+        serde_json::json!({
+            "matcher": self.matcher,
+            "hooks": [{"type": "command", "command": self.command}],
+        })
+    }
+}
+
+/// The command to write into an agent's config, quoted for the POSIX shell
+/// agents run hooks with: bash on Unix, Git Bash on Windows.
+fn hook_command(exe: &Path, agent: &str) -> String {
+    let exe = shlex::try_quote(exe.to_string_lossy().as_ref()).map_or_else(
+        |_| format!("'{}'", exe.display()),
+        std::borrow::Cow::into_owned,
+    );
+
+    format!("{exe} hook {agent} || true")
+}
+
+fn add_hook_entries(hooks: &mut Value, hook: &ManagedHook) -> Result<()> {
     for event_type in HOOK_EVENT_TYPES {
         let event_hooks = hooks
             .as_object_mut()
@@ -319,27 +385,46 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
             .as_array_mut()
             .ok_or_else(|| eyre::eyre!("hooks.{event_type} is not an array"))?;
 
-        let already_installed = arr.iter().any(|entry| {
+        // Rewrite hooks we own rather than appending: an install that only ever
+        // appended would leave an existing bare `atuin hook …` in place, and
+        // that stale entry is the one that can block the agent's Bash tool.
+        // Only the first survives, so exactly one Atuin hook fires per event.
+        let mut claimed = false;
+        for entry in arr.iter_mut() {
+            let Some(entry_hooks) = entry.get_mut("hooks").and_then(Value::as_array_mut) else {
+                continue;
+            };
+
+            entry_hooks.retain_mut(|entry_hook| {
+                let Some(command) = entry_hook.get("command").and_then(Value::as_str) else {
+                    return true;
+                };
+                if !hook.owns(command) {
+                    return true;
+                }
+                if claimed {
+                    return false;
+                }
+
+                claimed = true;
+                entry_hook["command"] = Value::String(hook.command.clone());
+                true
+            });
+        }
+
+        arr.retain(|entry| {
             entry
                 .get("hooks")
                 .and_then(Value::as_array)
-                .is_some_and(|hooks| {
-                    hooks.iter().any(|hook| {
-                        hook.get("command").and_then(Value::as_str) == Some(hook_command)
-                    })
-                })
+                .is_none_or(|hooks| !hooks.is_empty())
         });
 
-        if already_installed {
-            eprintln!("hooks.{event_type}: already installed, skipping");
-            continue;
+        if claimed {
+            eprintln!("hooks.{event_type}: refreshed atuin hook");
+        } else {
+            arr.push(hook.entry());
+            eprintln!("hooks.{event_type}: installed atuin hook");
         }
-
-        arr.push(serde_json::json!({
-            "matcher": matcher,
-            "hooks": [{"type": "command", "command": hook_command}],
-        }));
-        eprintln!("hooks.{event_type}: installed atuin hook");
     }
 
     Ok(())
@@ -354,7 +439,7 @@ mod tests {
     };
     use atuin_client::history::is_known_agent;
     use clap::Parser;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
 
     #[test]
     fn parse_hook_agent_command() {
@@ -442,5 +527,125 @@ mod tests {
             AtuinCmd::Client(client::Cmd::Hook(Cmd { action: None, agent: Some(agent) }))
                 if agent == "codex"
         ));
+    }
+
+    /// What an install writes today: an absolute binary, quoted, fail-open.
+    const INSTALLED: &str = "/opt/homebrew/bin/atuin hook claude-code || true";
+
+    #[fixture]
+    fn hook() -> ManagedHook {
+        ManagedHook {
+            agent: "claude-code",
+            matcher: "Bash",
+            command: INSTALLED.to_owned(),
+        }
+    }
+
+    /// One wrapper entry per hook event, each holding `commands`.
+    fn config(commands: &[&str]) -> Value {
+        let entries: Vec<Value> = commands
+            .iter()
+            .map(|command| {
+                serde_json::json!({
+                    "matcher": "Bash",
+                    "hooks": [{"type": "command", "command": command}],
+                })
+            })
+            .collect();
+
+        HOOK_EVENT_TYPES
+            .iter()
+            .map(|event| ((*event).to_owned(), Value::Array(entries.clone())))
+            .collect()
+    }
+
+    fn commands(hooks: &Value, event: &str) -> Vec<String> {
+        hooks[event]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|entry| entry["hooks"].as_array().unwrap())
+            .map(|hook| hook["command"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    /// A bare `atuin` can resolve to a build without `hook`, whose clap exits 2
+    /// — which Claude Code reads as "deny this Bash call". The command must name
+    /// the binary that installed it and swallow whatever that binary does.
+    #[test]
+    fn hook_command_pins_the_binary_and_fails_open() {
+        assert_eq!(
+            hook_command(&PathBuf::from("/opt/homebrew/bin/atuin"), "claude-code"),
+            INSTALLED
+        );
+    }
+
+    #[test]
+    fn hook_command_quotes_a_path_with_spaces() {
+        assert_eq!(
+            hook_command(&PathBuf::from("/Users/Ada Lovelace/bin/atuin"), "codex"),
+            "'/Users/Ada Lovelace/bin/atuin' hook codex || true"
+        );
+    }
+
+    /// Reinstalling has to recognize what earlier installers wrote, or it leaves
+    /// the blocking entry behind and adds a second hook beside it.
+    #[rstest]
+    #[case::bare("atuin hook claude-code", true)]
+    #[case::absolute("/usr/local/bin/atuin hook claude-code", true)]
+    #[case::fail_open("/usr/local/bin/atuin hook claude-code || true", true)]
+    #[case::quoted("'/Users/Ada/bin/atuin' hook claude-code || true", true)]
+    #[case::windows(r#""C:\Program Files\atuin\atuin.exe" hook claude-code"#, true)]
+    #[case::another_agent("atuin hook codex", false)]
+    #[case::another_binary("/usr/bin/echo hook claude-code", false)]
+    fn owns_atuin_installed_commands(
+        hook: ManagedHook,
+        #[case] command: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(hook.owns(command), expected);
+    }
+
+    #[rstest]
+    #[case::bare("atuin hook claude-code")]
+    #[case::absolute("/usr/local/bin/atuin hook claude-code")]
+    #[case::current(INSTALLED)]
+    fn install_leaves_one_hook_per_event(hook: ManagedHook, #[case] installed: &str) {
+        let mut hooks = config(&[installed]);
+
+        add_hook_entries(&mut hooks, &hook).unwrap();
+
+        for event in HOOK_EVENT_TYPES {
+            assert_eq!(commands(&hooks, event), vec![INSTALLED.to_owned()]);
+        }
+    }
+
+    /// Two managed hooks would record every command twice.
+    #[rstest]
+    fn install_collapses_duplicate_atuin_hooks(hook: ManagedHook) {
+        let mut hooks = config(&[
+            "atuin hook claude-code",
+            "/usr/local/bin/atuin hook claude-code",
+        ]);
+
+        add_hook_entries(&mut hooks, &hook).unwrap();
+
+        for event in HOOK_EVENT_TYPES {
+            assert_eq!(commands(&hooks, event), vec![INSTALLED.to_owned()]);
+        }
+    }
+
+    #[rstest]
+    fn install_leaves_other_hooks_alone(hook: ManagedHook) {
+        let mut hooks = config(&["/usr/bin/echo hi"]);
+
+        add_hook_entries(&mut hooks, &hook).unwrap();
+
+        for event in HOOK_EVENT_TYPES {
+            assert_eq!(
+                commands(&hooks, event),
+                vec!["/usr/bin/echo hi".to_owned(), INSTALLED.to_owned()]
+            );
+        }
     }
 }

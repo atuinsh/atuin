@@ -88,7 +88,15 @@ For support tiers, see [Supported platforms](../support.md).
 atuin hook install claude-code
 ```
 
-This adds hook entries to `~/.claude/settings.json`. Claude Code calls `atuin hook claude-code` on each `Bash` tool use, passing the event as JSON on `stdin`.
+This adds hook entries to `~/.claude/settings.json`. Claude Code calls Atuin on each `Bash` tool use, passing the event as JSON on `stdin`.
+
+The installed command names the Atuin binary that ran `hook install` and ends in `|| true`:
+
+```
+/home/ellie/.atuin/bin/atuin hook claude-code || true
+```
+
+Both halves keep a hook failure from breaking your shell. Claude Code reads a `PreToolUse` hook that exits 2 as "deny this Bash call", and agents run hooks with a minimal `PATH`, where a bare `atuin` can be missing or resolve to an older build whose `atuin hook` doesn't exist — an unknown subcommand exits 2. Recording history is best effort, so Atuin never blocks a command it failed to record.
 
 ### Codex
 
@@ -96,7 +104,7 @@ This adds hook entries to `~/.claude/settings.json`. Claude Code calls `atuin ho
 atuin hook install codex
 ```
 
-This adds hook entries to `~/.codex/hooks.json`. Codex calls `atuin hook codex` on each Bash tool use matching `^Bash$`.
+This adds hook entries to `~/.codex/hooks.json`. Codex calls Atuin on each Bash tool use matching `^Bash$`, using the same pinned, fail-open command as Claude Code.
 
 ### opencode
 
@@ -153,12 +161,14 @@ ls ~/.pi/agent/extensions/atuin.ts
 
 ## Re-installing
 
-Running `atuin hook install` again is safe. If hooks are already installed, the command will skip them and print a message:
+Running `atuin hook install` again is safe. For Claude Code and Codex, it rewrites the hook entries Atuin owns to point at the binary you just ran, leaving any hooks you added yourself alone:
 
 ```
-hooks.PreToolUse: already installed, skipping
-hooks.PostToolUse: already installed, skipping
-hooks.PostToolUseFailure: already installed, skipping
+hooks.PreToolUse: refreshed atuin hook
+hooks.PostToolUse: refreshed atuin hook
+hooks.PostToolUseFailure: refreshed atuin hook
 ```
 
-For opencode and pi, reinstalling will also skip if the installed extension already matches the bundled version.
+Re-run it after moving or upgrading your Atuin binary.
+
+For opencode and pi, reinstalling will skip if the installed extension already matches the bundled version.
