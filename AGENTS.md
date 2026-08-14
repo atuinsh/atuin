@@ -32,6 +32,7 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 ## Databases
 
 - **Client**: SQLite everywhere. Separate DBs for history, record store, KV, scripts. All use sqlx + WAL mode.
+- `history.db` stores UUIDs (`id`, `session`) as 16-byte blobs. Rows written by older versions may still hold text UUIDs, so every read/lookup path must handle both forms; `atuin store rebuild history` converts text rows in place.
 - **Server**: Postgres (primary) or SQLite. Auto-detected from URI prefix.
 - Migrations live alongside each crate. Never modify existing migrations, only add new ones.
 

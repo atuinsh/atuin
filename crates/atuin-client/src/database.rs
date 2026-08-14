@@ -201,13 +201,12 @@ fn uuid_bytes(value: &str) -> Option<[u8; 16]> {
 fn to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
 
-    bytes.iter().fold(
-        String::with_capacity(bytes.len() * 2),
-        |mut out, byte| {
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut out, byte| {
             let _ = write!(out, "{byte:02x}");
             out
-        },
-    )
+        })
 }
 
 /// Read a UUID column that may be stored either as a 16-byte blob (written by current
@@ -356,8 +355,9 @@ pub trait Database: Send + Sync + 'static {
     async fn get_dups(&self, before: i64, dupkeep: u32) -> Result<Vec<History>>;
 
     /// Rewrite UUIDs stored as text (`id` and `session` on rows written by older
-    /// versions) into the compact 16-byte binary form the write path now uses.
-    /// Returns the number of column values converted.
+    /// versions) into the compact 16-byte binary form the write path now uses, and
+    /// vacuum to return the freed pages to the filesystem. Returns the number of
+    /// column values converted.
     async fn convert_uuids_to_binary(&self) -> Result<u64>;
 
     fn clone_boxed(&self) -> Box<dyn Database + 'static>;
@@ -1145,6 +1145,12 @@ impl Database for Sqlite {
         }
 
         tx.commit().await?;
+
+        // The rewritten rows leave free pages behind; without a vacuum the file stays
+        // the same size and the point of the conversion is the disk space.
+        if converted > 0 {
+            sqlx::query("vacuum").execute(&self.pool).await?;
+        }
 
         Ok(converted)
     }
@@ -2431,7 +2437,12 @@ mod test {
         #[from(empty_db)]
         db: Sqlite,
     ) {
-        let h = history_with(&new_uuid(), &new_uuid(), "echo hi", OffsetDateTime::now_utc());
+        let h = history_with(
+            &new_uuid(),
+            &new_uuid(),
+            "echo hi",
+            OffsetDateTime::now_utc(),
+        );
         db.save(&h).await.unwrap();
 
         let (id_type, session_type) = column_types(&db, &h.id.0).await;
@@ -2450,7 +2461,12 @@ mod test {
         #[from(empty_db)]
         db: Sqlite,
     ) {
-        let h = history_with(&new_uuid(), "beep boop", "echo hi", OffsetDateTime::now_utc());
+        let h = history_with(
+            &new_uuid(),
+            "beep boop",
+            "echo hi",
+            OffsetDateTime::now_utc(),
+        );
         db.save(&h).await.unwrap();
 
         let (id_type, session_type) = column_types(&db, &h.id.0).await;
@@ -2500,7 +2516,12 @@ mod test {
         let session = new_uuid();
         let now = OffsetDateTime::now_utc();
 
-        let legacy = history_with(&new_uuid(), &session, "echo old", now - time::Duration::minutes(1));
+        let legacy = history_with(
+            &new_uuid(),
+            &session,
+            "echo old",
+            now - time::Duration::minutes(1),
+        );
         insert_legacy_text_row(&db, &legacy).await;
 
         let new = history_with(&new_uuid(), &session, "echo new", now);
