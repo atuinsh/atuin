@@ -158,7 +158,8 @@ EOF
       ;;
     2|[lL]*)
       echo ""
-      if ! "$ATUIN_BIN" login </dev/tty; then
+      # Silences pre-#3916 401 log spam; drop once that fix is in the latest release.
+      if ! ATUIN_LOG="warn,atuin_client::hub=off" "$ATUIN_BIN" login </dev/tty; then
         echo ""
         echo "Login did not complete. You can run 'atuin login' any time to try again."
       fi
