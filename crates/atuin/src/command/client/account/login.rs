@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, IsTerminal};
 
 use clap::Parser;
 use eyre::{Context, Result, bail};
@@ -32,10 +32,15 @@ pub struct Cmd {
     pub from_registration: bool,
 }
 
-fn get_input() -> Result<String> {
+/// Read a line from stdin, returning `None` at end of input. The distinction
+/// matters for the key prompts, which re-prompt on a blank line but must not
+/// spin forever once stdin is exhausted.
+fn get_input() -> Result<Option<String>> {
     let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    Ok(input.trim_end_matches(&['\r', '\n'][..]).to_string())
+    if io::stdin().read_line(&mut input)? == 0 {
+        return Ok(None);
+    }
+    Ok(Some(input.trim_end_matches(&['\r', '\n'][..]).to_string()))
 }
 
 impl Cmd {
@@ -66,7 +71,16 @@ impl Cmd {
             self.run_legacy_login(settings, store).await?;
         }
 
-        verify_key_against_remote(settings).await
+        verify_key_against_remote(settings, store, self.interactive()).await
+    }
+
+    /// Whether a rejected key can be corrected by asking for another one.
+    ///
+    /// A key from `--key` is a scripted input: the caller committed to a value
+    /// up front, so a wrong one is an error to report rather than a prompt to
+    /// raise. Only a human typing at a terminal gets to try again.
+    fn interactive(&self) -> bool {
+        self.key.is_none() && io::stdin().is_terminal()
     }
 
     /// Hub login: use the browser flow unless the username was provided for headless use.
@@ -190,71 +204,77 @@ impl Cmd {
             atuin_common::docs::url("guide/sync/#login")
         );
 
-        let key = or_user_input(
-            self.key.clone(),
-            "encryption key [blank to use existing key file]",
-        );
+        let interactive = self.interactive();
+        let mut flag_key = self.key.clone();
 
-        // if provided, the key may be EITHER base64, or a bip mnemonic
-        // try to normalize on base64
-        let loaded_key: Option<paseto_v4::Key> = if key.is_empty() {
-            None
-        } else {
-            Some(paseto_v4::Key::try_from_mnemonic(&key)?)
-        };
+        loop {
+            let key = match flag_key.take() {
+                Some(key) => key,
+                None => match read_user_input("encryption key [blank to use existing key file]") {
+                    Some(key) => key,
+                    // Stdin is exhausted, so re-prompting would spin forever.
+                    None => bail!("No encryption key provided"),
+                },
+            };
 
-        match loaded_key {
-            None => {
-                assert!(
-                    key_path.exists(),
-                    "No key provided and no existing key file found. Please use 'atuin key' on your other machine, or recover your key from a backup"
-                );
+            if key.is_empty() {
+                if !key_path.exists() {
+                    let msg = "No key provided and no existing key file found. Please use 'atuin key' on your other machine, or recover your key from a backup";
+                    if !interactive {
+                        bail!(msg);
+                    }
+                    println!("\n{msg}\n");
+                    continue;
+                }
 
-                let bytes = fs_err::read_to_string(key_path).context(format!(
-                    "Existing key file at '{}' could not be read",
+                paseto_v4::Key::try_load_from_path(key_path).context(format!(
+                    "The key in existing key file at '{}' is invalid",
                     key_path.to_string_lossy()
                 ))?;
 
-                if paseto_v4::Key::decode(&bytes).is_err() {
-                    bail!(format!(
-                        "The key in existing key file at '{}' is invalid",
-                        key_path.to_string_lossy()
-                    ));
-                }
-
-                Ok(())
+                return Ok(());
             }
-            Some(k) => {
-                if !key_path.exists() {
-                    k.try_write_path(key_path)?;
 
-                    return Ok(());
-                }
-
-                // we now know that the user has logged in specifying a key, AND that the key path
-                // exists
-
-                // 1. check if the saved key and the provided key match. if so, nothing to do.
-                // 2. if not, re-encrypt the local history and overwrite the key
-                let current_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
-
-                if k != current_key {
-                    println!("\nRe-encrypting local store with new key");
-
-                    store.re_encrypt(&current_key, &k).await?;
-
-                    println!("Writing new key");
-                    k.overwrite_path(key_path)?;
-                }
-
-                Ok(())
+            // The key may be EITHER base64 or a bip39 mnemonic.
+            match paseto_v4::Key::try_from_mnemonic(&key) {
+                Ok(key) => return store_key(settings, store, &key).await,
+                Err(err) if interactive => println!("\n{err}. Please try again.\n"),
+                Err(err) => return Err(err.into()),
             }
         }
     }
 }
 
-async fn verify_key_against_remote(settings: &Settings) -> Result<()> {
-    let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+/// Write the key to the key file, re-encrypting the local store first if it was
+/// previously encrypted with a different key.
+async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Key) -> Result<()> {
+    let key_path = &settings.key_path;
+
+    if !key_path.exists() {
+        key.try_write_path(key_path)?;
+        return Ok(());
+    }
+
+    let current_key = paseto_v4::Key::try_load_from_path(key_path)?;
+    if *key == current_key {
+        return Ok(());
+    }
+
+    println!("\nRe-encrypting local store with new key");
+    store.re_encrypt(&current_key, key).await?;
+
+    println!("Writing new key");
+    key.overwrite_path(key_path)?;
+
+    Ok(())
+}
+
+async fn verify_key_against_remote(
+    settings: &Settings,
+    store: &SqliteStore,
+    interactive: bool,
+) -> Result<()> {
+    let mut key = paseto_v4::Key::try_load_from_path(&settings.key_path)
         .context("could not load encryption key for verification")?;
 
     let client = sync::build_client(settings).await?;
@@ -266,36 +286,65 @@ async fn verify_key_against_remote(settings: &Settings) -> Result<()> {
         }
     };
 
-    match sync::check_encryption_key(&client, &remote_index, &key).await {
-        Ok(()) => Ok(()),
-        Err(SyncError::WrongKey) => {
-            // Roll back the saved session so the user is not left in a
-            // half-authenticated state with a key that can't read the data.
-            if let Ok(meta) = Settings::meta_store().await {
-                let _ = meta.delete_session().await;
-                let _ = meta.delete_hub_session().await;
+    loop {
+        match sync::check_encryption_key(&client, &remote_index, &key).await {
+            // Only persist a key the server has confirmed can read the data, so
+            // that cancelling out of a retry leaves the local store as it was.
+            Ok(()) => return store_key(settings, store, &key).await,
+            Err(SyncError::WrongKey) => {
+                if !interactive {
+                    logout_wrong_key().await;
+                }
+
+                println!(
+                    "\nThe encryption key on this machine does not match the data on the server."
+                );
+                println!(
+                    "You can find the correct key by running 'atuin key' on a machine that already syncs successfully."
+                );
+
+                let input = read_user_input("encryption key [blank to log out and cancel]");
+                match input {
+                    Some(input) if !input.is_empty() => {
+                        match paseto_v4::Key::try_from_mnemonic(&input) {
+                            Ok(candidate) => key = candidate,
+                            Err(err) => println!("\n{err}. Please try again."),
+                        }
+                    }
+                    // A blank line or exhausted stdin both mean "give up".
+                    _ => logout_wrong_key().await,
+                }
             }
-            crate::print_error::print_error(
-                "Wrong encryption key",
-                "The encryption key on this machine does not match the data on the server. \
-                 You have been logged out.\n\n\
-                 To fix this, find your existing key by running `atuin key` on a machine that \
-                 already syncs successfully, then run `atuin login` again here with that key.",
-            );
-            std::process::exit(1);
-        }
-        Err(e) => {
-            // Non-key error (e.g. transient network issue). Don't fail the
-            // login — the user is authenticated and can sync later when the
-            // network recovers.
-            tracing::warn!("could not verify encryption key against remote: {e}");
-            Ok(())
+            Err(e) => {
+                // Non-key error (e.g. transient network issue). Don't fail the
+                // login — the user is authenticated and can sync later when the
+                // network recovers.
+                tracing::warn!("could not verify encryption key against remote: {e}");
+                return Ok(());
+            }
         }
     }
 }
 
+/// Roll back the saved session so the user is not left in a half-authenticated
+/// state with a key that can't read the data, then exit.
+async fn logout_wrong_key() -> ! {
+    if let Ok(meta) = Settings::meta_store().await {
+        let _ = meta.delete_session().await;
+        let _ = meta.delete_hub_session().await;
+    }
+    crate::print_error::print_error(
+        "Wrong encryption key",
+        "The encryption key on this machine does not match the data on the server. \
+         You have been logged out.\n\n\
+         To fix this, find your existing key by running `atuin key` on a machine that \
+         already syncs successfully, then run `atuin login` again here with that key.",
+    );
+    std::process::exit(1);
+}
+
 pub(super) fn or_user_input(value: Option<String>, name: &'static str) -> String {
-    value.unwrap_or_else(|| read_user_input(name))
+    value.unwrap_or_else(|| read_user_input(name).unwrap_or_default())
 }
 
 pub(super) fn read_user_password() -> String {
@@ -303,7 +352,8 @@ pub(super) fn read_user_password() -> String {
     password.expect("Failed to read from input")
 }
 
-fn read_user_input(name: &'static str) -> String {
+/// Returns `None` if stdin reached end of input before a line was read.
+fn read_user_input(name: &'static str) -> Option<String> {
     eprint!("Please enter {name}: ");
     get_input().expect("Failed to read from input")
 }
