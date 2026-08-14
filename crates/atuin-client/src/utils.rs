@@ -1,5 +1,3 @@
-pub(crate) mod rmp;
-
 pub(crate) fn get_hostname() -> String {
     std::env::var("ATUIN_HOST_NAME")
         .unwrap_or_else(|_| whoami::hostname().unwrap_or_else(|_| "unknown-host".to_string()))

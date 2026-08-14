@@ -3,6 +3,8 @@
 use std::num::NonZeroU8;
 
 use atuin_common::encryption::paseto_v4;
+use atuin_common::rmp::decode::{self, Bytes, DecodeError};
+use atuin_common::rmp::encode::{self, EncodeError, RmpWrite};
 use atuin_common::rmp::serde::TryToVecError;
 use atuin_domain::record::{
     DecryptedData, EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag,
@@ -10,34 +12,54 @@ use atuin_domain::record::{
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::record::sqlite_store::SqliteStore;
 
-use crate::utils::rmp as atuin_rmp;
-use atuin_rmp::{DecodeError, EncodeError};
-use uuid::Uuid;
-
-fn parse_uuid<'a>(bytes: &mut rmp::decode::Bytes<'a>) -> Result<Uuid, DecodeError<'a>> {
-    let uuid_bytes = atuin_rmp::read_fixed_binary_array(bytes)?;
+fn read_uuid<'a>(bytes: &mut Bytes<'a>) -> Result<Uuid, DecodeError<'a>> {
+    let uuid_bytes = decode::read_fixed_binary_array(bytes)?;
     Ok(Uuid::from_bytes(uuid_bytes))
 }
 
-fn parse_record<'a>(
-    bytes: &mut rmp::decode::Bytes<'a>,
-) -> Result<Record<DecryptedData>, DecodeError<'a>> {
+fn write_uuid<W>(writer: &mut W, uuid: Uuid) -> Result<(), EncodeError<W::Error>>
+where
+    W: RmpWrite,
+{
+    encode::write_binary_array(writer, uuid.into_bytes())
+}
+
+fn read_record<'a>(bytes: &mut Bytes<'a>) -> Result<Record<DecryptedData>, DecodeError<'a>> {
     // Do not reorder these fields; the evaluation order matters.
     Ok(Record {
-        id: RecordId(parse_uuid(bytes)?),
-        idx: rmp::decode::read_u64(bytes)?,
+        id: RecordId(read_uuid(bytes)?),
+        idx: decode::read_u64(bytes)?,
         host: Host {
-            id: HostId(parse_uuid(bytes)?),
-            name: atuin_rmp::read_string(bytes)?,
+            id: HostId(read_uuid(bytes)?),
+            name: decode::read_string(bytes)?,
         },
-        timestamp: rmp::decode::read_u64(bytes)?,
-        version: atuin_rmp::with_str(bytes, RecordVersion::from)?,
-        tag: atuin_rmp::with_str(bytes, RecordTag::from)?,
-        data: DecryptedData(atuin_rmp::read_binary_array(bytes).collect::<Result<_, _>>()?),
+        timestamp: decode::read_u64(bytes)?,
+        version: decode::with_str(bytes, RecordVersion::from)?,
+        tag: decode::with_str(bytes, RecordTag::from)?,
+        data: DecryptedData(decode::read_binary_array(bytes).collect::<Result<_, _>>()?),
     })
+}
+
+fn write_record<'a, W>(
+    writer: &mut W,
+    record: &Record<DecryptedData>,
+) -> Result<(), EncodeError<W::Error>>
+where
+    W: RmpWrite,
+{
+    write_uuid(writer, record.id.0)?;
+    encode::write_u64(writer, record.idx)?;
+    write_uuid(writer, record.host.id.0)?;
+    encode::write_str(writer, &record.host.name)?;
+    encode::write_u64(writer, record.timestamp)?;
+    encode::write_str(writer, record.version.as_str())?;
+    encode::write_str(writer, record.tag.as_str())?;
+    encode::write_binary_array(writer, record.data.0.iter().copied())?;
+    Ok(())
 }
 
 #[derive(Debug, Error)]

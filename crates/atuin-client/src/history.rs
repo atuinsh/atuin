@@ -1,20 +1,19 @@
-use rmp::decode::{self, Bytes};
-use rmp::encode;
 use std::env;
+use std::sync::LazyLock;
 
 use atuin_common::filter::OrFilter;
+use atuin_common::rmp::decode::{self, Bytes, DecodeError};
+use atuin_common::rmp::encode::{self, EncodeError};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::{normalize_optional_string, uuid_v7};
 use atuin_domain::record::DecryptedData;
-use std::sync::LazyLock;
 
 use eyre::{Result, bail};
+use time::OffsetDateTime;
 
 use crate::secrets::SECRET_PATTERNS_RE;
 use crate::settings::Settings;
 use crate::utils::get_host_user;
-use crate::utils::rmp::{DecodeError, EncodeError, read_optional, read_string, write_optional};
-use time::OffsetDateTime;
 
 pub(crate) mod builder;
 pub mod store;
@@ -272,14 +271,14 @@ impl History {
         encode::write_str(&mut output, &self.session)?;
         encode::write_str(&mut output, &self.hostname)?;
 
-        write_optional(
+        encode::write_optional(
             &mut output,
             self.deleted_at.map(|d| d.unix_timestamp_nanos() as u64),
             encode::write_u64,
         )?;
         encode::write_str(&mut output, self.author.as_str())?;
-        write_optional(&mut output, self.intent.as_deref(), encode::write_str)?;
-        write_optional(&mut output, self.shell.as_deref(), encode::write_str)?;
+        encode::write_optional(&mut output, self.intent.as_deref(), encode::write_str)?;
+        encode::write_optional(&mut output, self.shell.as_deref(), encode::write_str)?;
         Ok(DecryptedData(output))
     }
 
@@ -301,19 +300,19 @@ impl History {
             bail!("unexpected number of fields ({nfields}) for history version {version}");
         }
 
-        let id = read_string(&mut bytes)?;
+        let id = decode::read_string(&mut bytes)?;
         let timestamp = decode::read_u64(&mut bytes).map_err(DecodeError::from)?;
         let duration = decode::read_int(&mut bytes).map_err(DecodeError::from)?;
         let exit = decode::read_int(&mut bytes).map_err(DecodeError::from)?;
 
-        let command = read_string(&mut bytes)?;
-        let cwd = read_string(&mut bytes)?;
-        let session = read_string(&mut bytes)?;
-        let hostname = read_string(&mut bytes)?;
-        let deleted_at = read_optional(&mut bytes, decode::read_u64)?;
+        let command = decode::read_string(&mut bytes)?;
+        let cwd = decode::read_string(&mut bytes)?;
+        let session = decode::read_string(&mut bytes)?;
+        let hostname = decode::read_string(&mut bytes)?;
+        let deleted_at = decode::read_optional(&mut bytes, decode::read_u64)?;
 
         let author = if version >= Version::One {
-            read_optional(&mut bytes, read_string)?
+            decode::read_optional(&mut bytes, decode::read_string)?
         } else {
             None
         };
@@ -323,13 +322,13 @@ impl History {
             Version::One => nfields > min_fields,
             Version::Two => true,
         } {
-            read_optional(&mut bytes, read_string)?
+            decode::read_optional(&mut bytes, decode::read_string)?
         } else {
             None
         };
 
         let shell = if version >= Version::Two {
-            read_optional(&mut bytes, read_string)?
+            decode::read_optional(&mut bytes, decode::read_string)?
         } else {
             None
         };
