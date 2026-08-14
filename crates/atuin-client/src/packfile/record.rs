@@ -5,12 +5,40 @@ use std::num::NonZeroU8;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::rmp::serde::TryToVecError;
 use atuin_domain::record::{
-    DecryptedData, EncryptedData, HostId, Record, RecordId, RecordIdx, RecordTag,
+    DecryptedData, EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag,
+    RecordVersion,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::record::sqlite_store::SqliteStore;
+
+use crate::utils::rmp as atuin_rmp;
+use atuin_rmp::{DecodeError, EncodeError};
+use uuid::Uuid;
+
+fn parse_uuid<'a>(bytes: &mut rmp::decode::Bytes<'a>) -> Result<Uuid, DecodeError<'a>> {
+    let uuid_bytes = atuin_rmp::read_fixed_binary_array(bytes)?;
+    Ok(Uuid::from_bytes(uuid_bytes))
+}
+
+fn parse_record<'a>(
+    bytes: &mut rmp::decode::Bytes<'a>,
+) -> Result<Record<DecryptedData>, DecodeError<'a>> {
+    // Do not reorder these fields; the evaluation order matters.
+    Ok(Record {
+        id: RecordId(parse_uuid(bytes)?),
+        idx: rmp::decode::read_u64(bytes)?,
+        host: Host {
+            id: HostId(parse_uuid(bytes)?),
+            name: atuin_rmp::read_string(bytes)?,
+        },
+        timestamp: rmp::decode::read_u64(bytes)?,
+        version: atuin_rmp::with_str(bytes, RecordVersion::from)?,
+        tag: atuin_rmp::with_str(bytes, RecordTag::from)?,
+        data: DecryptedData(atuin_rmp::read_binary_array(bytes).collect::<Result<_, _>>()?),
+    })
+}
 
 #[derive(Debug, Error)]
 pub enum ParsingError {

@@ -35,6 +35,8 @@ pub enum KeyDecodingError {
     B64Decode(#[from] base64::DecodeError),
     #[error("encryption key is empty")]
     EmptyKey,
+    // TODO(taylordotfish): use atuin_client::utils::rmp::DecodeError once that's moved to
+    // atuin-common
     #[error("unexpected decoding error: {_0}")]
     DecodingError(String),
     #[error("encryption key is not the correct size")]
