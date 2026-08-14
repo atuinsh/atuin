@@ -1,5 +1,7 @@
+use std::convert::Infallible;
+
 use rmp::Marker;
-pub use rmp::encode::{RmpWrite, RmpWriteErr, ValueWriteError};
+pub use rmp::encode::{ByteBuf, RmpWrite, RmpWriteErr, ValueWriteError};
 pub use rmp::encode::{write_array_len, write_bin_len, write_map_len, write_str_len};
 pub use rmp::encode::{write_i8, write_i16, write_i32, write_i64};
 pub use rmp::encode::{write_nil, write_sint, write_str, write_uint, write_uint8};
@@ -11,11 +13,14 @@ pub use rmp::encode::{write_u8, write_u16, write_u32, write_u64};
 /// [`rmp`]'s error message does not indicate which variant the error is (`InvalidMarkerWrite` or
 /// `InvalidDataWrite`) and does not print anything about the inner I/O error of type `E`.
 #[derive(Debug, thiserror::Error)]
-pub enum EncodeError<E: RmpWriteErr = std::io::Error> {
+pub enum EncodeError<E: RmpWriteErr = std::io::Error, Inner = Infallible> {
     #[error("could not write MessagePack value: {0:?}")]
     ValueWrite(#[from] ValueWriteError<E>),
     #[error("cannot encode array larger than {}", u32::MAX)]
     ArrayOverflow,
+    /// An inner error from the iterator passed to [`try_write_array`].
+    #[error(transparent)]
+    Inner(Inner),
 }
 
 /// Write an optional value to the stream.
@@ -45,14 +50,18 @@ where
 /// Write an iterator of elements as a MessagePack array.
 ///
 /// `write` is a function that writes a single element.
-pub fn write_array<'a, W, S, T, F, E>(writer: &mut W, iter: S, write: F) -> Result<(), E>
+pub fn write_array<W, S, T, F, E>(
+    writer: &mut W,
+    iter: S,
+    write: F,
+) -> Result<(), EncodeError<W::Error>>
 where
     W: RmpWrite,
     S: IntoIterator<IntoIter: ExactSizeIterator<Item = T>>,
     F: FnMut(&mut W, T) -> Result<(), E>,
-    E: From<EncodeError<W::Error>>,
+    E: Into<EncodeError<W::Error>>,
 {
-    write_array_impl(writer, iter, write_array_len, write)
+    try_write_array(writer, iter.into_iter().map(Ok::<_, Infallible>), write)
 }
 
 /// Write an iterator of bytes as a MessagePack binary array.
@@ -61,31 +70,57 @@ where
     W: RmpWrite,
     B: IntoIterator<IntoIter: ExactSizeIterator<Item = u8>>,
 {
-    write_array_impl(writer, bytes, write_bin_len, |writer, byte| {
-        writer
-            .write_u8(byte)
-            .map_err(|e| ValueWriteError::InvalidDataWrite(e).into())
-    })
+    try_write_array_impl(
+        writer,
+        bytes.into_iter().map(Ok::<_, Infallible>),
+        write_bin_len,
+        |writer, byte| {
+            writer
+                .write_u8(byte)
+                .map_err(ValueWriteError::InvalidDataWrite)
+        },
+    )
 }
 
-/// Helper function for sharing code between [`write_array`] and [`write_binary_array`].
-fn write_array_impl<'a, W, S, T, L, F, E>(
+/// Tries to write an iterator of [`Result`]s as a MessagePack array.
+///
+/// The difference from [`write_array`] is that this function accepts an iterator of [`Result`]s
+/// rather than an iterator of elements. If any of the [`Result`]s is an [`Err`], this function will
+/// return [`EncodeError::Inner`] with that error.
+///
+/// `write` is a function that writes a single element.
+pub fn try_write_array<W, S, T, E, F, WrErr>(
+    writer: &mut W,
+    iter: S,
+    write: F,
+) -> Result<(), EncodeError<W::Error, E>>
+where
+    W: RmpWrite,
+    S: IntoIterator<IntoIter: ExactSizeIterator<Item = Result<T, E>>>,
+    F: FnMut(&mut W, T) -> Result<(), WrErr>,
+    WrErr: Into<EncodeError<W::Error, E>>,
+{
+    try_write_array_impl(writer, iter, write_array_len, write)
+}
+
+/// Helper function for sharing code between [`try_write_array`] and [`write_binary_array`].
+fn try_write_array_impl<W, S, T, E, L, F, WrErr>(
     writer: &mut W,
     iter: S,
     write_len: L,
     write: F,
-) -> Result<(), E>
+) -> Result<(), EncodeError<W::Error, E>>
 where
     W: RmpWrite,
     // Ideally we would require `TrustedLen`, but that's unstable.
-    S: IntoIterator<IntoIter: ExactSizeIterator<Item = T>>,
+    S: IntoIterator<IntoIter: ExactSizeIterator<Item = Result<T, E>>>,
     L: FnOnce(&mut W, u32) -> Result<Marker, ValueWriteError<W::Error>>,
-    F: FnMut(&mut W, T) -> Result<(), E>,
-    E: From<EncodeError<W::Error>>,
+    F: FnMut(&mut W, T) -> Result<(), WrErr>,
+    WrErr: Into<EncodeError<W::Error, E>>,
 {
     let iter = iter.into_iter();
     let len = u32::try_from(iter.len()).map_err(|_| EncodeError::ArrayOverflow)?;
-    write_len(writer, len).map_err(EncodeError::from)?;
+    write_len(writer, len)?;
 
     // The "incorrect implementation of ExactSizeIterator" panics are not expected to happen in
     // practice. To trigger them, we would have to write a custom implementation of
@@ -102,7 +137,7 @@ where
             .expect("programming error: incorrect implementation of ExactSizeIterator");
     });
 
-    write_raw_seq(writer, iter, write)?;
+    try_write_raw_seq(writer, iter, write)?;
     assert_eq!(
         len, count,
         "programming error: incorrect implementation of ExactSizeIterator"
@@ -111,15 +146,18 @@ where
 }
 
 /// Write a raw sequence of items. This does *not* write the sequence length!
-fn write_raw_seq<'a, W, S, T, F, E>(writer: &mut W, sequence: S, mut write: F) -> Result<(), E>
+fn try_write_raw_seq<W, S, T, E, F, WrErr>(
+    writer: &mut W,
+    sequence: S,
+    mut write: F,
+) -> Result<(), EncodeError<W::Error, E>>
 where
     W: RmpWrite,
-    S: IntoIterator<Item = T>,
-    F: FnMut(&mut W, T) -> Result<(), E>,
-    E: From<EncodeError<W::Error>>,
+    S: IntoIterator<Item = Result<T, E>>,
+    F: FnMut(&mut W, T) -> Result<(), WrErr>,
+    WrErr: Into<EncodeError<W::Error, E>>,
 {
     sequence
         .into_iter()
-        .try_for_each(|item| write(writer, item))
-        .map_err(Into::into)
+        .try_for_each(|item| write(writer, item.map_err(EncodeError::Inner)?).map_err(Into::into))
 }

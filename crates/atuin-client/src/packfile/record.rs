@@ -4,7 +4,7 @@ use std::num::NonZeroU8;
 
 use atuin_common::encryption::paseto_v4;
 use atuin_common::rmp::decode::{self, Bytes, DecodeError};
-use atuin_common::rmp::encode::{self, EncodeError, RmpWrite};
+use atuin_common::rmp::encode::{self, ByteBuf, EncodeError, RmpWrite};
 use atuin_common::rmp::serde::TryToVecError;
 use atuin_domain::record::{
     DecryptedData, EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag,
@@ -44,7 +44,7 @@ fn read_record<'a>(bytes: &mut Bytes<'a>) -> Result<Record<DecryptedData>, Decod
     })
 }
 
-fn write_record<'a, W>(
+fn write_record<W>(
     writer: &mut W,
     record: &Record<DecryptedData>,
 ) -> Result<(), EncodeError<W::Error>>
