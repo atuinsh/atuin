@@ -90,13 +90,13 @@ atuin hook install claude-code
 
 This adds hook entries to `~/.claude/settings.json`. Claude Code calls Atuin on each `Bash` tool use, passing the event as JSON on `stdin`.
 
-The installed command names the Atuin binary that ran `hook install` and ends in `|| true`:
+The installed command names the Atuin binary that ran `hook install`, rather than relying on `PATH`:
 
 ```
-/home/ellie/.atuin/bin/atuin hook claude-code || true
+/home/ellie/.atuin/bin/atuin hook claude-code
 ```
 
-Both halves keep a hook failure from breaking your shell. Claude Code reads a `PreToolUse` hook that exits 2 as "deny this Bash call", and agents run hooks with a minimal `PATH`, where a bare `atuin` can be missing or resolve to an older build whose `atuin hook` doesn't exist — an unknown subcommand exits 2. Recording history is best effort, so Atuin never blocks a command it failed to record.
+That matters because Claude Code reads a `PreToolUse` hook that exits 2 as "deny this Bash call", and agents run hooks with a minimal `PATH`, where a bare `atuin` can be missing or resolve to an older build with no `hook` subcommand — which exits 2. Atuin also never fails this command itself: recording history is best effort, so a hook that can't record still reports success and leaves your command alone.
 
 ### Codex
 
@@ -104,7 +104,7 @@ Both halves keep a hook failure from breaking your shell. Claude Code reads a `P
 atuin hook install codex
 ```
 
-This adds hook entries to `~/.codex/hooks.json`. Codex calls Atuin on each Bash tool use matching `^Bash$`, using the same pinned, fail-open command as Claude Code.
+This adds hook entries to `~/.codex/hooks.json`. Codex calls Atuin on each Bash tool use matching `^Bash$`, using the same pinned command as Claude Code.
 
 ### opencode
 

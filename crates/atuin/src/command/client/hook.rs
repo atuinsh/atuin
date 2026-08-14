@@ -163,15 +163,7 @@ impl Cmd {
     pub async fn run(self, settings: &Settings) -> Result<()> {
         match (self.action, self.agent) {
             (Some(Action::Install { agent }), None) => install(&agent),
-            // Recording is best-effort: agents read a hook's exit code as a
-            // verdict on the command it wrapped, so a failure here must never
-            // stop the agent from running the command.
-            (None, Some(agent)) => {
-                if let Err(err) = handle(&agent, settings).await {
-                    tracing::warn!(error = %err, agent, "agent hook failed");
-                }
-                Ok(())
-            }
+            (None, Some(agent)) => handle(&agent, settings).await,
             (None, None) => {
                 bail!("expected `atuin hook <agent>` or `atuin hook install <agent>`");
             }
@@ -317,13 +309,13 @@ struct ManagedHook {
 }
 
 impl ManagedHook {
-    /// Build the command for `agent`, pinned to the running binary and shielded
-    /// from its own failures.
+    /// Build the command for `agent`, naming the binary that is installing it.
     ///
-    /// Both parts matter. Agents spawn hooks with a minimal `PATH`, where a bare
-    /// `atuin` can miss or resolve to an older build without `hook` — and clap
-    /// exits 2 for an unknown subcommand, which Claude Code reads as "deny this
-    /// Bash call". `|| true` keeps any other failure from doing the same.
+    /// Agents spawn hooks with a minimal `PATH`, where a bare `atuin` can be
+    /// missing entirely or resolve to an older build that has no `hook`
+    /// subcommand — and clap exits 2 for that, which Claude Code reads as "deny
+    /// this Bash call". Pinning the path keeps the hook on the binary that knows
+    /// what to do with it.
     fn new(agent: &'static str, matcher: &'static str) -> Result<Self> {
         let exe = std::env::current_exe()
             .wrap_err("could not locate the atuin executable to install hooks with")?;
@@ -336,15 +328,13 @@ impl ManagedHook {
     }
 
     /// Whether `command` is an Atuin hook for this agent, so reinstalling can
-    /// claim it: a bare `atuin hook <agent>` from an older installer, an
-    /// absolute path to an `atuin` binary, with or without `|| true`.
+    /// claim it: the bare `atuin hook <agent>` older installers wrote, or any
+    /// path to an `atuin` binary invoked the same way.
     fn owns(&self, command: &str) -> bool {
-        let command = command.trim();
-        let command = command
-            .strip_suffix("|| true")
-            .map_or(command, str::trim_end);
-
-        let Some(binary) = command.strip_suffix(&format!(" hook {}", self.agent)) else {
+        let Some(binary) = command
+            .trim()
+            .strip_suffix(&format!(" hook {}", self.agent))
+        else {
             return false;
         };
 
@@ -370,7 +360,7 @@ fn hook_command(exe: &Path, agent: &str) -> String {
         std::borrow::Cow::into_owned,
     );
 
-    format!("{exe} hook {agent} || true")
+    format!("{exe} hook {agent}")
 }
 
 fn add_hook_entries(hooks: &mut Value, hook: &ManagedHook) -> Result<()> {
@@ -529,8 +519,8 @@ mod tests {
         ));
     }
 
-    /// What an install writes today: an absolute binary, quoted, fail-open.
-    const INSTALLED: &str = "/opt/homebrew/bin/atuin hook claude-code || true";
+    /// What an install writes today: the binary it ran from, quoted.
+    const INSTALLED: &str = "/opt/homebrew/bin/atuin hook claude-code";
 
     #[fixture]
     fn hook() -> ManagedHook {
@@ -570,10 +560,9 @@ mod tests {
     }
 
     /// A bare `atuin` can resolve to a build without `hook`, whose clap exits 2
-    /// — which Claude Code reads as "deny this Bash call". The command must name
-    /// the binary that installed it and swallow whatever that binary does.
+    /// — which Claude Code reads as "deny this Bash call".
     #[test]
-    fn hook_command_pins_the_binary_and_fails_open() {
+    fn hook_command_pins_the_installing_binary() {
         assert_eq!(
             hook_command(&PathBuf::from("/opt/homebrew/bin/atuin"), "claude-code"),
             INSTALLED
@@ -584,7 +573,7 @@ mod tests {
     fn hook_command_quotes_a_path_with_spaces() {
         assert_eq!(
             hook_command(&PathBuf::from("/Users/Ada Lovelace/bin/atuin"), "codex"),
-            "'/Users/Ada Lovelace/bin/atuin' hook codex || true"
+            "'/Users/Ada Lovelace/bin/atuin' hook codex"
         );
     }
 
@@ -593,8 +582,7 @@ mod tests {
     #[rstest]
     #[case::bare("atuin hook claude-code", true)]
     #[case::absolute("/usr/local/bin/atuin hook claude-code", true)]
-    #[case::fail_open("/usr/local/bin/atuin hook claude-code || true", true)]
-    #[case::quoted("'/Users/Ada/bin/atuin' hook claude-code || true", true)]
+    #[case::quoted("'/Users/Ada/bin/atuin' hook claude-code", true)]
     #[case::windows(r#""C:\Program Files\atuin\atuin.exe" hook claude-code"#, true)]
     #[case::another_agent("atuin hook codex", false)]
     #[case::another_binary("/usr/bin/echo hook claude-code", false)]
