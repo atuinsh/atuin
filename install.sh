@@ -63,6 +63,10 @@ fi
 # Use of single quotes around $() is intentional here
 # shellcheck disable=SC2016
 
+if ! grep -q "atuin init bash" "$HOME/.bashrc"; then
+  echo 'eval "$(atuin init bash)"' >> "$HOME/.bashrc"
+fi
+
 if [ -f "$HOME/.config/fish/config.fish" ]; then
   if ! grep -q "atuin init fish" "$HOME/.config/fish/config.fish"; then
     printf '\nif status is-interactive\n    atuin init fish | source\nend\n' >> "$HOME/.config/fish/config.fish"
