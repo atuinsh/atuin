@@ -133,7 +133,7 @@ fn try_write_array_impl<W, S, T, E, L, F, WrErr>(
     writer: &mut W,
     iter: S,
     write_len: L,
-    write: F,
+    mut write: F,
 ) -> Result<(), TryEncodeError<W::Error, E>>
 where
     W: RmpWrite,
@@ -143,7 +143,7 @@ where
     F: FnMut(&mut W, T) -> Result<(), WrErr>,
     WrErr: Into<EncodeError<W::Error>>,
 {
-    let iter = iter.into_iter();
+    let mut iter = iter.into_iter();
     let len = u32::try_from(iter.len()).map_err(|_| EncodeError::ArrayOverflow)?;
     write_len(writer, len).map_err(EncodeError::from)?;
 
@@ -156,33 +156,17 @@ where
     // example, `std::collections::HashMap` will panic if `Eq` and `Hash` do not agree.
 
     let mut count: u32 = 0;
-    let iter = iter.inspect(|_| {
+    iter.try_for_each(|result| {
         count = count
             .checked_add(1)
             .expect("programming error: incorrect implementation of ExactSizeIterator");
-    });
+        let item = result.map_err(TryEncodeError::Inner)?;
+        write(writer, item).map_err(|e| TryEncodeError::from(e.into()))
+    })?;
 
-    try_write_raw_seq(writer, iter, write)?;
     assert_eq!(
         len, count,
         "programming error: incorrect implementation of ExactSizeIterator"
     );
     Ok(())
-}
-
-/// Write a raw sequence of items. This does *not* write the sequence length!
-fn try_write_raw_seq<W, S, T, E, F, WrErr>(
-    writer: &mut W,
-    sequence: S,
-    mut write: F,
-) -> Result<(), TryEncodeError<W::Error, E>>
-where
-    W: RmpWrite,
-    S: IntoIterator<Item = Result<T, E>>,
-    F: FnMut(&mut W, T) -> Result<(), WrErr>,
-    WrErr: Into<EncodeError<W::Error>>,
-{
-    sequence.into_iter().try_for_each(|item| {
-        write(writer, item.map_err(TryEncodeError::Inner)?).map_err(|e| e.into().into())
-    })
 }

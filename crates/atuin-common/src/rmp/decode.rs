@@ -196,7 +196,7 @@ where
 fn read_array_impl<'a, R, T, L, F, E>(
     reader: &mut R,
     read_len: L,
-    read: F,
+    mut read: F,
 ) -> impl Iterator<Item = Result<T, DecodeError<'a, R::Error>>>
 where
     R: RmpRead,
@@ -209,14 +209,7 @@ where
         Err(e) => (0, Some(e)),
     };
 
-    // We're using `zip` instead of `take(len)` because `len` is a `u32`, not a `usize`, and
-    // conversion from `u32` to `usize` is fallible. In practice, it is only fallible on 16-bit
-    // platforms, which we don't support, so in theory we could just `.unwrap()` and call it a day,
-    // but the `zip` approach avoids having to do explicit error handling and should be just about
-    // as efficient -- `size_hint` will still be specific and accurate.
-    let items = read_raw_seq(reader, read)
-        .zip(0..len)
-        .map(|(result, _i)| result);
+    let items = (0..len).map(move |_| read(reader).map_err(Into::into));
     // Errors from `read_array_len` are yielded as an element of the iterator. Otherwise we would
     // have wrap this function's return type in another `Result`, which is less ergonomic.
     error.into_iter().map(|e| Err(e.into())).chain(items)
@@ -260,20 +253,4 @@ where
     // SAFETY: We fully initialized the array by calling `MaybeUninit::write` on every element of
     // the array.
     Ok(unsafe { array.assume_init() })
-}
-
-/// Read a raw sequence of items. This does *not* read the sequence length!
-///
-/// The returned iterator will go on forever. It is the caller's responsibility to stop pulling
-/// elements from it at the appropriate point!
-fn read_raw_seq<'a, R, T, F, E>(
-    reader: &mut R,
-    mut read: F,
-) -> impl Iterator<Item = Result<T, DecodeError<'a, R::Error>>>
-where
-    R: RmpRead,
-    F: FnMut(&mut R) -> Result<T, E>,
-    E: Into<DecodeError<'a, R::Error>>,
-{
-    std::iter::repeat_with(move || read(reader).map_err(Into::into))
 }
