@@ -196,6 +196,19 @@ __atuin_clear_prompt() {
 __atuin_accept_line() {
     local __atuin_command=$1
 
+    if [[ ${BLE_ATTACHED-} ]]; then
+        ble-edit/content/reset-and-check-dirty "$__atuin_command"
+        ble/widget/accept-line
+        READLINE_LINE=""
+        READLINE_POINT=0
+        return 0
+    elif [[ ${__atuin_macro_chain_keymap-} ]]; then
+        READLINE_LINE=$__atuin_command
+        READLINE_POINT=${#READLINE_LINE}
+        bind -m "$__atuin_macro_chain_keymap" '"'"$__atuin_macro_chain"'": '"$__atuin_macro_accept_line"
+        return 0
+    fi
+
     # Reprint the prompt, accounting for multiple lines
     local __atuin_prompt __atuin_prompt_offset
     __atuin_evaluate_prompt
@@ -259,6 +272,9 @@ __atuin_accept_line() {
     __atuin_evaluate_prompt
     printf '%s' "$__atuin_prompt"
     __atuin_clear_prompt 0
+
+    READLINE_LINE=""
+    READLINE_POINT=0
 }
 
 #------------------------------------------------------------------------------
@@ -362,20 +378,7 @@ __atuin_history() {
 
     if [[ $__atuin_output == __atuin_accept__:* ]]; then
         __atuin_output=${__atuin_output#__atuin_accept__:}
-
-        if [[ ${BLE_ATTACHED-} ]]; then
-            ble-edit/content/reset-and-check-dirty "$__atuin_output"
-            ble/widget/accept-line
-            READLINE_LINE=""
-        elif [[ ${__atuin_macro_chain_keymap-} ]]; then
-            READLINE_LINE=$__atuin_output
-            bind -m "$__atuin_macro_chain_keymap" '"'"$__atuin_macro_chain"'": '"$__atuin_macro_accept_line"
-        else
-            __atuin_accept_line "$__atuin_output"
-            READLINE_LINE=""
-        fi
-
-        READLINE_POINT=${#READLINE_LINE}
+        __atuin_accept_line "$__atuin_output"
     else
         READLINE_LINE=$__atuin_output
         READLINE_POINT=${#READLINE_LINE}
