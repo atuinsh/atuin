@@ -344,8 +344,15 @@ pub async fn run(
         HashMap::new()
     };
 
-    // Compute overall stats using existing functionality
-    let stats = compute(settings, &history, 10, 1).expect("Failed to compute stats");
+    // Compute overall stats using existing functionality.
+    // `compute` returns None when every command in range is filtered out by
+    // stats.ignored_commands, which is not an error.
+    let Some(stats) = compute(settings, &history, 10, 1) else {
+        println!(
+            "Every command in your {year} history is in stats.ignored_commands, so there is nothing to wrap up!"
+        );
+        return Ok(());
+    };
     let wrapped_stats = WrappedStats::new(settings, &stats, &history, &alias_map);
 
     // Print wrapped format
