@@ -200,15 +200,29 @@ __atuin_clear_prompt() {
 # chaining.
 __atuin_insert_line() {
     local __atuin_command=$1
+
+    # READLINE_LINE and READLINE_POINT are only supported by bash >= 4.0 or
+    # ble.sh.  When it is not supported, we localize them to avoid confusing
+    # bash-preexec.
+    [[ ${BLE_ATTACHED-} ]] || ((BASH_VERSINFO[0] >= 4)) ||
+        local READLINE_LINE="" READLINE_POINT=0
+
     READLINE_LINE=$__atuin_command
     READLINE_POINT=${#READLINE_LINE}
     if [[ ! ${BLE_ATTACHED-} ]] && ((BASH_VERSINFO[0] < 4)) && [[ ${__atuin_macro_chain_keymap-} ]]; then
+        __atuin_expand_line=$__atuin_command
         bind -m "$__atuin_macro_chain_keymap" '"'"$__atuin_macro_chain"'": '"$__atuin_macro_insert_line"
     fi
 }
 
 __atuin_accept_line() {
     local __atuin_command=$1
+
+    # READLINE_LINE and READLINE_POINT are only supported by bash >= 4.0 or
+    # ble.sh.  When it is not supported, we localize them to avoid confusing
+    # bash-preexec.
+    [[ ${BLE_ATTACHED-} ]] || ((BASH_VERSINFO[0] >= 4)) ||
+        local READLINE_LINE="" READLINE_POINT=0
 
     if [[ ${BLE_ATTACHED-} ]]; then
         ble-edit/content/reset-and-check-dirty "$__atuin_command"
@@ -219,6 +233,7 @@ __atuin_accept_line() {
     elif [[ ${__atuin_macro_chain_keymap-} ]]; then
         READLINE_LINE=$__atuin_command
         READLINE_POINT=${#READLINE_LINE}
+        __atuin_expand_line=$__atuin_command
         bind -m "$__atuin_macro_chain_keymap" '"'"$__atuin_macro_chain"'": '"$__atuin_macro_accept_line"
         return 0
     fi
@@ -379,7 +394,7 @@ __atuin_history() {
     # ble.sh.  When it is not supported, we clear them to suppress strange
     # behaviors.
     [[ ${BLE_ATTACHED-} ]] || ((BASH_VERSINFO[0] >= 4)) ||
-        READLINE_LINE="" READLINE_POINT=0
+        local READLINE_LINE="" READLINE_POINT=0
 
     local __atuin_output
     if ! __atuin_output=$(__atuin_search_cmd "$@"); then
@@ -612,7 +627,7 @@ else
             bind -m "$__atuin_keymap" '"\C-x\C-_A1\a": beginning-of-line'
             bind -m "$__atuin_keymap" '"\C-x\C-_A2\a": kill-line'
             # shellcheck disable=SC2016
-            bind -m "$__atuin_keymap" '"\C-x\C-_A3\a": "$READLINE_LINE"'
+            bind -m "$__atuin_keymap" '"\C-x\C-_A3\a": "$__atuin_expand_line"'
             bind -m "$__atuin_keymap" '"\C-x\C-_A4\a": shell-expand-line'
             bind -m "$__atuin_keymap" '"\C-x\C-_A5\a": accept-line'
             bind -m "$__atuin_keymap" '"\C-x\C-_A6\a": end-of-line'
@@ -622,9 +637,9 @@ else
         bind -m vi-command '"\C-x\C-_A7\a": vi-insertion-mode'
         bind -m vi-insert  '"\C-x\C-_A7\a": vi-movement-mode'
 
-        # "\C-x\C-_A10\a": Replace the command line with READLINE_LINE.  When we are
-        #   in the vi-command keymap, we go to vi-insert, input
-        #   "$READLINE_LINE", and come back to vi-command.
+        # "\C-x\C-_A10\a": Replace the command line with $__atuin_expand_line.
+        # When we are in the vi-command keymap, we go to vi-insert, input
+        # "$__atuin_expand_line", and come back to vi-command.
         bind -m emacs      '"\C-x\C-_A10\a": "\C-x\C-_A1\a\C-x\C-_A2\a\C-x\C-_A3\a\C-x\C-_A4\a"'
         bind -m vi-insert  '"\C-x\C-_A10\a": "\C-x\C-_A1\a\C-x\C-_A2\a\C-x\C-_A3\a\C-x\C-_A4\a"'
         bind -m vi-command '"\C-x\C-_A10\a": "\C-x\C-_A1\a\C-x\C-_A2\a\C-x\C-_A7\a\C-x\C-_A3\a\C-x\C-_A7\a\C-x\C-_A4\a"'
@@ -636,6 +651,12 @@ else
     __atuin_bash42_dispatch_selector=
 
     __atuin_bash42_dispatch() {
+        # READLINE_LINE and READLINE_POINT are only supported by bash >= 4.0 or
+        # ble.sh.  When it is not supported, we clear them to suppress strange
+        # behaviors.
+        [[ ${BLE_ATTACHED-} ]] || ((BASH_VERSINFO[0] >= 4)) ||
+            local READLINE_LINE="" READLINE_POINT=0
+
         local s=$__atuin_bash42_dispatch_selector
         __atuin_bash42_dispatch_selector=
         __atuin_widget_run "$((2#0$s))"
