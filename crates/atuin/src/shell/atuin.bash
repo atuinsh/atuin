@@ -193,6 +193,20 @@ __atuin_clear_prompt() {
     printf '%s' "${__atuin_clear_prompt_cache[offset]}"
 }
 
+# Insert $1 into the line buffer of the line editor.  Special handling is
+# needed in Bash <= 3.2 because the old Bash does not support READLINE_LINE and
+# READLINE_POINT.  When this function is called from inside a keybinding set up
+# by `atuin-bind`, the contents is inserted into the command line by macro
+# chaining.
+__atuin_insert_line() {
+    local __atuin_command=$1
+    READLINE_LINE=$__atuin_command
+    READLINE_POINT=${#READLINE_LINE}
+    if [[ ! ${BLE_ATTACHED-} ]] && ((BASH_VERSINFO[0] < 4)) && [[ ${__atuin_macro_chain_keymap-} ]]; then
+        bind -m "$__atuin_macro_chain_keymap" '"'"$__atuin_macro_chain"'": '"$__atuin_macro_insert_line"
+    fi
+}
+
 __atuin_accept_line() {
     local __atuin_command=$1
 
@@ -380,11 +394,7 @@ __atuin_history() {
         __atuin_output=${__atuin_output#__atuin_accept__:}
         __atuin_accept_line "$__atuin_output"
     else
-        READLINE_LINE=$__atuin_output
-        READLINE_POINT=${#READLINE_LINE}
-        if [[ ! ${BLE_ATTACHED-} ]] && ((BASH_VERSINFO[0] < 4)) && [[ ${__atuin_macro_chain_keymap-} ]]; then
-            bind -m "$__atuin_macro_chain_keymap" '"'"$__atuin_macro_chain"'": '"$__atuin_macro_insert_line"
-        fi
+        __atuin_insert_line "$__atuin_output"
     fi
 }
 
