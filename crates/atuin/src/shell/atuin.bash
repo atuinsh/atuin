@@ -711,10 +711,20 @@ fi
 
 if command -v __atuin_load_builtin_preexec > /dev/null; then
     if [[ -z ${ATUIN_NO_BUILTIN_PREEXEC-} ]]; then
-        __atuin_update_preexec_backend
-        if [[ $ATUIN_PREEXEC_BACKEND == *:unknown ]]; then
-            __atuin_load_builtin_preexec
-        fi
+        # We can simply load bash-preexec.sh without caring existing
+        # preexec-backend because duplicate detection is already properly
+        # implemented in bash-preexec itself:
+        #
+        # 1. When another instance of bash-preexec.sh has already been loaded,
+        #    the initialization is canceled at the beginning by bash-preexec's
+        #    own detection using the variable "bash_preexec_imported" or
+        #    "__bp_imported".
+        # 2. When ble.sh has already been loaded, we have already requested
+        #    ble.sh's emulation of bash-preexec by "ble-import" in the function
+        #    "__atuin_initialize_blesh", which also sets
+        #    "bash_preexec_imported" and "__bp_imported", so later loading of
+        #    bash-preexec.sh is canceled.
+        __atuin_load_builtin_preexec
     fi
     # Free the function from memory
     unset -f __atuin_load_builtin_preexec
