@@ -148,24 +148,30 @@ _atuin_ai_question_mark() {
     fi
 }
 
-# A "bind -x" handler cannot invoke readline bindable functions such as
-# accept-line, so binding '?' directly to the handler could only ever edit
-# READLINE_LINE, never execute it.  We use the same two-step macro dispatch
-# as atuin's main bash integration: '?' expands to two intermediate
-# sequences, the first runs the handler via "bind -x", and the handler
-# decides what the second does by rebinding it — accept-line to execute, a
-# no-op otherwise.  The sequences \C-x\C-_B<n>\a mirror the main
-# integration's \C-x\C-_A<n>\a chain, with B instead of A to avoid
-# colliding with it.
-if ((BASH_VERSINFO[0] >= 5 || BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3)); then
-    bind '"\C-x\C-_B0\a": ""'
-    bind -x '"\C-x\C-_B1\a": _atuin_ai_question_mark'
-    bind '"?": "\C-x\C-_B1\a\C-x\C-_B0\a"'
-else
-    # Bash <= 4.2 cannot "bind -x" a key sequence longer than two bytes,
-    # so bind the handler directly.  Enter in the TUI then inserts the
-    # command instead of executing it.
-    bind -x '"?": _atuin_ai_question_mark'
+# We only set up keybinding in Bash >= 4.0.  Bash < 4.0 does not provide
+# READLINE_LINE, so if bound, it would always start an AI session regardless of
+# the contents of the line buffer.  This means that it would make impossible
+# to input "?" in Bash 3.2.
+if ((BASH_VERSINFO[0] >= 4)) || [[ ${BLE_VERSION-} ]]; then
+    # A "bind -x" handler cannot invoke readline bindable functions such as
+    # accept-line, so binding '?' directly to the handler could only ever edit
+    # READLINE_LINE, never execute it.  We use the same two-step macro dispatch
+    # as atuin's main bash integration: '?' expands to two intermediate
+    # sequences, the first runs the handler via "bind -x", and the handler
+    # decides what the second does by rebinding it — accept-line to execute, a
+    # no-op otherwise.  The sequences \C-x\C-_B<n>\a mirror the main
+    # integration's \C-x\C-_A<n>\a chain, with B instead of A to avoid
+    # colliding with it.
+    if ((BASH_VERSINFO[0] >= 5 || BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3)); then
+        bind '"\C-x\C-_B0\a": ""'
+        bind -x '"\C-x\C-_B1\a": _atuin_ai_question_mark'
+        bind '"?": "\C-x\C-_B1\a\C-x\C-_B0\a"'
+    else
+        # Bash <= 4.2 cannot "bind -x" a key sequence longer than two bytes,
+        # so bind the handler directly.  Enter in the TUI then inserts the
+        # command instead of executing it.
+        bind -x '"?": _atuin_ai_question_mark'
+    fi
 fi
 "#
     .trim()
