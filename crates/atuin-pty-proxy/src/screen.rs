@@ -799,7 +799,9 @@ mod tests {
         let mut cursor = std::io::Cursor::new(resize);
         let (frame_type, payload) = protocol::read_frame(&mut cursor).unwrap().unwrap();
         assert_eq!(frame_type, protocol::FRAME_RESIZE);
-        assert_eq!(protocol::decode_resize(&payload), Some((1, 1)));
+
+        // Due to an upstream issue in vt100, each dimension is clamped to 2.
+        assert_eq!(protocol::decode_resize(&payload), Some((2, 2)));
     }
 
     #[test]
