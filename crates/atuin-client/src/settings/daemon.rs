@@ -153,7 +153,7 @@ impl Daemon {
 #[cfg(unix)]
 trait SocketCtx: Copy + Sized {
     fn tmp_dir(&self) -> PathBuf {
-        atuin_common::utils::env_abspath("TMPDIR").unwrap_or_else(|| "/tmp".into())
+        atuin_common::utils::env_nonempty("TMPDIR").map_or_else(|| "/tmp".into(), Into::into)
     }
 
     fn runtime_dir(&self) -> Option<PathBuf> {

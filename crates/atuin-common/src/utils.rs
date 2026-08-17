@@ -111,7 +111,7 @@ pub fn home_dir() -> PathBuf {
 ///
 /// This function will never return an empty string: if the environment variable is set but empty,
 /// [`None`] is returned.
-fn env_nonempty(name: &str) -> Option<OsString> {
+pub fn env_nonempty(name: &str) -> Option<OsString> {
     std::env::var_os(name).filter(|value| !value.is_empty())
 }
 
