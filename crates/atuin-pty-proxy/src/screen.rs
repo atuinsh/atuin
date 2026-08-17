@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::time::Duration;
 
-use atuin_common::ansi::new_vt100_parser;
+use atuin_common::ansi::{Vt100ParserExt as _, Vt100ScreenExt as _};
 use rand::RngCore;
 
 use crate::protocol;
@@ -255,7 +255,7 @@ struct ParserState {
 
 impl ParserState {
     fn new(rows: u16, cols: u16) -> Self {
-        let parser = new_vt100_parser(rows, cols, 0);
+        let parser = vt100::Parser::new_safe(rows, cols, 0);
         let (rows, cols) = parser.screen().size();
         Self {
             parser,
@@ -285,7 +285,7 @@ impl ParserState {
         let caught =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(&mut self.parser)));
         if caught.is_err() {
-            self.parser = new_vt100_parser(self.rows, self.cols, 0);
+            self.parser = vt100::Parser::new_safe(self.rows, self.cols, 0);
         }
     }
 
@@ -305,7 +305,7 @@ impl ParserState {
                 let (rows, cols) = (rows.max(1), cols.max(1));
                 self.rows = rows;
                 self.cols = cols;
-                self.vt100_guarded(|parser| parser.screen_mut().set_size(rows, cols));
+                self.vt100_guarded(|parser| parser.screen_mut().set_size_safe(rows, cols));
                 let frame = protocol::resize_frame(rows, cols);
                 self.fan_out(&frame);
             }

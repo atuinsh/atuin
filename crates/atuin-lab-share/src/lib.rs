@@ -1,4 +1,5 @@
 #![deny(unsafe_code)]
+#![allow(clippy::disallowed_methods)]
 
 //! Experimental terminal sharing for atuin (`atuin lab share`).
 //!
