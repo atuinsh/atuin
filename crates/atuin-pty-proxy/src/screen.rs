@@ -741,7 +741,9 @@ mod tests {
         state.handle(Msg::ScreenRequest(reply_tx));
         let blob = reply_rx.recv().unwrap();
         let snapshot = protocol::Snapshot::decode(&blob).unwrap();
-        assert_eq!((snapshot.rows, snapshot.cols), (1, 1));
+
+        // Dimensions need to be clamped to (2, 2) to avoid an upstream vt100 issue.
+        assert_eq!((snapshot.rows, snapshot.cols), (2, 2));
     }
 
     /// Make sure <https://github.com/doy/vt100-rust/issues/37> doesn't kill our parser.
