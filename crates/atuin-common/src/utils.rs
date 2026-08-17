@@ -132,8 +132,8 @@ pub fn config_dir() -> PathBuf {
 }
 
 pub fn data_dir() -> PathBuf {
-    let data_dir: PathBuf = env_abspath("XDG_DATA_HOME")
-        .unwrap_or_else(|| home_dir().join(".local").join("share"));
+    let data_dir: PathBuf =
+        env_abspath("XDG_DATA_HOME").unwrap_or_else(|| home_dir().join(".local").join("share"));
     data_dir.join("atuin")
 }
 
