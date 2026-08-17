@@ -6,6 +6,50 @@ use std::num::NonZeroU16;
 /// Arbitrary upper bound on the emulated screen height, in rows. Mitigates OOMs with long output.
 const MAX_ROWS: usize = 16_384;
 
+/// Extension trait for [`vt100::Parser`].
+pub trait Vt100ParserExt: Sized {
+    fn new_safe(rows: u16, cols: u16, scrollback_len: usize) -> Self;
+}
+
+/// Extension trait for [`vt100::Screen`].
+pub trait Vt100ScreenExt: Sized {
+    fn set_size_safe(&mut self, rows: u16, cols: u16);
+}
+
+impl Vt100ParserExt for vt100::Parser {
+    /// Create a new [`vt100::Parser`].
+    ///
+    /// Prefer this function over calling [`vt100::Parser::new`] directly. [`vt100`] has [a bug]
+    /// that can cause panics when `rows` or `cols` is less than 2. This function avoids that
+    /// case by clamping `rows` and `cols` to 2 if either is less than that.
+    ///
+    /// [a bug]: https://github.com/doy/vt100-rust/issues/37
+    fn new_safe(rows: u16, cols: u16, scrollback_len: usize) -> Self {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "this is the one safe wrapper around the disallowed function"
+        )]
+        Self::new(rows.max(2), cols.max(2), scrollback_len)
+    }
+}
+
+impl Vt100ScreenExt for vt100::Screen {
+    /// Set the size of a [`vt100::Screen`].
+    ///
+    /// Prefer this function over calling [`vt100::Screen::set_size`] directly. [`vt100`] has
+    /// [a bug] that can cause panics when `rows` or `cols` is less than 2. This method avoids
+    /// that case by clamping `rows` and `cols` to 2 if either is less than that.
+    ///
+    /// [a bug]: https://github.com/doy/vt100-rust/issues/37
+    fn set_size_safe(&mut self, rows: u16, cols: u16) {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "this is the one safe wrapper around the disallowed method"
+        )]
+        self.set_size(rows.max(2), cols.max(2))
+    }
+}
+
 /// Render ANSI-encoded terminal output to plain text, as it would appear on a `cols`-wide terminal.
 ///
 /// Uses [`vt100::Parser`] under the hood meaning that backspaces, ANSI codes, etc. are gracefully
@@ -17,14 +61,6 @@ pub fn to_plain_text(input: impl AsRef<[u8]>, cols: NonZeroU16) -> String {
     if bytes.is_empty() {
         return String::new();
     }
-
-    // vt100 assumes at least two columns when a double-width character
-    // arrives (`size.cols - width` underflows, panicking in debug builds),
-    // so never emulate a one-column screen.
-    //
-    // TODO: Remove this once upstream issue is fixed:
-    // https://github.com/doy/vt100-rust/issues/37
-    let cols = cols.get().max(2);
 
     let mut newlines = 0usize;
     let normalized: Vec<u8> = onlcr(bytes)
@@ -41,13 +77,13 @@ pub fn to_plain_text(input: impl AsRef<[u8]>, cols: NonZeroU16) -> String {
     // We then add the bytes/cols case for the extra rows created due to soft-wrapping.
     // Note this overshoots, but that's OK, we'll clean up later.
     let newline_rows = newlines + 1;
-    let wrapped_rows = normalized.len() / cols as usize;
+    let wrapped_rows = normalized.len() / usize::from(cols.get());
     let rows = newline_rows
         .saturating_add(wrapped_rows)
         .saturating_add(1)
-        .clamp(1, MAX_ROWS.min(u16::MAX as usize)) as u16;
+        .clamp(1, MAX_ROWS.min(usize::from(u16::MAX))) as u16;
 
-    let mut parser = vt100::Parser::new(rows, cols, 0);
+    let mut parser = vt100::Parser::new_safe(rows, cols.get(), 0);
     parser.process(&normalized);
 
     // The emulator renders onto a fixed grid, so `contents()` comes back with each row right-padded

@@ -6,7 +6,7 @@ use std::{
 };
 
 use atuin_client::history::AuthorPattern;
-use atuin_common::ansi;
+use atuin_common::ansi::{self, Vt100ParserExt as _};
 use atuin_common::filter::OrFilter;
 use atuin_common::time::UtcOffsetExt;
 use enum_dispatch::enum_dispatch;
@@ -875,7 +875,7 @@ pub(crate) async fn execute_shell_command_streaming(
     let stderr = child.stderr.take().expect("stderr was piped");
 
     // VT100 emulator for the live preview (viewport-sized)
-    let mut parser = vt100::Parser::new(PREVIEW_HEIGHT, PREVIEW_WIDTH, 0);
+    let mut parser = vt100::Parser::new_safe(PREVIEW_HEIGHT, PREVIEW_WIDTH, 0);
 
     let mut stdout_reader = tokio::io::BufReader::new(stdout);
     let mut stderr_reader = tokio::io::BufReader::new(stderr);
