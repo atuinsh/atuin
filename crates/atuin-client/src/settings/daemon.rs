@@ -157,7 +157,7 @@ trait SocketCtx: Copy + Sized {
     }
 
     fn runtime_dir(&self) -> Option<PathBuf> {
-        atuin_common::utils::env_nonempty("XDG_RUNTIME_DIR").map(Into::into)
+        atuin_common::utils::env_abspath("XDG_RUNTIME_DIR")
     }
 
     fn data_dir(&self) -> PathBuf {

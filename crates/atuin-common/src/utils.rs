@@ -115,15 +115,25 @@ pub fn env_nonempty(name: &str) -> Option<OsString> {
     std::env::var_os(name).filter(|value| !value.is_empty())
 }
 
+/// Read an environment variable that must be an absolute path.
+///
+/// This is usually done in the name of XDG-compliance which requires that paths given through
+/// environment variables are absolute.
+pub fn env_abspath(name: &str) -> Option<PathBuf> {
+    env_nonempty(name)
+        .map(PathBuf::from)
+        .filter(|s| s.is_absolute())
+}
+
 pub fn config_dir() -> PathBuf {
     let config_dir: PathBuf =
-        env_nonempty("XDG_CONFIG_HOME").map_or_else(|| home_dir().join(".config"), Into::into);
+        env_abspath("XDG_CONFIG_HOME").unwrap_or_else(|| home_dir().join(".config"));
     config_dir.join("atuin")
 }
 
 pub fn data_dir() -> PathBuf {
-    let data_dir: PathBuf = env_nonempty("XDG_DATA_HOME")
-        .map_or_else(|| home_dir().join(".local").join("share"), Into::into);
+    let data_dir: PathBuf =
+        env_abspath("XDG_DATA_HOME").unwrap_or_else(|| home_dir().join(".local").join("share"));
     data_dir.join("atuin")
 }
 
