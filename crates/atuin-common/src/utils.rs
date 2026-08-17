@@ -127,7 +127,7 @@ pub fn env_abspath(name: &str) -> Option<PathBuf> {
 
 pub fn config_dir() -> PathBuf {
     let config_dir: PathBuf =
-        env_abspath("XDG_CONFIG_HOME").map_or_else(|| home_dir().join(".config"), Into::into);
+        env_abspath("XDG_CONFIG_HOME").unwrap_or_else(|| home_dir().join(".config"));
     config_dir.join("atuin")
 }
 
