@@ -255,11 +255,10 @@ struct ParserState {
 
 impl ParserState {
     fn new(rows: u16, cols: u16) -> Self {
-        // vt100 0.16 underflows (and panics in debug builds) on a 0-row or
-        // 0-column grid; clamp here and in the Resize arm.
-        let (rows, cols) = (rows.max(1), cols.max(1));
+        let parser = new_vt100_parser(rows, cols, 0);
+        let (rows, cols) = parser.screen().size();
         Self {
-            parser: new_vt100_parser(rows, cols, 0),
+            parser,
             subscribers: Vec::new(),
             rows,
             cols,
@@ -722,6 +721,7 @@ fn peer_uid_matches(stream: &UnixStream) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn zero_dimension_screens_do_not_panic() {
@@ -744,15 +744,13 @@ mod tests {
         assert_eq!((snapshot.rows, snapshot.cols), (1, 1));
     }
 
-    /// vt100 0.16 panics in `col_wrap` when text wraps on a 1-row grid.
-    /// The guard must absorb it: the parser thread is the sole owner of the
-    /// screen model, so an unwinding one leaves every connection thread with
-    /// nothing to serve — no snapshots, no subscribers, and `--active` gone
-    /// for the shell's remaining lifetime. Raw-byte fan-out and the snapshot
-    /// service must both survive the panic.
-    #[test]
-    fn vt100_wrap_panic_does_not_kill_the_parser() {
-        let mut state = ParserState::new(1, 3);
+    /// Make sure <https://github.com/doy/vt100-rust/issues/37> doesn't kill our parser.
+    #[rstest]
+    fn vt100_wrap_panic_does_not_kill_the_parser(
+        #[values(0, 1, 2, 3)] rows: u16,
+        #[values(0, 1, 2, 3)] cols: u16,
+    ) {
+        let mut state = ParserState::new(rows, cols);
         let (frames_tx, frames_rx) = mpsc::sync_channel(SUBSCRIBER_QUEUE_FRAMES);
         state.handle(Msg::Subscribe {
             id: 1,
@@ -773,7 +771,10 @@ mod tests {
         state.handle(Msg::ScreenRequest(reply_tx));
         let blob = reply_rx.recv().expect("parser still answering");
         let snapshot = protocol::Snapshot::decode(&blob).unwrap();
-        assert_eq!((snapshot.rows, snapshot.cols), (1, 3));
+
+        // To avoid the upstream vt100 issue, the snapshot size needs to be clamped so neither
+        // dimension is less than 2.
+        assert_eq!((snapshot.rows, snapshot.cols), (rows.max(2), cols.max(2)));
     }
 
     #[test]
