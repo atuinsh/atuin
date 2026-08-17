@@ -521,7 +521,7 @@ mod tests {
 
     #[test]
     fn snapshot_roundtrip_through_vt100() {
-        let mut parser = vt100::Parser::new(4, 10, 0);
+        let mut parser = atuin_common::ansi::new_vt100_parser(4, 10, 0);
         parser.process(b"hi\r\nthere\x1b[1;3H");
         let snapshot = Snapshot::from_screen(parser.screen());
         assert_eq!((snapshot.rows, snapshot.cols), (4, 10));

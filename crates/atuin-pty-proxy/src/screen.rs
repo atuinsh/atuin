@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::time::Duration;
 
+use atuin_common::ansi::new_vt100_parser;
 use rand::RngCore;
 
 use crate::protocol;
@@ -258,7 +259,7 @@ impl ParserState {
         // 0-column grid; clamp here and in the Resize arm.
         let (rows, cols) = (rows.max(1), cols.max(1));
         Self {
-            parser: vt100::Parser::new(rows, cols, 0),
+            parser: new_vt100_parser(rows, cols, 0),
             subscribers: Vec::new(),
             rows,
             cols,
@@ -285,7 +286,7 @@ impl ParserState {
         let caught =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(&mut self.parser)));
         if caught.is_err() {
-            self.parser = vt100::Parser::new(self.rows, self.cols, 0);
+            self.parser = new_vt100_parser(self.rows, self.cols, 0);
         }
     }
 
