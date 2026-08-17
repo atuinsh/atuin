@@ -302,10 +302,10 @@ impl ParserState {
                 }
             }
             Msg::Resize { rows, cols } => {
-                let (rows, cols) = (rows.max(1), cols.max(1));
+                self.vt100_guarded(|parser| parser.screen_mut().set_size_safe(rows, cols));
+                let (rows, cols) = self.parser.screen().size();
                 self.rows = rows;
                 self.cols = cols;
-                self.vt100_guarded(|parser| parser.screen_mut().set_size_safe(rows, cols));
                 let frame = protocol::resize_frame(rows, cols);
                 self.fan_out(&frame);
             }
