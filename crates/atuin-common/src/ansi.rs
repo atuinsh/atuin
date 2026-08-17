@@ -39,6 +39,8 @@ impl Vt100ScreenExt for vt100::Screen {
     /// Prefer this function over calling [`vt100::Screen::set_size`] directly. [`vt100`] has
     /// [a bug] that can cause panics when `rows` or `cols` is less than 2. This method avoids
     /// that case by clamping `rows` and `cols` to 2 if either is less than that.
+    ///
+    /// [a bug]: https://github.com/doy/vt100-rust/issues/37
     fn set_size_safe(&mut self, rows: u16, cols: u16) {
         #[allow(
             clippy::disallowed_methods,
