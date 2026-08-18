@@ -22,18 +22,21 @@ pub struct Diff {
     pub remote: Option<RecordIdx>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Host {
     pub id: HostId,
-    pub name: String,
+    /// At some point in history, this field used to carry some meaning.
+    ///
+    /// But the protocol requires we carry it around, so we carry an empty string here.
+    ///
+    /// TODO(ATU-589): Remove the field.
+    #[serde(rename = "name", skip_deserializing)]
+    _name: &'static str,
 }
 
 impl Host {
     pub fn new(id: HostId) -> Self {
-        Host {
-            id,
-            name: String::new(),
-        }
+        Self { id, _name: "" }
     }
 }
 
