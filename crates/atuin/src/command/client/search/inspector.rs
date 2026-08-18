@@ -120,7 +120,8 @@ pub fn draw_stats_table(
 ) {
     let duration = Duration::saturating_from_nanos_i64(history.duration);
     let avg_duration = Duration::from_nanos(stats.average_duration);
-    let (host, user) = history.hostname.split_once(':').unwrap_or(("", ""));
+    let host = history.cmd_origin.host().as_str();
+    let user = history.cmd_origin.user().as_str();
 
     let rows = [
         Row::new(vec!["Host".to_string(), host.to_string()]),
@@ -346,6 +347,7 @@ mod tests {
         history::{History, HistoryId, HistoryStats},
         theme::ThemeManager,
     };
+    use atuin_domain::CmdOrigin;
     use ratatui::{backend::TestBackend, prelude::*};
     use rstest::*;
     use time::OffsetDateTime;
@@ -360,7 +362,7 @@ mod tests {
             command: "/bin/cmd".to_string(),
             cwd: "/toot".to_string(),
             session: "sesh1".to_string(),
-            hostname: "hostn".to_string(),
+            cmd_origin: CmdOrigin::from("hostn"),
             author: "hostn".to_string(),
             intent: None,
             deleted_at: None,
@@ -374,7 +376,7 @@ mod tests {
             command: "/bin/cmd -os".to_string(),
             cwd: "/toot".to_string(),
             session: "sesh1".to_string(),
-            hostname: "hostn".to_string(),
+            cmd_origin: CmdOrigin::from("hostn"),
             author: "hostn".to_string(),
             intent: None,
             deleted_at: None,
@@ -388,7 +390,7 @@ mod tests {
             command: "/bin/cmd -a".to_string(),
             cwd: "/toot".to_string(),
             session: "sesh1".to_string(),
-            hostname: "hostn".to_string(),
+            cmd_origin: CmdOrigin::from("hostn"),
             author: "hostn".to_string(),
             intent: None,
             deleted_at: None,

@@ -322,6 +322,7 @@ dependencies = [
  "atuin-client",
  "atuin-common",
  "atuin-daemon",
+ "atuin-domain",
  "chrono",
  "chrono-humanize",
  "clap",
@@ -540,6 +541,7 @@ dependencies = [
  "typed-builder",
  "url",
  "uuid",
+ "whoami",
  "wiremock",
  "xxhash-rust",
 ]

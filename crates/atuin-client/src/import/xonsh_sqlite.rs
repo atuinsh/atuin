@@ -46,7 +46,7 @@ impl HistDbEntry {
             .command(self.inp)
             .cwd(self.cwd)
             .session(session_id)
-            .hostname(cmd_origin)
+            .cmd_origin(cmd_origin)
             .build()
             .into()
     }
@@ -192,7 +192,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
                 .duration(2628564)
-                .hostname("box:user".to_string())
+                .cmd_origin("box:user".to_string())
                 .build()
                 .into(),
             History::import()
@@ -201,7 +201,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
                 .duration(9371519)
-                .hostname("box:user".to_string())
+                .cmd_origin("box:user".to_string())
                 .build()
                 .into(),
             History::import()
@@ -210,7 +210,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(1)
                 .duration(17337560)
-                .hostname("box:user".to_string())
+                .cmd_origin("box:user".to_string())
                 .build()
                 .into(),
             History::import()
@@ -219,7 +219,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
                 .duration(4599094)
-                .hostname("box:user".to_string())
+                .cmd_origin("box:user".to_string())
                 .build()
                 .into(),
         ]

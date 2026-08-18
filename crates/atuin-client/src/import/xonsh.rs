@@ -137,7 +137,7 @@ impl Importer for Xonsh {
                     .command(cmd.inp.trim())
                     .cwd(cmd.cwd)
                     .session(session.sessionid.clone())
-                    .hostname(self.cmd_origin.clone());
+                    .cmd_origin(self.cmd_origin.clone());
                 loader.push(entry.build().into()).await?;
             }
         }
@@ -218,7 +218,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
                 .duration(4651069)
-                .hostname("box:user".to_string())
+                .cmd_origin("box:user".to_string())
                 .build()
                 .into(),
             History::import()
@@ -227,7 +227,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
                 .duration(21288633)
-                .hostname("box:user".to_string())
+                .cmd_origin("box:user".to_string())
                 .build()
                 .into(),
             History::import()
@@ -236,7 +236,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin/atuin-client".to_string())
                 .exit(1)
                 .duration(10269403)
-                .hostname("box:user".to_string())
+                .cmd_origin("box:user".to_string())
                 .build()
                 .into(),
             History::import()
@@ -245,7 +245,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin/atuin-client".to_string())
                 .exit(0)
                 .duration(4259347)
-                .hostname("box:user".to_string())
+                .cmd_origin("box:user".to_string())
                 .build()
                 .into(),
         ]

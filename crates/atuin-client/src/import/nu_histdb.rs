@@ -45,7 +45,7 @@ impl From<HistDbEntry> for History {
             .exit(histdb_item.exit_status)
             .duration(histdb_item.duration_ms)
             .session(format!("{:x}", histdb_item.session_id))
-            .hostname(String::from_utf8_lossy(&histdb_item.hostname).into_owned());
+            .cmd_origin(String::from_utf8_lossy(&histdb_item.hostname).into_owned());
 
         imported.build().into()
     }

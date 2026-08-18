@@ -81,6 +81,7 @@ mod tests {
     use time::{OffsetDateTime, UtcOffset};
 
     use super::*;
+    use atuin_domain::CmdOrigin;
 
     fn history(duration: i64) -> History {
         History {
@@ -91,7 +92,7 @@ mod tests {
             command: "cargo test".to_string(),
             cwd: "/repo".to_string(),
             session: String::new(),
-            hostname: String::new(),
+            cmd_origin: CmdOrigin::from(String::new()),
             author: String::new(),
             intent: None,
             deleted_at: None,

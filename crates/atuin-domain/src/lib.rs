@@ -68,108 +68,132 @@ pub mod api;
 pub mod caps;
 pub mod record;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, derive_more::Display)]
-pub struct CmdHost(String);
+/// A hostname, generic over its backing storage so it can be an owned
+/// `CmdHost<String>` or a zero-copy `CmdHost<&str>` view into a [`CmdOrigin`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, derive_more::Display, derive_more::From)]
+pub struct CmdHost<T: AsRef<str> = String>(T);
 
-impl CmdHost {
-    pub fn probe() -> Self {
-        std::env::var("ATUIN_HOST_NAME")
-            .ok()
-            .or_else(|| atuin_common::os::hostname().ok())
-            .map(Self)
-            .unwrap_or_default()
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
+impl<T: AsRef<str>> AsRef<str> for CmdHost<T> {
+    fn as_ref(&self) -> &str {
+        self.0.as_ref()
     }
 }
 
-impl Default for CmdHost {
+impl<T: AsRef<str>> CmdHost<T> {
+    pub fn owned(&self) -> CmdHost<String> {
+        CmdHost(self.0.as_ref().to_string())
+    }
+}
+
+impl CmdHost<String> {
+    pub fn probe() -> Self {
+        std::env::var("ATUIN_HOST_NAME")
+            .ok()
+            .or_else(|| whoami::hostname().ok())
+            .map(Self)
+            .unwrap_or_default()
+    }
+}
+
+impl<'a> CmdHost<&'a str> {
+    pub fn as_str(&self) -> &'a str {
+        self.0
+    }
+}
+
+impl Default for CmdHost<String> {
     fn default() -> Self {
         Self(String::from("unknown-host"))
     }
 }
 
-impl From<String> for CmdHost {
-    fn from(value: String) -> Self {
-        Self(value)
+/// A username, generic over its backing storage (owned `String` or `&str` view).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, derive_more::Display, derive_more::From)]
+pub struct CmdUser<T: AsRef<str> = String>(T);
+
+impl<T: AsRef<str>> AsRef<str> for CmdUser<T> {
+    fn as_ref(&self) -> &str {
+        self.0.as_ref()
     }
 }
 
-impl From<&str> for CmdHost {
-    fn from(value: &str) -> Self {
-        Self(value.to_string())
+impl<T: AsRef<str>> CmdUser<T> {
+    pub fn owned(&self) -> CmdUser<String> {
+        CmdUser(self.0.as_ref().to_string())
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, derive_more::Display)]
-pub struct CmdUser(String);
-
-impl CmdUser {
+impl CmdUser<String> {
     pub fn probe() -> Self {
         std::env::var("ATUIN_HOST_USER")
             .ok()
-            .or_else(|| atuin_common::os::username().ok())
+            .or_else(|| whoami::username().ok())
             .map(Self)
             .unwrap_or_default()
     }
+}
 
-    pub fn as_str(&self) -> &str {
-        &self.0
+impl<'a> CmdUser<&'a str> {
+    pub fn as_str(&self) -> &'a str {
+        self.0
     }
 }
 
-impl Default for CmdUser {
+impl Default for CmdUser<String> {
     fn default() -> Self {
         Self(String::from("unknown-user"))
     }
 }
 
-impl From<String> for CmdUser {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-
-impl From<&str> for CmdUser {
-    fn from(value: &str) -> Self {
-        Self(value.to_string())
-    }
-}
-
+/// The origin of a command: the `host:user` pair it was run under.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, derive_more::Display)]
-#[display("{hostname}:{username}")]
+#[display("{raw}")]
 pub struct CmdOrigin {
-    pub hostname: CmdHost,
-    pub username: CmdUser,
+    raw: String,
+    sep: usize,
 }
 
 impl CmdOrigin {
-    pub fn new(hostname: CmdHost, username: CmdUser) -> Self {
-        Self { hostname, username }
+    pub fn new<H: AsRef<str>, U: AsRef<str>>(host: CmdHost<H>, user: CmdUser<U>) -> Self {
+        let host = host.as_ref();
+        let sep = host.len();
+        Self {
+            raw: format!("{host}:{}", user.as_ref()),
+            sep,
+        }
     }
 
     pub fn probe() -> Self {
+        Self::new(CmdHost::probe(), CmdUser::probe())
+    }
+
+    /// The host portion, as a zero-copy view.
+    pub fn host(&self) -> CmdHost<&str> {
+        CmdHost(&self.raw[..self.sep])
+    }
+
+    /// The user portion, as a zero-copy view (empty when there is no `:`).
+    pub fn user(&self) -> CmdUser<&str> {
+        CmdUser(self.raw.get(self.sep + 1..).unwrap_or(""))
+    }
+
+    /// Build from an already-owned `host:user` string, taking ownership without copying.
+    fn from_raw(raw: String) -> Self {
         Self {
-            hostname: CmdHost::probe(),
-            username: CmdUser::probe(),
+            sep: raw.find(':').unwrap_or(raw.len()),
+            raw,
         }
     }
 }
 
 impl From<&str> for CmdOrigin {
     fn from(value: &str) -> Self {
-        let (hostname, username) = value.split_once(':').unwrap_or((value, ""));
-        Self {
-            hostname: CmdHost::from(hostname),
-            username: CmdUser::from(username),
-        }
+        Self::from_raw(value.to_string())
     }
 }
 
 impl From<String> for CmdOrigin {
     fn from(value: String) -> Self {
-        Self::from(value.as_str())
+        Self::from_raw(value)
     }
 }

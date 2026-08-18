@@ -159,7 +159,7 @@ impl HistorySvc for HistoryGrpcService {
             .command(req.command)
             .cwd(req.cwd)
             .session(req.session)
-            .hostname(req.hostname)
+            .cmd_origin(req.hostname)
             .author(req.author)
             .intent(req.intent)
             .shell(req.shell)

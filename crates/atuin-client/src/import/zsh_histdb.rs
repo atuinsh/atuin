@@ -170,7 +170,7 @@ impl Importer for ZshHistDb {
                 .duration(entry.duration.saturating_mul(1_000_000_000))
                 .exit(entry.exit_status)
                 .session(session.as_simple().to_string())
-                .hostname(cmd_origin)
+                .cmd_origin(cmd_origin)
                 .build();
             h.push(imported.into()).await?;
         }
@@ -217,7 +217,7 @@ mod test {
                 exit_status: 0,
                 session: 0,
             }],
-            username: "user".into(),
+            username: "user".to_string().into(),
         };
 
         let mut loader = TestLoader::default();

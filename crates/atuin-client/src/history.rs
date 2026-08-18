@@ -199,12 +199,6 @@ pub struct HistoryStats {
 }
 
 impl History {
-    pub(crate) fn author_from_hostname(hostname: &str) -> String {
-        hostname
-            .split_once(':')
-            .map_or_else(|| hostname.to_owned(), |(_, user)| user.to_owned())
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn new(
         timestamp: OffsetDateTime,
@@ -225,7 +219,7 @@ impl History {
         let cmd_origin = cmd_origin.unwrap_or_else(CmdOrigin::probe);
         let author = normalize_optional_string(author)
             .or_else(|| normalize_optional_string(env::var(HISTORY_AUTHOR_ENV).ok()))
-            .unwrap_or_else(|| Self::author_from_hostname(&cmd_origin.to_string()));
+            .unwrap_or_else(|| cmd_origin.user().to_string());
         let intent = normalize_optional_string(intent)
             .or_else(|| normalize_optional_string(env::var(HISTORY_INTENT_ENV).ok()));
         let shell = normalize_optional_string(shell);
@@ -346,7 +340,7 @@ impl History {
             command,
             cwd,
             session,
-            author: author.unwrap_or_else(|| Self::author_from_hostname(&cmd_origin.to_string())),
+            author: author.unwrap_or_else(|| cmd_origin.user().to_string()),
             cmd_origin,
             intent,
             deleted_at: deleted_at.map(OffsetDateTime::from_unix_nanos_u64),
@@ -452,7 +446,7 @@ impl History {
     ///     .command("ls -la")
     ///     .cwd("/home/user")
     ///     .session("018deb6e8287781f9973ef40e0fde76b")
-    ///     .hostname("computer:ellie")
+    ///     .cmd_origin("computer:ellie")
     ///     .build()
     ///     .into();
     /// ```
@@ -525,6 +519,7 @@ mod tests {
 
     use super::{AuthorPattern, History, all_user_author_filter, is_known_agent};
     use atuin_common::filter::OrFilter;
+    use atuin_domain::CmdOrigin;
 
     /// Whether an author filter permits `author`, mirroring the SQL that
     /// [`apply_author_filter`](crate::database::OptFilters::authors) builds.

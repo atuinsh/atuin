@@ -21,7 +21,7 @@ pub struct HistoryImported {
     #[builder(default, setter(strip_option, into))]
     session: Option<String>,
     #[builder(default, setter(strip_option, into))]
-    hostname: Option<CmdOrigin>,
+    cmd_origin: Option<CmdOrigin>,
     #[builder(default, setter(strip_option, into))]
     author: Option<String>,
     #[builder(default, setter(strip_option, into))]
@@ -44,7 +44,7 @@ impl From<HistoryImported> for History {
             imported.exit,
             imported.duration,
             imported.session,
-            imported.hostname,
+            imported.cmd_origin,
             imported.author,
             imported.intent,
             None,
@@ -145,7 +145,7 @@ pub struct HistoryDaemonCapture {
     #[builder(setter(into))]
     session: String,
     #[builder(setter(into))]
-    hostname: CmdOrigin,
+    cmd_origin: CmdOrigin,
     #[builder(default, setter(strip_option, into))]
     author: Option<String>,
     #[builder(default, setter(strip_option, into))]
@@ -163,7 +163,7 @@ impl From<HistoryDaemonCapture> for History {
             -1,
             -1,
             Some(captured.session),
-            Some(captured.hostname),
+            Some(captured.cmd_origin),
             captured.author,
             captured.intent,
             None,

@@ -383,7 +383,7 @@ impl Sqlite {
         let author: Option<String> = row.try_get("author").ok().flatten();
         let author = author
             .filter(|author| !author.trim().is_empty())
-            .unwrap_or_else(|| History::author_from_hostname(hostname.as_str()));
+            .unwrap_or_else(|| CmdOrigin::from(hostname.as_str()).user().to_string());
         let intent: Option<String> = row.try_get("intent").ok().flatten();
         let intent = intent.filter(|intent| !intent.trim().is_empty());
         let shell: Option<String> = row.try_get("shell").ok().flatten();

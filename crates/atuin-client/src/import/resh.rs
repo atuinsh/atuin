@@ -144,7 +144,7 @@ impl Importer for Resh {
                 .duration(duration)
                 .exit(entry.exit_code)
                 .cwd(entry.pwd)
-                .hostname(entry.host)
+                .cmd_origin(entry.host)
                 // CHECK: should we add uuid here? It's not set in the other importers
                 .session(uuid_v7().as_simple().to_string());
 
