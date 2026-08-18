@@ -77,7 +77,7 @@ fn xonsh_db_path(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
 #[derive(Debug)]
 pub struct XonshSqlite {
     pool: SqlitePool,
-    hostname: String,
+    user_host: String,
 }
 
 #[async_trait]
@@ -97,10 +97,7 @@ impl Importer for XonshSqlite {
 
         let pool = SqlitePool::connect(connection_str).await?;
         let user_host = AtuinHostUser::probe().to_string();
-        Ok(XonshSqlite {
-            pool,
-            hostname: user_host,
-        })
+        Ok(XonshSqlite { pool, user_host })
     }
 
     async fn entries(&mut self) -> Result<usize> {
@@ -122,7 +119,7 @@ impl Importer for XonshSqlite {
 
         let mut count = 0;
         while let Some(entry) = entries.try_next().await? {
-            let hist = entry.into_hist_with_hostname(self.hostname.clone());
+            let hist = entry.into_hist_with_hostname(self.user_host.clone());
             loader.push(hist).await?;
             count += 1;
         }
@@ -171,7 +168,7 @@ mod tests {
         let connection_str = "tests/data/xonsh-history.sqlite";
         let xonsh_sqlite = XonshSqlite {
             pool: SqlitePool::connect(connection_str).await.unwrap(),
-            hostname: "box:user".to_string(),
+            user_host: "box:user".to_string(),
         };
 
         let mut loader = TestLoader::default();

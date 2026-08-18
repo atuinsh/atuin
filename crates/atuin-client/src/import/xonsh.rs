@@ -41,7 +41,7 @@ struct HistoryCmd {
 pub struct Xonsh {
     // history is stored as a bunch of json files, one per session
     sessions: Vec<HistoryData>,
-    hostname: String,
+    user_host: String,
 }
 
 fn xonsh_hist_dir(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
@@ -110,7 +110,7 @@ impl Importer for Xonsh {
         let user_host = AtuinHostUser::probe().to_string();
         Ok(Xonsh {
             sessions,
-            hostname: user_host,
+            user_host,
         })
     }
 
@@ -137,7 +137,7 @@ impl Importer for Xonsh {
                     .command(cmd.inp.trim())
                     .cwd(cmd.cwd)
                     .session(session.sessionid.clone())
-                    .hostname(self.hostname.clone());
+                    .hostname(self.user_host.clone());
                 loader.push(entry.build().into()).await?;
             }
         }
@@ -175,7 +175,7 @@ mod tests {
                     ts: (1e30, 1e30),
                 }],
             }],
-            hostname: "box:user".to_string(),
+            user_host: "box:user".to_string(),
         };
 
         let mut loader = TestLoader::default();
@@ -190,8 +190,11 @@ mod tests {
     async fn test_import() {
         let dir = PathBuf::from("tests/data/xonsh");
         let sessions = load_sessions(&dir).unwrap();
-        let hostname = "box:user".to_string();
-        let xonsh = Xonsh { sessions, hostname };
+        let user_host = "box:user".to_string();
+        let xonsh = Xonsh {
+            sessions,
+            user_host,
+        };
 
         let mut loader = TestLoader::default();
         xonsh.load(&mut loader).await.unwrap();
