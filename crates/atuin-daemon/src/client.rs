@@ -125,7 +125,7 @@ impl HistoryClient {
         let req = StartHistoryRequest {
             command: h.command,
             cwd: h.cwd,
-            hostname: h.hostname,
+            hostname: h.cmd_origin.to_string(),
             session: h.session,
             timestamp: h.timestamp.unix_timestamp_nanos() as u64,
             author: h.author,

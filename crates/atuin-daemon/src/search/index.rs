@@ -132,7 +132,7 @@ impl CommandData {
 
         let dir_key =
             interner.get_or_intern(history.cwd.display_rich().trailing_slash(true).to_string());
-        let host_key = interner.get_or_intern(&history.hostname);
+        let host_key = interner.get_or_intern(history.cmd_origin.to_string());
 
         let mut global_frecency = FrecencyData::default();
         global_frecency.record_use(timestamp);
@@ -167,7 +167,8 @@ impl CommandData {
         let dir_key =
             interner.get_or_intern(history.cwd.display_rich().trailing_slash(true).to_string());
         self.directories.insert(dir_key);
-        self.hosts.insert(interner.get_or_intern(&history.hostname));
+        self.hosts
+            .insert(interner.get_or_intern(history.cmd_origin.to_string()));
         self.sessions.insert(session);
 
         // Update most recent if this invocation is newer

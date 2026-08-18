@@ -131,7 +131,7 @@ fn history_to_tail_reply(kind: HistoryEventKind, history: History) -> TailHistor
             command: history.command,
             cwd: history.cwd,
             session: history.session,
-            hostname: history.hostname,
+            hostname: history.cmd_origin.to_string(),
             author: history.author,
             intent: history.intent.unwrap_or_default(),
             exit: history.exit,

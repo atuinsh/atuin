@@ -7,8 +7,6 @@
 //! [`api`] request/response types, and the [`caps`] capability types. These are
 //! shared across the client, the daemon, and the server.
 
-use std::fmt::Display;
-
 /// Defines a new UUID type wrapper
 macro_rules! new_uuid {
     ($name:ident) => {
@@ -71,9 +69,9 @@ pub mod caps;
 pub mod record;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, derive_more::Display)]
-pub struct AtuinHostname(String);
+pub struct CmdHost(String);
 
-impl AtuinHostname {
+impl CmdHost {
     pub fn probe() -> Self {
         std::env::var("ATUIN_HOST_NAME")
             .ok()
@@ -81,21 +79,25 @@ impl AtuinHostname {
             .map(Self)
             .unwrap_or_default()
     }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
-impl Default for AtuinHostname {
+impl Default for CmdHost {
     fn default() -> Self {
         Self(String::from("unknown-host"))
     }
 }
 
-impl From<String> for AtuinHostname {
+impl From<String> for CmdHost {
     fn from(value: String) -> Self {
         Self(value)
     }
 }
 
-impl From<&str> for AtuinHostname {
+impl From<&str> for CmdHost {
     fn from(value: &str) -> Self {
         Self(value.to_string())
     }
@@ -111,6 +113,10 @@ impl CmdUser {
             .or_else(|| atuin_common::os::username().ok())
             .map(Self)
             .unwrap_or_default()
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -132,28 +138,23 @@ impl From<&str> for CmdUser {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, derive_more::Display)]
+#[display("{hostname}:{username}")]
 pub struct CmdOrigin {
-    pub hostname: AtuinHostname,
+    pub hostname: CmdHost,
     pub username: CmdUser,
 }
 
 impl CmdOrigin {
-    pub fn new(hostname: AtuinHostname, username: CmdUser) -> Self {
+    pub fn new(hostname: CmdHost, username: CmdUser) -> Self {
         Self { hostname, username }
     }
 
     pub fn probe() -> Self {
         Self {
-            hostname: AtuinHostname::probe(),
+            hostname: CmdHost::probe(),
             username: CmdUser::probe(),
         }
-    }
-}
-
-impl Display for CmdOrigin {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.hostname, self.username)
     }
 }
 
@@ -161,7 +162,7 @@ impl From<&str> for CmdOrigin {
     fn from(value: &str) -> Self {
         let (hostname, username) = value.split_once(':').unwrap_or((value, ""));
         Self {
-            hostname: AtuinHostname::from(hostname),
+            hostname: CmdHost::from(hostname),
             username: CmdUser::from(username),
         }
     }
