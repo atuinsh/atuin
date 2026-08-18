@@ -35,9 +35,12 @@ fn read_record<'a>(bytes: &mut Bytes<'a>) -> Result<Record<DecryptedData>, Decod
     Ok(Record {
         id: RecordId(read_uuid(bytes)?),
         idx: decode::read_u64(bytes)?,
-        host: Host {
-            id: HostId(read_uuid(bytes)?),
-            name: decode::read_string(bytes)?,
+        host: {
+            let id = HostId(read_uuid(bytes)?);
+            // Vestigial `name` slot: `Host` no longer has a name field, but the packfile layout
+            // still carries the (always-empty) string. Read and discard it to stay aligned.
+            let _name = decode::read_string(bytes)?;
+            Host::new(id)
         },
         timestamp: decode::read_u64(bytes)?,
         version: decode::with_str(bytes, RecordVersion::from)?,
@@ -56,7 +59,9 @@ where
     write_uuid(writer, record.id.0)?;
     encode::write_u64(writer, record.idx)?;
     write_uuid(writer, record.host.id.0)?;
-    encode::write_str(writer, &record.host.name)?;
+    // Vestigial `name` slot (see `read_record`): always empty now that `Host` has no name field.
+    // Kept so the packfile byte layout is unchanged for existing peers.
+    encode::write_str(writer, "")?;
     encode::write_u64(writer, record.timestamp)?;
     encode::write_str(writer, record.version.as_str())?;
     encode::write_str(writer, record.tag.as_str())?;
