@@ -1023,7 +1023,7 @@ impl Cmd {
             for entry in matches {
                 eprintln!("deleting {}", entry.id);
                 let (id, _) = history_store.delete(entry.id.clone()).await?;
-                history_store.build_all(db, &[id]).await?;
+                history_store.build_all(db, &[id], |_| {}).await?;
             }
 
             #[cfg(feature = "daemon")]
@@ -1079,7 +1079,7 @@ impl Cmd {
             for entry in matches {
                 eprintln!("deleting {}", entry.id);
                 let (id, _) = history_store.delete(entry.id).await?;
-                history_store.build_all(db, &[id]).await?;
+                history_store.build_all(db, &[id], |_| {}).await?;
             }
 
             #[cfg(feature = "daemon")]

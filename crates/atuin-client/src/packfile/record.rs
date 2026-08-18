@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::packfile::sync::{PackProgress, PackStage};
+use crate::progress::Observer;
 use crate::record::sqlite_store::SqliteStore;
 
 fn read_uuid<'a, R>(reader: &mut R) -> Result<Uuid, DecodeError<'a, R::Error>>
@@ -343,10 +345,20 @@ impl<'a> PackManifestRecordView<'a> {
         &self,
         packed_bytes: impl AsRef<[u8]> + Send + 'static,
         key: paseto_v4::Key,
+        observer: Observer<PackProgress>,
+        history_records: u64,
     ) -> Result<Vec<Record<EncryptedData>>, UnpackError> {
         let ia = self.ia().json();
 
         tokio::task::spawn_blocking(move || {
+            let stage = |stage| {
+                observer.notify(PackProgress {
+                    stage,
+                    history_records,
+                });
+            };
+
+            stage(PackStage::Decrypting);
             let mut bytes = Bytes::new(packed_bytes.as_ref());
             let encrypted: paseto_v4::EncryptedData = read_encrypted_data(&mut bytes)?;
 
@@ -357,6 +369,8 @@ impl<'a> PackManifestRecordView<'a> {
             )?;
 
             let decompressed = zstd::stream::decode_all(decrypted.as_slice())?;
+
+            stage(PackStage::Encrypting);
             let mut bytes = Bytes::new(decompressed.as_slice());
             let records = decode::read_array(&mut bytes, read_record)
                 .map(|result| {

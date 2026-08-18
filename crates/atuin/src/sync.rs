@@ -1,10 +1,13 @@
+use std::time::Duration;
+
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
 use atuin_scripts::store::ScriptStore;
 use eyre::{Context, Result};
+use indicatif::{ProgressBar, ProgressStyle};
 
 use atuin_client::{
-    database::Database, history::store::HistoryStore, record::sqlite_store::SqliteStore,
-    settings::Settings,
+    database::Database, history::store::HistoryStore, progress::draw_target,
+    record::sqlite_store::SqliteStore, settings::Settings,
 };
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::RecordId;
@@ -39,8 +42,31 @@ pub async fn build(
 
     // A failure in one store should not stop the others from building - build as much as
     // possible, and warn about the rest.
-    if let Err(e) = history_store.build_all(db, downloaded).await {
+    //
+    // Indexing a large restore is minutes of work after the download finishes, so it gets a
+    // bar of its own, advanced a batch at a time as they commit.
+    let pb = ProgressBar::with_draw_target(Some(downloaded.len() as u64), draw_target());
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {prefix} {human_pos}/{human_len} {msg}",
+        )
+        .expect("literal template")
+        .progress_chars("#>-"),
+    );
+    pb.set_prefix("History");
+    pb.set_message("indexing");
+    if !pb.is_hidden() {
+        pb.enable_steady_tick(Duration::from_millis(120));
+    }
+
+    if let Err(e) = history_store
+        .build_all(db, downloaded, |n| pb.inc(n as u64))
+        .await
+    {
+        pb.abandon_with_message("failed");
         eprintln!("Warning: failed to build history: {e}");
+    } else {
+        pb.finish_with_message("indexed");
     }
 
     if let Err(e) = alias_store.build().await {

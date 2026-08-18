@@ -1992,7 +1992,7 @@ pub async fn history(
                                 let entry = results.remove(index);
 
                                 let ids = history_store.delete_entries([entry]).await?;
-                                history_store.build_all(&db, &ids).await?;
+                                history_store.build_all(&db, &ids, |_| {}).await?;
 
                                 app.tab_index  = 0;
                             },
@@ -2015,7 +2015,7 @@ pub async fn history(
                                 ).await?;
 
                                 let ids = history_store.delete_entries(all_matching).await?;
-                                history_store.build_all(&db, &ids).await?;
+                                history_store.build_all(&db, &ids, |_| {}).await?;
 
                                 app.results_len = results.len();
                                 app.results_state = ListState::default();

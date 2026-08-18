@@ -399,7 +399,7 @@ impl Client {
         Ok(())
     }
 
-    async fn get_packfile_download_url(&self, manifest_id: RecordId) -> Result<Url> {
+    pub async fn get_packfile_download_url(&self, manifest_id: RecordId) -> Result<Url> {
         // `append_path` takes `&'static str`; the manifest id is dynamic, so inline its logic.
         let path = format!("api/v0/packfiles/{}", manifest_id.0);
         let url = self
@@ -412,9 +412,8 @@ impl Client {
         Ok(parsed.download_url)
     }
 
-    /// Download the packfile for the given manifest id.
-    pub async fn download_packfile(&self, manifest_id: RecordId) -> Result<Vec<u8>> {
-        let download_url = self.get_packfile_download_url(manifest_id).await?;
+    /// Download a packfile blob from a presigned URL.
+    pub async fn download_packfile(&self, download_url: Url) -> Result<Vec<u8>> {
         let resp = self.lfs_client.get(download_url).send().await?;
         let resp = handle_resp_error(resp).await?;
         Ok(resp.bytes().await?.to_vec())

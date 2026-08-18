@@ -2,7 +2,7 @@ use std::{collections::HashSet, fmt::Write, time::Duration};
 
 use atuin_common::rmp::decode::Bytes;
 use eyre::{Result, bail, eyre};
-use futures::{Stream, TryStreamExt, future, stream};
+use futures::{Stream, StreamExt, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 
 use crate::{
@@ -377,14 +377,24 @@ impl HistoryStore {
         }
     }
 
-    /// Apply records to the history database, discarding the created `History` entries.
+    /// Apply records to the history database, discarding the created `History` entries and
+    /// reporting the size of each committed batch.
     ///
     /// Use this when you want the database writes but not the values. Callers that need
     /// the created entries should use [`HistoryStore::incremental_build`] directly.
-    pub async fn build_all(&self, database: &dyn Database, ids: &[RecordId]) -> Result<()> {
-        self.incremental_build(database, ids)
-            .try_for_each(|_| future::ready(Ok(())))
-            .await
+    pub async fn build_all(
+        &self,
+        database: &dyn Database,
+        ids: &[RecordId],
+        mut committed: impl FnMut(usize),
+    ) -> Result<()> {
+        let mut batches = std::pin::pin!(self.incremental_build(database, ids));
+
+        while let Some(batch) = batches.next().await {
+            committed(batch?.len());
+        }
+
+        Ok(())
     }
 
     /// Get a list of history IDs that exist in the store
@@ -797,6 +807,11 @@ mod tests {
         let db = memory_db().await;
         db.pool.close().await;
 
-        assert!(history_store.build_all(&db, &[record_id]).await.is_err());
+        assert!(
+            history_store
+                .build_all(&db, &[record_id], |_| {})
+                .await
+                .is_err()
+        );
     }
 }

@@ -24,6 +24,7 @@ pub mod meta;
 pub mod ordering;
 pub mod packfile;
 pub mod plugin;
+pub mod progress;
 pub mod record;
 pub mod secrets;
 pub mod settings;
