@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use atuin_nucleo_matcher::Config;
 
-use crate::{pattern, Nucleo};
+use crate::{Nucleo, pattern};
 
 #[test]
 fn active_injector_count() {
@@ -83,11 +83,7 @@ fn filter_excludes_items() {
     assert_eq!(nucleo.snapshot().matched_item_count(), 2);
 
     // Verify the items are correct
-    let items: Vec<_> = nucleo
-        .snapshot()
-        .matched_items(..)
-        .map(|i| i.data.text.clone())
-        .collect();
+    let items: Vec<_> = nucleo.snapshot().matched_items(..).map(|i| i.data.text.clone()).collect();
     assert!(items.contains(&"apple".to_string()));
     assert!(items.contains(&"avocado".to_string()));
     assert!(!items.contains(&"apricot".to_string()));
@@ -141,17 +137,11 @@ fn scorer_affects_sort_order() {
     assert_eq!(nucleo.snapshot().matched_item_count(), 3);
 
     // Set scorer that uses priority as the score (ignoring fuzzy score)
-    nucleo.set_scorer(Some(Arc::new(|item: &TestItem, _fuzzy_score| {
-        item.priority
-    })));
+    nucleo.set_scorer(Some(Arc::new(|item: &TestItem, _fuzzy_score| item.priority)));
 
     // Search again - should be sorted by priority (high to low)
     while nucleo.tick(10).running {}
-    let items: Vec<_> = nucleo
-        .snapshot()
-        .matched_items(..)
-        .map(|i| i.data.clone())
-        .collect();
+    let items: Vec<_> = nucleo.snapshot().matched_items(..).map(|i| i.data.clone()).collect();
     assert_eq!(items.len(), 3);
     assert_eq!(items[0].text, "blueberry"); // priority 100
     assert_eq!(items[1].text, "blackberry"); // priority 50
@@ -208,11 +198,7 @@ fn filter_and_scorer_combined() {
     while nucleo.tick(10).running {}
 
     // Should have 2 items (cherry, coconut) sorted by priority
-    let items: Vec<_> = nucleo
-        .snapshot()
-        .matched_items(..)
-        .map(|i| i.data.clone())
-        .collect();
+    let items: Vec<_> = nucleo.snapshot().matched_items(..).map(|i| i.data.clone()).collect();
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].text, "coconut"); // priority 50
     assert_eq!(items[1].text, "cherry"); // priority 10
@@ -241,9 +227,7 @@ fn scorer_combines_with_fuzzy_score() {
     );
 
     // Set scorer that combines fuzzy score with priority
-    nucleo.set_scorer(Some(Arc::new(|item: &TestItem, fuzzy_score| {
-        fuzzy_score + item.priority
-    })));
+    nucleo.set_scorer(Some(Arc::new(|item: &TestItem, fuzzy_score| fuzzy_score + item.priority)));
 
     nucleo.pattern.reparse(
         0,

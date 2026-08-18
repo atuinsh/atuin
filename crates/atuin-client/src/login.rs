@@ -2,7 +2,9 @@ use atuin_common::encryption::paseto_v4;
 use atuin_domain::api::LoginRequest;
 use eyre::Result;
 
-use crate::{api_client, record::sqlite_store::SqliteStore, settings::Settings};
+use crate::api_client;
+use crate::record::sqlite_store::SqliteStore;
+use crate::settings::Settings;
 
 pub async fn login(
     settings: &Settings,
@@ -43,10 +45,7 @@ pub async fn login(
     )
     .await?;
 
-    Settings::meta_store()
-        .await?
-        .save_session(&session.session)
-        .await?;
+    Settings::meta_store().await?.save_session(&session.session).await?;
 
     Ok(session.session)
 }

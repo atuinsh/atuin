@@ -311,9 +311,10 @@ impl<'de> Deserialize<'de> for KeyInput {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use rstest::rstest;
+
+    use super::*;
 
     // (A) parse -> (code, flags). Asserting ALL flags is a strengthening,
     // verified consistent with the parse logic.
@@ -359,10 +360,7 @@ mod tests {
     // (B) super aliases parse equal.
     #[rstest]
     fn super_aliases_parse_equal(#[values("super-a", "cmd-a", "win-a")] input: &str) {
-        assert_eq!(
-            SingleKey::parse(input).unwrap(),
-            SingleKey::parse("super-a").unwrap()
-        );
+        assert_eq!(SingleKey::parse(input).unwrap(), SingleKey::parse("super-a").unwrap());
     }
 
     // (C) parse errors.
@@ -413,15 +411,7 @@ mod tests {
         false,
         true
     )]
-    #[case::f1(
-        KeyCode::F(1),
-        KeyModifiers::NONE,
-        KeyCodeValue::F(1),
-        false,
-        false,
-        false,
-        false
-    )]
+    #[case::f1(KeyCode::F(1), KeyModifiers::NONE, KeyCodeValue::F(1), false, false, false, false)]
     #[case::f12_ctrl(
         KeyCode::F(12),
         KeyModifiers::CONTROL,
@@ -504,11 +494,7 @@ mod tests {
         s: &str,
     ) {
         let k = KeyInput::parse(s).unwrap();
-        assert_eq!(
-            k,
-            KeyInput::parse(&k.to_string()).unwrap(),
-            "round-trip failed for {s}"
-        );
+        assert_eq!(k, KeyInput::parse(&k.to_string()).unwrap(), "round-trip failed for {s}");
     }
 
     // (G) exact display.

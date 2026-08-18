@@ -1,10 +1,10 @@
 use rmp::Marker;
 pub use rmp::decode::bytes::{Bytes, BytesReadError};
-pub use rmp::decode::{DecodeStringError, NumValueReadError, RmpRead, RmpReadErr, ValueReadError};
-pub use rmp::decode::{read_array_len, read_bin_len, read_map_len, read_str_len};
-pub use rmp::decode::{read_bool, read_int, read_str_from_slice};
-pub use rmp::decode::{read_i8, read_i16, read_i32, read_i64};
-pub use rmp::decode::{read_u8, read_u16, read_u32, read_u64};
+pub use rmp::decode::{
+    DecodeStringError, NumValueReadError, RmpRead, RmpReadErr, ValueReadError, read_array_len,
+    read_bin_len, read_bool, read_i8, read_i16, read_i32, read_i64, read_int, read_map_len,
+    read_str_from_slice, read_str_len, read_u8, read_u16, read_u32, read_u64,
+};
 
 /// An error encountered while trying to decode a message with [`rmp`].
 ///
@@ -85,9 +85,7 @@ pub fn read_string<'a>(bytes: &mut Bytes<'a>) -> Result<String, DecodeError<'a>>
             if let DecodeStringError::TypeMismatch(_) = e {
                 // The decode functions in `rmp::decode` consume the marker byte when there's a
                 // type mismatch; make sure we do that too, as `read_optional` depends on it.
-                bytes
-                    .read_u8()
-                    .expect("TypeMismatch implies stream contains a marker byte");
+                bytes.read_u8().expect("TypeMismatch implies stream contains a marker byte");
             }
             return Err(e.into());
         }
@@ -247,7 +245,8 @@ where
 
     #[allow(
         unsafe_code,
-        reason = "Doing this without unsafe code is much less efficient. We would have to create an
+        reason = "Doing this without unsafe code is much less efficient. We would have to create \
+                  an
             `[Option<T>; N]`, which could be up to twice the size, fill in each element, and then
             use `array::map` to call `Option::unwrap` on each element. Besides the overhead of
             `unwrap`, `array::map` is noted as being inefficient on large arrays."

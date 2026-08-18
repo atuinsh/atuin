@@ -1,7 +1,8 @@
 // This file will probably trigger a lot of scanners. Sorry.
 
-use regex::RegexSet;
 use std::sync::LazyLock;
+
+use regex::RegexSet;
 
 pub enum TestValue<'a> {
     Single(&'a str),
@@ -153,7 +154,11 @@ mod tests {
             let re =
                 Regex::new(regex).unwrap_or_else(|_| panic!("Failed to compile regex for {name}"));
 
-            let label = if embed { "embedded test" } else { "test" };
+            let label = if embed {
+                "embedded test"
+            } else {
+                "test"
+            };
             let wrap = |s: &str| {
                 if embed {
                     format!("some random text {s} some more random text")

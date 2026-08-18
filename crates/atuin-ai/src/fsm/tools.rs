@@ -142,25 +142,17 @@ impl ToolManager {
     /// synchronously at receipt (unknown tool, missing capability) and never
     /// enter the execution lifecycle.
     pub fn all_resolved(&self, tool_ids: &[String]) -> bool {
-        tool_ids
-            .iter()
-            .all(|id| self.get(id).is_none_or(|t| t.is_resolved()))
+        tool_ids.iter().all(|id| self.get(id).is_none_or(|t| t.is_resolved()))
     }
 
     /// Find the first tool awaiting user permission.
     pub fn awaiting_permission(&self) -> Option<&TrackedTool> {
-        self.tools
-            .iter()
-            .find(|t| t.state == ToolState::AwaitingPermission)
+        self.tools.iter().find(|t| t.state == ToolState::AwaitingPermission)
     }
 
     /// Get IDs of all non-resolved tools (for cancel).
     pub fn pending_ids(&self) -> Vec<String> {
-        self.tools
-            .iter()
-            .filter(|t| !t.is_resolved())
-            .map(|t| t.id.clone())
-            .collect()
+        self.tools.iter().filter(|t| !t.is_resolved()).map(|t| t.id.clone()).collect()
     }
 
     /// Get IDs of all currently executing tools (for interrupt/abort).

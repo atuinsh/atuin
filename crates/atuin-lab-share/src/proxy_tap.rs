@@ -286,9 +286,7 @@ fn read_token(socket_path: &Path, want_input: bool) -> crate::Result<Vec<u8>> {
     if !want_input {
         return Ok(Vec::new());
     }
-    let path = socket_path
-        .parent()
-        .map_or_else(|| PathBuf::from("token"), |dir| dir.join("token"));
+    let path = socket_path.parent().map_or_else(|| PathBuf::from("token"), |dir| dir.join("token"));
     std::fs::read(&path).map_err(|source| Error::ProxyToken { path, source })
 }
 
@@ -318,9 +316,7 @@ fn read_token(socket_path: &Path, want_input: bool) -> crate::Result<Vec<u8>> {
 fn handshake(stream: &mut UnixStream, want_input: bool, token: &[u8]) -> crate::Result<Snapshot> {
     if stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT)).is_err()
         || stream.write_all(&MAGIC).is_err()
-        || stream
-            .write_all(&protocol::subscribe_frame(want_input, token))
-            .is_err()
+        || stream.write_all(&protocol::subscribe_frame(want_input, token)).is_err()
     {
         return Err(Error::ProxyTooOld);
     }
@@ -373,10 +369,7 @@ fn handshake(stream: &mut UnixStream, want_input: bool, token: &[u8]) -> crate::
 /// reliable here because `protocol::read_frame` -> `read_exact_or_eof`
 /// propagates the raw `io::Error` untouched.
 fn is_read_timeout(error: &io::Error) -> bool {
-    matches!(
-        error.kind(),
-        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-    )
+    matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut)
 }
 
 /// The blocking reader half of the tap, run by the session's detached
@@ -559,9 +552,8 @@ mod tests {
         let mut magic = [0u8; 4];
         server.read_exact(&mut magic).expect("greeting");
         assert_eq!(magic, MAGIC);
-        let (frame_type, payload) = protocol::read_frame(server)
-            .expect("subscribe frame")
-            .expect("not eof");
+        let (frame_type, payload) =
+            protocol::read_frame(server).expect("subscribe frame").expect("not eof");
         assert_eq!(frame_type, protocol::FRAME_SUBSCRIBE);
         let (got_want, got_token) = protocol::decode_subscribe(&payload).expect("valid subscribe");
         assert_eq!(got_want, want_input);
@@ -595,9 +587,7 @@ mod tests {
         let served = snapshot.clone();
         let fake_proxy = std::thread::spawn(move || {
             expect_subscribe(&mut server, true, b"tok");
-            server
-                .write_all(&protocol::hello_frame(true))
-                .expect("hello");
+            server.write_all(&protocol::hello_frame(true)).expect("hello");
             server
                 .write_all(&protocol::encode_frame(FRAME_KEYFRAME, &served.encode()))
                 .expect("keyframe");
@@ -618,18 +608,12 @@ mod tests {
             let _ = server.write_all(&test_snapshot().encode());
             // close without ever reading
         });
-        assert!(matches!(
-            handshake(&mut client, false, b""),
-            Err(Error::ProxyTooOld)
-        ));
+        assert!(matches!(handshake(&mut client, false, b""), Err(Error::ProxyTooOld)));
         fake_proxy.join().expect("fake proxy");
 
         let (mut client, server) = UnixStream::pair().expect("socketpair");
         drop(server); // immediate EOF
-        assert!(matches!(
-            handshake(&mut client, false, b""),
-            Err(Error::ProxyTooOld)
-        ));
+        assert!(matches!(handshake(&mut client, false, b""), Err(Error::ProxyTooOld)));
     }
 
     /// A proxy that accepts and then goes silent is *wedged*, not old: the
@@ -671,9 +655,7 @@ mod tests {
         let (mut client, mut server) = UnixStream::pair().expect("socketpair");
         let fake_proxy = std::thread::spawn(move || {
             expect_subscribe(&mut server, false, b"");
-            server
-                .write_all(&protocol::hello_frame(false))
-                .expect("hello");
+            server.write_all(&protocol::hello_frame(false)).expect("hello");
             // ...then nothing, with the connection held open.
             std::thread::sleep(HANDSHAKE_TIMEOUT + Duration::from_secs(1));
         });
@@ -694,10 +676,7 @@ mod tests {
             expect_subscribe(&mut server, true, b"wrong");
             let _ = server.write_all(&protocol::hello_frame(false));
         });
-        assert!(matches!(
-            handshake(&mut client, true, b"wrong"),
-            Err(Error::ProxyInputDenied)
-        ));
+        assert!(matches!(handshake(&mut client, true, b"wrong"), Err(Error::ProxyInputDenied)));
         fake_proxy.join().expect("fake proxy");
     }
 
@@ -712,18 +691,10 @@ mod tests {
         let (client, mut server) = UnixStream::pair().expect("socketpair");
         let (mut reader, eof_rx) = stopped_reader(client);
 
-        server
-            .write_all(&protocol::encode_frame(FRAME_OUTPUT, b"hello"))
-            .expect("output");
-        server
-            .write_all(&protocol::resize_frame(30, 100))
-            .expect("resize");
-        server
-            .write_all(&protocol::encode_frame(0x7f, b"future"))
-            .expect("unknown");
-        server
-            .write_all(&protocol::encode_frame(FRAME_OUTPUT, b"world"))
-            .expect("output");
+        server.write_all(&protocol::encode_frame(FRAME_OUTPUT, b"hello")).expect("output");
+        server.write_all(&protocol::resize_frame(30, 100)).expect("resize");
+        server.write_all(&protocol::encode_frame(0x7f, b"future")).expect("unknown");
+        server.write_all(&protocol::encode_frame(FRAME_OUTPUT, b"world")).expect("output");
         server.write_all(&protocol::end_frame()).expect("end");
         drop(server);
 
@@ -734,13 +705,10 @@ mod tests {
         // The resize arrives exactly between the chunks it separated on the
         // wire — never before "hello" or after "world".
         match reader.read_event().expect("second event") {
-            Some(ReadEvent::Resize(size)) => assert_eq!(
-                size,
-                Size {
-                    cols: 100,
-                    rows: 30
-                }
-            ),
+            Some(ReadEvent::Resize(size)) => assert_eq!(size, Size {
+                cols: 100,
+                rows: 30
+            }),
             _ => panic!("expected the resize between the two output chunks"),
         }
         match reader.read_event().expect("third event") {
@@ -775,10 +743,10 @@ mod tests {
 
         // A survivable geometry passes through untouched — no bar row is
         // reserved, because the tap feeds a headless session.
-        assert_eq!(
-            attach_size(&test_snapshot()).expect("80x24 is survivable"),
-            Size { cols: 80, rows: 24 }
-        );
+        assert_eq!(attach_size(&test_snapshot()).expect("80x24 is survivable"), Size {
+            cols: 80,
+            rows: 24
+        });
         // Exactly on the floor is fine; one row under is not.
         assert!(
             attach_size(&Snapshot {
@@ -853,12 +821,8 @@ mod tests {
         // Path 2: a mid-session Resize frame.
         let (client, mut server) = UnixStream::pair().expect("socketpair");
         let (mut reader, _eof_rx) = stopped_reader(client);
-        server
-            .write_all(&protocol::resize_frame(1, 1))
-            .expect("resize");
-        server
-            .write_all(&protocol::resize_frame(0, 0))
-            .expect("resize");
+        server.write_all(&protocol::resize_frame(1, 1)).expect("resize");
+        server.write_all(&protocol::resize_frame(0, 0)).expect("resize");
         drop(server);
         match reader.read_event().expect("first resize") {
             Some(ReadEvent::Resize(size)) => assert_eq!(size, floor, "1x1 must be floored"),
@@ -877,9 +841,7 @@ mod tests {
         let (client, mut server) = UnixStream::pair().expect("socketpair");
         let (mut reader, _eof_rx) = stopped_reader(client);
         let payload: Vec<u8> = (0..=255u8).cycle().take(1000).collect();
-        server
-            .write_all(&protocol::encode_frame(FRAME_OUTPUT, &payload))
-            .expect("output");
+        server.write_all(&protocol::encode_frame(FRAME_OUTPUT, &payload)).expect("output");
 
         match reader.read_event().expect("event") {
             Some(ReadEvent::Output(bytes)) => assert_eq!(bytes, payload),
@@ -899,13 +861,9 @@ mod tests {
         let fake_proxy = std::thread::spawn(move || {
             let (mut conn, _) = listener.accept().expect("accept");
             expect_subscribe(&mut conn, false, b"");
-            conn.write_all(&protocol::hello_frame(false))
-                .expect("hello");
-            conn.write_all(&protocol::encode_frame(
-                FRAME_KEYFRAME,
-                &test_snapshot().encode(),
-            ))
-            .expect("keyframe");
+            conn.write_all(&protocol::hello_frame(false)).expect("hello");
+            conn.write_all(&protocol::encode_frame(FRAME_KEYFRAME, &test_snapshot().encode()))
+                .expect("keyframe");
             conn // keep the reconnected feed open until the client is done
         });
 
@@ -958,9 +916,8 @@ mod tests {
             }),
         };
         writer.write_all(b"keys").expect("write");
-        let (frame_type, payload) = protocol::read_frame(&mut server)
-            .expect("frame")
-            .expect("not eof");
+        let (frame_type, payload) =
+            protocol::read_frame(&mut server).expect("frame").expect("not eof");
         assert_eq!(frame_type, protocol::FRAME_INPUT);
         assert_eq!(payload, b"keys");
     }

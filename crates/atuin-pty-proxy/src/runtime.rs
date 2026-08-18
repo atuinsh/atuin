@@ -67,21 +67,12 @@ fn run(options: RuntimeOptions) -> eyre::Result<()> {
         cmd.umask(Some(mask as _));
     }
 
-    let mut child = pair
-        .slave
-        .spawn_command(cmd)
-        .map_err(|e| eyre::eyre!("{e:#}"))?;
+    let mut child = pair.slave.spawn_command(cmd).map_err(|e| eyre::eyre!("{e:#}"))?;
 
     drop(pair.slave);
 
-    let pty_reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(|e| eyre::eyre!("{e:#}"))?;
-    let pty_writer = pair
-        .master
-        .take_writer()
-        .map_err(|e| eyre::eyre!("{e:#}"))?;
+    let pty_reader = pair.master.try_clone_reader().map_err(|e| eyre::eyre!("{e:#}"))?;
+    let pty_writer = pair.master.take_writer().map_err(|e| eyre::eyre!("{e:#}"))?;
 
     let mut core = ProxyCore::spawn(ProxyCoreConfig {
         reader: pty_reader,
@@ -273,9 +264,8 @@ fn spawn_output_pump(pump: OutputPump) -> JoinHandle<()> {
         } = pump;
 
         let mut highlighter = debug_osc133.then(Osc133DebugHighlighter::new);
-        let mut capture_tracker = command_capture_sink
-            .as_ref()
-            .map(|_| CommandCaptureTracker::new(current_cols));
+        let mut capture_tracker =
+            command_capture_sink.as_ref().map(|_| CommandCaptureTracker::new(current_cols));
         let mut buf = [0u8; 8192];
 
         loop {
@@ -387,8 +377,9 @@ fn process_exit_code(code: u32) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::process_exit_code;
     use rstest::rstest;
+
+    use super::process_exit_code;
 
     #[rstest]
     #[case::zero(0, 0)]

@@ -1,10 +1,10 @@
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
+use atuin_common::encryption::paseto_v4;
+use atuin_dotfiles::shell::Alias;
+use atuin_dotfiles::store::AliasStore;
 use clap::{Subcommand, ValueEnum};
 use eyre::{Context, Result, eyre};
-
-use atuin_client::{record::sqlite_store::SqliteStore, settings::Settings};
-use atuin_common::encryption::paseto_v4;
-
-use atuin_dotfiles::{shell::Alias, store::AliasStore};
 
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
 pub enum SortBy {
@@ -19,10 +19,15 @@ pub enum SortBy {
 #[command(infer_subcommands = true)]
 pub enum Cmd {
     /// Set an alias
-    Set { name: String, value: String },
+    Set {
+        name: String,
+        value: String,
+    },
 
     /// Delete an alias
-    Delete { name: String },
+    Delete {
+        name: String,
+    },
 
     /// List all aliases
     List {
@@ -62,10 +67,7 @@ impl Cmd {
         if found.is_empty() {
             println!("Aliasing '{name}={value}'.");
         } else {
-            println!(
-                "Overwriting alias '{name}={}' with '{name}={value}'.",
-                found[0].value
-            );
+            println!("Overwriting alias '{name}={}' with '{name}={value}'.", found[0].value);
         }
 
         store.set(&name, &value).await?;
@@ -151,7 +153,8 @@ impl Cmd {
     pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
         if !settings.dotfiles.enabled {
             eprintln!(
-                "Dotfiles are not enabled. Add\n\n[dotfiles]\nenabled = true\n\nto your configuration file to enable them.\n"
+                "Dotfiles are not enabled. Add\n\n[dotfiles]\nenabled = true\n\nto your \
+                 configuration file to enable them.\n"
             );
             eprintln!("The default configuration file is located at ~/.config/atuin/config.toml.");
             return Ok(());
@@ -171,16 +174,7 @@ impl Cmd {
                 reverse,
                 name,
                 value,
-            } => {
-                self.list(
-                    &alias_store,
-                    *sort_by,
-                    *reverse,
-                    name.clone(),
-                    value.clone(),
-                )
-                .await
-            }
+            } => self.list(&alias_store, *sort_by, *reverse, name.clone(), value.clone()).await,
             Self::Clear => self.clear(&alias_store).await,
         }
     }

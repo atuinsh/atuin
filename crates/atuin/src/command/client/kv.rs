@@ -1,11 +1,11 @@
 use std::io::{self, IsTerminal, Read};
 
-use clap::Subcommand;
-use eyre::{Context, Result, eyre};
-
-use atuin_client::{record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_kv::store::KvStore;
+use clap::Subcommand;
+use eyre::{Context, Result, eyre};
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
@@ -91,9 +91,7 @@ impl Cmd {
                         .context("failed to read value from stdin")?;
                     buf
                 } else {
-                    return Err(eyre!(
-                        "no value provided. Pass as an argument or pipe via stdin"
-                    ));
+                    return Err(eyre!("no value provided. Pass as an argument or pipe via stdin"));
                 };
 
                 kv_store.set(namespace, key, &value).await

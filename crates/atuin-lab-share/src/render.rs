@@ -4,10 +4,9 @@
 use std::borrow::Cow;
 use std::io::Write as _;
 
-use atuin_common::string::EllipsizeExt as _;
-use atuin_common::string::Measure;
 use atuin_common::string::align::Alignment;
 use atuin_common::string::ellipsis::{Indicator, Pos};
+use atuin_common::string::{EllipsizeExt as _, Measure};
 use unicode_width::UnicodeWidthStr;
 
 use crate::Size;
@@ -135,10 +134,7 @@ impl StatusBar {
         let segments: [(u8, Cow<'static, str>); 5] = [
             (MANDATORY, Cow::Borrowed("! SHARED SESSION")),
             (TIER_PROSE, Cow::Borrowed("anything you type is visible")),
-            (
-                TIER_VIEWERS,
-                Cow::Owned(format!("{} viewers", self.viewers)),
-            ),
+            (TIER_VIEWERS, Cow::Owned(format!("{} viewers", self.viewers))),
             (MANDATORY, Cow::Borrowed(write_state)),
             (TIER_HINT, Cow::Borrowed("Ctrl-\\ to end")),
         ];
@@ -443,13 +439,7 @@ mod tests {
         joined.process(&keyframe);
 
         assert_eq!(joined.screen().contents(), live.screen().contents());
-        assert_eq!(
-            joined.screen().cursor_position(),
-            live.screen().cursor_position()
-        );
-        assert_eq!(
-            joined.screen().contents_formatted(),
-            live.screen().contents_formatted()
-        );
+        assert_eq!(joined.screen().cursor_position(), live.screen().cursor_position());
+        assert_eq!(joined.screen().contents_formatted(), live.screen().contents_formatted());
     }
 }

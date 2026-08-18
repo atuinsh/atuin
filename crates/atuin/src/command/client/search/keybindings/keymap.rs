@@ -145,13 +145,10 @@ mod tests {
     fn conditional_first_match_wins() {
         let mut keymap = Keymap::new();
         let key = KeyInput::parse("left").unwrap();
-        keymap.bind_conditional(
-            key.clone(),
-            vec![
-                KeyRule::when(ConditionAtom::CursorAtStart, Action::Exit),
-                KeyRule::always(Action::CursorLeft),
-            ],
-        );
+        keymap.bind_conditional(key.clone(), vec![
+            KeyRule::when(ConditionAtom::CursorAtStart, Action::Exit),
+            KeyRule::always(Action::CursorLeft),
+        ]);
 
         // Cursor at start → Exit
         let ctx = make_ctx(0, 5, 0, 10);
@@ -175,10 +172,10 @@ mod tests {
         let mut keymap = Keymap::new();
         let key = KeyInput::parse("left").unwrap();
         // Only one rule with a condition that won't match
-        keymap.bind_conditional(
-            key.clone(),
-            vec![KeyRule::when(ConditionAtom::CursorAtStart, Action::Exit)],
-        );
+        keymap.bind_conditional(key.clone(), vec![KeyRule::when(
+            ConditionAtom::CursorAtStart,
+            Action::Exit,
+        )]);
 
         // Cursor not at start → no match
         let ctx = make_ctx(3, 5, 0, 10);

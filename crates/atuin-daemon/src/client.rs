@@ -1,41 +1,41 @@
+#[cfg(unix)]
+use std::path::PathBuf;
+
 use atuin_client::database::Context;
+use atuin_client::history::History;
 use atuin_client::settings::{FilterMode, Settings};
 use atuin_common::filter::{self, OrFilter};
 use eyre::{Context as EyreContext, Result};
+use hyper_util::rt::TokioIo;
 #[cfg(windows)]
 use tokio::net::TcpStream;
+#[cfg(unix)]
+use tokio::net::UnixStream;
 use tonic::Code;
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
-
-use hyper_util::rt::TokioIo;
-
-#[cfg(unix)]
-use std::path::PathBuf;
-#[cfg(unix)]
-use tokio::net::UnixStream;
-
-use atuin_client::history::History;
 use tracing::{Level, instrument, span};
 
-use crate::control::HistoryRebuiltEvent;
+use crate::control::control_client::ControlClient as ControlServiceClient;
 use crate::control::{
-    ForceSyncEvent, HistoryDeletedEvent, HistoryPrunedEvent, SendEventRequest,
-    SettingsReloadedEvent, ShutdownEvent, control_client::ControlClient as ControlServiceClient,
+    ForceSyncEvent, HistoryDeletedEvent, HistoryPrunedEvent, HistoryRebuiltEvent, SendEventRequest,
+    SettingsReloadedEvent, ShutdownEvent,
 };
 use crate::events::DaemonEvent;
+use crate::history::history_client::HistoryClient as HistoryServiceClient;
 use crate::history::{
     CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest, ShutdownRequest,
     StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply,
-    TailHistoryRequest, history_client::HistoryClient as HistoryServiceClient,
+    TailHistoryRequest,
 };
+use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
     FilterMode as RpcFilterMode, PrepareIndexRequest, SearchContext as RpcSearchContext,
-    SearchRequest, SearchResponse, search_client::SearchClient as SearchServiceClient,
+    SearchRequest, SearchResponse,
 };
+use crate::semantic::semantic_client::SemanticClient as SemanticServiceClient;
 use crate::semantic::{
     CommandCapture, CommandOutputReply, CommandOutputRequest, OutputRange, RecordCommandsReply,
-    semantic_client::SemanticClient as SemanticServiceClient,
 };
 
 pub struct HistoryClient {
@@ -158,11 +158,7 @@ impl HistoryClient {
     }
 
     pub async fn tail_history(&mut self) -> Result<tonic::Streaming<TailHistoryReply>> {
-        Ok(self
-            .client
-            .tail_history(TailHistoryRequest {})
-            .await?
-            .into_inner())
+        Ok(self.client.tail_history(TailHistoryRequest {}).await?.into_inner())
     }
 
     pub async fn shutdown(&mut self) -> Result<bool> {
@@ -301,9 +297,7 @@ impl From<Context> for RpcSearchContext {
             cwd: context.cwd,
             hostname: context.hostname,
             host_id: context.host_id,
-            git_root: context
-                .git_root
-                .map(|path| path.to_string_lossy().to_string()),
+            git_root: context.git_root.map(|path| path.to_string_lossy().to_string()),
         }
     }
 }
@@ -385,10 +379,7 @@ impl SemanticClient {
     ) -> Result<CommandOutputReply> {
         let request = CommandOutputRequest {
             history_id,
-            ranges: ranges
-                .into_iter()
-                .map(|(start, end)| OutputRange { start, end })
-                .collect(),
+            ranges: ranges.into_iter().map(|(start, end)| OutputRange { start, end }).collect(),
         };
 
         Ok(self.client.command_output(request).await?.into_inner())

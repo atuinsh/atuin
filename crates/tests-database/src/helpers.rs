@@ -55,9 +55,10 @@ pub async fn destroy_test_db(settings: &DbSettings) -> eyre::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use regex::Regex;
     use rstest::rstest;
+
+    use super::*;
 
     #[rstest]
     #[case::none(None, r"sqlite://.*[\\/]atuin_test_db_\d+")]

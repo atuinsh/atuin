@@ -52,13 +52,10 @@ impl FileReadTracker {
         let content_hash = hash_content(content);
         let mtime_ms = system_time_to_ms(mtime);
 
-        self.reads.insert(
-            path,
-            FileReadState {
-                content_hash,
-                mtime_ms,
-            },
-        );
+        self.reads.insert(path, FileReadState {
+            content_hash,
+            mtime_ms,
+        });
     }
 
     /// Check whether a file is fresh (unchanged since last read).
@@ -100,13 +97,10 @@ impl FileReadTracker {
         let content_hash = hash_content(new_content);
         let mtime_ms = system_time_to_ms(new_mtime);
 
-        self.reads.insert(
-            path.to_path_buf(),
-            FileReadState {
-                content_hash,
-                mtime_ms,
-            },
-        );
+        self.reads.insert(path.to_path_buf(), FileReadState {
+            content_hash,
+            mtime_ms,
+        });
     }
 
     /// Serialize to JSON for session metadata persistence.
@@ -121,9 +115,7 @@ impl FileReadTracker {
 }
 
 fn system_time_to_ms(t: SystemTime) -> i64 {
-    t.duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    t.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 fn hash_content(content: &[u8]) -> u64 {
@@ -132,10 +124,12 @@ fn hash_content(content: &[u8]) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use rstest::*;
     use std::io::Write;
+
+    use rstest::*;
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     #[fixture]
     fn recorded() -> (FileReadTracker, NamedTempFile) {
@@ -154,20 +148,14 @@ mod tests {
 
     #[rstest]
     fn record_and_check_fresh(#[from(recorded)] (tracker, tmp): (FileReadTracker, NamedTempFile)) {
-        assert!(matches!(
-            tracker.check_freshness(tmp.path()).unwrap(),
-            FreshnessCheck::Fresh
-        ));
+        assert!(matches!(tracker.check_freshness(tmp.path()).unwrap(), FreshnessCheck::Fresh));
     }
 
     #[test]
     fn check_not_read() {
         let tracker = FileReadTracker::default();
         let path = PathBuf::from("/nonexistent/file.txt");
-        assert!(matches!(
-            tracker.check_freshness(&path).unwrap(),
-            FreshnessCheck::NotRead
-        ));
+        assert!(matches!(tracker.check_freshness(&path).unwrap(), FreshnessCheck::NotRead));
     }
 
     #[rstest]
@@ -180,10 +168,7 @@ mod tests {
         // Modify the file
         std::fs::write(tmp.path(), "modified").unwrap();
 
-        assert!(matches!(
-            tracker.check_freshness(tmp.path()).unwrap(),
-            FreshnessCheck::Stale
-        ));
+        assert!(matches!(tracker.check_freshness(tmp.path()).unwrap(), FreshnessCheck::Stale));
     }
 
     #[rstest]
@@ -196,29 +181,20 @@ mod tests {
         let new_mtime = std::fs::metadata(tmp.path()).unwrap().modified().unwrap();
         tracker.update_after_edit(tmp.path(), new_content, new_mtime);
 
-        assert!(matches!(
-            tracker.check_freshness(tmp.path()).unwrap(),
-            FreshnessCheck::Fresh
-        ));
+        assert!(matches!(tracker.check_freshness(tmp.path()).unwrap(), FreshnessCheck::Fresh));
     }
 
     #[test]
     fn roundtrip_json() {
         let mut tracker = FileReadTracker::default();
-        tracker.reads.insert(
-            PathBuf::from("/some/file.toml"),
-            FileReadState {
-                content_hash: 12345,
-                mtime_ms: 1700000000000,
-            },
-        );
+        tracker.reads.insert(PathBuf::from("/some/file.toml"), FileReadState {
+            content_hash: 12345,
+            mtime_ms: 1700000000000,
+        });
 
         let json = tracker.to_json().unwrap();
         let restored = FileReadTracker::from_json(&json).unwrap();
         assert_eq!(restored.reads.len(), 1);
-        assert_eq!(
-            restored.reads[&PathBuf::from("/some/file.toml")].content_hash,
-            12345
-        );
+        assert_eq!(restored.reads[&PathBuf::from("/some/file.toml")].content_hash, 12345);
     }
 }

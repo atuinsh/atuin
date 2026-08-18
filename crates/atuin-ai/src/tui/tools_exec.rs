@@ -106,9 +106,8 @@ mod tests {
     #[tokio::test]
     async fn shell_stream_yields_previews_then_outcome() {
         let (_interrupt_tx, interrupt_rx) = oneshot::channel();
-        let msgs: Vec<Msg> = shell_stream("t1".into(), shell_call("echo hello"), interrupt_rx)
-            .collect()
-            .await;
+        let msgs: Vec<Msg> =
+            shell_stream("t1".into(), shell_call("echo hello"), interrupt_rx).collect().await;
 
         let mut saw_preview_with_output = false;
         let mut done: Option<&Event> = None;
@@ -125,10 +124,7 @@ mod tests {
                 other => panic!("unexpected message: {other:?}"),
             }
         }
-        assert!(
-            saw_preview_with_output,
-            "expected echoed output in a preview"
-        );
+        assert!(saw_preview_with_output, "expected echoed output in a preview");
         let Some(Event::ToolExecutionDone {
             tool_id, outcome, ..
         }) = done
@@ -137,13 +133,10 @@ mod tests {
         };
         assert_eq!(tool_id, "t1");
         assert!(
-            matches!(
-                outcome,
-                ToolOutcome::Structured {
-                    exit_code: Some(0),
-                    ..
-                }
-            ),
+            matches!(outcome, ToolOutcome::Structured {
+                exit_code: Some(0),
+                ..
+            }),
             "expected clean exit, got {outcome:?}"
         );
     }

@@ -1,15 +1,13 @@
+use atuin_client::api_client::Client;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::record::sync;
+use atuin_client::record::sync::Operation;
+use atuin_client::settings::Settings;
+use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::{HostId, RecordTag};
 use clap::Args;
 use eyre::Result;
 use uuid::Uuid;
-
-use atuin_client::{
-    api_client::Client,
-    record::sync::Operation,
-    record::{sqlite_store::SqliteStore, sync},
-    settings::Settings,
-};
-use atuin_common::encryption::paseto_v4;
 
 #[derive(Args, Debug)]
 pub struct Push {

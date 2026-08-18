@@ -1,5 +1,6 @@
-use crate::matrix::{MatrixCell, ScoreCell};
 use std::fmt::{Debug, Formatter, Result};
+
+use crate::matrix::{MatrixCell, ScoreCell};
 
 impl Debug for ScoreCell {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {

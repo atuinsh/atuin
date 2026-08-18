@@ -36,14 +36,7 @@ const PROGRAMS: [&str; 8] = [
     "atuin search",
 ];
 
-const ARGS: [&str; 6] = [
-    "commit --amend",
-    "build --release",
-    "up -d",
-    "-la",
-    "--follow",
-    "status",
-];
+const ARGS: [&str; 6] = ["commit --amend", "build --release", "up -d", "-la", "--follow", "status"];
 
 const PATHS: [&str; 6] = [
     "crates/atuin-client/src/history.rs",
@@ -59,17 +52,15 @@ fn fuzzy_match(bencher: divan::Bencher, n: usize) {
     let haystacks: Vec<Utf32String> = corpus(n).iter().map(|cmd| cmd.as_str().into()).collect();
     let needle: Utf32String = "gitcm".into();
 
-    bencher
-        .with_inputs(|| Matcher::new(Config::DEFAULT))
-        .bench_local_refs(|matcher| {
-            let mut total: u32 = 0;
-            for haystack in &haystacks {
-                if let Some(score) = matcher.fuzzy_match(haystack.slice(..), needle.slice(..)) {
-                    total += u32::from(score);
-                }
+    bencher.with_inputs(|| Matcher::new(Config::DEFAULT)).bench_local_refs(|matcher| {
+        let mut total: u32 = 0;
+        for haystack in &haystacks {
+            if let Some(score) = matcher.fuzzy_match(haystack.slice(..), needle.slice(..)) {
+                total += u32::from(score);
             }
-            total
-        });
+        }
+        total
+    });
 }
 
 /// Scores and ranks the whole candidate list, which is what a single keystroke does in the UI.

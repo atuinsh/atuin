@@ -27,8 +27,8 @@ changes in the future.
 
 */
 use std::ops::{Bound, RangeBounds};
-use std::sync::atomic::{self, AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{self, AtomicBool, Ordering};
 use std::time::Duration;
 
 /// A filter predicate that determines whether an item should be included in matching.
@@ -40,12 +40,12 @@ pub type Filter<T> = Arc<dyn Fn(&T) -> bool + Send + Sync>;
 /// Returns the combined/external score used for sorting results.
 pub type Scorer<T> = Arc<dyn Fn(&T, u32) -> u32 + Send + Sync>;
 
+pub use atuin_nucleo_matcher::{Config, Matcher, Utf32Str, Utf32String, chars};
 use parking_lot::Mutex;
 use rayon::ThreadPool;
 
 use crate::pattern::MultiPattern;
 use crate::worker::Worker;
-pub use atuin_nucleo_matcher::{chars, Config, Matcher, Utf32Str, Utf32String};
 
 mod boxcar;
 mod par_sort;
@@ -213,9 +213,7 @@ impl<T: Sync + Send + 'static> Snapshot<T> {
             Bound::Excluded(&end) => end as usize,
             Bound::Unbounded => self.matches.len(),
         };
-        self.matches[start..end]
-            .iter()
-            .map(|&m| unsafe { self.items.get_unchecked(m.idx) })
+        self.matches[start..end].iter().map(|&m| unsafe { self.items.get_unchecked(m.idx) })
     }
 
     /// Returns a reference to the item at the given index.
@@ -502,8 +500,7 @@ impl<T: Sync + Send + 'static> Nucleo<T> {
             if cleared {
                 inner.items = self.items.clone();
             }
-            self.pool
-                .spawn(move || unsafe { inner.run(status, cleared) })
+            self.pool.spawn(move || unsafe { inner.run(status, cleared) })
         }
         Status { changed, running }
     }

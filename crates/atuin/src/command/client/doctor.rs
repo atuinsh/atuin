@@ -1,6 +1,7 @@
+use std::env;
 use std::path::PathBuf;
 use std::process::Command;
-use std::{env, str::FromStr};
+use std::str::FromStr;
 
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
@@ -9,7 +10,6 @@ use atuin_common::utils;
 use colored::Colorize;
 use eyre::Result;
 use serde::Serialize;
-
 use sysinfo::{Disks, System, get_current_pid};
 
 #[derive(Debug, Serialize)]
@@ -36,10 +36,7 @@ impl ShellInfo {
     // Every shell we support handles `shell -ic 'command'`
     fn shellvar_exists(shell: &str, var: &str) -> bool {
         let cmd = Command::new(shell)
-            .args([
-                "-ic",
-                format!("[ -z ${var} ] || echo ATUIN_DOCTOR_ENV_FOUND").as_str(),
-            ])
+            .args(["-ic", format!("[ -z ${var} ] || echo ATUIN_DOCTOR_ENV_FOUND").as_str()])
             .output()
             .map_or(String::new(), |v| {
                 let out = v.stdout;
@@ -53,10 +50,8 @@ impl ShellInfo {
         if env::var("ATUIN_SESSION").ok().is_none() {
             None
         } else if shell.starts_with("bash") || shell == "sh" {
-            env::var("ATUIN_PREEXEC_BACKEND")
-                .ok()
-                .filter(|value| !value.is_empty())
-                .and_then(|atuin_preexec_backend| {
+            env::var("ATUIN_PREEXEC_BACKEND").ok().filter(|value| !value.is_empty()).and_then(
+                |atuin_preexec_backend| {
                     atuin_preexec_backend.rfind(':').and_then(|pos_colon| {
                         u32::from_str(&atuin_preexec_backend[..pos_colon])
                             .ok()
@@ -68,7 +63,8 @@ impl ShellInfo {
                             })
                             .then(|| atuin_preexec_backend[pos_colon + 1..].to_string())
                     })
-                })
+                },
+            )
         } else {
             Some("built-in".to_string())
         }
@@ -113,12 +109,7 @@ impl ShellInfo {
 
         type PluginValidator = fn(&str, &sysinfo::Process, &str) -> Option<String>;
 
-        let plugin_list: [(
-            &str,
-            PluginShellType,
-            PluginProbeType,
-            Option<PluginValidator>,
-        ); 3] = [
+        let plugin_list: [(&str, PluginShellType, PluginProbeType, Option<PluginValidator>); 3] = [
             (
                 "atuin",
                 PluginShellType::Any,
@@ -263,12 +254,9 @@ impl SyncInfo {
         // that a diagnostic command should not trigger.
         let meta = Settings::meta_store().await.ok();
         let has_hub_token = match &meta {
-            Some(m) => m
-                .hub_session_token()
-                .await
-                .ok()
-                .flatten()
-                .is_some_and(|t| t.starts_with("atapi_")),
+            Some(m) => {
+                m.hub_session_token().await.ok().flatten().is_some_and(|t| t.starts_with("atapi_"))
+            }
             None => false,
         };
         let has_cli_token = match &meta {
@@ -358,10 +346,7 @@ impl AtuinInfo {
         };
 
         let sqlite_version = match Sqlite::new("sqlite::memory:", 0.1).await {
-            Ok(db) => db
-                .sqlite_version()
-                .await
-                .unwrap_or_else(|_| "unknown".to_string()),
+            Ok(db) => db.sqlite_version().await.unwrap_or_else(|_| "unknown".to_string()),
             Err(_) => "error".to_string(),
         };
 
@@ -398,12 +383,18 @@ fn checks(info: &DoctorDump) {
     //
     let zfs_error = "[Filesystem] ZFS is known to have some issues with SQLite. Atuin uses SQLite heavily. If you are having poor performance, there are some workarounds here: https://github.com/atuinsh/atuin/issues/952".bold().red();
     let bash_plugin_error = format!(
-        "[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh (>= 0.4) be installed. An older ble.sh may not be detected. so ignore this if you have ble.sh >= 0.4 set up! Read more here: {}",
+        "[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh (>= \
+         0.4) be installed. An older ble.sh may not be detected. so ignore this if you have \
+         ble.sh >= 0.4 set up! Read more here: {}",
         atuin_common::docs::url("guide/installation/#installing-the-shell-plugin")
     )
     .bold()
     .red();
-    let blesh_integration_error = "[Shell] Atuin and ble.sh seem to be loaded in the session, but the integration does not seem to be working. Please check the setup in .bashrc.".bold().red();
+    let blesh_integration_error = "[Shell] Atuin and ble.sh seem to be loaded in the session, but \
+                                   the integration does not seem to be working. Please check the \
+                                   setup in .bashrc."
+        .bold()
+        .red();
     let openbsd_warning = "[System] OpenBSD is not officially supported.".bold().red();
 
     if cfg!(target_os = "openbsd") {
@@ -419,12 +410,7 @@ fn checks(info: &DoctorDump) {
 
     // Shell
     if info.shell.name == "bash" {
-        if !info
-            .shell
-            .plugins
-            .iter()
-            .any(|p| p == "blesh" || p == "bash-preexec")
-        {
+        if !info.shell.plugins.iter().any(|p| p == "blesh" || p == "bash-preexec") {
             println!("{bash_plugin_error}");
         }
 

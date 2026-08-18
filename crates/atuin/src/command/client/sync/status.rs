@@ -1,7 +1,9 @@
-use crate::{SHA, VERSION};
-use atuin_client::{api_client, settings::Settings};
+use atuin_client::api_client;
+use atuin_client::settings::Settings;
 use colored::Colorize;
 use eyre::{Result, bail};
+
+use crate::{SHA, VERSION};
 
 pub async fn run(settings: &Settings) -> Result<()> {
     if !settings.logged_in().await? {

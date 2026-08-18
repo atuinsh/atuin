@@ -52,19 +52,13 @@ impl MultiPattern {
         let old_status = self.cols[column].1;
         if append
             && old_status != Status::Rescore
-            && self.cols[column]
-                .0
-                .atoms
-                .last()
-                .is_none_or(|last| !last.negative)
+            && self.cols[column].0.atoms.last().is_none_or(|last| !last.negative)
         {
             self.cols[column].1 = Status::Update;
         } else {
             self.cols[column].1 = Status::Rescore;
         }
-        self.cols[column]
-            .0
-            .reparse(new_text, case_matching, normalization);
+        self.cols[column].0.reparse(new_text, case_matching, normalization);
     }
 
     pub fn column_pattern(&self, column: usize) -> &Pattern {
@@ -72,11 +66,7 @@ impl MultiPattern {
     }
 
     pub(crate) fn status(&self) -> Status {
-        self.cols
-            .iter()
-            .map(|&(_, status)| status)
-            .max()
-            .unwrap_or(Status::Unchanged)
+        self.cols.iter().map(|&(_, status)| status).max().unwrap_or(Status::Unchanged)
     }
 
     pub(crate) fn reset_status(&mut self) {
