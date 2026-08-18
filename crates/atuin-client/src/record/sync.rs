@@ -335,6 +335,24 @@ async fn sync_download(
             break;
         }
 
+        // Storing a record we can't decrypt would advance our index past it, so we'd never fetch
+        // it again. The key is a property of the whole store, so skip this one and sync the rest.
+        // Packfile manifests are plaintext, so there is nothing to check.
+        if tag != RecordTag::Packfile
+            && let Some(bad) = page.iter().find(|record| record.decrypt(key).is_err())
+        {
+            error!(
+                record_id = %bad.id,
+                host = %host.0,
+                %tag,
+                idx = bad.idx,
+                "cannot decrypt this store with the local key, skipping it. \
+                 run `atuin key` on the host that wrote these records to compare keys"
+            );
+            pb.abandon_with_message("Skipped store: cannot decrypt with the local key");
+            return Ok(ret);
+        }
+
         // We commit the packfile's history into the local store before we persist the manifests, so
         // a manifest we recorded always has its associated history.
         if tag == RecordTag::Packfile {
@@ -433,37 +451,50 @@ pub async fn sync_remote(
     Ok((uploaded, downloaded))
 }
 
+/// Check the local key can read _something_ on the remote before we touch either side. A single
+/// unreadable store is just another host's key, so only report [`SyncError::WrongKey`] when nothing
+/// on the remote decrypts.
 pub async fn check_encryption_key(
     client: &Client,
     remote_index: &RecordStatus,
     encryption_key: &paseto_v4::Key,
 ) -> Result<(), SyncError> {
-    let sample = remote_index
+    // Collected, not iterated lazily: a borrow of `remote_index` held across the await below makes
+    // this future's `Send` bound higher-ranked, and the daemon's `tokio::spawn` then won't compile.
+    let stores: Vec<(HostId, RecordTag)> = remote_index
         .hosts
         .iter()
         .flat_map(|(host, tags)| tags.keys().map(move |tag| (*host, tag.clone())))
         // Note we have to skip `Packfile`s here because packfiles _aren't_ actually encrypted, so
         // using the default CEK would fail decryption.
-        .find(|(_, tag)| *tag != RecordTag::Packfile);
+        .filter(|(_, tag)| *tag != RecordTag::Packfile)
+        .collect();
 
-    let Some((host, tag)) = sample else {
-        return Ok(());
-    };
+    // An empty remote is not a wrong key.
+    let mut sampled = false;
 
-    let records = client
-        .next_records(host, tag, 0, 1)
-        .await
-        .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
+    for (host, tag) in stores {
+        let records = client
+            .next_records(host, tag, 0, 1)
+            .await
+            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
 
-    let Some(record) = records.into_iter().next() else {
-        return Ok(());
-    };
+        let Some(record) = records.into_iter().next() else {
+            continue;
+        };
 
-    record
-        .decrypt(encryption_key)
-        .map_err(|_| SyncError::WrongKey)?;
+        sampled = true;
 
-    Ok(())
+        if record.decrypt(encryption_key).is_ok() {
+            return Ok(());
+        }
+    }
+
+    if sampled {
+        Err(SyncError::WrongKey)
+    } else {
+        Ok(())
+    }
 }
 
 pub async fn sync(
@@ -1395,6 +1426,261 @@ mod packfile_capability_tests {
                 .await
                 .unwrap()
                 .is_none()
+        );
+    }
+}
+
+/// A record we cannot decrypt must never reach the local store: storing it advances our index, so
+/// we'd never fetch it again. Encountering one skips that (host, tag) store and nothing else.
+#[cfg(test)]
+mod wrong_key_tests {
+    use super::packfile_download_tests::{memory_store, mock_client};
+    use super::{
+        Operation, RecordStatus, SyncError, check_encryption_key, sync_download, sync_remote,
+    };
+
+    use std::collections::HashMap;
+
+    use atuin_common::encryption::paseto_v4;
+    use atuin_common::utils::uuid_v7;
+    use atuin_domain::record::{
+        DecryptedData, EncryptedData, Host, HostId, Record, RecordIdx, RecordTag,
+    };
+    use rstest::*;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// The key the local machine holds.
+    #[fixture]
+    fn key() -> paseto_v4::Key {
+        paseto_v4::Key::from([7u8; 32])
+    }
+
+    /// A different key, as another host that never copied ours would have.
+    #[fixture]
+    fn other_key() -> paseto_v4::Key {
+        paseto_v4::Key::from([9u8; 32])
+    }
+
+    /// A single encrypted HISTORY record, as a server would serve it.
+    fn history_record(host: HostId, key: &paseto_v4::Key, idx: RecordIdx) -> Record<EncryptedData> {
+        Record::builder()
+            .host(Host::new(host))
+            .version("v1".into())
+            .tag(RecordTag::History)
+            .idx(idx)
+            .data(DecryptedData(format!("cmd {idx}").into_bytes()))
+            .build()
+            .encrypt(key)
+    }
+
+    /// Serve `page` for the record page starting at `start`, and nothing after it.
+    async fn mount_history_page(
+        server: &MockServer,
+        start: RecordIdx,
+        page: Vec<Record<EncryptedData>>,
+    ) {
+        Mock::given(method("GET"))
+            .and(path("/api/v0/record/next"))
+            .and(query_param("start", start.to_string()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(page))
+            .mount(server)
+            .await;
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn download_stores_nothing_from_a_store_encrypted_with_another_key(
+        key: paseto_v4::Key,
+        other_key: paseto_v4::Key,
+    ) {
+        let host = HostId(uuid_v7());
+
+        let server = MockServer::start().await;
+        mount_history_page(&server, 0, vec![history_record(host, &other_key, 0)]).await;
+
+        let down = memory_store().await;
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let downloaded = sync_download(&down, &client, host, RecordTag::History, 0, 100, &key)
+            .await
+            .expect("a store we cannot read is skipped, not a sync failure");
+
+        assert!(downloaded.is_empty(), "returned {downloaded:?}");
+        assert!(
+            down.last(host, &RecordTag::History)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// Pages that decrypted before the bad record stay committed; they are contiguous, so the
+    /// next sync resumes from the hole.
+    #[rstest]
+    #[tokio::test]
+    async fn download_keeps_the_readable_records_ahead_of_the_bad_one(
+        key: paseto_v4::Key,
+        other_key: paseto_v4::Key,
+    ) {
+        let host = HostId(uuid_v7());
+
+        let server = MockServer::start().await;
+        mount_history_page(&server, 0, vec![history_record(host, &key, 0)]).await;
+        mount_history_page(&server, 1, vec![history_record(host, &other_key, 1)]).await;
+
+        let down = memory_store().await;
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        // One record per page, so the good and the bad record arrive separately.
+        let downloaded = sync_download(&down, &client, host, RecordTag::History, 1, 1, &key)
+            .await
+            .unwrap();
+
+        assert_eq!(downloaded.len(), 1);
+        assert_eq!(
+            down.last(host, &RecordTag::History)
+                .await
+                .unwrap()
+                .unwrap()
+                .idx,
+            0
+        );
+    }
+
+    /// One unreadable store is another host's problem, not proof our key is wrong: if anything
+    /// else on the remote reads, sync goes ahead.
+    #[rstest]
+    #[tokio::test]
+    async fn check_encryption_key_passes_when_another_host_used_a_different_key(
+        key: paseto_v4::Key,
+        other_key: paseto_v4::Key,
+    ) {
+        let ours = HostId(uuid_v7());
+        let theirs = HostId(uuid_v7());
+
+        let server = MockServer::start().await;
+        for (host, host_key) in [(ours, &key), (theirs, &other_key)] {
+            Mock::given(method("GET"))
+                .and(path("/api/v0/record/next"))
+                .and(query_param("host", host.0.to_string()))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(vec![history_record(host, host_key, 0)]),
+                )
+                .mount(&server)
+                .await;
+        }
+
+        let mut hosts = HashMap::new();
+        for host in [ours, theirs] {
+            hosts.insert(host, HashMap::from([(RecordTag::History, 0)]));
+        }
+        let remote_index = RecordStatus { hosts };
+
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        check_encryption_key(&client, &remote_index, &key)
+            .await
+            .expect("one host's key mismatch must not block the whole sync");
+    }
+
+    /// GUARD: sampling every store must not weaken the check -- if nothing reads at all, the
+    /// local key really is wrong.
+    #[rstest]
+    #[tokio::test]
+    async fn check_encryption_key_still_fails_when_no_store_reads(
+        key: paseto_v4::Key,
+        other_key: paseto_v4::Key,
+    ) {
+        let host = HostId(uuid_v7());
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v0/record/next"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(vec![history_record(host, &other_key, 0)]),
+            )
+            .mount(&server)
+            .await;
+
+        let mut hosts = HashMap::new();
+        hosts.insert(host, HashMap::from([(RecordTag::History, 0)]));
+        let remote_index = RecordStatus { hosts };
+
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let err = check_encryption_key(&client, &remote_index, &key)
+            .await
+            .expect_err("a remote we cannot read at all is a wrong key");
+        assert!(
+            matches!(err, SyncError::WrongKey),
+            "expected WrongKey, got {err:?}"
+        );
+    }
+
+    /// A store that skips must not stop the ones after it in the same sync.
+    #[rstest]
+    #[tokio::test]
+    async fn a_skipped_store_does_not_stop_the_others(
+        key: paseto_v4::Key,
+        other_key: paseto_v4::Key,
+    ) {
+        let bad = HostId(uuid_v7());
+        let good = HostId(uuid_v7());
+
+        let server = MockServer::start().await;
+        for (host, host_key) in [(bad, &other_key), (good, &key)] {
+            Mock::given(method("GET"))
+                .and(path("/api/v0/record/next"))
+                .and(query_param("host", host.0.to_string()))
+                .and(query_param("start", "0"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(vec![history_record(host, host_key, 0)]),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v0/record/next"))
+                .and(query_param("host", host.0.to_string()))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(Vec::<Record<EncryptedData>>::new()),
+                )
+                .mount(&server)
+                .await;
+        }
+
+        let down = memory_store().await;
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let ops = vec![
+            Operation::Download {
+                remote: 0,
+                host: bad,
+                tag: RecordTag::History,
+            },
+            Operation::Download {
+                remote: 0,
+                host: good,
+                tag: RecordTag::History,
+            },
+        ];
+
+        let (_, downloaded) = sync_remote(&client, ops, &down, 100, &key).await.unwrap();
+
+        assert_eq!(downloaded.len(), 1);
+        assert!(down.last(bad, &RecordTag::History).await.unwrap().is_none());
+        assert!(
+            down.last(good, &RecordTag::History)
+                .await
+                .unwrap()
+                .is_some()
         );
     }
 }
