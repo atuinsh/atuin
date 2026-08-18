@@ -64,7 +64,10 @@ const CLAUDE_CODE: AgentSpec = AgentSpec {
     install_kind: InstallKind::JsonHooks {
         config_path: &[".claude", "settings.json"],
         hook_command: "atuin hook claude-code",
-        matcher: "Bash",
+        // Claude Code's matcher is a regex over the tool name. On Windows it
+        // runs shell commands through a `PowerShell` tool rather than `Bash`,
+        // so matching only `Bash` silently records nothing there.
+        matcher: "Bash|PowerShell",
     },
 };
 
@@ -319,7 +322,13 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
             .as_array_mut()
             .ok_or_else(|| eyre::eyre!("hooks.{event_type} is not an array"))?;
 
-        let already_installed = arr.iter().any(|entry| {
+        // Atuin owns any entry that invokes its own hook command, so an
+        // existing entry is identified by `command` alone. Its `matcher` can
+        // still be stale: someone who installed while claude-code only matched
+        // `Bash` would otherwise keep that matcher forever, and re-running
+        // install would report "already installed" while the new tool coverage
+        // never reached them.
+        let existing = arr.iter_mut().find(|entry| {
             entry
                 .get("hooks")
                 .and_then(Value::as_array)
@@ -330,8 +339,16 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
                 })
         });
 
-        if already_installed {
-            eprintln!("hooks.{event_type}: already installed, skipping");
+        if let Some(entry) = existing {
+            if entry.get("matcher").and_then(Value::as_str) == Some(matcher) {
+                eprintln!("hooks.{event_type}: already installed, skipping");
+            } else {
+                entry
+                    .as_object_mut()
+                    .ok_or_else(|| eyre::eyre!("hooks.{event_type} entry is not an object"))?
+                    .insert("matcher".to_string(), Value::String(matcher.to_string()));
+                eprintln!("hooks.{event_type}: updated matcher to {matcher}");
+            }
             continue;
         }
 
@@ -442,5 +459,96 @@ mod tests {
             AtuinCmd::Client(client::Cmd::Hook(Cmd { action: None, agent: Some(agent) }))
                 if agent == "codex"
         ));
+    }
+
+    /// The matcher an agent installs, for assertions below.
+    fn expected_matcher(agent: &Agent) -> &'static str {
+        let InstallKind::JsonHooks { matcher, .. } = agent.install_kind() else {
+            panic!("agent does not use JSON hooks");
+        };
+        matcher
+    }
+
+    /// A first install writes one entry per event type, carrying the agent's
+    /// current matcher.
+    #[test]
+    fn add_hook_entries_installs_into_an_empty_config() {
+        let agent = Agent::from_name("claude-code").unwrap();
+        let mut hooks = serde_json::json!({});
+
+        add_hook_entries(&mut hooks, &agent).unwrap();
+
+        for event_type in HOOK_EVENT_TYPES {
+            let arr = hooks[*event_type].as_array().unwrap();
+            assert_eq!(arr.len(), 1, "{event_type} should hold exactly one entry");
+            assert_eq!(arr[0]["matcher"], expected_matcher(&agent));
+        }
+    }
+
+    /// Re-running install against an up-to-date config changes nothing — no
+    /// duplicate entries.
+    #[test]
+    fn add_hook_entries_is_idempotent() {
+        let agent = Agent::from_name("claude-code").unwrap();
+        let mut hooks = serde_json::json!({});
+
+        add_hook_entries(&mut hooks, &agent).unwrap();
+        let after_first = hooks.clone();
+        add_hook_entries(&mut hooks, &agent).unwrap();
+
+        assert_eq!(hooks, after_first);
+    }
+
+    /// An entry installed by an older atuin keeps its stale matcher unless
+    /// install rewrites it. Matching on `command` alone would report "already
+    /// installed" and leave the user on the old tool coverage forever.
+    #[test]
+    fn add_hook_entries_refreshes_a_stale_matcher() {
+        let agent = Agent::from_name("claude-code").unwrap();
+        let InstallKind::JsonHooks { hook_command, .. } = agent.install_kind() else {
+            panic!("claude-code does not use JSON hooks");
+        };
+
+        let stale = serde_json::json!({
+            "matcher": "Bash",
+            "hooks": [{"type": "command", "command": hook_command}],
+        });
+        let mut hooks = serde_json::json!({});
+        for event_type in HOOK_EVENT_TYPES {
+            hooks[*event_type] = serde_json::json!([stale.clone()]);
+        }
+
+        add_hook_entries(&mut hooks, &agent).unwrap();
+
+        for event_type in HOOK_EVENT_TYPES {
+            let arr = hooks[*event_type].as_array().unwrap();
+            assert_eq!(arr.len(), 1, "{event_type} should not gain a second entry");
+            assert_eq!(arr[0]["matcher"], expected_matcher(&agent));
+        }
+    }
+
+    /// Hooks the user configured themselves are left alone; only atuin's own
+    /// entry is touched.
+    #[test]
+    fn add_hook_entries_leaves_foreign_entries_untouched() {
+        let agent = Agent::from_name("claude-code").unwrap();
+        let foreign = serde_json::json!({
+            "matcher": "Bash",
+            "hooks": [{"type": "command", "command": "some-other-tool"}],
+        });
+
+        let mut hooks = serde_json::json!({});
+        for event_type in HOOK_EVENT_TYPES {
+            hooks[*event_type] = serde_json::json!([foreign.clone()]);
+        }
+
+        add_hook_entries(&mut hooks, &agent).unwrap();
+
+        for event_type in HOOK_EVENT_TYPES {
+            let arr = hooks[*event_type].as_array().unwrap();
+            assert_eq!(arr.len(), 2, "{event_type} should keep the foreign entry");
+            assert_eq!(arr[0], foreign);
+            assert_eq!(arr[1]["matcher"], expected_matcher(&agent));
+        }
     }
 }
