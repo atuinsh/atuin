@@ -242,14 +242,21 @@ async fn sync_upload(
                         error!("failed to upload packfile: {e}");
                         SyncError::RemoteRequestError { msg: e.to_string() }
                     })?;
+
+                client
+                    .post_records(std::slice::from_ref(manifest))
+                    .await
+                    .map_err(|e| {
+                        error!("failed to post records: {e:?}");
+                        SyncError::RemoteRequestError { msg: e.to_string() }
+                    })?;
             }
+        } else {
+            client.post_records(&page).await.map_err(|e| {
+                error!("failed to post records: {e:?}");
+                SyncError::RemoteRequestError { msg: e.to_string() }
+            })?;
         }
-
-        client.post_records(&page).await.map_err(|e| {
-            error!("failed to post records: {e:?}");
-
-            SyncError::RemoteRequestError { msg: e.to_string() }
-        })?;
 
         progress += page.len() as u64;
         pb.set_position(progress);
@@ -1396,5 +1403,126 @@ mod packfile_capability_tests {
                 .unwrap()
                 .is_none()
         );
+    }
+}
+
+#[cfg(test)]
+mod packfile_upload_tests {
+    use super::packfile_download_tests::{memory_store, mock_client, seed_history};
+    use super::*;
+
+    use atuin_common::encryption::paseto_v4;
+    use atuin_common::utils::uuid_v7;
+    use atuin_domain::caps::PackfileCap;
+    use atuin_domain::record::HostId;
+    use rstest::*;
+    use wiremock::matchers::{body_partial_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use crate::packfile::try_pack;
+
+    #[fixture]
+    fn key() -> paseto_v4::Key {
+        paseto_v4::Key::from([7u8; 32])
+    }
+
+    async fn two_manifests(store: &SqliteStore, host: HostId, key: &paseto_v4::Key) -> Vec<RecordId> {
+        seed_history(store, host, key, 10).await;
+        try_pack(
+            store,
+            host,
+            Some(PackfileCap {
+                version: 1,
+                record_count: 5,
+            }),
+            &RecordTag::History,
+        )
+        .await
+        .unwrap();
+        let page = store.next(host, &RecordTag::Packfile, 0, 10).await.unwrap();
+        page.iter().map(|r| r.id).collect()
+    }
+
+    fn reserve_mock(server: &MockServer, manifest_id: RecordId, upload_path: &str) -> Mock {
+        Mock::given(method("POST"))
+            .and(path("/api/v0/packfiles"))
+            .and(body_partial_json(
+                serde_json::json!({ "manifest_id": manifest_id }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "upload_url": format!("{}{}", server.uri(), upload_path)
+            })))
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_failed_blob_upload_still_commits_earlier_manifests_and_aborts(key: paseto_v4::Key) {
+        let host = HostId(uuid_v7());
+        let store = memory_store().await;
+        let ids = two_manifests(&store, host, &key).await;
+        let (m0, m1) = (ids[0], ids[1]);
+
+        let server = MockServer::start().await;
+        reserve_mock(&server, m0, "/upload/0").mount(&server).await;
+        reserve_mock(&server, m1, "/upload/1").mount(&server).await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/0"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/1"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/v0/record"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let result = sync_upload(&store, &client, host, RecordTag::Packfile, 1, None, 10, &key).await;
+        assert!(result.is_err(), "a failed blob upload must abort the op");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn every_manifest_is_posted_after_its_blob_when_all_succeed(key: paseto_v4::Key) {
+        let host = HostId(uuid_v7());
+        let store = memory_store().await;
+        let ids = two_manifests(&store, host, &key).await;
+        let (m0, m1) = (ids[0], ids[1]);
+
+        let server = MockServer::start().await;
+        reserve_mock(&server, m0, "/upload/0").mount(&server).await;
+        reserve_mock(&server, m1, "/upload/1").mount(&server).await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/0"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/1"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/v0/record"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let posted = sync_upload(&store, &client, host, RecordTag::Packfile, 1, None, 10, &key)
+            .await
+            .unwrap();
+        assert_eq!(posted, 2, "both manifests upload and post");
     }
 }
