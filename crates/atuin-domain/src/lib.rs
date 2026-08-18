@@ -166,3 +166,9 @@ impl From<&str> for CmdOrigin {
         }
     }
 }
+
+impl From<String> for CmdOrigin {
+    fn from(value: String) -> Self {
+        Self::from(value.as_str())
+    }
+}

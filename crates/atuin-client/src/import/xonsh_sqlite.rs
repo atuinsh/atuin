@@ -46,7 +46,7 @@ impl HistDbEntry {
             .command(self.inp)
             .cwd(self.cwd)
             .session(session_id)
-            .hostname(cmd_origin.to_string())
+            .hostname(cmd_origin)
             .build()
             .into()
     }
@@ -180,7 +180,7 @@ mod tests {
             assert_eq!(actual.cwd, expected.cwd);
             assert_eq!(actual.exit, expected.exit);
             assert_eq!(actual.duration, expected.duration);
-            assert_eq!(actual.hostname, expected.hostname);
+            assert_eq!(actual.cmd_origin, expected.cmd_origin);
         }
     }
 

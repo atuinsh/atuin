@@ -166,7 +166,8 @@ pub struct History {
     /// The session ID, associated with a terminal session.
     pub session: String,
     /// The hostname of the machine the command was run on.
-    pub hostname: String,
+    #[sqlx(rename = "hostname", try_from = "String")]
+    pub cmd_origin: CmdOrigin,
     /// Who wrote this command (human user or automation/agent identity).
     pub author: String,
     /// Optional rationale for why the command was executed.
@@ -212,7 +213,7 @@ impl History {
         exit: i64,
         duration: i64,
         session: Option<String>,
-        hostname: Option<String>,
+        cmd_origin: Option<CmdOrigin>,
         author: Option<String>,
         intent: Option<String>,
         deleted_at: Option<OffsetDateTime>,
@@ -221,10 +222,10 @@ impl History {
         let session = session
             .or_else(|| env::var("ATUIN_SESSION").ok())
             .unwrap_or_else(|| uuid_v7().as_simple().to_string());
-        let cmd_origin = hostname.unwrap_or_else(|| CmdOrigin::probe().to_string());
+        let cmd_origin = cmd_origin.unwrap_or_else(CmdOrigin::probe);
         let author = normalize_optional_string(author)
             .or_else(|| normalize_optional_string(env::var(HISTORY_AUTHOR_ENV).ok()))
-            .unwrap_or_else(|| Self::author_from_hostname(cmd_origin.as_str()));
+            .unwrap_or_else(|| Self::author_from_hostname(&cmd_origin.to_string()));
         let intent = normalize_optional_string(intent)
             .or_else(|| normalize_optional_string(env::var(HISTORY_INTENT_ENV).ok()));
         let shell = normalize_optional_string(shell);
@@ -237,7 +238,7 @@ impl History {
             exit,
             duration,
             session,
-            hostname: cmd_origin,
+            cmd_origin,
             author,
             intent,
             deleted_at,
@@ -269,7 +270,7 @@ impl History {
         encode::write_str(&mut output, &self.command)?;
         encode::write_str(&mut output, &self.cwd)?;
         encode::write_str(&mut output, &self.session)?;
-        encode::write_str(&mut output, &self.hostname)?;
+        encode::write_str(&mut output, &self.cmd_origin.to_string())?;
 
         encode::write_optional(
             &mut output,
@@ -308,7 +309,7 @@ impl History {
         let command = decode::read_string(&mut bytes)?;
         let cwd = decode::read_string(&mut bytes)?;
         let session = decode::read_string(&mut bytes)?;
-        let hostname = decode::read_string(&mut bytes)?;
+        let cmd_origin = CmdOrigin::from(decode::read_string(&mut bytes)?);
         let deleted_at = decode::read_optional(&mut bytes, decode::read_u64)?;
 
         let author = if version >= Version::One {
@@ -345,8 +346,8 @@ impl History {
             command,
             cwd,
             session,
-            author: author.unwrap_or_else(|| Self::author_from_hostname(&hostname)),
-            hostname,
+            author: author.unwrap_or_else(|| Self::author_from_hostname(&cmd_origin.to_string())),
+            cmd_origin,
             intent,
             deleted_at: deleted_at.map(OffsetDateTime::from_unix_nanos_u64),
             shell,

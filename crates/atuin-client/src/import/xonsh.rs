@@ -137,7 +137,7 @@ impl Importer for Xonsh {
                     .command(cmd.inp.trim())
                     .cwd(cmd.cwd)
                     .session(session.sessionid.clone())
-                    .hostname(self.cmd_origin.to_string());
+                    .hostname(self.cmd_origin.clone());
                 loader.push(entry.build().into()).await?;
             }
         }
@@ -206,7 +206,7 @@ mod tests {
             assert_eq!(actual.cwd, expected.cwd);
             assert_eq!(actual.exit, expected.exit);
             assert_eq!(actual.duration, expected.duration);
-            assert_eq!(actual.hostname, expected.hostname);
+            assert_eq!(actual.cmd_origin, expected.cmd_origin);
         }
     }
 

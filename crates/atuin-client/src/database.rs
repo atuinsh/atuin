@@ -99,7 +99,7 @@ impl Context {
         Context {
             session: entry.session.to_string(),
             cwd: entry.cwd.to_string(),
-            cmd_origin: entry.hostname.to_string(),
+            cmd_origin: entry.cmd_origin.to_string(),
             host_id: String::new(),
             git_root: utils::in_git_repo(entry.cwd.as_str()),
         }
@@ -354,7 +354,7 @@ impl Sqlite {
         .bind(h.command.as_str())
         .bind(h.cwd.as_str())
         .bind(h.session.as_str())
-        .bind(h.hostname.as_str())
+        .bind(h.cmd_origin.to_string())
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
         .bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
@@ -485,7 +485,7 @@ impl Database for Sqlite {
         .bind(h.command.as_str())
         .bind(h.cwd.as_str())
         .bind(h.session.as_str())
-        .bind(h.hostname.as_str())
+        .bind(h.cmd_origin.to_string())
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
         .bind(h.deleted_at.map(|t|t.unix_timestamp_nanos() as i64))
@@ -1314,7 +1314,7 @@ mod test {
         captured.exit = 0;
         captured.duration = 1;
         captured.session = "beep boop".to_string();
-        captured.hostname = "booop".to_string();
+        captured.cmd_origin = CmdOrigin::from("booop");
 
         db.save(&captured).await
     }
@@ -1330,7 +1330,7 @@ mod test {
         captured.exit = 0;
         captured.duration = 1;
         captured.session = "beep boop".to_string();
-        captured.hostname = "booop".to_string();
+        captured.cmd_origin = CmdOrigin::from("booop");
 
         db.save(&captured).await.unwrap();
         captured
@@ -1363,7 +1363,7 @@ mod test {
             .build()
             .into();
         past.session = "beep boop".to_string();
-        past.hostname = "booop".to_string();
+        past.cmd_origin = CmdOrigin::from("booop");
         db.save(&past).await.unwrap();
         save_history_item(&db, "ls /home/frank").await;
 

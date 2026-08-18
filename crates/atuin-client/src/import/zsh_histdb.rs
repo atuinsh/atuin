@@ -45,7 +45,7 @@ use time::PrimitiveDateTime;
 use super::Importer;
 use crate::history::History;
 use crate::import::Loader;
-use atuin_domain::{AtuinHostname, CmdUser};
+use atuin_domain::{AtuinHostname, CmdOrigin, CmdUser};
 
 #[derive(sqlx::FromRow, Debug)]
 pub struct HistDbEntryCount {
@@ -156,12 +156,10 @@ impl Importer for ZshHistDb {
                 Ok(s) => s.trim_end(),
                 Err(_) => continue, // we can skip past things like invalid utf8
             };
-            let cmd_origin = format!(
-                "{}:{}",
-                String::from_utf8(entry.host)
-                    .unwrap_or_else(|_e| AtuinHostname::probe().to_string()),
-                self.username
-            );
+            let hostname = String::from_utf8(entry.host)
+                .map(AtuinHostname::from)
+                .unwrap_or_else(|_e| AtuinHostname::probe());
+            let cmd_origin = CmdOrigin::new(hostname, self.username.clone());
             let session = session_map.entry(entry.session).or_insert_with(uuid_v7);
 
             let imported = History::import()

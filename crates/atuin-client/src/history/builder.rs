@@ -1,5 +1,7 @@
 use typed_builder::TypedBuilder;
 
+use atuin_domain::CmdOrigin;
+
 use super::History;
 
 /// Builder for a history entry that is imported from shell history.
@@ -19,7 +21,7 @@ pub struct HistoryImported {
     #[builder(default, setter(strip_option, into))]
     session: Option<String>,
     #[builder(default, setter(strip_option, into))]
-    hostname: Option<String>,
+    hostname: Option<CmdOrigin>,
     #[builder(default, setter(strip_option, into))]
     author: Option<String>,
     #[builder(default, setter(strip_option, into))]
@@ -119,7 +121,7 @@ impl From<HistoryFromDb> for History {
             cwd: from_db.cwd,
             duration: from_db.duration,
             session: from_db.session,
-            hostname: from_db.hostname,
+            cmd_origin: from_db.hostname.into(),
             author: from_db.author,
             intent: from_db.intent,
             deleted_at: from_db.deleted_at,
@@ -143,7 +145,7 @@ pub struct HistoryDaemonCapture {
     #[builder(setter(into))]
     session: String,
     #[builder(setter(into))]
-    hostname: String,
+    hostname: CmdOrigin,
     #[builder(default, setter(strip_option, into))]
     author: Option<String>,
     #[builder(default, setter(strip_option, into))]
