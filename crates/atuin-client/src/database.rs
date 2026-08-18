@@ -881,6 +881,10 @@ impl Database for Sqlite {
     }
 
     async fn delete_rows(&self, ids: &[HistoryId]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+
         let mut tx = self.pool.begin().await?;
 
         for id in ids {

@@ -9,7 +9,7 @@ use sqlx::{
     },
 };
 use tokio::fs;
-use tracing::debug;
+use tracing::{debug, instrument};
 use uuid::Uuid;
 
 use crate::store::script::Script;
@@ -106,8 +106,11 @@ impl Database {
         Ok(())
     }
 
+    #[instrument]
     pub async fn save_bulk(&self, s: &[Script]) -> Result<()> {
-        debug!("saving scripts to sqlite");
+        if s.is_empty() {
+            return Ok(());
+        }
 
         let mut tx = self.pool.begin().await?;
 

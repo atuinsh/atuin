@@ -1,8 +1,9 @@
 use std::{collections::HashSet, fmt::Write, time::Duration};
 
+use atuin_common::futures::stream::chunk_by_bounded;
 use atuin_common::rmp::decode::Bytes;
 use eyre::{Result, bail, eyre};
-use futures::{Stream, TryStreamExt, future, stream};
+use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 
 use crate::{
@@ -23,7 +24,8 @@ pub struct HistoryStore {
     pub encryption_key: paseto_v4::Key,
 }
 
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone, strum_macros::EnumDiscriminants)]
+#[strum_discriminants(name(HistoryRecordKind))]
 #[allow(
     clippy::large_enum_variant,
     reason = "`Create` records are much more common than `Delete` records; wrapping in a `Box`
@@ -120,6 +122,11 @@ impl HistoryRecord {
 /// How many entries `incremental_build` holds in memory, and the most it puts into a single
 /// `save_bulk`/`delete_rows` transaction.
 const BUILD_BATCH_SIZE: usize = 5000;
+
+/// How many records `incremental_build` decodes concurrently. Decoding is read-then-decrypt per
+/// record; overlapping the reads keeps the record store's pool busy without unbounded fan-out.
+/// Kept under the store's connection pool size so decodes don't starve other readers.
+const DECODE_CONCURRENCY: usize = 4;
 
 impl HistoryStore {
     pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
@@ -287,67 +294,53 @@ impl HistoryStore {
     }
 
     /// Apply records to the history database, yielding each batch of created `History`.
-    ///
-    /// Creates and deletes accumulate into separate batches, flushed when the kind changes or
-    /// the batch is full, so the database sees them in record order.
     pub fn incremental_build<'a>(
         &'a self,
         database: &'a dyn Database,
         ids: &'a [RecordId],
     ) -> impl Stream<Item = Result<Vec<History>>> + 'a {
-        stream::try_unfold(
-            (ids.iter(), None),
-            move |(mut ids, mut next): (_, Option<HistoryRecord>)| async move {
-                let mut creates = Vec::new();
-                let mut deletes = Vec::new();
+        let records = stream::iter(ids)
+            .map(move |id| async move { self.decode(*id).await })
+            .buffered(DECODE_CONCURRENCY)
+            .filter_map(future::ready)
+            .boxed();
 
-                loop {
-                    let record = if let Some(record) = next.take() {
-                        record
-                    } else if let Some(id) = ids.next() {
-                        match self.decode(*id).await {
-                            Some(record) => record,
-                            None => continue,
-                        }
-                    } else {
-                        break;
-                    };
+        // The desire is to bundle similar actions together.
+        chunk_by_bounded(records, BUILD_BATCH_SIZE, |record| {
+            HistoryRecordKind::from(record)
+        })
+        .then(move |(kind, chunk)| async move {
+            // TODO(ATU-594): unwrapping the chunk into a typed `Vec` reallocates what
+            // `chunk_by_bounded` already collected.
+            match kind {
+                HistoryRecordKind::Create => {
+                    let creates: Vec<History> = chunk
+                        .into_iter()
+                        .filter_map(|record| match record {
+                            HistoryRecord::Create(h) => Some(h),
+                            HistoryRecord::Delete(_) => None,
+                        })
+                        .collect();
 
-                    match record {
-                        HistoryRecord::Create(h) if deletes.is_empty() => {
-                            creates.push(h);
-                            if creates.len() >= BUILD_BATCH_SIZE {
-                                break;
-                            }
-                        }
-                        HistoryRecord::Delete(id) if creates.is_empty() => {
-                            deletes.push(id);
-                            if deletes.len() >= BUILD_BATCH_SIZE {
-                                break;
-                            }
-                        }
-                        // Kind changed: flush this batch, resume from this record.
-                        record => {
-                            next = Some(record);
-                            break;
-                        }
-                    }
-                }
-
-                if creates.is_empty() && deletes.is_empty() && next.is_none() {
-                    return Ok(None);
-                }
-
-                if !creates.is_empty() {
                     database.save_bulk(&creates).await?;
-                }
-                if !deletes.is_empty() {
-                    database.delete_rows(&deletes).await?;
-                }
 
-                Ok(Some((creates, (ids, next))))
-            },
-        )
+                    Ok(creates)
+                }
+                HistoryRecordKind::Delete => {
+                    let deletes: Vec<HistoryId> = chunk
+                        .into_iter()
+                        .filter_map(|record| match record {
+                            HistoryRecord::Delete(id) => Some(id),
+                            HistoryRecord::Create(_) => None,
+                        })
+                        .collect();
+
+                    database.delete_rows(&deletes).await?;
+
+                    Ok(Vec::new())
+                }
+            }
+        })
     }
 
     /// Read a record and decode it, or `None` if it is missing, not history, or undecodable.

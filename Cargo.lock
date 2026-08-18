@@ -443,6 +443,7 @@ dependencies = [
  "directories",
  "eyre",
  "fs-err",
+ "futures",
  "getrandom 0.4.3",
  "itertools 0.15.0",
  "pretty_assertions",
