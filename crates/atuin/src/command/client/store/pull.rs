@@ -2,7 +2,7 @@ use clap::Args;
 use eyre::Result;
 
 use atuin_client::{
-    database::Database,
+    database::Sqlite,
     record::sync::Operation,
     record::{sqlite_store::SqliteStore, sync},
     settings::Settings,
@@ -30,12 +30,7 @@ pub struct Pull {
 }
 
 impl Pull {
-    pub async fn run(
-        &self,
-        settings: &Settings,
-        store: SqliteStore,
-        db: &dyn Database,
-    ) -> Result<()> {
+    pub async fn run(&self, settings: &Settings, store: SqliteStore, db: &Sqlite) -> Result<()> {
         if self.force {
             println!("Forcing local overwrite!");
             println!("Clearing local store");

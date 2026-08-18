@@ -451,7 +451,7 @@ fn make_starting_history(
 }
 
 async fn handle_start(
-    db: &impl Database,
+    db: &Sqlite,
     settings: &Settings,
     command: &str,
     author: Option<&str>,
@@ -498,7 +498,7 @@ async fn handle_daemon_start(
 
 #[allow(unused_variables)]
 async fn handle_end(
-    db: &impl Database,
+    db: &Sqlite,
     store: SqliteStore,
     history_store: HistoryStore,
     settings: &Settings,
@@ -939,7 +939,7 @@ impl Cmd {
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::fn_params_excessive_bools)]
     async fn handle_list(
-        db: &impl Database,
+        db: &Sqlite,
         settings: &Settings,
         context: atuin_client::database::Context,
         session: bool,
@@ -981,7 +981,7 @@ impl Cmd {
     }
 
     async fn handle_prune(
-        db: &impl Database,
+        db: &Sqlite,
         settings: &Settings,
         store: SqliteStore,
         context: atuin_client::database::Context,
@@ -1033,7 +1033,7 @@ impl Cmd {
     }
 
     async fn handle_dedup(
-        db: &impl Database,
+        db: &Sqlite,
         settings: &Settings,
         store: SqliteStore,
         before: i64,

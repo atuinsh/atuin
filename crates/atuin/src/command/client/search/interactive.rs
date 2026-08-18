@@ -19,7 +19,7 @@ use super::{
     history_list::{HistoryList, ListState},
 };
 use atuin_client::{
-    database::{Context, Database, current_context},
+    database::{Context, Database, Sqlite, current_context},
     history::{History, HistoryId, HistoryStats, store::HistoryStore},
     settings::{
         CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, RequestedSearchMode,
@@ -199,7 +199,7 @@ impl State {
 
     async fn query_results(
         &mut self,
-        db: &mut dyn Database,
+        db: &mut Sqlite,
         settings: &Settings,
     ) -> Result<Vec<History>> {
         #[cfg(feature = "daemon")]
@@ -1742,7 +1742,7 @@ fn compute_popup_placement(
 pub async fn history(
     query: &[String],
     settings: &Settings,
-    mut db: impl Database,
+    mut db: Sqlite,
     history_store: &HistoryStore,
     theme: &Theme,
 ) -> Result<String> {
@@ -1881,7 +1881,7 @@ pub async fn history(
 
     // Counting history is a full table scan, which can take a while on a large,
     // cold database - don't hold up the first frame for it.
-    let count_db = db.clone_boxed();
+    let count_db = db.clone();
     let history_count = tokio::spawn(async move { count_db.history_count(false).await }).fuse();
     tokio::pin!(history_count);
 

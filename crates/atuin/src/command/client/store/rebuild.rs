@@ -7,7 +7,7 @@ use eyre::{Result, bail};
 use crate::command::client::daemon as daemon_cmd;
 
 use atuin_client::{
-    database::Database, history::store::HistoryStore, record::sqlite_store::SqliteStore,
+    database::Sqlite, history::store::HistoryStore, record::sqlite_store::SqliteStore,
     settings::Settings,
 };
 use atuin_common::encryption::paseto_v4;
@@ -22,7 +22,7 @@ impl Rebuild {
         &self,
         settings: &Settings,
         store: SqliteStore,
-        database: &dyn Database,
+        database: &Sqlite,
     ) -> Result<()> {
         // keep it as a string and not an enum atm
         // would be super cool to build this dynamically in the future
@@ -54,7 +54,7 @@ impl Rebuild {
         &self,
         settings: &Settings,
         store: SqliteStore,
-        database: &dyn Database,
+        database: &Sqlite,
     ) -> Result<()> {
         let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
 

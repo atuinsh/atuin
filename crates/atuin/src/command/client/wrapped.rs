@@ -4,7 +4,10 @@ use std::collections::{HashMap, HashSet};
 use time::{Date, Duration, Month, OffsetDateTime, Time};
 
 use atuin_client::{
-    database::Database, record::sqlite_store::SqliteStore, settings::Settings, theme::Theme,
+    database::{Database, Sqlite},
+    record::sqlite_store::SqliteStore,
+    settings::Settings,
+    theme::Theme,
 };
 use atuin_common::encryption::paseto_v4;
 use atuin_dotfiles::store::AliasStore;
@@ -288,7 +291,7 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
 
 pub async fn run(
     year: Option<i32>,
-    db: &impl Database,
+    db: &Sqlite,
     settings: &Settings,
     store: SqliteStore,
     theme: &Theme,

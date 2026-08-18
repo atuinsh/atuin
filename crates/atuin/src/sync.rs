@@ -3,7 +3,7 @@ use atuin_scripts::store::ScriptStore;
 use eyre::{Context, Result};
 
 use atuin_client::{
-    database::Database, history::store::HistoryStore, record::sqlite_store::SqliteStore,
+    database::Sqlite, history::store::HistoryStore, record::sqlite_store::SqliteStore,
     settings::Settings,
 };
 use atuin_common::encryption::paseto_v4;
@@ -19,7 +19,7 @@ use atuin_kv::store::KvStore;
 pub async fn build(
     settings: &Settings,
     store: &SqliteStore,
-    db: &dyn Database,
+    db: &Sqlite,
     downloaded: Option<&[RecordId]>,
 ) -> Result<()> {
     let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)

@@ -2,6 +2,7 @@ use super::{SearchEngine, SearchState};
 use atuin_client::{
     database::Database,
     database::OptFilters,
+    database::Sqlite,
     database::{DbSearchMode, QueryToken, QueryTokenizer},
     history::{History, all_user_author_filter},
 };
@@ -15,11 +16,7 @@ pub struct Search(pub DbSearchMode);
 
 impl SearchEngine for Search {
     #[instrument(skip_all, level = Level::TRACE, name = "db_search", fields(mode = ?self.0, query = %state.input.as_str()))]
-    async fn full_query(
-        &mut self,
-        state: &SearchState,
-        db: &mut dyn Database,
-    ) -> Result<Vec<History>> {
+    async fn full_query(&mut self, state: &SearchState, db: &mut Sqlite) -> Result<Vec<History>> {
         let shells = state.shells.to_filter();
         let results = db
             .search(

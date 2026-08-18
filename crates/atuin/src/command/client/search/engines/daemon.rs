@@ -1,5 +1,5 @@
 use atuin_client::{
-    database::{Database, DbSearchMode, OptFilters},
+    database::{Database, DbSearchMode, OptFilters, Sqlite},
     history::{History, all_user_author_filter},
     settings::Settings,
 };
@@ -103,7 +103,7 @@ impl Search {
     async fn fallback_to_db_search(
         &self,
         state: &SearchState,
-        db: &dyn Database,
+        db: &Sqlite,
     ) -> Result<Vec<History>> {
         let shells = state.shells.to_filter();
         Ok(db
@@ -125,7 +125,7 @@ impl Search {
     }
 
     #[instrument(skip_all, level = Level::TRACE, name = "hydrate_from_db", fields(count = ids.len()))]
-    async fn hydrate_from_db(&self, db: &dyn Database, ids: &[String]) -> Result<Vec<History>> {
+    async fn hydrate_from_db(&self, db: &Sqlite, ids: &[String]) -> Result<Vec<History>> {
         let placeholders: Vec<String> = ids.iter().map(|id| format!("'{id}'")).collect();
         let sql_query = format!(
             "SELECT * FROM history WHERE id IN ({}) ORDER BY timestamp DESC",
@@ -147,11 +147,7 @@ impl Search {
 
 impl SearchEngine for Search {
     #[instrument(skip_all, level = Level::TRACE, name = "daemon_search", fields(query = %state.input.as_str()))]
-    async fn full_query(
-        &mut self,
-        state: &SearchState,
-        db: &mut dyn Database,
-    ) -> Result<Vec<History>> {
+    async fn full_query(&mut self, state: &SearchState, db: &mut Sqlite) -> Result<Vec<History>> {
         let query = state.input.as_str().to_string();
 
         // Fall back to database for regex queries (Nucleo doesn't support regex)

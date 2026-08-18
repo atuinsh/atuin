@@ -14,7 +14,11 @@ use eyre::OptionExt;
 use eyre::{Result, bail};
 use tempfile::NamedTempFile;
 
-use atuin_client::{database::Database, record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_client::{
+    database::{Database, Sqlite},
+    record::sqlite_store::SqliteStore,
+    settings::Settings,
+};
 use atuin_common::encryption::paseto_v4;
 use tracing::debug;
 
@@ -224,7 +228,7 @@ impl Cmd {
         new_script: NewScript,
         script_store: ScriptStore,
         script_db: atuin_scripts::database::Database,
-        history_db: &impl Database,
+        history_db: &Sqlite,
     ) -> Result<()> {
         let mut stdin = std::io::stdin();
         let script_content = if let Some(count_opt) = new_script.last {
@@ -567,7 +571,7 @@ impl Cmd {
         self,
         settings: &Settings,
         store: SqliteStore,
-        history_db: &impl Database,
+        history_db: &Sqlite,
     ) -> Result<()> {
         let host_id = Settings::host_id().await?;
         let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;

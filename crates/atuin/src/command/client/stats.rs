@@ -4,7 +4,7 @@ use interim::parse_date_string;
 use time::{Duration, OffsetDateTime, Time};
 
 use atuin_client::{
-    database::{Database, current_context},
+    database::{Database, Sqlite, current_context},
     settings::{FilterMode, Settings},
     theme::Theme,
 };
@@ -51,7 +51,7 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(&self, db: &impl Database, settings: &Settings, theme: &Theme) -> Result<()> {
+    pub async fn run(&self, db: &Sqlite, settings: &Settings, theme: &Theme) -> Result<()> {
         let context = current_context().await?;
         let words = if self.period.is_empty() {
             String::from("all")
