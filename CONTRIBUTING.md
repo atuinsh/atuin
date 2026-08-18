@@ -46,11 +46,7 @@ These variable exports can be added in a local `.envrc` file, read by [direnv](h
 - [`.editorconfig`](https://editorconfig.org/) which sets sane defaults for `.rs` files.
 - [`.nvim.lua`](https://github.com/atuinsh/atuin/blob/main/.nvim.lua) which configures neovim. Note you need `vim.o.exrc = true` and `nvim >= 0.11+`. You can disable it if you prefer, please see the docs at the top of that file.
 
-If you format via rust-analyzer (format-on-save in your editor), point it at nightly rustfmt too, otherwise it will silently skip the nightly-only options and your saves will disagree with CI:
-
-```json
-"rust-analyzer.rustfmt.overrideCommand": ["cargo", "+nightly", "fmt", "--", "--emit=stdout"]
-```
+If you format via rust-analyzer (LSP integration in your editor), make sure it uses nightly Rustfmt by setting [`rust-analyzer.rustfmt.overrideCommand`](https://rust-analyzer.github.io/book/configuration.html#rustfmt.overrideCommand) to `["rustfmt", "+nightly"]`.
 
 ## PRs
 
