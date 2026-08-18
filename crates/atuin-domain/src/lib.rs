@@ -187,23 +187,41 @@ impl CmdOrigin {
         self.raw
     }
 
-    /// Build from an already-owned `host:user` string, taking ownership without copying.
-    fn from_raw(raw: String) -> Self {
-        Self {
-            sep: raw.find(':').unwrap_or(raw.len()),
-            raw,
+    /// Leniently parse a string.
+    ///
+    /// If a `:` exists, the string is parsed as `<host>:<user>`.
+    /// If no `:` exists, the string is parsed as `host`, and [`CmdUser::default`] is used.
+    pub fn parse_fuzzy<T: Into<String> + AsRef<str>>(value: T) -> Self {
+        match value.as_ref().find(':') {
+            Some(sep) => Self {
+                raw: value.into(),
+                sep,
+            },
+            None => Self::new(CmdHost::from(value.into()), CmdUser::default()),
         }
     }
 }
 
-impl From<&str> for CmdOrigin {
-    fn from(value: &str) -> Self {
-        Self::from_raw(value.to_string())
+/// A [`CmdOrigin`] string was missing the `:` host/user separator.
+#[derive(Debug, thiserror::Error)]
+#[error("`{0}` is not a valid host:user command origin (missing `:`)")]
+pub struct CmdOriginParseError(pub String);
+
+impl TryFrom<String> for CmdOrigin {
+    type Error = CmdOriginParseError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.find(':') {
+            Some(sep) => Ok(Self { raw: value, sep }),
+            None => Err(CmdOriginParseError(value)),
+        }
     }
 }
 
-impl From<String> for CmdOrigin {
-    fn from(value: String) -> Self {
-        Self::from_raw(value)
+impl TryFrom<&str> for CmdOrigin {
+    type Error = CmdOriginParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::try_from(value.to_string())
     }
 }

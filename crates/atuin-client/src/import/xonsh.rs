@@ -175,7 +175,7 @@ mod tests {
                     ts: (1e30, 1e30),
                 }],
             }],
-            cmd_origin: CmdOrigin::from("box:user"),
+            cmd_origin: CmdOrigin::try_from("box:user").unwrap(),
         };
 
         let mut loader = TestLoader::default();
@@ -190,7 +190,7 @@ mod tests {
     async fn test_import() {
         let dir = PathBuf::from("tests/data/xonsh");
         let sessions = load_sessions(&dir).unwrap();
-        let cmd_origin = CmdOrigin::from("box:user");
+        let cmd_origin = CmdOrigin::try_from("box:user").unwrap();
         let xonsh = Xonsh {
             sessions,
             cmd_origin,
@@ -218,7 +218,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
                 .duration(4651069)
-                .cmd_origin("box:user")
+                .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
             History::import()
@@ -227,7 +227,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
                 .duration(21288633)
-                .cmd_origin("box:user")
+                .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
             History::import()
@@ -236,7 +236,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin/atuin-client".to_string())
                 .exit(1)
                 .duration(10269403)
-                .cmd_origin("box:user")
+                .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
             History::import()
@@ -245,7 +245,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin/atuin-client".to_string())
                 .exit(0)
                 .duration(4259347)
-                .cmd_origin("box:user")
+                .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
         ]

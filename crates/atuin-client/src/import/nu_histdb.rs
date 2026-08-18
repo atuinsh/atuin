@@ -13,6 +13,7 @@ use time::OffsetDateTime;
 use super::Importer;
 use crate::history::History;
 use crate::import::Loader;
+use atuin_domain::{CmdHost, CmdOrigin, CmdUser};
 
 #[derive(sqlx::FromRow, Debug)]
 pub struct HistDbEntry {
@@ -45,7 +46,10 @@ impl From<HistDbEntry> for History {
             .exit(histdb_item.exit_status)
             .duration(histdb_item.duration_ms)
             .session(format!("{:x}", histdb_item.session_id))
-            .cmd_origin(String::from_utf8_lossy(&histdb_item.hostname).into_owned());
+            .cmd_origin(CmdOrigin::new(
+                CmdHost::from(String::from_utf8_lossy(&histdb_item.hostname).into_owned()),
+                CmdUser::default(),
+            ));
 
         imported.build().into()
     }

@@ -1318,7 +1318,7 @@ mod test {
         captured.exit = 0;
         captured.duration = 1;
         captured.session = "beep boop".to_string();
-        captured.cmd_origin = CmdOrigin::from("booop");
+        captured.cmd_origin = CmdOrigin::parse_fuzzy("booop");
 
         db.save(&captured).await
     }
@@ -1334,7 +1334,7 @@ mod test {
         captured.exit = 0;
         captured.duration = 1;
         captured.session = "beep boop".to_string();
-        captured.cmd_origin = CmdOrigin::from("booop");
+        captured.cmd_origin = CmdOrigin::parse_fuzzy("booop");
 
         db.save(&captured).await.unwrap();
         captured
@@ -1367,7 +1367,7 @@ mod test {
             .build()
             .into();
         past.session = "beep boop".to_string();
-        past.cmd_origin = CmdOrigin::from("booop");
+        past.cmd_origin = CmdOrigin::parse_fuzzy("booop");
         db.save(&past).await.unwrap();
         save_history_item(&db, "ls /home/frank").await;
 

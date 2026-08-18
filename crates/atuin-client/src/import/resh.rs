@@ -13,6 +13,7 @@ use super::{Importer, Loader, get_histfile_path, unix_byte_lines};
 use crate::history::History;
 use crate::history::builder::HistoryImported;
 use crate::import::read_to_end;
+use atuin_domain::{CmdHost, CmdOrigin, CmdUser};
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -144,7 +145,10 @@ impl Importer for Resh {
                 .duration(duration)
                 .exit(entry.exit_code)
                 .cwd(entry.pwd)
-                .cmd_origin(entry.host)
+                .cmd_origin(CmdOrigin::new(
+                    CmdHost::from(entry.host),
+                    CmdUser::default(),
+                ))
                 // CHECK: should we add uuid here? It's not set in the other importers
                 .session(uuid_v7().as_simple().to_string());
 

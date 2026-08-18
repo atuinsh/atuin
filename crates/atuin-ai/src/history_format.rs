@@ -92,7 +92,7 @@ mod tests {
             command: "cargo test".to_string(),
             cwd: "/repo".to_string(),
             session: String::new(),
-            cmd_origin: CmdOrigin::from(String::new()),
+            cmd_origin: CmdOrigin::parse_fuzzy(""),
             author: String::new(),
             intent: None,
             deleted_at: None,

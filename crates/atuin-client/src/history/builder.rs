@@ -121,7 +121,7 @@ impl From<HistoryFromDb> for History {
             cwd: from_db.cwd,
             duration: from_db.duration,
             session: from_db.session,
-            cmd_origin: from_db.hostname.into(),
+            cmd_origin: CmdOrigin::parse_fuzzy(from_db.hostname),
             author: from_db.author,
             intent: from_db.intent,
             deleted_at: from_db.deleted_at,

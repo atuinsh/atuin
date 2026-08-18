@@ -158,7 +158,7 @@ mod tests {
             session_start: 0.0,
         };
 
-        let hist = entry.into_hist_with_cmd_origin(CmdOrigin::from("box:user"));
+        let hist = entry.into_hist_with_cmd_origin(CmdOrigin::try_from("box:user").unwrap());
         assert_eq!(hist.timestamp, OffsetDateTime::UNIX_EPOCH);
         assert_eq!(hist.command, "echo hello");
     }
@@ -168,7 +168,7 @@ mod tests {
         let connection_str = "tests/data/xonsh-history.sqlite";
         let xonsh_sqlite = XonshSqlite {
             pool: SqlitePool::connect(connection_str).await.unwrap(),
-            cmd_origin: CmdOrigin::from("box:user"),
+            cmd_origin: CmdOrigin::try_from("box:user").unwrap(),
         };
 
         let mut loader = TestLoader::default();
@@ -192,7 +192,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
                 .duration(2628564)
-                .cmd_origin("box:user")
+                .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
             History::import()
@@ -201,7 +201,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
                 .duration(9371519)
-                .cmd_origin("box:user")
+                .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
             History::import()
@@ -210,7 +210,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(1)
                 .duration(17337560)
-                .cmd_origin("box:user")
+                .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
             History::import()
@@ -219,7 +219,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
                 .duration(4599094)
-                .cmd_origin("box:user")
+                .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
         ]

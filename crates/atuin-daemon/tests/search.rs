@@ -37,7 +37,7 @@ mod unix {
             .timestamp(time::OffsetDateTime::now_utc())
             .command(command)
             .cwd(cwd)
-            .cmd_origin(hostname)
+            .cmd_origin(atuin_domain::CmdOrigin::parse_fuzzy(hostname))
             .session(session.to_string())
             .build()
             .into();
@@ -132,7 +132,7 @@ mod unix {
         Context {
             session: session.to_string(),
             cwd: cwd.to_string(),
-            cmd_origin: hostname.to_string(),
+            cmd_origin: atuin_domain::CmdOrigin::parse_fuzzy(hostname).into_string(),
             host_id: "test-host-id".to_string(),
             git_root: git_root.map(Into::into),
         }

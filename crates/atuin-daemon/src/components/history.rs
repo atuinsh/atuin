@@ -11,6 +11,7 @@ use atuin_client::{
     settings::Settings,
 };
 use atuin_common::time::OffsetDateTimeExt;
+use atuin_domain::CmdOrigin;
 use atuin_domain::caps::PackfileCap;
 use atuin_domain::record::RecordTag;
 use dashmap::DashMap;
@@ -154,12 +155,14 @@ impl HistorySvc for HistoryGrpcService {
 
         let timestamp = OffsetDateTime::from_unix_nanos_u64(req.timestamp);
 
+        let cmd_origin = CmdOrigin::try_from(req.hostname)
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let h: History = History::daemon()
             .timestamp(timestamp)
             .command(req.command)
             .cwd(req.cwd)
             .session(req.session)
-            .cmd_origin(req.hostname)
+            .cmd_origin(cmd_origin)
             .author(req.author)
             .intent(req.intent)
             .shell(req.shell)

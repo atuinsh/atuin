@@ -626,7 +626,7 @@ mod tests {
             command: command.to_string(),
             cwd: String::new(),
             session: session.to_string(),
-            cmd_origin: CmdOrigin::from(String::new()),
+            cmd_origin: CmdOrigin::parse_fuzzy(""),
             author: String::new(),
             intent: None,
             deleted_at: None,

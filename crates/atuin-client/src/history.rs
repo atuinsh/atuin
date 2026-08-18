@@ -303,7 +303,7 @@ impl History {
         let command = decode::read_string(&mut bytes)?;
         let cwd = decode::read_string(&mut bytes)?;
         let session = decode::read_string(&mut bytes)?;
-        let cmd_origin = CmdOrigin::from(decode::read_string(&mut bytes)?);
+        let cmd_origin = CmdOrigin::parse_fuzzy(decode::read_string(&mut bytes)?);
         let deleted_at = decode::read_optional(&mut bytes, decode::read_u64)?;
 
         let author = if version >= Version::One {
@@ -446,7 +446,7 @@ impl History {
     ///     .command("ls -la")
     ///     .cwd("/home/user")
     ///     .session("018deb6e8287781f9973ef40e0fde76b")
-    ///     .cmd_origin("computer:ellie")
+    ///     .cmd_origin(atuin_domain::CmdOrigin::try_from("computer:ellie").unwrap())
     ///     .build()
     ///     .into();
     /// ```
@@ -618,7 +618,7 @@ mod tests {
         command: "git status".to_owned(),
         cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
         session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
-        cmd_origin: CmdOrigin::from("fvfg936c0kpf:conrad.ludgate"),
+        cmd_origin: CmdOrigin::try_from("fvfg936c0kpf:conrad.ludgate").unwrap(),
         author: "conrad.ludgate".to_owned(),
         intent: None,
         deleted_at: None,
@@ -632,7 +632,7 @@ mod tests {
         command: "git status".to_owned(),
         cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
         session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
-        cmd_origin: CmdOrigin::from("fvfg936c0kpf:conrad.ludgate"),
+        cmd_origin: CmdOrigin::try_from("fvfg936c0kpf:conrad.ludgate").unwrap(),
         author: "conrad.ludgate".to_owned(),
         intent: None,
         deleted_at: Some(datetime!(2023-11-19 20:18 +00:00)),
@@ -646,7 +646,7 @@ mod tests {
         command: "git status".to_owned(),
         cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
         session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
-        cmd_origin: CmdOrigin::from("fvfg936c0kpf:conrad.ludgate"),
+        cmd_origin: CmdOrigin::try_from("fvfg936c0kpf:conrad.ludgate").unwrap(),
         author: "claude".to_owned(),
         intent: Some("check repository status".to_owned()),
         deleted_at: None,
@@ -700,7 +700,7 @@ mod tests {
             command: "git status".to_owned(),
             cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
             session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
-            cmd_origin: CmdOrigin::from("fvfg936c0kpf:conrad.ludgate"),
+            cmd_origin: CmdOrigin::try_from("fvfg936c0kpf:conrad.ludgate").unwrap(),
             author: "conrad.ludgate".to_owned(),
             intent: Some("sample intent".to_owned()),
             deleted_at: Some(time::OffsetDateTime::from_unix_timestamp(1784080673).unwrap()),
