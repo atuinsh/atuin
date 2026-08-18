@@ -3,7 +3,6 @@ use atuin_client::settings::Settings;
 use atuin_common::logs::{FileConfig, LogConfig, StderrConfig};
 use atuin_common::shell::Shell;
 use clap::{Args, Subcommand};
-pub mod init;
 pub(crate) mod inline;
 
 #[derive(Args, Debug)]
@@ -23,13 +22,6 @@ pub struct AiArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Initialize shell integration
-    Init {
-        /// Shell to generate integration for; defaults to "auto"
-        #[arg(value_name = "SHELL", default_value = "auto")]
-        shell: String,
-    },
-
     /// Inline completion mode with small TUI overlay
     Inline {
         #[command(flatten)]
@@ -52,14 +44,12 @@ impl Command {
                 file: FileConfig::from_settings(&settings.logs, &settings.logs.ai),
                 stderr: args.verbose.then(StderrConfig::default),
             },
-            _ => LogConfig::stderr_only(),
         }
     }
 }
 
 pub async fn run(command: Command, settings: &Settings) -> eyre::Result<()> {
     match command {
-        Command::Init { shell } => init::run(shell).await,
         Command::Inline {
             command,
             hook,

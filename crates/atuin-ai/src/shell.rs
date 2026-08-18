@@ -1,32 +1,4 @@
-use crate::commands::detect_shell;
-
-pub(crate) async fn run(shell: String) -> eyre::Result<()> {
-    let integration = match shell.as_str() {
-        "zsh" => generate_zsh_integration(),
-        "bash" => generate_bash_integration(),
-        "fish" => generate_fish_integration(),
-        "auto" => generate_auto_integration()?,
-        _ => eyre::bail!("Unsupported shell: {}", shell),
-    };
-
-    println!("{}", integration);
-    Ok(())
-}
-
-fn generate_auto_integration() -> eyre::Result<&'static str> {
-    let shell = detect_shell();
-    match shell.as_deref() {
-        Some("zsh") => Ok(generate_zsh_integration()),
-        Some("bash") => Ok(generate_bash_integration()),
-        Some("fish") => Ok(generate_fish_integration()),
-        Some(s) => eyre::bail!("Unsupported shell: {}", s),
-        None => eyre::bail!("Could not detect shell"),
-    }
-}
-
-/// Generate the zsh integration function - pure function for easy testing
-pub fn generate_zsh_integration() -> &'static str {
-    r#"
+pub const ZSH_INIT: &str = r#"
 _atuin_ai_cleanup() {
     true
 }
@@ -92,12 +64,9 @@ self-atuin-ai-question-mark() {
 zle -N self-atuin-ai-question-mark
 bindkey '?' self-atuin-ai-question-mark # Question mark
 "#
-    .trim()
-}
+.trim_ascii();
 
-/// Generate the bash integration function - pure function for easy testing
-pub fn generate_bash_integration() -> &'static str {
-    r#"
+pub const BASH_INIT: &str = r#"
 # Question mark at start of line - natural language mode
 _atuin_ai_question_mark() {
     # If buffer is empty or just contains '?', trigger natural language mode
@@ -141,12 +110,9 @@ if ((BASH_VERSINFO[0] >= 4)) || [[ ${BLE_VERSION-} ]]; then
     atuin-bind '?' _atuin_ai_question_mark
 fi
 "#
-    .trim()
-}
+.trim_ascii();
 
-/// Generate the fish integration function - pure function for easy testing
-pub fn generate_fish_integration() -> &'static str {
-    r#"
+pub const FISH_INIT: &str = r#"
 # Question mark at start of line - natural language mode
 function _atuin_ai_question_mark
     set -l buf (commandline -b)
@@ -195,8 +161,7 @@ end
 # Set up keybindings
 bind "?" _atuin_ai_question_mark
 "#
-    .trim()
-}
+.trim_ascii();
 
 #[cfg(test)]
 mod tests {
@@ -205,18 +170,18 @@ mod tests {
 
     #[rstest]
     #[case::zsh(
-        generate_zsh_integration(),
+        ZSH_INIT,
         &["self-atuin-ai-question-mark", "bindkey", "zle self-insert"]
     )]
     #[case::bash(
-        generate_bash_integration(),
+        BASH_INIT,
         &["_atuin_ai_question_mark", "bind", "READLINE_LINE", "__atuin_accept_line", "atuin-bind"]
     )]
     #[case::fish(
-        generate_fish_integration(),
+        FISH_INIT,
         &["_atuin_ai_question_mark", "bind", "commandline"]
     )]
-    fn generates_shell_integration(#[case] result: &str, #[case] extras: &[&str]) {
+    fn shell_init(#[case] result: &str, #[case] extras: &[&str]) {
         for t in [
             "atuin ai inline --hook",
             "__atuin_ai_print__",
