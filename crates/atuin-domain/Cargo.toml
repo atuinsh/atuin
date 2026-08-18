@@ -14,7 +14,7 @@ repository = { workspace = true }
 
 [dependencies]
 serde = { workspace = true }
-atuin-common = { workspace = true }
+atuin-common = { workspace = true, features = ["os"] }
 uuid = { workspace = true }
 time = { workspace = true }
 semver = { workspace = true }

@@ -23,10 +23,8 @@ use sqlx::{
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::{
-    history::{HistoryId, HistoryStats},
-    utils::get_host_user,
-};
+use crate::history::{HistoryId, HistoryStats};
+use atuin_domain::AtuinHostUser;
 
 use super::{
     history::History,
@@ -72,7 +70,7 @@ pub struct OptFilters<'a> {
 /// filters simply match nothing.
 pub async fn query_context() -> eyre::Result<Context> {
     let session = env::var("ATUIN_SESSION").unwrap_or_default();
-    let hostname = get_host_user();
+    let hostname = AtuinHostUser::probe().to_string();
     let cwd = utils::get_current_dir();
     let host_id = Settings::host_id().await?;
     let git_root = utils::in_git_repo(cwd.as_str());
