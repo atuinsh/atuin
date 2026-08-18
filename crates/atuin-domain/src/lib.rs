@@ -182,6 +182,11 @@ impl CmdOrigin {
         &self.raw
     }
 
+    /// Consume into the owned `host:user` string, without copying.
+    pub fn into_string(self) -> String {
+        self.raw
+    }
+
     /// Build from an already-owned `host:user` string, taking ownership without copying.
     fn from_raw(raw: String) -> Self {
         Self {

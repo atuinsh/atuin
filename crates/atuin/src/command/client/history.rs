@@ -791,7 +791,7 @@ impl TailEvent {
         out.push('\n');
 
         push_pretty_field(&mut out, "cwd", &self.history.cwd);
-        push_pretty_field(&mut out, "hostname", &self.history.cmd_origin.to_string());
+        push_pretty_field(&mut out, "hostname", self.history.cmd_origin.as_str());
         push_pretty_field(&mut out, "host", self.host());
         push_pretty_field(&mut out, "user", self.user());
         push_pretty_field(&mut out, "author", &self.history.author);

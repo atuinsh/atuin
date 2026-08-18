@@ -70,7 +70,7 @@ pub struct OptFilters<'a> {
 /// filters simply match nothing.
 pub async fn query_context() -> eyre::Result<Context> {
     let session = env::var("ATUIN_SESSION").unwrap_or_default();
-    let cmd_origin = CmdOrigin::probe().to_string();
+    let cmd_origin = CmdOrigin::probe().into_string();
     let cwd = utils::get_current_dir();
     let host_id = Settings::host_id().await?;
     let git_root = utils::in_git_repo(cwd.as_str());
@@ -383,7 +383,11 @@ impl Sqlite {
         let author: Option<String> = row.try_get("author").ok().flatten();
         let author = author
             .filter(|author| !author.trim().is_empty())
-            .unwrap_or_else(|| CmdOrigin::from(hostname.as_str()).user().to_string());
+            .unwrap_or_else(|| {
+                hostname
+                    .split_once(':')
+                    .map_or_else(|| hostname.clone(), |(_, user)| user.to_owned())
+            });
         let intent: Option<String> = row.try_get("intent").ok().flatten();
         let intent = intent.filter(|intent| !intent.trim().is_empty());
         let shell: Option<String> = row.try_get("shell").ok().flatten();

@@ -264,7 +264,7 @@ impl History {
         encode::write_str(&mut output, &self.command)?;
         encode::write_str(&mut output, &self.cwd)?;
         encode::write_str(&mut output, &self.session)?;
-        encode::write_str(&mut output, &self.cmd_origin.to_string())?;
+        encode::write_str(&mut output, self.cmd_origin.as_str())?;
 
         encode::write_optional(
             &mut output,
