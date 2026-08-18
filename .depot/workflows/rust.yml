@@ -178,10 +178,10 @@ jobs:
     runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - name: Install latest rust
+      - name: Install nightly rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.94.0
+          toolchain: nightly
           components: rustfmt
       - name: Format
-        run: cargo fmt -- --check
+        run: cargo +nightly fmt -- --check

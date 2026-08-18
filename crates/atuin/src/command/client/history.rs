@@ -342,7 +342,7 @@ impl FormatKey for FmtHistory<'_> {
             "author" => f.write_str(&self.history.author)?,
             "intent" => f.write_str(self.history.intent.as_deref().unwrap_or_default())?,
             "user" => {
-                f.write_str(self.history.hostname.split_once(':').map_or("", |(_, user)| user))?
+                f.write_str(self.history.hostname.split_once(':').map_or("", |(_, user)| user))?;
             }
             "session" => f.write_str(&self.history.session)?,
             "uuid" => f.write_str(&self.history.id.0)?,
