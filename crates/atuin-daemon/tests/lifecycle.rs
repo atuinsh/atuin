@@ -133,7 +133,7 @@ mod unix {
             .command("echo hello".to_string())
             .cwd("/tmp".to_string())
             .session("test-session".to_string())
-            .cmd_origin("test-host".to_string())
+            .cmd_origin("test-host")
             .build()
             .into();
 
@@ -163,7 +163,7 @@ mod unix {
             .command("git status".to_string())
             .cwd("/tmp/repo".to_string())
             .session("tail-session".to_string())
-            .cmd_origin("test-host:ellie".to_string())
+            .cmd_origin("test-host:ellie")
             .author("claude".to_string())
             .intent("inspect repository state".to_string())
             .shell("bash")

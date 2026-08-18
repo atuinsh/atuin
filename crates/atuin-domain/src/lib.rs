@@ -177,6 +177,11 @@ impl CmdOrigin {
         CmdUser(self.raw.get(self.sep + 1..).unwrap_or(""))
     }
 
+    /// The whole `host:user` string, borrowed.
+    pub fn as_str(&self) -> &str {
+        &self.raw
+    }
+
     /// Build from an already-owned `host:user` string, taking ownership without copying.
     fn from_raw(raw: String) -> Self {
         Self {

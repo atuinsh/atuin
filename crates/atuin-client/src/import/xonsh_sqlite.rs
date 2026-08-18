@@ -192,7 +192,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
                 .duration(2628564)
-                .cmd_origin("box:user".to_string())
+                .cmd_origin("box:user")
                 .build()
                 .into(),
             History::import()
@@ -201,7 +201,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
                 .duration(9371519)
-                .cmd_origin("box:user".to_string())
+                .cmd_origin("box:user")
                 .build()
                 .into(),
             History::import()
@@ -210,7 +210,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(1)
                 .duration(17337560)
-                .cmd_origin("box:user".to_string())
+                .cmd_origin("box:user")
                 .build()
                 .into(),
             History::import()
@@ -219,7 +219,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
                 .duration(4599094)
-                .cmd_origin("box:user".to_string())
+                .cmd_origin("box:user")
                 .build()
                 .into(),
         ]

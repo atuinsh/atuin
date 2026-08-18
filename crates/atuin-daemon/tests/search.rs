@@ -37,7 +37,7 @@ mod unix {
             .timestamp(time::OffsetDateTime::now_utc())
             .command(command)
             .cwd(cwd)
-            .cmd_origin(hostname.to_string())
+            .cmd_origin(hostname)
             .session(session.to_string())
             .build()
             .into();
