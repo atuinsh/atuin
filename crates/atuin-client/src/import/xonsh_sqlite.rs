@@ -27,7 +27,7 @@ struct HistDbEntry {
 }
 
 impl HistDbEntry {
-    fn into_hist_with_hostname(self, hostname: String) -> History {
+    fn into_hist_with_cmd_origin(self, cmd_origin: CmdOrigin) -> History {
         let ts_nanos = (self.tsb * 1_000_000_000_f64) as i128;
         let timestamp =
             OffsetDateTime::from_unix_nanos(ts_nanos).unwrap_or(OffsetDateTime::UNIX_EPOCH);
@@ -46,7 +46,7 @@ impl HistDbEntry {
             .command(self.inp)
             .cwd(self.cwd)
             .session(session_id)
-            .hostname(hostname)
+            .hostname(cmd_origin.to_string())
             .build()
             .into()
     }
@@ -119,7 +119,7 @@ impl Importer for XonshSqlite {
 
         let mut count = 0;
         while let Some(entry) = entries.try_next().await? {
-            let hist = entry.into_hist_with_hostname(self.cmd_origin.to_string());
+            let hist = entry.into_hist_with_cmd_origin(self.cmd_origin.clone());
             loader.push(hist).await?;
             count += 1;
         }
@@ -158,7 +158,7 @@ mod tests {
             session_start: 0.0,
         };
 
-        let hist = entry.into_hist_with_hostname("box:user".to_string());
+        let hist = entry.into_hist_with_cmd_origin(CmdOrigin::from("box:user"));
         assert_eq!(hist.timestamp, OffsetDateTime::UNIX_EPOCH);
         assert_eq!(hist.command, "echo hello");
     }
@@ -168,7 +168,7 @@ mod tests {
         let connection_str = "tests/data/xonsh-history.sqlite";
         let xonsh_sqlite = XonshSqlite {
             pool: SqlitePool::connect(connection_str).await.unwrap(),
-            cmd_origin: CmdOrigin::try_from("box:user").unwrap(),
+            cmd_origin: CmdOrigin::from("box:user"),
         };
 
         let mut loader = TestLoader::default();

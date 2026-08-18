@@ -175,7 +175,7 @@ mod tests {
                     ts: (1e30, 1e30),
                 }],
             }],
-            cmd_origin: CmdOrigin::try_from("box:user").unwrap(),
+            cmd_origin: CmdOrigin::from("box:user"),
         };
 
         let mut loader = TestLoader::default();
@@ -190,7 +190,7 @@ mod tests {
     async fn test_import() {
         let dir = PathBuf::from("tests/data/xonsh");
         let sessions = load_sessions(&dir).unwrap();
-        let cmd_origin = CmdOrigin::try_from("box:user").unwrap();
+        let cmd_origin = CmdOrigin::from("box:user");
         let xonsh = Xonsh {
             sessions,
             cmd_origin,

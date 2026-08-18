@@ -45,7 +45,7 @@ use time::PrimitiveDateTime;
 use super::Importer;
 use crate::history::History;
 use crate::import::Loader;
-use atuin_domain::{AtuinHostname, AtuinUsername};
+use atuin_domain::{AtuinHostname, CmdUser};
 
 #[derive(sqlx::FromRow, Debug)]
 pub struct HistDbEntryCount {
@@ -67,7 +67,7 @@ pub struct HistDbEntry {
 #[derive(Debug)]
 pub struct ZshHistDb {
     histdb: Vec<HistDbEntry>,
-    username: AtuinUsername,
+    username: CmdUser,
 }
 
 /// Read db at given file, return vector of entries.
@@ -137,7 +137,7 @@ impl Importer for ZshHistDb {
         let histdb_entry_vec = hist_from_db(dbpath).await?;
         Ok(Self {
             histdb: histdb_entry_vec,
-            username: AtuinUsername::probe(),
+            username: CmdUser::probe(),
         })
     }
 
@@ -277,7 +277,7 @@ mod test {
         let histdb_vec = hist_from_db_conn(pool).await.unwrap();
         let histdb = ZshHistDb {
             histdb: histdb_vec,
-            username: AtuinUsername::probe(),
+            username: CmdUser::probe(),
         };
 
         println!("h: {:#?}", histdb.histdb);
