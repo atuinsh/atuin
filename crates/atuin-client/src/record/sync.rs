@@ -239,9 +239,11 @@ async fn sync_upload(
         }
 
         if tag == RecordTag::Packfile {
-            let mut uploads = stream::iter(&page)
+            let uploads = page
+                .iter()
                 .map(|manifest| upload_packed(manifest, store, key, client))
-                .buffered(MAX_CONCURRENT_PACKFILE_TRANSFERS);
+                .collect::<Vec<_>>();
+            let mut uploads = stream::iter(uploads).buffered(MAX_CONCURRENT_PACKFILE_TRANSFERS);
 
             while let Some(result) = uploads.next().await {
                 result.map_err(|e| {
@@ -344,8 +346,11 @@ async fn sync_download(
         // We commit the packfile's history into the local store before we persist the manifests, so
         // a manifest we recorded always has its associated history.
         if tag == RecordTag::Packfile {
-            let results: Vec<Result<Vec<RecordId>, _>> = stream::iter(&page)
+            let downloads = page
+                .iter()
                 .map(|manifest| download_packed(manifest, store, key, client))
+                .collect::<Vec<_>>();
+            let results: Vec<Result<Vec<RecordId>, _>> = stream::iter(downloads)
                 .buffered(MAX_CONCURRENT_PACKFILE_TRANSFERS)
                 .collect()
                 .await;
@@ -782,7 +787,9 @@ mod packfile_download_tests {
     use std::collections::HashMap;
 
     use atuin_common::utils::uuid_v7;
-    use atuin_domain::record::{DecryptedData, EncryptedData, Host, HostId, Record, RecordId};
+    use atuin_domain::record::{
+        DecryptedData, EncryptedData, Host, HostId, Record, RecordId, RecordVersion,
+    };
     use rstest::*;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1142,6 +1149,194 @@ mod packfile_download_tests {
             got.is_empty(),
             "nothing to download when local head already exceeds remote"
         );
+    }
+
+    /// Build `num_packs` contiguous packfiles of `per` history records each for a single host,
+    /// returning every manifest paired with the blob a server would serve, plus all covered history
+    /// ids in idx order.
+    async fn packed_packfiles(
+        host: HostId,
+        key: &paseto_v4::Key,
+        per: u64,
+        num_packs: u64,
+    ) -> (Vec<(Record<EncryptedData>, Vec<u8>)>, Vec<RecordId>) {
+        let up = memory_store().await;
+        seed_history(&up, host, key, per * num_packs).await;
+        try_pack(
+            &up,
+            host,
+            Some(PackfileCap {
+                version: 1,
+                record_count: per,
+            }),
+            &RecordTag::History,
+        )
+        .await
+        .unwrap();
+
+        let manifests = up
+            .next(host, &RecordTag::Packfile, 0, num_packs)
+            .await
+            .unwrap();
+        assert_eq!(
+            manifests.len() as u64,
+            num_packs,
+            "fixture expects exactly one manifest per pack"
+        );
+
+        let mut packs = Vec::new();
+        for manifest in &manifests {
+            let view = PackManifestRecordView::new(manifest).unwrap();
+            let (blob, _ids) = view.pack_records(&up, key.clone()).await.unwrap();
+            packs.push((manifest.clone(), blob));
+        }
+
+        let history_ids = up
+            .next(host, &RecordTag::History, 0, per * num_packs)
+            .await
+            .unwrap()
+            .iter()
+            .map(|record| record.id)
+            .collect();
+
+        (packs, history_ids)
+    }
+
+    /// Mount `/api/v0/packfiles/{id}` -> a per-manifest download URL, and that URL -> the blob, for
+    /// each pack. Each gets a distinct download path so the batch fetches don't alias.
+    async fn mount_packfile_blobs(server: &MockServer, packs: &[(Record<EncryptedData>, Vec<u8>)]) {
+        for (i, (manifest, blob)) in packs.iter().enumerate() {
+            let download_path = format!("/download/{i}");
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v0/packfiles/{}", manifest.id.0)))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "download_url": format!("{}{}", server.uri(), download_path) })))
+                .mount(server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(download_path))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(blob.clone()))
+                .mount(server)
+                .await;
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sync_download_expands_a_batch_of_packfile_manifests(key: paseto_v4::Key) {
+        let host = HostId(uuid_v7());
+
+        // Two contiguous packfiles (idx 0..=2 and 3..=5) delivered together in one page.
+        let (packs, history_ids) = packed_packfiles(host, &key, 3, 2).await;
+
+        let server = MockServer::start().await;
+        let page: Vec<Record<EncryptedData>> = packs.iter().map(|(m, _)| m.clone()).collect();
+        Mock::given(method("GET"))
+            .and(path("/api/v0/record/next"))
+            .and(query_param("start", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(page))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v0/record/next"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(Vec::<Record<EncryptedData>>::new()),
+            )
+            .mount(&server)
+            .await;
+        mount_packfile_blobs(&server, &packs).await;
+
+        let down = memory_store().await;
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let returned = sync_download(&down, &client, host, RecordTag::Packfile, 1, 100, &key)
+            .await
+            .unwrap();
+
+        // Every batched packfile's history is populated, whichever download finished first.
+        assert_eq!(
+            down.next(host, &RecordTag::History, 0, 6)
+                .await
+                .unwrap()
+                .len(),
+            6,
+            "all history across the batch must be populated"
+        );
+        for id in &history_ids {
+            assert!(
+                returned.contains(id),
+                "expanded history id {id:?} must be returned for indexing"
+            );
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sync_download_skips_a_permanent_failure_within_a_batch(key: paseto_v4::Key) {
+        let host = HostId(uuid_v7());
+
+        // Two valid contiguous packfiles...
+        let (packs, history_ids) = packed_packfiles(host, &key, 3, 2).await;
+
+        // ...plus a malformed manifest riding in the same page. It fails to parse before any network
+        // I/O (permanent), so it needs no download mock of its own.
+        let bad = Record::builder()
+            .host(Host::new(host))
+            .version(RecordVersion::V1)
+            .tag(RecordTag::Packfile)
+            .idx(2)
+            .data(EncryptedData {
+                raw: "001{not json".into(),
+                cek: String::new(),
+            })
+            .build();
+
+        let server = MockServer::start().await;
+        let page: Vec<Record<EncryptedData>> = packs
+            .iter()
+            .map(|(m, _)| m.clone())
+            .chain(std::iter::once(bad.clone()))
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/api/v0/record/next"))
+            .and(query_param("start", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(page))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v0/record/next"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(Vec::<Record<EncryptedData>>::new()),
+            )
+            .mount(&server)
+            .await;
+        mount_packfile_blobs(&server, &packs).await;
+
+        let down = memory_store().await;
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        // The permanent per-manifest failure is logged and skipped; the whole tick still succeeds.
+        let returned = sync_download(&down, &client, host, RecordTag::Packfile, 2, 100, &key)
+            .await
+            .expect("a permanent per-manifest failure must not fail the tick");
+
+        // The two valid packfiles in the batch still expand despite the poisoned sibling.
+        assert_eq!(
+            down.next(host, &RecordTag::History, 0, 6)
+                .await
+                .unwrap()
+                .len(),
+            6,
+            "valid packfiles in the batch must still expand"
+        );
+        for id in &history_ids {
+            assert!(
+                returned.contains(id),
+                "expanded history id {id:?} must be returned for indexing"
+            );
+        }
     }
 }
 
