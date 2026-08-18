@@ -100,12 +100,6 @@ pub fn generate_bash_integration() -> &'static str {
     r#"
 # Question mark at start of line - natural language mode
 _atuin_ai_question_mark() {
-    # Reset the chain sequence to a no-op; the execute branch below rebinds
-    # it to accept-line so readline runs the command after this handler
-    # returns.  Without the reset, a stale accept-line binding from a
-    # previous execute would fire on the next '?' press.
-    bind '"\C-x\C-_B0\a": ""'
-
     # If buffer is empty or just contains '?', trigger natural language mode
     if [[ -z "$READLINE_LINE" || "$READLINE_LINE" == "?" ]]; then
         READLINE_LINE=""
@@ -120,26 +114,17 @@ _atuin_ai_question_mark() {
 
         if [[ $output == __atuin_ai_print__:* ]]; then
             echo "${output#__atuin_ai_print__:}"
-            READLINE_LINE=""
-            READLINE_POINT=0
+            __atuin_insert_line ""
         elif [[ $output == __atuin_ai_cancel__ ]]; then
-            READLINE_LINE=""
-            READLINE_POINT=0
+            __atuin_insert_line ""
         elif [[ $output == __atuin_ai_execute__:* ]]; then
-            READLINE_LINE=${output#__atuin_ai_execute__:}
-            READLINE_POINT=${#READLINE_LINE}
-            # Execute by rebinding the chain sequence; accepting the line
-            # also records the command in bash history and fires
-            # bash-preexec, so atuin history captures it too.
-            bind '"\C-x\C-_B0\a": accept-line'
+            __atuin_accept_line "${output#__atuin_ai_execute__:}"
         elif [[ $output == __atuin_ai_insert__:* ]]; then
             # Insert the command for editing
-            READLINE_LINE=${output#__atuin_ai_insert__:}
-            READLINE_POINT=${#READLINE_LINE}
+            __atuin_insert_line "${output#__atuin_ai_insert__:}"
         elif [[ -n $output ]]; then
             # Default: insert for editing
-            READLINE_LINE=$output
-            READLINE_POINT=${#READLINE_LINE}
+            __atuin_insert_line "$output"
         fi
     else
         # Not at empty prompt, just insert the question mark
@@ -153,25 +138,7 @@ _atuin_ai_question_mark() {
 # the contents of the line buffer.  This means that it would make impossible
 # to input "?" in Bash 3.2.
 if ((BASH_VERSINFO[0] >= 4)) || [[ ${BLE_VERSION-} ]]; then
-    # A "bind -x" handler cannot invoke readline bindable functions such as
-    # accept-line, so binding '?' directly to the handler could only ever edit
-    # READLINE_LINE, never execute it.  We use the same two-step macro dispatch
-    # as atuin's main bash integration: '?' expands to two intermediate
-    # sequences, the first runs the handler via "bind -x", and the handler
-    # decides what the second does by rebinding it — accept-line to execute, a
-    # no-op otherwise.  The sequences \C-x\C-_B<n>\a mirror the main
-    # integration's \C-x\C-_A<n>\a chain, with B instead of A to avoid
-    # colliding with it.
-    if ((BASH_VERSINFO[0] >= 5 || BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3)); then
-        bind '"\C-x\C-_B0\a": ""'
-        bind -x '"\C-x\C-_B1\a": _atuin_ai_question_mark'
-        bind '"?": "\C-x\C-_B1\a\C-x\C-_B0\a"'
-    else
-        # Bash <= 4.2 cannot "bind -x" a key sequence longer than two bytes,
-        # so bind the handler directly.  Enter in the TUI then inserts the
-        # command instead of executing it.
-        bind -x '"?": _atuin_ai_question_mark'
-    fi
+    atuin-bind '?' _atuin_ai_question_mark
 fi
 "#
     .trim()
@@ -243,7 +210,7 @@ mod tests {
     )]
     #[case::bash(
         generate_bash_integration(),
-        &["_atuin_ai_question_mark", "bind", "READLINE_LINE", "accept-line", r#"\C-x\C-_B0\a"#]
+        &["_atuin_ai_question_mark", "bind", "READLINE_LINE", "__atuin_accept_line", "atuin-bind"]
     )]
     #[case::fish(
         generate_fish_integration(),
