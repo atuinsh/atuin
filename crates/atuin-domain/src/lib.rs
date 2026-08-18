@@ -191,6 +191,11 @@ impl CmdOrigin {
     ///
     /// If a `:` exists, the string is parsed as `<host>:<user>`.
     /// If no `:` exists, the string is parsed as `host`, and [`CmdUser::default`] is used.
+    #[deprecated(
+        note = "this function is considered an anti-pattern and should not be used moving forwards. \
+            it is mostly used to interface with legacy code and need to deserialize potentially \
+            malformed data."
+    )]
     pub fn parse_fuzzy<T: Into<String> + AsRef<str>>(value: T) -> Self {
         match value.as_ref().find(':') {
             Some(sep) => Self {
@@ -198,6 +203,16 @@ impl CmdOrigin {
                 sep,
             },
             None => Self::new(CmdHost::from(value.into()), CmdUser::default()),
+        }
+    }
+}
+
+impl Default for CmdOrigin {
+    fn default() -> Self {
+        let def_str = String::from("unknown-host:unknown-user");
+        Self {
+            sep: def_str.find(':').expect("literal missing :"),
+            raw: def_str,
         }
     }
 }
