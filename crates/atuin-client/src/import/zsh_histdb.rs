@@ -45,7 +45,7 @@ use time::PrimitiveDateTime;
 use super::Importer;
 use crate::history::History;
 use crate::import::Loader;
-use crate::utils::{get_hostname, get_username};
+use atuin_domain::{AtuinHostname, AtuinUsername};
 
 #[derive(sqlx::FromRow, Debug)]
 pub struct HistDbEntryCount {
@@ -137,7 +137,7 @@ impl Importer for ZshHistDb {
         let histdb_entry_vec = hist_from_db(dbpath).await?;
         Ok(Self {
             histdb: histdb_entry_vec,
-            username: get_username(),
+            username: AtuinUsername::probe().to_string(),
         })
     }
 
@@ -156,9 +156,10 @@ impl Importer for ZshHistDb {
                 Ok(s) => s.trim_end(),
                 Err(_) => continue, // we can skip past things like invalid utf8
             };
-            let hostname = format!(
+            let user_host = format!(
                 "{}:{}",
-                String::from_utf8(entry.host).unwrap_or_else(|_e| get_hostname()),
+                String::from_utf8(entry.host)
+                    .unwrap_or_else(|_e| AtuinHostname::probe().to_string()),
                 self.username
             );
             let session = session_map.entry(entry.session).or_insert_with(uuid_v7);
@@ -171,7 +172,7 @@ impl Importer for ZshHistDb {
                 .duration(entry.duration.saturating_mul(1_000_000_000))
                 .exit(entry.exit_status)
                 .session(session.as_simple().to_string())
-                .hostname(hostname)
+                .hostname(user_host)
                 .build();
             h.push(imported.into()).await?;
         }
@@ -276,7 +277,7 @@ mod test {
         let histdb_vec = hist_from_db_conn(pool).await.unwrap();
         let histdb = ZshHistDb {
             histdb: histdb_vec,
-            username: get_username(),
+            username: AtuinUsername::probe().to_string(),
         };
 
         println!("h: {:#?}", histdb.histdb);

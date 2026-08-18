@@ -70,14 +70,14 @@ pub struct OptFilters<'a> {
 /// filters simply match nothing.
 pub async fn query_context() -> eyre::Result<Context> {
     let session = env::var("ATUIN_SESSION").unwrap_or_default();
-    let hostname = AtuinHostUser::probe().to_string();
+    let user_host = AtuinHostUser::probe().to_string();
     let cwd = utils::get_current_dir();
     let host_id = Settings::host_id().await?;
     let git_root = utils::in_git_repo(cwd.as_str());
 
     Ok(Context {
         session,
-        hostname,
+        hostname: user_host,
         cwd,
         git_root,
         host_id: host_id.0.as_simple().to_string(),

@@ -96,8 +96,11 @@ impl Importer for XonshSqlite {
         })?;
 
         let pool = SqlitePool::connect(connection_str).await?;
-        let hostname = AtuinHostUser::probe().to_string();
-        Ok(XonshSqlite { pool, hostname })
+        let user_host = AtuinHostUser::probe().to_string();
+        Ok(XonshSqlite {
+            pool,
+            hostname: user_host,
+        })
     }
 
     async fn entries(&mut self) -> Result<usize> {

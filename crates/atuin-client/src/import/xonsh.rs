@@ -107,8 +107,11 @@ impl Importer for Xonsh {
         let xonsh_data_dir = env::var("XONSH_DATA_DIR").ok();
         let hist_dir = get_histdir_path(|| xonsh_hist_dir(xonsh_data_dir))?;
         let sessions = load_sessions(&hist_dir)?;
-        let hostname = AtuinHostUser::probe().to_string();
-        Ok(Xonsh { sessions, hostname })
+        let user_host = AtuinHostUser::probe().to_string();
+        Ok(Xonsh {
+            sessions,
+            hostname: user_host,
+        })
     }
 
     async fn entries(&mut self) -> Result<usize> {

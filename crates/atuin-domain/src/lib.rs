@@ -98,8 +98,10 @@ pub struct AtuinUsername(String);
 impl AtuinUsername {
     pub fn probe() -> Self {
         std::env::var("ATUIN_HOST_USER")
+            .ok()
+            .or_else(|| atuin_common::os::username().ok())
             .map(Self)
-            .unwrap_or_else(|_| Self::default())
+            .unwrap_or_default()
     }
 }
 
