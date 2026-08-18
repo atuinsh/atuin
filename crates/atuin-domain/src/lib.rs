@@ -92,6 +92,14 @@ impl Default for AtuinHostname {
     }
 }
 
+impl TryFrom<&str> for AtuinHostname {
+    type Error = atuin_common::os::HostnameStringConversionError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Hostname::try_from(value).map(Self)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, derive_more::Display)]
 pub struct AtuinUsername(String);
 
@@ -124,12 +132,16 @@ impl From<&str> for AtuinUsername {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct AtuinHostUser {
+pub struct CmdOrigin {
     pub hostname: AtuinHostname,
     pub username: AtuinUsername,
 }
 
-impl AtuinHostUser {
+impl CmdOrigin {
+    pub fn new(hostname: AtuinHostname, username: AtuinUsername) -> Self {
+        Self { hostname, username }
+    }
+
     pub fn probe() -> Self {
         Self {
             hostname: AtuinHostname::probe(),
@@ -138,8 +150,20 @@ impl AtuinHostUser {
     }
 }
 
-impl Display for AtuinHostUser {
+impl Display for CmdOrigin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}", self.hostname, self.username)
+    }
+}
+
+impl TryFrom<&str> for CmdOrigin {
+    type Error = atuin_common::os::HostnameStringConversionError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let (hostname, username) = value.split_once(':').unwrap_or((value, ""));
+        Ok(Self {
+            hostname: AtuinHostname::try_from(hostname)?,
+            username: AtuinUsername::from(username),
+        })
     }
 }

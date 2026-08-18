@@ -299,7 +299,7 @@ impl From<Context> for RpcSearchContext {
         RpcSearchContext {
             session_id: context.session,
             cwd: context.cwd,
-            hostname: context.hostname,
+            hostname: context.cmd_origin,
             host_id: context.host_id,
             git_root: context
                 .git_root

@@ -14,7 +14,7 @@ use uuid::timestamp::{Timestamp, context::NoContext};
 use super::{Importer, Loader, get_histfile_path};
 use crate::history::History;
 use crate::history::builder::HistoryImported;
-use atuin_domain::AtuinHostUser;
+use atuin_domain::CmdOrigin;
 
 #[derive(Debug, FromRow)]
 struct HistDbEntry {
@@ -77,7 +77,7 @@ fn xonsh_db_path(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
 #[derive(Debug)]
 pub struct XonshSqlite {
     pool: SqlitePool,
-    user_host: String,
+    cmd_origin: CmdOrigin,
 }
 
 #[async_trait]
@@ -96,8 +96,8 @@ impl Importer for XonshSqlite {
         })?;
 
         let pool = SqlitePool::connect(connection_str).await?;
-        let user_host = AtuinHostUser::probe().to_string();
-        Ok(XonshSqlite { pool, user_host })
+        let cmd_origin = CmdOrigin::probe();
+        Ok(XonshSqlite { pool, cmd_origin })
     }
 
     async fn entries(&mut self) -> Result<usize> {
@@ -119,7 +119,7 @@ impl Importer for XonshSqlite {
 
         let mut count = 0;
         while let Some(entry) = entries.try_next().await? {
-            let hist = entry.into_hist_with_hostname(self.user_host.clone());
+            let hist = entry.into_hist_with_hostname(self.cmd_origin.to_string());
             loader.push(hist).await?;
             count += 1;
         }
@@ -168,7 +168,7 @@ mod tests {
         let connection_str = "tests/data/xonsh-history.sqlite";
         let xonsh_sqlite = XonshSqlite {
             pool: SqlitePool::connect(connection_str).await.unwrap(),
-            user_host: "box:user".to_string(),
+            cmd_origin: CmdOrigin::try_from("box:user").unwrap(),
         };
 
         let mut loader = TestLoader::default();

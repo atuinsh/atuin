@@ -14,7 +14,7 @@ use uuid::timestamp::{Timestamp, context::NoContext};
 use super::{Importer, Loader, get_histdir_path};
 use crate::history::History;
 use crate::history::builder::HistoryImported;
-use atuin_domain::AtuinHostUser;
+use atuin_domain::CmdOrigin;
 
 // Note: both HistoryFile and HistoryData have other keys present in the JSON, we don't
 // care about them so we leave them unspecified so as to avoid deserializing unnecessarily.
@@ -41,7 +41,7 @@ struct HistoryCmd {
 pub struct Xonsh {
     // history is stored as a bunch of json files, one per session
     sessions: Vec<HistoryData>,
-    user_host: String,
+    cmd_origin: CmdOrigin,
 }
 
 fn xonsh_hist_dir(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
@@ -107,10 +107,10 @@ impl Importer for Xonsh {
         let xonsh_data_dir = env::var("XONSH_DATA_DIR").ok();
         let hist_dir = get_histdir_path(|| xonsh_hist_dir(xonsh_data_dir))?;
         let sessions = load_sessions(&hist_dir)?;
-        let user_host = AtuinHostUser::probe().to_string();
+        let cmd_origin = CmdOrigin::probe();
         Ok(Xonsh {
             sessions,
-            user_host,
+            cmd_origin,
         })
     }
 
@@ -137,7 +137,7 @@ impl Importer for Xonsh {
                     .command(cmd.inp.trim())
                     .cwd(cmd.cwd)
                     .session(session.sessionid.clone())
-                    .hostname(self.user_host.clone());
+                    .hostname(self.cmd_origin.to_string());
                 loader.push(entry.build().into()).await?;
             }
         }
@@ -175,7 +175,7 @@ mod tests {
                     ts: (1e30, 1e30),
                 }],
             }],
-            user_host: "box:user".to_string(),
+            cmd_origin: CmdOrigin::try_from("box:user").unwrap(),
         };
 
         let mut loader = TestLoader::default();
@@ -190,10 +190,10 @@ mod tests {
     async fn test_import() {
         let dir = PathBuf::from("tests/data/xonsh");
         let sessions = load_sessions(&dir).unwrap();
-        let user_host = "box:user".to_string();
+        let cmd_origin = CmdOrigin::try_from("box:user").unwrap();
         let xonsh = Xonsh {
             sessions,
-            user_host,
+            cmd_origin,
         };
 
         let mut loader = TestLoader::default();

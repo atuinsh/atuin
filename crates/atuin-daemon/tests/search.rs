@@ -132,7 +132,7 @@ mod unix {
         Context {
             session: session.to_string(),
             cwd: cwd.to_string(),
-            hostname: hostname.to_string(),
+            cmd_origin: hostname.to_string(),
             host_id: "test-host-id".to_string(),
             git_root: git_root.map(Into::into),
         }

@@ -24,7 +24,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::history::{HistoryId, HistoryStats};
-use atuin_domain::AtuinHostUser;
+use atuin_domain::CmdOrigin;
 
 use super::{
     history::History,
@@ -36,7 +36,7 @@ use super::{
 pub struct Context {
     pub session: String,
     pub cwd: String,
-    pub hostname: String,
+    pub cmd_origin: String,
     pub host_id: String,
     pub git_root: Option<PathBuf>,
 }
@@ -70,14 +70,14 @@ pub struct OptFilters<'a> {
 /// filters simply match nothing.
 pub async fn query_context() -> eyre::Result<Context> {
     let session = env::var("ATUIN_SESSION").unwrap_or_default();
-    let user_host = AtuinHostUser::probe().to_string();
+    let cmd_origin = CmdOrigin::probe().to_string();
     let cwd = utils::get_current_dir();
     let host_id = Settings::host_id().await?;
     let git_root = utils::in_git_repo(cwd.as_str());
 
     Ok(Context {
         session,
-        hostname: user_host,
+        cmd_origin,
         cwd,
         git_root,
         host_id: host_id.0.as_simple().to_string(),
@@ -99,7 +99,7 @@ impl Context {
         Context {
             session: entry.session.to_string(),
             cwd: entry.cwd.to_string(),
-            hostname: entry.hostname.to_string(),
+            cmd_origin: entry.hostname.to_string(),
             host_id: String::new(),
             git_root: utils::in_git_repo(entry.cwd.as_str()),
         }
@@ -528,7 +528,7 @@ impl Database for Sqlite {
                     // Case-insensitive, matching `search()` - the reported casing of a
                     // hostname changes over time. lower() is indexed as an expression.
                     "lower(hostname)",
-                    quote(context.hostname.to_lowercase()),
+                    quote(context.cmd_origin.to_lowercase()),
                 ),
                 FilterMode::Session => query.and_where_eq("session", quote(&context.session)),
                 FilterMode::SessionPreload => {
@@ -643,7 +643,7 @@ impl Database for Sqlite {
         match filter {
             FilterMode::Global => &mut sql,
             FilterMode::Host => {
-                sql.and_where_eq("lower(hostname)", quote(context.hostname.to_lowercase()))
+                sql.and_where_eq("lower(hostname)", quote(context.cmd_origin.to_lowercase()))
             }
             FilterMode::Session => sql.and_where_eq("session", quote(&context.session)),
             FilterMode::SessionPreload => {
@@ -1235,7 +1235,7 @@ mod test {
 
     fn new_context() -> Context {
         Context {
-            hostname: "test:host".to_string(),
+            cmd_origin: "test:host".to_string(),
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
             host_id: "test-host".to_string(),
@@ -1347,7 +1347,7 @@ mod test {
         db: Sqlite,
     ) {
         let context = Context {
-            hostname: "booop".to_string(),
+            cmd_origin: "booop".to_string(),
             session: "beep boop".to_string(),
             cwd: "/home/ellie".to_string(),
             host_id: "test-host".to_string(),
@@ -1987,7 +1987,7 @@ mod test {
             .list(
                 &[],
                 &Context {
-                    hostname: "".to_string(),
+                    cmd_origin: "".to_string(),
                     session: "".to_string(),
                     cwd: "".to_string(),
                     host_id: "".to_string(),
@@ -2101,7 +2101,7 @@ mod test {
         }
 
         let context = Context {
-            hostname: "hostname".into(),
+            cmd_origin: "hostname".into(),
             session: "session".into(),
             cwd: "/tmp".into(),
             host_id: "host".into(),
@@ -2161,7 +2161,7 @@ mod test {
         }
 
         let context = Context {
-            hostname: "hostname".into(),
+            cmd_origin: "hostname".into(),
             session: "session".into(),
             cwd: "/tmp".into(),
             host_id: "host".into(),
