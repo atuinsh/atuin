@@ -57,7 +57,14 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 
 ## Testing
 
-- Unit tests inline with `#[cfg(test)]`, async via `#[tokio::test]`.
+- Unit tests inline with `#[cfg(test)]`. Use `rstest` for every test — `#[rstest]`, never a
+  bare `#[test]` (async: `#[rstest]` + `#[tokio::test]`); migrate plain `#[test]`s in files you touch.
+- Lean on `#[fixture]`s for shared setup and compose them; when a test needs teardown, return an
+  RAII guard from the fixture (e.g. a temp dir removed on `Drop`) rather than cleaning up by hand.
+- Parametrize with `#[case(...)]` (input/expected tables) and `#[values(...)]` (cross-products of
+  independent parameters) instead of near-duplicate tests.
+- Reach for `proptest` when a property holds across many inputs — round-trips (encode/decode, serde,
+  parse/display), invariants, idempotence; keep targeted `#[case]`s for known edge cases and regressions.
 - Integration tests in `crates/atuin/tests/` need Postgres (`ATUIN_DB_URI` env var).
 - Use `rstest` for tests, especially when they can be made simpler using `case`s and `fixture`s.
 - Use `":memory:"` SQLite for unit tests needing a database.
