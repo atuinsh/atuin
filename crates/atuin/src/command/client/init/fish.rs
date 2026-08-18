@@ -83,8 +83,7 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
 
         #[cfg(feature = "ai")]
         if options.enable_ai {
-            let bind_ai = atuin_ai::commands::init::generate_fish_integration();
-            println!("{bind_ai}");
+            println!("{}", atuin_ai::shell::FISH_INIT);
         }
     }
 }

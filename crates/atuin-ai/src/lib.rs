@@ -11,6 +11,7 @@ pub mod mcp;
 pub(crate) mod models;
 pub(crate) mod permissions;
 pub(crate) mod session;
+pub mod shell;
 pub(crate) mod skills;
 pub(crate) mod snapshots;
 pub(crate) mod store;

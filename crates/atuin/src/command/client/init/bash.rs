@@ -42,8 +42,7 @@ fn write_static_init<W: Write>(writer: &mut W, options: &StaticInitOptions<'_>) 
 
     #[cfg(feature = "ai")]
     if options.enable_ai {
-        let bind_ai = atuin_ai::commands::init::generate_bash_integration();
-        writeln!(writer, "{bind_ai}")?;
+        writeln!(writer, "{}", atuin_ai::shell::BASH_INIT)?;
     }
 
     writeln!(writer, "}}") // end include guard

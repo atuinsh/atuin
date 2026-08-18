@@ -38,9 +38,7 @@ bindkey -M vicmd 'k' atuin-up-search-vicmd";
 
         #[cfg(feature = "ai")]
         if options.enable_ai {
-            let bind_ai = atuin_ai::commands::init::generate_zsh_integration();
-
-            println!("{bind_ai}");
+            println!("{}", atuin_ai::shell::ZSH_INIT);
         }
     }
 }
