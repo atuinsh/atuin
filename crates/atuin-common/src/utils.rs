@@ -1,6 +1,5 @@
-use std::env;
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use eyre::{Result, eyre};
 
@@ -34,67 +33,6 @@ pub fn uuid_v7() -> Uuid {
 
 pub fn uuid_v4() -> String {
     Uuid::new_v4().as_simple().to_string()
-}
-
-pub fn has_git_dir(path: &str) -> bool {
-    let mut gitdir = PathBuf::from(path);
-    gitdir.push(".git");
-
-    gitdir.exists()
-}
-
-// in a git worktree, .git is a file containing "gitdir: <path>" pointing
-// to the main repo's .git/worktrees/<name> directory. follow the pointer
-// back to the main repo root so all worktrees share a workspace.
-fn resolve_git_worktree(path: &Path) -> Option<PathBuf> {
-    let git_path = path.join(".git");
-
-    if !git_path.is_file() {
-        return None;
-    }
-
-    let contents = std::fs::read_to_string(&git_path).ok()?;
-    let gitdir_str = contents.strip_prefix("gitdir: ")?.trim();
-
-    let gitdir = PathBuf::from(gitdir_str);
-    let gitdir = if gitdir.is_absolute() {
-        gitdir
-    } else {
-        path.join(gitdir_str)
-    };
-
-    // walk up from e.g. /repo/.git/worktrees/feature to find /repo
-    let mut candidate = gitdir.as_path();
-    while let Some(parent) = candidate.parent() {
-        if parent.join(".git").is_dir() {
-            return Some(parent.to_path_buf());
-        }
-        candidate = parent;
-    }
-
-    None
-}
-
-// detect if any parent dir has a git repo in it
-// I really don't want to bring in libgit for something simple like this
-// If we start to do anything more advanced, then perhaps
-pub fn in_git_repo(path: &str) -> Option<PathBuf> {
-    let mut gitdir = PathBuf::from(path);
-
-    while gitdir.parent().is_some() && !has_git_dir(gitdir.to_str().unwrap()) {
-        gitdir.pop();
-    }
-
-    // No parent? then we hit root, finding no git
-    if gitdir.parent().is_some() {
-        // if .git is a file (worktree), resolve to the main repo root
-        if let Some(main_repo) = resolve_git_worktree(&gitdir) {
-            return Some(main_repo);
-        }
-        return Some(gitdir);
-    }
-
-    None
 }
 
 // TODO: more reliable, more tested
@@ -144,17 +82,6 @@ pub fn logs_dir() -> PathBuf {
 pub fn dotfiles_cache_dir() -> PathBuf {
     // In most cases, this will be  ~/.local/share/atuin/dotfiles/cache
     data_dir().join("dotfiles").join("cache")
-}
-
-pub fn get_current_dir() -> String {
-    // Prefer PWD environment variable over cwd if available to better support symbolic links
-    match env::var("PWD") {
-        Ok(v) => v,
-        Err(_) => match env::current_dir() {
-            Ok(dir) => dir.display().to_string(),
-            Err(_) => String::from(""),
-        },
-    }
 }
 
 pub fn broken_symlink<P: Into<PathBuf>>(path: P) -> bool {
@@ -212,6 +139,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_ne;
     use rstest::rstest;
+    use std::env;
 
     #[cfg(not(windows))]
     #[test]
@@ -300,52 +228,6 @@ mod tests {
         assert_eq!(data_dir(), PathBuf::from("/home/user/.local/share/atuin"));
         // TODO: Audit that the environment access only happens in single-threaded code.
         unsafe { env::remove_var("HOME") };
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn in_git_repo_regular() {
-        // regular git repo should resolve to the directory containing .git
-        let tmp = std::env::temp_dir().join("atuin-test-regular-git");
-        let _ = std::fs::remove_dir_all(&tmp);
-        let subdir = tmp.join("src").join("deep");
-        std::fs::create_dir_all(&subdir).unwrap();
-        std::fs::create_dir_all(tmp.join(".git")).unwrap();
-
-        let result = in_git_repo(subdir.to_str().unwrap());
-        assert_eq!(result, Some(tmp.clone()));
-
-        std::fs::remove_dir_all(&tmp).unwrap();
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn in_git_repo_worktree_resolves_to_main_repo() {
-        // worktree .git is a file pointing back to the main repo —
-        // in_git_repo should follow it so all worktrees share a workspace
-        let tmp = std::env::temp_dir().join("atuin-test-worktree-git");
-        let _ = std::fs::remove_dir_all(&tmp);
-
-        // main repo at tmp/main with a real .git directory
-        let main_repo = tmp.join("main");
-        let worktree_git_dir = main_repo.join(".git").join("worktrees").join("feature");
-        std::fs::create_dir_all(&worktree_git_dir).unwrap();
-
-        // worktree at tmp/worktree with a .git file
-        let worktree = tmp.join("worktree");
-        let worktree_subdir = worktree.join("src");
-        std::fs::create_dir_all(&worktree_subdir).unwrap();
-        std::fs::write(
-            worktree.join(".git"),
-            format!("gitdir: {}", worktree_git_dir.to_str().unwrap()),
-        )
-        .unwrap();
-
-        // should resolve to the main repo root, not the worktree root
-        let result = in_git_repo(worktree_subdir.to_str().unwrap());
-        assert_eq!(result, Some(main_repo));
-
-        std::fs::remove_dir_all(&tmp).unwrap();
     }
 
     #[rstest]

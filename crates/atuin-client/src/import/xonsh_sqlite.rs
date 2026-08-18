@@ -14,7 +14,7 @@ use uuid::timestamp::{Timestamp, context::NoContext};
 use super::{Importer, Loader, get_histfile_path};
 use crate::history::History;
 use crate::history::builder::HistoryImported;
-use crate::utils::get_host_user;
+use atuin_domain::AtuinHostUser;
 
 #[derive(Debug, FromRow)]
 struct HistDbEntry {
@@ -96,7 +96,7 @@ impl Importer for XonshSqlite {
         })?;
 
         let pool = SqlitePool::connect(connection_str).await?;
-        let hostname = get_host_user();
+        let hostname = AtuinHostUser::probe().to_string();
         Ok(XonshSqlite { pool, hostname })
     }
 

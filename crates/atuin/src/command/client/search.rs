@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{IsTerminal as _, Write, stderr, stdout};
 
 use atuin_common::filter::OrFilter;
-use atuin_common::{string::EscapeNonPrintablePosixExt as _, utils};
+use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use clap::Parser;
 use eyre::Result;
 
@@ -333,7 +333,7 @@ async fn run_non_interactive(
 ) -> Result<Vec<History>> {
     let current_dir;
     let dir = if filter_options.cwd == Some(".") {
-        current_dir = utils::get_current_dir();
+        current_dir = atuin_client::ctx::app().workspace().cwd().to_string();
         Some(current_dir.as_str())
     } else {
         filter_options.cwd

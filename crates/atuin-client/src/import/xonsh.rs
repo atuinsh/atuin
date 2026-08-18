@@ -14,7 +14,7 @@ use uuid::timestamp::{Timestamp, context::NoContext};
 use super::{Importer, Loader, get_histdir_path};
 use crate::history::History;
 use crate::history::builder::HistoryImported;
-use crate::utils::get_host_user;
+use atuin_domain::AtuinHostUser;
 
 // Note: both HistoryFile and HistoryData have other keys present in the JSON, we don't
 // care about them so we leave them unspecified so as to avoid deserializing unnecessarily.
@@ -107,7 +107,7 @@ impl Importer for Xonsh {
         let xonsh_data_dir = env::var("XONSH_DATA_DIR").ok();
         let hist_dir = get_histdir_path(|| xonsh_hist_dir(xonsh_data_dir))?;
         let sessions = load_sessions(&hist_dir)?;
-        let hostname = get_host_user();
+        let hostname = AtuinHostUser::probe().to_string();
         Ok(Xonsh { sessions, hostname })
     }
 

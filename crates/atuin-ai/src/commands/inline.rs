@@ -69,9 +69,14 @@ pub(crate) async fn run(
         None
     };
 
-    let git_root = std::env::current_dir()
+    let git_root = atuin_client::ctx::app()
+        .workspace()
+        .git_ctx()
+        .await
         .ok()
-        .and_then(|cwd| atuin_common::utils::in_git_repo(cwd.to_str()?));
+        .flatten()
+        .and_then(|git| git.repo().work_dir())
+        .map(|p| p.to_path_buf());
 
     let ctx = AppContext {
         endpoint,
@@ -186,9 +191,7 @@ async fn run_inline_tui(
         }
     };
 
-    let cwd = std::env::current_dir()
-        .ok()
-        .map(|p| p.to_string_lossy().into_owned());
+    let cwd = Some(atuin_client::ctx::app().workspace().cwd().to_string());
     let git_root_str = ctx
         .git_root
         .as_ref()
@@ -280,10 +283,15 @@ async fn run_inline_tui(
     let snapshot_store = crate::snapshots::SnapshotStore::open(snapshot_dir).ok();
 
     // ─── Discover skills ───────────────────────────────────────
-    let project_root = ctx
-        .git_root
-        .clone()
-        .or_else(|| std::env::current_dir().ok());
+    let project_root = ctx.git_root.clone().or_else(|| {
+        Some(
+            atuin_client::ctx::app()
+                .workspace()
+                .cwd()
+                .as_ref()
+                .to_path_buf(),
+        )
+    });
     let skill_registry = crate::skills::SkillRegistry::discover(project_root.as_deref()).await;
 
     // ─── Resume notice (frozen at startup) ──────────────────────
