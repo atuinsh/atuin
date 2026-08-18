@@ -50,10 +50,12 @@ impl<T: AsRef<str>> EscapeNonPrintablePosixExt for T {}
 
 #[cfg(test)]
 mod tests {
-    use super::EscapeNonPrintablePosixExt;
+    use std::borrow::Cow;
+
     use proptest::prelude::*;
     use rstest::rstest;
-    use std::borrow::Cow;
+
+    use super::EscapeNonPrintablePosixExt;
 
     /// Table-driven examples of the exact `cat -v` mapping. Each case is its own
     /// test, so a failure names precisely which input broke.

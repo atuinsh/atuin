@@ -1,7 +1,8 @@
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 #[cfg(unix)]
 use std::{borrow::Cow, path::Path};
+
+use serde::{Deserialize, Serialize};
 
 #[cfg(unix)]
 const SOCKET_NAME: &str = "atuin.sock";
@@ -96,9 +97,8 @@ impl Daemon {
 
     fn existing_socket_path_ctx(&self, ctx: impl SocketCtx) -> Cow<'_, Path> {
         let mut candidates = self.potential_socket_paths_ctx(ctx);
-        let primary = candidates
-            .next()
-            .expect("there is always at least one potential socket path");
+        let primary =
+            candidates.next().expect("there is always at least one potential socket path");
 
         if primary.exists() {
             return primary;
@@ -120,24 +120,13 @@ impl Daemon {
             (self.default_socket_paths(ctx), usize::MAX)
         };
 
-        let defaults = defaults
-            .into_iter()
-            .take(defaults_limit)
-            .flatten()
-            .map(Cow::Owned);
+        let defaults = defaults.into_iter().take(defaults_limit).flatten().map(Cow::Owned);
 
-        self.socket_path
-            .as_deref()
-            .map(Cow::Borrowed)
-            .into_iter()
-            .chain(defaults)
+        self.socket_path.as_deref().map(Cow::Borrowed).into_iter().chain(defaults)
     }
 
     fn default_socket_paths(&self, ctx: impl SocketCtx) -> [Option<PathBuf>; 3] {
-        let runtime_path = self
-            .systemd_socket
-            .then(|| ctx.runtime_socket_path())
-            .flatten();
+        let runtime_path = self.systemd_socket.then(|| ctx.runtime_socket_path()).flatten();
         // If `runtime_socket_path` is `Some`, `ctx.legacy_socket_path()` will return the same path
         // (both pointing to `$XDG_RUNTIME_DIR`), so don't include the legacy path in that case.
         let legacy_path = runtime_path.is_none().then(|| ctx.legacy_socket_path());
@@ -169,9 +158,7 @@ trait SocketCtx: Copy + Sized {
     }
 
     fn default_socket_path(&self) -> PathBuf {
-        self.tmp_dir()
-            .join(format!("atuin-{}", self.uid()))
-            .join(SOCKET_NAME)
+        self.tmp_dir().join(format!("atuin-{}", self.uid())).join(SOCKET_NAME)
     }
 
     fn runtime_socket_path(&self) -> Option<PathBuf> {
@@ -179,8 +166,7 @@ trait SocketCtx: Copy + Sized {
     }
 
     fn legacy_socket_path(&self) -> PathBuf {
-        self.runtime_socket_path()
-            .unwrap_or_else(|| self.data_dir().join(SOCKET_NAME))
+        self.runtime_socket_path().unwrap_or_else(|| self.data_dir().join(SOCKET_NAME))
     }
 }
 
@@ -214,7 +200,10 @@ pub enum CreateSocketDirError {
         actual_uid: u32,
     },
     #[error("{} has incorrect permissions (expected 700, got {permissions:03o})", .path.display())]
-    WrongPermissions { path: PathBuf, permissions: u32 },
+    WrongPermissions {
+        path: PathBuf,
+        permissions: u32,
+    },
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -233,9 +222,7 @@ impl<'a> SocketPath<'a> {
             return Ok(());
         };
 
-        let dir = path
-            .parent()
-            .expect("default socket path always has a parent");
+        let dir = path.parent().expect("default socket path always has a parent");
         match std::fs::DirBuilder::new().mode(0o700).create(dir) {
             Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
             result => return result.map_err(Into::into),
@@ -310,11 +297,13 @@ impl<'a> From<SocketPath<'a>> for Cow<'a, Path> {
 
 #[cfg(all(unix, test))]
 mod unix_tests {
-    use super::*;
-    use rstest::*;
     use std::fs::Permissions;
     use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+
+    use rstest::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[fixture]
     fn tmp() -> TempDir {
@@ -432,16 +421,10 @@ mod unix_tests {
         };
 
         assert_eq!(
-            daemon
-                .potential_socket_paths_ctx(ctx)
-                .map(Cow::into_owned)
-                .collect::<Vec<_>>(),
+            daemon.potential_socket_paths_ctx(ctx).map(Cow::into_owned).collect::<Vec<_>>(),
             expected.iter().map(PathBuf::from).collect::<Vec<_>>(),
         );
-        assert_eq!(
-            daemon.socket_path_ctx(ctx).as_path(),
-            Path::new(expected[0])
-        );
+        assert_eq!(daemon.socket_path_ctx(ctx).as_path(), Path::new(expected[0]));
     }
 
     /// The path we connect to is the first one that is actually there, so that a daemon listening
@@ -469,10 +452,7 @@ mod unix_tests {
             fs_err::File::create(path).unwrap();
         }
 
-        assert_eq!(
-            daemon(None, false).existing_socket_path_ctx(ctx),
-            scoped(expected)
-        );
+        assert_eq!(daemon(None, false).existing_socket_path_ctx(ctx), scoped(expected));
     }
 
     #[rstest]
@@ -488,17 +468,11 @@ mod unix_tests {
 
     #[rstest]
     fn default_socket_dir_is_created_privately_then_reused(default_socket: DefaultSocket) {
-        default_socket
-            .path()
-            .create_default_dir_if_needed()
-            .unwrap();
+        default_socket.path().create_default_dir_if_needed().unwrap();
         let mode = fs_err::metadata(&default_socket.dir).unwrap().mode();
         assert_eq!(mode & 0o777, 0o700);
 
-        default_socket
-            .path()
-            .create_default_dir_if_needed()
-            .unwrap();
+        default_socket.path().create_default_dir_if_needed().unwrap();
     }
 
     #[rstest]
@@ -509,10 +483,7 @@ mod unix_tests {
         default_socket: DefaultSocket,
         #[case] mode: u32,
     ) {
-        default_socket
-            .path()
-            .create_default_dir_if_needed()
-            .unwrap();
+        default_socket.path().create_default_dir_if_needed().unwrap();
         fs_err::set_permissions(&default_socket.dir, Permissions::from_mode(mode)).unwrap();
 
         let Err(CreateSocketDirError::WrongPermissions { permissions, .. }) =

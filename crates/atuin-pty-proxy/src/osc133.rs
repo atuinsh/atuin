@@ -72,7 +72,10 @@ pub enum Param {
     /// A positional parameter without an equals sign.
     Value(String),
     /// A `key=value` parameter.
-    KeyValue { key: String, value: String },
+    KeyValue {
+        key: String,
+        value: String,
+    },
 }
 
 /// An OSC 133 event with its position in the most recent input chunk.
@@ -329,9 +332,7 @@ fn parse_exit_code(code: &[u8]) -> Option<i32> {
         return None;
     }
 
-    std::str::from_utf8(code)
-        .ok()
-        .and_then(|code| code.parse::<i32>().ok())
+    std::str::from_utf8(code).ok().and_then(|code| code.parse::<i32>().ok())
 }
 
 fn parse_params(metadata: &[u8]) -> Params {
@@ -363,8 +364,9 @@ fn parse_param(param: &[u8]) -> Param {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     /// Collect all events from a single `push` call.
     fn parse_events(data: &[u8]) -> Vec<Event> {
@@ -421,15 +423,12 @@ mod tests {
         parser.push(b"\x1b]133;D;0\x07", |e| events.push(e));
         assert_eq!(parser.zone(), Zone::Unknown);
 
-        assert_eq!(
-            events,
-            vec![
-                Event::PromptStart,
-                Event::CommandStart,
-                Event::CommandExecuted,
-                Event::CommandFinished { exit_code: Some(0) },
-            ]
-        );
+        assert_eq!(events, vec![
+            Event::PromptStart,
+            Event::CommandStart,
+            Event::CommandExecuted,
+            Event::CommandFinished { exit_code: Some(0) },
+        ]);
     }
 
     // -- Multiple events / interleaved text in one push -----------------------
@@ -506,16 +505,13 @@ mod tests {
         let data = b"\x1b]133;A\x07$ \x1b]133;B\x07\x1b]133;D\x07\x1b]133;A\x07$ \x1b]133;B\x07";
         parser.push(data, |e| events.push(e));
 
-        assert_eq!(
-            events,
-            vec![
-                Event::PromptStart,
-                Event::CommandStart,
-                Event::CommandFinished { exit_code: None },
-                Event::PromptStart,
-                Event::CommandStart,
-            ]
-        );
+        assert_eq!(events, vec![
+            Event::PromptStart,
+            Event::CommandStart,
+            Event::CommandFinished { exit_code: None },
+            Event::PromptStart,
+            Event::CommandStart,
+        ]);
         assert_eq!(parser.zone(), Zone::Input);
     }
 
@@ -531,12 +527,9 @@ mod tests {
             parser.push(&[byte], |e| events.push(e));
         }
 
-        assert_eq!(
-            events,
-            vec![Event::CommandFinished {
-                exit_code: Some(99)
-            }]
-        );
+        assert_eq!(events, vec![Event::CommandFinished {
+            exit_code: Some(99)
+        }]);
     }
 
     // -- Located event offsets ------------------------------------------------
@@ -549,16 +542,13 @@ mod tests {
 
         parser.push_located(data, |e| events.push(e));
 
-        assert_eq!(
-            events,
-            vec![LocatedEvent {
-                event: Event::PromptStart,
-                start_offset: b"before".len(),
-                offset: b"before\x1b]133;A\x07".len(),
-                zone: Zone::Prompt,
-                params: Params::default(),
-            }]
-        );
+        assert_eq!(events, vec![LocatedEvent {
+            event: Event::PromptStart,
+            start_offset: b"before".len(),
+            offset: b"before\x1b]133;A\x07".len(),
+            zone: Zone::Prompt,
+            params: Params::default(),
+        }]);
     }
 
     #[test]
@@ -569,18 +559,15 @@ mod tests {
         parser.push_located(b"\x1b]133;", |e| events.push(e));
         parser.push_located(b"D;42\x07after", |e| events.push(e));
 
-        assert_eq!(
-            events,
-            vec![LocatedEvent {
-                event: Event::CommandFinished {
-                    exit_code: Some(42)
-                },
-                start_offset: 0,
-                offset: b"D;42\x07".len(),
-                zone: Zone::Unknown,
-                params: Params::default(),
-            }]
-        );
+        assert_eq!(events, vec![LocatedEvent {
+            event: Event::CommandFinished {
+                exit_code: Some(42)
+            },
+            start_offset: 0,
+            offset: b"D;42\x07".len(),
+            zone: Zone::Unknown,
+            params: Params::default(),
+        }]);
     }
 
     #[test]
@@ -588,27 +575,18 @@ mod tests {
         let mut parser = Parser::new();
         let mut events = Vec::new();
 
-        parser.push_located(
-            b"\x1b]133;D;127;history_id=018f;session_id=abcd;flag\x07",
-            |event| events.push(event),
-        );
+        parser.push_located(b"\x1b]133;D;127;history_id=018f;session_id=abcd;flag\x07", |event| {
+            events.push(event)
+        });
 
         assert_eq!(events.len(), 1);
         let event = &events[0];
-        assert_eq!(
-            event.event,
-            Event::CommandFinished {
-                exit_code: Some(127)
-            }
-        );
+        assert_eq!(event.event, Event::CommandFinished {
+            exit_code: Some(127)
+        });
         assert_eq!(event.params.get("history_id"), Some("018f"));
         assert_eq!(event.params.get("session_id"), Some("abcd"));
-        assert!(
-            event
-                .params
-                .iter()
-                .any(|param| param == &Param::Value("flag".to_string()))
-        );
+        assert!(event.params.iter().any(|param| param == &Param::Value("flag".to_string())));
     }
 
     #[test]

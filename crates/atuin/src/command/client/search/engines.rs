@@ -1,8 +1,6 @@
-use atuin_client::{
-    database::{Context, DbSearchMode, OptFilters, Sqlite},
-    history::{History, HistoryId, all_user_author_filter},
-    settings::{FilterMode, SearchMode, Settings, Shells},
-};
+use atuin_client::database::{Context, DbSearchMode, OptFilters, Sqlite};
+use atuin_client::history::{History, HistoryId, all_user_author_filter};
+use atuin_client::settings::{FilterMode, SearchMode, Settings, Shells};
 use enum_dispatch::enum_dispatch;
 use eyre::Result;
 
@@ -38,12 +36,8 @@ pub struct SearchState {
 
 impl SearchState {
     pub(crate) fn rotate_filter_mode(&mut self, settings: &Settings, offset: isize) {
-        let mut i = settings
-            .search
-            .filters
-            .iter()
-            .position(|&m| m == self.filter_mode)
-            .unwrap_or_default();
+        let mut i =
+            settings.search.filters.iter().position(|&m| m == self.filter_mode).unwrap_or_default();
         for _ in 0..settings.search.filters.len() {
             i = (i.wrapping_add_signed(offset)) % settings.search.filters.len();
             let mode = settings.search.filters[i];
@@ -71,18 +65,12 @@ pub trait SearchEngine: Send + Sync + 'static {
         if state.input.as_str().is_empty() {
             let shells = state.shells.to_filter();
             Ok(db
-                .search(
-                    DbSearchMode::FullText,
-                    state.filter_mode,
-                    &state.context,
-                    "",
-                    OptFilters {
-                        limit: Some(200),
-                        authors: all_user_author_filter(),
-                        shells: shells.as_filter(),
-                        ..Default::default()
-                    },
-                )
+                .search(DbSearchMode::FullText, state.filter_mode, &state.context, "", OptFilters {
+                    limit: Some(200),
+                    authors: all_user_author_filter(),
+                    shells: shells.as_filter(),
+                    ..Default::default()
+                })
                 .await?
                 .into_iter()
                 .collect::<Vec<_>>())

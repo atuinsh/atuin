@@ -1,20 +1,19 @@
-use std::{collections::HashSet, fmt::Write, time::Duration};
+use std::collections::HashSet;
+use std::fmt::Write;
+use std::time::Duration;
 
+use atuin_common::encryption::paseto_v4;
 use atuin_common::rmp::decode::Bytes;
+use atuin_domain::record::{
+    DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag, RecordVersion,
+};
 use eyre::{Result, bail, eyre};
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 
-use crate::{
-    database::{Sqlite, current_context},
-    record::sqlite_store::SqliteStore,
-};
-use atuin_common::encryption::paseto_v4;
-use atuin_domain::record::{
-    DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag, RecordVersion,
-};
-
 use super::{History, HistoryId, Version};
+use crate::database::{Sqlite, current_context};
+use crate::record::sqlite_store::SqliteStore;
 
 #[derive(Debug, Clone)]
 pub struct HistoryStore {
@@ -128,11 +127,8 @@ impl HistoryStore {
 
     async fn push_record(&self, record: HistoryRecord) -> Result<(RecordId, RecordIdx)> {
         let bytes = record.serialize()?;
-        let idx = self
-            .store
-            .last(self.host_id, &RecordTag::History)
-            .await?
-            .map_or(0, |p| p.idx + 1);
+        let idx =
+            self.store.last(self.host_id, &RecordTag::History).await?.map_or(0, |p| p.idx + 1);
 
         let record = Record::builder()
             .host(Host::new(self.host_id))
@@ -144,9 +140,7 @@ impl HistoryStore {
 
         let id = record.id;
 
-        self.store
-            .push(&record.encrypt(&self.encryption_key))
-            .await?;
+        self.store.push(&record.encrypt(&self.encryption_key)).await?;
 
         Ok((id, idx))
     }
@@ -154,11 +148,8 @@ impl HistoryStore {
     async fn push_batch(&self, records: impl Iterator<Item = HistoryRecord>) -> Result<()> {
         let mut ret = Vec::new();
 
-        let idx = self
-            .store
-            .last(self.host_id, &RecordTag::History)
-            .await?
-            .map_or(0, |p| p.idx + 1);
+        let idx =
+            self.store.last(self.host_id, &RecordTag::History).await?.map_or(0, |p| p.idx + 1);
 
         // Could probably _also_ do this as an iterator, but let's see how this is for now.
         // optimizing for minimal sqlite transactions, this code can be optimised later
@@ -243,7 +234,9 @@ impl HistoryStore {
         if skipped > 0 {
             // library code that may run under the TUI or shell hooks, so no stderr here
             warn!(
-                "skipped {skipped} history records that could not be decrypted or decoded. Run `atuin store verify` to check your store, and `atuin store purge` to remove broken records locally."
+                "skipped {skipped} history records that could not be decrypted or decoded. Run \
+                 `atuin store verify` to check your store, and `atuin store purge` to remove \
+                 broken records locally."
             );
         }
 
@@ -336,9 +329,7 @@ impl HistoryStore {
     /// Use this when you want the database writes but not the values. Callers that need
     /// the created entries should use [`HistoryStore::incremental_build`] directly.
     pub async fn build_all(&self, database: &Sqlite, ids: &[RecordId]) -> Result<()> {
-        self.incremental_build(database, ids)
-            .try_for_each(|_| future::ready(Ok(())))
-            .await
+        self.incremental_build(database, ids).try_for_each(|_| future::ready(Ok(()))).await
     }
 
     /// Get a list of history IDs that exist in the store
@@ -412,14 +403,12 @@ mod tests {
     use rstest::*;
     use time::macros::datetime;
 
-    use crate::{
-        database::Sqlite,
-        history::{Version, store::HistoryRecord, store::HistoryStore},
-        record::sqlite_store::SqliteStore,
-        settings::test_local_timeout,
-    };
-
     use super::History;
+    use crate::database::Sqlite;
+    use crate::history::Version;
+    use crate::history::store::{HistoryRecord, HistoryStore};
+    use crate::record::sqlite_store::SqliteStore;
+    use crate::settings::test_local_timeout;
 
     /// The identical `History` literal used by both async tests.
     #[fixture]
@@ -446,9 +435,7 @@ mod tests {
     /// and the `HistoryStore` layered on it must originate from a single fixture.
     #[fixture]
     async fn stores() -> (SqliteStore, HostId, HistoryStore) {
-        let store = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
+        let store = SqliteStore::new(":memory:", test_local_timeout()).await.unwrap();
         let host_id = HostId(atuin_common::utils::uuid_v7());
         let history_store = HistoryStore::new(store.clone(), host_id, [0u8; 32].into());
         (store, host_id, history_store)
@@ -531,10 +518,7 @@ mod tests {
             .data(DecryptedData(vec![1, 2, 3]))
             .build();
 
-        store
-            .push(&corrupt.encrypt(&[1u8; 32].into()))
-            .await
-            .unwrap();
+        store.push(&corrupt.encrypt(&[1u8; 32].into())).await.unwrap();
 
         let records = history_store.history().await.unwrap();
 
@@ -555,15 +539,10 @@ mod tests {
         // `history.id` (the HistoryId). This distinction is the whole bug.
         let (record_id, _) = history_store.push(history.clone()).await.unwrap();
 
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
 
-        let created: Vec<History> = history_store
-            .incremental_build(&db, &[record_id])
-            .try_collect()
-            .await
-            .unwrap();
+        let created: Vec<History> =
+            history_store.incremental_build(&db, &[record_id]).try_collect().await.unwrap();
 
         assert_eq!(created.len(), 1);
         assert_eq!(created[0], history);

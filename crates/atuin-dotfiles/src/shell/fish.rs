@@ -1,7 +1,8 @@
 // Configuration for fish
 use std::path::PathBuf;
 
-use crate::store::{AliasStore, var::VarStore};
+use crate::store::AliasStore;
+use crate::store::var::VarStore;
 
 async fn cached_aliases(path: PathBuf, store: &AliasStore) -> String {
     match tokio::fs::read_to_string(path).await {

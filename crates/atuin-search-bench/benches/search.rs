@@ -42,15 +42,8 @@ fn main() {
 
 /// Queries the way users type them: empty (frecency-only listing), short
 /// low-selectivity prefixes, multi-word, and a no-match worst case.
-const QUERIES: &[&str] = &[
-    "",
-    "g",
-    "git",
-    "git p",
-    "cargo build",
-    "docker compose up",
-    "zzznomatchzzz",
-];
+const QUERIES: &[&str] =
+    &["", "g", "git", "git p", "cargo build", "docker compose up", "zzznomatchzzz"];
 
 /// The interactive UI requests up to 200 results per query.
 const LIMIT: u32 = 200;
@@ -90,10 +83,7 @@ impl fmt::Display for Case {
 }
 
 fn env_usize(name: &str, default: usize) -> usize {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(default)
+    std::env::var(name).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(default)
 }
 
 fn scales() -> &'static Vec<usize> {
@@ -148,10 +138,7 @@ fn commands() -> &'static Vec<String> {
                 eprintln!("error: BENCH_DATA file {path:?} contains no commands");
                 std::process::exit(1);
             }
-            eprintln!(
-                "corpus: real history ({path}, {} lines, cycled)",
-                lines.len()
-            );
+            eprintln!("corpus: real history ({path}, {} lines, cycled)", lines.len());
             // repeated commands are the norm in raw history, so cycling stays
             // representative
             let mut i = 0;
@@ -206,9 +193,7 @@ fn index(scale: usize) -> Arc<SearchIndex> {
         eprintln!("  {query:?}: {n} results (limit {LIMIT})");
     }
     let dir = filter_dir();
-    let n = index
-        .search("git", IndexFilterMode::Directory(dir.clone()), LIMIT)
-        .count();
+    let n = index.search("git", IndexFilterMode::Directory(dir.clone()), LIMIT).count();
     eprintln!("  \"git\" in {dir:?}: {n} results (limit {LIMIT})");
     assert!(n > 0, "directory filter matched nothing; filter is broken");
 

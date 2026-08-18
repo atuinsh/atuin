@@ -33,18 +33,10 @@ impl BenchRecord {
         let host = Host::new(HostId(uuid_v7()));
         let version: String = "v1".into();
         let tag = uuid_v7().simple().to_string();
-        let data: String = ctx
-            .rng()
-            .sample_iter(&Alphanumeric)
-            .take(Self::PAYLOAD_SIZE)
-            .map(char::from)
-            .collect();
-        let key: String = ctx
-            .rng()
-            .sample_iter(&Alphanumeric)
-            .take(Self::KEY_SIZE)
-            .map(char::from)
-            .collect();
+        let data: String =
+            ctx.rng().sample_iter(&Alphanumeric).take(Self::PAYLOAD_SIZE).map(char::from).collect();
+        let key: String =
+            ctx.rng().sample_iter(&Alphanumeric).take(Self::KEY_SIZE).map(char::from).collect();
 
         (0..n as u64)
             .map(|idx| {
@@ -74,9 +66,7 @@ impl BenchSqliteStore {
     async fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("bench.db");
-        let store = SqliteStore::new(db_path, Self::SQL_TIMEOUT_S)
-            .await
-            .unwrap();
+        let store = SqliteStore::new(db_path, Self::SQL_TIMEOUT_S).await.unwrap();
 
         Self {
             _temp_dir: dir,
@@ -101,7 +91,6 @@ fn push_batch(bencher: divan::Bencher, n: usize) {
             (db, records)
         })
         .bench_values(|(db, records)| {
-            rt.block_on(db.sqlite_store.push_batch(records.iter()))
-                .unwrap();
+            rt.block_on(db.sqlite_store.push_batch(records.iter())).unwrap();
         });
 }

@@ -15,13 +15,11 @@ const BATCH_SIZES: [usize; 2] = [1, 100];
 
 #[divan::bench(args = BATCH_SIZES, min_time = 1)]
 fn serialize(bencher: divan::Bencher, n: usize) {
-    bencher
-        .with_inputs(|| records(n))
-        .bench_values(|records: Vec<HistoryRecord>| {
-            for record in &records {
-                divan::black_box(record.serialize().unwrap());
-            }
-        });
+    bencher.with_inputs(|| records(n)).bench_values(|records: Vec<HistoryRecord>| {
+        for record in &records {
+            divan::black_box(record.serialize().unwrap());
+        }
+    });
 }
 
 #[divan::bench(args = BATCH_SIZES, min_time = 1)]
@@ -44,8 +42,5 @@ fn deserialize(bencher: divan::Bencher, n: usize) {
 
 fn records(n: usize) -> Vec<HistoryRecord> {
     let mut ctx = BenchCtx::new();
-    BenchHistory::count(&mut ctx, n)
-        .into_iter()
-        .map(HistoryRecord::Create)
-        .collect()
+    BenchHistory::count(&mut ctx, n).into_iter().map(HistoryRecord::Create).collect()
 }

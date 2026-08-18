@@ -1,14 +1,12 @@
-use clap::Subcommand;
-use eyre::{Result, WrapErr};
-
-use atuin_client::{
-    database::Sqlite,
-    history::store::HistoryStore,
-    record::{sqlite_store::SqliteStore, sync},
-    settings::Settings,
-};
+use atuin_client::database::Sqlite;
+use atuin_client::history::store::HistoryStore;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::record::sync;
+use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::RecordTag;
+use clap::Subcommand;
+use eyre::{Result, WrapErr};
 
 mod status;
 

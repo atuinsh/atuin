@@ -128,44 +128,22 @@ const FILES: &[&str] = &[
     "schema.sql",
 ];
 
-const BRANCHES: &[&str] = &[
-    "main",
-    "develop",
-    "feature/search",
-    "fix/sync-timeout",
-    "chore/deps",
-    "release-18",
-];
+const BRANCHES: &[&str] =
+    &["main", "develop", "feature/search", "fix/sync-timeout", "chore/deps", "release-18"];
 
-const HOSTS: &[&str] = &[
-    "prod-web-01",
-    "staging.internal",
-    "db.example.com",
-    "api.example.com",
-    "10.0.0.42",
-];
+const HOSTS: &[&str] =
+    &["prod-web-01", "staging.internal", "db.example.com", "api.example.com", "10.0.0.42"];
 
 const USERS: &[&str] = &["root", "deploy", "ellie", "admin"];
 
-const IMAGES: &[&str] = &[
-    "ubuntu:24.04",
-    "postgres:16",
-    "redis:7",
-    "alpine",
-    "rust:1.97",
-];
+const IMAGES: &[&str] = &["ubuntu:24.04", "postgres:16", "redis:7", "alpine", "rust:1.97"];
 
 fn gen_one(rng: &mut Rng) -> String {
     match rng.below(100) {
         // exact repeats of common commands — the deduplicatable head
         0..=37 => rng.pick_common(COMMON).to_string(),
         38..=57 => match rng.below(5) {
-            0 => format!(
-                "git commit -m '{} {} {}'",
-                rng.pick(WORDS),
-                rng.pick(WORDS),
-                rng.arg()
-            ),
+            0 => format!("git commit -m '{} {} {}'", rng.pick(WORDS), rng.pick(WORDS), rng.arg()),
             1 => format!("git checkout {}", rng.pick(BRANCHES)),
             2 => format!("git push origin {}", rng.pick(BRANCHES)),
             3 => format!("git rebase -i HEAD~{}", 1 + rng.below(9)),
@@ -182,12 +160,7 @@ fn gen_one(rng: &mut Rng) -> String {
             0 => format!("cargo run --release -p {}", rng.pick(WORDS)),
             1 => format!("npm run {}", rng.pick(WORDS)),
             2 => format!("make {}", rng.pick(WORDS)),
-            _ => format!(
-                "python3 {}.py --{} {}",
-                rng.pick(WORDS),
-                rng.pick(WORDS),
-                rng.arg()
-            ),
+            _ => format!("python3 {}.py --{} {}", rng.pick(WORDS), rng.pick(WORDS), rng.arg()),
         },
         82..=89 => match rng.below(4) {
             0 => format!("ssh {}@{}", rng.pick(USERS), rng.pick(HOSTS)),
@@ -210,13 +183,11 @@ fn gen_one(rng: &mut Rng) -> String {
                 5 + rng.below(20)
             ),
             1 => format!("history | grep {}", rng.pick(WORDS)),
-            _ => format!(
-                "ps aux | grep {} | awk '{{print $2}}' | xargs kill -9",
-                rng.pick(WORDS)
-            ),
+            _ => format!("ps aux | grep {} | awk '{{print $2}}' | xargs kill -9", rng.pick(WORDS)),
         },
         95..=96 => format!(
-            "for f in {}/*.{}; do {} \"$f\" >> {}.log; done && tail -n {} {}.log | sort | uniq -c | sort -rn",
+            "for f in {}/*.{}; do {} \"$f\" >> {}.log; done && tail -n {} {}.log | sort | uniq -c \
+             | sort -rn",
             rng.pick(DIRS),
             rng.pick(&["rs", "log", "json", "txt"]),
             rng.pick(&["cat", "wc -l", "sha256sum"]),

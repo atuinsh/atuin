@@ -4,17 +4,14 @@
 
 use atuin_client::history::History;
 use atuin_client::settings::AiCapabilities;
-
-use crate::context::history_output_capability_available;
 use atuin_common::url::UrlAppendExt;
-
 use eventsource_stream::Eventsource;
 use eyre::Result;
 use futures::StreamExt;
 use reqwest::Url;
 use reqwest::header::USER_AGENT;
 
-use crate::context::ClientContext;
+use crate::context::{ClientContext, history_output_capability_available};
 
 pub(crate) static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"));
 
@@ -76,10 +73,7 @@ impl ChatRequest {
         invocation_id: String,
         model: Option<String>,
     ) -> Self {
-        let mut caps = vec![
-            "client_invocations".to_string(),
-            "client_v1_load_skill".to_string(),
-        ];
+        let mut caps = vec!["client_invocations".to_string(), "client_v1_load_skill".to_string()];
         if capabilities.enable_history_search.unwrap_or(true) {
             caps.push("client_v1_atuin_history".to_string());
         }
@@ -97,12 +91,7 @@ impl ChatRequest {
             caps.push("client_v1_atuin_output".to_string());
         }
         if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
-            caps.extend(
-                extra
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty()),
-            );
+            caps.extend(extra.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
         }
 
         Self {

@@ -1,11 +1,10 @@
 use std::collections::HashSet;
 
-use eyre::{Result, eyre};
-
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx, RecordTag, RecordVersion};
 use entry::KvEntry;
+use eyre::{Result, eyre};
 use record::KvRecord;
 
 use crate::database::Database;
@@ -84,11 +83,8 @@ impl KvStore {
 
     async fn push_record(&self, record: KvRecord) -> Result<(RecordId, RecordIdx)> {
         let bytes = record.serialize()?;
-        let idx = self
-            .record_store
-            .last(self.host_id, &RecordTag::Kv)
-            .await?
-            .map_or(0, |p| p.idx + 1);
+        let idx =
+            self.record_store.last(self.host_id, &RecordTag::Kv).await?.map_or(0, |p| p.idx + 1);
 
         let record = Record::builder()
             .host(Host::new(self.host_id))
@@ -100,9 +96,7 @@ impl KvStore {
 
         let id = record.id;
 
-        self.record_store
-            .push(&record.encrypt(&self.encryption_key))
-            .await?;
+        self.record_store.push(&record.encrypt(&self.encryption_key)).await?;
 
         Ok((id, idx))
     }
@@ -154,9 +148,7 @@ impl KvStore {
                             .await?;
                     }
                     None => {
-                        self.kv_db
-                            .delete(kv.namespace.as_str(), kv.key.as_str())
-                            .await?;
+                        self.kv_db.delete(kv.namespace.as_str(), kv.key.as_str()).await?;
                     }
                 }
             }
@@ -167,9 +159,7 @@ impl KvStore {
         // but just in case because ** S O F T W A R E **
         for kv in cached {
             if !visited.contains(&format!("{}.{}", kv.namespace, kv.key)) {
-                self.kv_db
-                    .delete(kv.namespace.as_str(), kv.key.as_str())
-                    .await?;
+                self.kv_db.delete(kv.namespace.as_str(), kv.key.as_str()).await?;
             }
         }
 
@@ -184,8 +174,9 @@ impl KvStore {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::{fixture, rstest};
+
+    use super::*;
 
     #[fixture]
     async fn store() -> KvStore {

@@ -1,7 +1,5 @@
-use atuin_client::{
-    auth::{self, AuthClient, MutateResponse},
-    settings::Settings,
-};
+use atuin_client::auth::{self, AuthClient, MutateResponse};
+use atuin_client::settings::Settings;
 use clap::Parser;
 use eyre::{Result, bail};
 
@@ -34,9 +32,7 @@ impl Cmd {
         let mut totp_code = self.totp_code.clone();
 
         loop {
-            let response = client
-                .delete_account(&password, totp_code.as_deref())
-                .await?;
+            let response = client.delete_account(&password, totp_code.as_deref()).await?;
 
             match response {
                 MutateResponse::Success => break,

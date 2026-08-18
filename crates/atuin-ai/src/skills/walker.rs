@@ -74,11 +74,8 @@ async fn scan_dir(dir: &Path, is_project: bool, out: &mut Vec<RawSkillFile>) {
             // Check for SKILL.md directly in this directory
             let skill_path = path.join(SKILL_FILENAME);
             if skill_path.is_file() {
-                let dir_name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("unknown")
-                    .to_string();
+                let dir_name =
+                    path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string();
 
                 match tokio::fs::read_to_string(&skill_path).await {
                     Ok(content) => {
@@ -168,11 +165,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_directories_handled() {
-        let files = discover(
-            Some(Path::new("/does/not/exist")),
-            Path::new("/also/missing"),
-        )
-        .await;
+        let files = discover(Some(Path::new("/does/not/exist")), Path::new("/also/missing")).await;
         assert!(files.is_empty());
     }
 }

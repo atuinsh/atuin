@@ -155,14 +155,12 @@ impl<'a> Utf32Str<'a> {
     #[inline]
     pub(crate) fn leading_white_space(self) -> usize {
         match self {
-            Utf32Str::Ascii(bytes) => bytes
-                .iter()
-                .position(|b| !b.is_ascii_whitespace())
-                .unwrap_or(0),
-            Utf32Str::Unicode(codepoints) => codepoints
-                .iter()
-                .position(|c| !c.is_whitespace())
-                .unwrap_or(0),
+            Utf32Str::Ascii(bytes) => {
+                bytes.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(0)
+            }
+            Utf32Str::Unicode(codepoints) => {
+                codepoints.iter().position(|c| !c.is_whitespace()).unwrap_or(0)
+            }
         }
     }
 
@@ -170,16 +168,12 @@ impl<'a> Utf32Str<'a> {
     #[inline]
     pub(crate) fn trailing_white_space(self) -> usize {
         match self {
-            Utf32Str::Ascii(bytes) => bytes
-                .iter()
-                .rev()
-                .position(|b| !b.is_ascii_whitespace())
-                .unwrap_or(0),
-            Utf32Str::Unicode(codepoints) => codepoints
-                .iter()
-                .rev()
-                .position(|c| !c.is_whitespace())
-                .unwrap_or(0),
+            Utf32Str::Ascii(bytes) => {
+                bytes.iter().rev().position(|b| !b.is_ascii_whitespace()).unwrap_or(0)
+            }
+            Utf32Str::Unicode(codepoints) => {
+                codepoints.iter().rev().position(|c| !c.is_whitespace()).unwrap_or(0)
+            }
         }
     }
 

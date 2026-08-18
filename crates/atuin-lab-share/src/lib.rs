@@ -557,13 +557,13 @@ fn check_terminal() -> Result<()> {
 #[cfg(unix)]
 fn warning_copy(active: bool, write: render::WriteMode) -> String {
     let mut copy = String::from(
-        "!! Terminal sharing is experimental.\n  Everything shown here -- including \
-         secrets you type -- is visible to anyone with the link.",
+        "!! Terminal sharing is experimental.\n  Everything shown here -- including secrets you \
+         type -- is visible to anyone with the link.",
     );
     if active {
         copy.push_str(
-            "\n  Viewers will see the CURRENT contents of this terminal, including \
-             anything already on screen.",
+            "\n  Viewers will see the CURRENT contents of this terminal, including anything \
+             already on screen.",
         );
     }
     if write.is_write_enabled() {
@@ -671,14 +671,8 @@ async fn connect_to_hub(
 
     eprintln!("Connecting to {} ...", opts.hub_url);
     let transport = tokio::spawn(
-        transport::Transport::new(
-            opts.hub_url.clone(),
-            opts.api_token.clone(),
-            write,
-            key,
-            url_tx,
-        )
-        .run(out_rx, in_tx),
+        transport::Transport::new(opts.hub_url.clone(), opts.api_token.clone(), write, key, url_tx)
+            .run(out_rx, in_tx),
     );
 
     match tokio::time::timeout(CONNECT_TIMEOUT, url_rx).await {
@@ -699,13 +693,10 @@ fn spawn_subshell(
     join_url: &str,
     write: render::WriteMode,
 ) -> Result<subshell::Subshell> {
-    subshell::Subshell::spawn(
-        host_size,
-        &[
-            ("ATUIN_SHARE_URL", join_url),
-            ("ATUIN_SHARE_WRITE", write.as_env_value()),
-        ],
-    )
+    subshell::Subshell::spawn(host_size, &[
+        ("ATUIN_SHARE_URL", join_url),
+        ("ATUIN_SHARE_WRITE", write.as_env_value()),
+    ])
 }
 
 /// `atuin lab share` is unix-only for now (it needs a PTY).
@@ -725,8 +716,8 @@ mod tests {
     fn warning_copy_read_only() {
         assert_eq!(
             warning_copy(false, WriteMode::ReadOnly),
-            "!! Terminal sharing is experimental.\n  Everything shown here -- including \
-             secrets you type -- is visible to anyone with the link."
+            "!! Terminal sharing is experimental.\n  Everything shown here -- including secrets \
+             you type -- is visible to anyone with the link."
         );
     }
 
@@ -734,9 +725,9 @@ mod tests {
     fn warning_copy_write() {
         assert_eq!(
             warning_copy(false, WriteMode::ReadWrite),
-            "!! Terminal sharing is experimental.\n  Everything shown here -- including \
-             secrets you type -- is visible to anyone with the link.\n  WRITE MODE: they \
-             can run commands on your machine."
+            "!! Terminal sharing is experimental.\n  Everything shown here -- including secrets \
+             you type -- is visible to anyone with the link.\n  WRITE MODE: they can run commands \
+             on your machine."
         );
     }
 
@@ -744,9 +735,9 @@ mod tests {
     fn warning_copy_active_read_only() {
         assert_eq!(
             warning_copy(true, WriteMode::ReadOnly),
-            "!! Terminal sharing is experimental.\n  Everything shown here -- including \
-             secrets you type -- is visible to anyone with the link.\n  Viewers will see \
-             the CURRENT contents of this terminal, including anything already on screen."
+            "!! Terminal sharing is experimental.\n  Everything shown here -- including secrets \
+             you type -- is visible to anyone with the link.\n  Viewers will see the CURRENT \
+             contents of this terminal, including anything already on screen."
         );
     }
 
@@ -755,10 +746,10 @@ mod tests {
     fn warning_copy_active_write() {
         assert_eq!(
             warning_copy(true, WriteMode::ReadWrite),
-            "!! Terminal sharing is experimental.\n  Everything shown here -- including \
-             secrets you type -- is visible to anyone with the link.\n  Viewers will see \
-             the CURRENT contents of this terminal, including anything already on screen.\
-             \n  WRITE MODE: they can run commands on your machine."
+            "!! Terminal sharing is experimental.\n  Everything shown here -- including secrets \
+             you type -- is visible to anyone with the link.\n  Viewers will see the CURRENT \
+             contents of this terminal, including anything already on screen.\n  WRITE MODE: they \
+             can run commands on your machine."
         );
     }
 
@@ -774,9 +765,7 @@ mod tests {
 
     #[test]
     fn affirmative_answers() {
-        for answer in [
-            "y", "Y", "yes", "YES", "Yes", " y ", "y\n", "yes\r\n", "\ty\t",
-        ] {
+        for answer in ["y", "Y", "yes", "YES", "Yes", " y ", "y\n", "yes\r\n", "\ty\t"] {
             assert!(is_affirmative(answer), "{answer:?} should confirm");
         }
     }
@@ -785,9 +774,7 @@ mod tests {
     /// almost-yeses all decline.
     #[test]
     fn declining_answers() {
-        for answer in [
-            "", "\n", "n", "N", "no", "yess", "y es", "yeah", "ja", "si", "0", "true",
-        ] {
+        for answer in ["", "\n", "n", "N", "no", "yess", "y es", "yeah", "ja", "si", "0", "true"] {
             assert!(!is_affirmative(answer), "{answer:?} should decline");
         }
     }
@@ -805,10 +792,7 @@ mod tests {
     /// child and the spawning parent: byte-pin it.
     #[test]
     fn share_already_running_display() {
-        assert_eq!(
-            Error::ShareAlreadyRunning.to_string(),
-            "an active share is already running"
-        );
+        assert_eq!(Error::ShareAlreadyRunning.to_string(), "an active share is already running");
     }
 
     /// A silent proxy is transient: the copy must say retry and point at
@@ -822,9 +806,9 @@ mod tests {
         let copy = Error::ProxyUnresponsive.to_string();
         assert_eq!(
             copy,
-            "the atuin pty-proxy socket accepted the connection but did not answer in time \
-             -- wait a moment and retry; if it persists, check what is holding the socket \
-             with `lsof $ATUIN_PTY_PROXY_SOCKET`"
+            "the atuin pty-proxy socket accepted the connection but did not answer in time -- \
+             wait a moment and retry; if it persists, check what is holding the socket with `lsof \
+             $ATUIN_PTY_PROXY_SOCKET`"
         );
         assert!(copy.is_ascii());
         assert!(!copy.contains("new shell"));
@@ -853,14 +837,10 @@ mod tests {
             (80, 4, Size { cols: 80, rows: 3 }),
             (1, 24, Size { cols: 1, rows: 23 }),
             (2, 24, Size { cols: 2, rows: 23 }),
-            (
-                200,
-                60,
-                Size {
-                    cols: 200,
-                    rows: 59,
-                },
-            ),
+            (200, 60, Size {
+                cols: 200,
+                rows: 59,
+            }),
         ] {
             assert_eq!(
                 host_size_from(cols, rows).expect("{cols}x{rows} is a survivable size"),
@@ -899,10 +879,10 @@ mod tests {
         let copy = Error::TerminalTooSmall { cols: 0, rows: 0 }.to_string();
         assert_eq!(
             copy,
-            "terminal is too small to share: 0x0 -- atuin lab share needs at least 1x3 \
-             (2 rows for the shell plus 1 reserved for the warning bar) -- resize the \
-             window, or if this is a non-interactive invocation such as \
-             `script -q /dev/null ...`, give it a real terminal size"
+            "terminal is too small to share: 0x0 -- atuin lab share needs at least 1x3 (2 rows \
+             for the shell plus 1 reserved for the warning bar) -- resize the window, or if this \
+             is a non-interactive invocation such as `script -q /dev/null ...`, give it a real \
+             terminal size"
         );
         assert!(copy.is_ascii());
     }

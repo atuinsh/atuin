@@ -155,9 +155,7 @@ impl SessionKey {
     /// [`CryptoError::InvalidKey`] if the fragment is not unpadded base64url
     /// or does not decode to exactly [`KEY_LEN`] bytes.
     pub fn from_fragment(fragment: &str) -> Result<Self, CryptoError> {
-        let mut decoded = URL_SAFE_NO_PAD
-            .decode(fragment)
-            .map_err(|_| CryptoError::InvalidKey)?;
+        let mut decoded = URL_SAFE_NO_PAD.decode(fragment).map_err(|_| CryptoError::InvalidKey)?;
         if decoded.len() != KEY_LEN {
             decoded.zeroize();
             return Err(CryptoError::InvalidKey);
@@ -189,13 +187,10 @@ impl SessionKey {
         }
         let (nonce, ciphertext) = blob.split_at(NONCE_LEN);
         self.cipher()
-            .decrypt(
-                Nonce::from_slice(nonce),
-                Payload {
-                    msg: ciphertext,
-                    aad,
-                },
-            )
+            .decrypt(Nonce::from_slice(nonce), Payload {
+                msg: ciphertext,
+                aad,
+            })
             .map_err(|_| CryptoError::DecryptFailed)
     }
 
@@ -205,13 +200,10 @@ impl SessionKey {
     fn seal(&self, nonce: &[u8; NONCE_LEN], plaintext: &[u8], aad: &[u8; AAD_LEN]) -> Vec<u8> {
         let sealed = self
             .cipher()
-            .encrypt(
-                Nonce::from_slice(nonce),
-                Payload {
-                    msg: plaintext,
-                    aad,
-                },
-            )
+            .encrypt(Nonce::from_slice(nonce), Payload {
+                msg: plaintext,
+                aad,
+            })
             .expect("AES-GCM encryption is infallible for in-memory frame sizes");
         let mut blob = Vec::with_capacity(NONCE_LEN + sealed.len());
         blob.extend_from_slice(nonce);
@@ -253,10 +245,8 @@ mod tests {
     const VECTOR_CT_TAG_HEX: &str = "83cddb4a4811f46bacb67216f20a673e0ba9227cc3507c5757312b86e37c9fd6929b4ef72f0194e13a1674ed8686300ed4";
 
     fn vector_key() -> SessionKey {
-        let bytes: [u8; KEY_LEN] = hex::decode(VECTOR_KEY_HEX)
-            .expect("valid hex")
-            .try_into()
-            .expect("32 bytes");
+        let bytes: [u8; KEY_LEN] =
+            hex::decode(VECTOR_KEY_HEX).expect("valid hex").try_into().expect("32 bytes");
         SessionKey::from_bytes(bytes)
     }
 
@@ -266,10 +256,8 @@ mod tests {
 
     #[test]
     fn frozen_vector_encrypts_to_the_exact_bytes() {
-        let nonce: [u8; NONCE_LEN] = hex::decode(VECTOR_NONCE_HEX)
-            .expect("valid hex")
-            .try_into()
-            .expect("12 bytes");
+        let nonce: [u8; NONCE_LEN] =
+            hex::decode(VECTOR_NONCE_HEX).expect("valid hex").try_into().expect("12 bytes");
         let aad = frame_aad(FrameKind::Output, 42);
         assert_eq!(hex::encode(aad), "01000000000000002a");
 
@@ -306,10 +294,7 @@ mod tests {
             let aad = frame_aad(kind, 7);
             let blob = key.encrypt(b"round trip", &aad);
             assert_eq!(blob.len(), b"round trip".len() + NONCE_LEN + TAG_LEN);
-            assert_eq!(
-                key.decrypt(&blob, &aad).expect("round-trips"),
-                b"round trip"
-            );
+            assert_eq!(key.decrypt(&blob, &aad).expect("round-trips"), b"round trip");
         }
         // Empty plaintext is legal: the blob is exactly the 28-byte overhead.
         let aad = frame_aad(FrameKind::Output, 8);
@@ -348,9 +333,7 @@ mod tests {
         let fragment = key.to_fragment();
         assert_eq!(fragment.len(), 43);
         assert!(
-            fragment
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+            fragment.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
             "fragment must match ^[A-Za-z0-9_-]{{43}}$, got {fragment:?}"
         );
 
@@ -365,23 +348,14 @@ mod tests {
     #[test]
     fn from_fragment_rejects_wrong_lengths_and_padded_input() {
         // 42 chars decode to 31 bytes, 44 to 33 — both are not a key.
-        assert!(matches!(
-            SessionKey::from_fragment(&"A".repeat(42)),
-            Err(CryptoError::InvalidKey)
-        ));
-        assert!(matches!(
-            SessionKey::from_fragment(&"A".repeat(44)),
-            Err(CryptoError::InvalidKey)
-        ));
+        assert!(matches!(SessionKey::from_fragment(&"A".repeat(42)), Err(CryptoError::InvalidKey)));
+        assert!(matches!(SessionKey::from_fragment(&"A".repeat(44)), Err(CryptoError::InvalidKey)));
         // `=` is not in the no-pad alphabet at all.
         assert!(matches!(
             SessionKey::from_fragment(&format!("{}=", "A".repeat(43))),
             Err(CryptoError::InvalidKey)
         ));
-        assert!(matches!(
-            SessionKey::from_fragment(""),
-            Err(CryptoError::InvalidKey)
-        ));
+        assert!(matches!(SessionKey::from_fragment(""), Err(CryptoError::InvalidKey)));
     }
 
     #[test]
@@ -402,10 +376,8 @@ mod tests {
         let Ok(path) = std::env::var("INTEROP_OUT") else {
             return;
         };
-        let blob = vector_key().encrypt(
-            b"rust-produced blob: hello viewer\n",
-            &frame_aad(FrameKind::Keyframe, 111),
-        );
+        let blob = vector_key()
+            .encrypt(b"rust-produced blob: hello viewer\n", &frame_aad(FrameKind::Keyframe, 111));
         std::fs::write(&path, hex::encode(blob)).expect("write INTEROP_OUT");
     }
 }

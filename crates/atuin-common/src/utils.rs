@@ -2,9 +2,8 @@ use std::env;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use eyre::{Result, eyre};
-
 use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine};
+use eyre::{Result, eyre};
 use getrandom::fill;
 use uuid::Uuid;
 
@@ -120,9 +119,7 @@ pub fn env_nonempty(name: &str) -> Option<OsString> {
 /// This is usually done in the name of XDG-compliance which requires that paths given through
 /// environment variables are absolute.
 pub fn env_abspath(name: &str) -> Option<PathBuf> {
-    env_nonempty(name)
-        .map(PathBuf::from)
-        .filter(|s| s.is_absolute())
+    env_nonempty(name).map(PathBuf::from).filter(|s| s.is_absolute())
 }
 
 pub fn config_dir() -> PathBuf {
@@ -209,9 +206,10 @@ where
 #[allow(unsafe_code)]
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_ne;
     use rstest::rstest;
+
+    use super::*;
 
     #[cfg(not(windows))]
     #[test]
@@ -231,10 +229,7 @@ mod tests {
         unsafe { env::remove_var("HOME") };
         // TODO: Audit that the environment access only happens in single-threaded code.
         unsafe { env::set_var("XDG_CONFIG_HOME", "/home/user/custom_config") };
-        assert_eq!(
-            config_dir(),
-            PathBuf::from("/home/user/custom_config/atuin")
-        );
+        assert_eq!(config_dir(), PathBuf::from("/home/user/custom_config/atuin"));
         // TODO: Audit that the environment access only happens in single-threaded code.
         unsafe { env::remove_var("XDG_CONFIG_HOME") };
     }

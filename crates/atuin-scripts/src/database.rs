@@ -1,13 +1,13 @@
-use std::{path::Path, str::FromStr, time::Duration};
+use std::path::Path;
+use std::str::FromStr;
+use std::time::Duration;
 
 use atuin_common::utils;
-use sqlx::{
-    Result, Row,
-    sqlite::{
-        SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
-        SqliteSynchronous,
-    },
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
+    SqliteSynchronous,
 };
+use sqlx::{Result, Row};
 use tokio::fs;
 use tracing::debug;
 use uuid::Uuid;
@@ -26,7 +26,8 @@ impl Database {
 
         if utils::broken_symlink(path) {
             eprintln!(
-                "Atuin: Script sqlite db path ({path:?}) is a broken symlink. Unable to read or create replacement."
+                "Atuin: Script sqlite db path ({path:?}) is a broken symlink. Unable to read or \
+                 create replacement."
             );
             std::process::exit(1);
         }
@@ -57,9 +58,7 @@ impl Database {
     }
 
     pub async fn sqlite_version(&self) -> Result<String> {
-        sqlx::query_scalar("SELECT sqlite_version()")
-            .fetch_one(&self.pool)
-            .await
+        sqlx::query_scalar("SELECT sqlite_version()").fetch_one(&self.pool).await
     }
 
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
@@ -193,12 +192,8 @@ impl Database {
     pub async fn clear(&self) -> Result<()> {
         debug!("clearing all scripts from sqlite");
 
-        sqlx::query("delete from script_tags")
-            .execute(&self.pool)
-            .await?;
-        sqlx::query("delete from scripts")
-            .execute(&self.pool)
-            .await?;
+        sqlx::query("delete from script_tags").execute(&self.pool).await?;
+        sqlx::query("delete from scripts").execute(&self.pool).await?;
 
         Ok(())
     }
@@ -206,10 +201,7 @@ impl Database {
     pub async fn delete(&self, id: &str) -> Result<()> {
         debug!("deleting script {}", id);
 
-        sqlx::query("delete from scripts where id = ?1")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query("delete from scripts where id = ?1").bind(id).execute(&self.pool).await?;
 
         // delete all the tags for the script
         sqlx::query("delete from script_tags where script_id = ?1")
@@ -226,14 +218,17 @@ impl Database {
         let mut tx = self.pool.begin().await?;
 
         // Update the script's base fields
-        sqlx::query("update scripts set name = ?1, description = ?2, shebang = ?3, script = ?4 where id = ?5")
-            .bind(s.name.as_str())
-            .bind(s.description.as_str())
-            .bind(s.shebang.as_str())
-            .bind(s.script.as_str())
-            .bind(s.id.to_string())
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "update scripts set name = ?1, description = ?2, shebang = ?3, script = ?4 where id = \
+             ?5",
+        )
+        .bind(s.name.as_str())
+        .bind(s.description.as_str())
+        .bind(s.shebang.as_str())
+        .bind(s.script.as_str())
+        .bind(s.id.to_string())
+        .execute(&mut *tx)
+        .await?;
 
         // Delete all existing tags for this script
         sqlx::query("delete from script_tags where script_id = ?1")
@@ -284,8 +279,9 @@ impl Database {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use rstest::*;
+
+    use super::*;
 
     #[fixture]
     async fn db() -> Database {

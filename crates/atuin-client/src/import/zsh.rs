@@ -76,16 +76,12 @@ impl Entry {
             };
         };
 
-        let time = time
-            .parse::<i64>()
-            .ok()
-            .and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok());
+        let time =
+            time.parse::<i64>().ok().and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok());
 
         // use nanos, because why the hell not? we won't display them.
         // saturate rather than overflow on an implausible duration
-        let duration = duration
-            .parse::<i64>()
-            .map_or(-1, |t| t.saturating_mul(1_000_000_000));
+        let duration = duration.parse::<i64>().map_or(-1, |t| t.saturating_mul(1_000_000_000));
 
         Self {
             command: command.trim_end().to_owned(),
@@ -139,18 +135,14 @@ impl Importer for Zsh {
         let backfill =
             u32::try_from(commands_until_timestamp).unwrap_or(u32::MAX) * timestamp_increment;
         // a timestamp near the start of the representable range would underflow
-        let mut timestamp = first_timestamp
-            .checked_sub(backfill)
-            .unwrap_or(first_timestamp);
+        let mut timestamp = first_timestamp.checked_sub(backfill).unwrap_or(first_timestamp);
 
         for entry in entries {
             if let Some(time) = entry.timestamp {
                 timestamp = time;
             } else {
                 // a timestamp near the end of the representable range would overflow
-                timestamp = timestamp
-                    .checked_add(timestamp_increment)
-                    .unwrap_or(timestamp);
+                timestamp = timestamp.checked_add(timestamp_increment).unwrap_or(timestamp);
             }
 
             let imported = History::import()
@@ -190,9 +182,8 @@ mod test {
     use itertools::assert_equal;
     use rstest::rstest;
 
-    use crate::import::tests::TestLoader;
-
     use super::*;
+    use crate::import::tests::TestLoader;
 
     #[rstest]
     #[case::zero_duration(
@@ -254,10 +245,7 @@ mod test {
         let parsed = Entry::parse(line);
 
         assert_eq!(parsed.command, command);
-        assert_eq!(
-            parsed.timestamp.map(OffsetDateTime::unix_timestamp),
-            timestamp
-        );
+        assert_eq!(parsed.timestamp.map(OffsetDateTime::unix_timestamp), timestamp);
         assert_eq!(parsed.duration, duration);
     }
 
@@ -277,14 +265,11 @@ cargo update
         let mut loader = TestLoader::default();
         zsh.load(&mut loader).await.unwrap();
 
-        assert_equal(
-            loader.buf.iter().map(|h| h.command.as_str()),
-            [
-                "cargo install atuin",
-                "cargo install atuin; \\\ncargo update",
-                "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
-            ],
-        );
+        assert_equal(loader.buf.iter().map(|h| h.command.as_str()), [
+            "cargo install atuin",
+            "cargo install atuin; \\\ncargo update",
+            "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
+        ]);
     }
 
     #[tokio::test]
@@ -299,10 +284,10 @@ cargo update
         let mut loader = TestLoader::default();
         zsh.load(&mut loader).await.unwrap();
 
-        assert_equal(
-            loader.buf.iter().map(|h| h.command.as_str()),
-            ["cargo install atuin", "cargo update"],
-        );
+        assert_equal(loader.buf.iter().map(|h| h.command.as_str()), [
+            "cargo install atuin",
+            "cargo update",
+        ]);
     }
 
     #[tokio::test]
@@ -333,10 +318,7 @@ cargo update
         assert_eq!(loader.buf[0].timestamp.unix_timestamp(), 253_402_300_799);
         // the increment saturates at the maximum representable instant rather than
         // wrapping or resetting to the epoch
-        assert_eq!(
-            loader.buf.last().unwrap().timestamp.unix_timestamp(),
-            253_402_300_799
-        );
+        assert_eq!(loader.buf.last().unwrap().timestamp.unix_timestamp(), 253_402_300_799);
     }
 
     #[tokio::test]
@@ -350,9 +332,6 @@ cargo update
         let mut loader = TestLoader::default();
         zsh.load(&mut loader).await.unwrap();
 
-        assert_equal(
-            loader.buf.iter().map(|h| h.command.as_str()),
-            ["echo 你好", "ls ~/音乐"],
-        );
+        assert_equal(loader.buf.iter().map(|h| h.command.as_str()), ["echo 你好", "ls ~/音乐"]);
     }
 }
