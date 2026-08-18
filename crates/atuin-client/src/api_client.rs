@@ -229,7 +229,9 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
     }
 
     if !status.is_success() {
-        if let Ok(error) = resp.json::<ErrorResponse>().await {
+        let body = resp.text().await.unwrap_or_default();
+
+        if let Ok(error) = serde_json::from_str::<ErrorResponse>(&body) {
             let reason = error.reason;
 
             if status.is_client_error() {
@@ -242,7 +244,7 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
         }
 
         bail!(
-            "There was an error with the atuin sync service at {url}, Status {status:?}.\nIf the problem persists, contact the host"
+            "There was an error with the atuin sync service at {url}, Status {status:?}.\nResponse body: {body}\nIf the problem persists, contact the host"
         );
     }
 
@@ -364,6 +366,19 @@ impl Client {
         // Awesome, we got the packfile response, let's proceed uploading it up now.
         self.put_packfile(parsed.upload_url, packfile).await?;
 
+        self.confirm_packfile(manifest_id).await?;
+
+        Ok(())
+    }
+
+    /// Confirm a packfile body upload with the server.
+    async fn confirm_packfile(&self, manifest_id: RecordId) -> Result<()> {
+        let path = format!("api/v0/packfiles/{}/confirm", manifest_id.0);
+        let url = self
+            .sync_addr
+            .append(path.split('/').filter(|s| !s.is_empty()))?;
+        let resp = self.client.post(url).send().await?;
+        handle_resp_error(resp).await?;
         Ok(())
     }
 

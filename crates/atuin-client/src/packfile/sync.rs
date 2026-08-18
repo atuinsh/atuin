@@ -134,7 +134,7 @@ mod tests {
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordVersion};
     use rstest::*;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
@@ -268,11 +268,22 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
+        // After the PUT, the client confirms the upload so the server verifies the
+        // body landed and marks it downloadable (no reliance on the store webhook).
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/api/v0/packfiles/[^/]+/confirm$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "confirmed",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
 
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        // `.expect(1)` on both mocks verifies create_packfile + put_packfile each fired once.
+        // `.expect(1)` on all three mocks verifies create_packfile + put_packfile +
+        // confirm_packfile each fired exactly once.
         upload_packed(&manifest, &store, &key, &client)
             .await
             .unwrap();
