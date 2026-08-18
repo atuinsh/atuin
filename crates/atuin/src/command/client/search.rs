@@ -7,7 +7,6 @@ use clap::Parser;
 use eyre::Result;
 
 use atuin_client::{
-    database::Database,
     database::Sqlite,
     database::{OptFilters, current_context},
     history::{AuthorPattern, History, store::HistoryStore},

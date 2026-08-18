@@ -3,7 +3,7 @@ use crate::fsm::AgentFsm;
 use crate::session::{LocalSessionService, SessionManager, SessionService};
 use crate::tui::app::{AiApp, ExitOutcome, IoContext};
 use crate::tui::state::ConversationEvent;
-use atuin_client::database::{Database, Sqlite};
+use atuin_client::database::Sqlite;
 use eyre::{Context as _, Result, bail};
 use tracing::{debug, info};
 

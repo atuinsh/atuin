@@ -27,7 +27,7 @@ use atuin_common::utils::normalize_optional_string;
 use atuin_daemon::history::{HistoryEventKind, TailHistoryReply};
 
 use atuin_client::{
-    database::{Database, Sqlite, current_context},
+    database::{Sqlite, current_context},
     history::{History, store::HistoryStore},
     record::sqlite_store::SqliteStore,
     settings::{

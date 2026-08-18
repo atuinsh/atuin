@@ -14,11 +14,7 @@ use eyre::OptionExt;
 use eyre::{Result, bail};
 use tempfile::NamedTempFile;
 
-use atuin_client::{
-    database::{Database, Sqlite},
-    record::sqlite_store::SqliteStore,
-    settings::Settings,
-};
+use atuin_client::{database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings};
 use atuin_common::encryption::paseto_v4;
 use tracing::debug;
 

@@ -423,7 +423,6 @@ impl AiApp {
                     let Some(io) = &self.io else { continue };
                     let db = io.app_ctx.history_db.clone();
                     ctx.perform(async move {
-                        use atuin_client::database::Database as _;
                         // Ids are stored in simple (no-hyphen) form today,
                         // but older or imported rows may be hyphenated.
                         let command = match db.load(&history_id.as_simple().to_string()).await {

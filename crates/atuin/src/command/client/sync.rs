@@ -2,7 +2,7 @@ use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
 use atuin_client::{
-    database::{Database, Sqlite},
+    database::Sqlite,
     history::store::HistoryStore,
     record::{sqlite_store::SqliteStore, sync},
     settings::Settings,

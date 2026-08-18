@@ -6,7 +6,6 @@
 use std::ops::Deref;
 use std::{pin::Pin, sync::Arc};
 
-use atuin_client::database::Database;
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use eyre::Result;

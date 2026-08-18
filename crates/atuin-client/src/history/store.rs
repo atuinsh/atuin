@@ -6,7 +6,7 @@ use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 
 use crate::{
-    database::{Database, Sqlite, current_context},
+    database::{Sqlite, current_context},
     record::sqlite_store::SqliteStore,
 };
 use atuin_common::encryption::paseto_v4;

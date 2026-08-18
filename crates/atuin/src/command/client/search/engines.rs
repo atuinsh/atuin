@@ -1,5 +1,5 @@
 use atuin_client::{
-    database::{Context, Database, DbSearchMode, OptFilters, Sqlite},
+    database::{Context, DbSearchMode, OptFilters, Sqlite},
     history::{History, HistoryId, all_user_author_filter},
     settings::{FilterMode, SearchMode, Settings, Shells},
 };

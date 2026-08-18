@@ -6,7 +6,7 @@ use eyre::Result;
 use indicatif::ProgressBar;
 
 use atuin_client::{
-    database::{Database, Sqlite},
+    database::Sqlite,
     history::History,
     import::{
         Importer, Loader, bash::Bash, fish::Fish, nu::Nu, nu_histdb::NuHistDb,

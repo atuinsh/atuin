@@ -19,7 +19,7 @@ use super::{
     history_list::{HistoryList, ListState},
 };
 use atuin_client::{
-    database::{Context, Database, Sqlite, current_context},
+    database::{Context, Sqlite, current_context},
     history::{History, HistoryId, HistoryStats, store::HistoryStore},
     settings::{
         CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, RequestedSearchMode,
@@ -2828,7 +2828,7 @@ mod tests {
     #[cfg(all(feature = "daemon", unix))]
     #[tokio::test]
     async fn unavailable_daemon_fuzzy_retries_with_local_fuzzy() {
-        use atuin_client::database::{Database, Sqlite};
+        use atuin_client::database::Sqlite;
 
         let temp = tempfile::tempdir().unwrap();
         let mut settings = Settings::utc();

@@ -4,10 +4,7 @@ use std::collections::{HashMap, HashSet};
 use time::{Date, Duration, Month, OffsetDateTime, Time};
 
 use atuin_client::{
-    database::{Database, Sqlite},
-    record::sqlite_store::SqliteStore,
-    settings::Settings,
-    theme::Theme,
+    database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings, theme::Theme,
 };
 use atuin_common::encryption::paseto_v4;
 use atuin_dotfiles::store::AliasStore;

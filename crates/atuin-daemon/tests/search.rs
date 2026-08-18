@@ -9,7 +9,7 @@
 mod unix {
     use std::time::Duration;
 
-    use atuin_client::database::{Context, Database, Sqlite};
+    use atuin_client::database::{Context, Sqlite};
     use atuin_client::history::History;
     use atuin_client::record::sqlite_store::SqliteStore;
     use atuin_client::settings::{FilterMode, Settings, init_meta_config_for_testing};

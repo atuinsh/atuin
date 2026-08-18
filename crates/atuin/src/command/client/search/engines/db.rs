@@ -1,6 +1,5 @@
 use super::{SearchEngine, SearchState};
 use atuin_client::{
-    database::Database,
     database::OptFilters,
     database::Sqlite,
     database::{DbSearchMode, QueryToken, QueryTokenizer},
