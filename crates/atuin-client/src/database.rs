@@ -36,7 +36,7 @@ use super::{
 pub struct Context {
     pub session: String,
     pub cwd: String,
-    pub cmd_origin: String,
+    pub cmd_origin: CmdOrigin,
     pub host_id: String,
     pub git_root: Option<PathBuf>,
 }
@@ -70,7 +70,7 @@ pub struct OptFilters<'a> {
 /// filters simply match nothing.
 pub async fn query_context() -> eyre::Result<Context> {
     let session = env::var("ATUIN_SESSION").unwrap_or_default();
-    let cmd_origin = CmdOrigin::probe().into_string();
+    let cmd_origin = CmdOrigin::probe();
     let cwd = utils::get_current_dir();
     let host_id = Settings::host_id().await?;
     let git_root = utils::in_git_repo(cwd.as_str());
@@ -99,7 +99,7 @@ impl Context {
         Context {
             session: entry.session.to_string(),
             cwd: entry.cwd.to_string(),
-            cmd_origin: entry.cmd_origin.to_string(),
+            cmd_origin: entry.cmd_origin.clone(),
             host_id: String::new(),
             git_root: utils::in_git_repo(entry.cwd.as_str()),
         }
@@ -532,7 +532,7 @@ impl Database for Sqlite {
                     // Case-insensitive, matching `search()` - the reported casing of a
                     // hostname changes over time. lower() is indexed as an expression.
                     "lower(hostname)",
-                    quote(context.cmd_origin.to_lowercase()),
+                    quote(context.cmd_origin.as_str().to_lowercase()),
                 ),
                 FilterMode::Session => query.and_where_eq("session", quote(&context.session)),
                 FilterMode::SessionPreload => {
@@ -646,9 +646,10 @@ impl Database for Sqlite {
 
         match filter {
             FilterMode::Global => &mut sql,
-            FilterMode::Host => {
-                sql.and_where_eq("lower(hostname)", quote(context.cmd_origin.to_lowercase()))
-            }
+            FilterMode::Host => sql.and_where_eq(
+                "lower(hostname)",
+                quote(context.cmd_origin.as_str().to_lowercase()),
+            ),
             FilterMode::Session => sql.and_where_eq("session", quote(&context.session)),
             FilterMode::SessionPreload => {
                 sql.and_where_eq("session", quote(&context.session));
@@ -1230,6 +1231,7 @@ impl<'a> Iterator for QueryTokenizer<'a> {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod test {
     use super::*;
     use crate::settings::test_local_timeout;
@@ -1239,7 +1241,7 @@ mod test {
 
     fn new_context() -> Context {
         Context {
-            cmd_origin: "test:host".to_string(),
+            cmd_origin: CmdOrigin::try_from("test:host").unwrap(),
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
             host_id: "test-host".to_string(),
@@ -1351,7 +1353,7 @@ mod test {
         db: Sqlite,
     ) {
         let context = Context {
-            cmd_origin: "booop".to_string(),
+            cmd_origin: CmdOrigin::parse_fuzzy("booop"),
             session: "beep boop".to_string(),
             cwd: "/home/ellie".to_string(),
             host_id: "test-host".to_string(),
@@ -1991,7 +1993,7 @@ mod test {
             .list(
                 &[],
                 &Context {
-                    cmd_origin: "".to_string(),
+                    cmd_origin: CmdOrigin::parse_fuzzy(""),
                     session: "".to_string(),
                     cwd: "".to_string(),
                     host_id: "".to_string(),
@@ -2105,7 +2107,7 @@ mod test {
         }
 
         let context = Context {
-            cmd_origin: "hostname".into(),
+            cmd_origin: CmdOrigin::parse_fuzzy("hostname"),
             session: "session".into(),
             cwd: "/tmp".into(),
             host_id: "host".into(),
@@ -2165,7 +2167,7 @@ mod test {
         }
 
         let context = Context {
-            cmd_origin: "hostname".into(),
+            cmd_origin: CmdOrigin::parse_fuzzy("hostname"),
             session: "session".into(),
             cwd: "/tmp".into(),
             host_id: "host".into(),

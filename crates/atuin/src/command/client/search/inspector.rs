@@ -341,6 +341,7 @@ pub fn draw_full(
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::draw_ultracompact;
     use atuin_client::{

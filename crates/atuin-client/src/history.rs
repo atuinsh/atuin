@@ -277,6 +277,7 @@ impl History {
         Ok(DecryptedData(output.into_vec()))
     }
 
+    #[allow(deprecated)]
     pub fn deserialize(bytes: &[u8], version: &str) -> Result<History> {
         let Some(version) = Version::from_name(version) else {
             bail!("unknown version {version:?}");

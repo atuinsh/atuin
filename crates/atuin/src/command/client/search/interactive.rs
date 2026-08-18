@@ -2292,7 +2292,7 @@ mod tests {
                 context: Context {
                     session: String::new(),
                     cwd: String::new(),
-                    cmd_origin: String::new(),
+                    cmd_origin: atuin_domain::CmdOrigin::default(),
                     host_id: String::new(),
                     git_root: None,
                 },

@@ -112,6 +112,8 @@ pub struct HistoryFromDb {
 }
 
 impl From<HistoryFromDb> for History {
+    // Reads a `hostname` column that predates the strict `host:user` format.
+    #[allow(deprecated)]
     fn from(from_db: HistoryFromDb) -> Self {
         History {
             id: from_db.id.into(),

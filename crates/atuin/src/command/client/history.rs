@@ -662,6 +662,7 @@ struct TailJsonHistory<'a> {
 
 #[cfg(feature = "daemon")]
 impl TailEvent {
+    #[allow(deprecated)]
     fn from_proto(reply: TailHistoryReply) -> Result<Self> {
         let history = reply
             .history

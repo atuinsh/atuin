@@ -4,6 +4,7 @@
 //! connects a client, and exercises the daemon RPCs.
 
 #[cfg(unix)]
+#[allow(deprecated)]
 mod unix {
     use std::time::Duration;
 
