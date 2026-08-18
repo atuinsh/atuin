@@ -37,7 +37,7 @@ fn read_record<'a>(bytes: &mut Bytes<'a>) -> Result<Record<DecryptedData>, Decod
         idx: decode::read_u64(bytes)?,
         host: {
             let id = HostId(read_uuid(bytes)?);
-    // TODO(ATU-589): Remove the vestigial `Host::_name` serialization.
+            // TODO(ATU-589): Remove the vestigial `Host::_name` serialization.
             let _name = decode::read_string(bytes)?;
             Host::new(id)
         },
