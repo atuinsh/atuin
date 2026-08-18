@@ -868,7 +868,7 @@ impl Database for Sqlite {
     }
 
     fn all_paged(&self, page_size: usize, include_deleted: bool, unique: bool) -> Paged {
-        Paged::new(Box::new(self.clone()), page_size, include_deleted, unique)
+        Paged::new(self.clone(), page_size, include_deleted, unique)
     }
 
     // This used to scramble the command and set deleted_at, so that sync v1 could
@@ -1037,7 +1037,7 @@ impl Database for Sqlite {
 }
 
 pub struct Paged {
-    database: Box<dyn Database + 'static>,
+    database: Sqlite,
     page_size: usize,
     last_id: Option<String>,
     include_deleted: bool,
@@ -1045,12 +1045,7 @@ pub struct Paged {
 }
 
 impl Paged {
-    pub fn new(
-        database: Box<dyn Database + 'static>,
-        page_size: usize,
-        include_deleted: bool,
-        unique: bool,
-    ) -> Self {
+    pub fn new(database: Sqlite, page_size: usize, include_deleted: bool, unique: bool) -> Self {
         Self {
             database,
             page_size,
