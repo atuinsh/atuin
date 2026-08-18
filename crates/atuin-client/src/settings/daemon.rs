@@ -10,7 +10,11 @@ const SOCKET_NAME: &str = "atuin.sock";
 pub struct Daemon {
     /// Use the daemon to sync
     /// If enabled, history hooks are routed through the daemon.
-    #[serde(alias = "enable")]
+    ///
+    /// Defaulted by serde rather than `set_default`, for the same reason as
+    /// [`crate::settings::PtyProxy::enabled`]: a merged default would arrive
+    /// alongside the `enable` spelling and serde would reject the duplicate.
+    #[serde(alias = "enable", default)]
     pub enabled: bool,
 
     /// Automatically start and manage a local daemon when needed.

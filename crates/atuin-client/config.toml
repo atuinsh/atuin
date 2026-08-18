@@ -311,6 +311,20 @@ enter_accept = true
 ## starts once.
 # enabled = false
 
+# [suggest]
+## Experimental. Inline suggestions in `atuin pty-proxy`, from your history
+## and your shell's completions. Requires `daemon.enabled = true`.
+# enabled = false
+
+## Maximum number of history entries fetched per keystroke.
+# limit = 8
+
+## Minimum typed characters before suggestions appear.
+# min_chars = 1
+
+## Hide commands that have failed and never succeeded.
+# filter_failed = true
+
 # [theme]
 ## Color theme to use for rendering in the terminal.
 ## There are some built-in themes, including the base theme ("default"),

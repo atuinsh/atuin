@@ -32,7 +32,7 @@ use atuin_client::history::History;
 use atuin_client::settings::Search as SearchSettings;
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
-use atuin_daemon::search::{IndexFilterMode, SearchIndex};
+use atuin_daemon::search::{IndexFilterMode, SearchIndex, SuggestScope};
 use atuin_search_bench::corpus;
 use time::OffsetDateTime;
 
@@ -54,6 +54,10 @@ const QUERIES: &[&str] = &[
 
 /// The interactive UI requests up to 200 results per query.
 const LIMIT: u32 = 200;
+
+/// The suggestion popup shows a handful of rows, and `suggest.limit`
+/// defaults to 8.
+const SUGGEST_LIMIT: usize = 8;
 
 /// Working directories assigned round-robin to history entries, so the
 /// directory-filtered benchmark has a realistic candidate subset.
@@ -226,4 +230,27 @@ fn daemon_search(bencher: divan::Bencher, case: &Case) {
         IndexFilterMode::Global
     };
     bencher.bench(|| index.search(case.query, filter.clone(), LIMIT).count());
+}
+
+/// The pty-proxy popup requests far fewer results than the interactive UI,
+/// but does it on every keystroke and behind a 100ms client timeout, so its
+/// worst case (a one-character query, where nearly everything is a candidate
+/// and every candidate is scored for locality) is what matters.
+#[divan::bench(args = cases())]
+fn daemon_suggest(bencher: divan::Bencher, case: &Case) {
+    let index = index(case.scale);
+    let directory = filter_dir();
+    // A workspace root above the benchmark's directories, so the workspace
+    // tier is exercised rather than short-circuited by the exact-directory
+    // test — the expensive path, and the one a repo actually takes.
+    let workspace = "/home/user/src/"
+        .display_rich()
+        .trailing_slash(true)
+        .to_string();
+    let scope = SuggestScope {
+        directory: Some(directory.as_str()),
+        workspace: Some(workspace.as_str()),
+        filter_failed: true,
+    };
+    bencher.bench(|| index.suggest(case.query, SUGGEST_LIMIT, scope).len());
 }

@@ -1,7 +1,13 @@
 #[cfg(unix)]
 mod capture;
 #[cfg(unix)]
+mod compositor;
+#[cfg(unix)]
+mod core;
+#[cfg(unix)]
 mod debug;
+#[cfg(unix)]
+mod oracle;
 #[cfg(unix)]
 mod osc133;
 #[cfg(unix)]
@@ -12,13 +18,19 @@ mod pty_proxy;
 mod runtime;
 #[cfg(unix)]
 mod screen;
+#[cfg(unix)]
+mod suggest;
 
 #[cfg(unix)]
 pub use capture::{CommandCapture, CommandCaptureSink};
 #[cfg(unix)]
-pub use pty_proxy::{PtyProxy, Shell, init_script};
+pub use core::{ProxyCore, ProxyCoreConfig, ProxyHandle};
 #[cfg(unix)]
-pub use runtime::{ProxyCore, ProxyCoreConfig, ProxyHandle};
+pub use oracle::{Candidate, CompletionOracleHandle, OracleShell, OracleWarmer, find_in_path};
+#[cfg(unix)]
+pub use pty_proxy::{PtyProxy, RunOptions, Shell, init_script};
+#[cfg(unix)]
+pub use suggest::{Suggestion, SuggestionProvider, SuggestionSource, SyntaxClass, SyntaxSpan};
 
 #[cfg(not(unix))]
 #[allow(dead_code)]

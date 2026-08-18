@@ -20,10 +20,13 @@ use crate::{
     events::DaemonEvent,
     search::{
         FilterMode, IndexFilterMode, PrepareIndexRequest, PrepareIndexResponse, SearchIndex,
-        SearchRequest, SearchResponse,
+        SearchRequest, SearchResponse, SuggestReply, SuggestRequest, SuggestScope, Suggestion,
         search_server::{Search as SearchSvc, SearchServer},
     },
 };
+
+/// Cap on suggestions returned per request, whatever the client asks for.
+const SUGGEST_LIMIT: u32 = 50;
 
 const PAGE_SIZE: usize = 5000;
 const RESULTS_LIMIT: u32 = 200;
@@ -59,6 +62,13 @@ where
                     histories.len()
                 );
                 index().await.add_histories(&histories);
+                // Indexing a page is CPU-bound, and the daemon runs on a
+                // current-thread runtime: without a scheduling point here,
+                // a rebuild holds the only thread from first page to last
+                // and every request waits it out. The pty-proxy's popup
+                // gives up after 100ms, so for it that means no suggestions
+                // at all until the rebuild finishes.
+                tokio::task::yield_now().await;
             }
             Ok(None) => {
                 info!(
@@ -428,6 +438,70 @@ impl SearchSvc for SearchGrpcService {
         }
         Ok(Response::new(PrepareIndexResponse {}))
     }
+
+    #[instrument(skip_all, level = Level::TRACE, name = "suggest_rpc")]
+    async fn suggest(
+        &self,
+        request: Request<SuggestRequest>,
+    ) -> Result<Response<SuggestReply>, Status> {
+        let request = request.into_inner();
+        let limit = request.limit.min(SUGGEST_LIMIT) as usize;
+
+        // Served from whatever index the daemon currently holds, and never
+        // from a rebuilt one. `search` rebuilds when the requested shell
+        // filter differs from the index's, which reads the whole history
+        // database — seconds on an established history. That is fine for an
+        // interactive search, which waits as long as it takes, and fatal
+        // here: this caller gives up after 100ms, and abandoning the request
+        // takes the rebuild with it, so the next keystroke starts over and
+        // suggestions never arrive at all.
+        //
+        // The cost of not rebuilding is that suggestions ride whichever
+        // shell filter the index was built with. Usually that is the user's
+        // shell already; when it is broader, they see commands from another
+        // shell of theirs until an interactive search narrows it.
+        let index = self.index.read().await;
+
+        let (directory, workspace) = suggest_scope_paths(request.context.as_ref());
+        // Directory ranking fails silently by design — a directory nobody has
+        // run anything in simply ranks nothing — so the directory it ranked
+        // against is the one thing worth naming when suggestions look wrong.
+        trace!(
+            directory = directory.as_deref().unwrap_or("<none>"),
+            workspace = workspace.as_deref().unwrap_or("<none>"),
+            "ranking suggestions"
+        );
+
+        let suggestions = index
+            .suggest(
+                &request.query,
+                limit,
+                SuggestScope {
+                    directory: directory.as_deref(),
+                    workspace: workspace.as_deref(),
+                    filter_failed: request.filter_failed,
+                },
+            )
+            .into_iter()
+            .map(|command| Suggestion { command })
+            .collect();
+        Ok(Response::new(SuggestReply { suggestions }))
+    }
+}
+
+/// The directory and workspace `Suggest` ranks by, normalized the way
+/// [`CommandData`](crate::search::SearchIndex) interns a history entry's
+/// `cwd` — the same preparation `convert_filter_mode` gives these two paths.
+/// A path that misses that normalization interns to nothing and silently
+/// ranks every command as "elsewhere", so it is worth its own seam.
+fn suggest_scope_paths(
+    context: Option<&crate::search::SearchContext>,
+) -> (Option<String>, Option<String>) {
+    let directory = context.map(|ctx| ctx.cwd.display_rich().trailing_slash(true).to_string());
+    let workspace = context
+        .and_then(|ctx| ctx.git_root.as_ref())
+        .map(|root| root.display_rich().trailing_slash(true).to_string());
+    (directory, workspace)
 }
 
 /// Convert proto FilterMode and context to IndexFilterMode.
@@ -456,5 +530,71 @@ fn convert_filter_mode(
         }
         // If no context provided, fall back to global
         _ => IndexFilterMode::Global,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::search::{SearchContext, SuggestScope};
+    use atuin_client::history::History;
+    use time::macros::datetime;
+
+    fn history_in(command: &str, cwd: &str) -> History {
+        History::import()
+            .timestamp(datetime!(2024-01-01 10:00 UTC))
+            .command(command)
+            .cwd(cwd)
+            .build()
+            .into()
+    }
+
+    /// The path a client sends is a plain cwd, exactly as the shell reports
+    /// it; the index interns directories with a trailing separator. If those
+    /// two ever drift apart, directory ranking stops working with nothing to
+    /// show for it — every command simply ranks as "elsewhere".
+    #[test]
+    fn a_client_cwd_ranks_against_the_directories_the_index_interned() {
+        let index = SearchIndex::default();
+        index.add_history(&history_in("cargo build --release", "/home/user/elsewhere"));
+        index.add_history(&history_in("cargo test", "/home/user/repo/crates"));
+        index.add_history(&history_in("cargo clippy --fix", "/home/user/repo"));
+
+        // What the pty-proxy sends: the shell's cwd and its git root, both
+        // unadorned.
+        let context = SearchContext {
+            session_id: String::new(),
+            cwd: "/home/user/repo".to_string(),
+            hostname: String::new(),
+            host_id: String::new(),
+            git_root: Some("/home/user/repo".to_string()),
+        };
+        let (directory, workspace) = suggest_scope_paths(Some(&context));
+
+        let results = index.suggest(
+            "cargo",
+            10,
+            SuggestScope {
+                directory: directory.as_deref(),
+                workspace: workspace.as_deref(),
+                filter_failed: true,
+            },
+        );
+        assert_eq!(
+            results,
+            vec!["cargo clippy --fix".to_string()],
+            "only what ran in this exact directory survives: `cargo test` ran \
+             in a sibling crate of the same workspace, which is a different \
+             set of files"
+        );
+    }
+
+    /// A client that sends no context at all still gets suggestions, just
+    /// without locality.
+    #[test]
+    fn a_missing_context_ranks_everything_as_elsewhere() {
+        let (directory, workspace) = suggest_scope_paths(None);
+        assert!(directory.is_none());
+        assert!(workspace.is_none());
     }
 }

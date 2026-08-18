@@ -40,7 +40,33 @@ message PrepareIndexRequest {
 
 message PrepareIndexResponse {}
 
+// Prefix completions for the pty-proxy suggestion UI: commands that start
+// with the typed line, best first.
+message SuggestRequest {
+  string query = 1;
+  uint32 limit = 2;
+  // No shell filter: unlike Search, a suggestion is served from the index
+  // as it stands rather than rebuilding it to match, so there is nothing to
+  // honour a filter with. See the Suggest implementation.
+  reserved 3;
+  // Where the shell is. Unlike SearchRequest, this ranks rather than
+  // filters: commands run in this directory come first, then those run
+  // elsewhere in the same workspace. Only cwd and git_root are read.
+  SearchContext context = 4;
+  // Drop commands that have failed and never succeeded.
+  bool filter_failed = 5;
+}
+
+message Suggestion {
+  string command = 1;
+}
+
+message SuggestReply {
+  repeated Suggestion suggestions = 1;
+}
+
 service Search {
   rpc Search(stream SearchRequest) returns (stream SearchResponse);
   rpc PrepareIndex(PrepareIndexRequest) returns (PrepareIndexResponse);
+  rpc Suggest(SuggestRequest) returns (SuggestReply);
 }

@@ -645,12 +645,15 @@ dependencies = [
  "clap",
  "crossterm",
  "eyre",
+ "libc",
  "nix 0.29.0",
  "portable-pty",
  "rand 0.8.7",
  "rstest",
+ "rustix",
  "signal-hook",
  "tempfile",
+ "unicode-width 0.2.2",
  "vt100",
 ]
 

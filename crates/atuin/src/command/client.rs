@@ -30,6 +30,10 @@ mod kv;
 mod lab;
 mod scripts;
 mod search;
+// The one item the suggest module needs; the search module itself stays
+// private to the client command tree.
+#[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]
+pub(in crate::command) use search::syntax;
 mod setup;
 mod stats;
 mod store;

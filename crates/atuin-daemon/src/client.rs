@@ -31,7 +31,8 @@ use crate::history::{
 };
 use crate::search::{
     FilterMode as RpcFilterMode, PrepareIndexRequest, SearchContext as RpcSearchContext,
-    SearchRequest, SearchResponse, search_client::SearchClient as SearchServiceClient,
+    SearchRequest, SearchResponse, SuggestRequest, Suggestion,
+    search_client::SearchClient as SearchServiceClient,
 };
 use crate::semantic::{
     CommandCapture, CommandOutputReply, CommandOutputRequest, OutputRange, RecordCommandsReply,
@@ -278,6 +279,35 @@ impl SearchClient {
         };
         self.client.prepare_index(request).await?;
         Ok(())
+    }
+
+    /// Prefix completions for the pty-proxy suggestion UI: suggestions whose
+    /// command starts with `query`, best first. `context` ranks rather than
+    /// filters — its cwd and git root pull commands run there to the top.
+    #[instrument(
+        skip_all,
+        level = Level::TRACE,
+        name = "daemon_client_suggest",
+        fields(query = %query),
+    )]
+    pub async fn suggest(
+        &mut self,
+        query: &str,
+        limit: u32,
+        context: Context,
+        filter_failed: bool,
+    ) -> Result<Vec<Suggestion>> {
+        let response = self
+            .client
+            .suggest(SuggestRequest {
+                query: query.to_string(),
+                limit,
+                context: Some(context.into()),
+                filter_failed,
+            })
+            .await?;
+
+        Ok(response.into_inner().suggestions)
     }
 }
 
