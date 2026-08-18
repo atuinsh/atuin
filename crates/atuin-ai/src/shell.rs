@@ -165,8 +165,9 @@ bind "?" _atuin_ai_question_mark
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     #[rstest]
     #[case::zsh(

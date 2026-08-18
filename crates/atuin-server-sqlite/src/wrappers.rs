@@ -1,7 +1,8 @@
 use ::sqlx::{FromRow, Result};
 use atuin_domain::record::{EncryptedData, Host, Record, RecordTag, RecordVersion};
 use atuin_server_database::models::{Session, User};
-use sqlx::{Row, sqlite::SqliteRow};
+use sqlx::Row;
+use sqlx::sqlite::SqliteRow;
 
 #[derive(derive_more::Into)]
 pub struct DbUser(pub User);

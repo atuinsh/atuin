@@ -1,6 +1,7 @@
+use std::ops::Range;
+
 use atuin_client::settings::WordJumpMode;
 use itertools::Itertools;
-use std::ops::Range;
 
 /// Like [`str::char_indices`], but only yields characters whose byte positions
 /// are in `start..end`.
@@ -16,9 +17,7 @@ fn chars_within(
     // `ceil_char_boundary` clamps to `string.len()` if out of bounds. Use
     // `.max` to prevent `end` from being less than `start`.
     let end = string.ceil_char_boundary(range.end).max(start);
-    string[start..end]
-        .char_indices()
-        .map(move |(i, c)| (start + i, c))
+    string[start..end].char_indices().map(move |(i, c)| (start + i, c))
 }
 
 pub struct Cursor {
@@ -261,7 +260,11 @@ impl Cursor {
     }
 
     pub fn back(&mut self) -> Option<char> {
-        if self.left() { self.remove() } else { None }
+        if self.left() {
+            self.remove()
+        } else {
+            None
+        }
     }
 
     pub fn clear(&mut self) {
@@ -294,9 +297,9 @@ impl Cursor {
 
 #[cfg(test)]
 mod cursor_tests {
-    use super::Cursor;
-    use super::*;
     use rstest::rstest;
+
+    use super::{Cursor, *};
 
     static EMACS_WORD_JUMPER: WordJumper = WordJumper {
         word_chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",

@@ -9,7 +9,8 @@ use eyre::{Result, eyre};
 use serde::Deserialize;
 use time::OffsetDateTime;
 use uuid::Uuid;
-use uuid::timestamp::{Timestamp, context::NoContext};
+use uuid::timestamp::Timestamp;
+use uuid::timestamp::context::NoContext;
 
 use super::{Importer, Loader, get_histdir_path};
 use crate::history::History;
@@ -147,17 +148,13 @@ mod tests {
     use time::macros::datetime;
 
     use super::*;
-
     use crate::history::History;
     use crate::import::tests::TestLoader;
 
     #[test]
     fn test_hist_dir_xonsh() {
         let hist_dir = xonsh_hist_dir(Some("/home/user/xonsh_data".to_string())).unwrap();
-        assert_eq!(
-            hist_dir,
-            PathBuf::from("/home/user/xonsh_data/history_json")
-        );
+        assert_eq!(hist_dir, PathBuf::from("/home/user/xonsh_data/history_json"));
     }
 
     #[tokio::test]

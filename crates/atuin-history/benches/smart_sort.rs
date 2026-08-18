@@ -1,9 +1,7 @@
 use atuin_client::history::History;
 use atuin_history::sort::sort;
-
-use rand::Rng;
-use rand::SeedableRng;
 use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use time::OffsetDateTime;
 use time::macros::datetime;
 
@@ -20,9 +18,7 @@ const SEED_NOW: OffsetDateTime = datetime!(2026-01-01 12:59:59 -5);
 #[divan::bench(args=[100, 200, 400, 800, 1600, 10000])]
 fn smart_sort(bencher: divan::Bencher, lines: usize) {
     // Generating the history is not part of what we measure, so it happens as an input.
-    bencher
-        .with_inputs(|| history(lines))
-        .bench_values(|commands| sort("curl", commands));
+    bencher.with_inputs(|| history(lines)).bench_values(|commands| sort("curl", commands));
 }
 
 /// Generate a few different sizes of "history". This will use a whole bunch of memory, sorry.

@@ -1,15 +1,14 @@
-use axum::{Json, extract::Query, extract::State, http::StatusCode};
+use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus, RecordTag};
+use atuin_server_database::Database;
+use axum::Json;
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use metrics::counter;
 use serde::Deserialize;
 use tracing::{error, instrument};
 
-use crate::{
-    handlers::{ErrorResponse, ErrorResponseStatus, RespExt},
-    router::{AppState, UserAuth},
-};
-use atuin_server_database::Database;
-
-use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus, RecordTag};
+use crate::handlers::{ErrorResponse, ErrorResponseStatus, RespExt};
+use crate::router::{AppState, UserAuth};
 
 #[instrument(skip_all, err(level = "warn"), fields(user.id = user.id, record.count = records.len()))]
 pub async fn post<DB: Database>(
@@ -21,11 +20,7 @@ pub async fn post<DB: Database>(
         database, settings, ..
     }) = state;
 
-    tracing::debug!(
-        count = records.len(),
-        user = user.username,
-        "request to add records"
-    );
+    tracing::debug!(count = records.len(), user = user.username, "request to add records");
 
     counter!("atuin_record_uploaded").increment(records.len() as u64);
 
@@ -36,10 +31,8 @@ pub async fn post<DB: Database>(
     if !keep {
         counter!("atuin_record_too_large").increment(1);
 
-        return Err(
-            ErrorResponse::reply("could not add records; record too large")
-                .with_status(StatusCode::BAD_REQUEST),
-        );
+        return Err(ErrorResponse::reply("could not add records; record too large")
+            .with_status(StatusCode::BAD_REQUEST));
     }
 
     if let Err(e) = database.add_records(&user, &records).await {

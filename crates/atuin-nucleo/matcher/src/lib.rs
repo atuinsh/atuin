@@ -100,11 +100,10 @@ mod utf32_str;
 #[cfg(test)]
 mod tests;
 
-pub use crate::config::Config;
-pub use crate::utf32_str::{Utf32Str, Utf32String};
-
 use crate::chars::{AsciiChar, Char};
+pub use crate::config::Config;
 use crate::matrix::MatrixSlab;
+pub use crate::utf32_str::{Utf32Str, Utf32String};
 
 /// A matcher engine that can execute (fuzzy) matches.
 ///
@@ -169,9 +168,7 @@ impl Clone for Matcher {
 
 impl std::fmt::Debug for Matcher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Matcher")
-            .field("config", &self.config)
-            .finish_non_exhaustive()
+        f.debug_struct("Matcher").field("config", &self.config).finish_non_exhaustive()
     }
 }
 
@@ -725,9 +722,7 @@ impl Matcher {
                     AsciiChar::cast(haystack)[start..end]
                         .iter()
                         .map(|c| c.normalize(&self.config))
-                        .eq(AsciiChar::cast(needle)
-                            .iter()
-                            .map(|c| c.normalize(&self.config)))
+                        .eq(AsciiChar::cast(needle).iter().map(|c| c.normalize(&self.config)))
                 } else {
                     &haystack[start..end] == needle
                 };
@@ -751,9 +746,7 @@ impl Matcher {
                 let matched = haystack[start..end]
                     .iter()
                     .map(|c| c.normalize(&self.config))
-                    .eq(AsciiChar::cast(needle)
-                        .iter()
-                        .map(|c| c.normalize(&self.config)));
+                    .eq(AsciiChar::cast(needle).iter().map(|c| c.normalize(&self.config)));
                 if !matched {
                     return None;
                 }

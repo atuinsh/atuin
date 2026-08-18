@@ -1,29 +1,28 @@
 use std::time::Duration;
-use time::macros::format_description;
 
-use atuin_client::{
-    history::{History, HistoryStats},
-    settings::Settings,
-};
+use atuin_client::history::{History, HistoryStats};
+use atuin_client::settings::Settings;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
-use ratatui::{
-    Frame,
-    backend::FromCrossterm,
-    layout::Rect,
-    prelude::{Constraint, Direction, Layout},
-    style::Style,
-    text::{Span, Text},
-    widgets::{Bar, BarChart, BarGroup, Block, Borders, Padding, Paragraph, Row, Table},
-};
-
 use atuin_common::time::{DurationExt, UtcOffsetSpec};
+use ratatui::Frame;
+use ratatui::backend::FromCrossterm;
+use ratatui::layout::Rect;
+use ratatui::prelude::{Constraint, Direction, Layout};
+use ratatui::style::Style;
+use ratatui::text::{Span, Text};
+use ratatui::widgets::{Bar, BarChart, BarGroup, Block, Borders, Padding, Paragraph, Row, Table};
+use time::macros::format_description;
 
 use super::super::theme::{Meaning, Theme};
 use super::interactive::{Compactness, to_compactness};
 
 #[allow(clippy::cast_sign_loss)]
 fn u64_or_zero(num: i64) -> u64 {
-    if num < 0 { 0 } else { num as u64 }
+    if num < 0 {
+        0
+    } else {
+        num as u64
+    }
 }
 
 pub fn draw_commands(
@@ -41,17 +40,9 @@ pub fn draw_commands(
             Direction::Horizontal
         })
         .constraints(if compact {
-            [
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Min(0),
-            ]
+            [Constraint::Length(1), Constraint::Length(1), Constraint::Min(0)]
         } else {
-            [
-                Constraint::Ratio(1, 4),
-                Constraint::Ratio(1, 2),
-                Constraint::Ratio(1, 4),
-            ]
+            [Constraint::Ratio(1, 4), Constraint::Ratio(1, 2), Constraint::Ratio(1, 4)]
         })
         .split(parent);
 
@@ -125,24 +116,15 @@ pub fn draw_stats_table(
     let rows = [
         Row::new(vec!["Host".to_string(), host.to_string()]),
         Row::new(vec!["User".to_string(), user.to_string()]),
-        Row::new(vec![
-            "Time".to_string(),
-            history.timestamp.to_offset(tz.0).to_string(),
-        ]),
-        Row::new(vec![
-            "Duration".to_string(),
-            duration.display().largest_unit().to_string(),
-        ]),
+        Row::new(vec!["Time".to_string(), history.timestamp.to_offset(tz.0).to_string()]),
+        Row::new(vec!["Duration".to_string(), duration.display().largest_unit().to_string()]),
         Row::new(vec![
             "Avg duration".to_string(),
             avg_duration.display().largest_unit().to_string(),
         ]),
         Row::new(vec!["Exit".to_string(), history.exit.to_string()]),
         Row::new(vec!["Directory".to_string(), history.cwd.clone()]),
-        Row::new(vec![
-            "Intent".to_string(),
-            history.intent.clone().unwrap_or_default(),
-        ]),
+        Row::new(vec!["Intent".to_string(), history.intent.clone().unwrap_or_default()]),
         Row::new(vec!["Session".to_string(), history.session.clone()]),
         Row::new(vec!["Total runs".to_string(), stats.total.to_string()]),
     ];
@@ -192,10 +174,7 @@ fn sort_duration_over_time(durations: &[(String, i64)]) -> Vec<(String, i64)> {
     durations
         .iter()
         .map(|(date, duration)| {
-            (
-                date.format(output).expect("failed to format sqlite date"),
-                *duration,
-            )
+            (date.format(output).expect("failed to format sqlite date"), *duration)
         })
         .collect()
 }
@@ -204,11 +183,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, them
     let exits: Vec<Bar> = stats
         .exits
         .iter()
-        .map(|(exit, count)| {
-            Bar::default()
-                .label(exit.to_string())
-                .value(u64_or_zero(*count))
-        })
+        .map(|(exit, count)| Bar::default().label(exit.to_string()).value(u64_or_zero(*count)))
         .collect();
 
     let exits = BarChart::default()
@@ -229,9 +204,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, them
         .day_of_week
         .iter()
         .map(|(day, count)| {
-            Bar::default()
-                .label(num_to_day(day.as_str()))
-                .value(u64_or_zero(*count))
+            Bar::default().label(num_to_day(day.as_str())).value(u64_or_zero(*count))
         })
         .collect();
 
@@ -277,11 +250,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, them
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Ratio(1, 3),
-            Constraint::Ratio(1, 3),
-            Constraint::Ratio(1, 3),
-        ])
+        .constraints([Constraint::Ratio(1, 3), Constraint::Ratio(1, 3), Constraint::Ratio(1, 3)])
         .split(parent);
 
     f.render_widget(exits, layout[0]);
@@ -341,14 +310,14 @@ pub fn draw_full(
 
 #[cfg(test)]
 mod tests {
-    use super::draw_ultracompact;
-    use atuin_client::{
-        history::{History, HistoryId, HistoryStats},
-        theme::ThemeManager,
-    };
-    use ratatui::{backend::TestBackend, prelude::*};
+    use atuin_client::history::{History, HistoryId, HistoryStats};
+    use atuin_client::theme::ThemeManager;
+    use ratatui::backend::TestBackend;
+    use ratatui::prelude::*;
     use rstest::*;
     use time::OffsetDateTime;
+
+    use super::draw_ultracompact;
 
     #[fixture]
     fn mock_history_stats() -> (History, HistoryStats) {
@@ -470,13 +439,7 @@ mod tests {
             .collect();
 
         // NUL is shown as caret notation ^@, never as a raw NUL byte
-        assert!(
-            rendered.contains("^@"),
-            "expected caret-escaped NUL (^@) in rendered output"
-        );
-        assert!(
-            !rendered.contains('\u{0000}'),
-            "raw NUL byte leaked to the terminal"
-        );
+        assert!(rendered.contains("^@"), "expected caret-escaped NUL (^@) in rendered output");
+        assert!(!rendered.contains('\u{0000}'), "raw NUL byte leaked to the terminal");
     }
 }

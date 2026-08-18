@@ -1,8 +1,8 @@
-use atuin_client::settings::Settings;
+use std::io::{self, Write};
 
+use atuin_client::settings::Settings;
 use colored::Colorize;
 use eyre::Result;
-use std::io::{self, Write};
 use toml_edit::{DocumentMut, value};
 
 pub async fn run(_settings: &Settings) -> Result<()> {
@@ -10,7 +10,8 @@ pub async fn run(_settings: &Settings) -> Result<()> {
         "Atuin AI",
         "This will enable command generation and other AI features via the question mark key",
         Some(
-            "By default, Atuin AI only has access to the name and version of your operating system and shell - your shell history is not sent to the AI.",
+            "By default, Atuin AI only has access to the name and version of your operating \
+             system and shell - your shell history is not sent to the AI.",
         ),
     )?;
 
@@ -46,25 +47,16 @@ pub async fn run(_settings: &Settings) -> Result<()> {
     if changed {
         tokio::fs::write(config_file, doc.to_string()).await?;
 
-        println!(
-            "{check} Settings updated successfully",
-            check = "✓".bold().bright_green()
-        );
+        println!("{check} Settings updated successfully", check = "✓".bold().bright_green());
     } else {
-        println!(
-            "{check} No settings changed",
-            check = "✓".bold().bright_green()
-        );
+        println!("{check} No settings changed", check = "✓".bold().bright_green());
     }
 
     Ok(())
 }
 
 pub fn prompt(feature: &str, description: &str, note: Option<&str>) -> Result<bool> {
-    println!(
-        "> Enable {feature}?",
-        feature = feature.bold().bright_blue()
-    );
+    println!("> Enable {feature}?", feature = feature.bold().bright_blue());
     if let Some(note) = note {
         println!("  {description}");
         print!("  {note} {q} ", q = "[Y/n]".bold());

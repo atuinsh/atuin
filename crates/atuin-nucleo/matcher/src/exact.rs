@@ -1,9 +1,8 @@
-use memchr::memmem;
-use memchr::{Memchr, Memchr2};
+use memchr::{Memchr, Memchr2, memmem};
 
+use crate::Matcher;
 use crate::chars::{AsciiChar, Char};
 use crate::score::{BONUS_FIRST_CHAR_MULTIPLIER, SCORE_MATCH};
-use crate::Matcher;
 
 impl Matcher {
     pub(crate) fn substring_match_1_ascii<const INDICES: bool>(

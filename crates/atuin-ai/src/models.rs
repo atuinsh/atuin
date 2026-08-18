@@ -44,10 +44,7 @@ pub(crate) async fn fetch_models(endpoint: &reqwest::Url, token: &str) -> Result
         eyre::bail!("model list request failed ({status})");
     }
 
-    response
-        .json::<ModelList>()
-        .await
-        .context("failed to parse model list")
+    response.json::<ModelList>().await.context("failed to parse model list")
 }
 
 /// Persist the chosen alias to `ai.model` in config.toml so it becomes the
@@ -55,9 +52,7 @@ pub(crate) async fn fetch_models(endpoint: &reqwest::Url, token: &str) -> Result
 /// read at startup.
 pub(crate) async fn save_model_selection(alias: &str) -> Result<()> {
     let config_file = atuin_client::settings::Settings::get_config_path()?;
-    let config_str = tokio::fs::read_to_string(&config_file)
-        .await
-        .unwrap_or_default();
+    let config_str = tokio::fs::read_to_string(&config_file).await.unwrap_or_default();
     let mut doc = config_str.parse::<toml_edit::DocumentMut>()?;
 
     if !doc.contains_key("ai") {

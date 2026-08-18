@@ -106,16 +106,14 @@ pub(crate) async fn fetch_usage(endpoint: &reqwest::Url, token: &str) -> Result<
         eyre::bail!("usage request failed ({status})");
     }
 
-    response
-        .json::<UsageSnapshot>()
-        .await
-        .context("failed to parse usage response")
+    response.json::<UsageSnapshot>().await.context("failed to parse usage response")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     #[test]
     fn deserializes_server_payload() {
@@ -146,10 +144,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&snapshot).unwrap();
-        assert_eq!(
-            serde_json::from_str::<UsageSnapshot>(&json).unwrap(),
-            snapshot
-        );
+        assert_eq!(serde_json::from_str::<UsageSnapshot>(&json).unwrap(), snapshot);
     }
 
     #[test]

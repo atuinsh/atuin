@@ -48,7 +48,7 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - `#![deny(unsafe_code)]` on client/common, `#![forbid(unsafe_code)]` on server.
 - Clippy: `pedantic` + `nursery` on main crate. CI enforces `-D warnings -D clippy::redundant_clone`, on both the default targets and `--tests`.
 - Rustdoc: CI runs `cargo doc --document-private-items --no-deps --workspace` with `RUSTDOCFLAGS=-D warnings`. Broken intra-doc links fail the build.
-- Format: `cargo fmt`. Only non-default: `reorder_imports = true`.
+- Format: `cargo +nightly fmt`. `.rustfmt.toml` uses nightly-only options, so formatting requires the nightly toolchain even though the project builds on stable 1.97.0.
 - IDs: UUIDv7 (time-ordered), newtype wrappers (`HistoryId`, `RecordId`, `HostId`).
 - Serialization: MessagePack for encrypted payloads, JSON for API, TOML for config.
 - Storage traits: `Database` (client), `Store` (record store), `Database` (server) -- all `async_trait`.
@@ -80,6 +80,6 @@ cargo build
 cargo test
 cargo clippy -- -D warnings -D clippy::redundant_clone
 cargo clippy --tests -- -D warnings -D clippy::redundant_clone
-cargo fmt --check
+cargo +nightly fmt --check
 RUSTDOCFLAGS="-D warnings" cargo doc --document-private-items --no-deps --workspace
 ```

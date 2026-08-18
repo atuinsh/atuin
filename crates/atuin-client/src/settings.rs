@@ -1,22 +1,20 @@
+use std::collections::HashMap;
+use std::io::prelude::*;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, OnceLock};
+
 use atuin_common::logs::LogLevel;
 use atuin_common::utils;
 use atuin_domain::record::HostId;
 use clap::ValueEnum;
-use config::{
-    Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat, builder::DefaultState,
-};
+use config::builder::DefaultState;
+use config::{Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat};
 use eyre::{Context, Result, eyre};
 use fs_err::{File, create_dir_all};
 use humantime::parse_duration;
 use regex::RegexSet;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    io::prelude::*,
-    path::{Path, PathBuf},
-    sync::{LazyLock, OnceLock},
-};
 use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::sync::OnceCell;
@@ -370,17 +368,25 @@ pub enum SyncProtocol {
 pub enum SyncAuth {
     /// Self-hosted Rust server. Uses `Authorization: Token <session>` and
     /// legacy endpoints.
-    Legacy { token: String },
+    Legacy {
+        token: String,
+    },
     /// Hub with a valid Hub API token (`atapi_*`). Uses
     /// `Authorization: Bearer <token>` and v0 endpoints.
-    Hub { token: String },
+    Hub {
+        token: String,
+    },
     /// Targeting Hub but only has a CLI session token. Uses
     /// `Authorization: Token <session>` against compat/record endpoints.
     /// Sync, password change, and account deletion still work, but the user
     /// should be nudged to run `atuin login` for full Hub auth.
-    HubViaCli { token: String },
+    HubViaCli {
+        token: String,
+    },
     /// Not authenticated at all. Contains an actionable user-facing message.
-    NotLoggedIn { reason: String },
+    NotLoggedIn {
+        reason: String,
+    },
 }
 
 #[cfg(feature = "sync")]
@@ -1118,8 +1124,7 @@ impl Settings {
     }
 
     pub fn search_mode_shell_up_key_binding(&self) -> Option<SearchMode> {
-        self.requested_search_mode_shell_up_key_binding
-            .map(Into::into)
+        self.requested_search_mode_shell_up_key_binding.map(Into::into)
     }
 
     /// Return the active search mode depending on whether Atuin was invoked from the "up"
@@ -1136,10 +1141,7 @@ impl Settings {
     }
 
     pub(crate) fn effective_data_dir() -> PathBuf {
-        DATA_DIR
-            .get()
-            .cloned()
-            .unwrap_or_else(atuin_common::utils::data_dir)
+        DATA_DIR.get().cloned().unwrap_or_else(atuin_common::utils::data_dir)
     }
 
     // -- Meta store: lazily initialized on first access --
@@ -1278,8 +1280,8 @@ impl Settings {
             return match meta.session_token().await {
                 Ok(Some(token)) => SyncAuth::Legacy { token },
                 _ => SyncAuth::NotLoggedIn {
-                    reason: "Not logged in. Run 'atuin login' to authenticate \
-                             with your sync server."
+                    reason: "Not logged in. Run 'atuin login' to authenticate with your sync \
+                             server."
                         .into(),
                 },
             };
@@ -1310,8 +1312,7 @@ impl Settings {
         match meta.session_token().await {
             Ok(Some(token)) => SyncAuth::HubViaCli { token },
             _ => SyncAuth::NotLoggedIn {
-                reason: "Not logged in. Run 'atuin login' or 'atuin register' \
-                         to authenticate."
+                reason: "Not logged in. Run 'atuin login' or 'atuin register' to authenticate."
                     .into(),
             },
         }
@@ -1414,9 +1415,7 @@ impl Settings {
     }
 
     pub fn builder() -> Result<ConfigBuilder<DefaultState>> {
-        Ok(Self::builder_with_data_dir(
-            &atuin_common::utils::data_dir(),
-        )?)
+        Ok(Self::builder_with_data_dir(&atuin_common::utils::data_dir())?)
     }
 
     fn builder_with_data_dir(
@@ -1517,17 +1516,14 @@ impl Settings {
             .set_default("ai.opening.send_cwd", false)?
             .set_default("ai.opening.send_last_command", false)?
             .set_default("ui.syntax_highlight", true)?
-            .set_default(
-                "search.filters",
-                vec![
-                    "global",
-                    "host",
-                    "session",
-                    "workspace",
-                    "directory",
-                    "session-preload",
-                ],
-            )?
+            .set_default("search.filters", vec![
+                "global",
+                "host",
+                "session",
+                "workspace",
+                "directory",
+                "session-preload",
+            ])?
             .set_default("theme.name", "default")?
             .set_default("theme.debug", None::<bool>)?
             .set_default("tmux.enabled", false)?
@@ -1541,11 +1537,7 @@ impl Settings {
                     .unwrap_or_else(|| config::Value::new(None, config::ValueKind::Boolean(false))),
             )?
             .set_default("no_mouse", false)?
-            .add_source(
-                Environment::with_prefix("atuin")
-                    .prefix_separator("_")
-                    .separator("__"),
-            ))
+            .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__")))
     }
 
     pub fn get_config_path() -> Result<PathBuf> {
@@ -1582,17 +1574,12 @@ impl Settings {
                 data_dir: Option<String>,
             }
 
-            let config_file_str = config_file
-                .to_str()
-                .ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
+            let config_file_str =
+                config_file.to_str().ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
 
             let partial_config = Config::builder()
                 .add_source(ConfigFile::new(config_file_str, FileFormat::Toml))
-                .add_source(
-                    Environment::with_prefix("atuin")
-                        .prefix_separator("_")
-                        .separator("__"),
-                )
+                .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__"))
                 .build()
                 .ok();
 
@@ -1620,9 +1607,8 @@ impl Settings {
         let mut config_builder = Self::builder_with_data_dir(&effective_data_dir)?;
 
         config_builder = if config_file.exists() {
-            let config_file_str = config_file
-                .to_str()
-                .ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
+            let config_file_str =
+                config_file.to_str().ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
             config_builder.add_source(ConfigFile::new(config_file_str, FileFormat::Toml))
         } else {
             let mut file = File::create(config_file).wrap_err("could not create config file")?;
@@ -1695,9 +1681,8 @@ impl Settings {
             );
         }
 
-        let value: Value = config
-            .get(key)
-            .map_err(|e| eyre!("failed to get config value '{}': {}", key, e))?;
+        let value: Value =
+            config.get(key).map_err(|e| eyre!("failed to get config value '{}': {}", key, e))?;
 
         Ok(Self::format_resolved_value(&value, key))
     }
@@ -1715,10 +1700,8 @@ impl Settings {
             ValueKind::Float(f) => f.to_string(),
             ValueKind::String(s) => s.clone(),
             ValueKind::Array(arr) => {
-                let items: Vec<String> = arr
-                    .iter()
-                    .map(|v| Self::format_resolved_value(v, ""))
-                    .collect();
+                let items: Vec<String> =
+                    arr.iter().map(|v| Self::format_resolved_value(v, "")).collect();
                 format!("[{}]", items.join(", "))
             }
             ValueKind::Table(map) => {
@@ -1755,17 +1738,14 @@ impl Settings {
 
     pub fn new() -> Result<Self> {
         let config = Self::build_config()?;
-        let settings: Settings = config
-            .try_deserialize()
-            .map_err(|e| eyre!("failed to deserialize: {}", e))?;
+        let settings: Settings =
+            config.try_deserialize().map_err(|e| eyre!("failed to deserialize: {}", e))?;
 
         // Validate UI settings
         settings.ui.validate()?;
 
         // Register meta store config for lazy initialization on first access
-        META_CONFIG
-            .set((settings.meta.db_path.clone(), settings.local_timeout))
-            .ok();
+        META_CONFIG.set((settings.meta.db_path.clone(), settings.local_timeout)).ok();
 
         Ok(settings)
     }
@@ -1862,12 +1842,12 @@ mod tests {
 
     use eyre::Result;
     use rstest::rstest;
+    use url::Url;
 
     use super::{
         AiEndpointProtocol, ConfigFile, FileFormat, FilterMode, RequestedSearchMode, SearchMode,
         Settings, UtcOffsetSpec,
     };
-    use url::Url;
 
     #[rstest]
     #[case::plus_two_digit_hours("+02", (2, 0, 0))]
@@ -1920,10 +1900,7 @@ mod tests {
         let mut settings = Settings::default();
         settings.ai.endpoint_protocol = protocol;
 
-        assert_eq!(
-            settings.is_hub_ai_endpoint(&Url::parse(endpoint).unwrap()),
-            expected,
-        );
+        assert_eq!(settings.is_hub_ai_endpoint(&Url::parse(endpoint).unwrap()), expected,);
     }
 
     /// Forces both `LazyLock`s, so a typo in either constant fails here rather
@@ -1976,21 +1953,12 @@ mod tests {
 
         assert_eq!(db_path, custom_dir.join("history.db").to_str().unwrap());
         assert_eq!(key_path, custom_dir.join("key").to_str().unwrap());
-        assert_eq!(
-            record_store_path,
-            custom_dir.join("records.db").to_str().unwrap()
-        );
+        assert_eq!(record_store_path, custom_dir.join("records.db").to_str().unwrap());
         assert_eq!(kv_db_path, custom_dir.join("kv.db").to_str().unwrap());
-        assert_eq!(
-            scripts_db_path,
-            custom_dir.join("scripts.db").to_str().unwrap()
-        );
+        assert_eq!(scripts_db_path, custom_dir.join("scripts.db").to_str().unwrap());
         assert_eq!(meta_db_path, custom_dir.join("meta.db").to_str().unwrap());
         assert_eq!(daemon_socket_path, None);
-        assert_eq!(
-            daemon_pidfile_path,
-            custom_dir.join("atuin-daemon.pid").to_str().unwrap()
-        );
+        assert_eq!(daemon_pidfile_path, custom_dir.join("atuin-daemon.pid").to_str().unwrap());
         assert!(!daemon_autostart);
 
         Ok(())
@@ -2014,18 +1982,14 @@ mod tests {
         "data_dir"
     )]
     #[case::more_than_one_expanding_column(
-        "[ui]\ncolumns = [{ type = \"duration\", expand = true }, { type = \"command\", expand = true }]\n",
+        "[ui]\ncolumns = [{ type = \"duration\", expand = true }, { type = \"command\", expand = \
+         true }]\n",
         "expand"
     )]
     fn validate_rejects(#[case] toml: &str, #[case] expected_err: &str) {
-        let err = Settings::validate_str(toml)
-            .expect_err("config should not validate")
-            .to_string();
+        let err = Settings::validate_str(toml).expect_err("config should not validate").to_string();
 
-        assert!(
-            err.contains(expected_err),
-            "error should mention `{expected_err}`, got: {err}"
-        );
+        assert!(err.contains(expected_err), "error should mention `{expected_err}`, got: {err}");
     }
 
     #[test]
@@ -2128,10 +2092,7 @@ mod tests {
             settings.requested_search_mode_shell_up_key_binding,
             Some(RequestedSearchMode::Skim)
         );
-        assert_eq!(
-            settings.search_mode_shell_up_key_binding(),
-            Some(SearchMode::Fuzzy)
-        );
+        assert_eq!(settings.search_mode_shell_up_key_binding(), Some(SearchMode::Fuzzy));
     }
 
     #[rstest]

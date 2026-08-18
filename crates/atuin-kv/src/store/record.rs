@@ -102,9 +102,10 @@ impl KvRecord {
 
 #[cfg(test)]
 mod tests {
-    use super::{DecryptedData, KvRecord};
     use atuin_domain::record::RecordVersion;
     use rstest::rstest;
+
+    use super::{DecryptedData, KvRecord};
 
     #[rstest]
     #[case::some(
@@ -134,9 +135,8 @@ mod tests {
             value: Some("baz".to_owned()),
         };
 
-        let snapshot = vec![
-            0x93, 0xa3, b'f', b'o', b'o', 0xa3, b'b', b'a', b'r', 0xa3, b'b', b'a', b'z',
-        ];
+        let snapshot =
+            vec![0x93, 0xa3, b'f', b'o', b'o', 0xa3, b'b', b'a', b'r', 0xa3, b'b', b'a', b'z'];
 
         let decoded = KvRecord::deserialize(&DecryptedData(snapshot), &RecordVersion::V0).unwrap();
 

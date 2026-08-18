@@ -1,16 +1,16 @@
-use atuin_dotfiles::store::{AliasStore, var::VarStore};
+use atuin_client::database::Database;
+use atuin_client::history::store::HistoryStore;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
+use atuin_common::encryption::paseto_v4;
+use atuin_dotfiles::store::AliasStore;
+use atuin_dotfiles::store::var::VarStore;
 use atuin_scripts::store::ScriptStore;
 use clap::Args;
 use eyre::{Result, bail};
 
 #[cfg(feature = "daemon")]
 use crate::command::client::daemon as daemon_cmd;
-
-use atuin_client::{
-    database::Database, history::store::HistoryStore, record::sqlite_store::SqliteStore,
-    settings::Settings,
-};
-use atuin_common::encryption::paseto_v4;
 
 #[derive(Args, Debug)]
 pub struct Rebuild {
@@ -30,8 +30,7 @@ impl Rebuild {
         // binary big
         match self.tag.as_str() {
             "history" => {
-                self.rebuild_history(settings, store.clone(), database)
-                    .await?;
+                self.rebuild_history(settings, store.clone(), database).await?;
             }
 
             "dotfiles" => {

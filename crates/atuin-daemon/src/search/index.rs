@@ -7,7 +7,6 @@
 //! - Frecency-based ranking (frequency + recency)
 //! - Dynamic filtering by directory, host, session, etc.
 
-use super::normalize_diacritics;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -22,6 +21,8 @@ use lasso::{Spur, ThreadedRodeo};
 use time::OffsetDateTime;
 use tracing::{Level, instrument};
 use uuid::Uuid;
+
+use super::normalize_diacritics;
 
 /// Parse a UUID string into a 16-byte array.
 /// Returns None if the string is not a valid UUID.
@@ -194,9 +195,7 @@ impl CommandData {
     /// Check if any invocation matches a directory prefix (workspace/git root).
     /// O(n) where n = number of unique directories for this command.
     pub fn has_invocation_in_workspace(&self, prefix: &str, interner: &ThreadedRodeo) -> bool {
-        self.directories
-            .iter()
-            .any(|&spur| interner.resolve(&spur).starts_with(prefix))
+        self.directories.iter().any(|&spur| interner.resolve(&spur).starts_with(prefix))
     }
 
     /// Check if any invocation matches an interned hostname.
@@ -244,13 +243,13 @@ impl IndexFilterMode {
     fn compile(&self, interner: &ThreadedRodeo) -> CompiledFilter<'_> {
         match self {
             Self::Global => CompiledFilter::All,
-            Self::Directory(dir) => interner
-                .get(dir)
-                .map_or(CompiledFilter::Nothing, CompiledFilter::Directory),
+            Self::Directory(dir) => {
+                interner.get(dir).map_or(CompiledFilter::Nothing, CompiledFilter::Directory)
+            }
             Self::Workspace(prefix) => CompiledFilter::Workspace(prefix),
-            Self::Host(hostname) => interner
-                .get(hostname)
-                .map_or(CompiledFilter::Nothing, CompiledFilter::Host),
+            Self::Host(hostname) => {
+                interner.get(hostname).map_or(CompiledFilter::Nothing, CompiledFilter::Host)
+            }
             Self::Session(session) => {
                 parse_uuid_bytes(session).map_or(CompiledFilter::Nothing, CompiledFilter::Session)
             }
@@ -373,10 +372,7 @@ impl SearchIndex {
         if is_known_agent(&history.author) {
             return;
         }
-        if !self
-            .shells
-            .contains(history.shell.as_deref().unwrap_or_default())
-        {
+        if !self.shells.contains(history.shell.as_deref().unwrap_or_default()) {
             return;
         }
 
@@ -473,10 +469,7 @@ impl SearchIndex {
 
         let candidate_frecency = |candidate_index: usize| {
             let hay_idx = candidates[candidate_index] as usize;
-            frecency_map
-                .as_ref()
-                .and_then(|f| f.get(hay_idx).copied())
-                .unwrap_or(0)
+            frecency_map.as_ref().and_then(|f| f.get(hay_idx).copied()).unwrap_or(0)
         };
 
         let config = frizbee::Config::default()
@@ -497,10 +490,8 @@ impl SearchIndex {
         } else {
             // This is a vec of `&Arc<str>` instead of `&str` because `&Arc<str>` is the size of one
             // pointer while `&str` is the size of two.
-            let normalized_commands: Vec<&Arc<str>> = candidates
-                .iter()
-                .map(|i| &haystack[*i as usize].normalized)
-                .collect();
+            let normalized_commands: Vec<&Arc<str>> =
+                candidates.iter().map(|i| &haystack[*i as usize].normalized).collect();
             // Use all cores when the number of commands is sufficiently large.
             let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
             let matches = tracing::span!(Level::TRACE, "index_search_match").in_scope(|| {
@@ -565,8 +556,7 @@ impl SearchIndex {
                 .map(|hay| {
                     self.commands.get(hay.original.as_ref()).map_or(0, |data| {
                         let frecency =
-                            data.global_frecency
-                                .compute(now, recency_mul, frequency_mul);
+                            data.global_frecency.compute(now, recency_mul, frequency_mul);
                         // Apply overall frecency multiplier and round to u32
                         (frecency as f64 * frecency_mul).round() as u32
                     })
@@ -586,17 +576,13 @@ impl Default for SearchIndex {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
     use time::macros::datetime;
 
+    use super::*;
+
     fn make_history(command: &str, cwd: &str, timestamp: OffsetDateTime) -> History {
-        History::import()
-            .timestamp(timestamp)
-            .command(command)
-            .cwd(cwd)
-            .build()
-            .into()
+        History::import().timestamp(timestamp).command(command).cwd(cwd).build().into()
     }
 
     #[test]
@@ -712,56 +698,29 @@ mod tests {
 
         let (check1, check2, check3) = if cfg!(windows) {
             (
-                "C:\\Users\\User\\project"
-                    .display_rich()
-                    .trailing_slash(true)
-                    .to_string(),
-                "C:\\Users\\User\\other"
-                    .display_rich()
-                    .trailing_slash(true)
-                    .to_string(),
-                "C:\\Users\\User\\missing"
-                    .display_rich()
-                    .trailing_slash(true)
-                    .to_string(),
+                "C:\\Users\\User\\project".display_rich().trailing_slash(true).to_string(),
+                "C:\\Users\\User\\other".display_rich().trailing_slash(true).to_string(),
+                "C:\\Users\\User\\missing".display_rich().trailing_slash(true).to_string(),
             )
         } else {
             (
-                "/home/user/project"
-                    .display_rich()
-                    .trailing_slash(true)
-                    .to_string(),
-                "/home/user/other"
-                    .display_rich()
-                    .trailing_slash(true)
-                    .to_string(),
-                "/home/user/missing"
-                    .display_rich()
-                    .trailing_slash(true)
-                    .to_string(),
+                "/home/user/project".display_rich().trailing_slash(true).to_string(),
+                "/home/user/other".display_rich().trailing_slash(true).to_string(),
+                "/home/user/missing".display_rich().trailing_slash(true).to_string(),
             )
         };
 
-        let in_dir = |dir: &str| {
-            interner
-                .get(dir)
-                .is_some_and(|spur| data.has_invocation_in_dir(spur))
-        };
+        let in_dir =
+            |dir: &str| interner.get(dir).is_some_and(|spur| data.has_invocation_in_dir(spur));
         assert!(in_dir(&check1));
         assert!(in_dir(&check2));
         assert!(!in_dir(&check3));
 
         let (check1, check2, check3) = if cfg!(windows) {
             (
-                "C:\\Users\\User"
-                    .display_rich()
-                    .trailing_slash(true)
-                    .to_string(),
+                "C:\\Users\\User".display_rich().trailing_slash(true).to_string(),
                 "C:\\Users".display_rich().trailing_slash(true).to_string(),
-                "C:\\Users\\User\\var"
-                    .display_rich()
-                    .trailing_slash(true)
-                    .to_string(),
+                "C:\\Users\\User\\var".display_rich().trailing_slash(true).to_string(),
             )
         } else {
             (
@@ -780,21 +739,13 @@ mod tests {
     fn search_index_add_and_search() {
         let index = SearchIndex::default();
 
-        let h1 = make_history(
-            "git status",
-            "/home/user/project",
-            datetime!(2024-01-01 10:00 UTC),
-        );
+        let h1 = make_history("git status", "/home/user/project", datetime!(2024-01-01 10:00 UTC));
         let h2 = make_history(
             "git commit -m 'test'",
             "/home/user/project",
             datetime!(2024-01-01 10:05 UTC),
         );
-        let h3 = make_history(
-            "ls -la",
-            "/home/user/other",
-            datetime!(2024-01-01 10:10 UTC),
-        );
+        let h3 = make_history("ls -la", "/home/user/other", datetime!(2024-01-01 10:10 UTC));
 
         index.add_history(&h1);
         index.add_history(&h2);
@@ -811,10 +762,7 @@ mod tests {
             .search(
                 "",
                 IndexFilterMode::Directory(
-                    "/home/user/project"
-                        .display_rich()
-                        .trailing_slash(true)
-                        .to_string(),
+                    "/home/user/project".display_rich().trailing_slash(true).to_string(),
                 ),
                 10,
             )
@@ -836,27 +784,18 @@ mod tests {
         // scattered match (b..a..r spread over "build-analyzer-report"), run
         // 200 times so its frecency dwarfs any fuzzy score difference
         for _ in 0..200 {
-            let h = make_history(
-                "foo build-analyzer-report",
-                "/tmp",
-                datetime!(2024-01-01 10:00 UTC),
-            );
+            let h =
+                make_history("foo build-analyzer-report", "/tmp", datetime!(2024-01-01 10:00 UTC));
             index.add_history(&h);
         }
 
         index.rebuild_frecency(&Search::default());
 
-        let results: Vec<_> = index
-            .search("foo bar", IndexFilterMode::Global, 10)
-            .collect();
+        let results: Vec<_> = index.search("foo bar", IndexFilterMode::Global, 10).collect();
         assert_eq!(results.len(), 2);
         assert_eq!(
             results[0],
-            index
-                .commands
-                .get("foo bar --baz")
-                .unwrap()
-                .most_recent_id(),
+            index.commands.get("foo bar --baz").unwrap().most_recent_id(),
             "contiguous match must rank above the high-frecency scattered match"
         );
     }
@@ -868,11 +807,7 @@ mod tests {
     fn equal_matches_order_by_frecency() {
         let index = SearchIndex::default();
 
-        index.add_history(&make_history(
-            "echo alpha",
-            "/tmp",
-            datetime!(2024-01-01 10:00 UTC),
-        ));
+        index.add_history(&make_history("echo alpha", "/tmp", datetime!(2024-01-01 10:00 UTC)));
         // same fuzzy score for the query, much higher frecency
         for _ in 0..50 {
             let h = make_history("echo beta", "/tmp", datetime!(2024-01-01 10:00 UTC));
@@ -898,16 +833,8 @@ mod tests {
     fn diacritics_normalized_for_matching() {
         let index = SearchIndex::default();
 
-        index.add_history(&make_history(
-            "echo déjà-vu",
-            "/tmp",
-            datetime!(2024-01-01 10:00 UTC),
-        ));
-        index.add_history(&make_history(
-            "echo plain",
-            "/tmp",
-            datetime!(2024-01-01 10:00 UTC),
-        ));
+        index.add_history(&make_history("echo déjà-vu", "/tmp", datetime!(2024-01-01 10:00 UTC)));
+        index.add_history(&make_history("echo plain", "/tmp", datetime!(2024-01-01 10:00 UTC)));
 
         let expected = index.commands.get("echo déjà-vu").unwrap().most_recent_id();
 
@@ -932,9 +859,7 @@ mod tests {
             "kubectl get pods -n",
             "make -j",
         ];
-        (0..12_000)
-            .map(|i| format!("{} run-{i}", prefixes[i % prefixes.len()]))
-            .collect()
+        (0..12_000).map(|i| format!("{} run-{i}", prefixes[i % prefixes.len()])).collect()
     }
 
     /// The parallel-matching switch must be invisible in the results:
@@ -977,10 +902,7 @@ mod tests {
             let ts = datetime!(2024-01-01 00:00 UTC) + time::Duration::minutes((i % 1440) as i64);
             index.add_history(&make_history(command, "/tmp", ts));
         }
-        assert!(
-            index.command_count() > 10_000,
-            "corpus must cross threshold"
-        );
+        assert!(index.command_count() > 10_000, "corpus must cross threshold");
         index.rebuild_frecency(&Search::default());
 
         for query in ["git", "git p", "docker compose up", "deja", ""] {
@@ -997,16 +919,10 @@ mod tests {
     #[test]
     fn long_query_truncated_not_panicking() {
         let index = SearchIndex::default();
-        index.add_history(&make_history(
-            "echo hello",
-            "/tmp",
-            datetime!(2024-01-01 10:00 UTC),
-        ));
+        index.add_history(&make_history("echo hello", "/tmp", datetime!(2024-01-01 10:00 UTC)));
 
         let long_query = "a".repeat(5000);
-        let results: Vec<_> = index
-            .search(&long_query, IndexFilterMode::Global, 10)
-            .collect();
+        let results: Vec<_> = index.search(&long_query, IndexFilterMode::Global, 10).collect();
         assert!(results.is_empty());
     }
 

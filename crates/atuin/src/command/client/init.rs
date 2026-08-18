@@ -1,9 +1,8 @@
-use atuin_client::{
-    record::sqlite_store::SqliteStore,
-    settings::{Settings, Tmux},
-};
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::{Settings, Tmux};
 use atuin_common::encryption::paseto_v4;
-use atuin_dotfiles::store::{AliasStore, var::VarStore};
+use atuin_dotfiles::store::AliasStore;
+use atuin_dotfiles::store::var::VarStore;
 use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr};
 
@@ -146,7 +145,8 @@ impl Cmd {
             Shell::Nu => atuin_pty_proxy::Shell::Nu,
             Shell::Xonsh | Shell::PowerShell => {
                 eprintln!(
-                    "atuin: pty_proxy.enabled is set, but atuin pty-proxy does not support this shell"
+                    "atuin: pty_proxy.enabled is set, but atuin pty-proxy does not support this \
+                     shell"
                 );
                 return;
             }
@@ -159,7 +159,8 @@ impl Cmd {
     fn pty_proxy_init(&self, settings: &Settings) {
         if settings.pty_proxy.enabled {
             eprintln!(
-                "atuin: pty_proxy.enabled is set, but this build of atuin does not include pty-proxy support"
+                "atuin: pty_proxy.enabled is set, but this build of atuin does not include \
+                 pty-proxy support"
             );
         }
     }
@@ -167,7 +168,8 @@ impl Cmd {
     pub async fn run(self, settings: &Settings) -> Result<()> {
         if !settings.paths_ok() {
             eprintln!(
-                "Atuin settings paths are broken. Disabling atuin shell hooks. Run `atuin doctor` to diagnose."
+                "Atuin settings paths are broken. Disabling atuin shell hooks. Run `atuin doctor` \
+                 to diagnose."
             );
             return Ok(());
         }

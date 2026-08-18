@@ -122,8 +122,5 @@ const ALL_DESCRIPTORS: &[&ToolDescriptor] = &[
 /// Look up a tool descriptor by its canonical wire name.
 /// Returns None for unknown tool names.
 pub(crate) fn by_name(name: &str) -> Option<&'static ToolDescriptor> {
-    ALL_DESCRIPTORS
-        .iter()
-        .find(|d| d.canonical_names.contains(&name))
-        .copied()
+    ALL_DESCRIPTORS.iter().find(|d| d.canonical_names.contains(&name)).copied()
 }

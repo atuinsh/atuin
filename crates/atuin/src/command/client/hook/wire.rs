@@ -3,9 +3,8 @@
 //! Claude Code and Codex invoke `atuin hook <agent>` for each tool use and
 //! pass the event as JSON on stdin.
 
-use serde::Deserialize;
-
 use atuin_common::string::NonNulStr;
+use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub enum WireToolName {

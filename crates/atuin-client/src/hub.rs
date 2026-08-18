@@ -10,14 +10,14 @@
 
 use std::time::Duration;
 
-use eyre::{Context, Result, bail};
-use reqwest::{StatusCode, Url, header::USER_AGENT};
-use thiserror::Error;
-
 use atuin_common::url::UrlAppendExt;
 use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, CliCodeResponse, CliVerifyResponse, ErrorResponse,
 };
+use eyre::{Context, Result, bail};
+use reqwest::header::USER_AGENT;
+use reqwest::{StatusCode, Url};
+use thiserror::Error;
 
 use crate::settings::Settings;
 
@@ -185,11 +185,7 @@ pub async fn save_session(token: &str) -> Result<()> {
 
 /// Delete the hub session token (logout from Hub)
 pub async fn delete_session() -> Result<()> {
-    Settings::meta_store()
-        .await?
-        .delete_hub_session()
-        .await
-        .context("Failed to delete hub session")
+    Settings::meta_store().await?.delete_hub_session().await.context("Failed to delete hub session")
 }
 
 /// Check if the user is logged in with Hub authentication
@@ -266,11 +262,7 @@ async fn handle_resp_error(resp: reqwest::Response) -> Result<reqwest::Response,
         return Ok(resp);
     }
 
-    let reason = resp
-        .json::<ErrorResponse>()
-        .await
-        .ok()
-        .map(|e| e.reason.into_owned());
+    let reason = resp.json::<ErrorResponse>().await.ok().map(|e| e.reason.into_owned());
     Err(HubError::Status { status, reason })
 }
 

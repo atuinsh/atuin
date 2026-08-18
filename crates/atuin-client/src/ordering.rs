@@ -1,6 +1,7 @@
 use minspan::minspan;
 
-use super::{database::DbSearchMode, history::History};
+use super::database::DbSearchMode;
+use super::history::History;
 
 pub fn reorder_fuzzy(mode: DbSearchMode, query: &str, res: Vec<History>) -> Vec<History> {
     match mode {
@@ -26,10 +27,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::history::History;
     use rstest::rstest;
     use time::OffsetDateTime;
+
+    use super::*;
+    use crate::history::History;
 
     fn hist(command: &str) -> History {
         History::capture()

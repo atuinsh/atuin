@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # --- rust conveniences ---
 RUN rustup component add rust-analyzer clippy rustfmt && \
+    rustup toolchain install nightly --profile minimal --component rustfmt && \
     cargo install cargo-nextest --locked || true
 
 # Use mold by default. This has to live in $CARGO_HOME (/usr/local/cargo in this

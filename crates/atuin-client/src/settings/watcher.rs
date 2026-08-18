@@ -21,17 +21,13 @@
 //! }
 //! ```
 
-use std::{
-    path::PathBuf,
-    sync::{Arc, OnceLock},
-    time::Duration,
-};
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use eyre::{Result, WrapErr};
-use notify::{
-    Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher,
-    event::{EventKind, ModifyKind},
-};
+use notify::event::{EventKind, ModifyKind};
+use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
@@ -188,10 +184,7 @@ impl SettingsWatcher {
 
         // Defensive: ensure watch path exists before trying to watch
         if !watch_path.exists() {
-            warn!(
-                "config directory does not exist, creating it: {:?}",
-                watch_path
-            );
+            warn!("config directory does not exist, creating it: {:?}", watch_path);
             std::fs::create_dir_all(watch_path)
                 .wrap_err_with(|| format!("failed to create config directory: {:?}", watch_path))?;
         }
@@ -228,10 +221,7 @@ impl SettingsWatcher {
             // Defensive: check if config file exists before reloading
             // (handles case where file was deleted - we'll get notified when it's recreated)
             if !config_path.exists() {
-                debug!(
-                    "config file does not exist, skipping reload: {:?}",
-                    config_path
-                );
+                debug!("config file does not exist, skipping reload: {:?}", config_path);
                 continue;
             }
 

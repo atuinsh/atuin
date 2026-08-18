@@ -4,7 +4,8 @@
 //! with frecency-based ranking and dynamic filtering.
 
 use std::ops::Deref;
-use std::{pin::Pin, sync::Arc};
+use std::pin::Pin;
+use std::sync::Arc;
 
 use atuin_client::database::Database;
 use atuin_common::filter::OrFilter;
@@ -15,14 +16,12 @@ use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{Level, debug, error, info, instrument, span, trace};
 
-use crate::{
-    daemon::{Component, DaemonHandle},
-    events::DaemonEvent,
-    search::{
-        FilterMode, IndexFilterMode, PrepareIndexRequest, PrepareIndexResponse, SearchIndex,
-        SearchRequest, SearchResponse,
-        search_server::{Search as SearchSvc, SearchServer},
-    },
+use crate::daemon::{Component, DaemonHandle};
+use crate::events::DaemonEvent;
+use crate::search::search_server::{Search as SearchSvc, SearchServer};
+use crate::search::{
+    FilterMode, IndexFilterMode, PrepareIndexRequest, PrepareIndexResponse, SearchIndex,
+    SearchRequest, SearchResponse,
 };
 
 const PAGE_SIZE: usize = 5000;
@@ -45,19 +44,13 @@ where
     F: Fn() -> R,
     R: Future<Output: Deref<Target = SearchIndex>>,
 {
-    info!(
-        "Loading history into search index; page size = {}",
-        PAGE_SIZE
-    );
+    info!("Loading history into search index; page size = {}", PAGE_SIZE);
     let db = handle.history_db();
     let mut pager = db.all_paged(PAGE_SIZE, false, true);
     loop {
         match pager.next().await {
             Ok(Some(histories)) => {
-                info!(
-                    "Loading {} history entries into search index",
-                    histories.len()
-                );
+                info!("Loading {} history entries into search index", histories.len());
                 index().await.add_histories(&histories);
             }
             Ok(None) => {
@@ -160,10 +153,7 @@ impl SearchComponent {
             return;
         }
 
-        info!(
-            "Search index rebuild complete; {} unique commands",
-            new_index.command_count()
-        );
+        info!("Search index rebuild complete; {} unique commands", new_index.command_count());
         *self.index.write().await = new_index;
     }
 }
@@ -191,13 +181,8 @@ impl Component for SearchComponent {
             // will use the value of the `ATUIN_SHELL` environment variable. This variable might be
             // correct if the daemon was autostarted by the shell hooks, but if it's unset or
             // incorrect, we'll simply rebuild the index upon receipt of the first request.
-            let shells = handle_for_loader
-                .settings()
-                .await
-                .search
-                .shells
-                .to_filter()
-                .to_vec_filter();
+            let shells =
+                handle_for_loader.settings().await.search.shells.to_filter().to_vec_filter();
             index.write().await.shells = shells;
             let _ = build_index(|| index.read(), &handle_for_loader).await;
         }));
@@ -246,10 +231,7 @@ impl Component for SearchComponent {
                 self.rebuild_index_only().await;
             }
             DaemonEvent::HistoryDeleted { ids } => {
-                info!(
-                    count = ids.len(),
-                    "History deleted, rebuilding search index"
-                );
+                info!(count = ids.len(), "History deleted, rebuilding search index");
                 // For now, just rebuild the entire index. A more efficient implementation
                 // would remove specific items from the index.
                 self.rebuild_index_only().await;
@@ -315,10 +297,7 @@ impl SearchGrpcService {
         let new_index = SearchIndex::new(shells);
         build_index(async || &new_index, &self.handle).await?;
 
-        info!(
-            "Search index rebuild complete; {} unique commands",
-            new_index.command_count()
-        );
+        info!("Search index rebuild complete; {} unique commands", new_index.command_count());
         Ok(Some(new_index))
     }
 }
@@ -351,10 +330,8 @@ impl SearchSvc for SearchGrpcService {
 
                 let query = search_req.query;
                 let query_id = search_req.query_id;
-                let filter_mode: FilterMode = search_req
-                    .filter_mode
-                    .try_into()
-                    .unwrap_or(FilterMode::Global);
+                let filter_mode: FilterMode =
+                    search_req.filter_mode.try_into().unwrap_or(FilterMode::Global);
                 let proto_context = search_req.context;
 
                 debug!(
@@ -378,9 +355,7 @@ impl SearchSvc for SearchGrpcService {
                     }
                     Ok(None) => this.index.read().await,
                     Err(()) => {
-                        let _ = tx
-                            .send(Err(Status::internal("failed to build index")))
-                            .await;
+                        let _ = tx.send(Err(Status::internal("failed to build index"))).await;
                         break;
                     }
                 };
@@ -388,10 +363,7 @@ impl SearchSvc for SearchGrpcService {
                 // Perform the search
                 let history_ids: Vec<Vec<u8>> =
                     span!(Level::TRACE, "daemon_search_query", %query, query_id).in_scope(|| {
-                        index
-                            .search(&query, index_filter, RESULTS_LIMIT)
-                            .map(Vec::from)
-                            .collect()
+                        index.search(&query, index_filter, RESULTS_LIMIT).map(Vec::from).collect()
                     });
                 drop(index);
 

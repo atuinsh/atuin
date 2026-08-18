@@ -2,7 +2,7 @@
 
 use std::cmp::Reverse;
 
-use crate::{chars, Matcher, Utf32Str};
+use crate::{Matcher, Utf32Str, chars};
 
 #[cfg(test)]
 mod tests;
