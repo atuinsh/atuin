@@ -298,7 +298,7 @@ impl Cmd {
                     }
 
                     let ids = history_store.delete_entries(entries).await?;
-                    history_store.build_all(&db, &ids).await?;
+                    history_store.build_all(&db, &ids, |_| {}).await?;
 
                     entries = run_non_interactive(settings, opt_filter, &query, &db).await?;
                 }

@@ -19,7 +19,8 @@ use atuin_domain::record::{EncryptedData, Record, RecordId, RecordTag};
 use thiserror::Error;
 
 use crate::{
-    api_client::Client, packfile::record::ParsingError, record::sqlite_store::SqliteStore,
+    api_client::Client, packfile::record::ParsingError, progress::Observer,
+    record::sqlite_store::SqliteStore,
 };
 
 use super::record::{PackManifestRecordView, PackingError, UnpackError};
@@ -54,6 +55,36 @@ pub async fn upload_packed(
         .upload_packfile(view.record.id, &ids, blob)
         .await
         .map_err(UploadError::Api)
+}
+
+/// A stage of expanding one packfile manifest, reported as it is entered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackStage {
+    ResolvingUrl,
+    Downloading,
+    Decrypting,
+    Encrypting,
+    Storing,
+}
+
+impl PackStage {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ResolvingUrl => "resolving packfile url",
+            Self::Downloading => "downloading packfile",
+            Self::Decrypting => "decrypting & decompressing",
+            Self::Encrypting => "encrypting history records",
+            Self::Storing => "inserting into record store",
+        }
+    }
+}
+
+/// A [`PackStage`], with the number of history records this manifest covers - not a count of
+/// manifests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PackProgress {
+    pub stage: PackStage,
+    pub history_records: u64,
 }
 
 #[derive(Debug, Error)]
@@ -91,8 +122,18 @@ pub async fn download_packed(
     store: &SqliteStore,
     key: &paseto_v4::Key,
     client: &Client,
+    observer: &Observer<PackProgress>,
 ) -> Result<Vec<RecordId>, DownloadError> {
     let view = PackManifestRecordView::new(manifest)?;
+
+    let range = view.range();
+    let history_records = range.end - range.start;
+    let stage = |stage| {
+        observer.notify(PackProgress {
+            stage,
+            history_records,
+        });
+    };
 
     // Skip if we already have the whole range (history is contiguous, packfiles are prefixes).
     let head = store
@@ -100,7 +141,7 @@ pub async fn download_packed(
         .await
         .map_err(DownloadError::Store)?;
     if let Some(head) = head
-        && head.idx >= view.range().end - 1
+        && head.idx >= range.end - 1
     {
         // Range already available locally. Return the IDs.
         let existing = view
@@ -110,14 +151,24 @@ pub async fn download_packed(
         return Ok(existing.iter().map(|r| r.id).collect());
     }
 
-    let blob = client
-        .download_packfile(view.record.id)
+    stage(PackStage::ResolvingUrl);
+    let download_url = client
+        .get_packfile_download_url(view.record.id)
         .await
         .map_err(DownloadError::Api)?;
 
-    let records = view.unpack_records(blob, key.clone()).await?;
+    stage(PackStage::Downloading);
+    let blob = client
+        .download_packfile(download_url)
+        .await
+        .map_err(DownloadError::Api)?;
+
+    let records = view
+        .unpack_records(blob, key.clone(), observer.clone(), history_records)
+        .await?;
     let ids: Vec<RecordId> = records.iter().map(|record| record.id).collect();
 
+    stage(PackStage::Storing);
     store
         .push_batch(records.iter())
         .await
@@ -139,6 +190,7 @@ mod tests {
 
     use super::*;
     use atuin_domain::caps::PackfileCap;
+    use std::sync::{Arc, Mutex};
 
     use crate::api_client::{AuthToken, Client, caps_client};
     use crate::packfile::try_pack;
@@ -335,7 +387,7 @@ mod tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let ids = download_packed(&manifest, &down, &key, &client)
+        let ids = download_packed(&manifest, &down, &key, &client, &Observer::hidden())
             .await
             .unwrap();
         assert_eq!(ids.len(), 5, "all five history records populated");
@@ -391,7 +443,7 @@ mod tests {
         )
         .unwrap();
 
-        let ids = download_packed(&manifest, &down, &key, &client)
+        let ids = download_packed(&manifest, &down, &key, &client, &Observer::hidden())
             .await
             .unwrap();
 
@@ -401,6 +453,78 @@ mod tests {
             ids, expected_ids,
             "range already local -> covered ids returned anyway, for re-indexing"
         );
+    }
+
+    fn recording_observer() -> (Observer<PackProgress>, Arc<Mutex<Vec<PackProgress>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let observer = {
+            let seen = Arc::clone(&seen);
+            Observer::new(move |p| seen.lock().unwrap().push(p))
+        };
+        (observer, seen)
+    }
+
+    /// Stages are reported in the order the work happens, and the count is the manifest's five
+    /// HISTORY records - not the one manifest.
+    #[rstest]
+    #[tokio::test]
+    async fn expanding_a_manifest_reports_its_stages_and_history_record_count(key: paseto_v4::Key) {
+        let host = HostId(uuid_v7());
+        let up = memory_store().await;
+        seed_history(&up, host, &key, 5).await;
+        try_pack(
+            &up,
+            host,
+            Some(PackfileCap {
+                version: 1,
+                record_count: 5,
+            }),
+            &RecordTag::History,
+        )
+        .await
+        .unwrap();
+        let manifest = up.last(host, &RecordTag::Packfile).await.unwrap().unwrap();
+        let (blob, _) = PackManifestRecordView::new(&manifest)
+            .unwrap()
+            .pack_records(&up, key.clone())
+            .await
+            .unwrap();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/api/v0/packfiles/{}", manifest.id.0)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "download_url": format!("{}/download/abc", server.uri()),
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/download/abc"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(blob))
+            .mount(&server)
+            .await;
+
+        let down = memory_store().await;
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let (observer, seen) = recording_observer();
+        download_packed(&manifest, &down, &key, &client, &observer)
+            .await
+            .unwrap();
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(
+            seen.iter().map(|p| p.stage).collect::<Vec<_>>(),
+            vec![
+                PackStage::ResolvingUrl,
+                PackStage::Downloading,
+                PackStage::Decrypting,
+                PackStage::Encrypting,
+                PackStage::Storing,
+            ]
+        );
+        assert!(seen.iter().all(|p| p.history_records == 5), "{seen:?}");
     }
 
     /// An unknown-version / malformed / inverted-range manifest fails at
@@ -482,7 +606,7 @@ mod tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let err = download_packed(&bad, &down, &key, &client)
+        let err = download_packed(&bad, &down, &key, &client, &Observer::hidden())
             .await
             .expect_err("a malformed manifest must not expand");
         assert!(
@@ -490,7 +614,7 @@ mod tests {
             "the caller must be told to skip this manifest, not fail the tick: {err:?}"
         );
 
-        let ids = download_packed(&good, &down, &key, &client)
+        let ids = download_packed(&good, &down, &key, &client, &Observer::hidden())
             .await
             .expect("the valid manifest still expands");
         assert_eq!(ids.len(), 3, "the valid manifest's three records expand");
@@ -545,7 +669,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = download_packed(&manifest, &down, &key, &client).await;
+        let result = download_packed(&manifest, &down, &key, &client, &Observer::hidden()).await;
         assert!(
             matches!(result, Err(DownloadError::Api(_))),
             "a transient transport fault must surface as Api: {result:?}"

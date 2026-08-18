@@ -1,5 +1,5 @@
 // do a sync :O
-use std::{cmp::Ordering, fmt::Write, sync::Arc};
+use std::{cmp::Ordering, fmt::Write, sync::Arc, time::Duration};
 
 use eyre::Result;
 use thiserror::Error;
@@ -7,14 +7,17 @@ use thiserror::Error;
 use super::sqlite_store::SqliteStore;
 use crate::{
     api_client::{Client, caps_client},
-    packfile::{download_packed, upload_packed},
+    packfile::{PackProgress, download_packed, upload_packed},
+    progress::{Observer, draw_target},
     settings::Settings,
 };
 
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::caps::{CapClient, PackfileCap};
-use atuin_domain::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus, RecordTag};
-use indicatif::{ProgressBar, ProgressState, ProgressStyle};
+use atuin_domain::record::{
+    Diff, EncryptedData, HostId, Record, RecordId, RecordIdx, RecordStatus, RecordTag,
+};
+use indicatif::{ProgressBar, ProgressFinish, ProgressState, ProgressStyle};
 
 #[derive(Error, Debug)]
 pub enum SyncError {
@@ -207,15 +210,13 @@ async fn sync_upload(
     let expected = local + 1 - first_missing_remote;
     let mut progress = 0;
 
-    let pb = ProgressBar::new(expected);
-    pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {human_pos}/{human_len} ({eta})")
-        .unwrap()
-        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
-        .progress_chars("#>-"));
+    let unit = unit_label(&tag);
+    let pb = sync_bar(unit, expected);
 
     println!(
-        "Uploading {} records to {}/{}",
+        "Uploading {} {} to {}/{}",
         expected,
+        unit.to_lowercase(),
         host.0.as_simple(),
         tag
     );
@@ -236,15 +237,18 @@ async fn sync_upload(
 
         if tag == RecordTag::Packfile {
             for manifest in &page {
+                pb.set_message("uploading packfile");
                 upload_packed(manifest, store, key, client)
                     .await
                     .map_err(|e| {
                         error!("failed to upload packfile: {e}");
                         SyncError::RemoteRequestError { msg: e.to_string() }
                     })?;
+                pb.inc(1);
             }
         }
 
+        pb.set_message("posting records");
         client.post_records(&page).await.map_err(|e| {
             error!("failed to post records: {e:?}");
 
@@ -255,7 +259,7 @@ async fn sync_upload(
         pb.set_position(progress);
     }
 
-    pb.finish_with_message("Uploaded records");
+    pb.finish_with_message("done");
 
     Ok(progress)
 }
@@ -312,20 +316,21 @@ async fn sync_download(
     let mut progress = 0;
     let mut ret = Vec::new();
 
+    let unit = unit_label(&tag);
+
     println!(
-        "Downloading {} records from {}/{}",
+        "Downloading {} {} from {}/{}",
         expected,
+        unit.to_lowercase(),
         host.0.as_simple(),
         tag
     );
 
-    let pb = ProgressBar::new(expected);
-    pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {human_pos}/{human_len} ({eta})")
-        .unwrap()
-        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
-        .progress_chars("#>-"));
+    let pb = sync_bar(unit, expected);
 
     while progress < expected {
+        pb.set_message("fetching page");
+
         let page = client
             .next_records(host, tag.clone(), first_missing_local + progress, page_size)
             .await
@@ -338,23 +343,10 @@ async fn sync_download(
         // We commit the packfile's history into the local store before we persist the manifests, so
         // a manifest we recorded always has its associated history.
         if tag == RecordTag::Packfile {
-            for manifest in &page {
-                match download_packed(manifest, store, key, client).await {
-                    Ok(expanded) => ret.extend(expanded),
-                    Err(e) if e.is_permanent() => error!(
-                        manifest_id = %manifest.id,
-                        host = %manifest.host.id,
-                        idx = manifest.idx,
-                        "skipping unexpandable packfile manifest: {e}. you have lost data."
-                    ),
-                    Err(e) => {
-                        error!("failed to download packfile: {e:?}");
-                        return Err(SyncError::RemoteRequestError { msg: e.to_string() });
-                    }
-                }
-            }
+            ret.extend(expand_manifests(&page, store, key, client, &pb).await?);
         }
 
+        pb.set_message("writing to the record store");
         store
             .push_batch(page.iter())
             .await
@@ -366,9 +358,80 @@ async fn sync_download(
         pb.set_position(progress);
     }
 
-    pb.finish_with_message("Downloaded records");
+    pb.finish_with_message("done");
 
     Ok(ret)
+}
+
+/// Expand each packfile manifest in `page`, advancing `pb` as each one completes rather than
+/// once the whole page has.
+async fn expand_manifests(
+    page: &[Record<EncryptedData>],
+    store: &SqliteStore,
+    key: &paseto_v4::Key,
+    client: &Client,
+    pb: &ProgressBar,
+) -> Result<Vec<RecordId>, SyncError> {
+    let observer = {
+        let pb = pb.clone();
+        Observer::new(move |p: PackProgress| {
+            pb.set_message(format!(
+                "{} · {} history records",
+                p.stage.label(),
+                p.history_records
+            ));
+        })
+    };
+
+    let mut ret = Vec::new();
+
+    for manifest in page {
+        match download_packed(manifest, store, key, client, &observer).await {
+            Ok(expanded) => ret.extend(expanded),
+            Err(e) if e.is_permanent() => error!(
+                manifest_id = %manifest.id,
+                host = %manifest.host.id,
+                idx = manifest.idx,
+                "skipping unexpandable packfile manifest: {e}. you have lost data."
+            ),
+            Err(e) => {
+                error!("failed to download packfile: {e:?}");
+                return Err(SyncError::RemoteRequestError { msg: e.to_string() });
+            }
+        }
+
+        pb.inc(1);
+    }
+
+    Ok(ret)
+}
+
+/// A packfile op moves one manifest at a time, and each manifest stands for many history
+/// records - calling those "records" would be a lie.
+const fn unit_label(tag: &RecordTag) -> &'static str {
+    match tag {
+        RecordTag::Packfile => "Packfiles",
+        _ => "Records",
+    }
+}
+
+fn sync_bar(unit: &str, expected: u64) -> ProgressBar {
+    let pb = ProgressBar::with_draw_target(Some(expected), draw_target())
+        // Dropped without an explicit finish - ie. on any error path - the bar abandons here
+        // rather than leaving its last stage message up.
+        .with_finish(ProgressFinish::AbandonWithMessage("failed".into()))
+        .with_prefix(unit.to_owned());
+    pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {prefix} {human_pos}/{human_len} ({eta}) {msg}")
+        .unwrap()
+        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
+        .progress_chars("#>-"));
+
+    // Most of a packfile sync is spent waiting on the network or on crypto.
+    if !pb.is_hidden() {
+        pb.enable_steady_tick(Duration::from_millis(120));
+    }
+
+    pb
 }
 
 pub async fn sync_remote(
@@ -771,6 +834,7 @@ mod packfile_download_tests {
 
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{DecryptedData, EncryptedData, Host, HostId, Record, RecordId};
+    use indicatif::ProgressDrawTarget;
     use rstest::*;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -899,6 +963,63 @@ mod packfile_download_tests {
             .respond_with(ResponseTemplate::new(200).set_body_bytes(blob))
             .mount(server)
             .await;
+    }
+
+    /// The bar advances as each manifest completes. The page's second manifest fails, so the
+    /// page never completes - per-page advance would leave this at 0.
+    #[rstest]
+    #[tokio::test]
+    async fn packfile_progress_advances_per_manifest_not_per_page(key: paseto_v4::Key) {
+        let (good, good_blob) = packed_packfile(HostId(uuid_v7()), &key, 3).await;
+        // Its blob is never served, so the download 404s - transient, so the page gives up.
+        let (bad, _) = packed_packfile(HostId(uuid_v7()), &key, 3).await;
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/api/v0/packfiles/{}", good.id.0)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "download_url": format!("{}/download/good", server.uri()) })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/download/good"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(good_blob))
+            .mount(&server)
+            .await;
+
+        let store = memory_store().await;
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let pb = ProgressBar::with_draw_target(Some(2), ProgressDrawTarget::hidden());
+        let result = expand_manifests(&[good, bad], &store, &key, &client, &pb).await;
+
+        assert!(matches!(result, Err(SyncError::RemoteRequestError { .. })));
+        assert_eq!(pb.position(), 1);
+        assert!(
+            pb.message().contains("3 history records"),
+            "{}",
+            pb.message()
+        );
+    }
+
+    /// A bar left unfinished - any error path - abandons on drop rather than leaving its last
+    /// stage message up. `finish_using_style` applies the same `on_finish` that drop does.
+    #[test]
+    fn an_unfinished_bar_abandons_its_stage_message() {
+        let pb = sync_bar("Packfiles", 10);
+        pb.set_message("downloading packfile · 500 history records");
+
+        pb.finish_using_style();
+
+        assert!(pb.is_finished());
+        assert_eq!(pb.message(), "failed");
+    }
+
+    #[test]
+    fn packfiles_are_not_labelled_as_records() {
+        assert_eq!(unit_label(&RecordTag::Packfile), "Packfiles");
+        assert_eq!(unit_label(&RecordTag::History), "Records");
     }
 
     /// REGRESSION: packfile manifests are stored plaintext (no `cek`), so `check_encryption_key`
