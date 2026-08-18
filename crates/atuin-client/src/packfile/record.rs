@@ -37,8 +37,7 @@ fn read_record<'a>(bytes: &mut Bytes<'a>) -> Result<Record<DecryptedData>, Decod
         idx: decode::read_u64(bytes)?,
         host: {
             let id = HostId(read_uuid(bytes)?);
-            // Vestigial `name` slot: `Host` no longer has a name field, but the packfile layout
-            // still carries the (always-empty) string. Read and discard it to stay aligned.
+    // TODO(ATU-589): Remove the vestigial `Host::_name` serialization.
             let _name = decode::read_string(bytes)?;
             Host::new(id)
         },
@@ -59,8 +58,7 @@ where
     write_uuid(writer, record.id.0)?;
     encode::write_u64(writer, record.idx)?;
     write_uuid(writer, record.host.id.0)?;
-    // Vestigial `name` slot (see `read_record`): always empty now that `Host` has no name field.
-    // Kept so the packfile byte layout is unchanged for existing peers.
+    // TODO(ATU-589): Remove the vestigial `Host::_name` serialization.
     encode::write_str(writer, "")?;
     encode::write_u64(writer, record.timestamp)?;
     encode::write_str(writer, record.version.as_str())?;
