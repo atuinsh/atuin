@@ -1426,7 +1426,11 @@ mod packfile_upload_tests {
         paseto_v4::Key::from([7u8; 32])
     }
 
-    async fn two_manifests(store: &SqliteStore, host: HostId, key: &paseto_v4::Key) -> Vec<RecordId> {
+    async fn two_manifests(
+        store: &SqliteStore,
+        host: HostId,
+        key: &paseto_v4::Key,
+    ) -> Vec<RecordId> {
         seed_history(store, host, key, 10).await;
         try_pack(
             store,
@@ -1485,7 +1489,17 @@ mod packfile_upload_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let result = sync_upload(&store, &client, host, RecordTag::Packfile, 1, None, 10, &key).await;
+        let result = sync_upload(
+            &store,
+            &client,
+            host,
+            RecordTag::Packfile,
+            1,
+            None,
+            10,
+            &key,
+        )
+        .await;
         assert!(result.is_err(), "a failed blob upload must abort the op");
     }
 
@@ -1520,9 +1534,18 @@ mod packfile_upload_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let posted = sync_upload(&store, &client, host, RecordTag::Packfile, 1, None, 10, &key)
-            .await
-            .unwrap();
+        let posted = sync_upload(
+            &store,
+            &client,
+            host,
+            RecordTag::Packfile,
+            1,
+            None,
+            10,
+            &key,
+        )
+        .await
+        .unwrap();
         assert_eq!(posted, 2, "both manifests upload and post");
     }
 }
