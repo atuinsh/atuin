@@ -14,7 +14,11 @@ use crate::{
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus, RecordTag};
+use futures::{StreamExt, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
+
+/// How many packfile blobs to transfer (upload or download) concurrently within a single page.
+const MAX_CONCURRENT_PACKFILE_TRANSFERS: usize = 16;
 
 #[derive(Error, Debug)]
 pub enum SyncError {
@@ -235,13 +239,15 @@ async fn sync_upload(
         }
 
         if tag == RecordTag::Packfile {
-            for manifest in &page {
-                upload_packed(manifest, store, key, client)
-                    .await
-                    .map_err(|e| {
-                        error!("failed to upload packfile: {e}");
-                        SyncError::RemoteRequestError { msg: e.to_string() }
-                    })?;
+            let mut uploads = stream::iter(&page)
+                .map(|manifest| upload_packed(manifest, store, key, client))
+                .buffered(MAX_CONCURRENT_PACKFILE_TRANSFERS);
+
+            while let Some(result) = uploads.next().await {
+                result.map_err(|e| {
+                    error!("failed to upload packfile: {e}");
+                    SyncError::RemoteRequestError { msg: e.to_string() }
+                })?;
             }
         }
 
@@ -338,8 +344,14 @@ async fn sync_download(
         // We commit the packfile's history into the local store before we persist the manifests, so
         // a manifest we recorded always has its associated history.
         if tag == RecordTag::Packfile {
-            for manifest in &page {
-                match download_packed(manifest, store, key, client).await {
+            let results: Vec<Result<Vec<RecordId>, _>> = stream::iter(&page)
+                .map(|manifest| download_packed(manifest, store, key, client))
+                .buffered(MAX_CONCURRENT_PACKFILE_TRANSFERS)
+                .collect()
+                .await;
+
+            for (manifest, result) in page.iter().zip(results) {
+                match result {
                     Ok(expanded) => ret.extend(expanded),
                     Err(e) if e.is_permanent() => error!(
                         manifest_id = %manifest.id,
