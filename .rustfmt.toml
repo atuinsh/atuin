@@ -1,5 +1,6 @@
 comment_width = 100
 #error_on_line_overflow = true
+#error_on_unformatted = true
 format_macro_bodies = true
 format_macro_matchers = true
 format_strings = true
