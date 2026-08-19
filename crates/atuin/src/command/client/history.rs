@@ -334,10 +334,10 @@ impl FormatKey for FmtHistory<'_> {
                 let d = OffsetDateTime::now_utc().saturating_duration_since(self.history.timestamp);
                 write!(f, "{}", d.display().largest_unit())?;
             }
-            "host" => f.write_str(self.history.cmd_origin.host().as_str())?,
+            "host" => f.write_str(self.history.cmd_origin.host().into_inner())?,
             "author" => f.write_str(&self.history.author)?,
             "intent" => f.write_str(self.history.intent.as_deref().unwrap_or_default())?,
-            "user" => f.write_str(self.history.cmd_origin.user().as_str())?,
+            "user" => f.write_str(self.history.cmd_origin.user().into_inner())?,
             "session" => f.write_str(&self.history.session)?,
             "uuid" => f.write_str(&self.history.id.0)?,
             _ => return Err(FormatKeyError::UnknownKey),
@@ -776,11 +776,11 @@ impl TailEvent {
     }
 
     fn host(&self) -> &str {
-        self.history.cmd_origin.host().as_str()
+        self.history.cmd_origin.host().into_inner()
     }
 
     fn user(&self) -> &str {
-        self.history.cmd_origin.user().as_str()
+        self.history.cmd_origin.user().into_inner()
     }
 
     fn exit_value(&self) -> Option<i64> {

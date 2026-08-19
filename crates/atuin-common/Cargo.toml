@@ -23,10 +23,9 @@ unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
 # via a `vt100` terminal emulator. Compiled only when enabled.
 ansi = ["dep:vt100"]
 # Enables OS-specific utilities.
-os = ["dep:rustix", "dep:whoami"]
+os = ["dep:rustix"]
 
 [dependencies]
-whoami = { workspace = true, optional = true }
 derive_more = { workspace = true }
 tiny-bip39 = { workspace = true }
 crypto_secretbox = { workspace = true }

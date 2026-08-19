@@ -3,7 +3,7 @@
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, derive_more::Display, derive_more::From,
 )]
-pub struct CmdHost<T: AsRef<str> = String>(T);
+pub struct CmdHost<T = String>(T);
 
 impl<T: AsRef<str>> AsRef<str> for CmdHost<T> {
     fn as_ref(&self) -> &str {
@@ -11,7 +11,7 @@ impl<T: AsRef<str>> AsRef<str> for CmdHost<T> {
     }
 }
 
-impl<T: AsRef<str> + Into<String>> CmdHost<T> {
+impl<T: Into<String>> CmdHost<T> {
     pub fn into_owned(self) -> CmdHost<String> {
         CmdHost(self.0.into())
     }
@@ -27,8 +27,8 @@ impl CmdHost<String> {
     }
 }
 
-impl<'a> CmdHost<&'a str> {
-    pub fn as_str(&self) -> &'a str {
+impl<T> CmdHost<T> {
+    pub fn into_inner(self) -> T {
         self.0
     }
 }
@@ -41,7 +41,7 @@ impl Default for CmdHost<String> {
 
 /// A username, generic over its backing storage (owned `String` or `&str` view).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, derive_more::Display, derive_more::From)]
-pub struct CmdUser<T: AsRef<str> = String>(T);
+pub struct CmdUser<T = String>(T);
 
 impl<T: AsRef<str>> AsRef<str> for CmdUser<T> {
     fn as_ref(&self) -> &str {
@@ -49,7 +49,7 @@ impl<T: AsRef<str>> AsRef<str> for CmdUser<T> {
     }
 }
 
-impl<T: AsRef<str> + Into<String>> CmdUser<T> {
+impl<T: Into<String>> CmdUser<T> {
     pub fn into_owned(self) -> CmdUser<String> {
         CmdUser(self.0.into())
     }
@@ -65,8 +65,8 @@ impl CmdUser<String> {
     }
 }
 
-impl<'a> CmdUser<&'a str> {
-    pub fn as_str(&self) -> &'a str {
+impl<T> CmdUser<T> {
+    pub fn into_inner(self) -> T {
         self.0
     }
 }

@@ -470,7 +470,6 @@ dependencies = [
  "url",
  "uuid",
  "vt100",
- "whoami",
  "zeroize",
 ]
 

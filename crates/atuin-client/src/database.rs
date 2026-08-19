@@ -172,7 +172,7 @@ fn get_session_start_time(session_id: &str) -> Option<i64> {
 fn origin_sql_filter(origin: &CmdOrigin) -> String {
     // This helper implements logic to support host-only matching against a combined host:user pair.
     // Normally, you'd think we could just do
-    // `lower(hostname) = {origin.host().as_str().to_lowercase()}`, but that does not work.
+    // `lower(hostname) = {origin.host().into_inner().to_lowercase()}`, but that does not work.
     //
     // Normally, `CmdOrigin` is intended to be serialized as a string "<host>:<user>", but, certain
     // parsing logic we historically had would parse a string "<host>", rather than
@@ -191,7 +191,7 @@ fn origin_sql_filter(origin: &CmdOrigin) -> String {
     // the cloud. Recipe for disaster.
     //
     // So this function exists.
-    let host = origin.host().as_str().to_lowercase();
+    let host = origin.host().into_inner().to_lowercase();
     format!(
         "(lower(hostname) = {eq} OR (lower(hostname) >= {lo} AND lower(hostname) < {hi}))",
         eq = quote(&host),
@@ -336,7 +336,7 @@ impl Sqlite {
         let author: Option<String> = row.try_get("author").ok().flatten();
         let author = author.filter(|author| !author.trim().is_empty()).unwrap_or_else(|| {
             CmdOrigin::try_from(hostname.clone())
-                .map_or_else(|err| err.0, |origin| origin.user().as_str().to_owned())
+                .map_or_else(|err| err.0, |origin| origin.user().into_inner().to_owned())
         });
         let intent: Option<String> = row.try_get("intent").ok().flatten();
         let intent = intent.filter(|intent| !intent.trim().is_empty());

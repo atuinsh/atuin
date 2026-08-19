@@ -111,8 +111,8 @@ pub fn draw_stats_table(
 ) {
     let duration = Duration::saturating_from_nanos_i64(history.duration);
     let avg_duration = Duration::from_nanos(stats.average_duration);
-    let host = history.cmd_origin.host().as_str();
-    let user = history.cmd_origin.user().as_str();
+    let host = history.cmd_origin.host().into_inner();
+    let user = history.cmd_origin.user().into_inner();
 
     let rows = [
         Row::new(vec!["Host".to_string(), host.to_string()]),

@@ -387,7 +387,7 @@ impl DrawState<'_> {
         let style = self.theme.as_style(Meaning::Annotation);
         let w = width as usize;
         // Database stores hostname as "hostname:username"
-        let host = h.cmd_origin.host().as_str();
+        let host = h.cmd_origin.host().into_inner();
         let display =
             host.pad_ellipsize(Measure::Columns(w), Pos::End, Indicator::UNICODE, Alignment::Start);
         self.draw(&display, Style::from_crossterm(style));
@@ -398,7 +398,7 @@ impl DrawState<'_> {
         let style = self.theme.as_style(Meaning::Annotation);
         let w = width as usize;
         // Database stores hostname as "hostname:username"
-        let user = h.cmd_origin.user().as_str();
+        let user = h.cmd_origin.user().into_inner();
         let display =
             user.pad_ellipsize(Measure::Columns(w), Pos::End, Indicator::UNICODE, Alignment::Start);
         self.draw(&display, Style::from_crossterm(style));
