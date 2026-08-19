@@ -118,13 +118,9 @@ impl LogCtx {
     }
 }
 
-/// Build the stderr `fmt` layer, if stderr logging is configured.
+/// [`tracing_subscriber::Layer`] is generic, so we need a monomorphic helper here.
 ///
-/// The timer type `T` is a generic rather than a runtime value because
-/// [`fmt::format::Format::with_timer`] bakes the timer into the event-formatter type;
-/// `()` (no timestamp) and [`fmt::time::SystemTime`] are therefore distinct types.
-/// Callers dispatch `T` so only this one axis is monomorphized instead of duplicating
-/// the whole subscriber build. `S` is inferred at the `.with(...)` call site.
+/// See <https://github.com/tokio-rs/tracing/issues/3180> for more details.
 fn stderr_layer<S, T>(
     config: Option<&StderrConfig>,
     filter: EnvFilter,
