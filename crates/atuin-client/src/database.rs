@@ -361,23 +361,44 @@ impl Sqlite {
         Ok(res)
     }
 
-    pub async fn load_active(&self, ids: &[HistoryId]) -> Result<Vec<History>> {
+    pub async fn load_active(
+        &self,
+        ids: impl IntoIterator<Item = HistoryId>,
+    ) -> Result<Vec<History>> {
+        let mut iter_ids = ids.into_iter();
+        let size_hint = iter_ids.size_hint();
+
         // sqlite caps bound parameters per statement (SQLITE_MAX_VARIABLE_NUMBER, as low as 999).
         // Chunk well under that.
         const CHUNK: usize = 500;
 
-        debug!("loading {} history items", ids.len());
+        if let Some(upper) = size_hint.1
+            && size_hint.0 == upper
+        {
+            debug!("loading {} history items", size_hint.0);
+        } else {
+            debug!("loading somewhere around {} history items", size_hint.0);
+        }
 
-        let mut out = Vec::with_capacity(ids.len());
+        let mut out = Vec::with_capacity(size_hint.0);
 
-        for chunk in ids.chunks(CHUNK) {
+        // Buffer reused across multiple chunks to avoid reallocating.
+        let mut chunk: Vec<HistoryId> = Vec::with_capacity(CHUNK);
+
+        loop {
+            chunk.clear();
+            chunk.extend(iter_ids.by_ref().take(CHUNK));
+            if chunk.is_empty() {
+                break;
+            }
+
             let placeholders = ["?"].repeat(chunk.len()).join(",");
             let sql = format!(
                 "select * from history where id in ({placeholders}) and deleted_at is null"
             );
 
             let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
-            for id in chunk {
+            for id in &chunk {
                 query = query.bind(id.0.as_str());
             }
 
@@ -1269,7 +1290,7 @@ mod test {
         let bravo = save_history_item(&db, "echo bravo").await;
         let _charlie = save_history_item(&db, "echo charlie").await;
 
-        let loaded = db.load_active(&[alpha.id.clone(), bravo.id.clone()]).await.unwrap();
+        let loaded = db.load_active([alpha.id.clone(), bravo.id.clone()]).await.unwrap();
 
         let mut commands: Vec<String> = loaded.into_iter().map(|h| h.command).collect();
         commands.sort();
@@ -1287,7 +1308,7 @@ mod test {
 
         // `select ... where id in ()` is a syntax error, so the empty case must
         // short-circuit rather than build a query.
-        let loaded = db.load_active(&[]).await.unwrap();
+        let loaded = db.load_active(std::iter::empty::<HistoryId>()).await.unwrap();
 
         assert!(loaded.is_empty());
     }
@@ -1306,7 +1327,7 @@ mod test {
         alpha.command = String::new();
         db.update(&alpha).await.unwrap();
 
-        let loaded = db.load_active(&[alpha.id.clone(), bravo.id.clone()]).await.unwrap();
+        let loaded = db.load_active([alpha.id.clone(), bravo.id.clone()]).await.unwrap();
 
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].command, "echo bravo");
@@ -1322,7 +1343,7 @@ mod test {
         let alpha = save_history_item(&db, "echo alpha").await;
 
         let loaded = db
-            .load_active(&[alpha.id.clone(), HistoryId("does-not-exist".to_string())])
+            .load_active([alpha.id.clone(), HistoryId("does-not-exist".to_string())])
             .await
             .unwrap();
 
@@ -1344,7 +1365,7 @@ mod test {
             ids.push(save_history_item(&db, &format!("echo {i}")).await.id);
         }
 
-        let loaded = db.load_active(&ids).await.unwrap();
+        let loaded = db.load_active(ids).await.unwrap();
 
         assert_eq!(loaded.len(), 1200);
     }
