@@ -212,7 +212,7 @@ impl History {
         shell: Option<String>,
     ) -> Self {
         let session = session
-            .or_else(|| env::var("ATUIN_SESSION").ok())
+            .or_else(|| crate::ctx::app().session())
             .unwrap_or_else(|| uuid_v7().as_simple().to_string());
         let cmd_origin = cmd_origin.unwrap_or_else(CmdOrigin::probe_current);
         let author = normalize_optional_string(author)

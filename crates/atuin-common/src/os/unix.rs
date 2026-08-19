@@ -2,6 +2,38 @@
 
 use std::path::Path;
 
+use whoami;
+
+use crate::string::NonNulStr;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, derive_more::Display)]
+pub struct PosixHostname(String);
+
+impl PosixHostname {
+    const MAX_HOSTNAME_LENGTH: usize = 255;
+
+    /// Equivalent to [`whoami::hostname`].
+    pub fn get() -> Result<Self, super::HostnameGetError> {
+        whoami::hostname().map(Self).map_err(super::HostnameGetError::FailedToQuery)
+    }
+}
+
+impl TryFrom<&str> for PosixHostname {
+    type Error = super::HostnameStringConversionError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        // The constraints here reference <https://docs.rs/whoami/latest/whoami/fn.hostname.html>
+        let value =
+            NonNulStr::new(value).map_err(|_| Self::Error::InvalidCharacters(char::from(0)))?;
+
+        if value.len() > Self::MAX_HOSTNAME_LENGTH {
+            return Err(Self::Error::TooLong(Self::MAX_HOSTNAME_LENGTH));
+        }
+
+        Ok(PosixHostname(value.to_string()))
+    }
+}
+
 use rustix::fs;
 
 /// Get the current UID.

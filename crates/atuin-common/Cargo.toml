@@ -23,9 +23,10 @@ unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
 # via a `vt100` terminal emulator. Compiled only when enabled.
 ansi = ["dep:vt100"]
 # Enables OS-specific utilities.
-os = ["dep:rustix"]
+os = ["dep:rustix", "dep:whoami"]
 
 [dependencies]
+whoami = { workspace = true, optional = true }
 derive_more = { workspace = true }
 tiny-bip39 = { workspace = true }
 crypto_secretbox = { workspace = true }
@@ -39,6 +40,7 @@ thiserror = { workspace = true }
 directories = { workspace = true }
 sysinfo = "0.30.7"
 base64 = { workspace = true }
+bstr = "1"
 getrandom = "0.4"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, optional = true }

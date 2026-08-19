@@ -1968,7 +1968,7 @@ pub async fn history(
                             InputAction::SwitchContext(index) => {
                                 if let Some(index) = index && let Some(entry) = results.get(index) {
                                     app.search.custom_context = Some(entry.id.clone());
-                                    app.search.context = Context::from_history(entry);
+                                    app.search.context = Context::from_history(entry).await;
                                     app.search.filter_mode = FilterMode::Session;
                                     app.search.input = Cursor::from(String::new());
                                     app.results_state = ListState::default();

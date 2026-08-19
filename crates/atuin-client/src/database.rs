@@ -1,4 +1,3 @@
-use std::env;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
@@ -61,11 +60,20 @@ pub struct OptFilters<'a> {
 /// `ATUIN_SESSION` is unset; the session is left empty so session-scoped
 /// filters simply match nothing.
 pub async fn query_context() -> eyre::Result<Context> {
-    let session = env::var("ATUIN_SESSION").unwrap_or_default();
+    // Touch the workspace up front so its background git discovery overlaps the awaits below
+    // (host_id) rather than starting only when we await git_ctx at the end.
+    let workspace = crate::ctx::app().workspace();
+    let session = crate::ctx::app().session().unwrap_or_default();
     let cmd_origin = CmdOrigin::probe_current();
-    let cwd = utils::get_current_dir();
+    let cwd = workspace.cwd().to_string();
     let host_id = Settings::host_id().await?;
-    let git_root = utils::in_git_repo(cwd.as_str());
+    let git_root = workspace
+        .git_ctx()
+        .await
+        .ok()
+        .flatten()
+        .and_then(|git| git.repo().work_dir())
+        .map(|p| p.to_path_buf());
 
     Ok(Context {
         session,
@@ -77,7 +85,7 @@ pub async fn query_context() -> eyre::Result<Context> {
 }
 
 pub async fn current_context() -> eyre::Result<Context> {
-    if env::var("ATUIN_SESSION").is_err() {
+    if crate::ctx::app().session().is_none() {
         return Err(eyre::eyre!(
             "Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set \
              up your shell."
@@ -88,13 +96,22 @@ pub async fn current_context() -> eyre::Result<Context> {
 }
 
 impl Context {
-    pub fn from_history(entry: &History) -> Self {
+    pub async fn from_history(entry: &History) -> Self {
+        let git_root = crate::ctx::app()
+            .workspace()
+            .git_ctx()
+            .await
+            .ok()
+            .flatten()
+            .and_then(|git| git.repo().work_dir())
+            .map(|p| p.to_path_buf());
+
         Context {
             session: entry.session.to_string(),
             cwd: entry.cwd.to_string(),
             cmd_origin: entry.cmd_origin.clone(),
             host_id: String::new(),
-            git_root: utils::in_git_repo(entry.cwd.as_str()),
+            git_root,
         }
     }
 }
@@ -491,11 +508,8 @@ impl Sqlite {
             query.and_where_is_null("deleted_at");
         }
 
-        let git_root = if let Some(git_root) = context.git_root.clone() {
-            git_root.to_str().unwrap_or("/").to_string()
-        } else {
-            context.cwd.clone()
-        };
+        let git_root =
+            context.git_root.as_deref().and_then(Path::to_str).unwrap_or(context.cwd.as_str());
 
         let session_start = get_session_start_time(&context.session);
 
@@ -512,7 +526,7 @@ impl Sqlite {
                     &mut query
                 }
                 FilterMode::Directory => query.and_where_eq("cwd", quote(&context.cwd)),
-                FilterMode::Workspace => query.and_where_like_left("cwd", &git_root),
+                FilterMode::Workspace => query.and_where_like_left("cwd", git_root),
             };
         }
 
@@ -606,11 +620,8 @@ impl Sqlite {
         // built below, so that the timestamp-ordered scan can early-terminate.
         let mut sql = SqlBuilder::select_from("history");
 
-        let git_root = if let Some(git_root) = context.git_root.clone() {
-            git_root.to_str().unwrap_or("/").to_string()
-        } else {
-            context.cwd.clone()
-        };
+        let git_root =
+            context.git_root.as_deref().and_then(Path::to_str).unwrap_or(context.cwd.as_str());
 
         let session_start = get_session_start_time(&context.session);
 

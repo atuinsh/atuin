@@ -14,7 +14,6 @@ use atuin_common::encryption::paseto_v4;
 use atuin_common::logs::LogConfig;
 use atuin_common::string::{EscapeNonPrintablePosixExt as _, NonNulStr};
 use atuin_common::time::{DurationExt, OffsetDateTimeExt, UtcOffsetSpec};
-use atuin_common::utils;
 #[cfg(feature = "daemon")]
 use atuin_common::utils::normalize_optional_string;
 #[cfg(feature = "daemon")]
@@ -396,7 +395,7 @@ fn make_starting_history(
 ) -> Option<History> {
     // It's better for atuin to silently fail here and attempt to
     // store whatever is ran, than to throw an error to the terminal
-    let cwd = utils::get_current_dir();
+    let cwd = atuin_client::ctx::app().workspace().cwd().to_string();
     let command = normalize_command_for_storage(command, settings);
 
     // A command containing a NUL byte could never have been executed by a shell

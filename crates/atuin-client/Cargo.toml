@@ -59,6 +59,7 @@ thiserror = { workspace = true }
 futures = "0.3"
 notify = "8"
 serde_with = "3.8.1"
+gix = { workspace = true }
 
 # encryption
 rusty_paseto = { version = "0.8.0", default-features = false }
