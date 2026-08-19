@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use atuin_common::time::OffsetDateTimeExt;
+use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
 use directories::BaseDirs;
 use eyre::{Result, eyre};
 use sqlx::Pool;
@@ -46,7 +47,10 @@ impl From<HistDbEntry> for History {
             .exit(histdb_item.exit_status)
             .duration(histdb_item.duration_ms)
             .session(format!("{:x}", histdb_item.session_id))
-            .hostname(String::from_utf8_lossy(&histdb_item.hostname).into_owned());
+            .cmd_origin(CmdOrigin::new(
+                CmdHost::from(String::from_utf8_lossy(&histdb_item.hostname).into_owned()),
+                CmdUser::default(),
+            ));
 
         imported.build().into()
     }

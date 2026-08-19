@@ -19,6 +19,7 @@ use atuin_common::utils;
 use atuin_common::utils::normalize_optional_string;
 #[cfg(feature = "daemon")]
 use atuin_daemon::history::{HistoryEventKind, TailHistoryReply};
+use atuin_domain::record::CmdOrigin;
 use clap::Subcommand;
 #[cfg(feature = "daemon")]
 use colored::Colorize;
@@ -333,17 +334,10 @@ impl FormatKey for FmtHistory<'_> {
                 let d = OffsetDateTime::now_utc().saturating_duration_since(self.history.timestamp);
                 write!(f, "{}", d.display().largest_unit())?;
             }
-            "host" => f.write_str(
-                self.history
-                    .hostname
-                    .split_once(':')
-                    .map_or(&self.history.hostname, |(host, _)| host),
-            )?,
+            "host" => f.write_str(self.history.cmd_origin.host().into_inner())?,
             "author" => f.write_str(&self.history.author)?,
             "intent" => f.write_str(self.history.intent.as_deref().unwrap_or_default())?,
-            "user" => {
-                f.write_str(self.history.hostname.split_once(':').map_or("", |(_, user)| user))?;
-            }
+            "user" => f.write_str(self.history.cmd_origin.user().into_inner())?,
             "session" => f.write_str(&self.history.session)?,
             "uuid" => f.write_str(&self.history.id.0)?,
             _ => return Err(FormatKeyError::UnknownKey),
@@ -670,7 +664,8 @@ impl TailEvent {
                 command: history.command,
                 cwd: history.cwd,
                 session: history.session,
-                hostname: history.hostname,
+                #[allow(deprecated)]
+                cmd_origin: CmdOrigin::parse_lenient(history.hostname),
                 author: history.author,
                 intent: normalize_optional_string(history.intent),
                 shell: normalize_optional_string(history.shell),
@@ -700,7 +695,7 @@ impl TailEvent {
                 command: &self.history.command,
                 cwd: &self.history.cwd,
                 session: &self.history.session,
-                hostname: &self.history.hostname,
+                hostname: self.history.cmd_origin.as_str(),
                 host: self.host(),
                 user: self.user(),
                 author: &self.history.author,
@@ -761,7 +756,7 @@ impl TailEvent {
         out.push('\n');
 
         push_pretty_field(&mut out, "cwd", &self.history.cwd);
-        push_pretty_field(&mut out, "hostname", &self.history.hostname);
+        push_pretty_field(&mut out, "hostname", self.history.cmd_origin.as_str());
         push_pretty_field(&mut out, "host", self.host());
         push_pretty_field(&mut out, "user", self.user());
         push_pretty_field(&mut out, "author", &self.history.author);
@@ -781,14 +776,11 @@ impl TailEvent {
     }
 
     fn host(&self) -> &str {
-        self.history
-            .hostname
-            .split_once(':')
-            .map_or(self.history.hostname.as_str(), |(host, _)| host)
+        self.history.cmd_origin.host().into_inner()
     }
 
     fn user(&self) -> &str {
-        self.history.hostname.split_once(':').map_or("", |(_, user)| user)
+        self.history.cmd_origin.user().into_inner()
     }
 
     fn exit_value(&self) -> Option<i64> {
@@ -1273,7 +1265,7 @@ mod tests {
                 command: "git status".to_owned(),
                 cwd: "/tmp/repo".to_owned(),
                 session: "session-id".to_owned(),
-                hostname: "host:ellie".to_owned(),
+                cmd_origin: CmdOrigin::try_from("host:ellie").unwrap(),
                 author: "claude".to_owned(),
                 intent: Some("inspect repository state".to_owned()),
                 deleted_at: None,

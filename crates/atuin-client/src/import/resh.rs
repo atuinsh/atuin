@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::uuid_v7;
+use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
 use directories::UserDirs;
 use eyre::{Result, eyre};
 use serde::Deserialize;
@@ -143,7 +144,7 @@ impl Importer for Resh {
                 .duration(duration)
                 .exit(entry.exit_code)
                 .cwd(entry.pwd)
-                .hostname(entry.host)
+                .cmd_origin(CmdOrigin::new(CmdHost::from(entry.host), CmdUser::default()))
                 // CHECK: should we add uuid here? It's not set in the other importers
                 .session(uuid_v7().as_simple().to_string());
 

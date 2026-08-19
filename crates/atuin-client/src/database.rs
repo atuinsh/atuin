@@ -6,6 +6,7 @@ use std::time::Duration;
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils;
+use atuin_domain::record::CmdOrigin;
 use fs_err as fs;
 use itertools::Itertools;
 use sql_builder::bind::Bind;
@@ -22,13 +23,12 @@ use super::history::History;
 use super::ordering;
 use super::settings::{FilterMode, SearchMode, Settings};
 use crate::history::{AuthorPattern, HistoryId, HistoryStats, KNOWN_AGENTS};
-use crate::utils::get_host_user;
 
 #[derive(Clone)]
 pub struct Context {
     pub session: String,
     pub cwd: String,
-    pub hostname: String,
+    pub cmd_origin: CmdOrigin,
     pub host_id: String,
     pub git_root: Option<PathBuf>,
 }
@@ -62,14 +62,14 @@ pub struct OptFilters<'a> {
 /// filters simply match nothing.
 pub async fn query_context() -> eyre::Result<Context> {
     let session = env::var("ATUIN_SESSION").unwrap_or_default();
-    let hostname = get_host_user();
+    let cmd_origin = CmdOrigin::probe_current();
     let cwd = utils::get_current_dir();
     let host_id = Settings::host_id().await?;
     let git_root = utils::in_git_repo(cwd.as_str());
 
     Ok(Context {
         session,
-        hostname,
+        cmd_origin,
         cwd,
         git_root,
         host_id: host_id.0.as_simple().to_string(),
@@ -92,7 +92,7 @@ impl Context {
         Context {
             session: entry.session.to_string(),
             cwd: entry.cwd.to_string(),
-            hostname: entry.hostname.to_string(),
+            cmd_origin: entry.cmd_origin.clone(),
             host_id: String::new(),
             git_root: utils::in_git_repo(entry.cwd.as_str()),
         }
@@ -166,6 +166,38 @@ fn get_session_start_time(session_id: &str) -> Option<i64> {
         return Some(seconds as i64 * 1_000_000_000 + nanos as i64);
     }
     None
+}
+
+/// SQL predicate to match for a [`CmdOrigin`].
+fn origin_sql_filter(origin: &CmdOrigin) -> String {
+    // This helper implements logic to support host-only matching against a combined host:user pair.
+    // Normally, you'd think we could just do
+    // `lower(hostname) = {origin.host().into_inner().to_lowercase()}`, but that does not work.
+    //
+    // Normally, `CmdOrigin` is intended to be serialized as a string "<host>:<user>", but, certain
+    // parsing logic we historically had would parse a string "<host>", rather than
+    // "<host>:unknown-user" (which other logic did). An example offender is the `nushell` importer.
+    //
+    // The database column `hostname` is a misnomer -- it actually refers to the `cmd_origin`. Some
+    // importers, have parsed it as "<host>:<user>", others as "<host>" and others yet as "<host>:".
+    //
+    // In effect, there's this crappy data in the database. Another case for writing
+    // application-specific types.
+    //
+    // You'd think that we could apply a migration and call it a day, but unfortunately that doesn't
+    // work -- the `history` table is actually a cache over the `records` table, and the records
+    // table only holds this information in encrypted, synced form. If we want to get it, we need to
+    // decrypt all the local `records` rows, patch them up, re-encrypt them and then sync that to
+    // the cloud. Recipe for disaster.
+    //
+    // So this function exists.
+    let host = origin.host().into_inner().to_lowercase();
+    format!(
+        "(lower(hostname) = {eq} OR (lower(hostname) >= {lo} AND lower(hostname) < {hi}))",
+        eq = quote(&host),
+        lo = quote(format!("{host}:")),
+        hi = quote(format!("{host};")),
+    )
 }
 
 /// Controls the type of search [`Sqlite::search`] performs.
@@ -275,7 +307,7 @@ impl Sqlite {
         .bind(h.command.as_str())
         .bind(h.cwd.as_str())
         .bind(h.session.as_str())
-        .bind(h.hostname.as_str())
+        .bind(h.cmd_origin.as_str())
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
         .bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
@@ -302,9 +334,10 @@ impl Sqlite {
         let deleted_at: Option<i64> = row.get("deleted_at");
         let hostname: String = row.get("hostname");
         let author: Option<String> = row.try_get("author").ok().flatten();
-        let author = author
-            .filter(|author| !author.trim().is_empty())
-            .unwrap_or_else(|| History::author_from_hostname(hostname.as_str()));
+        let author = author.filter(|author| !author.trim().is_empty()).unwrap_or_else(|| {
+            CmdOrigin::try_from(hostname.clone())
+                .map_or_else(|err| err.0, |origin| origin.user().into_inner().to_owned())
+        });
         let intent: Option<String> = row.try_get("intent").ok().flatten();
         let intent = intent.filter(|intent| !intent.trim().is_empty());
         let shell: Option<String> = row.try_get("shell").ok().flatten();
@@ -430,7 +463,7 @@ impl Sqlite {
         .bind(h.command.as_str())
         .bind(h.cwd.as_str())
         .bind(h.session.as_str())
-        .bind(h.hostname.as_str())
+        .bind(h.cmd_origin.as_str())
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
         .bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
@@ -469,12 +502,7 @@ impl Sqlite {
         for filter in filters {
             match filter {
                 FilterMode::Global => &mut query,
-                FilterMode::Host => query.and_where_eq(
-                    // Case-insensitive, matching `search()` - the reported casing of a
-                    // hostname changes over time. lower() is indexed as an expression.
-                    "lower(hostname)",
-                    quote(context.hostname.to_lowercase()),
-                ),
+                FilterMode::Host => query.and_where(origin_sql_filter(&context.cmd_origin)),
                 FilterMode::Session => query.and_where_eq("session", quote(&context.session)),
                 FilterMode::SessionPreload => {
                     query.and_where_eq("session", quote(&context.session));
@@ -588,9 +616,7 @@ impl Sqlite {
 
         match filter {
             FilterMode::Global => &mut sql,
-            FilterMode::Host => {
-                sql.and_where_eq("lower(hostname)", quote(context.hostname.to_lowercase()))
-            }
+            FilterMode::Host => sql.and_where(origin_sql_filter(&context.cmd_origin)),
             FilterMode::Session => sql.and_where_eq("session", quote(&context.session)),
             FilterMode::SessionPreload => {
                 sql.and_where_eq("session", quote(&context.session));
@@ -1152,7 +1178,7 @@ mod test {
 
     fn new_context() -> Context {
         Context {
-            hostname: "test:host".to_string(),
+            cmd_origin: CmdOrigin::try_from("test:host").unwrap(),
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
             host_id: "test-host".to_string(),
@@ -1222,7 +1248,10 @@ mod test {
         captured.exit = 0;
         captured.duration = 1;
         captured.session = "beep boop".to_string();
-        captured.hostname = "booop".to_string();
+        #[allow(deprecated)]
+        {
+            captured.cmd_origin = CmdOrigin::parse_lenient("booop");
+        }
 
         db.save(&captured).await
     }
@@ -1238,7 +1267,10 @@ mod test {
         captured.exit = 0;
         captured.duration = 1;
         captured.session = "beep boop".to_string();
-        captured.hostname = "booop".to_string();
+        #[allow(deprecated)]
+        {
+            captured.cmd_origin = CmdOrigin::parse_lenient("booop");
+        }
 
         db.save(&captured).await.unwrap();
         captured
@@ -1255,7 +1287,8 @@ mod test {
         db: Sqlite,
     ) {
         let context = Context {
-            hostname: "booop".to_string(),
+            #[allow(deprecated)]
+            cmd_origin: CmdOrigin::parse_lenient("booop"),
             session: "beep boop".to_string(),
             cwd: "/home/ellie".to_string(),
             host_id: "test-host".to_string(),
@@ -1271,7 +1304,10 @@ mod test {
             .build()
             .into();
         past.session = "beep boop".to_string();
-        past.hostname = "booop".to_string();
+        #[allow(deprecated)]
+        {
+            past.cmd_origin = CmdOrigin::parse_lenient("booop");
+        }
         db.save(&past).await.unwrap();
         save_history_item(&db, "ls /home/frank").await;
 
@@ -1793,7 +1829,8 @@ mod test {
             .list(
                 [],
                 &Context {
-                    hostname: "".to_string(),
+                    #[allow(deprecated)]
+                    cmd_origin: CmdOrigin::parse_lenient(""),
                     session: "".to_string(),
                     cwd: "".to_string(),
                     host_id: "".to_string(),
@@ -1893,7 +1930,8 @@ mod test {
         }
 
         let context = Context {
-            hostname: "hostname".into(),
+            #[allow(deprecated)]
+            cmd_origin: CmdOrigin::parse_lenient("hostname"),
             session: "session".into(),
             cwd: "/tmp".into(),
             host_id: "host".into(),
@@ -1945,7 +1983,8 @@ mod test {
         }
 
         let context = Context {
-            hostname: "hostname".into(),
+            #[allow(deprecated)]
+            cmd_origin: CmdOrigin::parse_lenient("hostname"),
             session: "session".into(),
             cwd: "/tmp".into(),
             host_id: "host".into(),

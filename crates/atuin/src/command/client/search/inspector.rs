@@ -111,7 +111,8 @@ pub fn draw_stats_table(
 ) {
     let duration = Duration::saturating_from_nanos_i64(history.duration);
     let avg_duration = Duration::from_nanos(stats.average_duration);
-    let (host, user) = history.hostname.split_once(':').unwrap_or(("", ""));
+    let host = history.cmd_origin.host().into_inner();
+    let user = history.cmd_origin.user().into_inner();
 
     let rows = [
         Row::new(vec!["Host".to_string(), host.to_string()]),
@@ -312,6 +313,7 @@ pub fn draw_full(
 mod tests {
     use atuin_client::history::{History, HistoryId, HistoryStats};
     use atuin_client::theme::ThemeManager;
+    use atuin_domain::record::CmdOrigin;
     use ratatui::backend::TestBackend;
     use ratatui::prelude::*;
     use rstest::*;
@@ -329,7 +331,8 @@ mod tests {
             command: "/bin/cmd".to_string(),
             cwd: "/toot".to_string(),
             session: "sesh1".to_string(),
-            hostname: "hostn".to_string(),
+            #[allow(deprecated)]
+            cmd_origin: CmdOrigin::parse_lenient("hostn"),
             author: "hostn".to_string(),
             intent: None,
             deleted_at: None,
@@ -343,7 +346,8 @@ mod tests {
             command: "/bin/cmd -os".to_string(),
             cwd: "/toot".to_string(),
             session: "sesh1".to_string(),
-            hostname: "hostn".to_string(),
+            #[allow(deprecated)]
+            cmd_origin: CmdOrigin::parse_lenient("hostn"),
             author: "hostn".to_string(),
             intent: None,
             deleted_at: None,
@@ -357,7 +361,8 @@ mod tests {
             command: "/bin/cmd -a".to_string(),
             cwd: "/toot".to_string(),
             session: "sesh1".to_string(),
-            hostname: "hostn".to_string(),
+            #[allow(deprecated)]
+            cmd_origin: CmdOrigin::parse_lenient("hostn"),
             author: "hostn".to_string(),
             intent: None,
             deleted_at: None,

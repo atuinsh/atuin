@@ -37,6 +37,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use atuin_common::utils::uuid_v7;
+use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
 use directories::UserDirs;
 use eyre::{Result, eyre};
 use sqlx::Pool;
@@ -46,7 +47,6 @@ use time::PrimitiveDateTime;
 use super::Importer;
 use crate::history::History;
 use crate::import::Loader;
-use crate::utils::{get_hostname, get_username};
 
 #[derive(sqlx::FromRow, Debug)]
 pub struct HistDbEntryCount {
@@ -68,7 +68,7 @@ pub struct HistDbEntry {
 #[derive(Debug)]
 pub struct ZshHistDb {
     histdb: Vec<HistDbEntry>,
-    username: String,
+    username: CmdUser,
 }
 
 /// Read db at given file, return vector of entries.
@@ -132,7 +132,7 @@ impl Importer for ZshHistDb {
         let histdb_entry_vec = hist_from_db(dbpath).await?;
         Ok(Self {
             histdb: histdb_entry_vec,
-            username: get_username(),
+            username: CmdUser::probe_current(),
         })
     }
 
@@ -151,11 +151,10 @@ impl Importer for ZshHistDb {
                 Ok(s) => s.trim_end(),
                 Err(_) => continue, // we can skip past things like invalid utf8
             };
-            let hostname = format!(
-                "{}:{}",
-                String::from_utf8(entry.host).unwrap_or_else(|_e| get_hostname()),
-                self.username
-            );
+            let hostname = String::from_utf8(entry.host)
+                .map(CmdHost::from)
+                .unwrap_or_else(|_e| CmdHost::probe_current());
+            let cmd_origin = CmdOrigin::new(hostname, self.username.clone());
             let session = session_map.entry(entry.session).or_insert_with(uuid_v7);
 
             let imported = History::import()
@@ -166,7 +165,7 @@ impl Importer for ZshHistDb {
                 .duration(entry.duration.saturating_mul(1_000_000_000))
                 .exit(entry.exit_status)
                 .session(session.as_simple().to_string())
-                .hostname(hostname)
+                .cmd_origin(cmd_origin)
                 .build();
             h.push(imported.into()).await?;
         }
@@ -216,7 +215,7 @@ mod test {
                 exit_status: 0,
                 session: 0,
             }],
-            username: "user".to_string(),
+            username: "user".to_string().into(),
         };
 
         let mut loader = TestLoader::default();
@@ -268,7 +267,7 @@ mod test {
         let histdb_vec = hist_from_db_conn(pool).await.unwrap();
         let histdb = ZshHistDb {
             histdb: histdb_vec,
-            username: get_username(),
+            username: CmdUser::probe_current(),
         };
 
         println!("h: {:#?}", histdb.histdb);

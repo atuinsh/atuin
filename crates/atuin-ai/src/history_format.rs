@@ -67,6 +67,7 @@ fn format_duration(nanos: i64) -> String {
 #[cfg(test)]
 mod tests {
     use atuin_client::history::{History, HistoryId};
+    use atuin_domain::record::CmdOrigin;
     use rstest::rstest;
     use time::{OffsetDateTime, UtcOffset};
 
@@ -81,7 +82,7 @@ mod tests {
             command: "cargo test".to_string(),
             cwd: "/repo".to_string(),
             session: String::new(),
-            hostname: String::new(),
+            cmd_origin: CmdOrigin::default(),
             author: String::new(),
             intent: None,
             deleted_at: None,

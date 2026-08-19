@@ -2233,7 +2233,7 @@ mod tests {
                 context: Context {
                     session: String::new(),
                     cwd: String::new(),
-                    hostname: String::new(),
+                    cmd_origin: atuin_domain::record::CmdOrigin::default(),
                     host_id: String::new(),
                     git_root: None,
                 },

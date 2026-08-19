@@ -133,7 +133,10 @@ mod unix {
             .command("echo hello".to_string())
             .cwd("/tmp".to_string())
             .session("test-session".to_string())
-            .hostname("test-host".to_string())
+            .cmd_origin(
+                #[allow(deprecated)]
+                atuin_domain::record::CmdOrigin::parse_lenient("test-host"),
+            )
             .build()
             .into();
 
@@ -160,7 +163,7 @@ mod unix {
             .command("git status".to_string())
             .cwd("/tmp/repo".to_string())
             .session("tail-session".to_string())
-            .hostname("test-host:ellie".to_string())
+            .cmd_origin(atuin_domain::record::CmdOrigin::try_from("test-host:ellie").unwrap())
             .author("claude".to_string())
             .intent("inspect repository state".to_string())
             .shell("bash")

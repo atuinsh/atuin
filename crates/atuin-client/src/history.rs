@@ -6,13 +6,12 @@ use atuin_common::rmp::decode::{self, Bytes, DecodeError};
 use atuin_common::rmp::encode::{self, ByteBuf, EncodeError};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::{normalize_optional_string, uuid_v7};
-use atuin_domain::record::DecryptedData;
+use atuin_domain::record::{CmdOrigin, DecryptedData};
 use eyre::{Result, bail};
 use time::OffsetDateTime;
 
 use crate::secrets::SECRET_PATTERNS_RE;
 use crate::settings::Settings;
-use crate::utils::get_host_user;
 
 pub(crate) mod builder;
 pub mod store;
@@ -165,7 +164,8 @@ pub struct History {
     /// The session ID, associated with a terminal session.
     pub session: String,
     /// The hostname of the machine the command was run on.
-    pub hostname: String,
+    #[sqlx(rename = "hostname", try_from = "String")]
+    pub cmd_origin: CmdOrigin,
     /// Who wrote this command (human user or automation/agent identity).
     pub author: String,
     /// Optional rationale for why the command was executed.
@@ -197,10 +197,6 @@ pub struct HistoryStats {
 }
 
 impl History {
-    pub(crate) fn author_from_hostname(hostname: &str) -> String {
-        hostname.split_once(':').map_or_else(|| hostname.to_owned(), |(_, user)| user.to_owned())
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn new(
         timestamp: OffsetDateTime,
@@ -209,7 +205,7 @@ impl History {
         exit: i64,
         duration: i64,
         session: Option<String>,
-        hostname: Option<String>,
+        cmd_origin: Option<CmdOrigin>,
         author: Option<String>,
         intent: Option<String>,
         deleted_at: Option<OffsetDateTime>,
@@ -218,10 +214,10 @@ impl History {
         let session = session
             .or_else(|| env::var("ATUIN_SESSION").ok())
             .unwrap_or_else(|| uuid_v7().as_simple().to_string());
-        let hostname = hostname.unwrap_or_else(get_host_user);
+        let cmd_origin = cmd_origin.unwrap_or_else(CmdOrigin::probe_current);
         let author = normalize_optional_string(author)
             .or_else(|| normalize_optional_string(env::var(HISTORY_AUTHOR_ENV).ok()))
-            .unwrap_or_else(|| Self::author_from_hostname(hostname.as_str()));
+            .unwrap_or_else(|| cmd_origin.user().to_string());
         let intent = normalize_optional_string(intent)
             .or_else(|| normalize_optional_string(env::var(HISTORY_INTENT_ENV).ok()));
         let shell = normalize_optional_string(shell);
@@ -234,7 +230,7 @@ impl History {
             exit,
             duration,
             session,
-            hostname,
+            cmd_origin,
             author,
             intent,
             deleted_at,
@@ -266,7 +262,7 @@ impl History {
         encode::write_str(&mut output, &self.command)?;
         encode::write_str(&mut output, &self.cwd)?;
         encode::write_str(&mut output, &self.session)?;
-        encode::write_str(&mut output, &self.hostname)?;
+        encode::write_str(&mut output, self.cmd_origin.as_str())?;
 
         encode::write_optional(
             &mut output,
@@ -305,7 +301,8 @@ impl History {
         let command = decode::read_string(&mut bytes)?;
         let cwd = decode::read_string(&mut bytes)?;
         let session = decode::read_string(&mut bytes)?;
-        let hostname = decode::read_string(&mut bytes)?;
+        #[allow(deprecated)]
+        let cmd_origin = CmdOrigin::parse_lenient(decode::read_string(&mut bytes)?);
         let deleted_at = decode::read_optional(&mut bytes, decode::read_u64)?;
 
         let author = if version >= Version::One {
@@ -342,8 +339,8 @@ impl History {
             command,
             cwd,
             session,
-            author: author.unwrap_or_else(|| Self::author_from_hostname(&hostname)),
-            hostname,
+            author: author.unwrap_or_else(|| cmd_origin.user().to_string()),
+            cmd_origin,
             intent,
             deleted_at: deleted_at.map(OffsetDateTime::from_unix_nanos_u64),
             shell,
@@ -448,7 +445,7 @@ impl History {
     ///     .command("ls -la")
     ///     .cwd("/home/user")
     ///     .session("018deb6e8287781f9973ef40e0fde76b")
-    ///     .hostname("computer:ellie")
+    ///     .cmd_origin(atuin_domain::record::CmdOrigin::try_from("computer:ellie").unwrap())
     ///     .build()
     ///     .into();
     /// ```
@@ -514,6 +511,7 @@ impl History {
 #[cfg(test)]
 mod tests {
     use atuin_common::filter::OrFilter;
+    use atuin_domain::record::CmdOrigin;
     use regex::RegexSet;
     use rstest::*;
     use time::macros::datetime;
@@ -619,7 +617,7 @@ mod tests {
         command: "git status".to_owned(),
         cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
         session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
-        hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
+        cmd_origin: CmdOrigin::try_from("fvfg936c0kpf:conrad.ludgate").unwrap(),
         author: "conrad.ludgate".to_owned(),
         intent: None,
         deleted_at: None,
@@ -633,7 +631,7 @@ mod tests {
         command: "git status".to_owned(),
         cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
         session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
-        hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
+        cmd_origin: CmdOrigin::try_from("fvfg936c0kpf:conrad.ludgate").unwrap(),
         author: "conrad.ludgate".to_owned(),
         intent: None,
         deleted_at: Some(datetime!(2023-11-19 20:18 +00:00)),
@@ -647,7 +645,7 @@ mod tests {
         command: "git status".to_owned(),
         cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
         session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
-        hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
+        cmd_origin: CmdOrigin::try_from("fvfg936c0kpf:conrad.ludgate").unwrap(),
         author: "claude".to_owned(),
         intent: Some("check repository status".to_owned()),
         deleted_at: None,
@@ -697,7 +695,7 @@ mod tests {
             command: "git status".to_owned(),
             cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
             session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
-            hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
+            cmd_origin: CmdOrigin::try_from("fvfg936c0kpf:conrad.ludgate").unwrap(),
             author: "conrad.ludgate".to_owned(),
             intent: Some("sample intent".to_owned()),
             deleted_at: Some(time::OffsetDateTime::from_unix_timestamp(1784080673).unwrap()),

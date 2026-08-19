@@ -435,7 +435,9 @@ impl HistoryStore {
 
 #[cfg(test)]
 mod tests {
-    use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordTag, RecordVersion};
+    use atuin_domain::record::{
+        CmdOrigin, DecryptedData, Host, HostId, Record, RecordTag, RecordVersion,
+    };
     use futures::TryStreamExt;
     use rstest::*;
     use time::Duration;
@@ -459,7 +461,7 @@ mod tests {
             command: "ls".to_owned(),
             cwd: "/".to_owned(),
             session: "018cd4fead897597852527a31c998059".to_owned(),
-            hostname: "test:test".to_owned(),
+            cmd_origin: CmdOrigin::try_from("test:test").unwrap(),
             author: "test".to_owned(),
             intent: None,
             deleted_at: None,
@@ -506,7 +508,7 @@ mod tests {
             command: "ls".to_owned(),
             cwd: "/Users/ellie/src/github.com/atuinsh/atuin".to_owned(),
             session: "018cd4fead897597852527a31c998059".to_owned(),
-            hostname: "boop:ellie".to_owned(),
+            cmd_origin: CmdOrigin::try_from("boop:ellie").unwrap(),
             author: "ellie".to_owned(),
             intent: None,
             deleted_at: None,
@@ -604,7 +606,7 @@ mod tests {
         Context {
             session: "018cd4fead897597852527a31c998059".to_owned(),
             cwd: "/".to_owned(),
-            hostname: "test:test".to_owned(),
+            cmd_origin: CmdOrigin::try_from("test:test").unwrap(),
             host_id: "test".to_owned(),
             git_root: None,
         }

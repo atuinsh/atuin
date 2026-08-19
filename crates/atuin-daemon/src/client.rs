@@ -125,7 +125,7 @@ impl HistoryClient {
         let req = StartHistoryRequest {
             command: h.command,
             cwd: h.cwd,
-            hostname: h.hostname,
+            hostname: h.cmd_origin.into_string(),
             session: h.session,
             timestamp: h.timestamp.unix_timestamp_nanos() as u64,
             author: h.author,
@@ -295,7 +295,7 @@ impl From<Context> for RpcSearchContext {
         RpcSearchContext {
             session_id: context.session,
             cwd: context.cwd,
-            hostname: context.hostname,
+            hostname: context.cmd_origin.into_string(),
             host_id: context.host_id,
             git_root: context.git_root.map(|path| path.to_string_lossy().to_string()),
         }

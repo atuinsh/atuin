@@ -11,7 +11,7 @@ use atuin_client::packfile;
 use atuin_client::settings::Settings;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::caps::PackfileCap;
-use atuin_domain::record::RecordTag;
+use atuin_domain::record::{CmdOrigin, RecordTag};
 use dashmap::DashMap;
 use eyre::Result;
 use time::OffsetDateTime;
@@ -125,7 +125,7 @@ fn history_to_tail_reply(kind: HistoryEventKind, history: History) -> TailHistor
             command: history.command,
             cwd: history.cwd,
             session: history.session,
-            hostname: history.hostname,
+            hostname: history.cmd_origin.into_string(),
             author: history.author,
             intent: history.intent.unwrap_or_default(),
             exit: history.exit,
@@ -148,12 +148,14 @@ impl HistorySvc for HistoryGrpcService {
 
         let timestamp = OffsetDateTime::from_unix_nanos_u64(req.timestamp);
 
+        let cmd_origin = CmdOrigin::try_from(req.hostname)
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let h: History = History::daemon()
             .timestamp(timestamp)
             .command(req.command)
             .cwd(req.cwd)
             .session(req.session)
-            .hostname(req.hostname)
+            .cmd_origin(cmd_origin)
             .author(req.author)
             .intent(req.intent)
             .shell(req.shell)

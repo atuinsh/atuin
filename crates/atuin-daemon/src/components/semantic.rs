@@ -577,6 +577,7 @@ fn log_record(record: &SemanticCommandRecord, message: &'static str) {
 
 #[cfg(test)]
 mod tests {
+    use atuin_domain::record::CmdOrigin;
     use rstest::rstest;
     use time::OffsetDateTime;
 
@@ -591,7 +592,7 @@ mod tests {
             command: command.to_string(),
             cwd: String::new(),
             session: session.to_string(),
-            hostname: String::new(),
+            cmd_origin: CmdOrigin::default(),
             author: String::new(),
             intent: None,
             deleted_at: None,

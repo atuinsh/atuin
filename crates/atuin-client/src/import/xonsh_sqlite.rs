@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use atuin_common::time::OffsetDateTimeExt;
+use atuin_domain::record::CmdOrigin;
 use directories::BaseDirs;
 use eyre::{Result, eyre};
 use futures::TryStreamExt;
@@ -16,7 +17,6 @@ use uuid::timestamp::context::NoContext;
 use super::{Importer, Loader, get_histfile_path};
 use crate::history::History;
 use crate::history::builder::HistoryImported;
-use crate::utils::get_host_user;
 
 #[derive(Debug, FromRow)]
 struct HistDbEntry {
@@ -29,7 +29,7 @@ struct HistDbEntry {
 }
 
 impl HistDbEntry {
-    fn into_hist_with_hostname(self, hostname: String) -> History {
+    fn into_hist_with_cmd_origin(self, cmd_origin: CmdOrigin) -> History {
         let ts_nanos = (self.tsb * 1_000_000_000_f64) as i128;
         let timestamp =
             OffsetDateTime::from_unix_nanos(ts_nanos).unwrap_or(OffsetDateTime::UNIX_EPOCH);
@@ -48,7 +48,7 @@ impl HistDbEntry {
             .command(self.inp)
             .cwd(self.cwd)
             .session(session_id)
-            .hostname(hostname)
+            .cmd_origin(cmd_origin)
             .build()
             .into()
     }
@@ -76,7 +76,7 @@ fn xonsh_db_path(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
 #[derive(Debug)]
 pub struct XonshSqlite {
     pool: SqlitePool,
-    hostname: String,
+    cmd_origin: CmdOrigin,
 }
 
 #[async_trait]
@@ -92,8 +92,8 @@ impl Importer for XonshSqlite {
         })?;
 
         let pool = SqlitePool::connect(connection_str).await?;
-        let hostname = get_host_user();
-        Ok(XonshSqlite { pool, hostname })
+        let cmd_origin = CmdOrigin::probe_current();
+        Ok(XonshSqlite { pool, cmd_origin })
     }
 
     async fn entries(&mut self) -> Result<usize> {
@@ -115,7 +115,7 @@ impl Importer for XonshSqlite {
 
         let mut count = 0;
         while let Some(entry) = entries.try_next().await? {
-            let hist = entry.into_hist_with_hostname(self.hostname.clone());
+            let hist = entry.into_hist_with_cmd_origin(self.cmd_origin.clone());
             loader.push(hist).await?;
             count += 1;
         }
@@ -150,7 +150,7 @@ mod tests {
             session_start: 0.0,
         };
 
-        let hist = entry.into_hist_with_hostname("box:user".to_string());
+        let hist = entry.into_hist_with_cmd_origin(CmdOrigin::try_from("box:user").unwrap());
         assert_eq!(hist.timestamp, OffsetDateTime::UNIX_EPOCH);
         assert_eq!(hist.command, "echo hello");
     }
@@ -160,7 +160,7 @@ mod tests {
         let connection_str = "tests/data/xonsh-history.sqlite";
         let xonsh_sqlite = XonshSqlite {
             pool: SqlitePool::connect(connection_str).await.unwrap(),
-            hostname: "box:user".to_string(),
+            cmd_origin: CmdOrigin::try_from("box:user").unwrap(),
         };
 
         let mut loader = TestLoader::default();
@@ -172,7 +172,7 @@ mod tests {
             assert_eq!(actual.cwd, expected.cwd);
             assert_eq!(actual.exit, expected.exit);
             assert_eq!(actual.duration, expected.duration);
-            assert_eq!(actual.hostname, expected.hostname);
+            assert_eq!(actual.cmd_origin, expected.cmd_origin);
         }
     }
 
@@ -184,7 +184,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
                 .duration(2628564)
-                .hostname("box:user".to_string())
+                .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
             History::import()
@@ -193,7 +193,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
                 .duration(9371519)
-                .hostname("box:user".to_string())
+                .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
             History::import()
@@ -202,7 +202,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(1)
                 .duration(17337560)
-                .hostname("box:user".to_string())
+                .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
             History::import()
@@ -211,7 +211,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
                 .duration(4599094)
-                .hostname("box:user".to_string())
+                .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
         ]
