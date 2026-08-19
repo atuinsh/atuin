@@ -23,7 +23,7 @@ use uuid::Uuid;
 use super::history::History;
 use super::ordering;
 use super::settings::{FilterMode, SearchMode, Settings};
-use crate::history::{AuthorPattern, HistoryId, HistoryStats, KNOWN_AGENTS};
+use crate::history::{AuthorKind, AuthorPattern, HistoryId, HistoryStats, KNOWN_AGENTS};
 
 #[derive(Clone)]
 pub struct Context {
@@ -102,28 +102,41 @@ impl Context {
     }
 }
 
-/// Each entry is OR'd: [`AuthorPattern::AllUser`] → NOT IN agents, [`AuthorPattern::AllAgent`] →
-/// IN agents, [`AuthorPattern::Name`] → exact match.
+/// Each entry is OR'd: [`AuthorPattern::AllUser`] → not an agent, [`AuthorPattern::AllAgent`] → an
+/// agent, [`AuthorPattern::Name`] → exact match.
 fn apply_author_filter(sql: &mut SqlBuilder, authors: OrFilter<&[AuthorPattern]>) {
     let authors = match authors.items() {
         filter::Items::All => return,
         filter::Items::Some(a) => a,
     };
 
-    let author_expr = "CASE WHEN author IS NULL OR trim(author) = '' THEN CASE WHEN \
-                       instr(hostname, ':') > 0 THEN substr(hostname, instr(hostname, ':') + 1) \
-                       ELSE hostname END ELSE author END";
+    // The username half of `hostname`, which is what `author` falls back to when nothing set it.
+    let user_expr = "CASE \
+        WHEN instr(hostname, ':') > 0 THEN substr(hostname, instr(hostname, ':') + 1) \
+        ELSE hostname \
+    END";
 
-    let mut agent_list: Option<String> = None;
-    let get_agent_list = || KNOWN_AGENTS.iter().map(quote).join(", ");
+    let author_expr =
+        format!("CASE WHEN author IS NULL OR trim(author) = '' THEN {user_expr} ELSE author END");
+
+    // Mirrors [`History::is_agent`]: a recorded kind wins, and without one a known agent name means
+    // an agent, unless the author is only the username it defaulted to. A kind we don't recognise
+    // (written by a newer version) falls through to the name heuristic, exactly like
+    // [`AuthorKind::from_u8`] mapping it to `None` — and so does a NULL kind, because
+    // `NULL IN (...)` is not true.
+    let is_agent = || {
+        format!(
+            "CASE WHEN author_kind IN ({kinds}) THEN author_kind = {agent} \
+             ELSE {author_expr} IN ({names}) AND {author_expr} <> {user_expr} END",
+            kinds = AuthorKind::VARIANTS.iter().map(|kind| kind.as_u8().to_string()).join(", "),
+            agent = AuthorKind::Agent.as_u8(),
+            names = KNOWN_AGENTS.iter().map(quote).join(", "),
+        )
+    };
 
     let mut conditions = authors.iter().map(|author| match author {
-        AuthorPattern::AllUser => {
-            format!("{author_expr} NOT IN ({})", agent_list.get_or_insert_with(get_agent_list))
-        }
-        AuthorPattern::AllAgent => {
-            format!("{author_expr} IN ({})", agent_list.get_or_insert_with(get_agent_list))
-        }
+        AuthorPattern::AllUser => format!("NOT ({})", is_agent()),
+        AuthorPattern::AllAgent => is_agent(),
         AuthorPattern::Name(name) => {
             format!("{author_expr} = {}", quote(name))
         }
@@ -342,10 +355,18 @@ impl Sqlite {
     #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     async fn save_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, h: &History) -> Result<()> {
         sqlx::query(
-            "insert or ignore into history(
+            // On an id conflict, adopt the incoming author_kind if the stored row has none: store
+            // rebuilds re-save every record through here, and this is what lets a kind synced from
+            // another machine reach a row that was first written without one (the record store
+            // itself is immutable). The trailing bare ON CONFLICT keeps the old `insert or ignore`
+            // behavior for the (timestamp, cwd, command) uniqueness constraint.
+            "insert into history(
                 id, timestamp, duration, exit, command, cwd, session, hostname, author, intent,
-                deleted_at, shell
-            ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                deleted_at, shell, author_kind
+            ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            on conflict(id) do update set author_kind = excluded.author_kind
+                where history.author_kind is null and excluded.author_kind is not null
+            on conflict do nothing",
         )
         .bind(h.id.0.as_str())
         .bind(h.timestamp.unix_timestamp_nanos() as i64)
@@ -359,6 +380,7 @@ impl Sqlite {
         .bind(h.intent.as_deref())
         .bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
         .bind(h.shell.as_deref())
+        .bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
         .execute(&mut **tx)
         .await?;
 
@@ -376,6 +398,39 @@ impl Sqlite {
             .await?;
 
         Ok(())
+    }
+
+    fn row_to_history(row: &SqliteRow) -> History {
+        let deleted_at: Option<i64> = row.get("deleted_at");
+        let hostname: String = row.get("hostname");
+        let author: Option<String> = row.try_get("author").ok().flatten();
+        let author = author.filter(|author| !author.trim().is_empty()).unwrap_or_else(|| {
+            CmdOrigin::try_from(hostname.clone())
+                .map_or_else(|err| err.0, |origin| origin.user().into_inner().to_owned())
+        });
+        let intent: Option<String> = row.try_get("intent").ok().flatten();
+        let intent = intent.filter(|intent| !intent.trim().is_empty());
+        let shell: Option<String> = row.try_get("shell").ok().flatten();
+        let author_kind: Option<i64> = row.try_get("author_kind").ok().flatten();
+        let author_kind =
+            author_kind.and_then(|kind| u8::try_from(kind).ok()).and_then(AuthorKind::from_u8);
+
+        History::from_db()
+            .id(row.get("id"))
+            .timestamp(OffsetDateTime::from_unix_nanos_i64(row.get("timestamp")))
+            .duration(row.get("duration"))
+            .exit(row.get("exit"))
+            .command(row.get("command"))
+            .cwd(row.get("cwd"))
+            .session(row.get("session"))
+            .hostname(hostname)
+            .author(author)
+            .intent(intent)
+            .deleted_at(deleted_at.map(OffsetDateTime::from_unix_nanos_i64))
+            .shell(shell)
+            .author_kind(author_kind)
+            .build()
+            .into()
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
@@ -476,7 +531,7 @@ impl Sqlite {
         sqlx::query(
             "update history
                 set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = \
-             ?7, hostname = ?8, author = ?9, intent = ?10, deleted_at = ?11
+             ?7, hostname = ?8, author = ?9, intent = ?10, deleted_at = ?11, author_kind = ?12
                 where id = ?1",
         )
         .bind(h.id.0.as_str())
@@ -490,6 +545,7 @@ impl Sqlite {
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
         .bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
+        .bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
         .execute(&self.pool)
         .await?;
 
@@ -824,6 +880,7 @@ impl Sqlite {
                 "deleted_at",
                 "null as author",
                 "null as intent",
+                "null as author_kind",
                 "group_concat(cwd, ':') as cwd",
                 "group_concat(session) as session",
                 "group_concat(hostname, ',') as hostname",
@@ -1482,12 +1539,18 @@ mod test {
         };
 
         let results = db
-            .search(DbSearchMode::FullText, FilterMode::Global, &context, "", OptFilters {
-                after: after.as_deref(),
-                before: before.as_deref(),
-                include_duplicates: true,
-                ..Default::default()
-            })
+            .search(
+                DbSearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "",
+                OptFilters {
+                    after: after.as_deref(),
+                    before: before.as_deref(),
+                    include_duplicates: true,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
 
@@ -1510,10 +1573,16 @@ mod test {
         let context = new_context();
 
         let hits = db
-            .search(DbSearchMode::FullText, FilterMode::Global, &context, "", OptFilters {
-                include_duplicates,
-                ..Default::default()
-            })
+            .search(
+                DbSearchMode::FullText,
+                FilterMode::Global,
+                &context,
+                "",
+                OptFilters {
+                    include_duplicates,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
 
@@ -1630,9 +1699,13 @@ mod test {
         new_history_item(&db, "corburl").await.unwrap();
 
         // if fuzzy reordering is on, it should come back in a more sensible order
-        assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, "curl", vec![
-            "curl", "corburl",
-        ])
+        assert_search_commands(
+            &db,
+            DbSearchMode::Fuzzy,
+            FilterMode::Global,
+            "curl",
+            vec!["curl", "corburl"],
+        )
         .await;
 
         assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, "xxxx", 0).await.unwrap();
@@ -1680,9 +1753,13 @@ mod test {
         new_history_item_at(&db, "curl", Some(now - time::Duration::seconds(10))).await.unwrap();
         new_history_item_at(&db, "corburl", Some(now)).await.unwrap();
 
-        assert_search_commands(&db, mode.closest_db_mode(), FilterMode::Global, "curl", vec![
-            "curl", "corburl",
-        ])
+        assert_search_commands(
+            &db,
+            mode.closest_db_mode(),
+            FilterMode::Global,
+            "curl",
+            vec!["curl", "corburl"],
+        )
         .await;
     }
 
@@ -1745,9 +1822,13 @@ mod test {
         new_history_item_at(&db, close, Some(now - time::Duration::days(5))).await.unwrap();
         new_history_item_at(&db, far, Some(now - time::Duration::hours(1))).await.unwrap();
 
-        assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, vec![
-            close, far,
-        ])
+        assert_search_commands(
+            &db,
+            DbSearchMode::Fuzzy,
+            FilterMode::Global,
+            query,
+            vec![close, far],
+        )
         .await;
     }
 
@@ -1757,9 +1838,13 @@ mod test {
     async fn test_search_fuzzy_operator() {
         let db = db_with(&["use screen", "screenshot tool"]).await;
 
-        assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, "screen$", vec![
-            "use screen",
-        ])
+        assert_search_commands(
+            &db,
+            DbSearchMode::Fuzzy,
+            FilterMode::Global,
+            "screen$",
+            vec!["use screen"],
+        )
         .await;
     }
 
@@ -1972,6 +2057,145 @@ mod test {
             .unwrap();
 
         assert_eq!(results.len(), expected_count, "{results:?}");
+    }
+
+    /// An author_kind value this version doesn't recognise (written by a newer one) must fall
+    /// through to the name heuristic in SQL, exactly like [`AuthorKind::from_u8`] returning `None`
+    /// does in [`History::is_agent`] — otherwise the two classifiers disagree on the same row.
+    #[tokio::test(flavor = "multi_thread")]
+    #[rstest]
+    async fn author_filter_treats_an_unknown_kind_as_unstated() {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+
+        let history: History = History::import()
+            .timestamp(OffsetDateTime::now_utc())
+            .command("echo hello")
+            .cwd("/tmp")
+            .cmd_origin(CmdOrigin::try_from("mac:ellie".to_owned()).unwrap())
+            .author("claude-code")
+            .build()
+            .into();
+        db.save(&history).await.unwrap();
+
+        // A kind from the future: one past the largest value any AuthorKind variant maps to, so
+        // it stays unknown even if more variants are added.
+        let unknown = AuthorKind::VARIANTS.iter().map(|kind| kind.as_u8()).max().unwrap() + 1;
+        sqlx::query("update history set author_kind = ?1")
+            .bind(i64::from(unknown))
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let context = Context {
+            cmd_origin: CmdOrigin::try_from("mac:ellie".to_owned()).unwrap(),
+            session: "session".into(),
+            cwd: "/tmp".into(),
+            host_id: "host".into(),
+            git_root: None,
+        };
+
+        for (pattern, expected) in [(AuthorPattern::AllAgent, 1), (AuthorPattern::AllUser, 0)] {
+            let authors = OrFilter::from_list(vec![pattern]).unwrap();
+            let filters = OptFilters {
+                authors: authors.as_slice_filter(),
+                ..Default::default()
+            };
+            let results = db
+                .search(DbSearchMode::FullText, FilterMode::Global, &context, "echo", filters)
+                .await
+                .unwrap();
+            assert_eq!(results.len(), expected, "{authors:?}");
+        }
+    }
+
+    /// Re-saving an existing row (as a store rebuild does for every record) fills in a missing
+    /// author_kind but never overwrites one that is already set.
+    #[tokio::test(flavor = "multi_thread")]
+    #[rstest]
+    async fn save_backfills_author_kind_on_existing_rows() {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+
+        let kindless: History = History::import()
+            .timestamp(OffsetDateTime::now_utc())
+            .command("echo hello")
+            .cwd("/tmp")
+            .cmd_origin(CmdOrigin::try_from("raspberry:pi".to_owned()).unwrap())
+            .author("pi")
+            .build()
+            .into();
+        db.save(&kindless).await.unwrap();
+
+        // The same entry arrives again, now carrying its kind (e.g. re-synced and rebuilt after
+        // an upgrade).
+        let with_kind = History {
+            author_kind: Some(AuthorKind::Agent),
+            ..kindless.clone()
+        };
+        db.save(&with_kind).await.unwrap();
+        let loaded = db.load(kindless.id.0.as_str()).await.unwrap().unwrap();
+        assert_eq!(loaded.author_kind, Some(AuthorKind::Agent));
+
+        // A later kindless copy does not erase the stored kind.
+        db.save(&kindless).await.unwrap();
+        let loaded = db.load(kindless.id.0.as_str()).await.unwrap().unwrap();
+        assert_eq!(loaded.author_kind, Some(AuthorKind::Agent));
+    }
+
+    /// A user called `pi` shares a name with the `pi` agent, so on their machine the author name
+    /// alone cannot say who ran a command: only an entry that states its kind is an agent's.
+    #[tokio::test(flavor = "multi_thread")]
+    #[rstest]
+    #[case::all_user(["$all-user"], &["echo pi-human"])]
+    #[case::all_agent(["$all-agent"], &["echo pi-agent", "echo claude"])]
+    #[case::by_name(["pi"], &["echo pi-agent", "echo pi-human"])]
+    async fn test_search_authors_when_the_user_is_named_after_an_agent<const N: usize>(
+        #[case] authors: [&str; N],
+        #[case] expected: &[&str],
+    ) {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+
+        for (command, author, author_kind) in [
+            ("echo pi-agent", "pi", Some(AuthorKind::Agent)),
+            ("echo pi-human", "pi", None),
+            ("echo claude", "claude-code", None),
+        ] {
+            let history = History::import()
+                .timestamp(OffsetDateTime::now_utc())
+                .command(command)
+                .cwd("/tmp")
+                .cmd_origin(CmdOrigin::try_from("raspberry:pi".to_owned()).unwrap())
+                .author(author)
+                .author_kind(author_kind)
+                .build()
+                .into();
+            db.save(&history).await.unwrap();
+        }
+
+        let context = Context {
+            cmd_origin: CmdOrigin::try_from("raspberry:pi".to_owned()).unwrap(),
+            session: "session".into(),
+            cwd: "/tmp".into(),
+            host_id: "host".into(),
+            git_root: None,
+        };
+
+        let authors =
+            OrFilter::from_list(authors.map(AuthorPattern::from).to_vec()).unwrap_or_default();
+        let filters = OptFilters {
+            authors: authors.as_slice_filter(),
+            ..Default::default()
+        };
+
+        let results = db
+            .search(DbSearchMode::FullText, FilterMode::Global, &context, "echo", filters)
+            .await
+            .unwrap();
+
+        let mut commands: Vec<&str> = results.iter().map(|h| h.command.as_str()).collect();
+        commands.sort_unstable();
+        let mut expected = expected.to_vec();
+        expected.sort_unstable();
+        assert_eq!(commands, expected);
     }
 
     #[tokio::test(flavor = "multi_thread")]

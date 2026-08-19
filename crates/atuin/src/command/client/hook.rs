@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::io::Read;
 use std::path::PathBuf;
 
+use atuin_client::history::AuthorKind;
 use atuin_client::settings::Settings;
 use atuin_common::utils::home_dir;
 use clap::{Parser, Subcommand};
@@ -202,6 +203,7 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
                 settings,
                 &command,
                 Some(agent.actor_name()),
+                Some(AuthorKind::Agent),
                 intent.as_deref(),
             )
             .await?

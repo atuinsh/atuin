@@ -1,7 +1,8 @@
+use atuin_common::utils::normalize_optional_string;
 use atuin_domain::record::CmdOrigin;
 use typed_builder::TypedBuilder;
 
-use super::History;
+use super::{AuthorKind, HISTORY_AUTHOR_ENV, HISTORY_AUTHOR_KIND_ENV, History, is_known_agent};
 
 /// Builder for a history entry that is imported from shell history.
 ///
@@ -27,6 +28,8 @@ pub struct HistoryImported {
     intent: Option<String>,
     #[builder(default, setter(strip_option, into))]
     shell: Option<String>,
+    #[builder(default)]
+    author_kind: Option<AuthorKind>,
 }
 
 impl HistoryImported {
@@ -48,6 +51,7 @@ impl From<HistoryImported> for History {
             imported.intent,
             None,
             imported.shell,
+            imported.author_kind,
         )
     }
 }
@@ -71,10 +75,28 @@ pub struct HistoryCaptured {
     intent: Option<String>,
     #[builder(default, setter(into))]
     shell: Option<String>,
+    #[builder(default)]
+    author_kind: Option<AuthorKind>,
 }
 
 impl From<HistoryCaptured> for History {
     fn from(captured: HistoryCaptured) -> Self {
+        // An author stated by the caller (`--author` or `ATUIN_HISTORY_AUTHOR`), unlike the
+        // hostname-derived default, is an authorship claim: a known agent name there identifies
+        // the agent even on a machine whose username matches it. This is what classifies entries
+        // from integrations that predate `--author-kind`. An explicit kind, from the builder or
+        // `ATUIN_HISTORY_AUTHOR_KIND` (`user`/`agent`), still wins.
+        let author = normalize_optional_string(captured.author)
+            .or_else(|| normalize_optional_string(std::env::var(HISTORY_AUTHOR_ENV).ok()));
+        let author_kind = captured
+            .author_kind
+            .or_else(|| {
+                // Parsed exactly like the `--author-kind` flag, so the two channels can't drift.
+                let value = std::env::var(HISTORY_AUTHOR_KIND_ENV).ok()?;
+                clap::ValueEnum::from_str(&value, false).ok()
+            })
+            .or_else(|| author.as_deref().is_some_and(is_known_agent).then_some(AuthorKind::Agent));
+
         Self::new(
             captured.timestamp,
             captured.command,
@@ -83,10 +105,11 @@ impl From<HistoryCaptured> for History {
             -1,
             None,
             None,
-            captured.author,
+            author,
             captured.intent,
             None,
             captured.shell,
+            author_kind,
         )
     }
 }
@@ -108,6 +131,7 @@ pub struct HistoryFromDb {
     intent: Option<String>,
     deleted_at: Option<time::OffsetDateTime>,
     shell: Option<String>,
+    author_kind: Option<AuthorKind>,
 }
 
 impl From<HistoryFromDb> for History {
@@ -127,6 +151,7 @@ impl From<HistoryFromDb> for History {
             intent: from_db.intent,
             deleted_at: from_db.deleted_at,
             shell: from_db.shell,
+            author_kind: from_db.author_kind,
         }
     }
 }
@@ -153,6 +178,8 @@ pub struct HistoryDaemonCapture {
     intent: Option<String>,
     #[builder(default, setter(strip_option, into))]
     shell: Option<String>,
+    #[builder(default)]
+    author_kind: Option<AuthorKind>,
 }
 
 impl From<HistoryDaemonCapture> for History {
@@ -169,6 +196,7 @@ impl From<HistoryDaemonCapture> for History {
             captured.intent,
             None,
             captured.shell,
+            captured.author_kind,
         )
     }
 }
