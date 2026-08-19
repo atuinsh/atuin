@@ -1,4 +1,4 @@
-use atuin_client::database::Database;
+use atuin_client::database::Sqlite;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync;
@@ -43,12 +43,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub async fn run(
-        self,
-        settings: Settings,
-        db: &impl Database,
-        store: SqliteStore,
-    ) -> Result<()> {
+    pub async fn run(self, settings: Settings, db: &Sqlite, store: SqliteStore) -> Result<()> {
         match self {
             Self::Sync { force } => run(&settings, force, db, store).await,
             Self::Login(l) => l.run(&settings, &store).await,
@@ -70,12 +65,7 @@ impl Cmd {
     }
 }
 
-async fn run(
-    settings: &Settings,
-    force: bool,
-    db: &impl Database,
-    store: SqliteStore,
-) -> Result<()> {
+async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) -> Result<()> {
     let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
         .context("could not load encryption key")?;
 

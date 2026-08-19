@@ -1,4 +1,4 @@
-use atuin_client::database::{Context, Database, DbSearchMode, OptFilters};
+use atuin_client::database::{Context, DbSearchMode, OptFilters, Sqlite};
 use atuin_client::history::{History, HistoryId, all_user_author_filter};
 use atuin_client::settings::{FilterMode, SearchMode, Settings, Shells};
 use enum_dispatch::enum_dispatch;
@@ -59,13 +59,9 @@ impl SearchState {
 
 #[enum_dispatch]
 pub trait SearchEngine: Send + Sync + 'static {
-    async fn full_query(
-        &mut self,
-        state: &SearchState,
-        db: &mut dyn Database,
-    ) -> Result<Vec<History>>;
+    async fn full_query(&mut self, state: &SearchState, db: &mut Sqlite) -> Result<Vec<History>>;
 
-    async fn query(&mut self, state: &SearchState, db: &mut dyn Database) -> Result<Vec<History>> {
+    async fn query(&mut self, state: &SearchState, db: &mut Sqlite) -> Result<Vec<History>> {
         if state.input.as_str().is_empty() {
             let shells = state.shells.to_filter();
             Ok(db
@@ -87,15 +83,11 @@ pub trait SearchEngine: Send + Sync + 'static {
 }
 
 impl<T: SearchEngine> SearchEngine for Box<T> {
-    async fn full_query(
-        &mut self,
-        state: &SearchState,
-        db: &mut dyn Database,
-    ) -> Result<Vec<History>> {
+    async fn full_query(&mut self, state: &SearchState, db: &mut Sqlite) -> Result<Vec<History>> {
         T::full_query(self, state, db).await
     }
 
-    async fn query(&mut self, state: &SearchState, db: &mut dyn Database) -> Result<Vec<History>> {
+    async fn query(&mut self, state: &SearchState, db: &mut Sqlite) -> Result<Vec<History>> {
         T::query(self, state, db).await
     }
 

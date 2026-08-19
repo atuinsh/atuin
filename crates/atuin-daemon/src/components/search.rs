@@ -7,7 +7,6 @@ use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use atuin_client::database::Database;
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use eyre::Result;
@@ -213,7 +212,7 @@ impl Component for SearchComponent {
                     return Ok(());
                 };
 
-                let histories = handle.history_db().load_active(ids).await?;
+                let histories = handle.history_db().load_active(ids.iter().cloned()).await?;
                 self.index.read().await.add_histories(&histories);
             }
             DaemonEvent::HistoryStarted(history) => {

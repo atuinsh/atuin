@@ -14,7 +14,7 @@ use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 
 use super::{History, HistoryId, Version};
-use crate::database::{Database, current_context};
+use crate::database::{Sqlite, current_context};
 use crate::record::sqlite_store::SqliteStore;
 
 #[derive(Debug, Clone)]
@@ -255,7 +255,7 @@ impl HistoryStore {
         Ok(ret)
     }
 
-    pub async fn build(&self, database: &dyn Database) -> Result<()> {
+    pub async fn build(&self, database: &Sqlite) -> Result<()> {
         // I'd like to change how we rebuild and not couple this with the database, but need to
         // consider the structure more deeply. This will be easy to change.
 
@@ -282,7 +282,7 @@ impl HistoryStore {
         }
 
         database.save_bulk(&creates).await?;
-        database.delete_rows(&deletes).await?;
+        database.delete_rows(deletes).await?;
 
         Ok(())
     }
@@ -290,7 +290,7 @@ impl HistoryStore {
     /// Apply records to the history database, yielding each batch of created `History`.
     pub fn incremental_build<'a>(
         &'a self,
-        database: &'a dyn Database,
+        database: &'a Sqlite,
         ids: &'a [RecordId],
     ) -> impl Stream<Item = Result<Vec<History>>> + 'a {
         let records = stream::iter(ids)
@@ -307,11 +307,11 @@ impl HistoryStore {
                 // `chunk_by_bounded` already collected.
                 match kind {
                     HistoryRecordKind::Create => {
-                        let creates: Vec<History> = chunk
+                        let creates: Vec<_> = chunk
                             .into_iter()
-                            .filter_map(|record| match record {
-                                HistoryRecord::Create(h) => Some(h),
-                                HistoryRecord::Delete(_) => None,
+                            .map(|record| match record {
+                                HistoryRecord::Create(h) => h,
+                                HistoryRecord::Delete(_) => unreachable!(),
                             })
                             .collect();
 
@@ -320,15 +320,12 @@ impl HistoryStore {
                         Ok(creates)
                     }
                     HistoryRecordKind::Delete => {
-                        let deletes: Vec<HistoryId> = chunk
-                            .into_iter()
-                            .filter_map(|record| match record {
-                                HistoryRecord::Delete(id) => Some(id),
-                                HistoryRecord::Create(_) => None,
-                            })
-                            .collect();
+                        let deletes = chunk.into_iter().map(|record| match record {
+                            HistoryRecord::Delete(id) => id,
+                            HistoryRecord::Create(_) => unreachable!(),
+                        });
 
-                        database.delete_rows(&deletes).await?;
+                        database.delete_rows(deletes).await?;
 
                         Ok(Vec::new())
                     }
@@ -368,7 +365,7 @@ impl HistoryStore {
     ///
     /// Use this when you want the database writes but not the values. Callers that need
     /// the created entries should use [`HistoryStore::incremental_build`] directly.
-    pub async fn build_all(&self, database: &dyn Database, ids: &[RecordId]) -> Result<()> {
+    pub async fn build_all(&self, database: &Sqlite, ids: &[RecordId]) -> Result<()> {
         self.incremental_build(database, ids).try_for_each(|_| future::ready(Ok(()))).await
     }
 
@@ -386,7 +383,7 @@ impl HistoryStore {
         Ok(ret)
     }
 
-    pub async fn init_store(&self, db: &impl Database) -> Result<()> {
+    pub async fn init_store(&self, db: &Sqlite) -> Result<()> {
         let pb = ProgressBar::new_spinner();
         pb.set_style(
             ProgressStyle::with_template("{spinner:.blue} {msg}")
@@ -401,7 +398,7 @@ impl HistoryStore {
         pb.set_message("Fetching history from old database");
 
         let context = current_context().await?;
-        let history = db.list(&[], &context, None, false, true, None).await?;
+        let history = db.list([], &context, None, false, true, None).await?;
 
         pb.set_message("Fetching history already in store");
         let store_ids = self.history_ids().await?;
@@ -445,7 +442,7 @@ mod tests {
     use time::macros::datetime;
 
     use super::{BUILD_BATCH_SIZE, History};
-    use crate::database::{Context, Database as _, Sqlite};
+    use crate::database::{Context, Sqlite};
     use crate::history::Version;
     use crate::history::store::{HistoryRecord, HistoryStore};
     use crate::record::sqlite_store::SqliteStore;
@@ -646,7 +643,7 @@ mod tests {
         }
 
         assert_eq!(batch_sizes(&history_store, &db, &ids).await, vec![25]);
-        assert_eq!(db.list(&[], &context(), None, false, true, None).await.unwrap().len(), 25);
+        assert_eq!(db.list([], &context(), None, false, true, None).await.unwrap().len(), 25);
     }
 
     /// The create before a delete is flushed on its own rather than grouped with the create
@@ -671,10 +668,11 @@ mod tests {
         assert_eq!(batch_sizes(&history_store, &db, &ids).await, vec![1, 0, 1]);
 
         // Had the delete been applied before the create, `first` would still be present.
-        let stored = db.list(&[], &context(), None, false, true, None).await.unwrap();
-        assert_eq!(stored.iter().map(|h| h.command.as_str()).collect::<Vec<_>>(), vec![
-            "command 2"
-        ]);
+        let stored = db.list([], &context(), None, false, true, None).await.unwrap();
+        assert_eq!(
+            stored.iter().map(|h| h.command.as_str()).collect::<Vec<_>>(),
+            vec!["command 2"]
+        );
     }
 
     #[rstest]
