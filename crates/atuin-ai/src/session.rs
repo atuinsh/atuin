@@ -99,9 +99,7 @@ impl SessionService for LocalSessionService {
         git_root: Option<&str>,
         max_age_secs: i64,
     ) -> Result<Option<StoredSession>> {
-        self.store
-            .find_resumable_session(directory, git_root, max_age_secs)
-            .await
+        self.store.find_resumable_session(directory, git_root, max_age_secs).await
     }
 
     async fn load_events(&self, session_id: &str) -> Result<Vec<StoredEvent>> {
@@ -118,14 +116,7 @@ impl SessionService for LocalSessionService {
         event_data: &str,
     ) -> Result<()> {
         self.store
-            .append_event(
-                session_id,
-                event_id,
-                parent_id,
-                invocation_id,
-                event_type,
-                event_data,
-            )
+            .append_event(session_id, event_id, parent_id, invocation_id, event_type, event_data)
             .await
     }
 
@@ -134,9 +125,7 @@ impl SessionService for LocalSessionService {
         session_id: &str,
         server_session_id: &str,
     ) -> Result<()> {
-        self.store
-            .update_server_session_id(session_id, server_session_id)
-            .await
+        self.store.update_server_session_id(session_id, server_session_id).await
     }
 
     async fn archive(&self, session_id: &str) -> Result<()> {
@@ -215,13 +204,7 @@ impl SessionManager {
     pub async fn resume(
         service: Box<dyn SessionService>,
         stored: &StoredSession,
-    ) -> Result<(
-        Self,
-        Vec<ConversationEvent>,
-        Option<String>,
-        Option<i64>,
-        String,
-    )> {
+    ) -> Result<(Self, Vec<ConversationEvent>, Option<String>, Option<i64>, String)> {
         let invocation_id = atuin_common::utils::uuid_v7().to_string();
         let stored_events = service.load_events(&stored.id).await?;
 
@@ -229,10 +212,7 @@ impl SessionManager {
         let mut last_event_id = None;
         let mut last_event_ts = None;
         for se in &stored_events {
-            events.push(event_serde::deserialize_event(
-                &se.event_type,
-                &se.event_data,
-            )?);
+            events.push(event_serde::deserialize_event(&se.event_type, &se.event_data)?);
             last_event_id = Some(se.id.clone());
             last_event_ts = Some(se.created_at);
         }
@@ -248,13 +228,7 @@ impl SessionManager {
             persisted_to_db: true,
         };
 
-        Ok((
-            manager,
-            events,
-            stored.server_session_id.clone(),
-            last_event_ts,
-            invocation_id,
-        ))
+        Ok((manager, events, stored.server_session_id.clone(), last_event_ts, invocation_id))
     }
 
     /// Ensure the session row exists in the database.
@@ -302,9 +276,7 @@ impl SessionManager {
     /// Persist the server session ID if it has changed.
     pub async fn persist_server_session_id(&mut self, server_session_id: &str) -> Result<()> {
         self.ensure_persisted().await?;
-        self.service
-            .update_server_session_id(&self.session_id, server_session_id)
-            .await
+        self.service.update_server_session_id(&self.session_id, server_session_id).await
     }
 
     /// Archive the current session (for `/new` command).
@@ -352,9 +324,7 @@ impl SessionManager {
     /// Write a metadata value for the current session.
     pub async fn set_metadata(&mut self, key: &str, value: &str) -> Result<()> {
         self.ensure_persisted().await?;
-        self.service
-            .set_metadata(&self.session_id, key, value)
-            .await
+        self.service.set_metadata(&self.session_id, key, value).await
     }
 
     /// Write the usage cache for a user key. Not tied to the current
@@ -366,16 +336,13 @@ impl SessionManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::*;
+
+    use super::*;
 
     #[fixture]
     async fn service() -> Box<dyn SessionService> {
-        Box::new(
-            LocalSessionService::open("sqlite::memory:", 2.0)
-                .await
-                .unwrap(),
-        )
+        Box::new(LocalSessionService::open("sqlite::memory:", 2.0).await.unwrap())
     }
 
     #[rstest]
@@ -406,9 +373,7 @@ mod tests {
         let svc = service.await;
 
         let session_id = atuin_common::utils::uuid_v7().to_string();
-        svc.create_session(&session_id, Some("/project"), Some("/project"))
-            .await
-            .unwrap();
+        svc.create_session(&session_id, Some("/project"), Some("/project")).await.unwrap();
 
         let events = vec![
             ConversationEvent::UserMessage {
@@ -436,9 +401,7 @@ mod tests {
             parent = Some(eid);
         }
 
-        svc.update_server_session_id(&session_id, "srv-abc")
-            .await
-            .unwrap();
+        svc.update_server_session_id(&session_id, "srv-abc").await.unwrap();
 
         // Now find and resume the session with a fresh service connection
         let stored = svc

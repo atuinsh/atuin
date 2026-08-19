@@ -1,9 +1,7 @@
-use std::{
-    io::BufRead,
-    num::NonZeroU16,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::io::BufRead;
+use std::num::NonZeroU16;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use atuin_client::history::AuthorPattern;
 use atuin_common::ansi::{self, Vt100ParserExt as _};
@@ -27,9 +25,7 @@ use crate::permissions::rule::Rule;
 /// `?`, and `[...]` via `glob_match`.
 fn path_matches_scope(path: &Path, scope: &str) -> bool {
     let path = if path.is_relative() {
-        std::env::current_dir()
-            .map(|cwd| cwd.join(path))
-            .unwrap_or_else(|_| path.to_path_buf())
+        std::env::current_dir().map(|cwd| cwd.join(path)).unwrap_or_else(|_| path.to_path_buf())
     } else {
         path.to_path_buf()
     };
@@ -179,15 +175,13 @@ impl TryFrom<(&str, &serde_json::Value)> for ClientToolCall {
             "edit_file" => Ok(ClientToolCall::Edit(EditToolCall::try_from(input)?)),
             "write_file" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
             "execute_shell_command" => Ok(ClientToolCall::Shell(ShellToolCall::try_from(input)?)),
-            "atuin_history" => Ok(ClientToolCall::AtuinHistory(
-                AtuinHistoryToolCall::try_from(input)?,
-            )),
-            "atuin_output" => Ok(ClientToolCall::AtuinOutput(AtuinOutputToolCall::try_from(
-                input,
-            )?)),
-            "load_skill" => Ok(ClientToolCall::LoadSkill(LoadSkillToolCall::try_from(
-                input,
-            )?)),
+            "atuin_history" => {
+                Ok(ClientToolCall::AtuinHistory(AtuinHistoryToolCall::try_from(input)?))
+            }
+            "atuin_output" => {
+                Ok(ClientToolCall::AtuinOutput(AtuinOutputToolCall::try_from(input)?))
+            }
+            "load_skill" => Ok(ClientToolCall::LoadSkill(LoadSkillToolCall::try_from(input)?)),
             _ => Err(eyre::eyre!("Unknown tool call: {name}")),
         }
     }
@@ -284,10 +278,8 @@ impl TryFrom<&serde_json::Value> for ReadToolCall {
     type Error = eyre::Error;
 
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        let path = value
-            .get("file_path")
-            .and_then(|v| v.as_str())
-            .ok_or(eyre::eyre!("Missing path"))?;
+        let path =
+            value.get("file_path").and_then(|v| v.as_str()).ok_or(eyre::eyre!("Missing path"))?;
 
         let offset = value.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
         let limit = value
@@ -366,7 +358,8 @@ impl ReadToolCall {
 
                 if numbered.len() > 100_000 {
                     ToolOutcome::Error(format!(
-                        "Error: file is too large to read ({} bytes in {} lines); use view_range to read a subset of the file",
+                        "Error: file is too large to read ({} bytes in {} lines); use view_range \
+                         to read a subset of the file",
                         numbered.len(),
                         lines.len()
                     ))
@@ -424,10 +417,7 @@ impl TryFrom<&serde_json::Value> for EditToolCall {
             .and_then(|v| v.as_str())
             .ok_or(eyre::eyre!("Missing new_string"))?;
 
-        let replace_all = value
-            .get("replace_all")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let replace_all = value.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
 
         Ok(EditToolCall {
             path: expand_path(path),
@@ -507,16 +497,15 @@ impl EditToolCall {
             Ok(FreshnessCheck::Stale) => {
                 return (
                     ToolOutcome::Error(
-                        "File has been modified since read, either by the user or by a linter. Read it again before attempting to edit it.".to_string(),
+                        "File has been modified since read, either by the user or by a linter. \
+                         Read it again before attempting to edit it."
+                            .to_string(),
                     ),
                     None,
                 );
             }
             Err(e) => {
-                return (
-                    ToolOutcome::Error(format!("Error checking file state: {e}")),
-                    None,
-                );
+                return (ToolOutcome::Error(format!("Error checking file state: {e}")), None);
             }
             Ok(FreshnessCheck::Fresh) => {}
         }
@@ -533,7 +522,8 @@ impl EditToolCall {
         if match_count == 0 {
             return (
                 ToolOutcome::Error(format!(
-                    "old_string not found in {}. Make sure it matches exactly, including whitespace and indentation.",
+                    "old_string not found in {}. Make sure it matches exactly, including \
+                     whitespace and indentation.",
                     resolved_path.display()
                 )),
                 None,
@@ -543,7 +533,9 @@ impl EditToolCall {
         if match_count > 1 && !self.replace_all {
             return (
                 ToolOutcome::Error(format!(
-                    "Found {match_count} matches of old_string in {}, but replace_all is false. Either provide more context to make the match unique, or set replace_all to true.",
+                    "Found {match_count} matches of old_string in {}, but replace_all is false. \
+                     Either provide more context to make the match unique, or set replace_all to \
+                     true.",
                     resolved_path.display()
                 )),
                 None,
@@ -612,15 +604,10 @@ impl TryFrom<&serde_json::Value> for WriteToolCall {
             .and_then(|v| v.as_str())
             .ok_or(eyre::eyre!("Missing file_path"))?;
 
-        let content = value
-            .get("content")
-            .and_then(|v| v.as_str())
-            .ok_or(eyre::eyre!("Missing content"))?;
+        let content =
+            value.get("content").and_then(|v| v.as_str()).ok_or(eyre::eyre!("Missing content"))?;
 
-        let overwrite = value
-            .get("overwrite")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let overwrite = value.get("overwrite").and_then(|v| v.as_bool()).unwrap_or(false);
 
         Ok(WriteToolCall {
             path: expand_path(path),
@@ -659,7 +646,8 @@ impl WriteToolCall {
         if resolved_path.exists() && !self.overwrite {
             return (
                 ToolOutcome::Error(format!(
-                    "File already exists: {}. Set overwrite to true to replace it, or use edit_file to make targeted changes.",
+                    "File already exists: {}. Set overwrite to true to replace it, or use \
+                     edit_file to make targeted changes.",
                     resolved_path.display()
                 )),
                 None,
@@ -676,7 +664,11 @@ impl WriteToolCall {
         }
 
         let line_count = self.content.lines().count();
-        let verb = if existed { "Overwrote" } else { "Created" };
+        let verb = if existed {
+            "Overwrote"
+        } else {
+            "Created"
+        };
         (
             ToolOutcome::Success(format!(
                 "{verb} {} ({line_count} lines).",
@@ -722,28 +714,15 @@ impl TryFrom<&serde_json::Value> for ShellToolCall {
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
         let dir = value.get("dir").and_then(|v| v.as_str());
 
-        let command = value
-            .get("command")
-            .and_then(|v| v.as_str())
-            .ok_or(eyre::eyre!("Missing command"))?;
+        let command =
+            value.get("command").and_then(|v| v.as_str()).ok_or(eyre::eyre!("Missing command"))?;
 
-        let shell = value
-            .get("shell")
-            .and_then(|v| v.as_str())
-            .unwrap_or("bash")
-            .to_string();
+        let shell = value.get("shell").and_then(|v| v.as_str()).unwrap_or("bash").to_string();
 
-        let timeout_secs = value
-            .get("timeout")
-            .and_then(|v| v.as_u64())
-            .filter(|&v| v > 0)
-            .unwrap_or(30)
-            .min(600);
+        let timeout_secs =
+            value.get("timeout").and_then(|v| v.as_u64()).filter(|&v| v > 0).unwrap_or(30).min(600);
 
-        let description = value
-            .get("description")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let description = value.get("description").and_then(|v| v.as_str()).map(|s| s.to_string());
 
         Ok(ShellToolCall {
             dir: dir.map(expand_path),
@@ -1034,21 +1013,12 @@ impl TryFrom<&serde_json::Value> for AtuinHistoryToolCall {
             })
             .collect::<Result<Vec<HistorySearchFilterMode>>>()?;
 
-        let query = value
-            .get("query")
-            .and_then(|v| v.as_str())
-            .ok_or(eyre::eyre!("Missing query"))?;
+        let query =
+            value.get("query").and_then(|v| v.as_str()).ok_or(eyre::eyre!("Missing query"))?;
 
-        let limit = value
-            .get("limit")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(10)
-            .clamp(1, 50);
+        let limit = value.get("limit").and_then(|v| v.as_i64()).unwrap_or(10).clamp(1, 50);
 
-        let only_failed = value
-            .get("only_failed")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let only_failed = value.get("only_failed").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let authors = match value.get("authors") {
             Some(authors) => authors
@@ -1088,7 +1058,7 @@ impl PermissibleToolCall for AtuinHistoryToolCall {
 
 impl AtuinHistoryToolCall {
     pub(crate) async fn execute(&self, db: &atuin_client::database::Sqlite) -> ToolOutcome {
-        use atuin_client::database::{self, Database as _, DbSearchMode, OptFilters};
+        use atuin_client::database::{self, DbSearchMode, OptFilters};
 
         // query_context rather than current_context: when running outside an
         // atuin-hooked shell (e.g. as an MCP server) there is no ATUIN_SESSION.
@@ -1110,8 +1080,8 @@ impl AtuinHistoryToolCall {
             && context.session.is_empty()
         {
             return ToolOutcome::Error(
-                "Session-scoped search is unavailable: $ATUIN_SESSION is not set, so there is \
-                 no shell session to scope to. Use another filter mode."
+                "Session-scoped search is unavailable: $ATUIN_SESSION is not set, so there is no \
+                 shell session to scope to. Use another filter mode."
                     .to_string(),
             );
         }
@@ -1124,13 +1094,7 @@ impl AtuinHistoryToolCall {
         };
 
         let results = match db
-            .search(
-                DbSearchMode::Fuzzy,
-                filter_mode,
-                &context,
-                &self.query,
-                filter_options,
-            )
+            .search(DbSearchMode::Fuzzy, filter_mode, &context, &self.query, filter_options)
             .await
         {
             Ok(results) => results,
@@ -1175,11 +1139,8 @@ impl TryFrom<&serde_json::Value> for AtuinOutputToolCall {
             .and_then(|v| Uuid::parse_str(v).ok())
             .ok_or(eyre::eyre!("Missing or invalid history ID"))?;
 
-        let ranges = value
-            .get("ranges")
-            .and_then(|v| v.as_array())
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
+        let ranges =
+            value.get("ranges").and_then(|v| v.as_array()).map(Vec::as_slice).unwrap_or(&[]);
 
         let ranges = ranges
             .iter()
@@ -1192,9 +1153,8 @@ impl TryFrom<&serde_json::Value> for AtuinOutputToolCall {
                 let start = range[0]
                     .as_i64()
                     .ok_or_else(|| eyre::eyre!("Range start must be an integer"))?;
-                let end = range[1]
-                    .as_i64()
-                    .ok_or_else(|| eyre::eyre!("Range end must be an integer"))?;
+                let end =
+                    range[1].as_i64().ok_or_else(|| eyre::eyre!("Range end must be an integer"))?;
 
                 Ok((start, end))
             })
@@ -1219,14 +1179,8 @@ impl PermissibleToolCall for AtuinOutputToolCall {
 }
 
 fn format_output_lines_for_llm(lines: &[atuin_daemon::semantic::OutputLine]) -> String {
-    let width = lines
-        .iter()
-        .map(|line| line.line_number)
-        .max()
-        .unwrap_or(1)
-        .max(1)
-        .ilog10() as usize
-        + 1;
+    let width =
+        lines.iter().map(|line| line.line_number).max().unwrap_or(1).max(1).ilog10() as usize + 1;
     let mut formatted = Vec::with_capacity(lines.len());
     let mut previous_line_number = None;
 
@@ -1258,10 +1212,7 @@ impl AtuinOutputToolCall {
         };
 
         let history_id = self.history_id.as_simple().to_string();
-        let response = match client
-            .command_output(history_id.clone(), self.ranges.clone())
-            .await
-        {
+        let response = match client.command_output(history_id.clone(), self.ranges.clone()).await {
             Ok(response) => response,
             Err(e) => return ToolOutcome::Error(format!("Failed to fetch command output: {e}")),
         };
@@ -1291,10 +1242,7 @@ impl AtuinOutputToolCall {
                 response.total_bytes, response.output_observed_bytes, response.total_lines
             )
         } else {
-            format!(
-                "{} bytes, {} lines",
-                response.total_bytes, response.total_lines
-            )
+            format!("{} bytes, {} lines", response.total_bytes, response.total_lines)
         };
 
         ToolOutcome::Success(format!(
@@ -1312,10 +1260,8 @@ impl TryFrom<&serde_json::Value> for LoadSkillToolCall {
     type Error = eyre::Error;
 
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        let name = value
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or(eyre::eyre!("Missing skill name"))?;
+        let name =
+            value.get("name").and_then(|v| v.as_str()).ok_or(eyre::eyre!("Missing skill name"))?;
 
         Ok(LoadSkillToolCall {
             name: name.to_string(),
@@ -1335,9 +1281,10 @@ impl PermissibleToolCall for LoadSkillToolCall {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use atuin_common::filter;
     use rstest::*;
+
+    use super::*;
 
     fn read_rule(scope: Option<&str>) -> Rule {
         Rule {
@@ -1391,10 +1338,7 @@ mod tests {
 
         let call = AtuinHistoryToolCall::try_from(&input).unwrap();
         assert!(call.only_failed);
-        assert_eq!(
-            call.authors.items(),
-            filter::Items::Some([AuthorPattern::AllAgent].as_slice())
-        );
+        assert_eq!(call.authors.items(), filter::Items::Some([AuthorPattern::AllAgent].as_slice()));
     }
 
     #[rstest]
@@ -1405,10 +1349,7 @@ mod tests {
 
         let call = AtuinOutputToolCall::try_from(&input)?;
 
-        assert_eq!(
-            call.history_id.as_simple().to_string(),
-            "018f0000000070008000000000000000"
-        );
+        assert_eq!(call.history_id.as_simple().to_string(), "018f0000000070008000000000000000");
         assert!(call.ranges.is_empty());
         Ok(())
     }
@@ -1537,10 +1478,7 @@ mod tests {
         )
     )]
     fn read_scope_glob(#[case] path: &str, #[case] scope: &str, #[case] expected: bool) {
-        assert_eq!(
-            read_tool(path).matches_rule(&read_rule(Some(scope))),
-            expected
-        );
+        assert_eq!(read_tool(path).matches_rule(&read_rule(Some(scope))), expected);
     }
 
     #[rstest]
@@ -1549,11 +1487,7 @@ mod tests {
     fn relative_multi_segment_glob(#[case] scope: &str, #[case] expected: bool) {
         // This matches against the path relative to cwd
         let cwd = std::env::current_dir().unwrap();
-        let abs = cwd
-            .join("crates")
-            .join("atuin-ai")
-            .join("src")
-            .join("lib.rs");
+        let abs = cwd.join("crates").join("atuin-ai").join("src").join("lib.rs");
         let tool = read_tool(abs.to_str().unwrap());
         assert_eq!(tool.matches_rule(&read_rule(Some(scope))), expected);
     }
@@ -1916,10 +1850,7 @@ mod tests {
             let (outcome, new_bytes) = call2.execute(&file_path, &tracker);
             assert!(matches!(outcome, ToolOutcome::Success(_)));
             assert!(new_bytes.is_some());
-            assert_eq!(
-                std::fs::read_to_string(&file_path).unwrap(),
-                "key1 = xxx\nkey2 = yyy\n"
-            );
+            assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "key1 = xxx\nkey2 = yyy\n");
         }
 
         #[rstest]
@@ -1961,10 +1892,7 @@ mod tests {
             }
 
             // File should be unchanged (the user's edit preserved)
-            assert_eq!(
-                std::fs::read_to_string(&file_path).unwrap(),
-                "value = user_changed\n"
-            );
+            assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "value = user_changed\n");
         }
 
         #[rstest]
@@ -1995,9 +1923,7 @@ mod tests {
 
             // Second edit — snapshot should NOT be recreated
             let content_before_second = std::fs::read(&file_path).unwrap();
-            let created = store
-                .ensure_snapshot(&file_path, &content_before_second)
-                .unwrap();
+            let created = store.ensure_snapshot(&file_path, &content_before_second).unwrap();
             assert!(!created); // idempotent — already snapshotted
         }
 

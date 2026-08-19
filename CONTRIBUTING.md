@@ -41,10 +41,12 @@ These variable exports can be added in a local `.envrc` file, read by [direnv](h
 
 ## Editor setup (optional)
 
-`cargo fmt` is the source of truth and CI enforces it. We also have a:
+`cargo +nightly fmt` is the source of truth and CI enforces it. A nightly version of Rust is required for formatting because Atuin's `.rustfmt.toml` uses nightly-only options.
 
 - [`.editorconfig`](https://editorconfig.org/) which sets sane defaults for `.rs` files.
 - [`.nvim.lua`](https://github.com/atuinsh/atuin/blob/main/.nvim.lua) which configures neovim. Note you need `vim.o.exrc = true` and `nvim >= 0.11+`. You can disable it if you prefer, please see the docs at the top of that file.
+
+If you format via rust-analyzer (LSP integration in your editor), make sure it uses nightly Rustfmt by setting [`rust-analyzer.rustfmt.overrideCommand`](https://rust-analyzer.github.io/book/configuration.html#rustfmt.overrideCommand) to `["rustfmt", "+nightly"]`.
 
 ## PRs
 

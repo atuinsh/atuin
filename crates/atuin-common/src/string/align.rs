@@ -47,10 +47,11 @@ impl<T: AsRef<str>> AlignExt for T {}
 
 #[cfg(test)]
 mod tests {
-    use super::{AlignExt, Alignment};
-    use crate::string::Measure;
     use pretty_assertions::assert_eq;
     use rstest::rstest;
+
+    use super::{AlignExt, Alignment};
+    use crate::string::Measure;
 
     #[rstest]
     #[case::start_pads_on_the_end("hi", Measure::Columns(5), Alignment::Start, "hi   ")]
@@ -87,9 +88,6 @@ mod tests {
         #[case] expected_borrowed: bool,
     ) {
         let result = input.pad_to(budget, align);
-        assert_eq!(
-            matches!(result, std::borrow::Cow::Borrowed(_)),
-            expected_borrowed
-        );
+        assert_eq!(matches!(result, std::borrow::Cow::Borrowed(_)), expected_borrowed);
     }
 }

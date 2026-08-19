@@ -1,10 +1,7 @@
+use atuin_client::auth::{self, AuthClient, MutateResponse};
+use atuin_client::settings::Settings;
 use clap::Parser;
 use eyre::{Result, bail};
-
-use atuin_client::{
-    auth::{self, AuthClient, MutateResponse},
-    settings::Settings,
-};
 use rpassword::prompt_password;
 
 #[derive(Parser, Debug)]

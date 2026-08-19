@@ -21,6 +21,7 @@ tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-bash", "dep:tree-sitter-fish"
 enum_dispatch = { workspace = true }
 async-trait = { workspace = true }
 atuin-client = { workspace = true }
+atuin-domain = { workspace = true }
 derive_more = { workspace = true }
 atuin-common = { workspace = true, features = ["unicode", "ansi"] }
 atuin-daemon = { workspace = true }
@@ -78,3 +79,6 @@ rmcp = { version = "2.1.0", default-features = false, features = ["server", "tra
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 rstest = { workspace = true }
+
+[lints]
+workspace = true

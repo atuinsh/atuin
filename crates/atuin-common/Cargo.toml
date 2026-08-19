@@ -51,6 +51,7 @@ itertools = { workspace = true }
 rusty_paseto = { workspace = true }
 rusty_paserk = { workspace = true }
 tokio = { workspace = true }
+futures = "0.3"
 serde_json = { workspace = true }
 zeroize = { workspace = true }
 rmp = { workspace = true }
@@ -65,3 +66,6 @@ proptest = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+
+[lints]
+workspace = true

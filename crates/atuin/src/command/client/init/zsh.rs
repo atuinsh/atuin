@@ -1,7 +1,9 @@
-use super::StaticInitOptions;
 use atuin_client::settings::Tmux;
-use atuin_dotfiles::store::{AliasStore, var::VarStore};
+use atuin_dotfiles::store::AliasStore;
+use atuin_dotfiles::store::var::VarStore;
 use eyre::Result;
+
+use super::StaticInitOptions;
 
 fn print_tmux_config(tmux: &Tmux) {
     if tmux.enabled {

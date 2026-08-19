@@ -7,10 +7,6 @@
 //! [`api`] request/response types, and the [`caps`] capability types. These are
 //! shared across the client, the daemon, and the server.
 
-use std::fmt::Display;
-
-use atuin_common::os::Hostname;
-
 /// Defines a new UUID type wrapper
 macro_rules! new_uuid {
     ($name:ident) => {
@@ -71,73 +67,3 @@ macro_rules! new_uuid {
 pub mod api;
 pub mod caps;
 pub mod record;
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, derive_more::Display)]
-pub struct AtuinHostname(Hostname);
-
-impl AtuinHostname {
-    pub fn probe() -> Self {
-        std::env::var("ATUIN_HOST_NAME")
-            .ok()
-            .and_then(|name| Hostname::try_from(name.as_str()).ok())
-            .or_else(|| Hostname::get().ok())
-            .map(Self)
-            .unwrap_or_default()
-    }
-}
-
-impl Default for AtuinHostname {
-    fn default() -> Self {
-        Self(Hostname::try_from("unknown-host").unwrap())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, derive_more::Display)]
-pub struct AtuinUsername(String);
-
-impl AtuinUsername {
-    pub fn probe() -> Self {
-        std::env::var("ATUIN_HOST_USER")
-            .map(Self)
-            .unwrap_or_else(|_| Self::default())
-    }
-}
-
-impl Default for AtuinUsername {
-    fn default() -> Self {
-        Self(String::from("unknown-user"))
-    }
-}
-
-impl From<String> for AtuinUsername {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-
-impl From<&str> for AtuinUsername {
-    fn from(value: &str) -> Self {
-        Self(value.to_string())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct AtuinHostUser {
-    pub hostname: AtuinHostname,
-    pub username: AtuinUsername,
-}
-
-impl AtuinHostUser {
-    pub fn probe() -> Self {
-        Self {
-            hostname: AtuinHostname::probe(),
-            username: AtuinUsername::probe(),
-        }
-    }
-}
-
-impl Display for AtuinHostUser {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.hostname, self.username)
-    }
-}

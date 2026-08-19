@@ -119,10 +119,7 @@ pub fn classify_greeting(first: &[u8]) -> Greeting {
 /// sizes (PTY read chunks and screen snapshots) and must cap them first.
 #[must_use]
 pub fn encode_frame(frame_type: u8, payload: &[u8]) -> Vec<u8> {
-    assert!(
-        payload.len() <= MAX_FRAME_LEN,
-        "frame payload exceeds MAX_FRAME_LEN"
-    );
+    assert!(payload.len() <= MAX_FRAME_LEN, "frame payload exceeds MAX_FRAME_LEN");
     let len = u32::try_from(payload.len()).expect("payload length fits in u32");
     let mut buf = Vec::with_capacity(5 + payload.len());
     buf.push(frame_type);
@@ -149,10 +146,7 @@ pub fn read_frame(reader: &mut impl Read) -> io::Result<Option<(u8, Vec<u8>)>> {
     let frame_type = header[0];
     let len = u32::from_be_bytes([header[1], header[2], header[3], header[4]]) as usize;
     if len > MAX_FRAME_LEN {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "frame exceeds maximum length",
-        ));
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "frame exceeds maximum length"));
     }
     let mut payload = vec![0u8; len];
     reader.read_exact(&mut payload)?;

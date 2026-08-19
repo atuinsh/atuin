@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
+use atuin_client::history::History;
+use atuin_client::settings::Settings;
+use atuin_client::theme::{Meaning, Theme};
 use crossterm::style::{Color, ResetColor, SetAttribute, SetForegroundColor};
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
-
-use atuin_client::{history::History, settings::Settings, theme::Meaning, theme::Theme};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Stats {
@@ -172,10 +173,7 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
         .iter()
         .map(|(commands, _)| commands.iter().map(|c| c.len()).collect::<Vec<usize>>())
         .fold(vec![0; ngram_size], |acc, item| {
-            acc.iter()
-                .zip(item.iter())
-                .map(|(a, i)| *std::cmp::max(a, i))
-                .collect()
+            acc.iter().zip(item.iter()).map(|(a, i)| *std::cmp::max(a, i)).collect()
         });
 
     for (command, count) in stats.top {
@@ -232,7 +230,8 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
             .join(" | ");
 
         println!(
-            "{ResetColor}] {gray}{count:num_pad$}{ResetColor} {bold}{formatted_command}{ResetColor}"
+            "{ResetColor}] {gray}{count:num_pad$}{ResetColor} \
+             {bold}{formatted_command}{ResetColor}"
         );
     }
     println!("Total commands:   {}", stats.total_commands);
@@ -304,8 +303,7 @@ mod tests {
     use rstest::*;
     use time::OffsetDateTime;
 
-    use super::compute;
-    use super::{interesting_command, split_at_pipe, strip_leading_env_vars};
+    use super::{compute, interesting_command, split_at_pipe, strip_leading_env_vars};
 
     #[test]
     fn ignored_env_vars() {
@@ -328,11 +326,7 @@ mod tests {
         settings.stats.ignored_commands.push("cd".to_string());
 
         let history = [
-            History::import()
-                .timestamp(OffsetDateTime::now_utc())
-                .command("cd foo")
-                .build()
-                .into(),
+            History::import().timestamp(OffsetDateTime::now_utc()).command("cd foo").build().into(),
             History::import()
                 .timestamp(OffsetDateTime::now_utc())
                 .command("cargo build stuff")
@@ -345,18 +339,30 @@ mod tests {
         assert_eq!(stats.unique_commands, 1);
     }
 
+    #[test]
+    fn all_commands_ignored() {
+        let mut settings = Settings::utc();
+        settings.stats.ignored_commands.push("cd".to_string());
+
+        let history = [History::import()
+            .timestamp(OffsetDateTime::now_utc())
+            .command("cd foo")
+            .build()
+            .into()];
+
+        // non-empty history can still leave nothing to report, so callers have
+        // to handle None rather than assuming history.is_empty() covers it
+        assert!(compute(&settings, &history, 10, 1).is_none());
+    }
+
     #[fixture]
     fn settings(
         #[default(&[][..])] prefix: &[&str],
         #[default(&[][..])] subcommand: &[&str],
     ) -> Settings {
         let mut s = Settings::utc();
-        s.stats
-            .common_prefix
-            .extend(prefix.iter().map(|p| p.to_string()));
-        s.stats
-            .common_subcommands
-            .extend(subcommand.iter().map(|p| p.to_string()));
+        s.stats.common_prefix.extend(prefix.iter().map(|p| p.to_string()));
+        s.stats.common_subcommands.extend(subcommand.iter().map(|p| p.to_string()));
         s
     }
 

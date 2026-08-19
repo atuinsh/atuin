@@ -80,9 +80,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{ContainsNul, NonNulStr};
     use proptest::prelude::*;
     use rstest::rstest;
+
+    use super::{ContainsNul, NonNulStr};
 
     #[rstest]
     #[case("echo hello")]

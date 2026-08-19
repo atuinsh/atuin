@@ -58,12 +58,7 @@ impl AppContext {
         }
         caps.push("client_v1_load_skill".to_string());
         if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
-            caps.extend(
-                extra
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty()),
-            );
+            caps.extend(extra.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
         }
         caps
     }

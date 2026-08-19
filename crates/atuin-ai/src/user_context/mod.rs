@@ -92,9 +92,7 @@ impl UserContextCache {
     /// the cached value is only ever replaced wholesale — it can't be torn.
     /// Recover with the inner value rather than propagating the panic.
     fn lock(&self) -> std::sync::MutexGuard<'_, CacheSlot> {
-        self.inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -181,9 +179,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("TERMINAL.md");
         // The embedded sleep holds the gather open while we invalidate.
-        tokio::fs::write(&file, "!`sleep 0.5 && echo one`")
-            .await
-            .unwrap();
+        tokio::fs::write(&file, "!`sleep 0.5 && echo one`").await.unwrap();
 
         let cache = UserContextCache::default();
 
@@ -214,9 +210,7 @@ mod tests {
     async fn slow_gather_does_not_overwrite_concurrent_result() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("TERMINAL.md");
-        tokio::fs::write(&file, "!`sleep 0.5 && echo one`")
-            .await
-            .unwrap();
+        tokio::fs::write(&file, "!`sleep 0.5 && echo one`").await.unwrap();
 
         let cache = UserContextCache::default();
 

@@ -14,7 +14,8 @@ repository = { workspace = true }
 
 [dependencies]
 serde = { workspace = true }
-atuin-common = { workspace = true, features = ["os"] }
+atuin-common = { workspace = true }
+whoami = { workspace = true }
 uuid = { workspace = true }
 time = { workspace = true }
 semver = { workspace = true }
@@ -46,3 +47,6 @@ rstest = { workspace = true }
 proptest = { workspace = true }
 wiremock = { workspace = true }
 tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

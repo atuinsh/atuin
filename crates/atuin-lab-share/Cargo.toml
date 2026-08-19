@@ -54,3 +54,6 @@ hex = "0.4" # frozen interop-vector literals in crypto tests
 
 [target.'cfg(unix)'.dev-dependencies]
 tempfile = { workspace = true } # a real socket path for the tap resync test
+
+[lints]
+workspace = true

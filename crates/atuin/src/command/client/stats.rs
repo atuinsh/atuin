@@ -1,20 +1,14 @@
+use atuin_client::database::{Sqlite, current_context};
+use atuin_client::settings::{FilterMode, Settings};
+use atuin_client::theme::Theme;
+use atuin_history::stats::{compute, pretty_print};
 use clap::Parser;
 use eyre::Result;
 use interim::parse_date_string;
 use time::{Duration, OffsetDateTime, Time};
 
-use atuin_client::{
-    database::{Database, current_context},
-    settings::{FilterMode, Settings},
-    theme::Theme,
-};
-
-use atuin_history::stats::{compute, pretty_print};
-
 fn parse_ngram_size(s: &str) -> Result<usize, String> {
-    let value = s
-        .parse::<usize>()
-        .map_err(|_| format!("'{s}' is not a valid window size"))?;
+    let value = s.parse::<usize>().map_err(|_| format!("'{s}' is not a valid window size"))?;
 
     if value == 0 {
         return Err("ngram window size must be at least 1".to_string());
@@ -25,7 +19,8 @@ fn parse_ngram_size(s: &str) -> Result<usize, String> {
 
 fn period_long_help() -> String {
     format!(
-        "Compute statistics for the specified period, leave blank for statistics since the beginning. See [this]({}) for more details.",
+        "Compute statistics for the specified period, leave blank for statistics since the \
+         beginning. See [this]({}) for more details.",
         atuin_common::docs::url("reference/stats/")
     )
 }
@@ -51,7 +46,7 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(&self, db: &impl Database, settings: &Settings, theme: &Theme) -> Result<()> {
+    pub async fn run(&self, db: &Sqlite, settings: &Settings, theme: &Theme) -> Result<()> {
         let context = current_context().await?;
         let words = if self.period.is_empty() {
             String::from("all")
@@ -59,8 +54,8 @@ impl Cmd {
             self.period.join(" ")
         };
 
-        // A single filter mode, or none. `list` takes a slice so it can OR several,
-        // but stats only ever scopes to one at a time.
+        // A single filter mode, or none. `list` takes an iterator of modes so it can
+        // OR several, but stats only ever scopes to one at a time.
         let filter = self.filter_mode.map(|f| vec![f]).unwrap_or_default();
 
         let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
@@ -90,9 +85,7 @@ impl Cmd {
             Some((start, end))
         };
 
-        let history = db
-            .list(filter.as_slice(), &context, None, false, false, range)
-            .await?;
+        let history = db.list(filter, &context, None, false, false, range).await?;
 
         let stats = compute(settings, &history, self.count, self.ngram_size);
 

@@ -4,17 +4,18 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use atuin_common::time::OffsetDateTimeExt;
+use atuin_domain::record::CmdOrigin;
 use directories::BaseDirs;
 use eyre::{Result, eyre};
 use serde::Deserialize;
 use time::OffsetDateTime;
 use uuid::Uuid;
-use uuid::timestamp::{Timestamp, context::NoContext};
+use uuid::timestamp::Timestamp;
+use uuid::timestamp::context::NoContext;
 
 use super::{Importer, Loader, get_histdir_path};
 use crate::history::History;
 use crate::history::builder::HistoryImported;
-use atuin_domain::AtuinHostUser;
 
 // Note: both HistoryFile and HistoryData have other keys present in the JSON, we don't
 // care about them so we leave them unspecified so as to avoid deserializing unnecessarily.
@@ -41,7 +42,7 @@ struct HistoryCmd {
 pub struct Xonsh {
     // history is stored as a bunch of json files, one per session
     sessions: Vec<HistoryData>,
-    hostname: String,
+    cmd_origin: CmdOrigin,
 }
 
 fn xonsh_hist_dir(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
@@ -107,8 +108,11 @@ impl Importer for Xonsh {
         let xonsh_data_dir = env::var("XONSH_DATA_DIR").ok();
         let hist_dir = get_histdir_path(|| xonsh_hist_dir(xonsh_data_dir))?;
         let sessions = load_sessions(&hist_dir)?;
-        let hostname = AtuinHostUser::probe().to_string();
-        Ok(Xonsh { sessions, hostname })
+        let cmd_origin = CmdOrigin::probe_current();
+        Ok(Xonsh {
+            sessions,
+            cmd_origin,
+        })
     }
 
     async fn entries(&mut self) -> Result<usize> {
@@ -134,7 +138,7 @@ impl Importer for Xonsh {
                     .command(cmd.inp.trim())
                     .cwd(cmd.cwd)
                     .session(session.sessionid.clone())
-                    .hostname(self.hostname.clone());
+                    .cmd_origin(self.cmd_origin.clone());
                 loader.push(entry.build().into()).await?;
             }
         }
@@ -147,17 +151,13 @@ mod tests {
     use time::macros::datetime;
 
     use super::*;
-
     use crate::history::History;
     use crate::import::tests::TestLoader;
 
     #[test]
     fn test_hist_dir_xonsh() {
         let hist_dir = xonsh_hist_dir(Some("/home/user/xonsh_data".to_string())).unwrap();
-        assert_eq!(
-            hist_dir,
-            PathBuf::from("/home/user/xonsh_data/history_json")
-        );
+        assert_eq!(hist_dir, PathBuf::from("/home/user/xonsh_data/history_json"));
     }
 
     #[tokio::test]
@@ -172,7 +172,7 @@ mod tests {
                     ts: (1e30, 1e30),
                 }],
             }],
-            hostname: "box:user".to_string(),
+            cmd_origin: CmdOrigin::try_from("box:user").unwrap(),
         };
 
         let mut loader = TestLoader::default();
@@ -187,8 +187,11 @@ mod tests {
     async fn test_import() {
         let dir = PathBuf::from("tests/data/xonsh");
         let sessions = load_sessions(&dir).unwrap();
-        let hostname = "box:user".to_string();
-        let xonsh = Xonsh { sessions, hostname };
+        let cmd_origin = CmdOrigin::try_from("box:user").unwrap();
+        let xonsh = Xonsh {
+            sessions,
+            cmd_origin,
+        };
 
         let mut loader = TestLoader::default();
         xonsh.load(&mut loader).await.unwrap();
@@ -200,7 +203,7 @@ mod tests {
             assert_eq!(actual.cwd, expected.cwd);
             assert_eq!(actual.exit, expected.exit);
             assert_eq!(actual.duration, expected.duration);
-            assert_eq!(actual.hostname, expected.hostname);
+            assert_eq!(actual.cmd_origin, expected.cmd_origin);
         }
     }
 
@@ -212,7 +215,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
                 .duration(4651069)
-                .hostname("box:user".to_string())
+                .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
             History::import()
@@ -221,7 +224,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
                 .duration(21288633)
-                .hostname("box:user".to_string())
+                .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
             History::import()
@@ -230,7 +233,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin/atuin-client".to_string())
                 .exit(1)
                 .duration(10269403)
-                .hostname("box:user".to_string())
+                .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
             History::import()
@@ -239,7 +242,7 @@ mod tests {
                 .cwd("/home/user/Documents/code/atuin/atuin-client".to_string())
                 .exit(0)
                 .duration(4259347)
-                .hostname("box:user".to_string())
+                .cmd_origin(CmdOrigin::try_from("box:user").unwrap())
                 .build()
                 .into(),
         ]

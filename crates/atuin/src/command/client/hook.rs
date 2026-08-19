@@ -46,8 +46,7 @@ enum PathRoot {
 /// empty value as unset. Taking it literally would resolve to a relative path
 /// and install under the current directory, where the agent never looks.
 fn xdg_config_home(var: Option<OsString>) -> PathBuf {
-    var.filter(|value| !value.is_empty())
-        .map_or_else(|| home_dir().join(".config"), PathBuf::from)
+    var.filter(|value| !value.is_empty()).map_or_else(|| home_dir().join(".config"), PathBuf::from)
 }
 
 struct AgentSpec {
@@ -107,16 +106,13 @@ struct Agent(&'static AgentSpec);
 
 impl Agent {
     fn from_name(name: &str) -> Result<Self> {
-        AGENTS
-            .iter()
-            .copied()
-            .find(|spec| spec.aliases.contains(&name))
-            .map(Self)
-            .ok_or_else(|| {
+        AGENTS.iter().copied().find(|spec| spec.aliases.contains(&name)).map(Self).ok_or_else(
+            || {
                 eyre::eyre!(
                     "unknown agent: {name}. Supported agents: claude-code, codex, opencode, pi"
                 )
-            })
+            },
+        )
     }
 
     fn actor_name(&self) -> &'static str {
@@ -182,7 +178,8 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
 
     if let InstallKind::Extension { reload_hint, .. } = agent.install_kind() {
         bail!(
-            "`atuin hook {agent_name}` is not supported. Use `atuin hook install {agent_name}`. {reload_hint}"
+            "`atuin hook {agent_name}` is not supported. Use `atuin hook install {agent_name}`. \
+             {reload_hint}"
         );
     }
 
@@ -320,14 +317,11 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
             .ok_or_else(|| eyre::eyre!("hooks.{event_type} is not an array"))?;
 
         let already_installed = arr.iter().any(|entry| {
-            entry
-                .get("hooks")
-                .and_then(Value::as_array)
-                .is_some_and(|hooks| {
-                    hooks.iter().any(|hook| {
-                        hook.get("command").and_then(Value::as_str) == Some(hook_command)
-                    })
-                })
+            entry.get("hooks").and_then(Value::as_array).is_some_and(|hooks| {
+                hooks
+                    .iter()
+                    .any(|hook| hook.get("command").and_then(Value::as_str) == Some(hook_command))
+            })
         });
 
         if already_installed {
@@ -347,23 +341,19 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{
-        Atuin,
-        command::{AtuinCmd, client},
-    };
     use atuin_client::history::is_known_agent;
     use clap::Parser;
     use rstest::rstest;
+
+    use super::*;
+    use crate::Atuin;
+    use crate::command::{AtuinCmd, client};
 
     #[test]
     fn parse_hook_agent_command() {
         let cmd = Cmd::try_parse_from(["hook", "codex"]).unwrap();
 
-        assert!(matches!(
-            (cmd.action, cmd.agent.as_deref()),
-            (None, Some("codex"))
-        ));
+        assert!(matches!((cmd.action, cmd.agent.as_deref()), (None, Some("codex"))));
     }
 
     #[rstest]
@@ -385,10 +375,7 @@ mod tests {
     fn agent_from_name_supports_extension_agents(#[case] agent_name: &str) {
         let agent = Agent::from_name(agent_name).unwrap();
         assert_eq!(agent.actor_name(), agent_name);
-        assert!(matches!(
-            agent.install_kind(),
-            InstallKind::Extension { .. }
-        ));
+        assert!(matches!(agent.install_kind(), InstallKind::Extension { .. }));
     }
 
     /// An agent missing from `KNOWN_AGENTS` would be installable but invisible
@@ -426,10 +413,7 @@ mod tests {
         let root = xdg_config_home(std::env::var_os("XDG_CONFIG_HOME"));
         let installed = agent.path(extension_path);
 
-        assert!(
-            installed.starts_with(&root),
-            "{installed:?} is not under {root:?}"
-        );
+        assert!(installed.starts_with(&root), "{installed:?} is not under {root:?}");
         assert!(installed.ends_with("opencode/plugins/atuin.ts"));
     }
 

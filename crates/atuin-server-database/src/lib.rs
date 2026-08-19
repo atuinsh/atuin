@@ -4,10 +4,11 @@ pub mod models;
 
 use std::fmt::Debug;
 
-use self::models::{NewSession, NewUser, Session, User};
 use async_trait::async_trait;
 use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus, RecordTag};
 use serde::{Deserialize, Serialize};
+
+use self::models::{NewSession, NewUser, Session, User};
 
 #[derive(Debug, derive_more::Display, derive_more::Error, derive_more::From)]
 #[display("{self:?}")]

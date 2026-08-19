@@ -133,17 +133,17 @@ mod unix {
             .command("echo hello".to_string())
             .cwd("/tmp".to_string())
             .session("test-session".to_string())
-            .hostname("test-host".to_string())
+            .cmd_origin(
+                #[allow(deprecated)]
+                atuin_domain::record::CmdOrigin::parse_lenient("test-host"),
+            )
             .build()
             .into();
 
         let start_reply = client.start_history(history).await.unwrap();
         assert!(!start_reply.id.is_empty());
 
-        let end_reply = client
-            .end_history(start_reply.id, 1_000_000, 0)
-            .await
-            .unwrap();
+        let end_reply = client.end_history(start_reply.id, 1_000_000, 0).await.unwrap();
         assert!(!end_reply.id.is_empty());
     }
 
@@ -163,7 +163,7 @@ mod unix {
             .command("git status".to_string())
             .cwd("/tmp/repo".to_string())
             .session("tail-session".to_string())
-            .hostname("test-host:ellie".to_string())
+            .cmd_origin(atuin_domain::record::CmdOrigin::try_from("test-host:ellie").unwrap())
             .author("claude".to_string())
             .intent("inspect repository state".to_string())
             .shell("bash")
@@ -173,10 +173,7 @@ mod unix {
         let start_reply = client.start_history(history).await.unwrap();
 
         let started = stream.message().await.unwrap().unwrap();
-        assert_eq!(
-            HistoryEventKind::try_from(started.kind).unwrap(),
-            HistoryEventKind::Started
-        );
+        assert_eq!(HistoryEventKind::try_from(started.kind).unwrap(), HistoryEventKind::Started);
         let started_history = started.history.unwrap();
         assert_eq!(started_history.id, start_reply.id);
         assert_eq!(started_history.command, "git status");
@@ -185,16 +182,10 @@ mod unix {
         assert_eq!(started_history.author, "claude");
         assert_eq!(started_history.intent, "inspect repository state");
 
-        client
-            .end_history(start_reply.id.clone(), 1_000_000, 0)
-            .await
-            .unwrap();
+        client.end_history(start_reply.id.clone(), 1_000_000, 0).await.unwrap();
 
         let ended = stream.message().await.unwrap().unwrap();
-        assert_eq!(
-            HistoryEventKind::try_from(ended.kind).unwrap(),
-            HistoryEventKind::Ended
-        );
+        assert_eq!(HistoryEventKind::try_from(ended.kind).unwrap(), HistoryEventKind::Ended);
         let ended_history = ended.history.unwrap();
         assert_eq!(ended_history.id, start_reply.id);
         assert_eq!(ended_history.exit, 0);
@@ -208,9 +199,7 @@ mod unix {
     ) {
         let (mut client, _handle, _tmp) = daemon.await;
 
-        let result = client
-            .end_history("nonexistent-id".to_string(), 1000, 0)
-            .await;
+        let result = client.end_history("nonexistent-id".to_string(), 1000, 0).await;
         assert!(result.is_err());
     }
 

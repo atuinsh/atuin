@@ -18,11 +18,10 @@ use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::{EncryptedData, Record, RecordId, RecordTag};
 use thiserror::Error;
 
-use crate::{
-    api_client::Client, packfile::record::ParsingError, record::sqlite_store::SqliteStore,
-};
-
 use super::record::{PackManifestRecordView, PackingError, UnpackError};
+use crate::api_client::Client;
+use crate::packfile::record::ParsingError;
+use crate::record::sqlite_store::SqliteStore;
 
 #[derive(Debug, Error)]
 pub enum UploadError {
@@ -50,10 +49,7 @@ pub async fn upload_packed(
 
     let (blob, ids) = view.pack_records(store, key.clone()).await?;
 
-    client
-        .upload_packfile(view.record.id, &ids, blob)
-        .await
-        .map_err(UploadError::Api)
+    client.upload_packfile(view.record.id, &ids, blob).await.map_err(UploadError::Api)
 }
 
 #[derive(Debug, Error)]
@@ -95,10 +91,8 @@ pub async fn download_packed(
     let view = PackManifestRecordView::new(manifest)?;
 
     // Skip if we already have the whole range (history is contiguous, packfiles are prefixes).
-    let head = store
-        .last(view.record.host.id, &RecordTag::History)
-        .await
-        .map_err(DownloadError::Store)?;
+    let head =
+        store.last(view.record.host.id, &RecordTag::History).await.map_err(DownloadError::Store)?;
     if let Some(head) = head
         && head.idx >= view.range().end - 1
     {
@@ -110,18 +104,12 @@ pub async fn download_packed(
         return Ok(existing.iter().map(|r| r.id).collect());
     }
 
-    let blob = client
-        .download_packfile(view.record.id)
-        .await
-        .map_err(DownloadError::Api)?;
+    let blob = client.download_packfile(view.record.id).await.map_err(DownloadError::Api)?;
 
     let records = view.unpack_records(blob, key.clone()).await?;
     let ids: Vec<RecordId> = records.iter().map(|record| record.id).collect();
 
-    store
-        .push_batch(records.iter())
-        .await
-        .map_err(DownloadError::Store)?;
+    store.push_batch(records.iter()).await.map_err(DownloadError::Store)?;
 
     Ok(ids)
 }
@@ -132,14 +120,13 @@ mod tests {
 
     use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
+    use atuin_domain::caps::PackfileCap;
     use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordVersion};
     use rstest::*;
     use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use atuin_domain::caps::PackfileCap;
-
     use crate::api_client::{AuthToken, Client, caps_client};
     use crate::packfile::try_pack;
     use crate::record::sqlite_store::SqliteStore;
@@ -155,22 +142,13 @@ mod tests {
     /// A [`Client`] pointed at a wiremock server, authenticated with a dummy token.
     fn mock_client(addr: &url::Url) -> Client {
         let caps = caps_client(addr, &HashMap::new()).unwrap();
-        Client::new(
-            addr.clone(),
-            AuthToken::Token("t".into()),
-            30,
-            30,
-            &HashMap::new(),
-            caps,
-        )
-        .unwrap()
+        Client::new(addr.clone(), AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
+            .unwrap()
     }
 
     /// A fresh in-memory record store.
     async fn memory_store() -> SqliteStore {
-        SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap()
+        SqliteStore::new(":memory:", test_local_timeout()).await.unwrap()
     }
 
     /// Push a contiguous run of `count` encrypted HISTORY records (idx `0..count`).
@@ -284,9 +262,7 @@ mod tests {
 
         // `.expect(1)` on all three mocks verifies create_packfile + put_packfile +
         // confirm_packfile each fired exactly once.
-        upload_packed(&manifest, &store, &key, &client)
-            .await
-            .unwrap();
+        upload_packed(&manifest, &store, &key, &client).await.unwrap();
     }
 
     #[rstest]
@@ -335,9 +311,7 @@ mod tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let ids = download_packed(&manifest, &down, &key, &client)
-            .await
-            .unwrap();
+        let ids = download_packed(&manifest, &down, &key, &client).await.unwrap();
         assert_eq!(ids.len(), 5, "all five history records populated");
 
         // History is present locally and decrypts to the same commands.
@@ -391,9 +365,7 @@ mod tests {
         )
         .unwrap();
 
-        let ids = download_packed(&manifest, &down, &key, &client)
-            .await
-            .unwrap();
+        let ids = download_packed(&manifest, &down, &key, &client).await.unwrap();
 
         // Range already present -> no fetch, but the covered ids are still returned so the
         // id-driven history.db rebuild can re-index them (see download_packed's doc comment).
@@ -496,11 +468,7 @@ mod tests {
         assert_eq!(ids.len(), 3, "the valid manifest's three records expand");
 
         let got = down.next(host, &RecordTag::History, 0, 3).await.unwrap();
-        assert_eq!(
-            got.len(),
-            3,
-            "the valid packfile's history is present locally"
-        );
+        assert_eq!(got.len(), 3, "the valid packfile's history is present locally");
     }
 
     /// GUARD: a TRANSIENT/systemic fault (here a connection-refused packfile GET) must still

@@ -1,15 +1,15 @@
-use eyre::Result;
+use atuin_client::settings::Settings;
+use eyre::{Context, Result};
 
 use crate::components::history::HistoryGrpcService;
 use crate::components::search::SearchGrpcService;
 use crate::components::semantic::SemanticGrpcService;
-use crate::control::{ControlService, control_server::ControlServer};
+use crate::control::ControlService;
+use crate::control::control_server::ControlServer;
 use crate::daemon::DaemonHandle;
 use crate::history::history_server::HistoryServer;
 use crate::search::search_server::SearchServer;
 use crate::semantic::semantic_server::SemanticServer;
-
-use atuin_client::settings::Settings;
 
 /// How often to update the socket's modification time so it doesn't get automatically deleted by
 /// temporary file cleaners.
@@ -37,9 +37,10 @@ pub async fn run_grpc_server(
     let (uds, cleanup_path) = if cfg!(target_os = "linux") && settings.daemon.systemd_socket {
         #[cfg(target_os = "linux")]
         {
-            use eyre::{OptionExt, WrapErr};
             use std::os::unix::net::SocketAddr;
             use std::path::PathBuf;
+
+            use eyre::{OptionExt, WrapErr};
             tracing::info!("getting systemd socket");
             let listener = listenfd::ListenFd::from_env()
                 .take_unix_listener(0)?
@@ -66,7 +67,7 @@ pub async fn run_grpc_server(
                 Err(err) => {
                     tracing::warn!(
                         "could not detect systemd socket path, ensure that it's at the configured \
-                        path: {:?}, error: {err:?}",
+                         path: {:?}, error: {err:?}",
                         socket_path.as_path(),
                     );
                 }
@@ -76,10 +77,15 @@ pub async fn run_grpc_server(
         #[cfg(not(target_os = "linux"))]
         unreachable!()
     } else {
+        use atuin_common::path::DisplayRichExt;
+
         socket_path.create_default_dir_if_needed()?;
         tracing::info!("listening on unix socket {:?}", socket_path.as_path());
         (
-            UnixListener::bind(&socket_path)?,
+            UnixListener::bind(&socket_path).context(format!(
+                "reading socket: {}",
+                socket_path.display_rich().relative_to_cwd()
+            ))?,
             Some(socket_path.into_owned()),
         )
     };

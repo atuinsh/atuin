@@ -1,15 +1,15 @@
-use crossterm::style::{ResetColor, SetAttribute};
-use eyre::Result;
 use std::collections::{HashMap, HashSet};
-use time::{Date, Duration, Month, OffsetDateTime, Time};
 
-use atuin_client::{
-    database::Database, record::sqlite_store::SqliteStore, settings::Settings, theme::Theme,
-};
+use atuin_client::database::Sqlite;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
+use atuin_client::theme::Theme;
 use atuin_common::encryption::paseto_v4;
 use atuin_dotfiles::store::AliasStore;
-
 use atuin_history::stats::{Stats, compute};
+use crossterm::style::{ResetColor, SetAttribute};
+use eyre::Result;
+use time::{Date, Duration, Month, OffsetDateTime, Time};
 
 #[derive(Debug)]
 struct WrappedStats {
@@ -34,13 +34,7 @@ impl WrappedStats {
         let expand_alias = |cmd: &str| -> String {
             alias_map.get(cmd).map_or_else(
                 || cmd.to_string(),
-                |expanded| {
-                    expanded
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or(cmd)
-                        .to_string()
-                },
+                |expanded| expanded.split_whitespace().next().unwrap_or(cmd).to_string(),
             )
         };
 
@@ -119,12 +113,7 @@ impl WrappedStats {
         let mut hours: HashMap<String, usize> = HashMap::new();
 
         for entry in history {
-            let raw_cmd = entry
-                .command
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_string();
+            let raw_cmd = entry.command.split_whitespace().next().unwrap_or("").to_string();
             let cmd = expand_alias(&raw_cmd);
             let (total, errors) = command_errors.entry(cmd.clone()).or_insert((0, 0));
             *total += 1;
@@ -201,7 +190,8 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
 
     if wrapped_stats.git_percentage > 0.05 {
         println!(
-            "{bold}🌟 You're a Git Power User!{reset} {bold}{:.1}%{reset} of your commands were Git operations\n",
+            "{bold}🌟 You're a Git Power User!{reset} {bold}{:.1}%{reset} of your commands were \
+             Git operations\n",
             wrapped_stats.git_percentage * 100.0
         );
     }
@@ -209,7 +199,8 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
     let nav_percentage = wrapped_stats.nav_commands as f64 / stats.total_commands as f64 * 100.0;
     if nav_percentage > 0.05 {
         println!(
-            "{bold}🚀 You're a Navigator!{reset} {bold}{nav_percentage:.1}%{reset} of your time was spent navigating directories\n",
+            "{bold}🚀 You're a Navigator!{reset} {bold}{nav_percentage:.1}%{reset} of your time \
+             was spent navigating directories\n",
         );
     }
 
@@ -228,7 +219,8 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
     // Error patterns
     let error_percentage = wrapped_stats.error_rate * 100.0;
     println!(
-        "{bold}🚨 Error Analysis{reset}: Your commands failed {bold}{error_percentage:.1}%{reset} of the time\n",
+        "{bold}🚨 Error Analysis{reset}: Your commands failed {bold}{error_percentage:.1}%{reset} \
+         of the time\n",
     );
 
     // Command evolution
@@ -246,11 +238,8 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
     }
 
     // Find new favorite commands (in top 5 of second half but not in first half)
-    let first_half_set: HashSet<_> = wrapped_stats
-        .first_half_commands
-        .iter()
-        .map(|(cmd, _)| cmd)
-        .collect();
+    let first_half_set: HashSet<_> =
+        wrapped_stats.first_half_commands.iter().map(|(cmd, _)| cmd).collect();
     let new_favorites: Vec<_> = wrapped_stats
         .second_half_commands
         .iter()
@@ -270,12 +259,7 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
         println!("\n🕘 Most Productive Hour: {bold}{hour}{reset} ({count} commands)");
 
         // Night owl or early bird
-        let hour_num = hour
-            .split(':')
-            .next()
-            .unwrap_or("0")
-            .parse::<u32>()
-            .unwrap_or(0);
+        let hour_num = hour.split(':').next().unwrap_or("0").parse::<u32>().unwrap_or(0);
         if hour_num >= 22 || hour_num <= 4 {
             println!("  You're quite the night owl! 🦉");
         } else if (5..=7).contains(&hour_num) {
@@ -288,7 +272,7 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
 
 pub async fn run(
     year: Option<i32>,
-    db: &impl Database,
+    db: &Sqlite,
     settings: &Settings,
     store: SqliteStore,
     theme: &Theme,
@@ -319,7 +303,8 @@ pub async fn run(
     let history = db.range(start, end).await?;
     if history.is_empty() {
         println!(
-            "Your history for {year} is empty!\nMaybe 'atuin import' could help you import your previous history 🪄"
+            "Your history for {year} is empty!\nMaybe 'atuin import' could help you import your \
+             previous history 🪄"
         );
         return Ok(());
     }
@@ -344,18 +329,20 @@ pub async fn run(
         HashMap::new()
     };
 
-    // Compute overall stats using existing functionality
-    let stats = compute(settings, &history, 10, 1).expect("Failed to compute stats");
+    let Some(stats) = compute(settings, &history, 10, 1) else {
+        println!(
+            "No commands found in your {year} history. Run a command or check your config for for \
+             commands ignored by stats.ignored_commands."
+        );
+        return Ok(());
+    };
     let wrapped_stats = WrappedStats::new(settings, &stats, &history, &alias_map);
 
     // Print wrapped format
     print_wrapped_header(year);
 
     println!("🎉 In {year}, you typed {} commands!", stats.total_commands);
-    println!(
-        "   That's ~{} commands every day\n",
-        stats.total_commands / 365
-    );
+    println!("   That's ~{} commands every day\n", stats.total_commands / 365);
 
     println!("Your Top Commands:");
     atuin_history::stats::pretty_print(stats.clone(), 1, theme);

@@ -1,8 +1,9 @@
+use atuin_client::database::Sqlite;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
 use atuin_common::time::{OffsetDateTimeExt, UtcOffsetExt};
 use clap::Subcommand;
 use eyre::Result;
-
-use atuin_client::{database::Database, record::sqlite_store::SqliteStore, settings::Settings};
 use itertools::Itertools;
 use time::OffsetDateTime;
 
@@ -48,7 +49,7 @@ impl Cmd {
     pub async fn run(
         &self,
         settings: &Settings,
-        database: &dyn Database,
+        database: &Sqlite,
         store: SqliteStore,
     ) -> Result<()> {
         match self {

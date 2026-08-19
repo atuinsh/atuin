@@ -1,19 +1,23 @@
 use std::env;
 
 use async_trait::async_trait;
+use atuin_client::database::Sqlite;
+use atuin_client::history::History;
+use atuin_client::import::bash::Bash;
+use atuin_client::import::fish::Fish;
+use atuin_client::import::nu::Nu;
+use atuin_client::import::nu_histdb::NuHistDb;
+use atuin_client::import::powershell::PowerShell;
+use atuin_client::import::replxx::Replxx;
+use atuin_client::import::resh::Resh;
+use atuin_client::import::xonsh::Xonsh;
+use atuin_client::import::xonsh_sqlite::XonshSqlite;
+use atuin_client::import::zsh::Zsh;
+use atuin_client::import::zsh_histdb::ZshHistDb;
+use atuin_client::import::{Importer, Loader};
 use clap::Parser;
 use eyre::Result;
 use indicatif::ProgressBar;
-
-use atuin_client::{
-    database::Database,
-    history::History,
-    import::{
-        Importer, Loader, bash::Bash, fish::Fish, nu::Nu, nu_histdb::NuHistDb,
-        powershell::PowerShell, replxx::Replxx, resh::Resh, xonsh::Xonsh,
-        xonsh_sqlite::XonshSqlite, zsh::Zsh, zsh_histdb::ZshHistDb,
-    },
-};
 
 #[derive(Parser, Debug)]
 #[command(infer_subcommands = true)]
@@ -49,7 +53,7 @@ const BATCH_SIZE: usize = 100;
 
 impl Cmd {
     #[allow(clippy::cognitive_complexity)]
-    pub async fn run<DB: Database>(&self, db: &DB) -> Result<()> {
+    pub async fn run(&self, db: &Sqlite) -> Result<()> {
         println!("        Atuin         ");
         println!("======================");
         println!("          \u{1f30d}          ");
@@ -63,7 +67,7 @@ impl Cmd {
                 if cfg!(windows) {
                     return if env::var("PSModulePath").is_ok() {
                         println!("Detected PowerShell");
-                        import::<PowerShell, DB>(db).await
+                        import::<PowerShell>(db).await
                     } else {
                         println!("Could not detect the current shell.");
                         println!("Please run atuin import <SHELL>.");
@@ -79,64 +83,64 @@ impl Cmd {
 
                 if xonsh_histfile.to_lowercase().ends_with(".json") {
                     println!("Detected Xonsh");
-                    import::<Xonsh, DB>(db).await
+                    import::<Xonsh>(db).await
                 } else if xonsh_histfile.to_lowercase().ends_with(".sqlite") {
                     println!("Detected Xonsh (SQLite backend)");
-                    import::<XonshSqlite, DB>(db).await
+                    import::<XonshSqlite>(db).await
                 } else if shell.ends_with("/zsh") {
                     if let Ok(path) = ZshHistDb::histpath() {
                         println!("Detected Zsh-HistDb, using :{}", path.to_string_lossy());
-                        import::<ZshHistDb, DB>(db).await
+                        import::<ZshHistDb>(db).await
                     } else {
                         println!("Detected ZSH");
-                        import::<Zsh, DB>(db).await
+                        import::<Zsh>(db).await
                     }
                 } else if shell.ends_with("/fish") {
                     println!("Detected Fish");
-                    import::<Fish, DB>(db).await
+                    import::<Fish>(db).await
                 } else if shell.ends_with("/bash") {
                     println!("Detected Bash");
-                    import::<Bash, DB>(db).await
+                    import::<Bash>(db).await
                 } else if shell.ends_with("/nu") {
                     if let Ok(path) = NuHistDb::histpath() {
                         println!("Detected Nu-HistDb, using :{}", path.to_string_lossy());
-                        import::<NuHistDb, DB>(db).await
+                        import::<NuHistDb>(db).await
                     } else {
                         println!("Detected Nushell");
-                        import::<Nu, DB>(db).await
+                        import::<Nu>(db).await
                     }
                 } else if shell.ends_with("/pwsh") {
                     println!("Detected PowerShell");
-                    import::<PowerShell, DB>(db).await
+                    import::<PowerShell>(db).await
                 } else {
                     println!("cannot import {shell} history");
                     Ok(())
                 }
             }
 
-            Self::Zsh => import::<Zsh, DB>(db).await,
-            Self::ZshHistDb => import::<ZshHistDb, DB>(db).await,
-            Self::Bash => import::<Bash, DB>(db).await,
-            Self::Replxx => import::<Replxx, DB>(db).await,
-            Self::Resh => import::<Resh, DB>(db).await,
-            Self::Fish => import::<Fish, DB>(db).await,
-            Self::Nu => import::<Nu, DB>(db).await,
-            Self::NuHistDb => import::<NuHistDb, DB>(db).await,
-            Self::Xonsh => import::<Xonsh, DB>(db).await,
-            Self::XonshSqlite => import::<XonshSqlite, DB>(db).await,
-            Self::Powershell => import::<PowerShell, DB>(db).await,
+            Self::Zsh => import::<Zsh>(db).await,
+            Self::ZshHistDb => import::<ZshHistDb>(db).await,
+            Self::Bash => import::<Bash>(db).await,
+            Self::Replxx => import::<Replxx>(db).await,
+            Self::Resh => import::<Resh>(db).await,
+            Self::Fish => import::<Fish>(db).await,
+            Self::Nu => import::<Nu>(db).await,
+            Self::NuHistDb => import::<NuHistDb>(db).await,
+            Self::Xonsh => import::<Xonsh>(db).await,
+            Self::XonshSqlite => import::<XonshSqlite>(db).await,
+            Self::Powershell => import::<PowerShell>(db).await,
         }
     }
 }
 
-pub struct HistoryImporter<'db, DB: Database> {
+pub struct HistoryImporter<'db> {
     pb: ProgressBar,
     buf: Vec<History>,
-    db: &'db DB,
+    db: &'db Sqlite,
 }
 
-impl<'db, DB: Database> HistoryImporter<'db, DB> {
-    fn new(db: &'db DB, len: usize) -> Self {
+impl<'db> HistoryImporter<'db> {
+    fn new(db: &'db Sqlite, len: usize) -> Self {
         Self {
             pb: ProgressBar::new(len as u64),
             buf: Vec::with_capacity(BATCH_SIZE),
@@ -145,16 +149,14 @@ impl<'db, DB: Database> HistoryImporter<'db, DB> {
     }
 
     async fn flush(self) -> Result<()> {
-        if !self.buf.is_empty() {
-            self.db.save_bulk(&self.buf).await?;
-        }
+        self.db.save_bulk(&self.buf).await?;
         self.pb.finish();
         Ok(())
     }
 }
 
 #[async_trait]
-impl<DB: Database> Loader for HistoryImporter<'_, DB> {
+impl Loader for HistoryImporter<'_> {
     async fn push(&mut self, hist: History) -> Result<()> {
         self.pb.inc(1);
         self.buf.push(hist);
@@ -166,7 +168,7 @@ impl<DB: Database> Loader for HistoryImporter<'_, DB> {
     }
 }
 
-async fn import<I: Importer + Send, DB: Database>(db: &DB) -> Result<()> {
+async fn import<I: Importer + Send>(db: &Sqlite) -> Result<()> {
     println!("Importing history from {}", I::NAME);
 
     let mut importer = I::new().await?;
