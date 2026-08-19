@@ -5,6 +5,7 @@ use atuin_dotfiles::store::AliasStore;
 use atuin_dotfiles::store::var::VarStore;
 use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr};
+use tracing::instrument;
 
 mod bash;
 mod fish;
@@ -165,6 +166,7 @@ impl Cmd {
         }
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Settings) -> Result<()> {
         if !settings.paths_ok() {
             eprintln!(

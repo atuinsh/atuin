@@ -18,6 +18,7 @@ use atuin_client::import::{Importer, Loader};
 use clap::Parser;
 use eyre::Result;
 use indicatif::ProgressBar;
+use tracing::instrument;
 
 #[derive(Parser, Debug)]
 #[command(infer_subcommands = true)]
@@ -53,6 +54,7 @@ const BATCH_SIZE: usize = 100;
 
 impl Cmd {
     #[allow(clippy::cognitive_complexity)]
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(&self, db: &Sqlite) -> Result<()> {
         println!("        Atuin         ");
         println!("======================");

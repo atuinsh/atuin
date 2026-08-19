@@ -18,7 +18,7 @@ use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AG
 use reqwest::{Response, StatusCode, Url};
 use reqwest_middleware::ClientWithMiddleware;
 use semver::Version;
-use tracing::instrument;
+use tracing::{Instrument, instrument};
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
@@ -412,7 +412,12 @@ impl Client {
     #[instrument(level = "trace", skip_all, fields(id = ?manifest_id), err)]
     pub async fn download_packfile(&self, manifest_id: RecordId) -> Result<Vec<u8>> {
         let download_url = self.get_packfile_download_url(manifest_id).await?;
-        let resp = self.lfs_client.get(download_url).send().await?;
+        let resp = self
+            .lfs_client
+            .get(download_url)
+            .send()
+            .instrument(tracing::trace_span!("lfs_download"))
+            .await?;
         let resp = handle_resp_error(resp).await?;
         Ok(resp.bytes().await?.to_vec())
     }

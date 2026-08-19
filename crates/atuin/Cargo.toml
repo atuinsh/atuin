@@ -110,6 +110,10 @@ ratatui = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = "0.2"
+tracing-opentelemetry = "0.33"
+opentelemetry = "0.32"
+opentelemetry_sdk = "0.32"
+opentelemetry-otlp = "0.32"
 uuid = { workspace = true }
 sysinfo = "0.30.7"
 regex = "1.10.5"

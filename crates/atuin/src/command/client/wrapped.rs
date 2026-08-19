@@ -10,6 +10,7 @@ use atuin_history::stats::{Stats, compute};
 use crossterm::style::{ResetColor, SetAttribute};
 use eyre::Result;
 use time::{Date, Duration, Month, OffsetDateTime, Time};
+use tracing::instrument;
 
 #[derive(Debug)]
 struct WrappedStats {
@@ -270,6 +271,7 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
     println!();
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn run(
     year: Option<i32>,
     db: &Sqlite,

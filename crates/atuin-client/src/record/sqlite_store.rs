@@ -24,6 +24,11 @@ use uuid::Uuid;
 #[derive(Debug, Clone)]
 pub struct SqliteStore {
     pool: SqlitePool,
+
+    /// SQLite's `SQLITE_LIMIT_VARIABLE_NUMBER` for this database, queried at
+    /// construction. [`SqliteStore::push_batch`] chunks its multi-row INSERT against
+    /// this (one parameter per column, per row).
+    max_bind_params: usize,
 }
 
 impl SqliteStore {
@@ -60,8 +65,12 @@ impl SqliteStore {
             .await?;
 
         Self::setup_db(&pool).await?;
+        let max_bind_params = crate::sqlite_util::max_bind_params(&pool).await?;
 
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            max_bind_params,
+        })
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -137,10 +146,36 @@ impl SqliteStore {
         &self,
         records: impl Iterator<Item = &Record<paseto_v4::EncryptedData>> + Send + Sync,
     ) -> Result<()> {
+        // `store` has 8 columns, so each row binds 8 parameters; keep a full chunk
+        // within the bind-parameter limit. `max(1)` keeps the chunk non-empty on any
+        // (implausible) tiny limit.
+        const COLUMNS: usize = 8;
+        let rows_per_insert = (self.max_bind_params / COLUMNS).max(1);
+
+        let mut records = records.peekable();
         let mut tx = self.pool.begin().await?;
 
-        for record in records {
-            Self::save_raw(&mut tx, record).await?;
+        // Stream fixed-size chunks straight into a multi-row INSERT: `QueryBuilder`
+        // writes the `values (..),(..)` and binds each row in a single pass, so we
+        // never materialise the input. The `peek` guard keeps each chunk non-empty,
+        // which `push_values` requires.
+        while records.peek().is_some() {
+            let mut builder = sqlx::QueryBuilder::new(
+                "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek) ",
+            );
+
+            builder.push_values(records.by_ref().take(rows_per_insert), |mut b, r| {
+                b.push_bind(r.id.0.as_hyphenated().to_string())
+                    .push_bind(r.idx as i64)
+                    .push_bind(r.host.id.0.as_hyphenated().to_string())
+                    .push_bind(r.tag.as_str())
+                    .push_bind(r.timestamp as i64)
+                    .push_bind(r.version.as_str())
+                    .push_bind(r.data.raw.as_str())
+                    .push_bind(r.data.cek.as_str());
+            });
+
+            builder.build().execute(&mut *tx).await?;
         }
 
         tx.commit().await?;

@@ -138,7 +138,7 @@ codegen-units = 256
 # `release_max_level_info` ceiling strips anything below info -- including the
 # `#[instrument(level = "trace")]` spans. Turning debug assertions on flips
 # tracing to its (permissive) `max_level_*` ceiling, so those spans compile in.
-# Enable them at runtime with `ATUIN_SPAN=atuin-spans.json` or `ATUIN_LOG=trace`.
+# Emit them at runtime with `ATUIN_OTEL=1` (exports to Jaeger) or `ATUIN_LOG=trace`.
 # Build with: cargo build --profile profiling-traced
 [profile.profiling-traced]
 inherits = "profiling"

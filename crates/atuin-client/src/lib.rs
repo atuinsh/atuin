@@ -29,4 +29,5 @@ pub mod secrets;
 pub mod settings;
 pub mod theme;
 
+mod sqlite_util;
 mod utils;

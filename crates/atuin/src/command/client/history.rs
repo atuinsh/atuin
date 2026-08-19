@@ -27,7 +27,7 @@ use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 #[cfg(feature = "daemon")]
 use serde::Serialize;
 use time::OffsetDateTime;
-use tracing::{debug, warn};
+use tracing::{debug, instrument, warn};
 
 #[cfg(feature = "daemon")]
 use super::daemon as daemon_cmd;
@@ -189,6 +189,7 @@ impl ListMode {
 }
 
 #[allow(clippy::cast_sign_loss)]
+#[instrument(level = "trace", skip_all, fields(count = h.len()))]
 pub fn print_list(
     h: &[History],
     list_mode: ListMode,
@@ -426,6 +427,7 @@ fn make_starting_history(
     h.should_save(settings).then_some(h)
 }
 
+#[instrument(level = "trace", skip_all, err)]
 async fn handle_start(
     db: &Sqlite,
     settings: &Settings,
@@ -447,6 +449,7 @@ async fn handle_start(
 }
 
 #[cfg(feature = "daemon")]
+#[instrument(level = "trace", skip_all, err)]
 async fn handle_daemon_start(
     settings: &Settings,
     command: &str,
@@ -473,6 +476,7 @@ async fn handle_daemon_start(
 }
 
 #[allow(unused_variables)]
+#[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
 async fn handle_end(
     db: &Sqlite,
     store: SqliteStore,
@@ -540,6 +544,7 @@ async fn handle_end(
 }
 
 #[cfg(feature = "daemon")]
+#[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
 async fn handle_daemon_end(
     settings: &Settings,
     id: &str,
@@ -556,6 +561,7 @@ async fn handle_daemon_end(
     Ok(())
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub(super) async fn start_history_entry(
     settings: &Settings,
     command: &str,
@@ -572,6 +578,7 @@ pub(super) async fn start_history_entry(
     handle_start(&db, settings, command, author, intent).await
 }
 
+#[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
 pub(super) async fn end_history_entry(
     settings: &Settings,
     id: &str,
@@ -871,6 +878,7 @@ fn push_pretty_field(out: &mut String, label: &str, value: &str) {
 
 impl Cmd {
     #[cfg(feature = "daemon")]
+    #[instrument(level = "trace", skip_all, err)]
     async fn handle_tail(settings: &Settings) -> Result<()> {
         let tty = std::io::stdout().is_terminal();
         let mut client = daemon::tail_client(settings).await?;
@@ -895,6 +903,7 @@ impl Cmd {
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::fn_params_excessive_bools)]
+    #[instrument(level = "trace", skip_all, err)]
     async fn handle_list(
         db: &Sqlite,
         settings: &Settings,
@@ -932,6 +941,7 @@ impl Cmd {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(dry_run), err)]
     async fn handle_prune(
         db: &Sqlite,
         settings: &Settings,
@@ -984,6 +994,7 @@ impl Cmd {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(dry_run, dupkeep), err)]
     async fn handle_dedup(
         db: &Sqlite,
         settings: &Settings,
@@ -1043,6 +1054,7 @@ impl Cmd {
     }
 
     #[allow(clippy::too_many_lines)]
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Settings) -> Result<()> {
         match self {
             Self::Start {

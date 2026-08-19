@@ -20,6 +20,11 @@ use crate::settings::Settings;
 /// How many packfile blobs to transfer (upload or download) concurrently within a single page.
 const MAX_CONCURRENT_PACKFILE_TRANSFERS: usize = 16;
 
+/// How many loose-history download pages to keep in flight at once. Fetching the next
+/// page(s) (network) while the current one is written (local sqlite) overlaps the two
+/// disjoint resources instead of strictly alternating them.
+const DOWNLOAD_PREFETCH: usize = 8;
+
 #[derive(Error, Debug)]
 pub enum SyncError {
     #[error("the local store is ahead of the remote, but for another host. has remote lost data?")]
@@ -339,8 +344,6 @@ async fn sync_download(
     }
 
     let expected = (remote + 1).saturating_sub(first_missing_local);
-    let mut progress = 0;
-    let mut ret = Vec::new();
 
     println!("Downloading {} records from {}/{}", expected, host.0.as_simple(), tag);
 
@@ -357,6 +360,62 @@ async fn sync_download(
         .progress_chars("#>-"),
     );
 
+    let ret = if tag == RecordTag::Packfile {
+        download_packfile_pages(
+            store,
+            client,
+            host,
+            &tag,
+            key,
+            first_missing_local,
+            expected,
+            page_size,
+            &pb,
+        )
+        .await?
+    } else {
+        download_loose_pages(
+            store,
+            client,
+            host,
+            &tag,
+            first_missing_local,
+            expected,
+            page_size,
+            &pb,
+        )
+        .await?
+    };
+
+    pb.finish_with_message("Downloaded records");
+
+    Ok(ret)
+}
+
+/// Download a run of packfile-manifest pages, expanding each manifest's history into the local
+/// store *before* persisting the manifest (so a stored manifest always has its history). That
+/// ordering and the per-manifest permanent-failure handling keep this path strictly serial across
+/// pages -- unlike the loose-history path in [`sync_download`], which pipelines. Returns the record
+/// ids touched (expanded history plus persisted manifests).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "threads the same download context as its sync_download caller"
+)]
+#[instrument(level = "trace", skip_all, fields(host = ?host, tag = ?tag), err)]
+async fn download_packfile_pages(
+    store: &SqliteStore,
+    client: &Client,
+    host: HostId,
+    tag: &RecordTag,
+    key: &paseto_v4::Key,
+    first_missing_local: RecordIdx,
+    expected: u64,
+    page_size: u64,
+    pb: &ProgressBar,
+) -> Result<Vec<RecordId>, SyncError> {
+    let mut ret = Vec::new();
+    let mut progress = 0u64;
+
     while progress < expected {
         let page = client
             .next_records(host, tag.clone(), first_missing_local + progress, page_size)
@@ -367,27 +426,23 @@ async fn sync_download(
             break;
         }
 
-        // We commit the packfile's history into the local store before we persist the manifests, so
-        // a manifest we recorded always has its associated history.
-        if tag == RecordTag::Packfile {
-            let mut downloads = stream::iter(0..page.len())
-                .map(|i| download_packed(&page[i], store, key, client))
-                .buffered(MAX_CONCURRENT_PACKFILE_TRANSFERS)
-                .enumerate();
+        let mut downloads = stream::iter(0..page.len())
+            .map(|i| download_packed(&page[i], store, key, client))
+            .buffered(MAX_CONCURRENT_PACKFILE_TRANSFERS)
+            .enumerate();
 
-            while let Some((i, result)) = downloads.next().await {
-                match result {
-                    Ok(expanded) => ret.extend(expanded),
-                    Err(e) if e.is_permanent() => error!(
-                        manifest_id = %page[i].id,
-                        host = %page[i].host.id,
-                        idx = page[i].idx,
-                        "skipping unexpandable packfile manifest: {e}. you have lost data."
-                    ),
-                    Err(e) => {
-                        error!("failed to download packfile: {e:?}");
-                        return Err(SyncError::RemoteRequestError { msg: e.to_string() });
-                    }
+        while let Some((i, result)) = downloads.next().await {
+            match result {
+                Ok(expanded) => ret.extend(expanded),
+                Err(e) if e.is_permanent() => error!(
+                    manifest_id = %page[i].id,
+                    host = %page[i].host.id,
+                    idx = page[i].idx,
+                    "skipping unexpandable packfile manifest: {e}. you have lost data."
+                ),
+                Err(e) => {
+                    error!("failed to download packfile: {e:?}");
+                    return Err(SyncError::RemoteRequestError { msg: e.to_string() });
                 }
             }
         }
@@ -403,7 +458,89 @@ async fn sync_download(
         pb.set_position(progress);
     }
 
-    pb.finish_with_message("Downloaded records");
+    Ok(ret)
+}
+
+/// Download a run of loose (non-packfile) record pages, pipelining the network fetches against the
+/// local `push_batch` writes instead of strictly alternating them. Page offsets are predictable --
+/// `first_missing_local + i * page_size` -- because the server paginates
+/// `idx >= start ORDER BY idx ASC LIMIT count` over dense records, so a page is short only at the
+/// tail. `insert or ignore` makes any overlap (e.g. from server-side idx gaps) a harmless no-op;
+/// the only way to *skip* records is a short *mid-stream* page (e.g. a server that clamps `count`
+/// below our `page_size`), which the guard catches by finishing serially from the actual progress.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "threads the same download context as its sync_download caller"
+)]
+#[instrument(level = "trace", skip_all, fields(host = ?host, tag = ?tag), err)]
+async fn download_loose_pages(
+    store: &SqliteStore,
+    client: &Client,
+    host: HostId,
+    tag: &RecordTag,
+    first_missing_local: RecordIdx,
+    expected: u64,
+    page_size: u64,
+    pb: &ProgressBar,
+) -> Result<Vec<RecordId>, SyncError> {
+    let mut ret = Vec::new();
+    let mut progress = 0u64;
+
+    let n_pages = expected.div_ceil(page_size);
+    let mut pages = stream::iter(0..n_pages)
+        .map(|i| {
+            client.next_records(host, tag.clone(), first_missing_local + i * page_size, page_size)
+        })
+        .buffered(DOWNLOAD_PREFETCH);
+
+    let mut short_page = false;
+    while let Some(result) = pages.next().await {
+        let page = result.map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
+
+        if page.is_empty() {
+            break;
+        }
+
+        let len = page.len() as u64;
+        store
+            .push_batch(page.iter())
+            .await
+            .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
+
+        ret.extend(page.iter().map(|f| f.id));
+        progress += len;
+        pb.set_position(progress);
+
+        // A short page mid-stream means the predicted offsets past it could skip records, so stop
+        // trusting them and finish from the real progress below.
+        if len < page_size {
+            short_page = true;
+            break;
+        }
+    }
+    drop(pages);
+
+    if short_page {
+        while progress < expected {
+            let page = client
+                .next_records(host, tag.clone(), first_missing_local + progress, page_size)
+                .await
+                .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
+
+            if page.is_empty() {
+                break;
+            }
+
+            store
+                .push_batch(page.iter())
+                .await
+                .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
+
+            ret.extend(page.iter().map(|f| f.id));
+            progress += page.len() as u64;
+            pb.set_position(progress);
+        }
+    }
 
     Ok(ret)
 }
@@ -423,6 +560,13 @@ pub async fn sync_remote(
         client.caps().get_server::<PackfileCap>().await,
         Ok(Some(cap)) if cap.record_count > 0
     );
+
+    if !packfiles_enabled {
+        tracing::warn!(
+            "this server does not appear to support packfiles. currently, only Atuin Hub supports \
+             packfiles. sync is about 10x faster with packfiles"
+        );
+    }
 
     // this can totally run in parallel, but lets get it working first
     for i in operations {
@@ -1122,6 +1266,103 @@ mod packfile_download_tests {
         let got =
             sync_download(&down, &client, host, RecordTag::History, 2, 100, &key).await.unwrap();
         assert!(got.is_empty(), "nothing to download when local head already exceeds remote");
+    }
+
+    /// Serve `records` split into pages of `serve_size`, keyed on the `start` query param
+    /// (`idx >= start ORDER BY idx ASC LIMIT count`, dense). `serve_size` may be smaller than
+    /// the client's page size to emulate a server that clamps `count`.
+    async fn mount_paged_history(
+        server: &MockServer,
+        records: &[Record<EncryptedData>],
+        serve_size: usize,
+    ) {
+        for start in (0..records.len()).step_by(serve_size) {
+            let end = (start + serve_size).min(records.len());
+            Mock::given(method("GET"))
+                .and(path("/api/v0/record/next"))
+                .and(query_param("tag", RecordTag::History.as_str()))
+                .and(query_param("start", start.to_string()))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(records[start..end].to_vec()),
+                )
+                .mount(server)
+                .await;
+        }
+        // Any start past the end -> empty.
+        Mock::given(method("GET"))
+            .and(path("/api/v0/record/next"))
+            .and(query_param("tag", RecordTag::History.as_str()))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(Vec::<Record<EncryptedData>>::new()),
+            )
+            .mount(server)
+            .await;
+    }
+
+    /// The loose-history download pipelines fetches at predicted offsets
+    /// (`first_missing + i * page_size`) and must reassemble every page in order.
+    #[rstest]
+    #[tokio::test]
+    async fn sync_download_paginates_loose_history_across_pages(
+        key: paseto_v4::Key,
+        #[future] server: MockServer,
+    ) {
+        let host = HostId(uuid_v7());
+        let up = memory_store().await;
+        seed_history(&up, host, &key, 5).await;
+        let all = up.next(host, &RecordTag::History, 0, 5).await.unwrap();
+
+        let server = server.await;
+        // page_size 2 -> offsets 0, 2, 4; the last page (idx 4) is a short tail.
+        mount_paged_history(&server, &all, 2).await;
+
+        let down = memory_store().await;
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let returned =
+            sync_download(&down, &client, host, RecordTag::History, 4, 2, &key).await.unwrap();
+
+        assert_eq!(
+            down.next(host, &RecordTag::History, 0, 5).await.unwrap().len(),
+            5,
+            "every page must be reassembled"
+        );
+        assert_eq!(returned.len(), 5);
+    }
+
+    /// GUARD: a server that clamps `count` below the client's `page_size` returns a short page
+    /// *mid-stream*. The predicted offsets past it would skip records, so the download must
+    /// detect the short page and finish serially from the real progress -- losing nothing.
+    #[rstest]
+    #[tokio::test]
+    async fn sync_download_recovers_from_a_short_midstream_page(
+        key: paseto_v4::Key,
+        #[future] server: MockServer,
+    ) {
+        let host = HostId(uuid_v7());
+        let up = memory_store().await;
+        seed_history(&up, host, &key, 6).await;
+        let all = up.next(host, &RecordTag::History, 0, 6).await.unwrap();
+
+        let server = server.await;
+        // Client asks for page_size 4, but the server only ever returns 2 (a clamp). Predicted
+        // offsets would be 0 and 4, skipping idx 2..4 -- the guard must recover them.
+        mount_paged_history(&server, &all, 2).await;
+
+        let down = memory_store().await;
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let returned =
+            sync_download(&down, &client, host, RecordTag::History, 5, 4, &key).await.unwrap();
+
+        assert_eq!(
+            down.next(host, &RecordTag::History, 0, 6).await.unwrap().len(),
+            6,
+            "a short mid-stream page must not skip records"
+        );
+        assert_eq!(returned.len(), 6);
     }
 
     /// Build `num_packs` contiguous packfiles of `per` history records each for a single host,

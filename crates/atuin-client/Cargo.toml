@@ -26,6 +26,7 @@ vendored-tls = ["reqwest?/native-tls-vendored"]
 [dependencies]
 derive_more = { workspace = true }
 tracing = { workspace = true }
+tracing-futures = { version = "0.2", features = ["futures-03"] }
 base64 = { workspace = true }
 zeroize = { workspace = true }
 time = { workspace = true, features = ["macros", "formatting", "parsing"] }
@@ -46,6 +47,10 @@ itertools = { workspace = true }
 rand = { workspace = true }
 shellexpand = { workspace = true }
 sqlx = { workspace = true, features = ["sqlite", "regexp"] }
+# Version range mirrors sqlx-sqlite's so cargo unifies both to a single
+# `links = "sqlite3"` package (one bundled SQLite). Used only to query the real
+# SQLITE_LIMIT_VARIABLE_NUMBER at startup; the `bundled` feature is inherited from sqlx.
+libsqlite3-sys = ">=0.30.1, <0.38.0"
 minspan = "0.1.5"
 regex = { workspace = true }
 serde_regex = "1.1.0"
