@@ -30,3 +30,6 @@ rstest = { workspace = true }
 # `resource` is for the fd-pressure integration test's setrlimit only.
 nix = { version = "0.29", features = ["socket", "user", "resource", "term"] }
 tempfile = { workspace = true }
+
+[lints]
+workspace = true

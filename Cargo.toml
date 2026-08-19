@@ -143,3 +143,6 @@ codegen-units = 256
 # git URL because git-sourced patches break crates.io publishing. Drop this
 # once the change is upstreamed and released.
 axoasset = { path = "vendor/axoasset" }
+
+[workspace.lints.clippy]
+redundant_clone = "warn"

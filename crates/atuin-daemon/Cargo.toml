@@ -60,3 +60,6 @@ rstest = { workspace = true }
 protox = "0.9"
 tonic-build = "0.14"
 tonic-prost-build = "0.14"
+
+[lints]
+workspace = true

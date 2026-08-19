@@ -149,3 +149,6 @@ windows-sys = { version = "0.61.2", features = ["Win32_System_Console"] }
 [dev-dependencies]
 proptest = { workspace = true }
 rstest = { workspace = true }
+
+[lints]
+workspace = true

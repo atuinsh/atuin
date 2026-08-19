@@ -47,3 +47,6 @@ rstest = { workspace = true }
 proptest = { workspace = true }
 wiremock = { workspace = true }
 tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

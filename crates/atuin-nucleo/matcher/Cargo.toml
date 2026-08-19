@@ -24,3 +24,6 @@ divan = { version = "5.0.1", package = "codspeed-divan-compat" }
 [[bench]]
 name = "fuzzy_match"
 harness = false
+
+[lints]
+workspace = true

@@ -35,3 +35,6 @@ url = "2.5.8"
 
 [dev-dependencies]
 rstest = { workspace = true }
+
+[lints]
+workspace = true

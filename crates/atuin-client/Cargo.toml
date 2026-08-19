@@ -111,3 +111,6 @@ features = ["test-utils"]
 [[bench]]
 name = "benchmarks"
 harness = false
+
+[lints]
+workspace = true
