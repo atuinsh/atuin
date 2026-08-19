@@ -328,9 +328,9 @@ hasn't indexed a freshly-published dependency yet):
 
 ```
 atuin-common, atuin-client, atuin-ai, atuin-dotfiles, atuin-history,
-atuin-nucleo/matcher, atuin-nucleo, atuin-daemon, atuin-kv,
-atuin-scripts, atuin-server-database, atuin-server-postgres,
-atuin-server-sqlite, atuin-server, atuin-pty-proxy, atuin
+atuin-daemon, atuin-kv, atuin-scripts, atuin-server-database,
+atuin-server-postgres, atuin-server-sqlite, atuin-server,
+atuin-pty-proxy, atuin
 ```
 
 For each crate, run from `crates/<name>`:
@@ -339,8 +339,8 @@ cargo publish --no-verify 2>&1
 ```
 
 If it fails with "already uploaded", report it as a skip (not an error) —
-some crates like `atuin-nucleo` are versioned independently and may
-already be published at their current version.
+some crates are versioned independently and may already be published at
+their current version.
 
 If it fails for any other reason, stop and report the error.
 
