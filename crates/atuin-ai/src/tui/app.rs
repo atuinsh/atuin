@@ -448,15 +448,7 @@ impl AiApp {
                                 .app_ctx
                                 .git_root
                                 .clone()
-                                .or_else(|| {
-                                    Some(
-                                        atuin_client::ctx::app()
-                                            .workspace()
-                                            .cwd()
-                                            .as_ref()
-                                            .to_path_buf(),
-                                    )
-                                })
+                                .or_else(|| Some(io.app_ctx.cwd.as_ref().to_path_buf()))
                                 .unwrap_or_else(|| PathBuf::from("."));
                             crate::permissions::writer::project_permissions_path(&project_root)
                         }
@@ -582,7 +574,7 @@ impl AiApp {
         let working_dir = tool
             .target_dir()
             .map(|p| p.to_path_buf())
-            .or_else(|| Some(atuin_client::ctx::app().workspace().cwd().as_ref().to_path_buf()))
+            .or_else(|| Some(io.app_ctx.cwd.as_ref().to_path_buf()))
             .unwrap_or_else(|| PathBuf::from("."));
 
         ctx.perform(async move {
@@ -720,7 +712,10 @@ impl AiApp {
                 };
                 let db = io.app_ctx.history_db.clone();
                 ctx.perform(async move {
-                    let outcome = history_call.execute(&db).await;
+                    // `AppCtx` is a stateless, runtime-free marker with no `Clone` impl;
+                    // freely construct one for this spawned (`'static`) task.
+                    let app = atuin_client::ctx::AppCtx::new();
+                    let outcome = history_call.execute(&db, &app).await;
                     Msg::Fsm(Event::ToolExecutionDone {
                         tool_id,
                         outcome,

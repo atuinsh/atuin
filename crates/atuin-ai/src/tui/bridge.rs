@@ -29,7 +29,7 @@ pub(crate) fn stream_bridge(
         // User context files (TERMINAL.md) are gathered and interpolated on
         // the first request, then served from the cache until `/reload`.
         let shell = client_ctx.shell.clone().unwrap_or_else(|| "sh".to_string());
-        let start_dir = atuin_client::ctx::app().workspace().cwd().as_ref().to_path_buf();
+        let start_dir = app_ctx.cwd.as_ref().to_path_buf();
         let global_ctx_path = crate::user_context::global_context_path();
         let user_contexts = user_context_cache
             .get_or_gather(&start_dir, Some(&global_ctx_path), &shell)
@@ -41,7 +41,7 @@ pub(crate) fn stream_bridge(
             app_ctx.token_from_hub_session,
             request,
             client_ctx,
-            app_ctx.send_cwd,
+            app_ctx.send_cwd.then(|| app_ctx.cwd.to_string()),
             app_ctx.last_command.clone(),
             user_contexts,
             skill_summaries,

@@ -48,14 +48,18 @@ impl Command {
     }
 }
 
-pub async fn run(command: Command, settings: &Settings) -> eyre::Result<()> {
+pub async fn run(
+    command: Command,
+    settings: &Settings,
+    app: &atuin_client::ctx::AppCtx,
+) -> eyre::Result<()> {
     match command {
         Command::Inline {
             command,
             hook,
             args,
             ..
-        } => inline::run(command, args.api_endpoint, args.api_token, settings, hook).await,
+        } => inline::run(command, args.api_endpoint, args.api_token, settings, hook, app).await,
     }
 }
 

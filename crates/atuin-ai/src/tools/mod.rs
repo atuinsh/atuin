@@ -1057,12 +1057,18 @@ impl PermissibleToolCall for AtuinHistoryToolCall {
 }
 
 impl AtuinHistoryToolCall {
-    pub(crate) async fn execute(&self, db: &atuin_client::database::Sqlite) -> ToolOutcome {
+    pub(crate) async fn execute(
+        &self,
+        db: &atuin_client::database::Sqlite,
+        app: &atuin_client::ctx::AppCtx,
+    ) -> ToolOutcome {
         use atuin_client::database::{self, DbSearchMode, OptFilters};
 
         // query_context rather than current_context: when running outside an
         // atuin-hooked shell (e.g. as an MCP server) there is no ATUIN_SESSION.
-        let context = match database::query_context().await {
+        let workspace = atuin_client::ctx::WorkspaceCtx::new(app);
+        let git = atuin_client::ctx::GitCtx::new(&workspace);
+        let context = match database::query_context(app, &workspace, &git).await {
             Ok(ctx) => ctx,
             Err(e) => return ToolOutcome::Error(format!("Failed to get history context: {e}")),
         };

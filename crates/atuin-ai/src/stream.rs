@@ -111,7 +111,7 @@ pub(crate) fn create_chat_stream(
     token_from_hub_session: bool,
     request: ChatRequest,
     client_ctx: ClientContext,
-    send_cwd: bool,
+    cwd: Option<String>,
     last_command: Option<History>,
     user_contexts: Vec<crate::user_context::UserContext>,
     skill_summaries: Vec<crate::skills::SkillSummary>,
@@ -128,7 +128,7 @@ pub(crate) fn create_chat_stream(
 
         tracing::debug!("Sending SSE request to {endpoint}");
 
-        let context = client_ctx.to_json(send_cwd, last_command.as_ref());
+        let context = client_ctx.to_json(cwd.as_deref(), last_command.as_ref());
 
         let mut config = serde_json::json!({
             "capabilities": request.capabilities,

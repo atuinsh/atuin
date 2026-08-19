@@ -14,6 +14,7 @@ pub(crate) async fn run(
     api_token: Option<String>,
     settings: &atuin_client::settings::Settings,
     output_for_hook: bool,
+    app: &atuin_client::ctx::AppCtx,
 ) -> Result<()> {
     if settings.ai.enabled == Some(false) {
         return Ok(());
@@ -70,13 +71,14 @@ pub(crate) async fn run(
         None
     };
 
-    let git_root = atuin_client::ctx::app()
-        .workspace()
-        .git_ctx()
+    let workspace = atuin_client::ctx::WorkspaceCtx::new(app);
+    let git = atuin_client::ctx::GitCtx::new(&workspace);
+    let git_root = git
+        .repo_ctx()
         .await
         .ok()
         .flatten()
-        .and_then(|git| git.repo().work_dir())
+        .and_then(|repo| repo.repo().work_dir())
         .map(|p| p.to_path_buf());
 
     let ctx = AppContext {
@@ -88,6 +90,7 @@ pub(crate) async fn run(
         last_command,
         history_db: std::sync::Arc::new(history_db),
         git_root,
+        cwd: workspace.cwd().clone(),
         capabilities: settings.ai.capabilities.clone(),
         daemon_enabled: settings.daemon.enabled,
         yolo: settings.ai.yolo,
@@ -194,7 +197,7 @@ async fn run_inline_tui(
         }
     };
 
-    let cwd = Some(atuin_client::ctx::app().workspace().cwd().to_string());
+    let cwd = Some(ctx.cwd.to_string());
     let git_root_str = ctx.git_root.as_ref().map(|p| p.to_string_lossy().into_owned());
 
     let session_window_mins = settings.ai.session_continue_minutes.max(0); // treat negative values as 0 to avoid confusion
@@ -276,10 +279,7 @@ async fn run_inline_tui(
     let snapshot_store = crate::snapshots::SnapshotStore::open(snapshot_dir).ok();
 
     // ─── Discover skills ───────────────────────────────────────
-    let project_root = ctx
-        .git_root
-        .clone()
-        .or_else(|| Some(atuin_client::ctx::app().workspace().cwd().as_ref().to_path_buf()));
+    let project_root = ctx.git_root.clone().or_else(|| Some(ctx.cwd.as_ref().to_path_buf()));
     let skill_registry = crate::skills::SkillRegistry::discover(project_root.as_deref()).await;
 
     // ─── Resume notice (frozen at startup) ──────────────────────

@@ -23,6 +23,7 @@ use crate::tools::{AtuinHistoryToolCall, AtuinOutputToolCall, ToolOutcome};
 
 struct AtuinMcp {
     db: Sqlite,
+    app: atuin_client::ctx::AppCtx,
 }
 
 impl ServerHandler for AtuinMcp {
@@ -49,7 +50,7 @@ impl ServerHandler for AtuinMcp {
             "atuin_history" => {
                 AtuinHistoryToolCall::try_from(&arguments)
                     .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
-                    .execute(&self.db)
+                    .execute(&self.db, &self.app)
                     .await
             }
             "atuin_output" => {
@@ -79,16 +80,24 @@ impl ServerHandler for AtuinMcp {
 ///
 /// stdout carries only JSON-RPC messages; anything else (logs, errors) must
 /// go to stderr or it will corrupt the protocol stream.
-pub async fn run(db: &Sqlite) -> Result<()> {
+pub async fn run(db: &Sqlite, app: &atuin_client::ctx::AppCtx) -> Result<()> {
     let server = AtuinMcp {
         db: Sqlite {
             pool: db.pool.clone(),
         },
+        app: to_owned_app(app),
     }
     .serve(rmcp::transport::stdio())
     .await?;
     server.waiting().await?;
     Ok(())
+}
+
+/// `AppCtx` is a stateless, runtime-free marker (no fields, no `Clone` impl). The MCP
+/// handler must be `'static` (rmcp's `Service` bound), so reconstruct an equivalent
+/// owned instance rather than cloning the caller's borrowed one.
+fn to_owned_app(_app: &atuin_client::ctx::AppCtx) -> atuin_client::ctx::AppCtx {
+    atuin_client::ctx::AppCtx::new()
 }
 
 /// Tool metadata for `tools/list`. The input schemas mirror what the

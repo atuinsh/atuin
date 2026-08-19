@@ -28,6 +28,9 @@ pub(crate) struct AppContext {
     /// Git root of the current working directory, if inside a git repo.
     /// Resolves through worktrees to the main repo root.
     pub git_root: Option<PathBuf>,
+    /// The working directory atuin-ai was launched in. Snapshotted at startup so consumers in
+    /// spawned (`'static`) tasks need not borrow a `WorkspaceCtx`.
+    pub cwd: atuin_client::ctx::Cwd,
     pub capabilities: AiCapabilities,
     pub daemon_enabled: bool,
     pub yolo: bool,
@@ -89,17 +92,13 @@ impl ClientContext {
     /// computed fresh on each call if `send_cwd` is true.
     pub(crate) fn to_json(
         &self,
-        send_cwd: bool,
+        cwd: Option<&str>,
         last_command: Option<&History>,
     ) -> serde_json::Value {
         let mut ctx = serde_json::json!({
             "os": self.os,
             "shell": self.shell,
-            "pwd": if send_cwd {
-                Some(atuin_client::ctx::app().workspace().cwd().to_string())
-            } else {
-                None
-            },
+            "pwd": cwd,
         });
 
         if let Some(history) = last_command {
