@@ -799,13 +799,12 @@ pub enum UiColumnType {
     User,
     /// Exit code
     Exit,
-    /// The command itself (should be last, expands to fill)
+    /// The command itself (expands to fill by default)
     Command,
 }
 
 impl UiColumnType {
     /// Returns the default width for this column type (in characters).
-    /// The Command column returns 0 as it expands to fill remaining space.
     pub fn default_width(&self) -> u16 {
         match self {
             UiColumnType::Duration => 5,  // "814ms"
@@ -821,7 +820,7 @@ impl UiColumnType {
                     3 // Usually a byte on Unix
                 }
             }
-            UiColumnType::Command => 0, // Expands to fill
+            UiColumnType::Command => 20,
         }
     }
 }
@@ -928,7 +927,7 @@ impl<'de> serde::Deserialize<'de> for UiColumn {
 pub struct Ui {
     /// Columns to display in interactive search, from left to right.
     /// The indicator column (" > ") is always shown first implicitly.
-    /// The "command" column should be last as it expands to fill remaining space.
+    /// The "command" column expands to fill remaining space by default.
     /// Can be simple strings or objects with type and width.
     #[serde(default = "Ui::default_columns")]
     pub columns: Vec<UiColumn>,
@@ -2074,6 +2073,21 @@ mod tests {
             .expect("could not build config")
             .try_deserialize()
             .expect("could not deserialize config")
+    }
+
+    #[test]
+    fn fixed_command_column_uses_default_width() {
+        let settings = parse_settings(
+            "[ui]\ncolumns = [{ type = \"command\", expand = false }, { type = \"directory\", expand = true }]\n",
+        );
+
+        assert_eq!(
+            settings.ui.columns[0].column_type,
+            super::UiColumnType::Command
+        );
+        assert_eq!(settings.ui.columns[0].width, 20);
+        assert!(!settings.ui.columns[0].expand);
+        assert!(settings.ui.columns[1].expand);
     }
 
     #[test]
