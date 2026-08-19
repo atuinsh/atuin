@@ -31,15 +31,15 @@ impl Measure {
     /// The numeric limit, in this budget's own unit.
     pub(crate) fn amount(self) -> usize {
         match self {
-            Measure::Bytes(n) | Measure::Columns(n) => n,
+            Self::Bytes(n) | Self::Columns(n) => n,
         }
     }
 
     /// Total cost of `s` in this budget's unit.
     pub(crate) fn cost(self, s: &str) -> usize {
         match self {
-            Measure::Bytes(_) => s.len(),
-            Measure::Columns(_) => s.width(),
+            Self::Bytes(_) => s.len(),
+            Self::Columns(_) => s.width(),
         }
     }
 }

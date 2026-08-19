@@ -34,7 +34,7 @@ use crate::usage::UsageSnapshot;
 
 /// What the TUI resolves to, for the shell hook.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) enum ExitOutcome {
+pub enum ExitOutcome {
     Execute(String),
     Insert(String),
     #[default]
@@ -44,7 +44,7 @@ pub(crate) enum ExitOutcome {
 /// IO resources the app's effects need. Not part of the FSM's state.
 /// Session persistence goes through the [`crate::tui::persist`] worker,
 /// which owns the `SessionManager`.
-pub(crate) struct IoContext {
+pub struct IoContext {
     pub app_ctx: crate::context::AppContext,
     pub client_ctx: crate::context::ClientContext,
     pub persist: UnboundedSender<PersistJob>,
@@ -59,7 +59,7 @@ pub(crate) struct IoContext {
 /// (rebuilt from the model every update), so each variant means exactly one
 /// thing by the time it reaches `update`.
 #[derive(Debug, Clone)]
-pub(crate) enum Msg {
+pub enum Msg {
     /// Unclaimed key/paste, routed to the editor.
     Input(InputEvent),
     /// Insert a newline (Shift+Enter / Ctrl+J).
@@ -96,7 +96,7 @@ pub(crate) enum Msg {
     UsageFetchFailed(String),
 }
 
-pub(crate) struct AiApp {
+pub struct AiApp {
     pub fsm: AgentFsm,
     /// `None` only in headless tests; every effect that needs IO degrades
     /// to a debug log without it.
@@ -581,10 +581,10 @@ impl AiApp {
             use crate::permissions::check::PermissionResponse as Check;
             let response =
                 match crate::permissions::resolver::PermissionResolver::new(working_dir).await {
-                    Ok(resolver) => match resolver.check(&tool).await {
-                        Ok(Check::Allowed) => PermissionResponse::Allowed,
-                        Ok(Check::Denied) => PermissionResponse::Denied,
-                        Ok(Check::Ask) | Err(_) => PermissionResponse::Ask,
+                    Ok(resolver) => match resolver.check(&tool) {
+                        Check::Allowed => PermissionResponse::Allowed,
+                        Check::Denied => PermissionResponse::Denied,
+                        Check::Ask => PermissionResponse::Ask,
                     },
                     Err(_) => PermissionResponse::Ask,
                 };

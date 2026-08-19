@@ -109,9 +109,9 @@ impl Importer for Zsh {
         let mut entries = Vec::with_capacity(self.num_entries());
 
         for b in unix_byte_lines(&self.bytes) {
-            let s = match unmetafy(b) {
-                Some(s) => s,
-                _ => continue, // we can skip past things like invalid utf8
+            // we can skip past things like invalid utf8
+            let Some(s) = unmetafy(b) else {
+                continue;
             };
 
             if let Some(s) = s.strip_suffix('\\') {

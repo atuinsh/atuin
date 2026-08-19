@@ -66,7 +66,6 @@ mod unix {
             .history_db(history_db)
             .component(history_component)
             .build()
-            .await
             .unwrap();
 
         let handle = daemon.handle();

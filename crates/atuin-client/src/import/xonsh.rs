@@ -109,7 +109,7 @@ impl Importer for Xonsh {
         let hist_dir = get_histdir_path(|| xonsh_hist_dir(xonsh_data_dir))?;
         let sessions = load_sessions(&hist_dir)?;
         let cmd_origin = CmdOrigin::probe_current();
-        Ok(Xonsh {
+        Ok(Self {
             sessions,
             cmd_origin,
         })

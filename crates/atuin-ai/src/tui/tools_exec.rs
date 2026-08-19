@@ -13,7 +13,7 @@ use crate::tui::app::Msg;
 /// Spawned **detached**: interrupt is not cancellation. Ctrl+C sends on the
 /// interrupt channel, the child is killed, and the stream still delivers
 /// `ToolExecutionDone` so the FSM can report the interrupted outcome.
-pub(crate) fn shell_stream(
+pub fn shell_stream(
     tool_id: String,
     call: ShellToolCall,
     interrupt_rx: oneshot::Receiver<()>,
@@ -71,7 +71,7 @@ pub(crate) fn shell_stream(
 
 /// Load a skill's content, with errors folded into the returned string
 /// (they go to the model as conversation content, not failures).
-pub(crate) async fn load_skill_content(
+pub async fn load_skill_content(
     registry: &crate::skills::SkillRegistry,
     name: &str,
     shell: &str,

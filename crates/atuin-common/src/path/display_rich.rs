@@ -93,7 +93,7 @@ impl fmt::Display for RichDisplay<'_> {
             if self.trailing_slash
                 && p.as_os_str().as_encoded_bytes().last() != Some(&(MAIN_SEPARATOR as u8))
             {
-                write!(f, "{}", MAIN_SEPARATOR_STR)?;
+                write!(f, "{MAIN_SEPARATOR_STR}")?;
             }
 
             Ok(())

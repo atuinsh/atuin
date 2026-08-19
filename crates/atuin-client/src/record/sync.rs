@@ -79,7 +79,7 @@ pub async fn build_client_with_caps(
 ) -> Result<Client, SyncError> {
     Client::new(
         settings.sync_address.clone(),
-        settings
+        &settings
             .sync_auth_token()
             .await
             .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?,
@@ -118,10 +118,7 @@ pub async fn diff(
 // With the store as context, we can determine if a tail exists locally or not and therefore if it needs uploading or download.
 // In theory this could be done as a part of the diffing stage, but it's easier to reason
 // about and test this way
-pub async fn operations(
-    diffs: Vec<Diff>,
-    _store: &SqliteStore,
-) -> Result<Vec<Operation>, SyncError> {
+pub fn operations(diffs: Vec<Diff>, _store: &SqliteStore) -> Result<Vec<Operation>, SyncError> {
     let mut operations = Vec::with_capacity(diffs.len());
 
     for diff in diffs {
@@ -490,7 +487,7 @@ pub async fn sync(
     // Bail before mutating either side if the local key can't read the remote.
     check_encryption_key(&client, &remote_index, encryption_key).await?;
 
-    let operations = operations(diff, store).await?;
+    let operations = operations(diff, store)?;
     let (uploaded, downloaded) =
         sync_remote(&client, operations, store, 100, encryption_key).await?;
 
@@ -560,7 +557,7 @@ mod tests {
 
         assert_eq!(diff.len(), 1);
 
-        let operations = sync::operations(diff, &store).await.unwrap();
+        let operations = sync::operations(diff, &store).unwrap();
 
         assert_eq!(operations.len(), 1);
 
@@ -589,7 +586,7 @@ mod tests {
         let remote = vec![shared_record.clone(), remote_ahead.clone()]; // remote knows about the already-synced, and one new record in a new store
 
         let (store, diff) = build_test_diff(local, remote).await;
-        let operations = sync::operations(diff, &store).await.unwrap();
+        let operations = sync::operations(diff, &store).unwrap();
 
         assert_eq!(operations.len(), 2);
 
@@ -686,7 +683,7 @@ mod tests {
         ]; // remote knows about the already-synced, and one new record in a new store
 
         let (store, diff) = build_test_diff(local, remote).await;
-        let operations = sync::operations(diff, &store).await.unwrap();
+        let operations = sync::operations(diff, &store).unwrap();
 
         assert_eq!(operations.len(), 7);
 
@@ -785,7 +782,7 @@ mod packfile_download_tests {
     /// A [`Client`] pointed at a wiremock server, authenticated with a dummy token.
     pub(super) fn mock_client(addr: &url::Url) -> Client {
         let caps = caps_client(addr, &HashMap::new()).unwrap();
-        Client::new(addr.clone(), AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
+        Client::new(addr.clone(), &AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
             .unwrap()
     }
 

@@ -56,7 +56,7 @@ impl KvRecord {
                     bail!("trailing bytes in encoded kvrecord. malformed");
                 }
 
-                Ok(KvRecord {
+                Ok(Self {
                     namespace: namespace.to_owned(),
                     key: key.to_owned(),
                     value: Some(value.to_owned()),
@@ -87,7 +87,7 @@ impl KvRecord {
                     bail!("trailing bytes in encoded kvrecord. malformed");
                 }
 
-                Ok(KvRecord {
+                Ok(Self {
                     namespace: namespace.to_owned(),
                     key: key.to_owned(),
                     value,

@@ -82,7 +82,7 @@ impl Database {
         .execute(&mut **tx)
         .await?;
 
-        for tag in s.tags.iter() {
+        for tag in &s.tags {
             sqlx::query(
                 "insert or ignore into script_tags(script_id, tag)
                 values(?1, ?2)",
@@ -122,7 +122,7 @@ impl Database {
         Ok(())
     }
 
-    fn query_script(row: SqliteRow) -> Script {
+    fn query_script(row: &SqliteRow) -> Script {
         let id = row.get("id");
         let name = row.get("name");
         let description = row.get("description");
@@ -141,7 +141,7 @@ impl Database {
         }
     }
 
-    fn query_script_tags(row: SqliteRow) -> String {
+    fn query_script_tags(row: &SqliteRow) -> String {
         row.get("tag")
     }
 
@@ -151,7 +151,7 @@ impl Database {
 
         let res = sqlx::query("select * from scripts where id = ?1")
             .bind(id)
-            .map(Self::query_script)
+            .map(|row| Self::query_script(&row))
             .fetch_optional(&self.pool)
             .await?;
 
@@ -159,7 +159,7 @@ impl Database {
         if let Some(mut script) = res {
             let tags = sqlx::query("select tag from script_tags where script_id = ?1")
                 .bind(id)
-                .map(Self::query_script_tags)
+                .map(|row| Self::query_script_tags(&row))
                 .fetch_all(&self.pool)
                 .await?;
 
@@ -174,15 +174,15 @@ impl Database {
         debug!("listing scripts");
 
         let mut res = sqlx::query("select * from scripts")
-            .map(Self::query_script)
+            .map(|row| Self::query_script(&row))
             .fetch_all(&self.pool)
             .await?;
 
         // Fetch all the tags for each script
-        for script in res.iter_mut() {
+        for script in &mut res {
             let tags = sqlx::query("select tag from script_tags where script_id = ?1")
                 .bind(script.id.to_string())
-                .map(Self::query_script_tags)
+                .map(|row| Self::query_script_tags(&row))
                 .fetch_all(&self.pool)
                 .await?;
 
@@ -240,7 +240,7 @@ impl Database {
             .await?;
 
         // Insert new tags
-        for tag in s.tags.iter() {
+        for tag in &s.tags {
             sqlx::query(
                 "insert or ignore into script_tags(script_id, tag)
                 values(?1, ?2)",
@@ -259,14 +259,14 @@ impl Database {
     pub async fn get_by_name(&self, name: &str) -> Result<Option<Script>> {
         let res = sqlx::query("select * from scripts where name = ?1")
             .bind(name)
-            .map(Self::query_script)
+            .map(|row| Self::query_script(&row))
             .fetch_optional(&self.pool)
             .await?;
 
         let script = if let Some(mut script) = res {
             let tags = sqlx::query("select tag from script_tags where script_id = ?1")
                 .bind(script.id.to_string())
-                .map(Self::query_script_tags)
+                .map(|row| Self::query_script_tags(&row))
                 .fetch_all(&self.pool)
                 .await?;
 

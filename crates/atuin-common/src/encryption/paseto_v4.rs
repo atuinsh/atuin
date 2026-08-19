@@ -133,7 +133,7 @@ impl Key {
     }
 
     /// Equivalent to [`rusty_paserk::Key::wrap_pie`].
-    pub fn wrap_pie(&self, wrapping: &Key) -> PaserkV4PieWrappedKey {
+    pub fn wrap_pie(&self, wrapping: &Self) -> PaserkV4PieWrappedKey {
         let p_self: rusty_paserk::Key<rusty_paserk::V4, rusty_paserk::Local> = self.into();
         let p_wrapping: rusty_paserk::Key<rusty_paserk::V4, rusty_paserk::Local> = wrapping.into();
 
@@ -351,7 +351,7 @@ impl From<&Key> for rusty_paseto::PasetoSymmetricKey<rusty_paseto::V4, rusty_pas
 
 impl From<&Key> for rusty_paseto::Key<32> {
     fn from(value: &Key) -> Self {
-        rusty_paseto::Key::<32>::from(value.0)
+        Self::from(value.0)
     }
 }
 
@@ -398,7 +398,7 @@ mod cek {
         /// This will encrypt the given CEK with the given parent key, create the [`cek::Json`] and
         /// serialize it into JSON.
         pub fn encrypt(cek: &Key, parent_key: &Key) -> Result<String, EncryptionError> {
-            Ok(serde_json::to_string(&cek::Json {
+            Ok(serde_json::to_string(&Self {
                 wpk: cek.wrap_pie(parent_key),
                 kid: parent_key.key_id(),
             })?)

@@ -9,7 +9,7 @@ use crate::tools::ClientToolCall;
 
 /// Why a tool execution was interrupted.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum InterruptReason {
+pub enum InterruptReason {
     /// User pressed Ctrl+C or Esc during execution.
     User,
     /// The LLM-specified execution timeout expired.
@@ -18,7 +18,7 @@ pub(crate) enum InterruptReason {
 
 /// Per-tool lifecycle state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ToolState {
+pub enum ToolState {
     /// Permission resolver is running asynchronously.
     CheckingPermission,
     /// Waiting for user to grant/deny via the permission dialog.
@@ -33,7 +33,7 @@ pub(crate) enum ToolState {
 
 /// Cached preview data for rendering tool output.
 #[derive(Debug, Clone)]
-pub(crate) enum ToolPreviewData {
+pub enum ToolPreviewData {
     /// Shell command VT100 output lines.
     Shell {
         lines: Vec<String>,
@@ -48,7 +48,7 @@ pub(crate) enum ToolPreviewData {
 
 /// A tracked tool call with its current lifecycle state.
 #[derive(Debug, Clone)]
-pub(crate) struct TrackedTool {
+pub struct TrackedTool {
     pub id: String,
     pub tool: ClientToolCall,
     pub state: ToolState,
@@ -105,7 +105,7 @@ impl TrackedTool {
 /// (all resolved, any awaiting permission, etc.) that the FSM uses for
 /// state transitions.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct ToolManager {
+pub struct ToolManager {
     tools: Vec<TrackedTool>,
 }
 

@@ -39,13 +39,13 @@ impl RecordTag {
 
     fn variant_rank(&self) -> u8 {
         match self {
-            RecordTag::History => 0,
-            RecordTag::Kv => 1,
-            RecordTag::Script => 2,
-            RecordTag::DotfilesVar => 3,
-            RecordTag::ConfigShellAlias => 4,
-            RecordTag::Packfile => 5,
-            RecordTag::Other(_) => 6,
+            Self::History => 0,
+            Self::Kv => 1,
+            Self::Script => 2,
+            Self::DotfilesVar => 3,
+            Self::ConfigShellAlias => 4,
+            Self::Packfile => 5,
+            Self::Other(_) => 6,
         }
     }
 }

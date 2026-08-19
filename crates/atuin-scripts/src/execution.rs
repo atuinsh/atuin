@@ -11,7 +11,7 @@ use tracing::debug;
 use crate::store::script::Script;
 
 // Helper function to build a complete script with shebang
-pub fn build_executable_script(script: String, shebang: String) -> String {
+pub fn build_executable_script(script: &str, shebang: &str) -> String {
     if shebang.is_empty() {
         // Default to bash if no shebang is provided
         format!("#!/usr/bin/env bash\n{script}")
@@ -89,7 +89,7 @@ pub async fn execute_script_interactive(
     };
 
     // Write script content to the temp file, including the shebang
-    let full_script_content = build_executable_script(script.clone(), shebang.clone());
+    let full_script_content = build_executable_script(&script, &shebang);
 
     debug!("writing script content to temp file");
     tokio::fs::write(&temp_path, &full_script_content).await?;

@@ -93,7 +93,7 @@ impl Importer for XonshSqlite {
 
         let pool = SqlitePool::connect(connection_str).await?;
         let cmd_origin = CmdOrigin::probe_current();
-        Ok(XonshSqlite { pool, cmd_origin })
+        Ok(Self { pool, cmd_origin })
     }
 
     async fn entries(&mut self) -> Result<usize> {
@@ -104,12 +104,12 @@ impl Importer for XonshSqlite {
     }
 
     async fn load(self, loader: &mut impl Loader) -> Result<()> {
-        let query = r#"
+        let query = r"
             SELECT inp, rtn, tsb, tse, cwd,
             MIN(tsb) OVER (PARTITION BY sessionid) AS session_start
             FROM xonsh_history
             ORDER BY rowid
-        "#;
+        ";
 
         let mut entries = sqlx::query_as::<_, HistDbEntry>(query).fetch(&self.pool);
 

@@ -24,7 +24,7 @@
 //!   can ride alongside standard OSC 133 markers.
 
 /// Events emitted when an OSC 133 marker is detected.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
     /// `ESC ] 133 ; A ST` — the shell is about to display its prompt.
     PromptStart,

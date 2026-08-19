@@ -5,18 +5,18 @@ use serde::{Deserialize, Serialize};
 use crate::permissions::rule::Rule;
 
 #[derive(Debug, Clone)]
-pub(crate) struct RuleFile {
+pub struct RuleFile {
     pub path: PathBuf,
     pub content: RuleFileContent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct RuleFileContent {
+pub struct RuleFileContent {
     pub permissions: RuleFilePermissions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct RuleFilePermissions {
+pub struct RuleFilePermissions {
     #[serde(default)]
     pub allow: Vec<Rule>,
     #[serde(default)]

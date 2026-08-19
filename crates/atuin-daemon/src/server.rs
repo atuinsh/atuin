@@ -21,6 +21,7 @@ const SOCKET_KEEPALIVE_INTERVAL: std::time::Duration = std::time::Duration::from
 /// This starts the gRPC server in the background and returns immediately.
 /// The server will shut down when a ShutdownRequested event is received.
 #[cfg(unix)]
+#[allow(clippy::unused_async, reason = "needs to match the cfg(not(unix)) version")]
 pub async fn run_grpc_server(
     settings: Settings,
     history_service: HistoryServer<HistoryGrpcService>,
@@ -94,7 +95,6 @@ pub async fn run_grpc_server(
 
     // Periodically update the socket's modification time so it doesn't get automatically deleted by
     // temporary file cleaners.
-    #[cfg(unix)]
     let socket_updater = cleanup_path.clone().map(|path| {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(SOCKET_KEEPALIVE_INTERVAL);
@@ -119,7 +119,6 @@ pub async fn run_grpc_server(
                 Err(_) => break, // Channel closed
             }
         }
-        #[cfg(unix)]
         if let Some(handle) = socket_updater {
             handle.abort();
         }

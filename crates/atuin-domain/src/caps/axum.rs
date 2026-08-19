@@ -18,6 +18,7 @@ use super::http::{AVAILABLE_HEADER, ENFORCE_HEADER, KNOWN_HEADER};
 use super::{CapServer, Negotiation};
 
 /// `GET /api/v0/capabilities` -- serve the pre-serialized capability document.
+#[allow(clippy::unused_async, reason = "must be async to implement axum::handler::Handler")]
 pub async fn get(State(caps): State<Arc<CapServer>>) -> Response {
     ([(CONTENT_TYPE, HeaderValue::from_static("application/json"))], caps.body().to_owned())
         .into_response()

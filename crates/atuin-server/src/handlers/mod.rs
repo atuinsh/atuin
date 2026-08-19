@@ -57,7 +57,7 @@ impl<'a> RespExt<'a> for ErrorResponse<'a> {
         }
     }
 
-    fn reply(reason: &'a str) -> ErrorResponse<'a> {
+    fn reply(reason: &'a str) -> Self {
         Self {
             reason: reason.into(),
         }

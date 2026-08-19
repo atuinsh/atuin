@@ -87,7 +87,7 @@ fn parse_commands(source: &str) -> Vec<Command> {
 ///
 /// Commands are executed in parallel. Failed commands are replaced with an
 /// error marker so the AI has visibility into what went wrong.
-pub(crate) async fn interpolate(source: &str, shell: &str) -> String {
+pub async fn interpolate(source: &str, shell: &str) -> String {
     let commands = parse_commands(source);
     if commands.is_empty() {
         return source.to_string();
@@ -179,7 +179,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::double_backtick(r#"Host: !``echo `hostname` ``"#, &["echo `hostname` "])]
+    #[case::double_backtick(r"Host: !``echo `hostname` ``", &["echo `hostname` "])]
     #[case::block(
         "Before\n\n```!\necho hello\npython3 --version\n```\n\nAfter",
         &["echo hello\npython3 --version"]

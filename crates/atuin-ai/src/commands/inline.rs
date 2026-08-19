@@ -8,7 +8,7 @@ use crate::session::{LocalSessionService, SessionManager, SessionService};
 use crate::tui::app::{AiApp, ExitOutcome, IoContext};
 use crate::tui::state::ConversationEvent;
 
-pub(crate) async fn run(
+pub async fn run(
     initial_command: Option<String>,
     api_endpoint: Option<String>,
     api_token: Option<String>,

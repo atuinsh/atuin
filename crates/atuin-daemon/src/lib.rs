@@ -51,8 +51,7 @@ pub async fn boot(
         .component(search_component)
         .component(semantic_component)
         .component(sync_component)
-        .build()
-        .await?;
+        .build()?;
 
     // Get a handle for the control service and gRPC server shutdown
     let handle = daemon.handle();

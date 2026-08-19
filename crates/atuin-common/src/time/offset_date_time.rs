@@ -138,7 +138,7 @@ impl OffsetDateTimeExt for OffsetDateTime {
             return Err(TimestampOutOfRange { nanos });
         }
 
-        OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|_| TimestampOutOfRange { nanos })
+        Self::from_unix_timestamp_nanos(nanos).map_err(|_| TimestampOutOfRange { nanos })
     }
 
     fn from_unix_nanos_i64(nanos: i64) -> OffsetDateTime {

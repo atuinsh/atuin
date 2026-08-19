@@ -27,7 +27,7 @@ impl KvStore {
         host_id: HostId,
         encryption_key: paseto_v4::Key,
     ) -> Self {
-        KvStore {
+        Self {
             record_store,
             kv_db,
             host_id,

@@ -8,7 +8,7 @@ use crate::permissions::writer;
 use crate::tools::ClientToolCall;
 
 /// Resolves permissions for client tool calls by walking the filesystem to find permission files,
-pub(crate) struct PermissionResolver {
+pub struct PermissionResolver {
     checker: PermissionChecker,
 }
 
@@ -24,8 +24,8 @@ impl PermissionResolver {
     }
 
     /// Check whether `tool` is allowed, denied, or needs user confirmation.
-    pub async fn check(&self, tool: &ClientToolCall) -> Result<PermissionResponse> {
+    pub fn check(&self, tool: &ClientToolCall) -> PermissionResponse {
         let request = PermissionRequest::new(tool);
-        self.checker.check(&request).await
+        self.checker.check(&request)
     }
 }

@@ -118,7 +118,7 @@ impl Database {
         Ok(())
     }
 
-    fn query_kv_entry(row: SqliteRow) -> KvEntry {
+    fn query_kv_entry(row: &SqliteRow) -> KvEntry {
         let namespace = row.get("namespace");
         let key = row.get("key");
         let value = row.get("value");
@@ -132,7 +132,7 @@ impl Database {
         let res = sqlx::query("select * from kv where namespace = ?1 and key = ?2")
             .bind(namespace)
             .bind(key)
-            .map(Self::query_kv_entry)
+            .map(|row| Self::query_kv_entry(&row))
             .fetch_optional(&self.pool)
             .await?;
 
@@ -145,12 +145,12 @@ impl Database {
         let res = if let Some(namespace) = namespace {
             sqlx::query("select * from kv where namespace = ?1 order by key asc")
                 .bind(namespace)
-                .map(Self::query_kv_entry)
+                .map(|row| Self::query_kv_entry(&row))
                 .fetch_all(&self.pool)
                 .await?
         } else {
             sqlx::query("select * from kv order by namespace, key asc")
-                .map(Self::query_kv_entry)
+                .map(|row| Self::query_kv_entry(&row))
                 .fetch_all(&self.pool)
                 .await?
         };

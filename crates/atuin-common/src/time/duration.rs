@@ -160,17 +160,17 @@ impl fmt::Display for DurationDisplay {
     }
 }
 
-impl DurationExt<std::time::Duration> for std::time::Duration {
+impl DurationExt<Self> for std::time::Duration {
     #[allow(clippy::disallowed_methods)]
-    fn try_new(secs: u64, nsecs: u64) -> Result<std::time::Duration, DurationOverflow> {
+    fn try_new(secs: u64, nsecs: u64) -> Result<Self, DurationOverflow> {
         let carry = nsecs / 1_000_000_000;
         let nanos = (nsecs % 1_000_000_000) as u32;
         let secs = secs.checked_add(carry).ok_or(DurationOverflow { secs, nsecs })?;
-        Ok(std::time::Duration::new(secs, nanos))
+        Ok(Self::new(secs, nanos))
     }
 
-    fn saturating_from_nanos_i64(nanos: i64) -> std::time::Duration {
-        std::time::Duration::from_nanos(nanos.max(0).cast_unsigned())
+    fn saturating_from_nanos_i64(nanos: i64) -> Self {
+        Self::from_nanos(nanos.max(0).cast_unsigned())
     }
 
     fn display(self) -> DurationDisplay {
@@ -181,14 +181,14 @@ impl DurationExt<std::time::Duration> for std::time::Duration {
     }
 }
 
-impl DurationExt<time::Duration> for time::Duration {
-    fn try_new(secs: u64, nsecs: u64) -> Result<time::Duration, DurationOverflow> {
+impl DurationExt<Self> for time::Duration {
+    fn try_new(secs: u64, nsecs: u64) -> Result<Self, DurationOverflow> {
         let std = std::time::Duration::try_new(secs, nsecs)?;
-        time::Duration::try_from(std).map_err(|_| DurationOverflow { secs, nsecs })
+        Self::try_from(std).map_err(|_| DurationOverflow { secs, nsecs })
     }
 
-    fn saturating_from_nanos_i64(nanos: i64) -> time::Duration {
-        time::Duration::nanoseconds(nanos.max(0))
+    fn saturating_from_nanos_i64(nanos: i64) -> Self {
+        Self::nanoseconds(nanos.max(0))
     }
 
     fn display(self) -> DurationDisplay {

@@ -38,7 +38,7 @@ impl From<HistDbEntry> for History {
         let timestamp = OffsetDateTime::from_timespec(i128::from(ts_secs), i128::from(ts_ns))
             .unwrap_or(OffsetDateTime::UNIX_EPOCH);
 
-        let imported = History::import()
+        let imported = Self::import()
             .shell("nu")
             .timestamp(timestamp)
             // nushell stores raw bytes: keep the entry even if it is not valid utf8
@@ -48,8 +48,8 @@ impl From<HistDbEntry> for History {
             .duration(histdb_item.duration_ms)
             .session(format!("{:x}", histdb_item.session_id))
             .cmd_origin(CmdOrigin::new(
-                CmdHost::from(String::from_utf8_lossy(&histdb_item.hostname).into_owned()),
-                CmdUser::default(),
+                &CmdHost::from(String::from_utf8_lossy(&histdb_item.hostname).into_owned()),
+                &CmdUser::default(),
             ));
 
         imported.build().into()
@@ -71,13 +71,13 @@ async fn hist_from_db(dbpath: PathBuf) -> Result<Vec<HistDbEntry>> {
 }
 
 async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>> {
-    let query = r#"
+    let query = r"
         SELECT
             id, command_line, start_timestamp, session_id, hostname, cwd, duration_ms, exit_status,
             more_info
         FROM history
         ORDER BY start_timestamp
-    "#;
+    ";
     let histdb_vec: Vec<HistDbEntry> =
         sqlx::query_as::<_, HistDbEntry>(query).fetch_all(&pool).await?;
     Ok(histdb_vec)
@@ -105,7 +105,7 @@ impl Importer for NuHistDb {
     /// Creates a new NuHistDb and populates the history based on the pre-populated data
     /// structure.
     async fn new() -> Result<Self> {
-        let dbpath = NuHistDb::histpath()?;
+        let dbpath = Self::histpath()?;
         let histdb_entry_vec = hist_from_db(dbpath).await?;
         Ok(Self {
             histdb: histdb_entry_vec,

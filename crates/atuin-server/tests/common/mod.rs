@@ -89,7 +89,7 @@ pub async fn register_inner(
     let caps = api_client::caps_client(address, &Default::default()).unwrap();
     api_client::Client::new(
         address.clone(),
-        api_client::AuthToken::Token(registration_response.session),
+        &api_client::AuthToken::Token(registration_response.session),
         5,
         30,
         &Default::default(),
@@ -112,7 +112,7 @@ pub async fn login(address: &url::Url, username: String, password: String) -> ap
     let caps = api_client::caps_client(address, &Default::default()).unwrap();
     api_client::Client::new(
         address.clone(),
-        api_client::AuthToken::Token(login_response.session),
+        &api_client::AuthToken::Token(login_response.session),
         5,
         30,
         &Default::default(),

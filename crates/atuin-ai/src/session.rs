@@ -17,13 +17,13 @@ use crate::usage::UsageSnapshot;
 // Trait
 // ---------------------------------------------------------------------------
 
-pub(crate) struct CachedUsageSnapshot {
+pub struct CachedUsageSnapshot {
     pub snapshot: UsageSnapshot,
     pub written_at: i64,
 }
 
 #[async_trait]
-pub(crate) trait SessionService: Send + Sync {
+pub trait SessionService: Send + Sync {
     async fn create_session(
         &self,
         id: &str,
@@ -71,7 +71,7 @@ pub(crate) trait SessionService: Send + Sync {
 // Local implementation (direct SQLite)
 // ---------------------------------------------------------------------------
 
-pub(crate) struct LocalSessionService {
+pub struct LocalSessionService {
     store: AiSessionStore,
 }
 
@@ -157,7 +157,7 @@ impl SessionService for LocalSessionService {
 ///
 /// Owns the current session identity, tracks what has been persisted, and
 /// handles serialization between `ConversationEvent` and the storage format.
-pub(crate) struct SessionManager {
+pub struct SessionManager {
     service: Box<dyn SessionService>,
     session_id: String,
     invocation_id: String,

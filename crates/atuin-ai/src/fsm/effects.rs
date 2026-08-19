@@ -13,7 +13,7 @@ use crate::tools::ClientToolCall;
 
 /// Where to write a permission rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PermissionTarget {
+pub enum PermissionTarget {
     /// Project-level: `<git_root_or_cwd>/.atuin/permissions.ai.toml`
     Project,
     /// Global: `~/.config/atuin/permissions.ai.toml`
@@ -22,7 +22,7 @@ pub(crate) enum PermissionTarget {
 
 /// Side effects the driver should execute after a state transition.
 #[derive(Debug, Clone)]
-pub(crate) enum Effect {
+pub enum Effect {
     // ─── Network ────────────────────────────────────────────────
     /// Start a new streaming request to the server.
     StartStream {
@@ -102,7 +102,7 @@ pub(crate) enum Effect {
 
 /// What kind of timeout was scheduled.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum TimeoutKind {
+pub enum TimeoutKind {
     /// Dangerous command confirmation dialog auto-dismiss.
     Confirmation,
     /// Shell tool execution timeout — abort the tool if it's still running.
@@ -113,7 +113,7 @@ pub(crate) enum TimeoutKind {
 
 /// What to do when exiting the TUI.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ExitAction {
+pub enum ExitAction {
     /// Run the suggested command.
     Execute(String),
     /// Insert the command into the shell without running.

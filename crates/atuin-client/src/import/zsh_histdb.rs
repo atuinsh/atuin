@@ -81,7 +81,7 @@ async fn hist_from_db(dbpath: PathBuf) -> Result<Vec<HistDbEntry>> {
 }
 
 async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>> {
-    let query = r#"
+    let query = r"
         SELECT
             history.id, history.start_time, history.duration, places.host, places.dir,
             commands.argv, history.exit_status, history.session
@@ -89,7 +89,7 @@ async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>>
         LEFT JOIN commands ON history.command_id = commands.id
         LEFT JOIN places ON history.place_id = places.id
         ORDER BY history.start_time
-    "#;
+    ";
     let histdb_vec: Vec<HistDbEntry> =
         sqlx::query_as::<_, HistDbEntry>(query).fetch_all(&pool).await?;
     Ok(histdb_vec)
@@ -111,7 +111,7 @@ impl ZshHistDb {
     }
 
     pub fn histpath() -> Result<PathBuf> {
-        let histdb_path = ZshHistDb::histpath_candidate()?;
+        let histdb_path = Self::histpath_candidate()?;
         if histdb_path.exists() {
             Ok(histdb_path)
         } else {
@@ -128,7 +128,7 @@ impl Importer for ZshHistDb {
     /// Creates a new ZshHistDb and populates the history based on the pre-populated data
     /// structure.
     async fn new() -> Result<Self> {
-        let dbpath = ZshHistDb::histpath()?;
+        let dbpath = Self::histpath()?;
         let histdb_entry_vec = hist_from_db(dbpath).await?;
         Ok(Self {
             histdb: histdb_entry_vec,
@@ -154,7 +154,7 @@ impl Importer for ZshHistDb {
             let hostname = String::from_utf8(entry.host)
                 .map(CmdHost::from)
                 .unwrap_or_else(|_e| CmdHost::probe_current());
-            let cmd_origin = CmdOrigin::new(hostname, self.username.clone());
+            let cmd_origin = CmdOrigin::new(&hostname, &self.username);
             let session = session_map.entry(entry.session).or_insert_with(uuid_v7);
 
             let imported = History::import()
@@ -232,7 +232,7 @@ mod test {
             SqlitePoolOptions::new().min_connections(2).connect(":memory:").await.unwrap();
 
         // sql dump directly from a test database.
-        let db_sql = r#"
+        let db_sql = r"
         PRAGMA foreign_keys=OFF;
         BEGIN TRANSACTION;
         CREATE TABLE commands (id integer primary key autoincrement, argv text, unique(argv) on conflict ignore);
@@ -259,7 +259,7 @@ mod test {
         CREATE INDEX place_dir on places(dir);
         CREATE INDEX place_host on places(host);
         CREATE INDEX history_command_place on history(command_id, place_id);
-        COMMIT; "#;
+        COMMIT; ";
 
         sqlx::query(db_sql).execute(&pool).await.unwrap();
 
