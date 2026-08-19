@@ -623,24 +623,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "atuin-nucleo"
-version = "0.6.0"
-dependencies = [
- "atuin-nucleo-matcher",
- "parking_lot",
- "rayon",
-]
-
-[[package]]
-name = "atuin-nucleo-matcher"
-version = "0.3.1"
-dependencies = [
- "codspeed-divan-compat",
- "memchr",
- "unicode-segmentation",
-]
-
-[[package]]
 name = "atuin-pty-proxy"
 version = "18.20.0-beta.3"
 dependencies = [

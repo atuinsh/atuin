@@ -69,9 +69,8 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - Use `rstest` for tests, especially when they can be made simpler using `case`s and `fixture`s.
 - Use `":memory:"` SQLite for unit tests needing a database.
 - Runner: `cargo nextest`.
-- Benchmarks: `divan` in `atuin-client`, `atuin-history` and `atuin-nucleo-matcher`, tracked in CI
-  by CodSpeed. Run them locally with `cargo codspeed build && cargo codspeed run`, or with plain
-  `cargo bench`.
+- Benchmarks: `divan` in `atuin-client` and `atuin-history`, tracked in CI by CodSpeed. Run them
+  locally with `cargo codspeed build && cargo codspeed run`, or with plain `cargo bench`.
 
 ## Build and check
 

@@ -451,8 +451,6 @@ publish_crates() {
         atuin-ai
         atuin-dotfiles
         atuin-history
-        atuin-nucleo/matcher
-        atuin-nucleo
         atuin-daemon
         atuin-kv
         atuin-scripts
