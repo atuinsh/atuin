@@ -1,4 +1,4 @@
-use std::pin::Pin;
+use std::{num::NonZeroUsize, pin::Pin};
 
 use futures::{Stream, StreamExt, stream};
 
@@ -10,22 +10,27 @@ use futures::{Stream, StreamExt, stream};
 /// # Examples
 ///
 /// ```
+/// use std::num::NonZeroUsize;
+///
 /// use atuin_common::futures::stream::chunk_by_bounded;
 /// use futures::{StreamExt, executor::block_on, stream};
 ///
 /// // each chunk is paired with its key; `max` is large enough that it never splits a run
-/// let chunks: Vec<(i32, Vec<i32>)> =
-///     block_on(chunk_by_bounded(stream::iter([1, 1, 1, 2, 2, 3]), 5, |x| *x).collect());
+/// let chunks: Vec<(i32, Vec<i32>)> = block_on(
+///     chunk_by_bounded(stream::iter([1, 1, 1, 2, 2, 3]), NonZeroUsize::new(5).unwrap(), |x| *x)
+///         .collect(),
+/// );
 /// assert_eq!(chunks, vec![(1, vec![1, 1, 1]), (2, vec![2, 2]), (3, vec![3])]);
 ///
 /// // a run longer than `max` is split at the bound, so its key repeats
-/// let chunks: Vec<(i32, Vec<i32>)> =
-///     block_on(chunk_by_bounded(stream::iter([1, 1, 1, 1]), 2, |x| *x).collect());
+/// let chunks: Vec<(i32, Vec<i32>)> = block_on(
+///     chunk_by_bounded(stream::iter([1, 1, 1, 1]), NonZeroUsize::new(2).unwrap(), |x| *x).collect(),
+/// );
 /// assert_eq!(chunks, vec![(1, vec![1, 1]), (1, vec![1, 1])]);
 /// ```
 pub fn chunk_by_bounded<S, K, F>(
     stream: S,
-    max: usize,
+    max: NonZeroUsize,
     key: F,
 ) -> impl Stream<Item = (K, Vec<S::Item>)>
 where
@@ -33,6 +38,7 @@ where
     K: PartialEq,
     F: FnMut(&S::Item) -> K,
 {
+    let max = max.get();
     stream::unfold(
         (stream.peekable(), key),
         move |(mut stream, mut key)| async move {
@@ -56,6 +62,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use futures::{StreamExt, executor::block_on, stream};
     use proptest::prelude::*;
     use rstest::rstest;
@@ -65,6 +73,7 @@ mod tests {
     /// Run the combinator over an in-memory sequence, grouping by value equality, and drop the
     /// per-chunk key so the assertions read as plain chunk shapes.
     fn chunks_of(items: Vec<i32>, max: usize) -> Vec<Vec<i32>> {
+        let max = NonZeroUsize::new(max).expect("test max is non-zero");
         block_on(
             chunk_by_bounded(stream::iter(items), max, |x| *x)
                 .map(|(_, chunk)| chunk)
@@ -92,8 +101,14 @@ mod tests {
     fn groups_by_key_not_value() {
         // The key collapses values into residue classes; equal residues chunk together, and each
         // chunk is tagged with that residue.
-        let chunks: Vec<(i32, Vec<i32>)> =
-            block_on(chunk_by_bounded(stream::iter([2, 4, 3, 6, 5]), 5, |x| x % 2).collect());
+        let chunks: Vec<(i32, Vec<i32>)> = block_on(
+            chunk_by_bounded(
+                stream::iter([2, 4, 3, 6, 5]),
+                NonZeroUsize::new(5).unwrap(),
+                |x| x % 2,
+            )
+            .collect(),
+        );
 
         assert_eq!(
             chunks,

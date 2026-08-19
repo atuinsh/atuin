@@ -420,6 +420,10 @@ impl Database for Sqlite {
     }
 
     async fn save_bulk(&self, h: &[History]) -> Result<()> {
+        if h.is_empty() {
+            return Ok(());
+        }
+
         debug!("saving history to sqlite");
 
         let mut tx = self.pool.begin().await?;

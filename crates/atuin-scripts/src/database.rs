@@ -106,7 +106,7 @@ impl Database {
         Ok(())
     }
 
-    #[instrument]
+    #[instrument(level = "debug", skip(self, s), fields(count = s.len()))]
     pub async fn save_bulk(&self, s: &[Script]) -> Result<()> {
         if s.is_empty() {
             return Ok(());

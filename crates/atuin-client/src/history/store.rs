@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fmt::Write, time::Duration};
+use std::{collections::HashSet, fmt::Write, num::NonZeroUsize, time::Duration};
 
 use atuin_common::futures::stream::chunk_by_bounded;
 use atuin_common::rmp::decode::Bytes;
@@ -121,7 +121,7 @@ impl HistoryRecord {
 
 /// How many entries `incremental_build` holds in memory, and the most it puts into a single
 /// `save_bulk`/`delete_rows` transaction.
-const BUILD_BATCH_SIZE: usize = 5000;
+const BUILD_BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(5000).unwrap();
 
 /// How many records `incremental_build` decodes concurrently. Decoding is read-then-decrypt per
 /// record; overlapping the reads keeps the record store's pool busy without unbounded fan-out.
@@ -305,7 +305,8 @@ impl HistoryStore {
             .filter_map(future::ready)
             .boxed();
 
-        // The desire is to bundle similar actions together.
+        // Group adjacent records of the same kind so each kind lands in its own bulk transaction,
+        // while the database still sees them in record order.
         chunk_by_bounded(records, BUILD_BATCH_SIZE, |record| {
             HistoryRecordKind::from(record)
         })
@@ -719,7 +720,7 @@ mod tests {
         let (store, _host_id, history_store) = parts;
         let db = memory_db().await;
 
-        let total = BUILD_BATCH_SIZE + 3;
+        let total = BUILD_BATCH_SIZE.get() + 3;
         history_store
             .push_batch((0..total).map(|n| HistoryRecord::Create(history_n(n))))
             .await
@@ -734,7 +735,7 @@ mod tests {
 
         assert_eq!(
             batch_sizes(&history_store, &db, &ids).await,
-            vec![BUILD_BATCH_SIZE, 3]
+            vec![BUILD_BATCH_SIZE.get(), 3]
         );
     }
 
