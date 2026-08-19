@@ -1168,15 +1168,9 @@ mod test {
         let context = new_context();
 
         let results = db
-            .search(
-                mode,
-                filter_mode,
-                &context,
-                query,
-                OptFilters {
-                    ..Default::default()
-                },
-            )
+            .search(mode, filter_mode, &context, query, OptFilters {
+                ..Default::default()
+            })
             .await?;
 
         assert_eq!(
@@ -1414,18 +1408,12 @@ mod test {
         };
 
         let results = db
-            .search(
-                DbSearchMode::FullText,
-                FilterMode::Global,
-                &context,
-                "",
-                OptFilters {
-                    after: after.as_deref(),
-                    before: before.as_deref(),
-                    include_duplicates: true,
-                    ..Default::default()
-                },
-            )
+            .search(DbSearchMode::FullText, FilterMode::Global, &context, "", OptFilters {
+                after: after.as_deref(),
+                before: before.as_deref(),
+                include_duplicates: true,
+                ..Default::default()
+            })
             .await
             .unwrap();
 
@@ -1448,16 +1436,10 @@ mod test {
         let context = new_context();
 
         let hits = db
-            .search(
-                DbSearchMode::FullText,
-                FilterMode::Global,
-                &context,
-                "",
-                OptFilters {
-                    include_duplicates,
-                    ..Default::default()
-                },
-            )
+            .search(DbSearchMode::FullText, FilterMode::Global, &context, "", OptFilters {
+                include_duplicates,
+                ..Default::default()
+            })
             .await
             .unwrap();
 
@@ -1575,13 +1557,9 @@ mod test {
         new_history_item(&mut db, "corburl").await.unwrap();
 
         // if fuzzy reordering is on, it should come back in a more sensible order
-        assert_search_commands(
-            &db,
-            DbSearchMode::Fuzzy,
-            FilterMode::Global,
-            "curl",
-            vec!["curl", "corburl"],
-        )
+        assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, "curl", vec![
+            "curl", "corburl",
+        ])
         .await;
 
         assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, "xxxx", 0).await.unwrap();
@@ -1631,13 +1609,9 @@ mod test {
             .unwrap();
         new_history_item_at(&mut db, "corburl", Some(now)).await.unwrap();
 
-        assert_search_commands(
-            &db,
-            mode.closest_db_mode(),
-            FilterMode::Global,
-            "curl",
-            vec!["curl", "corburl"],
-        )
+        assert_search_commands(&db, mode.closest_db_mode(), FilterMode::Global, "curl", vec![
+            "curl", "corburl",
+        ])
         .await;
     }
 
@@ -1700,13 +1674,9 @@ mod test {
         new_history_item_at(&mut db, close, Some(now - time::Duration::days(5))).await.unwrap();
         new_history_item_at(&mut db, far, Some(now - time::Duration::hours(1))).await.unwrap();
 
-        assert_search_commands(
-            &db,
-            DbSearchMode::Fuzzy,
-            FilterMode::Global,
-            query,
-            vec![close, far],
-        )
+        assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, vec![
+            close, far,
+        ])
         .await;
     }
 
@@ -1716,13 +1686,9 @@ mod test {
     async fn test_search_fuzzy_operator() {
         let db = db_with(&["use screen", "screenshot tool"]).await;
 
-        assert_search_commands(
-            &db,
-            DbSearchMode::Fuzzy,
-            FilterMode::Global,
-            "screen$",
-            vec!["use screen"],
-        )
+        assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, "screen$", vec![
+            "use screen",
+        ])
         .await;
     }
 
@@ -1875,15 +1841,9 @@ mod test {
         }
         let start = Instant::now();
         let _results = db
-            .search(
-                DbSearchMode::Fuzzy,
-                FilterMode::Global,
-                &context,
-                "",
-                OptFilters {
-                    ..Default::default()
-                },
-            )
+            .search(DbSearchMode::Fuzzy, FilterMode::Global, &context, "", OptFilters {
+                ..Default::default()
+            })
             .await
             .unwrap();
         let duration = start.elapsed();
