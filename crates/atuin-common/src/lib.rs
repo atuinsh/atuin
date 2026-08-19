@@ -5,6 +5,7 @@ pub mod ansi;
 pub mod docs;
 pub mod encryption;
 pub mod filter;
+pub mod futures;
 pub mod logs;
 #[cfg(feature = "os")]
 pub mod os;

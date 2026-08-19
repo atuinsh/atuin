@@ -149,9 +149,7 @@ impl<'db> HistoryImporter<'db> {
     }
 
     async fn flush(self) -> Result<()> {
-        if !self.buf.is_empty() {
-            self.db.save_bulk(&self.buf).await?;
-        }
+        self.db.save_bulk(&self.buf).await?;
         self.pb.finish();
         Ok(())
     }
