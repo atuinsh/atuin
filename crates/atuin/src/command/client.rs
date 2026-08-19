@@ -197,7 +197,8 @@ impl Cmd {
         // doing anything else. History commands are performance-sensitive and run before and after
         // every shell command, so we want to skip any unnecessary initialization for them.
         let settings = Settings::new().wrap_err("could not load client settings")?;
-        self.init_logging(&settings);
+        // Held until the command returns so the OTLP exporter (ATUIN_OTEL) is flushed on exit.
+        let _log_guard = self.init_logging(&settings);
         let theme_manager = theme::ThemeManager::new(settings.theme.debug, None);
         let res = runtime.block_on(self.run_inner(settings, theme_manager));
 
@@ -326,9 +327,9 @@ impl Cmd {
         }
     }
 
-    fn init_logging(&self, settings: &Settings) {
-        if let Some(config) = self.log_config(settings) {
-            crate::logs::init_logging(&config);
-        }
+    fn init_logging(&self, settings: &Settings) -> crate::logs::LogGuard {
+        self.log_config(settings).map_or_else(crate::logs::LogGuard::disabled, |config| {
+            crate::logs::init_logging(&config)
+        })
     }
 }

@@ -6,6 +6,7 @@ use atuin_common::encryption::paseto_v4;
 use atuin_kv::store::KvStore;
 use clap::Subcommand;
 use eyre::{Context, Result, eyre};
+use tracing::instrument;
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
@@ -63,6 +64,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
             .context("could not load encryption key")?;

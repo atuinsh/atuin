@@ -11,6 +11,7 @@ use colored::Colorize;
 use eyre::Result;
 use serde::Serialize;
 use sysinfo::{Disks, System, get_current_pid};
+use tracing::instrument;
 
 #[derive(Debug, Serialize)]
 struct ShellInfo {
@@ -423,6 +424,7 @@ fn checks(info: &DoctorDump) {
     }
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn run(settings: &Settings) -> Result<()> {
     println!("{}", "Atuin Doctor".bold());
     println!("Checking for diagnostics");

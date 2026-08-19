@@ -13,6 +13,7 @@ use eyre::{Result, bail, eyre};
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use tracing::instrument;
+use tracing_futures::Instrument;
 
 use super::{History, HistoryId, Version};
 use crate::database::{Sqlite, current_context};
@@ -301,11 +302,14 @@ impl HistoryStore {
         database: &'a Sqlite,
         ids: &'a [RecordId],
     ) -> impl Stream<Item = Result<Vec<History>>> + 'a {
+        // Group the concurrent per-record decodes under one span so the whole
+        // decode fan-out shows as a single unit (each `decode` nests under it).
         let records = stream::iter(ids)
             .map(move |id| async move { self.decode(*id).await })
             .buffered(DECODE_CONCURRENCY)
             .filter_map(future::ready)
-            .boxed();
+            .boxed()
+            .instrument(tracing::trace_span!("decode_records", count = ids.len()));
 
         // Group adjacent records of the same kind so each kind lands in its own bulk transaction,
         // while the database still sees them in record order.
