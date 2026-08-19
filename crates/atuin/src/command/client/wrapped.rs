@@ -329,9 +329,6 @@ pub async fn run(
         HashMap::new()
     };
 
-    // Compute overall stats using existing functionality.
-    // `compute` returns None when every command in range is filtered out by
-    // stats.ignored_commands, which is not an error.
     let Some(stats) = compute(settings, &history, 10, 1) else {
         println!(
             "No commands found in your {year} history. Run a command or check your config for \
