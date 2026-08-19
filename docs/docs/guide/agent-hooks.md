@@ -57,7 +57,7 @@ For explicit author filtering, use the CLI `atuin search --author ...` flag. Spe
 | Value | Meaning |
 |-------|---------|
 | `$all-user` | Any entry that is **not** agent-run |
-| `$all-agent` | Any agent-run entry (see [how entries are classified](#filtering-by-author)) |
+| `$all-agent` | Any agent-run entry |
 
 You can also use literal author names:
 
@@ -77,21 +77,6 @@ atuin search --author '$all-agent' -- ''
 ```
 
 Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `opencode`, and `pi`.
-
-Whether an entry counts as agent-run is decided when it is captured, not by its author name alone:
-
-- An author stated explicitly — `atuin history start --author <name>` or the `ATUIN_HISTORY_AUTHOR`
-  environment variable — that matches a known agent name marks the entry as agent-run. This is how
-  all of the integrations above are classified.
-- An author that was merely defaulted from your username never does. That is what keeps a user
-  called `pi` out of `$all-agent`: their own commands are theirs, while commands the `pi` agent
-  runs on their machine are still recorded as the agent's.
-- `--author-kind <user|agent>` (or `ATUIN_HISTORY_AUTHOR_KIND`) overrides both — use it if you
-  really do want to claim an agent's name for your own commands, or to mark an agent whose name is
-  not in the list.
-
-For entries recorded by older versions, where no kind was stored, the same rule is approximated
-after the fact: an agent-named author counts as an agent unless it is also your username.
 
 ## Supported Agents
 

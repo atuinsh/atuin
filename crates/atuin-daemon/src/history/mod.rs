@@ -5,6 +5,8 @@
 // Include the generated proto code
 tonic::include_proto!("history");
 
+// Translate between the client's `Option<AuthorKind>` (where "not stated" is `None`) and the
+// proto enum (where proto3 forces a zero variant, `Unspecified`, to mean the same thing).
 impl From<Option<atuin_client::history::AuthorKind>> for AuthorKind {
     fn from(kind: Option<atuin_client::history::AuthorKind>) -> Self {
         match kind {

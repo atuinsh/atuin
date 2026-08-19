@@ -355,18 +355,10 @@ impl Sqlite {
     #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     async fn save_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, h: &History) -> Result<()> {
         sqlx::query(
-            // On an id conflict, adopt the incoming author_kind if the stored row has none: store
-            // rebuilds re-save every record through here, and this is what lets a kind synced from
-            // another machine reach a row that was first written without one (the record store
-            // itself is immutable). The trailing bare ON CONFLICT keeps the old `insert or ignore`
-            // behavior for the (timestamp, cwd, command) uniqueness constraint.
-            "insert into history(
+            "insert or ignore into history(
                 id, timestamp, duration, exit, command, cwd, session, hostname, author, intent,
                 deleted_at, shell, author_kind
-            ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
-            on conflict(id) do update set author_kind = excluded.author_kind
-                where history.author_kind is null and excluded.author_kind is not null
-            on conflict do nothing",
+            ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         )
         .bind(h.id.0.as_str())
         .bind(h.timestamp.unix_timestamp_nanos() as i64)
@@ -2106,39 +2098,6 @@ mod test {
                 .unwrap();
             assert_eq!(results.len(), expected, "{authors:?}");
         }
-    }
-
-    /// Re-saving an existing row (as a store rebuild does for every record) fills in a missing
-    /// author_kind but never overwrites one that is already set.
-    #[tokio::test(flavor = "multi_thread")]
-    #[rstest]
-    async fn save_backfills_author_kind_on_existing_rows() {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
-
-        let kindless: History = History::import()
-            .timestamp(OffsetDateTime::now_utc())
-            .command("echo hello")
-            .cwd("/tmp")
-            .cmd_origin(CmdOrigin::try_from("raspberry:pi".to_owned()).unwrap())
-            .author("pi")
-            .build()
-            .into();
-        db.save(&kindless).await.unwrap();
-
-        // The same entry arrives again, now carrying its kind (e.g. re-synced and rebuilt after
-        // an upgrade).
-        let with_kind = History {
-            author_kind: Some(AuthorKind::Agent),
-            ..kindless.clone()
-        };
-        db.save(&with_kind).await.unwrap();
-        let loaded = db.load(kindless.id.0.as_str()).await.unwrap().unwrap();
-        assert_eq!(loaded.author_kind, Some(AuthorKind::Agent));
-
-        // A later kindless copy does not erase the stored kind.
-        db.save(&kindless).await.unwrap();
-        let loaded = db.load(kindless.id.0.as_str()).await.unwrap().unwrap();
-        assert_eq!(loaded.author_kind, Some(AuthorKind::Agent));
     }
 
     /// A user called `pi` shares a name with the `pi` agent, so on their machine the author name

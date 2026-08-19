@@ -2,7 +2,9 @@ syntax = "proto3";
 package history;
 
 // Whether a human or an agent ran a command. Unspecified means the caller did
-// not say, and the author name is all the receiver has to go on.
+// not say, and the author name is all the receiver has to go on. Unspecified is
+// also what keeps this backwards compatible: it is proto3's zero value, so a
+// peer from before this field existed reads and writes it implicitly.
 enum AuthorKind {
   AUTHOR_KIND_UNSPECIFIED = 0;
   AUTHOR_KIND_USER = 1;
