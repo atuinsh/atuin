@@ -136,8 +136,8 @@ fn tool_definitions() -> Vec<Tool> {
                 "description": format!(
                     "Filter by who ran the command: '{AUTHOR_FILTER_ALL_USER}' for \
                      human-run commands, '{AUTHOR_FILTER_ALL_AGENT}' for commands run \
-                     by AI agents, or a literal agent name (one of: {}). Multiple \
-                     entries are OR-ed. Omit for everything.",
+                     by AI agents, or any literal author name (well-known agents: {}). \
+                     Multiple entries are OR-ed. Omit for everything.",
                     KNOWN_AGENTS.join(", ")
                 ),
             },

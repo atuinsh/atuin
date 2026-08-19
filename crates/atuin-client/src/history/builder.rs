@@ -91,9 +91,11 @@ impl From<HistoryCaptured> for History {
         let author_kind = captured
             .author_kind
             .or_else(|| {
-                // Parsed exactly like the `--author-kind` flag, so the two channels can't drift.
+                // Parsed like the `--author-kind` flag, so the two channels can't drift —
+                // case-insensitively, since a bad env value is silently ignored rather than
+                // rejected loudly the way a bad flag is.
                 let value = std::env::var(HISTORY_AUTHOR_KIND_ENV).ok()?;
-                clap::ValueEnum::from_str(&value, false).ok()
+                clap::ValueEnum::from_str(&value, true).ok()
             })
             .or_else(|| author.as_deref().is_some_and(is_known_agent).then_some(AuthorKind::Agent));
 
