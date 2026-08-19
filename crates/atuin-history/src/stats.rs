@@ -339,6 +339,22 @@ mod tests {
         assert_eq!(stats.unique_commands, 1);
     }
 
+    #[test]
+    fn all_commands_ignored() {
+        let mut settings = Settings::utc();
+        settings.stats.ignored_commands.push("cd".to_string());
+
+        let history = [History::import()
+            .timestamp(OffsetDateTime::now_utc())
+            .command("cd foo")
+            .build()
+            .into()];
+
+        // non-empty history can still leave nothing to report, so callers have
+        // to handle None rather than assuming history.is_empty() covers it
+        assert!(compute(&settings, &history, 10, 1).is_none());
+    }
+
     #[fixture]
     fn settings(
         #[default(&[][..])] prefix: &[&str],

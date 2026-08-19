@@ -329,8 +329,13 @@ pub async fn run(
         HashMap::new()
     };
 
-    // Compute overall stats using existing functionality
-    let stats = compute(settings, &history, 10, 1).expect("Failed to compute stats");
+    let Some(stats) = compute(settings, &history, 10, 1) else {
+        println!(
+            "No commands found in your {year} history. Run a command or check your config for for \
+             commands ignored by stats.ignored_commands."
+        );
+        return Ok(());
+    };
     let wrapped_stats = WrappedStats::new(settings, &stats, &history, &alias_map);
 
     // Print wrapped format
