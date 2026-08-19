@@ -135,9 +135,11 @@ impl<T: AsRef<Path> + ?Sized> DisplayRichExt for T {
 
 #[cfg(test)]
 mod tests {
-    use super::DisplayRichExt;
-    use rstest::rstest;
     use std::path::{MAIN_SEPARATOR_STR, Path, PathBuf};
+
+    use rstest::rstest;
+
+    use super::DisplayRichExt;
 
     /// With no options, output is byte-identical to `Path::display()`.
     #[rstest]
@@ -163,41 +165,17 @@ mod tests {
         #[case] enabled: bool,
         #[case] expected: String,
     ) {
-        assert_eq!(
-            input.display_rich().trailing_slash(enabled).to_string(),
-            expected
-        );
+        assert_eq!(input.display_rich().trailing_slash(enabled).to_string(), expected);
     }
 
     /// `display_rich()` is available on every `AsRef<Path>` input type.
     #[rstest]
     fn works_for_all_asref_path_types() {
         let expected = format!("bar{MAIN_SEPARATOR_STR}");
-        assert_eq!(
-            "bar".display_rich().trailing_slash(true).to_string(),
-            expected
-        );
-        assert_eq!(
-            String::from("bar")
-                .display_rich()
-                .trailing_slash(true)
-                .to_string(),
-            expected
-        );
-        assert_eq!(
-            Path::new("bar")
-                .display_rich()
-                .trailing_slash(true)
-                .to_string(),
-            expected
-        );
-        assert_eq!(
-            PathBuf::from("bar")
-                .display_rich()
-                .trailing_slash(true)
-                .to_string(),
-            expected
-        );
+        assert_eq!("bar".display_rich().trailing_slash(true).to_string(), expected);
+        assert_eq!(String::from("bar").display_rich().trailing_slash(true).to_string(), expected);
+        assert_eq!(Path::new("bar").display_rich().trailing_slash(true).to_string(), expected);
+        assert_eq!(PathBuf::from("bar").display_rich().trailing_slash(true).to_string(), expected);
     }
 
     /// `relative_to(base)` strips `base` when the path is under it (empty when
@@ -253,10 +231,7 @@ mod tests {
     fn relative_to_takes_priority_over_tilde() {
         let dir = Path::new("home").join("user");
         let p = dir.join("proj");
-        assert_eq!(
-            p.display_rich().relative_to(&dir).tilde(&dir).to_string(),
-            "proj"
-        );
+        assert_eq!(p.display_rich().relative_to(&dir).tilde(&dir).to_string(), "proj");
     }
 
     /// Enrichments compose with `trailing_slash`. The `relative_to`-to-base

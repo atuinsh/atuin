@@ -1,4 +1,6 @@
-use std::{ffi::OsStr, path::Path, process::Command};
+use std::ffi::OsStr;
+use std::path::Path;
+use std::process::Command;
 
 use serde::Serialize;
 use sysinfo::{Process, System, get_current_pid};
@@ -52,9 +54,8 @@ impl Shell {
     }
 
     pub fn from_env() -> Shell {
-        std::env::var("ATUIN_SHELL").map_or(Shell::Unknown, |shell| {
-            Shell::from_string(shell.trim().to_lowercase())
-        })
+        std::env::var("ATUIN_SHELL")
+            .map_or(Shell::Unknown, |shell| Shell::from_string(shell.trim().to_lowercase()))
     }
 
     pub fn config_file(&self) -> Option<std::path::PathBuf> {
@@ -83,7 +84,7 @@ impl Shell {
         let path = if sys.contains("darwin") {
             // This works in my testing so far
             Shell::Sh.run_interactive([
-                "dscl localhost -read \"/Local/Default/Users/$USER\" shell | awk '{print $2}'",
+                "dscl localhost -read \"/Local/Default/Users/$USER\" shell | awk '{print $2}'"
             ])?
         } else if cfg!(windows) {
             return Ok(Shell::Powershell);
@@ -98,9 +99,7 @@ impl Shell {
             return Err(ShellError::NotSupported);
         }
 
-        Ok(Shell::from_string(
-            shell.unwrap().to_string_lossy().to_string(),
-        ))
+        Ok(Shell::from_string(shell.unwrap().to_string_lossy().to_string()))
     }
 
     pub fn from_string(name: String) -> Shell {

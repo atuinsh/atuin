@@ -151,7 +151,10 @@ enum TransportError {
         "the hub returned a join url on a different origin than the configured hub: got {got:?}, \
          expected a url on {want} -- refusing to hand out the session key"
     )]
-    JoinUrlOrigin { got: String, want: String },
+    JoinUrlOrigin {
+        got: String,
+        want: String,
+    },
     #[error("connection closed by the hub")]
     Closed,
 }
@@ -308,10 +311,7 @@ struct InputDrops {
 /// renumbers or splices frames causes an authentication failure on the viewer
 /// instead of corrupted content.
 fn output_payload(key: &SessionKey, frame: &Frame) -> Value {
-    let blob = key.encrypt(
-        &frame.data,
-        &crypto::frame_aad(FrameKind::Output, frame.seq),
-    );
+    let blob = key.encrypt(&frame.data, &crypto::frame_aad(FrameKind::Output, frame.seq));
     json!({ "seq": frame.seq, "data": b64_encode(&blob) })
 }
 
@@ -319,10 +319,7 @@ fn output_payload(key: &SessionKey, frame: &Frame) -> Value {
 /// Keyframe AAD, so a keyframe blob can never be reflected as output (or vice
 /// versa).
 fn keyframe_payload(key: &SessionKey, frame: &Frame) -> Value {
-    let blob = key.encrypt(
-        &frame.data,
-        &crypto::frame_aad(FrameKind::Keyframe, frame.seq),
-    );
+    let blob = key.encrypt(&frame.data, &crypto::frame_aad(FrameKind::Keyframe, frame.seq));
     json!({ "seq": frame.seq, "data": b64_encode(&blob) })
 }
 
@@ -451,9 +448,7 @@ impl Connection {
             return Ok(());
         }
         for frame in self.queue.drain_output() {
-            self.wire
-                .push(EVENT_OUTPUT, output_payload(key, &frame))
-                .await?;
+            self.wire.push(EVENT_OUTPUT, output_payload(key, &frame)).await?;
         }
         Ok(())
     }
@@ -493,9 +488,7 @@ impl Connection {
                 // session — it is re-encrypted here, never cached as
                 // ciphertext, so a fresh `seq` and a fresh random nonce always
                 // travel together.
-                self.wire
-                    .push(EVENT_KEYFRAME, keyframe_payload(key, &frame))
-                    .await?;
+                self.wire.push(EVENT_KEYFRAME, keyframe_payload(key, &frame)).await?;
                 // Ends any resync window opened by an overflow: output queued
                 // after this keyframe carries a greater `seq`, so the hub's
                 // buffer is contiguous again.
@@ -503,9 +496,7 @@ impl Connection {
             }
             Outbound::HostSize { cols, rows } => {
                 self.flush(key).await?;
-                self.wire
-                    .push(EVENT_HOST_SIZE, json!({ "cols": cols, "rows": rows }))
-                    .await?;
+                self.wire.push(EVENT_HOST_SIZE, json!({ "cols": cols, "rows": rows })).await?;
             }
             Outbound::End => {
                 self.flush(key).await?;
@@ -638,8 +629,8 @@ impl Transport {
         }
         let d = &self.input_drops;
         eprintln!(
-            "\r\n[atuin lab share] input: accepted={} replay={} exhausted={} rejected={} \
-             empty={} read_only={}\r",
+            "\r\n[atuin lab share] input: accepted={} replay={} exhausted={} rejected={} empty={} \
+             read_only={}\r",
             d.accepted, d.replay, d.exhausted, d.rejected, d.empty, d.read_only
         );
     }
@@ -888,9 +879,7 @@ impl Transport {
             self.input_drops.rejected += 1;
             return None;
         }
-        let Some(nonce) = blob
-            .get(..NONCE_LEN)
-            .and_then(|n| <[u8; NONCE_LEN]>::try_from(n).ok())
+        let Some(nonce) = blob.get(..NONCE_LEN).and_then(|n| <[u8; NONCE_LEN]>::try_from(n).ok())
         else {
             self.input_drops.rejected += 1;
             return None;
@@ -920,10 +909,7 @@ impl Transport {
         //    and the fail-closed point un-inflatable by a hostile hub. It also
         //    preserves the older invariant that garbage cannot displace real
         //    nonces, strengthened into "garbage cannot consume budget".
-        let Ok(plaintext) = self
-            .key
-            .decrypt(blob, &crypto::frame_aad(FrameKind::Input, 0))
-        else {
+        let Ok(plaintext) = self.key.decrypt(blob, &crypto::frame_aad(FrameKind::Input, 0)) else {
             self.input_drops.rejected += 1;
             return None;
         };
@@ -1130,7 +1116,6 @@ fn is_fresh_session(last: Option<&str>, new: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::protocol::b64_decode;
 
     /// A fixed key so encrypt/decrypt assertions are reproducible across the
@@ -1179,17 +1164,12 @@ mod tests {
         assert_eq!(url.host_str(), Some("hub.example.com"));
         // A path-prefixed base (reverse-proxied hub) keeps its prefix.
         assert_eq!(url.path(), "/some/base/sockets/share/websocket");
-        let pairs: Vec<(String, String)> = url
-            .query_pairs()
-            .map(|(k, v)| (k.into_owned(), v.into_owned()))
-            .collect();
-        assert_eq!(
-            pairs,
-            vec![
-                ("vsn".to_string(), "2.0.0".to_string()),
-                ("token".to_string(), "api-token-123".to_string()),
-            ]
-        );
+        let pairs: Vec<(String, String)> =
+            url.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
+        assert_eq!(pairs, vec![
+            ("vsn".to_string(), "2.0.0".to_string()),
+            ("token".to_string(), "api-token-123".to_string()),
+        ]);
     }
 
     /// A bare origin normalizes to path `/`; appending must not produce a
@@ -1216,10 +1196,7 @@ mod tests {
 
     #[test]
     fn join_payload_has_no_resume_token_on_the_first_join() {
-        assert_eq!(
-            test_transport(false).join_payload(),
-            json!({ "write": false })
-        );
+        assert_eq!(test_transport(false).join_payload(), json!({ "write": false }));
     }
 
     #[test]
@@ -1227,10 +1204,7 @@ mod tests {
         let mut t = test_transport(true);
         t.host_resume_token = Some("secret-resume".to_string());
         t.last_public_token = Some("public-token".to_string());
-        assert_eq!(
-            t.join_payload(),
-            json!({ "write": true, "resume_token": "secret-resume" })
-        );
+        assert_eq!(t.join_payload(), json!({ "write": true, "resume_token": "secret-resume" }));
     }
 
     /// `from_event` is keyless: it b64-decodes the sealed blob and passes it
@@ -1288,18 +1262,10 @@ mod tests {
         let last = blob.len() - 1;
         blob[last] ^= 0x01;
         assert_eq!(t.decrypt_input(&blob), None);
-        assert_eq!(
-            t.input_nonces.len(),
-            0,
-            "unauthenticated bytes never consume budget"
-        );
+        assert_eq!(t.input_nonces.len(), 0, "unauthenticated bytes never consume budget");
         blob[last] ^= 0x01;
         assert_eq!(t.decrypt_input(&blob).as_deref(), Some(&b"x"[..]));
-        assert_eq!(
-            t.input_nonces.len(),
-            1,
-            "only the genuine blob spent a slot"
-        );
+        assert_eq!(t.input_nonces.len(), 1, "only the genuine blob spent a slot");
     }
 
     /// Cross-channel reflection: a blob the host sealed as *output* must never
@@ -1336,10 +1302,7 @@ mod tests {
             ledger.record(nonce_of(i));
         }
         assert!(ledger.is_full());
-        assert!(
-            ledger.contains(&nonce_of(0)),
-            "the oldest nonce is NOT evicted to make room"
-        );
+        assert!(ledger.contains(&nonce_of(0)), "the oldest nonce is NOT evicted to make room");
         assert_eq!(ledger.len(), 4);
     }
 
@@ -1370,11 +1333,7 @@ mod tests {
         // Asserted before anything else about the ledger's state, so that a
         // regression to an evicting policy fails HERE, on the security
         // property, rather than on a bookkeeping precondition.
-        assert_eq!(
-            t.decrypt_input(&x),
-            None,
-            "the captured blob must never execute a second time"
-        );
+        assert_eq!(t.decrypt_input(&x), None, "the captured blob must never execute a second time");
         assert_eq!(t.input_drops.replay, 1);
 
         // And the flood's tail was refused rather than allowed to displace it.
@@ -1391,10 +1350,7 @@ mod tests {
         const CAP: usize = 8;
         let mut t = capped_transport(true, CAP);
         for i in 0..CAP {
-            assert!(
-                t.decrypt_input(&sealed_input(format!("k{i}").as_bytes()))
-                    .is_some()
-            );
+            assert!(t.decrypt_input(&sealed_input(format!("k{i}").as_bytes())).is_some());
         }
         assert_eq!(
             t.decrypt_input(&sealed_input(b"never delivered")),
@@ -1452,10 +1408,7 @@ mod tests {
         // Exactly at the limit: 3044 + 12 + 16 = 3072.
         let at_limit = sealed_input(&vec![b'a'; MAX_INPUT_BLOB_BYTES - 28]);
         assert_eq!(at_limit.len(), MAX_INPUT_BLOB_BYTES);
-        assert_eq!(
-            t.decrypt_input(&at_limit).map(|p| p.len()),
-            Some(MAX_INPUT_BLOB_BYTES - 28)
-        );
+        assert_eq!(t.decrypt_input(&at_limit).map(|p| p.len()), Some(MAX_INPUT_BLOB_BYTES - 28));
     }
 
     /// The ledger is process-lifetime and cleared by NOTHING — in particular
@@ -1506,23 +1459,14 @@ mod tests {
         const CAP: usize = 4;
         let mut t = capped_transport(true, CAP);
         for i in 0..CAP {
-            assert!(
-                t.decrypt_input(&sealed_input(format!("k{i}").as_bytes()))
-                    .is_some()
-            );
+            assert!(t.decrypt_input(&sealed_input(format!("k{i}").as_bytes())).is_some());
         }
         assert!(!t.input_exhausted_notified);
         for i in 0..10 {
-            assert_eq!(
-                t.decrypt_input(&sealed_input(format!("x{i}").as_bytes())),
-                None
-            );
+            assert_eq!(t.decrypt_input(&sealed_input(format!("x{i}").as_bytes())), None);
         }
         assert!(t.input_exhausted_notified, "the notice latches");
-        assert_eq!(
-            t.input_drops.exhausted, 10,
-            "every refusal is still counted"
-        );
+        assert_eq!(t.input_drops.exhausted, 10, "every refusal is still counted");
         // Armed exactly once, and drained by the first taker.
         assert!(t.take_input_disabled_notice());
         assert!(!t.take_input_disabled_notice());
@@ -1585,14 +1529,8 @@ mod tests {
             b"hello viewer"
         );
         // Wrong kind (reflection) and wrong seq (renumbering) must both fail.
-        assert!(
-            key.decrypt(&blob, &crypto::frame_aad(FrameKind::Keyframe, 42))
-                .is_err()
-        );
-        assert!(
-            key.decrypt(&blob, &crypto::frame_aad(FrameKind::Output, 43))
-                .is_err()
-        );
+        assert!(key.decrypt(&blob, &crypto::frame_aad(FrameKind::Keyframe, 42)).is_err());
+        assert!(key.decrypt(&blob, &crypto::frame_aad(FrameKind::Output, 43)).is_err());
     }
 
     #[test]
@@ -1611,10 +1549,7 @@ mod tests {
                 .expect("genuine keyframe blob decrypts"),
             b"\x1b[2Jrepaint"
         );
-        assert!(
-            key.decrypt(&blob, &crypto::frame_aad(FrameKind::Output, 7))
-                .is_err()
-        );
+        assert!(key.decrypt(&blob, &crypto::frame_aad(FrameKind::Output, 7)).is_err());
     }
 
     /// Each encryption draws a fresh random nonce, so equal plaintext under
@@ -1626,10 +1561,7 @@ mod tests {
             seq: 1,
             data: b"same bytes".to_vec(),
         };
-        assert_ne!(
-            output_payload(&key, &frame)["data"],
-            output_payload(&key, &frame)["data"]
-        );
+        assert_ne!(output_payload(&key, &frame)["data"], output_payload(&key, &frame)["data"]);
     }
 
     #[test]
@@ -1660,10 +1592,7 @@ mod tests {
 
         // Both consumers see the SAME fragmented URL: the first-join oneshot
         // (feeds `ATUIN_SHARE_URL`) and the session's `Connected`.
-        assert_eq!(
-            url_rx.try_recv().expect("first join fires the oneshot"),
-            want
-        );
+        assert_eq!(url_rx.try_recv().expect("first join fires the oneshot"), want);
         match in_rx.try_recv().expect("Connected was sent") {
             Inbound::Connected {
                 join_url,
@@ -1789,10 +1718,7 @@ mod tests {
         .expect("wss hub and https join url are the same origin");
         assert_eq!(
             url,
-            format!(
-                "https://hub.example.com/lab/share/t#{}",
-                test_key().to_fragment()
-            )
+            format!("https://hub.example.com/lab/share/t#{}", test_key().to_fragment())
         );
     }
 
@@ -1840,40 +1766,25 @@ mod tests {
     fn same_origin_compares_scheme_host_and_port_and_nothing_else() {
         let accept = [
             // ws/wss hub bases against the http/https links they mint.
-            (
-                "wss://hub.example.com",
-                "https://hub.example.com/lab/share/t",
-            ),
+            ("wss://hub.example.com", "https://hub.example.com/lab/share/t"),
             ("wss://hub.example.com", "https://hub.example.com:443/x"),
             ("ws://127.0.0.1:4131", "http://127.0.0.1:4131/lab/share/t"),
             ("ws://localhost", "http://localhost:80/x"),
             // An http/https base (an `ATUIN_LAB_HUB_URL` given as given).
-            (
-                "https://hub.example.com/hub/",
-                "https://hub.example.com/a/b?c=1",
-            ),
+            ("https://hub.example.com/hub/", "https://hub.example.com/a/b?c=1"),
             ("http://127.0.0.1:4131", "http://127.0.0.1:4131/x"),
         ];
         for (hub, join) in accept {
             assert!(
-                same_origin(
-                    &Url::parse(hub).expect("hub"),
-                    &Url::parse(join).expect("join")
-                ),
+                same_origin(&Url::parse(hub).expect("hub"), &Url::parse(join).expect("join")),
                 "expected same origin: {hub} vs {join}"
             );
         }
 
         let refuse = [
             // Different host, including a lookalike subdomain and suffix.
-            (
-                "wss://hub.example.com",
-                "https://attacker.example.com/collect?s=1",
-            ),
-            (
-                "wss://hub.example.com",
-                "https://hub.example.com.evil.test/x",
-            ),
+            ("wss://hub.example.com", "https://attacker.example.com/collect?s=1"),
+            ("wss://hub.example.com", "https://hub.example.com.evil.test/x"),
             ("wss://hub.example.com", "https://evil.hub.example.com/x"),
             // Different port, including the implicit-vs-wrong-explicit pair.
             ("ws://127.0.0.1:4131", "http://127.0.0.1:4132/x"),
@@ -1890,10 +1801,7 @@ mod tests {
         ];
         for (hub, join) in refuse {
             assert!(
-                !same_origin(
-                    &Url::parse(hub).expect("hub"),
-                    &Url::parse(join).expect("join")
-                ),
+                !same_origin(&Url::parse(hub).expect("hub"), &Url::parse(join).expect("join")),
                 "expected different origins: {hub} vs {join}"
             );
         }
@@ -2036,10 +1944,7 @@ mod tests {
 
         let blob = hex::decode(field("blob_hex")).expect("blob_hex is hex");
         let expected = hex::decode(field("plaintext_hex")).expect("plaintext_hex is hex");
-        assert!(
-            !expected.is_empty(),
-            "the sealed plaintext must be non-empty"
-        );
+        assert!(!expected.is_empty(), "the sealed plaintext must be non-empty");
 
         let mut transport = test_transport(true);
 

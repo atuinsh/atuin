@@ -110,7 +110,6 @@ mod record;
 mod sync;
 
 pub use packer::{PackingError, try_pack};
-pub use sync::{DownloadError, UploadError, download_packed, upload_packed};
-
 #[cfg(test)]
 pub(crate) use record::PackManifestRecordView;
+pub use sync::{DownloadError, UploadError, download_packed, upload_packed};

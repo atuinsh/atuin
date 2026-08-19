@@ -1,6 +1,5 @@
-use eyre::{Result, bail};
-
 use atuin_client::settings::Settings;
+use eyre::{Result, bail};
 
 pub async fn run(settings: &Settings) -> Result<()> {
     let meta = Settings::meta_store().await?;

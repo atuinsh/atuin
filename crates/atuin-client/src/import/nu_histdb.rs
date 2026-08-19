@@ -5,15 +5,16 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use atuin_common::time::OffsetDateTimeExt;
+use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
 use directories::BaseDirs;
 use eyre::{Result, eyre};
-use sqlx::{Pool, sqlite::SqlitePool};
+use sqlx::Pool;
+use sqlx::sqlite::SqlitePool;
 use time::OffsetDateTime;
 
 use super::Importer;
 use crate::history::History;
 use crate::import::Loader;
-use atuin_domain::{CmdHost, CmdOrigin, CmdUser};
 
 #[derive(sqlx::FromRow, Debug)]
 pub struct HistDbEntry {
@@ -62,12 +63,9 @@ pub struct NuHistDb {
 
 /// Read db at given file, return vector of entries.
 async fn hist_from_db(dbpath: PathBuf) -> Result<Vec<HistDbEntry>> {
-    let connection_str = dbpath.to_str().ok_or_else(|| {
-        eyre!(
-            "Invalid path for SQLite database: {}",
-            dbpath.to_string_lossy()
-        )
-    })?;
+    let connection_str = dbpath
+        .to_str()
+        .ok_or_else(|| eyre!("Invalid path for SQLite database: {}", dbpath.to_string_lossy()))?;
     let pool = SqlitePool::connect(connection_str).await?;
     hist_from_db_conn(pool).await
 }
@@ -80,9 +78,8 @@ async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>>
         FROM history
         ORDER BY start_timestamp
     "#;
-    let histdb_vec: Vec<HistDbEntry> = sqlx::query_as::<_, HistDbEntry>(query)
-        .fetch_all(&pool)
-        .await?;
+    let histdb_vec: Vec<HistDbEntry> =
+        sqlx::query_as::<_, HistDbEntry>(query).fetch_all(&pool).await?;
     Ok(histdb_vec)
 }
 
@@ -150,13 +147,7 @@ mod test {
     /// A corrupt row must degrade to something representable rather than
     /// panicking; the command is what matters and must always survive.
     #[rstest]
-    #[case::valid(
-        1_639_162_832_500,
-        b"echo hello",
-        1_639_162_832,
-        500_000_000,
-        "echo hello"
-    )]
+    #[case::valid(1_639_162_832_500, b"echo hello", 1_639_162_832, 500_000_000, "echo hello")]
     #[case::out_of_range_timestamp(i64::MAX, b"echo hello", 0, 0, "echo hello")]
     #[case::invalid_utf8_command(0, &[0x65, 0x63, 0x68, 0x6f, 0xff], 0, 0, "echo\u{fffd}")]
     fn corrupt_rows_degrade(

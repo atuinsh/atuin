@@ -1,10 +1,13 @@
-use super::{CapKey, Capability, CapsBundle, DuplicateCapability};
-use crate::api::CapabilitiesResponse;
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use parking_lot::RwLock;
 use serde::de::DeserializeOwned;
-use std::{collections::HashMap, sync::Arc};
 use tokio;
 use url::Url;
+
+use super::{CapKey, Capability, CapsBundle, DuplicateCapability};
+use crate::api::CapabilitiesResponse;
 
 /// Client-side capability set: advertises its own capabilities and can read the server's.
 ///
@@ -131,22 +134,13 @@ impl CapClient {
 
     /// Whether our cached server token differs from `available` (or we have not fetched yet).
     fn is_stale(&self, available: &str) -> bool {
-        self.server
-            .read()
-            .as_ref()
-            .map(|caps| caps.version.as_str())
-            != Some(available)
+        self.server.read().as_ref().map(|caps| caps.version.as_str()) != Some(available)
     }
 
     /// Fetch and decode the server's capabilities document.
     async fn fetch_server_caps(&self) -> reqwest::Result<ServerCaps> {
-        let resp: CapabilitiesResponse = self
-            .http
-            .get(self.capabilities_url.clone())
-            .send()
-            .await?
-            .json()
-            .await?;
+        let resp: CapabilitiesResponse =
+            self.http.get(self.capabilities_url.clone()).send().await?.json().await?;
         Ok(ServerCaps::from(resp))
     }
 
@@ -170,12 +164,12 @@ impl CapClient {
             return Ok(None);
         };
 
-        serde_json::from_value(raw.clone())
-            .map(Some)
-            .map_err(|source| ServerSupportError::Malformed {
+        serde_json::from_value(raw.clone()).map(Some).map_err(|source| {
+            ServerSupportError::Malformed {
                 name: C::static_name(),
                 source,
-            })
+            }
+        })
     }
 
     /// Whether the server's capabilities have been fetched at least once.
@@ -194,11 +188,12 @@ impl CapClient {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::caps::{CapServer, CapabilitiesCap};
     use rstest::{fixture, rstest};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+    use crate::caps::{CapServer, CapabilitiesCap};
 
     /// A plain reqwest client for the network tests.
     #[fixture]
@@ -219,9 +214,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let caps_url: Url = format!("{}/api/v0/capabilities", server.uri())
-            .parse()
-            .unwrap();
+        let caps_url: Url = format!("{}/api/v0/capabilities", server.uri()).parse().unwrap();
         let client = CapClient::new(caps_url, http_client);
 
         // Nothing fetched yet.
@@ -237,9 +230,7 @@ mod tests {
     #[tokio::test]
     async fn client_observes_the_capability_the_server_advertises(http_client: reqwest::Client) {
         // Serve the exact wire body a real server would produce for the capabilities capability.
-        let advertised = CapServer::new()
-            .add(CapabilitiesCap { version: 1 })
-            .unwrap();
+        let advertised = CapServer::new().add(CapabilitiesCap { version: 1 }).unwrap();
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/v0/capabilities"))
@@ -247,9 +238,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let caps_url: Url = format!("{}/api/v0/capabilities", server.uri())
-            .parse()
-            .unwrap();
+        let caps_url: Url = format!("{}/api/v0/capabilities", server.uri()).parse().unwrap();
         let client = CapClient::new(caps_url, http_client);
 
         assert_eq!(

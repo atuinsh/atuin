@@ -40,9 +40,9 @@ impl OfficialPluginRegistry {
             OfficialPlugin::new(
                 "update",
                 "Update atuin to the latest version",
-                "The 'atuin update' command is provided by the atuin-update plugin.\n\
-                 It is only installed if you used the install script\n  \
-                 If you used a package manager (brew, apt, etc), please continue to use it for updates",
+                "The 'atuin update' command is provided by the atuin-update plugin.\nIt is only \
+                 installed if you used the install script\n  If you used a package manager (brew, \
+                 apt, etc), please continue to use it for updates",
             ),
         );
     }
@@ -56,9 +56,7 @@ impl OfficialPluginRegistry {
     }
 
     pub fn get_install_message(&self, name: &str) -> Option<&str> {
-        self.plugins
-            .get(name)
-            .map(|plugin| plugin.install_message.as_str())
+        self.plugins.get(name).map(|plugin| plugin.install_message.as_str())
     }
 }
 

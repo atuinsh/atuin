@@ -115,21 +115,15 @@ fn escape() {
 
 #[test]
 fn pattern_atoms() {
-    assert_eq!(
-        Pattern::parse("a b", CaseMatching::Ignore, Normalization::Smart).atoms,
-        vec![
-            Atom::parse("a", CaseMatching::Ignore, Normalization::Smart),
-            Atom::parse("b", CaseMatching::Ignore, Normalization::Smart),
-        ]
-    );
+    assert_eq!(Pattern::parse("a b", CaseMatching::Ignore, Normalization::Smart).atoms, vec![
+        Atom::parse("a", CaseMatching::Ignore, Normalization::Smart),
+        Atom::parse("b", CaseMatching::Ignore, Normalization::Smart),
+    ]);
 
-    assert_eq!(
-        Pattern::parse("a\n b", CaseMatching::Ignore, Normalization::Smart).atoms,
-        vec![
-            Atom::parse("a", CaseMatching::Ignore, Normalization::Smart),
-            Atom::parse("b", CaseMatching::Ignore, Normalization::Smart),
-        ]
-    );
+    assert_eq!(Pattern::parse("a\n b", CaseMatching::Ignore, Normalization::Smart).atoms, vec![
+        Atom::parse("a", CaseMatching::Ignore, Normalization::Smart),
+        Atom::parse("b", CaseMatching::Ignore, Normalization::Smart),
+    ]);
 
     assert_eq!(
         Pattern::parse("  a b\r\n", CaseMatching::Ignore, Normalization::Smart).atoms,
@@ -139,11 +133,8 @@ fn pattern_atoms() {
         ]
     );
 
-    assert_eq!(
-        Pattern::parse("ほ　げ", CaseMatching::Smart, Normalization::Smart).atoms,
-        vec![
-            Atom::parse("ほ", CaseMatching::Smart, Normalization::Smart),
-            Atom::parse("げ", CaseMatching::Smart, Normalization::Smart),
-        ],
-    )
+    assert_eq!(Pattern::parse("ほ　げ", CaseMatching::Smart, Normalization::Smart).atoms, vec![
+        Atom::parse("ほ", CaseMatching::Smart, Normalization::Smart),
+        Atom::parse("げ", CaseMatching::Smart, Normalization::Smart),
+    ],)
 }

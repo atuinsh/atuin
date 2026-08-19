@@ -15,14 +15,13 @@ mod tests;
 
 use std::collections::HashMap;
 
+use effects::{Effect, ExitAction, PermissionTarget, TimeoutKind};
+use events::{Event, PermissionChoice, PermissionResponse};
 use serde_json::Value;
+use tools::{ToolManager, ToolState};
 
 use crate::context_window::ContextWindowBuilder;
 use crate::tui::state::ConversationEvent;
-
-use effects::{Effect, ExitAction, PermissionTarget, TimeoutKind};
-use events::{Event, PermissionChoice, PermissionResponse};
-use tools::{ToolManager, ToolState};
 
 // ============================================================================
 // State
@@ -45,7 +44,9 @@ pub(crate) enum AgentState {
     },
 
     /// A conversation turn is in progress.
-    Turn { stream: StreamPhase },
+    Turn {
+        stream: StreamPhase,
+    },
 
     /// Unrecoverable error. User can retry or exit.
     Error(String),
@@ -57,7 +58,9 @@ pub(crate) enum StreamPhase {
     /// Request sent, awaiting first stream frame.
     Connecting,
     /// Actively receiving streamed response.
-    Streaming { status: Option<StreamingStatus> },
+    Streaming {
+        status: Option<StreamingStatus>,
+    },
     /// Stream connection has ended (Done received).
     Done,
 }
@@ -246,9 +249,7 @@ impl AgentFsm {
         // This event fires from the stream response headers, rather than having to wait until the end
         // of a turn when StreamDone arrives, which can be lost for cancelled turns.
         if let Event::SessionIdReceived(session_id) = &event {
-            self.ctx
-                .session_id
-                .get_or_insert_with(|| session_id.clone());
+            self.ctx.session_id.get_or_insert_with(|| session_id.clone());
         }
 
         match (&self.state, event) {
@@ -329,10 +330,7 @@ impl AgentFsm {
             }
 
             (AgentState::Idle { .. }, Event::ConfirmationTimeout { timeout_id }) => {
-                if self
-                    .state_confirmation()
-                    .is_some_and(|c| c.timeout_id == timeout_id)
-                {
+                if self.state_confirmation().is_some_and(|c| c.timeout_id == timeout_id) {
                     self.state = AgentState::Idle { confirmation: None };
                 }
                 vec![]
@@ -599,9 +597,7 @@ impl AgentFsm {
                     // Clear any pending execution timeout for this tool
                     self.ctx.tool_timeout_ids.retain(|_, tid| tid != id);
                 }
-                ids.into_iter()
-                    .map(|tool_id| Effect::AbortTool { tool_id })
-                    .collect()
+                ids.into_iter().map(|tool_id| Effect::AbortTool { tool_id }).collect()
             }
 
             (
@@ -647,7 +643,9 @@ impl AgentFsm {
                 // Add context so the LLM knows what happened
                 if !pending.is_empty() {
                     self.ctx.events.push(ConversationEvent::SystemContext {
-                        content: "The user cancelled the previous generation. Tool calls that were in progress have been aborted.".to_string(),
+                        content: "The user cancelled the previous generation. Tool calls that \
+                                  were in progress have been aborted."
+                            .to_string(),
                     });
                 }
 
@@ -766,9 +764,7 @@ impl AgentFsm {
     fn start_turn(&mut self, msg: String) -> Vec<Effect> {
         // A message submitted while the picker was loading dismisses it.
         self.ctx.model_picker = None;
-        self.ctx
-            .events
-            .push(ConversationEvent::UserMessage { content: msg });
+        self.ctx.events.push(ConversationEvent::UserMessage { content: msg });
         // Don't clear tools — completed tools persist for rendering history.
         // Tools are only cleared on /new (session reset).
         self.ctx.current_response.clear();
@@ -795,9 +791,7 @@ impl AgentFsm {
         let text = std::mem::take(&mut self.ctx.current_response);
         let trimmed = text.trim_start().to_string();
         if !trimmed.is_empty() {
-            self.ctx
-                .events
-                .push(ConversationEvent::Text { content: trimmed });
+            self.ctx.events.push(ConversationEvent::Text { content: trimmed });
         }
     }
 
@@ -853,7 +847,8 @@ impl AgentFsm {
             self.ctx.events.push(ConversationEvent::ToolResult {
                 tool_use_id: id.clone(),
                 content: format!(
-                    "Tool not enabled: capability '{required_cap}' was not advertised by this client"
+                    "Tool not enabled: capability '{required_cap}' was not advertised by this \
+                     client"
                 ),
                 is_error: true,
                 remote: false,
@@ -990,9 +985,7 @@ impl AgentFsm {
             PermissionChoice::AlwaysAllow => {
                 tracked.state = ToolState::Executing;
                 let tool = tracked.tool.clone();
-                let scope = tool
-                    .resolved_file_path()
-                    .map(|p| p.to_string_lossy().to_string());
+                let scope = tool.resolved_file_path().map(|p| p.to_string_lossy().to_string());
                 let rule = crate::permissions::rule::Rule {
                     tool: tool.rule_name().to_string(),
                     scope,
@@ -1141,9 +1134,7 @@ impl AgentFsm {
 
         if let crate::tools::ClientToolCall::Shell(ref shell) = tool {
             let timeout_id = self.ctx.next_timeout_id();
-            self.ctx
-                .tool_timeout_ids
-                .insert(timeout_id, tool_id.clone());
+            self.ctx.tool_timeout_ids.insert(timeout_id, tool_id.clone());
             effects.push(Effect::ScheduleTimeout {
                 timeout_id,
                 duration: std::time::Duration::from_secs(shell.timeout_secs),
@@ -1158,12 +1149,9 @@ impl AgentFsm {
     /// If so, either continue the conversation or go Idle.
     fn check_turn_completion(&mut self) -> Vec<Effect> {
         // Stream must be done
-        if !matches!(
-            self.state,
-            AgentState::Turn {
-                stream: StreamPhase::Done
-            }
-        ) {
+        if !matches!(self.state, AgentState::Turn {
+            stream: StreamPhase::Done
+        }) {
             return vec![];
         }
 
@@ -1212,10 +1200,7 @@ impl AgentFsm {
     /// Get the most recent suggested command from the conversation.
     /// Get the most recent command from the current invocation only.
     fn current_command(&self) -> Option<String> {
-        self.current_invocation_events()
-            .rev()
-            .find_map(|e| e.as_command())
-            .map(|s| s.to_string())
+        self.current_invocation_events().rev().find_map(|e| e.as_command()).map(|s| s.to_string())
     }
 
     /// Check if the most recent command is dangerous.
@@ -1226,10 +1211,7 @@ impl AgentFsm {
                 if let ConversationEvent::ToolCall { name, input, .. } = e
                     && name == "suggest_command"
                 {
-                    let danger = input
-                        .get("danger")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("low");
+                    let danger = input.get("danger").and_then(|v| v.as_str()).unwrap_or("low");
                     Some(danger == "high" || danger == "medium" || danger == "med")
                 } else {
                     None

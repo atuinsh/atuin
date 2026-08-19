@@ -4,9 +4,8 @@
 //! an event we care about. If we don't know how to deserialize it/don't care for it, we need to
 //! drop that on the floor. The [`HookEvent`] type represents agent events we know/care about.
 
-use serde_json::error::Category;
-
 use atuin_common::string::NonNulStr;
+use serde_json::error::Category;
 
 use super::wire::{HookEventName, WireHookEvent, WireToolName};
 
@@ -39,7 +38,10 @@ pub enum HookEvent {
         tool_use_id: String,
     },
     /// A Bash command finished; close the matching history entry.
-    End { tool_use_id: String, exit: i64 },
+    End {
+        tool_use_id: String,
+        exit: i64,
+    },
 }
 
 impl From<WireHookEvent> for Option<HookEvent> {
@@ -78,10 +80,7 @@ impl From<WireHookEvent> for Option<HookEvent> {
                 })
             }
             HookEventName::PostToolUse => {
-                let exit = wire
-                    .tool_response
-                    .and_then(|response| response.exit_code)
-                    .unwrap_or(0);
+                let exit = wire.tool_response.and_then(|response| response.exit_code).unwrap_or(0);
                 Some(HookEvent::End { tool_use_id, exit })
             }
             HookEventName::PostToolUseFailure => Some(HookEvent::End {
@@ -117,10 +116,11 @@ impl HookEvent {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use proptest::prelude::*;
     use rstest::rstest;
     use serde_json::json;
+
+    use super::*;
 
     fn non_nul(s: &str) -> NonNulStr {
         NonNulStr::new(s.to_owned()).unwrap()
@@ -290,10 +290,7 @@ mod tests {
         None
     )]
     fn parses_agent_event(#[case] input: serde_json::Value, #[case] expected: Option<HookEvent>) {
-        assert_eq!(
-            HookEvent::from_json_str(&input.to_string()).unwrap(),
-            expected
-        );
+        assert_eq!(HookEvent::from_json_str(&input.to_string()).unwrap(), expected);
     }
 
     /// Well-formed JSON that isn't a hook event we model is skipped, not an
@@ -317,10 +314,7 @@ mod tests {
         let ParseError::MalformedJson { line, column, .. } =
             HookEvent::from_json_str(input).unwrap_err();
 
-        assert!(
-            line >= 1 && column >= 1,
-            "position should be 1-based, got {line}:{column}"
-        );
+        assert!(line >= 1 && column >= 1, "position should be 1-based, got {line}:{column}");
     }
 
     proptest! {

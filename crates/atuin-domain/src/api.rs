@@ -1,9 +1,9 @@
-use semver::Version;
-use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use semver::Version;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 // the usage of X- has been deprecated for quite along time, it turns out

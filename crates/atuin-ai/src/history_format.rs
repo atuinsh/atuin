@@ -53,12 +53,7 @@ fn format_attribution(history: &History) -> String {
 }
 
 fn format_timestamp(history: &History, local_offset: UtcOffset) -> String {
-    history
-        .timestamp
-        .to_offset(local_offset)
-        .display()
-        .ymd_hms()
-        .to_string()
+    history.timestamp.to_offset(local_offset).display().ymd_hms().to_string()
 }
 
 fn format_duration(nanos: i64) -> String {
@@ -66,22 +61,17 @@ fn format_duration(nanos: i64) -> String {
         return String::new();
     }
 
-    format!(
-        ", {}",
-        std::time::Duration::saturating_from_nanos_i64(nanos)
-            .display()
-            .stopwatch()
-    )
+    format!(", {}", std::time::Duration::saturating_from_nanos_i64(nanos).display().stopwatch())
 }
 
 #[cfg(test)]
 mod tests {
     use atuin_client::history::{History, HistoryId};
+    use atuin_domain::record::CmdOrigin;
     use rstest::rstest;
     use time::{OffsetDateTime, UtcOffset};
 
     use super::*;
-    use atuin_domain::CmdOrigin;
 
     fn history(duration: i64) -> History {
         History {
@@ -104,7 +94,8 @@ mod tests {
     fn formats_last_command() {
         assert_eq!(
             format_last_command(&history(1_234_000_000), UtcOffset::UTC),
-            "History ID: 018f011c-9a0a-7000-8000-000000000001 - `cargo test`\n[1970-01-01 00:00:00] (in `/repo`, exit 2), 1.234s"
+            "History ID: 018f011c-9a0a-7000-8000-000000000001 - `cargo test`\n[1970-01-01 \
+             00:00:00] (in `/repo`, exit 2), 1.234s"
         );
     }
 
@@ -112,7 +103,8 @@ mod tests {
     fn formats_history_search_result() {
         assert_eq!(
             format_history_search_result(3, &history(0), UtcOffset::UTC),
-            "## #3. (History ID: 018f011c-9a0a-7000-8000-000000000001):\n`cargo test`\n[1970-01-01 00:00:00] (in `/repo`, exit 2)\n"
+            "## #3. (History ID: 018f011c-9a0a-7000-8000-000000000001):\n`cargo \
+             test`\n[1970-01-01 00:00:00] (in `/repo`, exit 2)\n"
         );
     }
 

@@ -37,15 +37,16 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use atuin_common::utils::uuid_v7;
+use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
 use directories::UserDirs;
 use eyre::{Result, eyre};
-use sqlx::{Pool, sqlite::SqlitePool};
+use sqlx::Pool;
+use sqlx::sqlite::SqlitePool;
 use time::PrimitiveDateTime;
 
 use super::Importer;
 use crate::history::History;
 use crate::import::Loader;
-use atuin_domain::{CmdHost, CmdOrigin, CmdUser};
 
 #[derive(sqlx::FromRow, Debug)]
 pub struct HistDbEntryCount {
@@ -72,12 +73,9 @@ pub struct ZshHistDb {
 
 /// Read db at given file, return vector of entries.
 async fn hist_from_db(dbpath: PathBuf) -> Result<Vec<HistDbEntry>> {
-    let connection_str = dbpath.to_str().ok_or_else(|| {
-        eyre!(
-            "Invalid path for SQLite database: {}",
-            dbpath.to_string_lossy()
-        )
-    })?;
+    let connection_str = dbpath
+        .to_str()
+        .ok_or_else(|| eyre!("Invalid path for SQLite database: {}", dbpath.to_string_lossy()))?;
     let pool = SqlitePool::connect(connection_str).await?;
     hist_from_db_conn(pool).await
 }
@@ -92,9 +90,8 @@ async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>>
         LEFT JOIN places ON history.place_id = places.id
         ORDER BY history.start_time
     "#;
-    let histdb_vec: Vec<HistDbEntry> = sqlx::query_as::<_, HistDbEntry>(query)
-        .fetch_all(&pool)
-        .await?;
+    let histdb_vec: Vec<HistDbEntry> =
+        sqlx::query_as::<_, HistDbEntry>(query).fetch_all(&pool).await?;
     Ok(histdb_vec)
 }
 
@@ -118,9 +115,7 @@ impl ZshHistDb {
         if histdb_path.exists() {
             Ok(histdb_path)
         } else {
-            Err(eyre!(
-                "Could not find history file. Try setting $HISTDB_FILE"
-            ))
+            Err(eyre!("Could not find history file. Try setting $HISTDB_FILE"))
         }
     }
 }
@@ -181,9 +176,11 @@ impl Importer for ZshHistDb {
 #[cfg(test)]
 mod test {
 
-    use super::*;
-    use sqlx::sqlite::SqlitePoolOptions;
     use std::env;
+
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    use super::*;
     #[tokio::test(flavor = "multi_thread")]
     #[allow(unsafe_code)]
     async fn test_env_vars() {
@@ -202,8 +199,9 @@ mod test {
 
     #[tokio::test]
     async fn duration_saturates_instead_of_overflowing() {
-        use crate::import::tests::TestLoader;
         use time::macros::datetime;
+
+        use crate::import::tests::TestLoader;
 
         // a corrupt duration column must not overflow when scaled to nanoseconds
         let histdb = ZshHistDb {
@@ -221,10 +219,7 @@ mod test {
         };
 
         let mut loader = TestLoader::default();
-        histdb
-            .load(&mut loader)
-            .await
-            .expect("import must not fail");
+        histdb.load(&mut loader).await.expect("import must not fail");
 
         assert_eq!(loader.buf.len(), 1);
         assert_eq!(loader.buf[0].command, "echo hello");
@@ -233,11 +228,8 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_import() {
-        let pool: SqlitePool = SqlitePoolOptions::new()
-            .min_connections(2)
-            .connect(":memory:")
-            .await
-            .unwrap();
+        let pool: SqlitePool =
+            SqlitePoolOptions::new().min_connections(2).connect(":memory:").await.unwrap();
 
         // sql dump directly from a test database.
         let db_sql = r#"

@@ -58,8 +58,9 @@ pub(crate) fn parse_shell_command(code: &str, shell: ShellKind) -> ParsedShellCo
 
 #[cfg(feature = "tree-sitter")]
 mod ts {
-    use super::{ParsedShellCommand, ShellCommand, parse_fallback};
     use tree_sitter::{Parser, Tree};
+
+    use super::{ParsedShellCommand, ShellCommand, parse_fallback};
 
     fn bash_parser() -> Parser {
         let mut parser = Parser::new();
@@ -177,9 +178,7 @@ mod ts {
 
     fn fish_parser() -> Parser {
         let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_fish::language())
-            .expect("failed to set fish language");
+        parser.set_language(&tree_sitter_fish::language()).expect("failed to set fish language");
         parser
     }
 
@@ -456,8 +455,9 @@ fn find_subslice(haystack: &[&str], needle: &[&str]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     fn names(cmds: &[ShellCommand]) -> Vec<&str> {
         cmds.iter().map(|c| c.name.as_str()).collect()
@@ -564,8 +564,9 @@ mod tests {
 
 #[cfg(all(test, feature = "tree-sitter"))]
 mod adversarial {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     fn cmd_names(cmds: &[ShellCommand]) -> Vec<&str> {
         cmds.iter().map(|c| c.name.as_str()).collect()

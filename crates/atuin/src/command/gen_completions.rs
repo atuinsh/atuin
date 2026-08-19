@@ -70,12 +70,7 @@ impl Cmd {
                 generate_to(shell, &mut cli, env!("CARGO_PKG_NAME"), &out_dir)?;
             }
             None => {
-                generate(
-                    shell,
-                    &mut cli,
-                    env!("CARGO_PKG_NAME"),
-                    &mut std::io::stdout(),
-                );
+                generate(shell, &mut cli, env!("CARGO_PKG_NAME"), &mut std::io::stdout());
             }
         }
 

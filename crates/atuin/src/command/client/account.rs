@@ -1,8 +1,7 @@
-use clap::{Args, Subcommand};
-use eyre::Result;
-
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
+use clap::{Args, Subcommand};
+use eyre::Result;
 
 pub mod change_password;
 pub mod delete;

@@ -39,8 +39,13 @@
 //! server only sends that header on a 412, so a stale client currently learns of a capability
 //! change on its next rejected request rather than preemptively from an earlier response.
 
+use std::any::Any;
+use std::borrow::Borrow;
+use std::cmp::Ordering;
+use std::collections::BTreeSet;
+use std::fmt;
+
 use parking_lot::RwLock;
-use std::{any::Any, borrow::Borrow, cmp::Ordering, collections::BTreeSet, fmt};
 
 pub mod http;
 
@@ -189,10 +194,7 @@ impl CapsBundle {
             .read()
             .iter()
             .map(|entry| {
-                let value = entry
-                    .0
-                    .json()
-                    .expect("a capability value must be JSON-serializable");
+                let value = entry.0.json().expect("a capability value must be JSON-serializable");
                 (entry.name().to_string(), value)
             })
             .collect();
@@ -203,8 +205,6 @@ impl CapsBundle {
 impl fmt::Debug for CapsBundle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // `dyn Any` is not `Debug`; show which capabilities are present, not their contents.
-        f.debug_set()
-            .entries(self.caps.read().iter().map(CapEntry::name))
-            .finish()
+        f.debug_set().entries(self.caps.read().iter().map(CapEntry::name)).finish()
     }
 }

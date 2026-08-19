@@ -1,9 +1,12 @@
+use std::io::{self, Write};
+
+use atuin_client::settings::Tmux;
+use atuin_dotfiles::store::AliasStore;
+use atuin_dotfiles::store::var::VarStore;
+use eyre::Result;
+
 use super::StaticInitOptions;
 use crate::shell::BASH;
-use atuin_client::settings::Tmux;
-use atuin_dotfiles::store::{AliasStore, var::VarStore};
-use eyre::Result;
-use std::io::{self, Write};
 
 fn write_tmux_config<W: Write>(writer: &mut W, tmux: &Tmux) -> io::Result<()> {
     if tmux.enabled {
@@ -24,10 +27,7 @@ fn write_static_init<W: Write>(writer: &mut W, options: &StaticInitOptions<'_>) 
     writeln!(writer, "{} && {{", BASH.include_guard)?;
 
     if std::env::var_os("ATUIN_NO_BUILTIN_PREEXEC").is_none_or(|s| s.is_empty()) {
-        writeln!(
-            writer,
-            "# Set ATUIN_NO_BUILTIN_PREEXEC=1 to disable loading bash-preexec"
-        )?;
+        writeln!(writer, "# Set ATUIN_NO_BUILTIN_PREEXEC=1 to disable loading bash-preexec")?;
         writeln!(writer, "__atuin_load_builtin_preexec() {{")?;
         for line in BASH.preexec.lines() {
             writeln!(writer, "    {line}")?;

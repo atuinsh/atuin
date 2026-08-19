@@ -140,11 +140,7 @@ pub(crate) fn fallback_proxy_dir() -> PathBuf {
 fn proxy_dir_name() -> String {
     let mut suffix = [0u8; 4];
     rand::thread_rng().fill_bytes(&mut suffix);
-    format!(
-        "atuin-pty-proxy-{}-{}",
-        std::process::id(),
-        hex_encode(&suffix)
-    )
+    format!("atuin-pty-proxy-{}-{}", std::process::id(), hex_encode(&suffix))
 }
 
 pub(crate) fn socket_path_in(dir: &Path) -> PathBuf {
@@ -379,8 +375,7 @@ impl ParserState {
     /// whose connection is gone. Never blocks (see the invariant on
     /// [`spawn_parser_thread`]).
     fn fan_out(&mut self, frame: &[u8]) {
-        self.subscribers
-            .retain(|(_, subscriber)| subscriber.try_send(frame.to_vec()).is_ok());
+        self.subscribers.retain(|(_, subscriber)| subscriber.try_send(frame.to_vec()).is_ok());
     }
 }
 
@@ -679,25 +674,18 @@ fn write_frames(mut stream: UnixStream, frames_rx: &Receiver<Vec<u8>>) {
     let _ = stream.shutdown(std::net::Shutdown::Both);
 }
 
-#[cfg(any(
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "freebsd",
-    target_os = "dragonfly"
-))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "dragonfly"))]
 fn peer_uid(stream: &UnixStream) -> Option<u32> {
-    use nix::sys::socket::{getsockopt, sockopt::LocalPeerCred};
-    getsockopt(stream, LocalPeerCred)
-        .ok()
-        .map(|cred| cred.uid())
+    use nix::sys::socket::getsockopt;
+    use nix::sys::socket::sockopt::LocalPeerCred;
+    getsockopt(stream, LocalPeerCred).ok().map(|cred| cred.uid())
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn peer_uid(stream: &UnixStream) -> Option<u32> {
-    use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
-    getsockopt(stream, PeerCredentials)
-        .ok()
-        .map(|cred| cred.uid())
+    use nix::sys::socket::getsockopt;
+    use nix::sys::socket::sockopt::PeerCredentials;
+    getsockopt(stream, PeerCredentials).ok().map(|cred| cred.uid())
 }
 
 #[cfg(not(any(
@@ -720,8 +708,9 @@ fn peer_uid_matches(stream: &UnixStream) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     #[test]
     fn zero_dimension_screens_do_not_panic() {
@@ -821,10 +810,7 @@ mod tests {
         // Drain everything that was queued before the drop...
         while frames_rx.try_recv().is_ok() {}
         // ...after which the channel reports disconnection.
-        assert!(matches!(
-            frames_rx.try_recv(),
-            Err(mpsc::TryRecvError::Disconnected)
-        ));
+        assert!(matches!(frames_rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)));
     }
 
     /// The registry is capped: a same-uid client cannot accumulate
@@ -915,17 +901,11 @@ mod tests {
         }
         // A signal or a peer that gave up between connect and accept.
         for code in [libc::EINTR, libc::ECONNABORTED] {
-            assert!(
-                matches!(classify(code), AcceptFailure::Retry),
-                "errno {code}"
-            );
+            assert!(matches!(classify(code), AcceptFailure::Retry), "errno {code}");
         }
         // The listener itself is gone: nothing left to accept.
         for code in [libc::EBADF, libc::EINVAL, libc::ENOTSOCK] {
-            assert!(
-                matches!(classify(code), AcceptFailure::Fatal),
-                "errno {code}"
-            );
+            assert!(matches!(classify(code), AcceptFailure::Fatal), "errno {code}");
         }
     }
 
@@ -939,10 +919,7 @@ mod tests {
             .map(|_| ConnectionSlot::acquire(&live).expect("under the cap"))
             .collect();
         assert_eq!(live.load(Ordering::Acquire), MAX_LIVE_CONNECTIONS);
-        assert!(
-            ConnectionSlot::acquire(&live).is_none(),
-            "the cap must hold"
-        );
+        assert!(ConnectionSlot::acquire(&live).is_none(), "the cap must hold");
 
         held.pop();
         assert_eq!(live.load(Ordering::Acquire), MAX_LIVE_CONNECTIONS - 1);

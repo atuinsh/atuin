@@ -124,7 +124,10 @@ pub struct Ellipsized<'a>(Repr<'a>);
 enum Repr<'a> {
     /// The whole result is one contiguous slice of the source; `source_offset`
     /// is the slice's byte offset in the source.
-    Contiguous { text: &'a str, source_offset: usize },
+    Contiguous {
+        text: &'a str,
+        source_offset: usize,
+    },
     /// A head slice, an indicator, and a tail slice - always with a marker.
     Spliced {
         head: &'a str,
@@ -267,12 +270,13 @@ fn suffix_boundary(s: &str, max: usize, cost: impl Fn(&str) -> usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{EllipsizeExt, Indicator, Measure, Pos};
-    use crate::string::align::Alignment;
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
     use rstest::rstest;
     use unicode_width::UnicodeWidthStr;
+
+    use super::{EllipsizeExt, Indicator, Measure, Pos};
+    use crate::string::align::Alignment;
 
     fn amount(b: Measure) -> usize {
         match b {
@@ -514,12 +518,7 @@ mod tests {
         #[case] align: Alignment,
         #[case] expected: &str,
     ) {
-        assert_eq!(
-            input
-                .pad_ellipsize(budget, side, Indicator::UNICODE, align)
-                .as_ref(),
-            expected
-        );
+        assert_eq!(input.pad_ellipsize(budget, side, Indicator::UNICODE, align).as_ref(), expected);
     }
 
     #[test]
@@ -536,12 +535,7 @@ mod tests {
         ));
         // Padding needed -> owned.
         assert!(matches!(
-            "hi".pad_ellipsize(
-                Measure::Columns(5),
-                Pos::End,
-                Indicator::UNICODE,
-                Alignment::Start
-            ),
+            "hi".pad_ellipsize(Measure::Columns(5), Pos::End, Indicator::UNICODE, Alignment::Start),
             std::borrow::Cow::Owned(_)
         ));
     }
@@ -555,10 +549,7 @@ mod tests {
     }
 
     fn any_budget() -> impl Strategy<Value = Measure> {
-        prop_oneof![
-            (0usize..40).prop_map(Measure::Bytes),
-            (0usize..40).prop_map(Measure::Columns),
-        ]
+        prop_oneof![(0usize..40).prop_map(Measure::Bytes), (0usize..40).prop_map(Measure::Columns),]
     }
 
     proptest! {
@@ -661,10 +652,7 @@ mod tests {
     #[test]
     fn source_index_fits_is_identity() {
         let e = "hi".ellipsize(Measure::Columns(10), Pos::Middle, Indicator::ASCII);
-        assert!(matches!(
-            std::borrow::Cow::from(e),
-            std::borrow::Cow::Borrowed(_)
-        ));
+        assert!(matches!(std::borrow::Cow::from(e), std::borrow::Cow::Borrowed(_)));
         assert_eq!(e.source_index(0), Some(0));
         assert_eq!(e.source_index(1), Some(1));
     }
@@ -673,15 +661,9 @@ mod tests {
     fn display_writes_without_allocating_via_cow() {
         let e = "hello world".ellipsize(Measure::Columns(8), Pos::End, Indicator::ASCII);
         assert_eq!(e.to_string(), "hello...");
-        assert!(matches!(
-            std::borrow::Cow::from(e),
-            std::borrow::Cow::Owned(_)
-        ));
+        assert!(matches!(std::borrow::Cow::from(e), std::borrow::Cow::Owned(_)));
 
         let fits = "hi".ellipsize(Measure::Columns(8), Pos::End, Indicator::ASCII);
-        assert!(matches!(
-            std::borrow::Cow::from(fits),
-            std::borrow::Cow::Borrowed(_)
-        ));
+        assert!(matches!(std::borrow::Cow::from(fits), std::borrow::Cow::Borrowed(_)));
     }
 }

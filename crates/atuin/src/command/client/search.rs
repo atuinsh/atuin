@@ -1,20 +1,18 @@
 use std::fs::File;
 use std::io::{IsTerminal as _, Write, stderr, stdout};
 
+use atuin_client::database::{Database, OptFilters, current_context};
+use atuin_client::history::store::HistoryStore;
+use atuin_client::history::{AuthorPattern, History};
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::{FilterMode, KeymapMode, RequestedSearchMode, Settings};
+use atuin_client::theme::Theme;
+use atuin_common::encryption::paseto_v4;
 use atuin_common::filter::OrFilter;
-use atuin_common::{string::EscapeNonPrintablePosixExt as _, utils};
+use atuin_common::string::EscapeNonPrintablePosixExt as _;
+use atuin_common::utils;
 use clap::Parser;
 use eyre::Result;
-
-use atuin_client::{
-    database::Database,
-    database::{OptFilters, current_context},
-    history::{AuthorPattern, History, store::HistoryStore},
-    record::sqlite_store::SqliteStore,
-    settings::{FilterMode, KeymapMode, RequestedSearchMode, Settings},
-    theme::Theme,
-};
-use atuin_common::encryption::paseto_v4;
 
 use super::history::ListMode;
 
@@ -182,12 +180,7 @@ impl Cmd {
         let query = if self.query.is_empty() {
             std::env::var("ATUIN_QUERY").map_or_else(
                 |_| vec![],
-                |query| {
-                    query
-                        .split(' ')
-                        .map(std::string::ToString::to_string)
-                        .collect()
-                },
+                |query| query.split(' ').map(std::string::ToString::to_string).collect(),
             )
         } else {
             self.query
@@ -207,7 +200,8 @@ impl Cmd {
 
         if self.delete && query.is_empty() {
             eprintln!(
-                "Please specify a query to match the items you wish to delete. If you wish to delete all history, pass --delete-it-all"
+                "Please specify a query to match the items you wish to delete. If you wish to \
+                 delete all history, pass --delete-it-all"
             );
             return Ok(());
         }
@@ -303,10 +297,7 @@ impl Cmd {
                     entries = run_non_interactive(settings, opt_filter, &query, &db).await?;
                 }
             } else {
-                let format = self
-                    .format
-                    .as_deref()
-                    .unwrap_or(settings.history_format.as_str());
+                let format = self.format.as_deref().unwrap_or(settings.history_format.as_str());
                 let tz = self.timezone.unwrap_or(settings.timezone);
 
                 super::history::print_list(
@@ -372,9 +363,10 @@ pub async fn prepare_index(settings: &Settings) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AuthorPattern, Cmd};
     use clap::Parser;
     use rstest::rstest;
+
+    use super::{AuthorPattern, Cmd};
 
     #[rstest]
     // triple_dash: Issue #3028 - searching for `---` should not be treated as a CLI flag
@@ -390,13 +382,10 @@ mod tests {
     fn search_author_cli_flag() {
         let cmd =
             Cmd::try_parse_from(["search", "--author", "codex", "--author", "ellie"]).unwrap();
-        assert_eq!(
-            cmd.author,
-            vec![
-                AuthorPattern::Name("codex".to_owned()),
-                AuthorPattern::Name("ellie".to_owned()),
-            ],
-        );
+        assert_eq!(cmd.author, vec![
+            AuthorPattern::Name("codex".to_owned()),
+            AuthorPattern::Name("ellie".to_owned()),
+        ],);
     }
 
     #[rstest]
@@ -411,14 +400,11 @@ mod tests {
             "$all-users",
         ])
         .unwrap();
-        assert_eq!(
-            cmd.author,
-            vec![
-                AuthorPattern::AllUser,
-                AuthorPattern::AllAgent,
-                // Not a special value; a typo'd one is an author name, as it was before.
-                AuthorPattern::Name("$all-users".to_owned()),
-            ],
-        );
+        assert_eq!(cmd.author, vec![
+            AuthorPattern::AllUser,
+            AuthorPattern::AllAgent,
+            // Not a special value; a typo'd one is an author name, as it was before.
+            AuthorPattern::Name("$all-users".to_owned()),
+        ],);
     }
 }

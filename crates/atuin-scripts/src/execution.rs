@@ -1,12 +1,14 @@
-use crate::store::script::Script;
-use eyre::Result;
 use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
+
+use eyre::Result;
 use tempfile::NamedTempFile;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tokio::task;
 use tracing::debug;
+
+use crate::store::script::Script;
 
 // Helper function to build a complete script with shebang
 pub fn build_executable_script(script: String, shebang: String) -> String {
@@ -136,11 +138,8 @@ pub async fn execute_script_interactive(
             cmd.arg(temp_path.to_str().unwrap());
 
             // Try with the interpreter
-            child_result = cmd
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn();
+            child_result =
+                cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
         }
     }
 
@@ -153,18 +152,12 @@ pub async fn execute_script_interactive(
     };
 
     // Get handles to stdin, stdout, stderr
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "Failed to open child process stdin".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Failed to open child process stdout".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Failed to open child process stderr".to_string())?;
+    let mut stdin =
+        child.stdin.take().ok_or_else(|| "Failed to open child process stdin".to_string())?;
+    let stdout =
+        child.stdout.take().ok_or_else(|| "Failed to open child process stdout".to_string())?;
+    let stderr =
+        child.stderr.take().ok_or_else(|| "Failed to open child process stderr".to_string())?;
 
     // Create channels for the interactive session
     let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(32);

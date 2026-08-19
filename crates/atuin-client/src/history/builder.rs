@@ -1,6 +1,5 @@
+use atuin_domain::record::CmdOrigin;
 use typed_builder::TypedBuilder;
-
-use atuin_domain::CmdOrigin;
 
 use super::History;
 

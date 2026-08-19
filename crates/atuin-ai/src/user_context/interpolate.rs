@@ -98,9 +98,7 @@ pub(crate) async fn interpolate(source: &str, shell: &str) -> String {
     for cmd in &commands {
         let shell = shell.to_string();
         let body = cmd.body.clone();
-        handles.push(tokio::spawn(
-            async move { run_command(&shell, &body).await },
-        ));
+        handles.push(tokio::spawn(async move { run_command(&shell, &body).await }));
     }
 
     // Collect results.
@@ -137,10 +135,7 @@ pub(crate) async fn interpolate(source: &str, shell: &str) -> String {
 async fn run_command(shell: &str, body: &str) -> String {
     let result = tokio::time::timeout(
         COMMAND_TIMEOUT,
-        tokio::process::Command::new(shell)
-            .arg("-c")
-            .arg(body)
-            .output(),
+        tokio::process::Command::new(shell).arg("-c").arg(body).output(),
     )
     .await;
 
@@ -164,17 +159,15 @@ async fn run_command(shell: &str, body: &str) -> String {
             }
         }
         Ok(Err(e)) => format!("[error: {e}]"),
-        Err(_) => format!(
-            "[error: command timed out after {}s]",
-            COMMAND_TIMEOUT.as_secs()
-        ),
+        Err(_) => format!("[error: command timed out after {}s]", COMMAND_TIMEOUT.as_secs()),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     #[test]
     fn parse_inline_command() {
@@ -182,10 +175,7 @@ mod tests {
         let cmds = parse_commands(source);
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].body, "git branch --show-current");
-        assert_eq!(
-            &source[cmds[0].range.clone()],
-            "!`git branch --show-current`"
-        );
+        assert_eq!(&source[cmds[0].range.clone()], "!`git branch --show-current`");
     }
 
     #[rstest]

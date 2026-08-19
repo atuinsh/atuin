@@ -1,15 +1,12 @@
 use std::io::{self, IsTerminal};
 
+use atuin_client::auth::{self, AuthClient, AuthResponse};
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::record::sync::{self, SyncError};
+use atuin_client::settings::{Settings, SyncAuth};
+use atuin_common::encryption::paseto_v4;
 use clap::Parser;
 use eyre::{Context, Result, bail};
-
-use atuin_client::{
-    auth::{self, AuthClient, AuthResponse},
-    record::sqlite_store::SqliteStore,
-    record::sync::{self, SyncError},
-    settings::{Settings, SyncAuth},
-};
-use atuin_common::encryption::paseto_v4;
 use rpassword::prompt_password;
 
 #[derive(Parser, Debug)]
@@ -58,8 +55,8 @@ impl Cmd {
             }
             SyncAuth::HubViaCli { .. } => {
                 println!(
-                    "You have a legacy sync session. \
-                     Continuing login to upgrade to full Hub authentication."
+                    "You have a legacy sync session. Continuing login to upgrade to full Hub \
+                     authentication."
                 );
             }
             SyncAuth::NotLoggedIn { .. } => {}
@@ -97,9 +94,7 @@ impl Cmd {
             let mut totp_code = self.totp_code.clone();
 
             let (session, auth_type) = loop {
-                let response = client
-                    .login(username, &password, totp_code.as_deref())
-                    .await?;
+                let response = client.login(username, &password, totp_code.as_deref()).await?;
 
                 match response {
                     AuthResponse::Success { session, auth_type } => break (session, auth_type),
@@ -118,8 +113,8 @@ impl Cmd {
                 meta.save_session(&session).await?;
                 println!("\nNote: Your account has not been fully migrated to Atuin Hub.");
                 println!(
-                    "Sync will continue to work, but you can visit hub.atuin.sh \
-                     to create an account and link it to your existing CLI account."
+                    "Sync will continue to work, but you can visit hub.atuin.sh to create an \
+                     account and link it to your existing CLI account."
                 );
             }
         } else {
@@ -195,14 +190,12 @@ impl Cmd {
 
         println!("IMPORTANT");
         println!(
-            "If you are already logged in on another machine, you must ensure that the key you use here is the same as the key you used there."
+            "If you are already logged in on another machine, you must ensure that the key you \
+             use here is the same as the key you used there."
         );
         println!("You can find your key by running 'atuin key' on the other machine.");
         println!("Do not share this key with anyone.");
-        println!(
-            "\nRead more here: {} \n",
-            atuin_common::docs::url("guide/sync/#login")
-        );
+        println!("\nRead more here: {} \n", atuin_common::docs::url("guide/sync/#login"));
 
         let interactive = self.interactive();
         let mut flag_key = self.key.clone();
@@ -219,7 +212,8 @@ impl Cmd {
 
             if key.is_empty() {
                 if !key_path.exists() {
-                    let msg = "No key provided and no existing key file found. Please use 'atuin key' on your other machine, or recover your key from a backup";
+                    let msg = "No key provided and no existing key file found. Please use 'atuin \
+                               key' on your other machine, or recover your key from a backup";
                     if !interactive {
                         bail!(msg);
                     }
@@ -300,7 +294,8 @@ async fn verify_key_against_remote(
                     "\nThe encryption key on this machine does not match the data on the server."
                 );
                 println!(
-                    "You can find the correct key by running 'atuin key' on a machine that already syncs successfully."
+                    "You can find the correct key by running 'atuin key' on a machine that \
+                     already syncs successfully."
                 );
 
                 let input = read_user_input("encryption key [blank to log out and cancel]");
@@ -335,10 +330,9 @@ async fn logout_wrong_key() -> ! {
     }
     crate::print_error::print_error(
         "Wrong encryption key",
-        "The encryption key on this machine does not match the data on the server. \
-         You have been logged out.\n\n\
-         To fix this, find your existing key by running `atuin key` on a machine that \
-         already syncs successfully, then run `atuin login` again here with that key.",
+        "The encryption key on this machine does not match the data on the server. You have been \
+         logged out.\n\nTo fix this, find your existing key by running `atuin key` on a machine \
+         that already syncs successfully, then run `atuin login` again here with that key.",
     );
     std::process::exit(1);
 }
@@ -376,7 +370,8 @@ mod tests {
         assert_eq!(mnemonic.entropy(), key.as_bytes().as_slice());
         assert_eq!(
             phrase,
-            "adapt amused able anxiety mother adapt beef gaze amount else seat alcohol cage lottery avoid scare alcohol cactus school avoid coral adjust catch pink"
+            "adapt amused able anxiety mother adapt beef gaze amount else seat alcohol cage \
+             lottery avoid scare alcohol cactus school avoid coral adjust catch pink"
         );
     }
 }

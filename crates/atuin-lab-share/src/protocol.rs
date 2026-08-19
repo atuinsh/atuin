@@ -36,14 +36,8 @@ impl PhoenixPush<'_> {
     /// Encode as a Phoenix v2 JSON array.
     #[must_use]
     pub(crate) fn encode(&self) -> String {
-        serde_json::json!([
-            self.join_ref,
-            self.ref_,
-            self.topic,
-            self.event,
-            self.payload
-        ])
-        .to_string()
+        serde_json::json!([self.join_ref, self.ref_, self.topic, self.event, self.payload])
+            .to_string()
     }
 }
 
@@ -64,7 +58,10 @@ pub(crate) enum Incoming {
         response: Value,
     },
     /// A server-initiated channel event (`output` requests, `participants`, …).
-    Event { event: String, payload: Value },
+    Event {
+        event: String,
+        payload: Value,
+    },
     /// `phx_error`: the channel process crashed; the client must rejoin.
     Error {
         // `parse` fills this in from the `phx_error` payload so the variant
@@ -110,8 +107,9 @@ impl Incoming {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     // Encoders: compare *parsed* values, not raw strings — the wire format is
     // "a JSON array with these five elements", not a particular byte sequence.
@@ -129,10 +127,7 @@ mod tests {
         }
         .encode();
         let v: Value = serde_json::from_str(&frame).expect("valid JSON");
-        assert_eq!(
-            v,
-            json!(["1", "1", "share:host", "phx_join", { "write": true }])
-        );
+        assert_eq!(v, json!(["1", "1", "share:host", "phx_join", { "write": true }]));
     }
 
     #[test]
@@ -147,10 +142,7 @@ mod tests {
         }
         .encode();
         let v: Value = serde_json::from_str(&frame).expect("valid JSON");
-        assert_eq!(
-            v,
-            json!(["1", "7", "share:host", "output", { "seq": 3, "data": "aGk=" }])
-        );
+        assert_eq!(v, json!(["1", "7", "share:host", "output", { "seq": 3, "data": "aGk=" }]));
     }
 
     #[test]
@@ -198,10 +190,7 @@ mod tests {
     #[test]
     fn decode_maps_phx_close() {
         let raw = r#"["1","1","share:host","phx_close",{}]"#;
-        assert!(matches!(
-            Incoming::parse(raw).expect("decodes"),
-            Incoming::Close
-        ));
+        assert!(matches!(Incoming::parse(raw).expect("decodes"), Incoming::Close));
     }
 
     #[test]
@@ -221,18 +210,9 @@ mod tests {
 
     #[test]
     fn decode_tolerates_empty_and_short_arrays_as_other() {
-        assert!(matches!(
-            Incoming::parse("[]").expect("decodes"),
-            Incoming::Other
-        ));
-        assert!(matches!(
-            Incoming::parse(r#"["1","2"]"#).expect("decodes"),
-            Incoming::Other
-        ));
-        assert!(matches!(
-            Incoming::parse("null").expect("decodes"),
-            Incoming::Other
-        ));
+        assert!(matches!(Incoming::parse("[]").expect("decodes"), Incoming::Other));
+        assert!(matches!(Incoming::parse(r#"["1","2"]"#).expect("decodes"), Incoming::Other));
+        assert!(matches!(Incoming::parse("null").expect("decodes"), Incoming::Other));
     }
 
     #[test]

@@ -1,36 +1,29 @@
-use std::{
-    env,
-    path::{Path, PathBuf},
-    str::FromStr,
-    time::Duration,
-};
+use std::env;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::time::Duration;
 
-use crate::history::{AuthorPattern, KNOWN_AGENTS};
 use async_trait::async_trait;
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils;
+use atuin_domain::record::CmdOrigin;
 use fs_err as fs;
 use itertools::Itertools;
-use sql_builder::{SqlBuilder, SqlName, bind::Bind, esc, quote};
-use sqlx::{
-    Result, Row,
-    sqlite::{
-        SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
-        SqliteSynchronous,
-    },
+use sql_builder::bind::Bind;
+use sql_builder::{SqlBuilder, SqlName, esc, quote};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
+    SqliteSynchronous,
 };
+use sqlx::{Result, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::history::{HistoryId, HistoryStats};
-use atuin_domain::CmdOrigin;
-
-use super::{
-    history::History,
-    ordering,
-    settings::{FilterMode, SearchMode, Settings},
-};
+use super::history::History;
+use super::ordering;
+use super::settings::{FilterMode, SearchMode, Settings};
+use crate::history::{AuthorPattern, HistoryId, HistoryStats, KNOWN_AGENTS};
 
 #[derive(Clone)]
 pub struct Context {
@@ -87,7 +80,8 @@ pub async fn query_context() -> eyre::Result<Context> {
 pub async fn current_context() -> eyre::Result<Context> {
     if env::var("ATUIN_SESSION").is_err() {
         return Err(eyre::eyre!(
-            "Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set up your shell."
+            "Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set \
+             up your shell."
         ));
     }
 
@@ -114,30 +108,19 @@ fn apply_author_filter(sql: &mut SqlBuilder, authors: OrFilter<&[AuthorPattern]>
         filter::Items::Some(a) => a,
     };
 
-    let author_expr = "CASE \
-        WHEN author IS NULL OR trim(author) = '' THEN \
-            CASE \
-                WHEN instr(hostname, ':') > 0 THEN substr(hostname, instr(hostname, ':') + 1) \
-                ELSE hostname \
-            END \
-        ELSE author \
-    END";
+    let author_expr = "CASE WHEN author IS NULL OR trim(author) = '' THEN CASE WHEN \
+                       instr(hostname, ':') > 0 THEN substr(hostname, instr(hostname, ':') + 1) \
+                       ELSE hostname END ELSE author END";
 
     let mut agent_list: Option<String> = None;
     let get_agent_list = || KNOWN_AGENTS.iter().map(quote).join(", ");
 
     let mut conditions = authors.iter().map(|author| match author {
         AuthorPattern::AllUser => {
-            format!(
-                "{author_expr} NOT IN ({})",
-                agent_list.get_or_insert_with(get_agent_list)
-            )
+            format!("{author_expr} NOT IN ({})", agent_list.get_or_insert_with(get_agent_list))
         }
         AuthorPattern::AllAgent => {
-            format!(
-                "{author_expr} IN ({})",
-                agent_list.get_or_insert_with(get_agent_list)
-            )
+            format!("{author_expr} IN ({})", agent_list.get_or_insert_with(get_agent_list))
         }
         AuthorPattern::Name(name) => {
             format!("{author_expr} = {}", quote(name))
@@ -297,7 +280,8 @@ impl Sqlite {
 
         if utils::broken_symlink(path) {
             eprintln!(
-                "Atuin: Sqlite db path ({path:?}) is a broken symlink. Unable to read or create replacement."
+                "Atuin: Sqlite db path ({path:?}) is a broken symlink. Unable to read or create \
+                 replacement."
             );
             std::process::exit(1);
         }
@@ -327,9 +311,7 @@ impl Sqlite {
     }
 
     pub async fn sqlite_version(&self) -> Result<String> {
-        sqlx::query_scalar("SELECT sqlite_version()")
-            .fetch_one(&self.pool)
-            .await
+        sqlx::query_scalar("SELECT sqlite_version()").fetch_one(&self.pool).await
     }
 
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
@@ -381,13 +363,10 @@ impl Sqlite {
         let deleted_at: Option<i64> = row.get("deleted_at");
         let hostname: String = row.get("hostname");
         let author: Option<String> = row.try_get("author").ok().flatten();
-        let author = author
-            .filter(|author| !author.trim().is_empty())
-            .unwrap_or_else(|| {
-                hostname
-                    .split_once(':')
-                    .map_or_else(|| hostname.clone(), |(_, user)| user.to_owned())
-            });
+        let author = author.filter(|author| !author.trim().is_empty()).unwrap_or_else(|| {
+            CmdOrigin::try_from(hostname.clone())
+                .map_or_else(|err| err.0, |origin| origin.user().as_str().to_owned())
+        });
         let intent: Option<String> = row.try_get("intent").ok().flatten();
         let intent = intent.filter(|intent| !intent.trim().is_empty());
         let shell: Option<String> = row.try_get("shell").ok().flatten();
@@ -479,7 +458,8 @@ impl Database for Sqlite {
 
         sqlx::query(
             "update history
-                set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = ?7, hostname = ?8, author = ?9, intent = ?10, deleted_at = ?11
+                set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = \
+             ?7, hostname = ?8, author = ?9, intent = ?10, deleted_at = ?11
                 where id = ?1",
         )
         .bind(h.id.0.as_str())
@@ -492,7 +472,7 @@ impl Database for Sqlite {
         .bind(h.cmd_origin.as_str())
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
-        .bind(h.deleted_at.map(|t|t.unix_timestamp_nanos() as i64))
+        .bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
         .execute(&self.pool)
         .await?;
 
@@ -576,11 +556,12 @@ impl Database for Sqlite {
         debug!("listing history from {:?} to {:?}", from, to);
 
         let res = sqlx::query(
-            "select * from history where timestamp >= ?1 and timestamp <= ?2 order by timestamp asc",
+            "select * from history where timestamp >= ?1 and timestamp <= ?2 order by timestamp \
+             asc",
         )
         .bind(from.unix_timestamp_nanos() as i64)
         .bind(to.unix_timestamp_nanos() as i64)
-            .map(Self::query_history)
+        .map(Self::query_history)
         .fetch_all(&self.pool)
         .await?;
 
@@ -646,10 +627,8 @@ impl Database for Sqlite {
 
         match filter {
             FilterMode::Global => &mut sql,
-            FilterMode::Host => sql.and_where_eq(
-                "lower(hostname)",
-                quote(context.cmd_origin.as_str().to_lowercase()),
-            ),
+            FilterMode::Host => sql
+                .and_where_eq("lower(hostname)", quote(context.cmd_origin.as_str().to_lowercase())),
             FilterMode::Session => sql.and_where_eq("session", quote(&context.session)),
             FilterMode::SessionPreload => {
                 sql.and_where_eq("session", quote(&context.session));
@@ -719,25 +698,17 @@ impl Database for Sqlite {
             sql.and_where("command regexp ?".bind(&regex));
         }
 
-        filter_options
-            .exit
-            .map(|exit| sql.and_where_eq("exit", exit));
+        filter_options.exit.map(|exit| sql.and_where_eq("exit", exit));
 
-        filter_options
-            .exclude_exit
-            .map(|exclude_exit| sql.and_where_ne("exit", exclude_exit));
+        filter_options.exclude_exit.map(|exclude_exit| sql.and_where_ne("exit", exclude_exit));
 
         if filter_options.only_failed {
             sql.and_where("exit != 0 AND exit != -1");
         }
 
-        filter_options
-            .cwd
-            .map(|cwd| sql.and_where_eq("cwd", quote(cwd)));
+        filter_options.cwd.map(|cwd| sql.and_where_eq("cwd", quote(cwd)));
 
-        filter_options
-            .exclude_cwd
-            .map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
+        filter_options.exclude_cwd.map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
 
         if let Some(before) = filter_options.before {
             let parsed =
@@ -794,13 +765,9 @@ impl Database for Sqlite {
             format!("SELECT * FROM ({inner}) f ORDER BY f.timestamp {order}{tail}")
         } else {
             format!(
-                "SELECT * FROM ({inner}) f \
-                 WHERE NOT EXISTS ( \
-                     SELECT 1 FROM ({inner}) f2 \
-                     WHERE f2.command = f.command \
-                       AND (f2.timestamp, f2.id) > (f.timestamp, f.id) \
-                 ) \
-                 ORDER BY f.timestamp {order}{tail}"
+                "SELECT * FROM ({inner}) f WHERE NOT EXISTS ( SELECT 1 FROM ({inner}) f2 WHERE \
+                 f2.command = f.command AND (f2.timestamp, f2.id) > (f.timestamp, f.id) ) ORDER \
+                 BY f.timestamp {order}{tail}"
             )
         };
 
@@ -922,10 +889,7 @@ impl Database for Sqlite {
         average.field("avg(duration)").and_where("command = ?1");
 
         let mut exits = SqlBuilder::select_from("history");
-        exits
-            .fields(&["exit", "count(1) as count"])
-            .and_where("command = ?1")
-            .group_by("exit");
+        exits.fields(&["exit", "count(1) as count"]).and_where("command = ?1").group_by("exit");
 
         // rewrite the following with sqlbuilder
         let mut day_of_week = SqlBuilder::select_from("history");
@@ -957,9 +921,8 @@ impl Database for Sqlite {
         let average = average.sql().expect("issue in stats previous query");
         let exits = exits.sql().expect("issue in stats exits query");
         let day_of_week = day_of_week.sql().expect("issue in stats day of week query");
-        let duration_over_time = duration_over_time
-            .sql()
-            .expect("issue in stats duration over time query");
+        let duration_over_time =
+            duration_over_time.sql().expect("issue in stats duration over time query");
 
         // The queries are all independent, so run them concurrently on the pool.
         let (prev, next, total, average, exits, day_of_week, duration_over_time): (
@@ -981,27 +944,17 @@ impl Database for Sqlite {
                 .bind(&h.session)
                 .map(Self::query_history)
                 .fetch_optional(&self.pool),
-            sqlx::query_as(sqlx::AssertSqlSafe(total))
-                .bind(&h.command)
-                .fetch_one(&self.pool),
-            sqlx::query_as(sqlx::AssertSqlSafe(average))
-                .bind(&h.command)
-                .fetch_one(&self.pool),
-            sqlx::query_as(sqlx::AssertSqlSafe(exits))
-                .bind(&h.command)
-                .fetch_all(&self.pool),
-            sqlx::query_as(sqlx::AssertSqlSafe(day_of_week))
-                .bind(&h.command)
-                .fetch_all(&self.pool),
+            sqlx::query_as(sqlx::AssertSqlSafe(total)).bind(&h.command).fetch_one(&self.pool),
+            sqlx::query_as(sqlx::AssertSqlSafe(average)).bind(&h.command).fetch_one(&self.pool),
+            sqlx::query_as(sqlx::AssertSqlSafe(exits)).bind(&h.command).fetch_all(&self.pool),
+            sqlx::query_as(sqlx::AssertSqlSafe(day_of_week)).bind(&h.command).fetch_all(&self.pool),
             sqlx::query_as(sqlx::AssertSqlSafe(duration_over_time))
                 .bind(&h.command)
                 .fetch_all(&self.pool),
         )?;
 
-        let duration_over_time = duration_over_time
-            .iter()
-            .map(|f| (f.0.clone(), f.1.round() as i64))
-            .collect();
+        let duration_over_time =
+            duration_over_time.iter().map(|f| (f.0.clone(), f.1.round() as i64)).collect();
 
         Ok(HistoryStats {
             next,
@@ -1076,9 +1029,7 @@ impl Paged {
             // We want to deduplicate on command, but the user can search via cwd, hostname, and session.
             // Without those fields, filter modes won't work right. With those fields, we get duplicates.
             // This must be handled upstream.
-            query
-                .group_by("command, cwd, hostname, session")
-                .having("max(timestamp)");
+            query.group_by("command, cwd, hostname, session").having("max(timestamp)");
         }
 
         query.limit(self.page_size);
@@ -1233,11 +1184,13 @@ impl<'a> Iterator for QueryTokenizer<'a> {
 #[cfg(test)]
 #[allow(deprecated)]
 mod test {
+    use std::time::{Duration, Instant};
+
+    use rstest::{fixture, rstest};
+    use time::format_description::well_known::Rfc3339;
+
     use super::*;
     use crate::settings::test_local_timeout;
-    use rstest::{fixture, rstest};
-    use std::time::{Duration, Instant};
-    use time::format_description::well_known::Rfc3339;
 
     fn new_context() -> Context {
         Context {
@@ -1251,9 +1204,7 @@ mod test {
 
     #[fixture]
     async fn empty_db() -> Sqlite {
-        Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap()
+        Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap()
     }
 
     async fn assert_search_eq(
@@ -1266,15 +1217,9 @@ mod test {
         let context = new_context();
 
         let results = db
-            .search(
-                mode,
-                filter_mode,
-                &context,
-                query,
-                OptFilters {
-                    ..Default::default()
-                },
-            )
+            .search(mode, filter_mode, &context, query, OptFilters {
+                ..Default::default()
+            })
             .await?;
 
         assert_eq!(
@@ -1294,9 +1239,8 @@ mod test {
         query: &str,
         expected_commands: Vec<&str>,
     ) {
-        let results = assert_search_eq(db, mode, filter_mode, query, expected_commands.len())
-            .await
-            .unwrap();
+        let results =
+            assert_search_eq(db, mode, filter_mode, query, expected_commands.len()).await.unwrap();
         let commands: Vec<&str> = results.iter().map(|a| a.command.as_str()).collect();
         assert_eq!(commands, expected_commands);
     }
@@ -1374,18 +1318,12 @@ mod test {
         save_history_item(&db, "ls /home/frank").await;
 
         // No range -> everything.
-        let all = db
-            .list(&[], &context, None, false, false, None)
-            .await
-            .unwrap();
+        let all = db.list(&[], &context, None, false, false, None).await.unwrap();
         assert_eq!(all.len(), 2);
 
         // A zero-width window on the item's exact timestamp matches it, because the
         // bounds are inclusive (`timestamp >= from AND timestamp <= to`).
-        let hits = db
-            .list(&[], &context, None, false, false, Some((at, at)))
-            .await
-            .unwrap();
+        let hits = db.list(&[], &context, None, false, false, Some((at, at))).await.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].command, "ls /home/ellie");
     }
@@ -1401,10 +1339,7 @@ mod test {
         let bravo = save_history_item(&db, "echo bravo").await;
         let _charlie = save_history_item(&db, "echo charlie").await;
 
-        let loaded = db
-            .load_active(&[alpha.id.clone(), bravo.id.clone()])
-            .await
-            .unwrap();
+        let loaded = db.load_active(&[alpha.id.clone(), bravo.id.clone()]).await.unwrap();
 
         let mut commands: Vec<String> = loaded.into_iter().map(|h| h.command).collect();
         commands.sort();
@@ -1441,10 +1376,7 @@ mod test {
         alpha.command = String::new();
         db.update(&alpha).await.unwrap();
 
-        let loaded = db
-            .load_active(&[alpha.id.clone(), bravo.id.clone()])
-            .await
-            .unwrap();
+        let loaded = db.load_active(&[alpha.id.clone(), bravo.id.clone()]).await.unwrap();
 
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].command, "echo bravo");
@@ -1488,9 +1420,7 @@ mod test {
     }
 
     async fn db_with(commands: &[&str]) -> Sqlite {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
 
         for command in commands {
             new_history_item(&mut db, command).await.unwrap();
@@ -1514,41 +1444,25 @@ mod test {
     ) {
         let t = OffsetDateTime::from_unix_timestamp(1708330400).unwrap();
 
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
-        new_history_item_at(&mut db, "ls /home/ellie", Some(t))
-            .await
-            .unwrap();
-        new_history_item_at(&mut db, "ls /home/frank", None)
-            .await
-            .unwrap();
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        new_history_item_at(&mut db, "ls /home/ellie", Some(t)).await.unwrap();
+        new_history_item_at(&mut db, "ls /home/frank", None).await.unwrap();
 
         let context = new_context();
 
-        let stamp = |seconds: i64| {
-            (t + time::Duration::seconds(seconds))
-                .format(&Rfc3339)
-                .unwrap()
-        };
+        let stamp = |seconds: i64| (t + time::Duration::seconds(seconds)).format(&Rfc3339).unwrap();
         let (after, before) = match offsets {
             Some((after, before)) => (Some(stamp(after)), Some(stamp(before))),
             None => (None, None),
         };
 
         let results = db
-            .search(
-                DbSearchMode::FullText,
-                FilterMode::Global,
-                &context,
-                "",
-                OptFilters {
-                    after: after.as_deref(),
-                    before: before.as_deref(),
-                    include_duplicates: true,
-                    ..Default::default()
-                },
-            )
+            .search(DbSearchMode::FullText, FilterMode::Global, &context, "", OptFilters {
+                after: after.as_deref(),
+                before: before.as_deref(),
+                include_duplicates: true,
+                ..Default::default()
+            })
             .await
             .unwrap();
 
@@ -1571,16 +1485,10 @@ mod test {
         let context = new_context();
 
         let hits = db
-            .search(
-                DbSearchMode::FullText,
-                FilterMode::Global,
-                &context,
-                "",
-                OptFilters {
-                    include_duplicates,
-                    ..Default::default()
-                },
-            )
+            .search(DbSearchMode::FullText, FilterMode::Global, &context, "", OptFilters {
+                include_duplicates,
+                ..Default::default()
+            })
             .await
             .unwrap();
 
@@ -1602,15 +1510,8 @@ mod test {
             _ => unreachable!(),
         }
 
-        let result = db
-            .search(
-                DbSearchMode::FullText,
-                FilterMode::Global,
-                &context,
-                "",
-                filters,
-            )
-            .await;
+        let result =
+            db.search(DbSearchMode::FullText, FilterMode::Global, &context, "", filters).await;
 
         assert!(result.is_err(), "unparsable `{which}` filter must error");
     }
@@ -1623,15 +1524,9 @@ mod test {
     async fn test_search_prefix(#[case] query: &str, #[case] expected: usize) {
         let db = db_with(&["ls /home/ellie"]).await;
 
-        assert_search_eq(
-            &db,
-            DbSearchMode::Prefix,
-            FilterMode::Global,
-            query,
-            expected,
-        )
-        .await
-        .unwrap();
+        assert_search_eq(&db, DbSearchMode::Prefix, FilterMode::Global, query, expected)
+            .await
+            .unwrap();
     }
 
     #[rstest]
@@ -1653,15 +1548,9 @@ mod test {
     async fn test_search_fulltext(#[case] query: &str, #[case] expected: usize) {
         let db = db_with(&["ls /home/ellie"]).await;
 
-        assert_search_eq(
-            &db,
-            DbSearchMode::FullText,
-            FilterMode::Global,
-            query,
-            expected,
-        )
-        .await
-        .unwrap();
+        assert_search_eq(&db, DbSearchMode::FullText, FilterMode::Global, query, expected)
+            .await
+            .unwrap();
     }
 
     #[rstest]
@@ -1698,15 +1587,9 @@ mod test {
         ])
         .await;
 
-        assert_search_eq(
-            &db,
-            DbSearchMode::Fuzzy,
-            FilterMode::Global,
-            query,
-            expected,
-        )
-        .await
-        .unwrap();
+        assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, expected)
+            .await
+            .unwrap();
     }
 
     #[rstest]
@@ -1723,21 +1606,13 @@ mod test {
         new_history_item(&mut db, "corburl").await.unwrap();
 
         // if fuzzy reordering is on, it should come back in a more sensible order
-        assert_search_commands(
-            &db,
-            DbSearchMode::Fuzzy,
-            FilterMode::Global,
-            "curl",
-            vec!["curl", "corburl"],
-        )
+        assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, "curl", vec![
+            "curl", "corburl",
+        ])
         .await;
 
-        assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, "xxxx", 0)
-            .await
-            .unwrap();
-        assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, "", 2)
-            .await
-            .unwrap();
+        assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, "xxxx", 0).await.unwrap();
+        assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, "", 2).await.unwrap();
     }
 
     #[rstest]
@@ -1773,9 +1648,7 @@ mod test {
     #[case::daemon_fuzzy(SearchMode::DaemonFuzzy)]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_interactive_only_modes_rank_like_fuzzy(#[case] mode: SearchMode) {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
 
         // "corburl" is strictly newer, so an unranked query would return it first and the assertion
         // below would fail.
@@ -1783,17 +1656,11 @@ mod test {
         new_history_item_at(&mut db, "curl", Some(now - time::Duration::seconds(10)))
             .await
             .unwrap();
-        new_history_item_at(&mut db, "corburl", Some(now))
-            .await
-            .unwrap();
+        new_history_item_at(&mut db, "corburl", Some(now)).await.unwrap();
 
-        assert_search_commands(
-            &db,
-            mode.closest_db_mode(),
-            FilterMode::Global,
-            "curl",
-            vec!["curl", "corburl"],
-        )
+        assert_search_commands(&db, mode.closest_db_mode(), FilterMode::Global, "curl", vec![
+            "curl", "corburl",
+        ])
         .await;
     }
 
@@ -1804,9 +1671,7 @@ mod test {
     #[case::trailing_space("screen ")]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_fuzzy_trailing_space(#[case] query: &str) {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
 
         let now = OffsetDateTime::now_utc();
         let irssi = "screen irssi";
@@ -1814,12 +1679,8 @@ mod test {
         let ls_ld = "ls -ld secrets/rendered";
         let screen_r = "screen -r";
 
-        new_history_item_at(&mut db, irssi, Some(now - time::Duration::days(5)))
-            .await
-            .unwrap();
-        new_history_item_at(&mut db, ls_l, Some(now - time::Duration::days(4)))
-            .await
-            .unwrap();
+        new_history_item_at(&mut db, irssi, Some(now - time::Duration::days(5))).await.unwrap();
+        new_history_item_at(&mut db, ls_l, Some(now - time::Duration::days(4))).await.unwrap();
         new_history_item_at(
             &mut db,
             ls_ld,
@@ -1827,13 +1688,10 @@ mod test {
         )
         .await
         .unwrap();
-        new_history_item_at(&mut db, screen_r, Some(now - time::Duration::hours(1)))
-            .await
-            .unwrap();
+        new_history_item_at(&mut db, screen_r, Some(now - time::Duration::hours(1))).await.unwrap();
 
-        let results = assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, 4)
-            .await
-            .unwrap();
+        let results =
+            assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, 4).await.unwrap();
         assert_eq!(
             results[0].command,
             screen_r,
@@ -1859,25 +1717,15 @@ mod test {
         #[case] close: &str,
         #[case] far: &str,
     ) {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
 
         let now = OffsetDateTime::now_utc();
-        new_history_item_at(&mut db, close, Some(now - time::Duration::days(5)))
-            .await
-            .unwrap();
-        new_history_item_at(&mut db, far, Some(now - time::Duration::hours(1)))
-            .await
-            .unwrap();
+        new_history_item_at(&mut db, close, Some(now - time::Duration::days(5))).await.unwrap();
+        new_history_item_at(&mut db, far, Some(now - time::Duration::hours(1))).await.unwrap();
 
-        assert_search_commands(
-            &db,
-            DbSearchMode::Fuzzy,
-            FilterMode::Global,
-            query,
-            vec![close, far],
-        )
+        assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, vec![
+            close, far,
+        ])
         .await;
     }
 
@@ -1887,13 +1735,9 @@ mod test {
     async fn test_search_fuzzy_operator() {
         let db = db_with(&["use screen", "screenshot tool"]).await;
 
-        assert_search_commands(
-            &db,
-            DbSearchMode::Fuzzy,
-            FilterMode::Global,
-            "screen$",
-            vec!["use screen"],
-        )
+        assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, "screen$", vec![
+            "use screen",
+        ])
         .await;
     }
 
@@ -1907,9 +1751,7 @@ mod test {
         let mut db = db;
         // Add 5 history items
         for i in 0..5 {
-            new_history_item(&mut db, &format!("command{}", i))
-                .await
-                .unwrap();
+            new_history_item(&mut db, &format!("command{}", i)).await.unwrap();
         }
 
         // Create a paged iterator with page_size of 2
@@ -2007,11 +1849,7 @@ mod test {
             .await
             .unwrap();
 
-        let to_delete = all
-            .iter()
-            .find(|h| h.command == "delete_me")
-            .unwrap()
-            .clone();
+        let to_delete = all.iter().find(|h| h.command == "delete_me").unwrap().clone();
         db.delete(to_delete).await.unwrap();
 
         // Deletes remove the row outright, so both views should get 2
@@ -2048,21 +1886,13 @@ mod test {
         let context = new_context();
 
         for _i in 1..10000 {
-            new_history_item(&mut db, "i am a duplicated command")
-                .await
-                .unwrap();
+            new_history_item(&mut db, "i am a duplicated command").await.unwrap();
         }
         let start = Instant::now();
         let _results = db
-            .search(
-                DbSearchMode::Fuzzy,
-                FilterMode::Global,
-                &context,
-                "",
-                OptFilters {
-                    ..Default::default()
-                },
-            )
+            .search(DbSearchMode::Fuzzy, FilterMode::Global, &context, "", OptFilters {
+                ..Default::default()
+            })
             .await
             .unwrap();
         let duration = start.elapsed();
@@ -2083,9 +1913,7 @@ mod test {
         #[case] shells: [&str; N],
         #[case] expected_count: usize,
     ) {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
 
         for (command, shell) in [
             ("echo unknown1", None),
@@ -2121,13 +1949,7 @@ mod test {
         };
 
         let results = db
-            .search(
-                DbSearchMode::FullText,
-                FilterMode::Global,
-                &context,
-                "echo",
-                filters,
-            )
+            .search(DbSearchMode::FullText, FilterMode::Global, &context, "echo", filters)
             .await
             .unwrap();
 
@@ -2146,9 +1968,7 @@ mod test {
         #[case] authors: [&str; N],
         #[case] expected_count: usize,
     ) {
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
 
         for (command, author) in [
             ("echo alice1", "alice"),
@@ -2182,13 +2002,7 @@ mod test {
         };
 
         let results = db
-            .search(
-                DbSearchMode::FullText,
-                FilterMode::Global,
-                &context,
-                "echo",
-                filters,
-            )
+            .search(DbSearchMode::FullText, FilterMode::Global, &context, "echo", filters)
             .await
             .unwrap();
 

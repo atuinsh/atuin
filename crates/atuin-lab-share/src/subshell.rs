@@ -85,10 +85,8 @@ impl Subshell {
         for (key, value) in env {
             cmd.env(key, value);
         }
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| Error::SpawnShell(format!("{e:#}")))?;
+        let child =
+            pair.slave.spawn_command(cmd).map_err(|e| Error::SpawnShell(format!("{e:#}")))?;
         drop(pair.slave);
 
         Ok(Self {

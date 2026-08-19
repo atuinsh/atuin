@@ -1,7 +1,8 @@
+use atuin_common::encryption::paseto_v4;
 use eyre::Result;
 
-use crate::{api_client, settings::Settings};
-use atuin_common::encryption::paseto_v4;
+use crate::api_client;
+use crate::settings::Settings;
 
 pub async fn register_classic(
     settings: &Settings,

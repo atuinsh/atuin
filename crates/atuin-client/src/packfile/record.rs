@@ -384,11 +384,12 @@ impl<'a> PackManifestRecordView<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::Host;
     use rstest::{fixture, rstest};
     use uuid::Uuid;
+
+    use super::*;
 
     #[fixture]
     fn key() -> paseto_v4::Key {

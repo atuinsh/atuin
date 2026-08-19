@@ -1,3 +1,6 @@
+use std::env::temp_dir;
+use std::time::Duration;
+
 use atuin_client::api_client;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync;
@@ -9,8 +12,6 @@ use atuin_server_database::DbSettings;
 use atuin_server_sqlite::Sqlite;
 use futures_util::TryFutureExt;
 use rstest::{fixture, rstest};
-use std::env::temp_dir;
-use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -30,15 +31,10 @@ impl TestServer {
         let password = uuid_v7().as_simple().to_string();
         let email = format!("{}@example.com", uuid_v7().as_simple());
 
-        let resp = api_client::register(
-            &self.address,
-            &username,
-            &email,
-            &password,
-            &Default::default(),
-        )
-        .await
-        .unwrap();
+        let resp =
+            api_client::register(&self.address, &username, &email, &password, &Default::default())
+                .await
+                .unwrap();
 
         api_client::Client::new(
             self.address.clone(),
@@ -148,25 +144,20 @@ async fn download(
     let host = HostId(uuid_v7());
     let tag = RecordTag::Other(uuid_v7().as_simple().to_string());
 
-    let records: Vec<Record<EncryptedData>> = (0..=remote_max)
-        .map(|idx| record(host, &tag, idx))
-        .collect();
+    let records: Vec<Record<EncryptedData>> =
+        (0..=remote_max).map(|idx| record(host, &tag, idx)).collect();
 
     client.post_records(&records).await.unwrap();
 
     let store = SqliteStore::new(":memory:", 2.0).await.unwrap();
     if let Some(local_max) = local_max {
-        store
-            .push_batch(records.iter().take(local_max as usize + 1))
-            .await
-            .unwrap();
+        store.push_batch(records.iter().take(local_max as usize + 1)).await.unwrap();
     }
 
     let (diff, _) = sync::diff(&client, &store).await.unwrap();
     let operations = sync::operations(diff, &store).await.unwrap();
-    let (_, downloaded) = sync::sync_remote(&client, operations, &store, page_size, &key())
-        .await
-        .unwrap();
+    let (_, downloaded) =
+        sync::sync_remote(&client, operations, &store, page_size, &key()).await.unwrap();
 
     let status = store.status().await.unwrap();
     let local_idx = *status.hosts.get(&host).unwrap().get(&tag).unwrap();
@@ -219,17 +210,13 @@ async fn upload(
     store.push_batch(records.iter()).await.unwrap();
 
     if let Some(remote_max) = remote_max {
-        client
-            .post_records(&records[..=remote_max as usize])
-            .await
-            .unwrap();
+        client.post_records(&records[..=remote_max as usize]).await.unwrap();
     }
 
     let (diff, _) = sync::diff(&client, &store).await.unwrap();
     let operations = sync::operations(diff, &store).await.unwrap();
-    let (uploaded, _) = sync::sync_remote(&client, operations, &store, page_size, &key())
-        .await
-        .unwrap();
+    let (uploaded, _) =
+        sync::sync_remote(&client, operations, &store, page_size, &key()).await.unwrap();
 
     let status = client.record_status().await.unwrap();
     let remote_idx = *status.hosts.get(&host).unwrap().get(&tag).unwrap();

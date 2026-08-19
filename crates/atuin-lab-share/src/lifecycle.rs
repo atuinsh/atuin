@@ -71,9 +71,7 @@ pub fn url_file_path() -> PathBuf {
 fn url_file_path_from(runtime_dir: Option<PathBuf>) -> PathBuf {
     match runtime_dir {
         Some(dir) => dir.join("lab-share.url"),
-        None => atuin_common::utils::data_dir()
-            .join("private")
-            .join("lab-share.url"),
+        None => atuin_common::utils::data_dir().join("private").join("lab-share.url"),
     }
 }
 
@@ -154,13 +152,7 @@ fn open_pidfile(path: &Path) -> std::io::Result<File> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(path)
+    OpenOptions::new().read(true).write(true).create(true).truncate(false).mode(0o600).open(path)
 }
 
 /// Probe the pidfile lock without disturbing a holder.
@@ -233,24 +225,15 @@ pub async fn wait_for_lock_release(path: &Path, timeout: Duration) -> bool {
 /// best-effort: a failed write must not kill a healthy session.
 pub fn write_url_file(path: &Path, url: &str, owner: Option<&str>) -> std::io::Result<()> {
     let Some(parent) = path.parent() else {
-        return Err(std::io::Error::other(
-            "url file path has no parent directory",
-        ));
+        return Err(std::io::Error::other("url file path has no parent directory"));
     };
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(parent)?;
+    fs::DirBuilder::new().recursive(true).mode(0o700).create(parent)?;
     let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
     tmp_name.push(".tmp");
     let tmp = path.with_file_name(tmp_name);
     {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&tmp)?;
+        let mut file =
+            OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
         file.write_all(url.as_bytes())?;
         file.write_all(b"\n")?;
         if let Some(owner) = owner {
@@ -396,10 +379,7 @@ mod tests {
         assert_eq!(read_url_file(&path), None, "missing file reads None");
 
         write_url_file(&path, "https://hub.example/s/one#key1", None).unwrap();
-        assert_eq!(
-            read_url_file(&path).as_deref(),
-            Some("https://hub.example/s/one#key1")
-        );
+        assert_eq!(read_url_file(&path).as_deref(), Some("https://hub.example/s/one#key1"));
         assert_eq!(read_url_file_owner(&path), None, "no owner recorded");
         let mode = fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "URL file must be private");
@@ -442,10 +422,7 @@ mod tests {
         let path = tmp.path().join("private").join("lab-share.url");
 
         write_url_file(&path, "https://hub.example/s/one#key1", None).unwrap();
-        let mode = fs::metadata(tmp.path().join("private"))
-            .unwrap()
-            .permissions()
-            .mode();
+        let mode = fs::metadata(tmp.path().join("private")).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o700, "URL directory must be private");
     }
 

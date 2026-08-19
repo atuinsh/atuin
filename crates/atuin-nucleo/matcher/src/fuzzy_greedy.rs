@@ -1,5 +1,5 @@
-use crate::chars::Char;
 use crate::Matcher;
+use crate::chars::Char;
 
 impl Matcher {
     /// greedy fallback algorithm, much faster (linear time) but reported scores/indices
@@ -12,7 +12,11 @@ impl Matcher {
         mut end: usize,
         indices: &mut Vec<u32>,
     ) -> Option<u16> {
-        let first_char_end = if H::ASCII && N::ASCII { start + 1 } else { end };
+        let first_char_end = if H::ASCII && N::ASCII {
+            start + 1
+        } else {
+            end
+        };
         'nonascii: {
             if !H::ASCII || !N::ASCII {
                 let mut needle_iter = needle[1..].iter().copied();

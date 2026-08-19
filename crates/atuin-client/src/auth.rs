@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 
-use enum_dispatch::enum_dispatch;
-use eyre::{Context, Result, bail};
-use reqwest::{StatusCode, Url, header::USER_AGENT};
-use serde::Deserialize;
-
 use atuin_common::url::UrlAppendExt;
 use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ChangePasswordRequest, LoginRequest, LoginResponse,
     RegisterResponse,
 };
+use enum_dispatch::enum_dispatch;
+use eyre::{Context, Result, bail};
+use reqwest::header::USER_AGENT;
+use reqwest::{StatusCode, Url};
+use serde::Deserialize;
 
 use crate::settings::Settings;
 
@@ -44,10 +44,7 @@ pub enum MutateResponse {
 /// CLI commands use this trait so they don't need to know which backend is
 /// active — they just prompt for input and call these methods.
 #[enum_dispatch]
-#[allow(
-    async_fn_in_trait,
-    reason = "only used within our code and we don't need it to be Send"
-)]
+#[allow(async_fn_in_trait, reason = "only used within our code and we don't need it to be Send")]
 pub trait AuthClient: Send + Sync {
     /// Log in with username + password, optionally providing a TOTP code.
     async fn login(
@@ -87,10 +84,7 @@ pub enum AnyAuthClient {
 pub async fn auth_client(settings: &Settings) -> AnyAuthClient {
     if settings.is_hub_sync() {
         let endpoint = settings.hub_endpoint();
-        AnyAuthClient::Hub(HubAuthClient::new(
-            &endpoint,
-            settings.hub_session_token().await.ok(),
-        ))
+        AnyAuthClient::Hub(HubAuthClient::new(&endpoint, settings.hub_session_token().await.ok()))
     } else {
         AnyAuthClient::Legacy(LegacyAuthClient::new(
             &settings.sync_address,
@@ -132,16 +126,10 @@ impl LegacyAuthClient {
     }
 
     fn authenticated_client(&self) -> Result<reqwest::Client> {
-        let token = self
-            .session_token
-            .as_deref()
-            .ok_or_else(|| eyre::eyre!("Not logged in"))?;
+        let token = self.session_token.as_deref().ok_or_else(|| eyre::eyre!("Not logged in"))?;
 
         let mut headers = crate::api_client::extra_headers_map(&self.extra_headers)?;
-        headers.insert(
-            reqwest::header::AUTHORIZATION,
-            format!("Token {token}").parse()?,
-        );
+        headers.insert(reqwest::header::AUTHORIZATION, format!("Token {token}").parse()?);
         headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
         headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
 
@@ -232,11 +220,8 @@ impl AuthClient for LegacyAuthClient {
         let client = self.authenticated_client()?;
         let url = self.address.append(["account"])?;
 
-        let resp = client
-            .delete(url)
-            .json(&serde_json::json!({ "password": password }))
-            .send()
-            .await?;
+        let resp =
+            client.delete(url).json(&serde_json::json!({ "password": password })).send().await?;
 
         match resp.status().as_u16() {
             200 => Ok(MutateResponse::Success),
@@ -373,16 +358,13 @@ impl AuthClient for HubAuthClient {
         totp_code: Option<&str>,
     ) -> Result<MutateResponse> {
         let hub_token = self.hub_token.as_deref().ok_or_else(|| {
-            eyre::eyre!(
-                "Not logged in to Atuin Hub. \
-                     Please run 'atuin login' to authenticate."
-            )
+            eyre::eyre!("Not logged in to Atuin Hub. Please run 'atuin login' to authenticate.")
         })?;
 
         if !hub_token.starts_with("atapi_") {
             bail!(
-                "Your Hub session token is invalid. \
-                 Please run 'atuin login' to re-authenticate with Atuin Hub."
+                "Your Hub session token is invalid. Please run 'atuin login' to re-authenticate \
+                 with Atuin Hub."
             );
         }
 
@@ -444,16 +426,13 @@ impl AuthClient for HubAuthClient {
         totp_code: Option<&str>,
     ) -> Result<MutateResponse> {
         let hub_token = self.hub_token.as_deref().ok_or_else(|| {
-            eyre::eyre!(
-                "Not logged in to Atuin Hub. \
-                     Please run 'atuin login' to authenticate."
-            )
+            eyre::eyre!("Not logged in to Atuin Hub. Please run 'atuin login' to authenticate.")
         })?;
 
         if !hub_token.starts_with("atapi_") {
             bail!(
-                "Your Hub session token is invalid. \
-                 Please run 'atuin login' to re-authenticate with Atuin Hub."
+                "Your Hub session token is invalid. Please run 'atuin login' to re-authenticate \
+                 with Atuin Hub."
             );
         }
 
