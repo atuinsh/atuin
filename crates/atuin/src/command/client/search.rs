@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{IsTerminal as _, Write, stderr, stdout};
 
-use atuin_client::database::{Database, OptFilters, current_context};
+use atuin_client::database::{OptFilters, Sqlite, current_context};
 use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{AuthorPattern, History};
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -172,7 +172,7 @@ impl Cmd {
     #[allow(clippy::too_many_lines)]
     pub async fn run(
         self,
-        db: impl Database,
+        db: Sqlite,
         settings: &mut Settings,
         store: SqliteStore,
         theme: &Theme,
@@ -320,7 +320,7 @@ async fn run_non_interactive(
     settings: &Settings,
     filter_options: OptFilters<'_>,
     query: &[String],
-    db: &impl Database,
+    db: &Sqlite,
 ) -> Result<Vec<History>> {
     let current_dir;
     let dir = if filter_options.cwd == Some(".") {

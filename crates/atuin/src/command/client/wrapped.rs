@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use atuin_client::database::Database;
+use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::theme::Theme;
@@ -272,7 +272,7 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
 
 pub async fn run(
     year: Option<i32>,
-    db: &impl Database,
+    db: &Sqlite,
     settings: &Settings,
     store: SqliteStore,
     theme: &Theme,
@@ -329,8 +329,13 @@ pub async fn run(
         HashMap::new()
     };
 
-    // Compute overall stats using existing functionality
-    let stats = compute(settings, &history, 10, 1).expect("Failed to compute stats");
+    let Some(stats) = compute(settings, &history, 10, 1) else {
+        println!(
+            "No commands found in your {year} history. Run a command or check your config for for \
+             commands ignored by stats.ignored_commands."
+        );
+        return Ok(());
+    };
     let wrapped_stats = WrappedStats::new(settings, &stats, &history, &alias_map);
 
     // Print wrapped format

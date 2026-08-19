@@ -5,7 +5,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use atuin_client::database::Database;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::packfile;

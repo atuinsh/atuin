@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 
-use atuin_client::database::Database;
+use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
@@ -219,7 +219,7 @@ impl Cmd {
         new_script: NewScript,
         script_store: ScriptStore,
         script_db: atuin_scripts::database::Database,
-        history_db: &impl Database,
+        history_db: &Sqlite,
     ) -> Result<()> {
         let mut stdin = std::io::stdin();
         let script_content = if let Some(count_opt) = new_script.last {
@@ -231,7 +231,7 @@ impl Cmd {
             let filters = [settings.default_filter_mode(context.git_root.is_some())];
 
             let mut history =
-                history_db.list(&filters, &context, Some(count), false, false, None).await?;
+                history_db.list(filters, &context, Some(count), false, false, None).await?;
 
             // Reverse to get chronological order
             history.reverse();
@@ -551,7 +551,7 @@ impl Cmd {
         self,
         settings: &Settings,
         store: SqliteStore,
-        history_db: &impl Database,
+        history_db: &Sqlite,
     ) -> Result<()> {
         let host_id = Settings::host_id().await?;
         let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;

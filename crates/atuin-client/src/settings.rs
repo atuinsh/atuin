@@ -111,7 +111,7 @@ impl SearchMode {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum, Serialize)]
+#[derive(Copy, Clone, Debug, Deserialize, PartialEq, Eq, ValueEnum, Serialize)]
 pub enum FilterMode {
     #[serde(rename = "global")]
     Global = 0,

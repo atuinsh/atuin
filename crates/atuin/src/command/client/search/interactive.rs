@@ -3,7 +3,7 @@ use std::io::Read as _;
 use std::io::{IsTerminal, Write, stdout};
 use std::time::Duration;
 
-use atuin_client::database::{Context, Database, current_context};
+use atuin_client::database::{Context, Sqlite, current_context};
 use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{History, HistoryId, HistoryStats};
 use atuin_client::settings::{
@@ -187,7 +187,7 @@ impl State {
 
     async fn query_results(
         &mut self,
-        db: &mut dyn Database,
+        db: &mut Sqlite,
         settings: &Settings,
     ) -> Result<Vec<History>> {
         #[cfg(feature = "daemon")]
@@ -1703,7 +1703,7 @@ fn compute_popup_placement(
 pub async fn history(
     query: &[String],
     settings: &Settings,
-    mut db: impl Database,
+    mut db: Sqlite,
     history_store: &HistoryStore,
     theme: &Theme,
 ) -> Result<String> {
@@ -1832,7 +1832,7 @@ pub async fn history(
 
     // Counting history is a full table scan, which can take a while on a large,
     // cold database - don't hold up the first frame for it.
-    let count_db = db.clone_boxed();
+    let count_db = db.clone();
     let history_count = tokio::spawn(async move { count_db.history_count(false).await }).fuse();
     tokio::pin!(history_count);
 
@@ -2772,7 +2772,7 @@ mod tests {
     #[cfg(all(feature = "daemon", unix))]
     #[tokio::test]
     async fn unavailable_daemon_fuzzy_retries_with_local_fuzzy() {
-        use atuin_client::database::{Database, Sqlite};
+        use atuin_client::database::Sqlite;
 
         let temp = tempfile::tempdir().unwrap();
         let mut settings = Settings::utc();

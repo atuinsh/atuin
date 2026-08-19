@@ -2,7 +2,7 @@ use std::fmt::{self, Display};
 use std::io::{self, IsTerminal, Write};
 use std::time::Duration;
 
-use atuin_client::database::{Database, Sqlite, current_context};
+use atuin_client::database::{Sqlite, current_context};
 use atuin_client::history::History;
 use atuin_client::history::store::HistoryStore;
 #[cfg(feature = "sync")]
@@ -421,7 +421,7 @@ fn make_starting_history(
 }
 
 async fn handle_start(
-    db: &impl Database,
+    db: &Sqlite,
     settings: &Settings,
     command: &str,
     author: Option<&str>,
@@ -468,7 +468,7 @@ async fn handle_daemon_start(
 
 #[allow(unused_variables)]
 async fn handle_end(
-    db: &impl Database,
+    db: &Sqlite,
     store: SqliteStore,
     history_store: HistoryStore,
     settings: &Settings,
@@ -888,7 +888,7 @@ impl Cmd {
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::fn_params_excessive_bools)]
     async fn handle_list(
-        db: &impl Database,
+        db: &Sqlite,
         settings: &Settings,
         context: atuin_client::database::Context,
         session: bool,
@@ -907,7 +907,7 @@ impl Cmd {
             (false, false) => [settings.default_filter_mode(context.git_root.is_some()), Global],
         };
 
-        let history = db.list(&filters, &context, None, false, include_deleted, None).await?;
+        let history = db.list(filters, &context, None, false, include_deleted, None).await?;
 
         print_list(
             &history,
@@ -925,7 +925,7 @@ impl Cmd {
     }
 
     async fn handle_prune(
-        db: &impl Database,
+        db: &Sqlite,
         settings: &Settings,
         store: SqliteStore,
         context: atuin_client::database::Context,
@@ -934,7 +934,7 @@ impl Cmd {
         // Grab all executed commands and filter them using History::should_save.
         // We could iterate or paginate here if memory usage becomes an issue.
         let matches: Vec<History> = db
-            .list(&[Global], &context, None, false, false, None)
+            .list([Global], &context, None, false, false, None)
             .await?
             .into_iter()
             .filter(|h| !h.should_save(settings))
@@ -977,7 +977,7 @@ impl Cmd {
     }
 
     async fn handle_dedup(
-        db: &impl Database,
+        db: &Sqlite,
         settings: &Settings,
         store: SqliteStore,
         before: i64,

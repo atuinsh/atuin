@@ -7,6 +7,7 @@ use atuin_common::encryption::paseto_v4;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus, RecordTag};
 use eyre::Result;
+use futures::{StreamExt, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use thiserror::Error;
 
@@ -14,6 +15,9 @@ use super::sqlite_store::SqliteStore;
 use crate::api_client::{Client, caps_client};
 use crate::packfile::{download_packed, upload_packed};
 use crate::settings::Settings;
+
+/// How many packfile blobs to transfer (upload or download) concurrently within a single page.
+const MAX_CONCURRENT_PACKFILE_TRANSFERS: usize = 16;
 
 #[derive(Error, Debug)]
 pub enum SyncError {
@@ -242,8 +246,12 @@ async fn sync_upload(
         }
 
         if tag == RecordTag::Packfile {
-            for manifest in &page {
-                upload_packed(manifest, store, key, client).await.map_err(|e| {
+            let mut uploads = stream::iter(0..page.len())
+                .map(|i| upload_packed(&page[i], store, key, client))
+                .buffered(MAX_CONCURRENT_PACKFILE_TRANSFERS);
+
+            while let Some(result) = uploads.next().await {
+                result.map_err(|e| {
                     error!("failed to upload packfile: {e}");
                     SyncError::RemoteRequestError { msg: e.to_string() }
                 })?;
@@ -345,13 +353,18 @@ async fn sync_download(
         // We commit the packfile's history into the local store before we persist the manifests, so
         // a manifest we recorded always has its associated history.
         if tag == RecordTag::Packfile {
-            for manifest in &page {
-                match download_packed(manifest, store, key, client).await {
+            let mut downloads = stream::iter(0..page.len())
+                .map(|i| download_packed(&page[i], store, key, client))
+                .buffered(MAX_CONCURRENT_PACKFILE_TRANSFERS)
+                .enumerate();
+
+            while let Some((i, result)) = downloads.next().await {
+                match result {
                     Ok(expanded) => ret.extend(expanded),
                     Err(e) if e.is_permanent() => error!(
-                        manifest_id = %manifest.id,
-                        host = %manifest.host.id,
-                        idx = manifest.idx,
+                        manifest_id = %page[i].id,
+                        host = %page[i].host.id,
+                        idx = page[i].idx,
                         "skipping unexpandable packfile manifest: {e}. you have lost data."
                     ),
                     Err(e) => {
@@ -744,7 +757,9 @@ mod packfile_download_tests {
 
     use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
-    use atuin_domain::record::{DecryptedData, EncryptedData, Host, HostId, Record, RecordId};
+    use atuin_domain::record::{
+        DecryptedData, EncryptedData, Host, HostId, Record, RecordId, RecordVersion,
+    };
     use rstest::*;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -760,6 +775,11 @@ mod packfile_download_tests {
     #[fixture]
     fn key() -> paseto_v4::Key {
         paseto_v4::Key::from([7u8; 32])
+    }
+
+    #[fixture]
+    async fn server() -> MockServer {
+        MockServer::start().await
     }
 
     /// A [`Client`] pointed at a wiremock server, authenticated with a dummy token.
@@ -872,7 +892,10 @@ mod packfile_download_tests {
     /// is the manifest makes the old sampler deterministically pick it.
     #[rstest]
     #[tokio::test]
-    async fn check_encryption_key_ignores_plaintext_packfile_manifests(key: paseto_v4::Key) {
+    async fn check_encryption_key_ignores_plaintext_packfile_manifests(
+        key: paseto_v4::Key,
+        #[future] server: MockServer,
+    ) {
         let host = HostId(uuid_v7());
         let (manifest, _blob) = packed_packfile(host, &key, 5).await;
 
@@ -883,7 +906,7 @@ mod packfile_download_tests {
         let remote_index = RecordStatus { hosts };
 
         // Serve the manifest if the sampler (wrongly) tries to fetch it.
-        let server = MockServer::start().await;
+        let server = server.await;
         Mock::given(method("GET"))
             .and(path("/api/v0/record/next"))
             .respond_with(ResponseTemplate::new(200).set_body_json(vec![manifest.clone()]))
@@ -901,7 +924,10 @@ mod packfile_download_tests {
     /// against an encrypted history record must still surface as `WrongKey`.
     #[rstest]
     #[tokio::test]
-    async fn check_encryption_key_still_detects_a_wrong_key_on_history(key: paseto_v4::Key) {
+    async fn check_encryption_key_still_detects_a_wrong_key_on_history(
+        key: paseto_v4::Key,
+        #[future] server: MockServer,
+    ) {
         let host = HostId(uuid_v7());
         let store = memory_store().await;
         seed_history(&store, host, &key, 1).await;
@@ -913,7 +939,7 @@ mod packfile_download_tests {
         hosts.insert(host, tags);
         let remote_index = RecordStatus { hosts };
 
-        let server = MockServer::start().await;
+        let server = server.await;
         Mock::given(method("GET"))
             .and(path("/api/v0/record/next"))
             .respond_with(ResponseTemplate::new(200).set_body_json(vec![rec]))
@@ -931,13 +957,16 @@ mod packfile_download_tests {
 
     #[rstest]
     #[tokio::test]
-    async fn sync_download_expands_packfile_manifests_into_history(key: paseto_v4::Key) {
+    async fn sync_download_expands_packfile_manifests_into_history(
+        key: paseto_v4::Key,
+        #[future] server: MockServer,
+    ) {
         let host = HostId(uuid_v7());
 
         // Uploader-side artifacts: history + manifest + blob.
         let (manifest, blob) = packed_packfile(host, &key, 3).await;
 
-        let server = MockServer::start().await;
+        let server = server.await;
         mount_packfile(&server, &manifest, blob).await;
 
         let down = memory_store().await;
@@ -953,12 +982,15 @@ mod packfile_download_tests {
 
     #[rstest]
     #[tokio::test]
-    async fn sync_download_returns_expanded_history_ids_for_indexing(key: paseto_v4::Key) {
+    async fn sync_download_returns_expanded_history_ids_for_indexing(
+        key: paseto_v4::Key,
+        #[future] server: MockServer,
+    ) {
         let host = HostId(uuid_v7());
 
         let (manifest, blob, history_ids) = packed_packfile_with_ids(host, &key, 3).await;
 
-        let server = MockServer::start().await;
+        let server = server.await;
         mount_packfile(&server, &manifest, blob).await;
 
         let down = memory_store().await;
@@ -978,12 +1010,15 @@ mod packfile_download_tests {
 
     #[rstest]
     #[tokio::test]
-    async fn history_download_skips_the_range_a_packfile_covered(key: paseto_v4::Key) {
+    async fn history_download_skips_the_range_a_packfile_covered(
+        key: paseto_v4::Key,
+        #[future] server: MockServer,
+    ) {
         let host = HostId(uuid_v7());
 
         let (manifest, blob) = packed_packfile(host, &key, 3).await;
 
-        let server = MockServer::start().await;
+        let server = server.await;
         Mock::given(method("GET"))
             .and(path("/api/v0/record/next"))
             .and(query_param("tag", RecordTag::Packfile.as_str()))
@@ -1041,7 +1076,10 @@ mod packfile_download_tests {
 
     #[rstest]
     #[tokio::test]
-    async fn sync_download_does_not_underflow_when_local_head_exceeds_remote(key: paseto_v4::Key) {
+    async fn sync_download_does_not_underflow_when_local_head_exceeds_remote(
+        key: paseto_v4::Key,
+        #[future] server: MockServer,
+    ) {
         let host = HostId(uuid_v7());
 
         // Local store already has HISTORY [0..=4] (head idx 4).
@@ -1049,7 +1087,7 @@ mod packfile_download_tests {
         seed_history(&down, host, &key, 5).await;
 
         // Server that returns empty for any record page (nothing new to fetch).
-        let server = MockServer::start().await;
+        let server = server.await;
         Mock::given(method("GET"))
             .and(path("/api/v0/record/next"))
             .respond_with(
@@ -1064,6 +1102,185 @@ mod packfile_download_tests {
         let got =
             sync_download(&down, &client, host, RecordTag::History, 2, 100, &key).await.unwrap();
         assert!(got.is_empty(), "nothing to download when local head already exceeds remote");
+    }
+
+    /// Build `num_packs` contiguous packfiles of `per` history records each for a single host,
+    /// returning every manifest paired with the blob a server would serve, plus all covered history
+    /// ids in idx order.
+    #[fixture]
+    async fn packed_packfiles(
+        key: paseto_v4::Key,
+        #[default(3)] per: u64,
+        #[default(2)] num_packs: u64,
+    ) -> (HostId, Vec<(Record<EncryptedData>, Vec<u8>)>, Vec<RecordId>) {
+        let host = HostId(uuid_v7());
+        let up = memory_store().await;
+        seed_history(&up, host, &key, per * num_packs).await;
+        try_pack(
+            &up,
+            host,
+            Some(PackfileCap {
+                version: 1,
+                record_count: per,
+            }),
+            &RecordTag::History,
+        )
+        .await
+        .unwrap();
+
+        let manifests = up.next(host, &RecordTag::Packfile, 0, num_packs).await.unwrap();
+        assert_eq!(
+            manifests.len() as u64,
+            num_packs,
+            "fixture expects exactly one manifest per pack"
+        );
+
+        let mut packs = Vec::new();
+        for manifest in &manifests {
+            let view = PackManifestRecordView::new(manifest).unwrap();
+            let (blob, _ids) = view.pack_records(&up, key.clone()).await.unwrap();
+            packs.push((manifest.clone(), blob));
+        }
+
+        let history_ids: Vec<RecordId> = up
+            .next(host, &RecordTag::History, 0, per * num_packs)
+            .await
+            .unwrap()
+            .iter()
+            .map(|record| record.id)
+            .collect();
+
+        (host, packs, history_ids)
+    }
+
+    /// Mount `/api/v0/packfiles/{id}` -> a per-manifest download URL, and that URL -> the blob, for
+    /// each pack. Each gets a distinct download path so the batch fetches don't alias.
+    async fn mount_packfile_blobs(server: &MockServer, packs: &[(Record<EncryptedData>, Vec<u8>)]) {
+        for (i, (manifest, blob)) in packs.iter().enumerate() {
+            let download_path = format!("/download/{i}");
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v0/packfiles/{}", manifest.id.0)))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "download_url": format!("{}{}", server.uri(), download_path) })))
+                .mount(server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(download_path))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(blob.clone()))
+                .mount(server)
+                .await;
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sync_download_expands_a_batch_of_packfile_manifests(
+        key: paseto_v4::Key,
+        #[future] server: MockServer,
+        #[future] packed_packfiles: (HostId, Vec<(Record<EncryptedData>, Vec<u8>)>, Vec<RecordId>),
+    ) {
+        // Two contiguous packfiles (idx 0..=2 and 3..=5) delivered together in one page.
+        let (host, packs, history_ids) = packed_packfiles.await;
+        let server = server.await;
+        let page: Vec<Record<EncryptedData>> = packs.iter().map(|(m, _)| m.clone()).collect();
+        Mock::given(method("GET"))
+            .and(path("/api/v0/record/next"))
+            .and(query_param("start", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(page))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v0/record/next"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(Vec::<Record<EncryptedData>>::new()),
+            )
+            .mount(&server)
+            .await;
+        mount_packfile_blobs(&server, &packs).await;
+
+        let down = memory_store().await;
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let returned =
+            sync_download(&down, &client, host, RecordTag::Packfile, 1, 100, &key).await.unwrap();
+
+        // Every batched packfile's history is populated, whichever download finished first.
+        assert_eq!(
+            down.next(host, &RecordTag::History, 0, 6).await.unwrap().len(),
+            6,
+            "all history across the batch must be populated"
+        );
+        for id in &history_ids {
+            assert!(
+                returned.contains(id),
+                "expanded history id {id:?} must be returned for indexing"
+            );
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sync_download_skips_a_permanent_failure_within_a_batch(
+        key: paseto_v4::Key,
+        #[future] server: MockServer,
+        #[future] packed_packfiles: (HostId, Vec<(Record<EncryptedData>, Vec<u8>)>, Vec<RecordId>),
+    ) {
+        // Two valid contiguous packfiles...
+        let (host, packs, history_ids) = packed_packfiles.await;
+
+        // ...plus a malformed manifest riding in the same page. It fails to parse before any network
+        // I/O (permanent), so it needs no download mock of its own.
+        let bad = Record::builder()
+            .host(Host::new(host))
+            .version(RecordVersion::V1)
+            .tag(RecordTag::Packfile)
+            .idx(2)
+            .data(EncryptedData {
+                raw: "001{not json".into(),
+                cek: String::new(),
+            })
+            .build();
+
+        let server = server.await;
+        let page: Vec<Record<EncryptedData>> =
+            packs.iter().map(|(m, _)| m.clone()).chain(std::iter::once(bad.clone())).collect();
+        Mock::given(method("GET"))
+            .and(path("/api/v0/record/next"))
+            .and(query_param("start", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(page))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v0/record/next"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(Vec::<Record<EncryptedData>>::new()),
+            )
+            .mount(&server)
+            .await;
+        mount_packfile_blobs(&server, &packs).await;
+
+        let down = memory_store().await;
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        // The permanent per-manifest failure is logged and skipped; the whole tick still succeeds.
+        let returned = sync_download(&down, &client, host, RecordTag::Packfile, 2, 100, &key)
+            .await
+            .expect("a permanent per-manifest failure must not fail the tick");
+
+        // The two valid packfiles in the batch still expand despite the poisoned sibling.
+        assert_eq!(
+            down.next(host, &RecordTag::History, 0, 6).await.unwrap().len(),
+            6,
+            "valid packfiles in the batch must still expand"
+        );
+        for id in &history_ids {
+            assert!(
+                returned.contains(id),
+                "expanded history id {id:?} must be returned for indexing"
+            );
+        }
     }
 }
 
@@ -1086,6 +1303,11 @@ mod packfile_capability_tests {
     #[fixture]
     fn key() -> paseto_v4::Key {
         paseto_v4::Key::from([7u8; 32])
+    }
+
+    #[fixture]
+    async fn server() -> MockServer {
+        MockServer::start().await
     }
 
     /// Mount `/api/v0/capabilities` returning the given verbatim body string.
@@ -1119,11 +1341,14 @@ mod packfile_capability_tests {
 
     #[rstest]
     #[tokio::test]
-    async fn packfile_op_runs_when_server_advertises_cap(key: paseto_v4::Key) {
+    async fn packfile_op_runs_when_server_advertises_cap(
+        key: paseto_v4::Key,
+        #[future] server: MockServer,
+    ) {
         let host = HostId(uuid_v7());
         let (manifest, blob) = packed_packfile(host, &key, 3).await;
 
-        let server = MockServer::start().await;
+        let server = server.await;
         let caps = CapServer::new()
             .add(CapabilitiesCap { version: 1 })
             .unwrap()
@@ -1149,11 +1374,14 @@ mod packfile_capability_tests {
 
     #[rstest]
     #[tokio::test]
-    async fn absent_cap_skips_packfile_but_loose_history_still_syncs(key: paseto_v4::Key) {
+    async fn absent_cap_skips_packfile_but_loose_history_still_syncs(
+        key: paseto_v4::Key,
+        #[future] server: MockServer,
+    ) {
         let host = HostId(uuid_v7());
         let (manifest, blob) = packed_packfile(host, &key, 3).await;
 
-        let server = MockServer::start().await;
+        let server = server.await;
         // Caps advertised, but NO PackfileCap -> get_server::<PackfileCap>() == Ok(None).
         let caps = CapServer::new().add(CapabilitiesCap { version: 1 }).unwrap();
         mount_caps_body(&server, caps.body().to_owned()).await;
@@ -1221,11 +1449,11 @@ mod packfile_capability_tests {
 
     #[rstest]
     #[tokio::test]
-    async fn not_fetched_skips_packfile_op(key: paseto_v4::Key) {
+    async fn not_fetched_skips_packfile_op(key: paseto_v4::Key, #[future] server: MockServer) {
         let host = HostId(uuid_v7());
         let (manifest, blob) = packed_packfile(host, &key, 3).await;
 
-        let server = MockServer::start().await;
+        let server = server.await;
         mount_packfile(&server, &manifest, blob).await;
 
         let down = memory_store().await;
@@ -1245,11 +1473,11 @@ mod packfile_capability_tests {
 
     #[rstest]
     #[tokio::test]
-    async fn malformed_cap_skips_packfile_op(key: paseto_v4::Key) {
+    async fn malformed_cap_skips_packfile_op(key: paseto_v4::Key, #[future] server: MockServer) {
         let host = HostId(uuid_v7());
         let (manifest, blob) = packed_packfile(host, &key, 3).await;
 
-        let server = MockServer::start().await;
+        let server = server.await;
         // Advertised, but the value does not deserialize into PackfileCap { version: u32 } ->
         // get_server::<PackfileCap>() == Err(Malformed) -> gate disabled (conservative).
         let body = serde_json::json!({

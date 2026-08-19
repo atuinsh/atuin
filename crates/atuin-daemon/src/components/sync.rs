@@ -12,8 +12,7 @@ use atuin_client::settings::Settings;
 use atuin_dotfiles::store::AliasStore;
 use atuin_dotfiles::store::var::VarStore;
 use eyre::Result;
-use futures::stream::TryChunksError;
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use rand::Rng;
 use tokio::sync::mpsc;
 use tokio::time::{self, MissedTickBehavior};
@@ -248,39 +247,31 @@ async fn do_sync_tick(
             SyncState::Retrying
         }
         Ok((uploaded_count, downloaded_records)) => {
-            // Controls how large of a Vec<History> we should try to process at a time.
-            // This is used limit how much memory we use at a time.
-            //
-            // An initial sync (on backfill, eg.), risks being dozens of GB of RAM
-            const HISTORY_BATCH_SIZE: usize = 5000;
-
             tracing::info!(
                 uploaded = uploaded_count,
                 downloaded = downloaded_records.len(),
                 "sync complete"
             );
 
-            let batches = history_store
-                .incremental_build(handle.history_db(), &downloaded_records)
-                // intentional try_chunks -- legacy behavior was to abort on the first error.
-                .try_chunks(HISTORY_BATCH_SIZE);
+            // `incremental_build` already yields in bounded batches - an initial sync (on
+            // backfill, eg.) risks being dozens of GB of RAM otherwise.
+            let batches = history_store.incremental_build(handle.history_db(), &downloaded_records);
             futures::pin_mut!(batches);
 
             while let Some(batch) = batches.next().await {
-                let (histories, failure) = match batch {
-                    Ok(histories) => (histories, None),
-                    Err(TryChunksError(histories, e)) => (histories, Some(e)),
-                };
-
-                if !histories.is_empty() {
-                    // Only the IDs go on the bus; the rows themselves are already in sqlite.
-                    let ids: Arc<[HistoryId]> = histories.iter().map(|h| h.id.clone()).collect();
-                    handle.emit(DaemonEvent::HistorySynced(ids));
-                }
-
-                if let Some(e) = failure {
-                    tracing::error!("failed to build history from downloaded records: {e}");
-                    break;
+                match batch {
+                    Ok(histories) if !histories.is_empty() => {
+                        // Only the IDs go on the bus; the rows themselves are already in sqlite.
+                        let ids: Arc<[HistoryId]> =
+                            histories.iter().map(|h| h.id.clone()).collect();
+                        handle.emit(DaemonEvent::HistorySynced(ids));
+                    }
+                    Ok(_) => {}
+                    // Legacy behavior was to abort on the first error.
+                    Err(e) => {
+                        tracing::error!("failed to build history from downloaded records: {e}");
+                        break;
+                    }
                 }
             }
 
