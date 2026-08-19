@@ -445,7 +445,7 @@ impl DaemonBuilder {
     /// Build the daemon.
     ///
     /// This loads the encryption key and creates the daemon state.
-    pub async fn build(self) -> Result<Daemon> {
+    pub fn build(self) -> Result<Daemon> {
         let store = self.store.ok_or_else(|| eyre::eyre!("store is required"))?;
         let history_db = self.history_db.ok_or_else(|| eyre::eyre!("history_db is required"))?;
 

@@ -164,7 +164,7 @@ mod tests {
                     assert!(re.is_match(&wrap(test)), "{name} {label} failed!");
                 }
                 TestValue::Multiple(tests) => {
-                    for test_str in tests.iter() {
+                    for test_str in *tests {
                         assert!(
                             re.is_match(&wrap(test_str)),
                             "{name} {label} with value \"{test_str}\" failed!"

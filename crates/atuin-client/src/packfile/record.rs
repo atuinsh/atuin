@@ -125,7 +125,7 @@ impl PackManifestData {
             // Untrusted data -- let's validate the count so it doesn't bubble down.
             let _ = body.record_count()?;
 
-            Ok(PackManifestData::V1(body))
+            Ok(Self::V1(body))
         } else {
             Err(ParsingError::UnknownVersion)
         }
@@ -134,7 +134,7 @@ impl PackManifestData {
     /// The half-open range of history indices this manifest covers.
     #[must_use]
     pub const fn range(&self) -> std::ops::Range<RecordIdx> {
-        let PackManifestData::V1(v1) = self;
+        let Self::V1(v1) = self;
         v1.start_idx..v1.end_idx + 1
     }
 }
@@ -239,7 +239,7 @@ pub enum PackingError {
 /// A parsed, validated view of a `packfile` manifest record. The manifest body is decoded once at
 /// construction and kept alongside the record, so callers read the range and load the covered
 /// history without re-parsing.
-pub(crate) struct PackManifestRecordView<'a> {
+pub struct PackManifestRecordView<'a> {
     pub record: &'a Record<EncryptedData>,
     pub manifest: PackManifestData,
 }

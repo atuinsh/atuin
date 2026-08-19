@@ -30,14 +30,14 @@ impl AliasRecord {
         let mut output = vec![];
 
         match self {
-            AliasRecord::Create(alias) => {
+            Self::Create(alias) => {
                 encode::write_u8(&mut output, 0)?; // create
                 encode::write_array_len(&mut output, 2)?; // 2 fields
 
                 encode::write_str(&mut output, alias.name.as_str())?;
                 encode::write_str(&mut output, alias.value.as_str())?;
             }
-            AliasRecord::Delete(name) => {
+            Self::Delete(name) => {
                 encode::write_u8(&mut output, 1)?; // delete
                 encode::write_array_len(&mut output, 1)?; // 1 field
 
@@ -78,7 +78,7 @@ impl AliasRecord {
                             bail!("trailing bytes in encoded shell alias record. malformed");
                         }
 
-                        Ok(AliasRecord::Create(Alias {
+                        Ok(Self::Create(Alias {
                             name: key.to_owned(),
                             value: value.to_owned(),
                         }))
@@ -98,7 +98,7 @@ impl AliasRecord {
                             bail!("trailing bytes in encoded shell alias record. malformed");
                         }
 
-                        Ok(AliasRecord::Delete(key.to_owned()))
+                        Ok(Self::Delete(key.to_owned()))
                     }
 
                     n => {
@@ -122,8 +122,8 @@ pub struct AliasStore {
 
 impl AliasStore {
     // will want to init the actual kv store when that is done
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> AliasStore {
-        AliasStore {
+    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
+        Self {
             store,
             host_id,
             encryption_key,

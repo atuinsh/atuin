@@ -97,7 +97,7 @@ impl SqliteStore {
         Ok(())
     }
 
-    fn query_row(row: SqliteRow) -> Record<paseto_v4::EncryptedData> {
+    fn query_row(row: &SqliteRow) -> Record<paseto_v4::EncryptedData> {
         let idx: i64 = row.get("idx");
         let timestamp: i64 = row.get("timestamp");
 
@@ -121,8 +121,10 @@ impl SqliteStore {
 
     #[instrument(level = "trace", skip_all, err)]
     async fn load_all(&self) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
-        let res =
-            sqlx::query("select * from store ").map(Self::query_row).fetch_all(&self.pool).await?;
+        let res = sqlx::query("select * from store ")
+            .map(|row| Self::query_row(&row))
+            .fetch_all(&self.pool)
+            .await?;
 
         Ok(res)
     }
@@ -152,7 +154,7 @@ impl SqliteStore {
     pub async fn get(&self, id: RecordId) -> Result<Record<paseto_v4::EncryptedData>> {
         let res = sqlx::query("select * from store where store.id = ?1")
             .bind(id.0.as_hyphenated().to_string())
-            .map(Self::query_row)
+            .map(|row| Self::query_row(&row))
             .fetch_one(&self.pool)
             .await?;
 
@@ -186,7 +188,7 @@ impl SqliteStore {
             sqlx::query("select * from store where host=?1 and tag=?2 order by idx desc limit 1")
                 .bind(host.0.as_hyphenated().to_string())
                 .bind(tag.as_str())
-                .map(Self::query_row)
+                .map(|row| Self::query_row(&row))
                 .fetch_one(&self.pool)
                 .await;
 
@@ -276,7 +278,7 @@ impl SqliteStore {
         .bind(host.0.as_hyphenated().to_string())
         .bind(tag.as_str())
         .bind(limit as i64)
-        .map(Self::query_row)
+        .map(|row| Self::query_row(&row))
         .fetch_all(&self.pool)
         .await?;
 
@@ -294,7 +296,7 @@ impl SqliteStore {
             .bind(idx as i64)
             .bind(host.0.as_hyphenated().to_string())
             .bind(tag.as_str())
-            .map(Self::query_row)
+            .map(|row| Self::query_row(&row))
             .fetch_one(&self.pool)
             .await;
 
@@ -337,7 +339,7 @@ impl SqliteStore {
     ) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
         let res = sqlx::query("select * from store where tag = ?1 order by timestamp asc")
             .bind(tag.as_str())
-            .map(Self::query_row)
+            .map(|row| Self::query_row(&row))
             .fetch_all(&self.pool)
             .await?;
 
@@ -408,7 +410,7 @@ impl SqliteStore {
     pub async fn purge(&self, key: &paseto_v4::Key) -> Result<()> {
         let all = self.load_all().await?;
 
-        for record in all.iter() {
+        for record in &all {
             match record.clone().decrypt(key) {
                 Ok(_) => continue,
                 Err(_) => {
@@ -633,7 +635,7 @@ mod tests {
         store.re_encrypt(&key, &new_key).await.expect("failed to re-encrypt store");
 
         let all = store.all_tagged(&RecordTag::Other("test".to_owned())).await.unwrap();
-        for record in all.iter() {
+        for record in &all {
             assert!(
                 record.clone().decrypt(&key).is_err(),
                 "old key still decrypts after re-encrypt"

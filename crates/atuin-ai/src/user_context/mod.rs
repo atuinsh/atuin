@@ -7,17 +7,17 @@
 //! The result is cached for the rest of the invocation; `/reload` clears
 //! the cache so the next request re-gathers.
 
-pub(crate) mod interpolate;
+pub mod interpolate;
 mod walker;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-pub(crate) use walker::global_context_path;
+pub use walker::global_context_path;
 
 /// A fully resolved user context, ready to include in an API request.
 #[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct UserContext {
+pub struct UserContext {
     /// The path to the context file on disk.
     pub path: String,
     /// The interpolated content.
@@ -30,7 +30,7 @@ pub(crate) struct UserContext {
 /// requests reuse the cached result. `/reload` invalidates the cache so the
 /// next request re-gathers.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct UserContextCache {
+pub struct UserContextCache {
     inner: Arc<Mutex<CacheSlot>>,
 }
 
@@ -101,11 +101,7 @@ impl UserContextCache {
 /// Walks from `start` up to the filesystem root looking for
 /// `.atuin/TERMINAL.md`, then checks `global_path`. Returns contexts
 /// ordered from most general (global/root) to most specific (deepest).
-pub(crate) async fn gather(
-    start: &Path,
-    global_path: Option<&Path>,
-    shell: &str,
-) -> Vec<UserContext> {
+pub async fn gather(start: &Path, global_path: Option<&Path>, shell: &str) -> Vec<UserContext> {
     let raw_files = match walker::walk(start, global_path).await {
         Ok(files) => files,
         Err(e) => {

@@ -88,7 +88,7 @@ impl Script {
             bail!("trailing bytes in encoded script record. malformed");
         }
 
-        Ok(Script {
+        Ok(Self {
             id: Uuid::parse_str(id).unwrap(),
             name: name.to_owned(),
             description: description.to_owned(),

@@ -11,7 +11,7 @@ use crate::tui::ConversationEvent;
 
 /// Serialize a ConversationEvent into an (event_type, event_data_json) pair
 /// suitable for database storage.
-pub(crate) fn serialize_event(event: &ConversationEvent) -> (String, String) {
+pub fn serialize_event(event: &ConversationEvent) -> (String, String) {
     match event {
         ConversationEvent::UserMessage { content } => {
             ("user_message".to_string(), serde_json::json!({ "content": content }).to_string())
@@ -79,7 +79,7 @@ pub(crate) fn serialize_event(event: &ConversationEvent) -> (String, String) {
 
 /// Deserialize an (event_type, event_data_json) pair from storage back into a
 /// ConversationEvent.
-pub(crate) fn deserialize_event(event_type: &str, event_data: &str) -> Result<ConversationEvent> {
+pub fn deserialize_event(event_type: &str, event_data: &str) -> Result<ConversationEvent> {
     let data: Value = serde_json::from_str(event_data)
         .map_err(|e| eyre!("failed to parse event_data JSON: {e}"))?;
 

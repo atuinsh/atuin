@@ -6,7 +6,7 @@ use crate::tui::ConversationEvent;
 
 /// Server-sent danger level for a suggested command
 #[derive(Debug)]
-pub(crate) enum DangerLevel {
+pub enum DangerLevel {
     Low(Option<String>),
     Medium(Option<String>),
     High(Option<String>),
@@ -16,10 +16,10 @@ pub(crate) enum DangerLevel {
 impl DangerLevel {
     pub(crate) fn notes(&self) -> Option<&String> {
         match self {
-            DangerLevel::Low(notes) => notes.as_ref(),
-            DangerLevel::Medium(notes) => notes.as_ref(),
-            DangerLevel::High(notes) => notes.as_ref(),
-            DangerLevel::Unknown(notes) => notes.as_ref(),
+            Self::Low(notes) => notes.as_ref(),
+            Self::Medium(notes) => notes.as_ref(),
+            Self::High(notes) => notes.as_ref(),
+            Self::Unknown(notes) => notes.as_ref(),
         }
     }
 }
@@ -33,18 +33,18 @@ impl From<(&String, &String)> for DangerLevel {
         };
 
         match danger_level.as_str() {
-            "low" => DangerLevel::Low(notes),
-            "medium" => DangerLevel::Medium(notes),
-            "med" => DangerLevel::Medium(notes),
-            "high" => DangerLevel::High(notes),
-            _ => DangerLevel::Unknown(notes),
+            "low" => Self::Low(notes),
+            "medium" => Self::Medium(notes),
+            "med" => Self::Medium(notes),
+            "high" => Self::High(notes),
+            _ => Self::Unknown(notes),
         }
     }
 }
 
 /// Server-sent confidence level for a suggested command
 #[derive(Debug)]
-pub(crate) enum ConfidenceLevel {
+pub enum ConfidenceLevel {
     Low(Option<String>),
     Medium(Option<String>),
     High(Option<String>),
@@ -54,10 +54,10 @@ pub(crate) enum ConfidenceLevel {
 impl ConfidenceLevel {
     pub(crate) fn notes(&self) -> Option<&String> {
         match self {
-            ConfidenceLevel::Low(notes) => notes.as_ref(),
-            ConfidenceLevel::Medium(notes) => notes.as_ref(),
-            ConfidenceLevel::High(notes) => notes.as_ref(),
-            ConfidenceLevel::Unknown(notes) => notes.as_ref(),
+            Self::Low(notes) => notes.as_ref(),
+            Self::Medium(notes) => notes.as_ref(),
+            Self::High(notes) => notes.as_ref(),
+            Self::Unknown(notes) => notes.as_ref(),
         }
     }
 }
@@ -71,17 +71,17 @@ impl From<(&String, &String)> for ConfidenceLevel {
         };
 
         match confidence_level.as_str() {
-            "low" => ConfidenceLevel::Low(notes),
-            "medium" => ConfidenceLevel::Medium(notes),
-            "med" => ConfidenceLevel::Medium(notes),
-            "high" => ConfidenceLevel::High(notes),
-            _ => ConfidenceLevel::Unknown(notes),
+            "low" => Self::Low(notes),
+            "medium" => Self::Medium(notes),
+            "med" => Self::Medium(notes),
+            "high" => Self::High(notes),
+            _ => Self::Unknown(notes),
         }
     }
 }
 
 #[derive(Debug)]
-pub(crate) enum UiEvent {
+pub enum UiEvent {
     Text {
         content: String,
     },
@@ -97,7 +97,7 @@ pub(crate) enum UiEvent {
 
 /// A run of consecutive client-side tool calls of the same groupable kind.
 #[derive(Debug)]
-pub(crate) struct ToolGroup {
+pub struct ToolGroup {
     pub(crate) kind: ToolGroupKind,
     pub(crate) calls: Vec<ToolCallDetails>,
 }
@@ -115,7 +115,7 @@ impl ToolGroup {
 /// Shell (needs its own viewport) and FileWrite (wants diffs/contents) are
 /// intentionally absent — those render as individual `UiEvent::ToolCall`s.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum ToolGroupKind {
+pub enum ToolGroupKind {
     FileRead,
     HistorySearch,
 }
@@ -125,7 +125,7 @@ pub(crate) enum ToolGroupKind {
 /// Each variant carries the data a per-tool renderer component needs.
 /// Built by TurnBuilder from ToolTracker + ConversationEvent data.
 #[derive(Debug)]
-pub(crate) enum ToolRenderData {
+pub enum ToolRenderData {
     /// Shell command with live/cached VT100 output preview.
     Shell {
         command: String,
@@ -160,7 +160,7 @@ pub(crate) enum ToolRenderData {
 
 impl ToolRenderData {
     pub(crate) fn is_remote(&self) -> bool {
-        matches!(self, ToolRenderData::Remote)
+        matches!(self, Self::Remote)
     }
 
     /// The group kind this tool should collapse into, if any.
@@ -169,15 +169,15 @@ impl ToolRenderData {
     /// (shell, file writes, remote).
     pub(crate) fn group_kind(&self) -> Option<ToolGroupKind> {
         match self {
-            ToolRenderData::FileRead { .. } => Some(ToolGroupKind::FileRead),
-            ToolRenderData::HistorySearch { .. } => Some(ToolGroupKind::HistorySearch),
+            Self::FileRead { .. } => Some(ToolGroupKind::FileRead),
+            Self::HistorySearch { .. } => Some(ToolGroupKind::HistorySearch),
             _ => None,
         }
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct ToolCallDetails {
+pub struct ToolCallDetails {
     pub(crate) tool_use_id: String,
     pub(crate) name: String,
     pub(crate) status: ToolResultStatus,
@@ -185,20 +185,20 @@ pub(crate) struct ToolCallDetails {
 }
 
 #[derive(Debug)]
-pub(crate) struct SuggestedCommandDetails {
+pub struct SuggestedCommandDetails {
     pub(crate) command: String,
     pub(crate) danger_level: DangerLevel,
     pub(crate) confidence_level: ConfidenceLevel,
 }
 
 #[derive(Debug)]
-pub(crate) struct OutOfBandOutputDetails {
+pub struct OutOfBandOutputDetails {
     pub(crate) command: Option<String>,
     pub(crate) content: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ToolResultStatus {
+pub enum ToolResultStatus {
     Pending,
     Success,
     /// Carries the result content so the view can label the failure
@@ -209,12 +209,12 @@ pub(crate) enum ToolResultStatus {
 }
 
 #[derive(Debug)]
-pub(crate) struct UiTurn {
+pub struct UiTurn {
     pub(crate) kind: UiTurnKind,
 }
 
 #[derive(Debug)]
-pub(crate) enum UiTurnKind {
+pub enum UiTurnKind {
     User {
         events: Vec<UiEvent>,
     },
@@ -226,7 +226,7 @@ pub(crate) enum UiTurnKind {
     },
 }
 
-pub(crate) struct TurnBuilder<'a> {
+pub struct TurnBuilder<'a> {
     turns: Vec<UiTurnKind>,
     current_turn: Option<UiTurnKind>,
     tracker: &'a ToolManager,
@@ -526,7 +526,7 @@ fn flush_group(
 }
 
 #[derive(Debug)]
-pub(crate) struct ToolSummary {
+pub struct ToolSummary {
     tool_calls: Vec<ToolCallDetails>,
 }
 

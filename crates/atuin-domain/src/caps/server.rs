@@ -30,7 +30,7 @@ impl CapServer {
     /// Create an empty capability server. It advertises nothing until you [`add`](Self::add) to it,
     /// but still carries a stable token for the empty set.
     pub fn new() -> Self {
-        let mut server = CapServer {
+        let mut server = Self {
             token: String::new(),
             body: String::new(),
             caps: CapsBundle::default(),

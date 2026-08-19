@@ -17,7 +17,7 @@ use crate::stream::{ChatRequest, StreamContent, StreamControl, StreamFrame, crea
 use crate::tui::app::Msg;
 use crate::user_context::UserContextCache;
 
-pub(crate) fn stream_bridge(
+pub fn stream_bridge(
     request: ChatRequest,
     app_ctx: AppContext,
     client_ctx: ClientContext,

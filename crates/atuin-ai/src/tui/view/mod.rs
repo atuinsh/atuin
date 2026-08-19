@@ -18,9 +18,9 @@ use crate::tui::events::PermissionResult;
 use crate::tui::select;
 use crate::tui::tips::Tip;
 
-pub(crate) mod input;
+pub mod input;
 mod trunc;
-pub(crate) mod turn;
+pub mod turn;
 
 use trunc::{command_spinner, truncated_line};
 use turn::{
@@ -39,7 +39,7 @@ const MAX_GROUP_ENTRIES: usize = 5;
 
 /// Tool spinner in the app's standard state colors: yellow glyph and label
 /// while in flight, green checkmark once done.
-pub(crate) fn tool_spinner(label: impl Into<String>, done: bool) -> Spinner {
+pub fn tool_spinner(label: impl Into<String>, done: bool) -> Spinner {
     let s = spinner(label).done(done);
     if done {
         s.spinner_style(Style::default().fg(Color::Green))
@@ -70,18 +70,14 @@ fn md(source: impl Into<String>) -> Markdown {
 /// The in-flight indicator hung off the last agent turn: the streaming
 /// status label plus an optional feature tip. `None` = no spinner (turn
 /// sealed, idle, or a prompt like the permission select is on screen).
-pub(crate) struct Working<'a> {
+pub struct Working<'a> {
     pub status: Option<&'a str>,
     pub tip: Option<&'static Tip>,
 }
 
 /// Render one turn. `first` suppresses the leading blank row; `working`
 /// shows the spinner (and tip) on the last agent turn while streaming.
-pub(crate) fn turn_view(
-    turn: &UiTurn,
-    first: bool,
-    working: Option<Working<'_>>,
-) -> AnyElement<'static> {
+pub fn turn_view(turn: &UiTurn, first: bool, working: Option<Working<'_>>) -> AnyElement<'static> {
     match &turn.kind {
         UiTurnKind::User { events } => user_turn_view(events, first),
         UiTurnKind::Agent { events } => agent_turn_view(events, working),
@@ -89,7 +85,7 @@ pub(crate) fn turn_view(
     }
 }
 
-pub(crate) fn user_turn_view(events: &[UiEvent], first_turn: bool) -> AnyElement<'static> {
+pub fn user_turn_view(events: &[UiEvent], first_turn: bool) -> AnyElement<'static> {
     let label_style = Style::default()
         .fg(Color::Cyan)
         .add_modifier(Modifier::BOLD)
@@ -109,10 +105,7 @@ pub(crate) fn user_turn_view(events: &[UiEvent], first_turn: bool) -> AnyElement
         .any()
 }
 
-pub(crate) fn agent_turn_view(
-    events: &[UiEvent],
-    working: Option<Working<'_>>,
-) -> AnyElement<'static> {
+pub fn agent_turn_view(events: &[UiEvent], working: Option<Working<'_>>) -> AnyElement<'static> {
     let label_style = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD)
@@ -140,7 +133,7 @@ pub(crate) fn agent_turn_view(
 
 /// The post-turn line that takes the spinner's place once a turn completes:
 /// how long the response took, with the turn's tip dropped underneath.
-pub(crate) fn responded_view(
+pub fn responded_view(
     elapsed: std::time::Duration,
     tip: Option<&'static Tip>,
 ) -> AnyElement<'static> {
@@ -174,7 +167,7 @@ fn format_elapsed(elapsed: std::time::Duration) -> String {
     }
 }
 
-pub(crate) fn out_of_band_turn_view(events: &[UiEvent]) -> AnyElement<'static> {
+pub fn out_of_band_turn_view(events: &[UiEvent]) -> AnyElement<'static> {
     let label_style = Style::default()
         .fg(Color::Blue)
         .add_modifier(Modifier::BOLD)
@@ -676,7 +669,7 @@ fn suggested_command_view(details: &SuggestedCommandDetails) -> AnyElement<'stat
 /// Edit/Write tools get a per-file session-scoped option instead of the
 /// workspace-level "Always allow in this directory"; other tools keep the
 /// standard set, with the directory label reflecting git-project status.
-pub(crate) fn permission_options(
+pub fn permission_options(
     tool: &ClientToolCall,
     in_git_project: bool,
 ) -> Vec<(&'static str, PermissionResult)> {
@@ -704,7 +697,7 @@ pub(crate) fn permission_options(
 }
 
 /// `Atuin AI would like to <verb>: <target>` plus the options list.
-pub(crate) fn permission_prompt_view(
+pub fn permission_prompt_view(
     tool_call: &TrackedTool,
     in_git_project: bool,
     cursor: usize,
@@ -747,7 +740,7 @@ pub(crate) fn permission_prompt_view(
 /// The /model picker: one row per model, the in-use model marked.
 /// `current` is the session's explicit selection; when unset, the server
 /// default is what's actually in use, so mark that row instead.
-pub(crate) fn model_picker_view(
+pub fn model_picker_view(
     list: &crate::models::ModelList,
     current: Option<&str>,
     cursor: usize,
@@ -784,7 +777,7 @@ const USAGE_BAR_WIDTH: usize = 5;
 /// One-line status bar under the input box: current model on the left;
 /// on the right, once usage crosses the threshold, a small bar chart with
 /// the percentage and time until the period resets.
-pub(crate) fn status_bar_view(
+pub fn status_bar_view(
     model: Option<&str>,
     usage: Option<&crate::usage::UsageSnapshot>,
 ) -> AnyElement<'static> {

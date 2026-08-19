@@ -44,7 +44,7 @@ impl Control for ControlService {
 
         let event = req.event.ok_or_else(|| Status::invalid_argument("event is required"))?;
 
-        let daemon_event = proto_event_to_daemon_event(event)?;
+        let daemon_event = proto_event_to_daemon_event(event);
 
         info!(?daemon_event, "received control event");
         self.handle.emit(daemon_event);
@@ -54,15 +54,15 @@ impl Control for ControlService {
 }
 
 /// Convert a proto event to a daemon event.
-fn proto_event_to_daemon_event(event: Event) -> Result<DaemonEvent, Status> {
+fn proto_event_to_daemon_event(event: Event) -> DaemonEvent {
     match event {
-        Event::HistoryPruned(_) => Ok(DaemonEvent::HistoryPruned),
-        Event::HistoryRebuilt(_) => Ok(DaemonEvent::HistoryRebuilt),
-        Event::HistoryDeleted(e) => Ok(DaemonEvent::HistoryDeleted {
+        Event::HistoryPruned(_) => DaemonEvent::HistoryPruned,
+        Event::HistoryRebuilt(_) => DaemonEvent::HistoryRebuilt,
+        Event::HistoryDeleted(e) => DaemonEvent::HistoryDeleted {
             ids: e.ids.into_iter().map(HistoryId).collect(),
-        }),
-        Event::ForceSync(_) => Ok(DaemonEvent::ForceSync),
-        Event::SettingsReloaded(_) => Ok(DaemonEvent::SettingsReloaded),
-        Event::Shutdown(_) => Ok(DaemonEvent::ShutdownRequested),
+        },
+        Event::ForceSync(_) => DaemonEvent::ForceSync,
+        Event::SettingsReloaded(_) => DaemonEvent::SettingsReloaded,
+        Event::Shutdown(_) => DaemonEvent::ShutdownRequested,
     }
 }

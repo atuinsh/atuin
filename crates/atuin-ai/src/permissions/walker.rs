@@ -11,7 +11,7 @@ struct FoundRuleFile {
     file: RuleFile,
 }
 
-pub(crate) struct PermissionWalker {
+pub struct PermissionWalker {
     start: PathBuf,
     /// Direct path to the global permissions file (e.g. `~/.config/atuin/permissions.ai.toml`).
     global_permissions_file: Option<PathBuf>,

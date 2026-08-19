@@ -382,7 +382,7 @@ impl Database for Postgres {
 
         let mut status = RecordStatus::new();
 
-        for i in res.iter() {
+        for i in &res {
             status.set_raw(HostId(i.0), RecordTag::from(i.1.clone()), i.2 as u64);
         }
 

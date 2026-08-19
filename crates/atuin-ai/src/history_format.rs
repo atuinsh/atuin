@@ -2,7 +2,7 @@ use atuin_client::history::{History, is_known_agent};
 use atuin_common::time::{DurationExt, OffsetDateTimeExt};
 use time::UtcOffset;
 
-pub(crate) fn format_last_command(history: &History, local_offset: UtcOffset) -> String {
+pub fn format_last_command(history: &History, local_offset: UtcOffset) -> String {
     format!(
         "History ID: {} - `{}`\n{}",
         history.id,
@@ -11,7 +11,7 @@ pub(crate) fn format_last_command(history: &History, local_offset: UtcOffset) ->
     )
 }
 
-pub(crate) fn format_history_search_result(
+pub fn format_history_search_result(
     ordinal: usize,
     history: &History,
     local_offset: UtcOffset,

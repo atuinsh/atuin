@@ -22,8 +22,8 @@ pub enum DbError {
 impl From<sqlx::Error> for DbError {
     fn from(error: sqlx::Error) -> Self {
         match error {
-            sqlx::Error::RowNotFound => DbError::NotFound,
-            error => DbError::Other(error.into()),
+            sqlx::Error::RowNotFound => Self::NotFound,
+            error => Self::Other(error.into()),
         }
     }
 }

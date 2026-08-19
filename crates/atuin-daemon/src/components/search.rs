@@ -82,8 +82,10 @@ where
     F: Fn() -> R,
     R: Future<Output: Deref<Target = SearchIndex>>,
 {
-    let settings = handle.settings().await;
-    index().await.rebuild_frecency(&settings.search);
+    {
+        let settings = handle.settings().await;
+        index().await.rebuild_frecency(&settings.search);
+    }
     info!("Frecency map built");
 }
 
@@ -342,7 +344,7 @@ impl SearchSvc for SearchGrpcService {
                 );
 
                 // Convert proto FilterMode + context to IndexFilterMode
-                let index_filter = convert_filter_mode(filter_mode, &proto_context);
+                let index_filter = convert_filter_mode(filter_mode, proto_context.as_ref());
 
                 // An empty list in `SearchRequest::shells` means "all".
                 let shells = OrFilter::from_list(search_req.shells).unwrap_or_default();
@@ -362,7 +364,7 @@ impl SearchSvc for SearchGrpcService {
                 // Perform the search
                 let history_ids: Vec<Vec<u8>> =
                     span!(Level::TRACE, "daemon_search_query", %query, query_id).in_scope(|| {
-                        index.search(&query, index_filter, RESULTS_LIMIT).map(Vec::from).collect()
+                        index.search(&query, &index_filter, RESULTS_LIMIT).map(Vec::from).collect()
                     });
                 drop(index);
 
@@ -404,7 +406,7 @@ impl SearchSvc for SearchGrpcService {
 /// Convert proto FilterMode and context to IndexFilterMode.
 fn convert_filter_mode(
     mode: FilterMode,
-    context: &Option<crate::search::SearchContext>,
+    context: Option<&crate::search::SearchContext>,
 ) -> IndexFilterMode {
     match (mode, context) {
         (FilterMode::Global, _) => IndexFilterMode::Global,

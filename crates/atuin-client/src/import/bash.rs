@@ -70,7 +70,7 @@ impl Importer for Bash {
         // a timestamp near the start of the representable range would underflow
         let mut next_timestamp = first_timestamp.checked_sub(backfill).unwrap_or(first_timestamp);
 
-        for line in lines.into_iter() {
+        for line in lines {
             match line {
                 LineType::NotUtf8 => unreachable!(), // already filtered
                 LineType::Empty => {}                // do nothing

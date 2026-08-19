@@ -42,8 +42,8 @@ impl AuthToken {
     /// Format the token as an Authorization header value
     fn to_header_value(&self) -> String {
         match self {
-            AuthToken::Bearer(token) => format!("Bearer {token}"),
-            AuthToken::Token(token) => format!("Token {token}"),
+            Self::Bearer(token) => format!("Bearer {token}"),
+            Self::Token(token) => format!("Token {token}"),
         }
     }
 }
@@ -271,7 +271,7 @@ impl Client {
     #[instrument(level = "trace", skip_all, fields(connect_timeout, timeout), err)]
     pub fn new(
         sync_addr: impl Into<Arc<Url>>,
-        auth: AuthToken,
+        auth: &AuthToken,
         connect_timeout: u64,
         timeout: u64,
         extra_headers: &HashMap<String, String>,
@@ -294,7 +294,7 @@ impl Client {
             .build()?
             .with_capabilities(caps.clone(), CapMismatch::Continue);
 
-        Ok(Client {
+        Ok(Self {
             sync_addr,
             client,
             lfs_client: reqwest::Client::builder()
@@ -644,7 +644,8 @@ mod tests {
         let addr: Url = server.uri().parse().unwrap();
         let caps = caps_client(&addr, &HashMap::new()).unwrap();
         let client =
-            Client::new(addr, AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps).unwrap();
+            Client::new(addr, &AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
+                .unwrap();
 
         // The client observes the server's advertised packfile cap; a second read stays warm
         // (the mock expects a single capabilities fetch).

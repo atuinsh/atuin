@@ -91,23 +91,23 @@ impl From<RequestedSearchMode> for SearchMode {
 impl SearchMode {
     pub fn as_str(self) -> &'static str {
         match self {
-            SearchMode::Prefix => "PREFIX",
-            SearchMode::FullText => "FULLTXT",
-            SearchMode::Fuzzy => "FUZZY",
-            SearchMode::DaemonFuzzy => "DAEMON",
+            Self::Prefix => "PREFIX",
+            Self::FullText => "FULLTXT",
+            Self::Fuzzy => "FUZZY",
+            Self::DaemonFuzzy => "DAEMON",
         }
     }
 
     pub fn next(self, settings: &Settings) -> Self {
         match self {
-            SearchMode::Prefix => SearchMode::FullText,
+            Self::Prefix => Self::FullText,
             // if the user is using daemon-fuzzy, we go to daemon-fuzzy
-            SearchMode::FullText if settings.active_search_mode() == SearchMode::DaemonFuzzy => {
-                SearchMode::DaemonFuzzy
+            Self::FullText if settings.active_search_mode() == Self::DaemonFuzzy => {
+                Self::DaemonFuzzy
             }
             // otherwise fuzzy.
-            SearchMode::FullText => SearchMode::Fuzzy,
-            SearchMode::Fuzzy | SearchMode::DaemonFuzzy => SearchMode::Prefix,
+            Self::FullText => Self::Fuzzy,
+            Self::Fuzzy | Self::DaemonFuzzy => Self::Prefix,
         }
     }
 }
@@ -136,12 +136,12 @@ pub enum FilterMode {
 impl FilterMode {
     pub fn as_str(&self) -> &'static str {
         match self {
-            FilterMode::Global => "GLOBAL",
-            FilterMode::Host => "HOST",
-            FilterMode::Session => "SESSION",
-            FilterMode::Directory => "DIRECTORY",
-            FilterMode::Workspace => "WORKSPACE",
-            FilterMode::SessionPreload => "SESSION+",
+            Self::Global => "GLOBAL",
+            Self::Host => "HOST",
+            Self::Session => "SESSION",
+            Self::Directory => "DIRECTORY",
+            Self::Workspace => "WORKSPACE",
+            Self::SessionPreload => "SESSION+",
         }
     }
 }
@@ -167,10 +167,10 @@ pub enum Dialect {
 }
 
 impl From<Dialect> for interim::Dialect {
-    fn from(d: Dialect) -> interim::Dialect {
+    fn from(d: Dialect) -> Self {
         match d {
-            Dialect::Uk => interim::Dialect::Uk,
-            Dialect::Us => interim::Dialect::Us,
+            Dialect::Uk => Self::Uk,
+            Dialect::Us => Self::Us,
         }
     }
 }
@@ -228,10 +228,10 @@ pub enum KeymapMode {
 impl KeymapMode {
     pub fn as_str(&self) -> &'static str {
         match self {
-            KeymapMode::Emacs => "EMACS",
-            KeymapMode::VimNormal => "VIMNORMAL",
-            KeymapMode::VimInsert => "VIMINSERT",
-            KeymapMode::Auto => "AUTO",
+            Self::Emacs => "EMACS",
+            Self::VimNormal => "VIMNORMAL",
+            Self::VimInsert => "VIMINSERT",
+            Self::Auto => "AUTO",
         }
     }
 }
@@ -268,13 +268,13 @@ pub enum CursorStyle {
 impl CursorStyle {
     pub fn as_str(&self) -> &'static str {
         match self {
-            CursorStyle::DefaultUserShape => "DEFAULT",
-            CursorStyle::BlinkingBlock => "BLINKBLOCK",
-            CursorStyle::SteadyBlock => "STEADYBLOCK",
-            CursorStyle::BlinkingUnderScore => "BLINKUNDERLINE",
-            CursorStyle::SteadyUnderScore => "STEADYUNDERLINE",
-            CursorStyle::BlinkingBar => "BLINKBAR",
-            CursorStyle::SteadyBar => "STEADYBAR",
+            Self::DefaultUserShape => "DEFAULT",
+            Self::BlinkingBlock => "BLINKBLOCK",
+            Self::SteadyBlock => "STEADYBLOCK",
+            Self::BlinkingUnderScore => "BLINKUNDERLINE",
+            Self::SteadyUnderScore => "STEADYUNDERLINE",
+            Self::BlinkingBar => "BLINKBAR",
+            Self::SteadyBar => "STEADYBAR",
         }
     }
 }
@@ -398,10 +398,10 @@ impl SyncAuth {
     pub fn into_auth_token(self) -> Result<crate::api_client::AuthToken> {
         use crate::api_client::AuthToken;
         match self {
-            SyncAuth::Legacy { token } => Ok(AuthToken::Token(token)),
-            SyncAuth::Hub { token } => Ok(AuthToken::Bearer(token)),
-            SyncAuth::HubViaCli { token } => Ok(AuthToken::Token(token)),
-            SyncAuth::NotLoggedIn { reason } => Err(eyre!(reason)),
+            Self::Legacy { token } => Ok(AuthToken::Token(token)),
+            Self::Hub { token } => Ok(AuthToken::Bearer(token)),
+            Self::HubViaCli { token } => Ok(AuthToken::Token(token)),
+            Self::NotLoggedIn { reason } => Err(eyre!(reason)),
         }
     }
 }
@@ -420,7 +420,7 @@ impl Keys {
     /// The standard default values for all `[keys]` options.
     /// These match the config defaults set in `builder_with_data_dir()`.
     pub fn standard_defaults() -> Self {
-        Keys {
+        Self {
             scroll_exits: true,
             exit_past_line_start: true,
             accept_past_line_end: true,
@@ -809,20 +809,20 @@ impl UiColumnType {
     /// The Command column returns 0 as it expands to fill remaining space.
     pub fn default_width(&self) -> u16 {
         match self {
-            UiColumnType::Duration => 5,  // "814ms"
-            UiColumnType::Time => 9,      // "459ms ago"
-            UiColumnType::Datetime => 16, // "2025-01-22 14:35"
-            UiColumnType::Directory => 20,
-            UiColumnType::Host => 15,
-            UiColumnType::User => 10,
-            UiColumnType::Exit => {
+            Self::Duration => 5,  // "814ms"
+            Self::Time => 9,      // "459ms ago"
+            Self::Datetime => 16, // "2025-01-22 14:35"
+            Self::Directory => 20,
+            Self::Host => 15,
+            Self::User => 10,
+            Self::Exit => {
                 if cfg!(windows) {
                     11 // 32-bit integer on Windows: "-1978335212"
                 } else {
                     3 // Usually a byte on Unix
                 }
             }
-            UiColumnType::Command => 0, // Expands to fill
+            Self::Command => 0, // Expands to fill
         }
     }
 }
@@ -1190,7 +1190,7 @@ impl Settings {
         match parse_duration(self.sync_frequency.as_str()) {
             Ok(d) => {
                 let d = time::Duration::try_from(d)?;
-                Ok(OffsetDateTime::now_utc() - Settings::last_sync().await? >= d)
+                Ok(OffsetDateTime::now_utc() - Self::last_sync().await? >= d)
             }
             Err(e) => Err(eyre!("failed to check sync: {}", e)),
         }
@@ -1332,7 +1332,7 @@ impl Settings {
 
     #[cfg(feature = "check-update")]
     async fn needs_update_check(&self) -> Result<bool> {
-        let last_check = Settings::last_version_check().await?;
+        let last_check = Self::last_version_check().await?;
         let diff = OffsetDateTime::now_utc() - last_check;
 
         // Check a max of once per hour
@@ -1363,7 +1363,7 @@ impl Settings {
         let latest = current;
 
         let meta = Self::meta_store().await?;
-        Settings::save_version_check_time().await?;
+        Self::save_version_check_time().await?;
         meta.save_latest_version(&latest.to_string()).await?;
 
         Ok(latest)
@@ -1412,6 +1412,10 @@ impl Settings {
     }
 
     #[cfg(not(feature = "check-update"))]
+    #[allow(
+        clippy::unused_async,
+        reason = "needs to match the `check-update` version of this method"
+    )]
     pub async fn needs_update(&self) -> Option<Version> {
         None
     }
@@ -1638,7 +1642,7 @@ impl Settings {
         // An unset optional path (`daemon.socket_path`) must stay unset rather
         // than be overridden with an empty one.
         .filter(|(_, value)| !value.is_empty())
-        .filter_map(|(key, value)| match Self::expand_path(value) {
+        .filter_map(|(key, value)| match Self::expand_path(&value) {
             Ok(expanded) => Some((key, expanded)),
             Err(e) => {
                 tracing::warn!("failed to expand path for {key}: {e}");
@@ -1716,7 +1720,7 @@ impl Settings {
                     let full_key = if prefix.is_empty() {
                         k.clone()
                     } else {
-                        format!("{}.{}", prefix, k)
+                        format!("{prefix}.{k}")
                     };
 
                     match &v.kind {
@@ -1740,7 +1744,7 @@ impl Settings {
 
     pub fn new() -> Result<Self> {
         let config = Self::build_config()?;
-        let settings: Settings =
+        let settings: Self =
             config.try_deserialize().map_err(|e| eyre!("failed to deserialize: {}", e))?;
 
         // Validate UI settings
@@ -1752,8 +1756,8 @@ impl Settings {
         Ok(settings)
     }
 
-    fn expand_path(path: String) -> Result<String> {
-        shellexpand::full(&path)
+    fn expand_path(path: &str) -> Result<String> {
+        shellexpand::full(path)
             .map(|p| p.to_string())
             .map_err(|e| eyre!("failed to expand path: {}", e))
     }
@@ -1778,7 +1782,7 @@ impl Settings {
             .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
             .build()?;
 
-        let settings: Settings = config.try_deserialize()?;
+        let settings: Self = config.try_deserialize()?;
         if let Some(dir) = &settings.data_dir {
             shellexpand::full(dir).map_err(ValidationError::DataDir)?;
         }

@@ -6,9 +6,9 @@
 //! The FSM owns the conversation event log and tool lifecycle state.
 //! It never performs IO directly.
 
-pub(crate) mod effects;
-pub(crate) mod events;
-pub(crate) mod tools;
+pub mod effects;
+pub mod events;
+pub mod tools;
 
 #[cfg(test)]
 mod tests;
@@ -31,13 +31,13 @@ use crate::tui::state::ConversationEvent;
 /// These are persisted in the event log, and the transcript view matches on
 /// them to label the failure ("denied", "cancelled"), so they live as
 /// constants rather than inline strings.
-pub(crate) const RESULT_USER_CANCELLED: &str = "Error: user cancelled this operation";
-pub(crate) const RESULT_DENIED_BY_RULES: &str = "Permission denied on the user's system";
-pub(crate) const RESULT_DENIED_BY_USER: &str = "Permission denied by the user";
+pub const RESULT_USER_CANCELLED: &str = "Error: user cancelled this operation";
+pub const RESULT_DENIED_BY_RULES: &str = "Permission denied on the user's system";
+pub const RESULT_DENIED_BY_USER: &str = "Permission denied by the user";
 
 /// The discrete states of the agent FSM.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum AgentState {
+pub enum AgentState {
     /// Waiting for user input.
     Idle {
         confirmation: Option<PendingConfirmation>,
@@ -54,7 +54,7 @@ pub(crate) enum AgentState {
 
 /// Stream connection lifecycle within a Turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum StreamPhase {
+pub enum StreamPhase {
     /// Request sent, awaiting first stream frame.
     Connecting,
     /// Actively receiving streamed response.
@@ -67,7 +67,7 @@ pub(crate) enum StreamPhase {
 
 /// Streaming status indicators from server.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum StreamingStatus {
+pub enum StreamingStatus {
     Processing,
     Searching,
     Thinking,
@@ -88,17 +88,17 @@ impl StreamingStatus {
 impl StreamingStatus {
     pub(crate) fn to_str(&self) -> &str {
         match &self {
-            StreamingStatus::Processing => "processing",
-            StreamingStatus::Searching => "searching",
-            StreamingStatus::Thinking => "thinking",
-            StreamingStatus::WaitingForTools => "waiting for tools",
+            Self::Processing => "processing",
+            Self::Searching => "searching",
+            Self::Thinking => "thinking",
+            Self::WaitingForTools => "waiting for tools",
         }
     }
 }
 
 /// Pending dangerous command confirmation state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PendingConfirmation {
+pub struct PendingConfirmation {
     pub command: String,
     pub timeout_id: u64,
 }
@@ -108,7 +108,7 @@ pub(crate) struct PendingConfirmation {
 /// While `Loading` the input box stays visible (there'd be no focusable
 /// component otherwise); `Ready` swaps it for the selection list.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ModelPicker {
+pub enum ModelPicker {
     Loading,
     Ready(crate::models::ModelList),
 }
@@ -119,7 +119,7 @@ pub(crate) enum ModelPicker {
 
 /// Shared context owned by the FSM.
 #[derive(Debug, Clone)]
-pub(crate) struct AgentContext {
+pub struct AgentContext {
     /// The full conversation event log (source of truth for API + persistence).
     pub events: Vec<ConversationEvent>,
     /// Server-assigned session ID.
@@ -179,7 +179,7 @@ impl AgentContext {
 /// Pure state machine — `handle()` takes an event, mutates internal state,
 /// and returns effects as data for the driver to execute.
 #[derive(Debug, Clone)]
-pub(crate) struct AgentFsm {
+pub struct AgentFsm {
     pub state: AgentState,
     pub ctx: AgentContext,
 }
@@ -555,7 +555,7 @@ impl AgentFsm {
                     outcome,
                     preview,
                 },
-            ) => self.handle_tool_done(tool_id, outcome, preview),
+            ) => self.handle_tool_done(tool_id, &outcome, preview),
 
             (
                 AgentState::Turn { .. },
@@ -918,7 +918,7 @@ impl AgentFsm {
             PermissionResponse::Allowed | PermissionResponse::SessionGranted => {
                 tracked.state = ToolState::Executing;
                 let tool = tracked.tool.clone();
-                self.emit_execute_tool(tool_id, tool)
+                self.emit_execute_tool(tool_id, &tool)
             }
             PermissionResponse::Ask => {
                 tracked.state = ToolState::AwaitingPermission;
@@ -956,12 +956,12 @@ impl AgentFsm {
             PermissionChoice::Allow => {
                 tracked.state = ToolState::Executing;
                 let tool = tracked.tool.clone();
-                self.emit_execute_tool(tool_id, tool)
+                self.emit_execute_tool(tool_id, &tool)
             }
             PermissionChoice::AllowForSession => {
                 tracked.state = ToolState::Executing;
                 let tool = tracked.tool.clone();
-                let mut effects = self.emit_execute_tool(tool_id, tool.clone());
+                let mut effects = self.emit_execute_tool(tool_id, &tool);
                 if let Some(path) = tool.resolved_file_path() {
                     effects.push(Effect::CacheSessionGrant { path });
                 }
@@ -974,7 +974,7 @@ impl AgentFsm {
                     tool: tool.rule_name().to_string(),
                     scope: None, // project file provides the scoping
                 };
-                let mut effects = self.emit_execute_tool(tool_id, tool);
+                let mut effects = self.emit_execute_tool(tool_id, &tool);
                 effects.push(Effect::WritePermissionRule {
                     target: PermissionTarget::Project,
                     rule,
@@ -990,7 +990,7 @@ impl AgentFsm {
                     tool: tool.rule_name().to_string(),
                     scope,
                 };
-                let mut effects = self.emit_execute_tool(tool_id, tool);
+                let mut effects = self.emit_execute_tool(tool_id, &tool);
                 effects.push(Effect::WritePermissionRule {
                     target: PermissionTarget::Global,
                     rule,
@@ -1016,7 +1016,7 @@ impl AgentFsm {
     fn handle_tool_done(
         &mut self,
         tool_id: String,
-        outcome: crate::tools::ToolOutcome,
+        outcome: &crate::tools::ToolOutcome,
         preview: Option<tools::ToolPreviewData>,
     ) -> Vec<Effect> {
         let Some(tracked) = self.ctx.tools.get_mut(&tool_id) else {
@@ -1035,7 +1035,7 @@ impl AgentFsm {
         let reason = tracked.interrupt_reason.take().or({
             if let crate::tools::ToolOutcome::Structured {
                 interrupted: true, ..
-            } = &outcome
+            } = outcome
             {
                 Some(tools::InterruptReason::User)
             } else {
@@ -1059,7 +1059,7 @@ impl AgentFsm {
                 }),
             ) => {
                 *exit_code = final_exit;
-                *interrupted = reason.clone();
+                interrupted.clone_from(&reason);
             }
             (_, Some(mut p)) => {
                 if let tools::ToolPreviewData::Shell {
@@ -1067,7 +1067,7 @@ impl AgentFsm {
                     ..
                 } = p
                 {
-                    *interrupted = reason.clone();
+                    interrupted.clone_from(&reason);
                 }
                 tracked.preview = Some(p);
             }
@@ -1125,14 +1125,14 @@ impl AgentFsm {
     fn emit_execute_tool(
         &mut self,
         tool_id: String,
-        tool: crate::tools::ClientToolCall,
+        tool: &crate::tools::ClientToolCall,
     ) -> Vec<Effect> {
         let mut effects = vec![Effect::ExecuteTool {
             tool_id: tool_id.clone(),
             tool: tool.clone(),
         }];
 
-        if let crate::tools::ClientToolCall::Shell(ref shell) = tool {
+        if let crate::tools::ClientToolCall::Shell(shell) = tool {
             let timeout_id = self.ctx.next_timeout_id();
             self.ctx.tool_timeout_ids.insert(timeout_id, tool_id.clone());
             effects.push(Effect::ScheduleTimeout {

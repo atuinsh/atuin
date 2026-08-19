@@ -46,7 +46,7 @@ pub enum Shell {
     Nu,
 }
 
-pub(crate) struct RuntimeOptions {
+pub struct RuntimeOptions {
     pub(crate) debug_osc133: bool,
     pub(crate) shell: Option<PathBuf>,
     pub(crate) command_capture_sink: Option<CommandCaptureSink>,

@@ -15,7 +15,7 @@ const CONTEXT_FILENAME: &str = "TERMINAL.md";
 
 /// A context file found on disk, before interpolation.
 #[derive(Debug)]
-pub(crate) struct RawContextFile {
+pub struct RawContextFile {
     pub path: PathBuf,
     pub content: String,
 }
@@ -31,7 +31,7 @@ struct FoundFile {
 /// At each ancestor directory, checks two locations:
 /// - `.atuin/TERMINAL.md` (dotdir-scoped)
 /// - `TERMINAL.md` (project root)
-pub(crate) async fn walk(start: &Path, global_path: Option<&Path>) -> Result<Vec<RawContextFile>> {
+pub async fn walk(start: &Path, global_path: Option<&Path>) -> Result<Vec<RawContextFile>> {
     let dirs: Vec<PathBuf> = start.ancestors().map(PathBuf::from).collect();
     let dir_count = dirs.len();
 
@@ -71,7 +71,7 @@ pub(crate) async fn walk(start: &Path, global_path: Option<&Path>) -> Result<Vec
 }
 
 /// The default global context file path (`~/.config/atuin/TERMINAL.md`).
-pub(crate) fn global_context_path() -> PathBuf {
+pub fn global_context_path() -> PathBuf {
     atuin_common::utils::config_dir().join(CONTEXT_FILENAME)
 }
 

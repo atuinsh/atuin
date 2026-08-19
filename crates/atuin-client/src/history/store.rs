@@ -59,7 +59,7 @@ impl HistoryRecord {
         let mut output = vec![];
 
         match self {
-            HistoryRecord::Create(history) => {
+            Self::Create(history) => {
                 // 0 -> a history create
                 encode::write_u8(&mut output, 0)?;
 
@@ -67,7 +67,7 @@ impl HistoryRecord {
 
                 encode::write_bin(&mut output, &bytes.0)?;
             }
-            HistoryRecord::Delete(id) => {
+            Self::Delete(id) => {
                 // 1 -> a history delete
                 encode::write_u8(&mut output, 1)?;
                 encode::write_str(&mut output, id.0.as_str())?;
@@ -97,7 +97,7 @@ impl HistoryRecord {
 
                 let record = History::deserialize(bytes.remaining_slice(), version)?;
 
-                Ok(HistoryRecord::Create(record))
+                Ok(Self::Create(record))
             }
 
             // 1 -> HistoryRecord::Delete
@@ -111,7 +111,7 @@ impl HistoryRecord {
                     );
                 }
 
-                Ok(HistoryRecord::Delete(id.to_string().into()))
+                Ok(Self::Delete(id.to_string().into()))
             }
 
             n => {
@@ -132,7 +132,7 @@ const DECODE_CONCURRENCY: usize = 4;
 
 impl HistoryStore {
     pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
-        HistoryStore {
+        Self {
             store,
             host_id,
             encryption_key,
@@ -229,7 +229,7 @@ impl HistoryStore {
         let mut ret = Vec::with_capacity(records.len());
         let mut skipped = 0;
 
-        for record in records.into_iter() {
+        for record in records {
             let id = record.id;
             let version = record.version.clone();
 
@@ -497,13 +497,13 @@ mod tests {
         (store, host_id, history_store)
     }
 
-    fn assert_record_roundtrip(record: HistoryRecord, expected_bytes: &[u8]) {
+    fn assert_record_roundtrip(record: &HistoryRecord, expected_bytes: &[u8]) {
         let serialized = record.serialize().expect("failed to serialize history");
         assert_eq!(serialized.0, expected_bytes);
 
         let deserialized = HistoryRecord::deserialize(&serialized, Version::LATEST.name())
             .expect("failed to deserialize HistoryRecord");
-        assert_eq!(deserialized, record);
+        assert_eq!(&deserialized, record);
 
         // check the snapshot too
         let deserialized = HistoryRecord::deserialize(
@@ -511,7 +511,7 @@ mod tests {
             Version::LATEST.name(),
         )
         .expect("failed to deserialize HistoryRecord");
-        assert_eq!(deserialized, record);
+        assert_eq!(&deserialized, record);
     }
 
     #[rstest]
@@ -550,7 +550,7 @@ mod tests {
         ]
     )]
     fn test_serialize_deserialize(#[case] record: HistoryRecord, #[case] expected_bytes: Vec<u8>) {
-        assert_record_roundtrip(record, &expected_bytes);
+        assert_record_roundtrip(&record, &expected_bytes);
     }
 
     #[rstest]

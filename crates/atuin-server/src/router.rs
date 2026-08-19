@@ -23,9 +23,9 @@ use crate::settings::Settings;
 
 pub struct UserAuth(pub User);
 
-impl<DB: Send + Sync> FromRequestParts<AppState<DB>> for UserAuth
+impl<DB> FromRequestParts<AppState<DB>> for UserAuth
 where
-    DB: Database,
+    DB: Database + Send + Sync,
 {
     type Rejection = ErrorResponseStatus<'static>;
 
@@ -70,7 +70,7 @@ where
 
         tracing::debug!(user.id = user.id, user.username = %user.username, "request authenticated");
 
-        Ok(UserAuth(user))
+        Ok(Self(user))
     }
 }
 

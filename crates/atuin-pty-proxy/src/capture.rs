@@ -36,7 +36,7 @@ struct CaptureBuffers {
     session_id: Option<String>,
 }
 
-pub(crate) struct CommandCaptureTracker {
+pub struct CommandCaptureTracker {
     parser: Parser,
     zone: Zone,
     buffers: CaptureBuffers,

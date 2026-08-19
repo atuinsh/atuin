@@ -80,7 +80,7 @@ const MAX_SUBSCRIBERS: usize = 8;
 /// that recovery is imperceptible. See [`AcceptFailure`].
 const ACCEPT_RETRY_PAUSE: Duration = Duration::from_millis(50);
 
-pub(crate) enum Msg {
+pub enum Msg {
     Data(Vec<u8>),
     Resize {
         rows: u16,
@@ -120,13 +120,13 @@ type SubscriberId = u64;
 static NEXT_SUBSCRIBER_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Default per-proxy directory: `$TMPDIR/atuin-pty-proxy-<pid>-<8 hex>`.
-pub(crate) fn default_proxy_dir() -> PathBuf {
+pub fn default_proxy_dir() -> PathBuf {
     std::env::temp_dir().join(proxy_dir_name())
 }
 
 /// Fallback when the default directory would overflow `sockaddr_un.sun_path`
 /// (macOS TMPDIR paths can be long): a literal `/tmp` location.
-pub(crate) fn fallback_proxy_dir() -> PathBuf {
+pub fn fallback_proxy_dir() -> PathBuf {
     Path::new("/tmp").join(proxy_dir_name())
 }
 
@@ -143,11 +143,11 @@ fn proxy_dir_name() -> String {
     format!("atuin-pty-proxy-{}-{}", std::process::id(), hex_encode(&suffix))
 }
 
-pub(crate) fn socket_path_in(dir: &Path) -> PathBuf {
+pub fn socket_path_in(dir: &Path) -> PathBuf {
     dir.join("sock")
 }
 
-pub(crate) fn token_path_in(dir: &Path) -> PathBuf {
+pub fn token_path_in(dir: &Path) -> PathBuf {
     dir.join("token")
 }
 
@@ -155,7 +155,7 @@ pub(crate) fn token_path_in(dir: &Path) -> PathBuf {
 /// (macOS) or 108 (Linux) bytes including the NUL; 100 is conservative.
 /// Checked *before* the path is exported to the child's environment, so we
 /// never advertise a socket we cannot bind.
-pub(crate) fn socket_path_fits(path: &Path) -> bool {
+pub fn socket_path_fits(path: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
     path.as_os_str().as_bytes().len() < 100
 }
@@ -165,7 +165,7 @@ pub(crate) fn socket_path_fits(path: &Path) -> bool {
 /// (the sticky bit protects other users' entries in `/tmp`) makes the
 /// `create` below fail with `AlreadyExists`: fail closed — never reuse a
 /// directory this process did not create.
-pub(crate) fn create_proxy_dir(dir: &Path) -> io::Result<()> {
+pub fn create_proxy_dir(dir: &Path) -> io::Result<()> {
     use std::os::unix::fs::DirBuilderExt;
     let _ = std::fs::remove_dir_all(dir);
     std::fs::DirBuilder::new().mode(0o700).create(dir)
@@ -173,7 +173,7 @@ pub(crate) fn create_proxy_dir(dir: &Path) -> io::Result<()> {
 
 /// Write a fresh input token (32 random bytes, hex-encoded to 64 ASCII
 /// characters) to `<dir>/token` with mode 0600 and return its bytes.
-pub(crate) fn write_token(dir: &Path) -> io::Result<Vec<u8>> {
+pub fn write_token(dir: &Path) -> io::Result<Vec<u8>> {
     use std::os::unix::fs::OpenOptionsExt;
 
     let mut raw = [0u8; 32];
@@ -218,14 +218,13 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// each) can be queued ahead of the pump's `Msg::Data` at once — at most
 /// [`MAX_LIVE_CONNECTIONS`] of them, since each connection thread can have
 /// only one outstanding. That cap is what keeps the bound a bound.
-pub(crate) fn spawn_parser_thread(rows: u16, cols: u16, msg_rx: Receiver<Msg>) {
+pub fn spawn_parser_thread(rows: u16, cols: u16, msg_rx: Receiver<Msg>) {
     std::thread::spawn(move || {
         let mut state = ParserState::new(rows, cols);
 
         loop {
-            let first = match msg_rx.recv() {
-                Ok(msg) => msg,
-                Err(_) => break,
+            let Ok(first) = msg_rx.recv() else {
+                break;
             };
 
             state.handle(first);
@@ -473,7 +472,7 @@ impl Drop for ConnectionSlot {
 /// per connection is what makes fd pressure reachable at all, so the two
 /// belong together, along with [`MAX_LIVE_CONNECTIONS`], which stops one
 /// same-uid client from creating that pressure in the first place.
-pub(crate) fn spawn_socket_server(
+pub fn spawn_socket_server(
     listener: UnixListener,
     msg_tx: SyncSender<Msg>,
     token: Vec<u8>,

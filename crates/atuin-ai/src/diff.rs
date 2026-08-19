@@ -11,13 +11,13 @@ const CONTEXT_LINES: u32 = 3;
 
 /// A structured diff preview for a file edit, ready for rendering.
 #[derive(Debug, Clone)]
-pub(crate) struct EditPreview {
+pub struct EditPreview {
     pub hunks: Vec<DiffHunk>,
 }
 
 /// A contiguous group of diff lines (context + changes).
 #[derive(Debug, Clone)]
-pub(crate) struct DiffHunk {
+pub struct DiffHunk {
     /// 1-indexed line number of the first line in this hunk (in the original file).
     pub before_start: u32,
     /// 1-indexed line number of the first line in this hunk (in the new file).
@@ -27,7 +27,7 @@ pub(crate) struct DiffHunk {
 
 /// A single line in a diff hunk.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DiffLine {
+pub enum DiffLine {
     /// Unchanged line (shown for context).
     Context(String),
     /// Line added in the new version.
@@ -48,7 +48,7 @@ impl EditPreview {
 
         let raw_hunks: Vec<_> = diff.hunks().collect();
         if raw_hunks.is_empty() {
-            return EditPreview { hunks: Vec::new() };
+            return Self { hunks: Vec::new() };
         }
 
         // Merge hunks that are within 2*CONTEXT_LINES of each other
@@ -70,7 +70,7 @@ impl EditPreview {
         // Build structured hunks from merged groups
         let hunks = merged_groups.into_iter().map(|group| build_hunk(&group, &input)).collect();
 
-        EditPreview { hunks }
+        Self { hunks }
     }
 
     /// The highest line number (from either file) that will be displayed.
@@ -106,7 +106,7 @@ const WRITE_PREVIEW_LINES: usize = 10;
 /// Shows the first N lines of the written content plus a count of
 /// remaining lines if truncated.
 #[derive(Debug, Clone)]
-pub(crate) struct WritePreview {
+pub struct WritePreview {
     /// First lines of content (up to WRITE_PREVIEW_LINES).
     pub lines: Vec<String>,
     /// Total number of lines in the written file.
@@ -119,7 +119,7 @@ impl WritePreview {
         let all_lines: Vec<&str> = content.lines().collect();
         let total_lines = all_lines.len();
         let lines = all_lines.into_iter().take(WRITE_PREVIEW_LINES).map(String::from).collect();
-        WritePreview { lines, total_lines }
+        Self { lines, total_lines }
     }
 
     /// Number of lines not shown in the preview.

@@ -96,7 +96,7 @@ impl HistoryClient {
 
         let client = HistoryServiceClient::new(channel);
 
-        Ok(HistoryClient { client })
+        Ok(Self { client })
     }
 
     #[cfg(not(unix))]
@@ -219,7 +219,7 @@ impl SearchClient {
 
         let client = SearchServiceClient::new(channel);
 
-        Ok(SearchClient { client })
+        Ok(Self { client })
     }
 
     #[cfg(not(unix))]
@@ -280,19 +280,19 @@ impl SearchClient {
 impl From<FilterMode> for RpcFilterMode {
     fn from(filter_mode: FilterMode) -> Self {
         match filter_mode {
-            FilterMode::Global => RpcFilterMode::Global,
-            FilterMode::Host => RpcFilterMode::Host,
-            FilterMode::Session => RpcFilterMode::Session,
-            FilterMode::Directory => RpcFilterMode::Directory,
-            FilterMode::Workspace => RpcFilterMode::Workspace,
-            FilterMode::SessionPreload => RpcFilterMode::SessionPreload,
+            FilterMode::Global => Self::Global,
+            FilterMode::Host => Self::Host,
+            FilterMode::Session => Self::Session,
+            FilterMode::Directory => Self::Directory,
+            FilterMode::Workspace => Self::Workspace,
+            FilterMode::SessionPreload => Self::SessionPreload,
         }
     }
 }
 
 impl From<Context> for RpcSearchContext {
     fn from(context: Context) -> Self {
-        RpcSearchContext {
+        Self {
             session_id: context.session,
             cwd: context.cwd,
             hostname: context.cmd_origin.into_string(),
@@ -329,7 +329,7 @@ impl SemanticClient {
 
         let client = SemanticServiceClient::new(channel);
 
-        Ok(SemanticClient { client })
+        Ok(Self { client })
     }
 
     #[cfg(not(unix))]
@@ -421,7 +421,7 @@ impl ControlClient {
 
         let client = ControlServiceClient::new(channel);
 
-        Ok(ControlClient { client })
+        Ok(Self { client })
     }
 
     /// Connect to the daemon's control service.

@@ -156,19 +156,19 @@ impl CapClient {
     ) -> Result<Option<C>, ServerSupportError> {
         let _ = self.warmed.clone().wait_for(|&done| done).await;
 
-        let server = self.server.read();
-        let Some(server) = server.as_ref() else {
+        let server_guard = self.server.read();
+        let Some(server) = server_guard.as_ref() else {
             return Err(ServerSupportError::NotFetched);
         };
-        let Some(raw) = server.caps.get(C::static_name()) else {
+        let Some(raw) = server.caps.get(C::static_name()).cloned() else {
             return Ok(None);
         };
 
-        serde_json::from_value(raw.clone()).map(Some).map_err(|source| {
-            ServerSupportError::Malformed {
-                name: C::static_name(),
-                source,
-            }
+        // Release the server lock
+        drop(server_guard);
+        serde_json::from_value(raw).map(Some).map_err(|source| ServerSupportError::Malformed {
+            name: C::static_name(),
+            source,
         })
     }
 

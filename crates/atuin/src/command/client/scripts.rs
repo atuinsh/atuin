@@ -394,7 +394,7 @@ impl Cmd {
         if let Some(script) = script {
             if get.script {
                 // Just print the executable script with shebang
-                print!("{}", build_executable_script(script.script.clone(), script.shebang));
+                print!("{}", build_executable_script(&script.script, &script.shebang));
                 return Ok(());
             }
 

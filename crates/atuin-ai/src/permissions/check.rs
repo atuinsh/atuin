@@ -1,9 +1,7 @@
-use eyre::Result;
-
 use crate::permissions::file::RuleFile;
 use crate::tools::PermissibleToolCall;
 
-pub(crate) struct PermissionRequest<'t> {
+pub struct PermissionRequest<'t> {
     call: &'t (dyn PermissibleToolCall + Send + Sync),
 }
 
@@ -13,13 +11,13 @@ impl<'t> PermissionRequest<'t> {
     }
 }
 
-pub(crate) enum PermissionResponse {
+pub enum PermissionResponse {
     Allowed,
     Denied,
     Ask,
 }
 
-pub(crate) struct PermissionChecker {
+pub struct PermissionChecker {
     files: Vec<RuleFile>,
 }
 
@@ -28,10 +26,7 @@ impl PermissionChecker {
         Self { files }
     }
 
-    pub async fn check<'t>(
-        &self,
-        request: &'t PermissionRequest<'t>,
-    ) -> Result<PermissionResponse> {
+    pub fn check<'t>(&self, request: &'t PermissionRequest<'t>) -> PermissionResponse {
         // Files are in order from deepest to shallowest, so we can stop at the first match.
         // Within a file, the priority is ask -> deny -> allow
         // The first rule type that matches is the one that applies, even if a later rule would contradict it.
@@ -43,7 +38,7 @@ impl PermissionChecker {
                         rule,
                         file.path.display()
                     );
-                    return Ok(PermissionResponse::Ask);
+                    return PermissionResponse::Ask;
                 }
             }
 
@@ -54,16 +49,16 @@ impl PermissionChecker {
                         rule,
                         file.path.display()
                     );
-                    return Ok(PermissionResponse::Denied);
+                    return PermissionResponse::Denied;
                 }
             }
 
             if request.call.all_covered_by(&file.content.permissions.allow) {
                 tracing::debug!("Permission 'ALLOW' by rules in file: {}", file.path.display());
-                return Ok(PermissionResponse::Allowed);
+                return PermissionResponse::Allowed;
             }
         }
 
-        Ok(PermissionResponse::Ask)
+        PermissionResponse::Ask
     }
 }

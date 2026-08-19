@@ -98,8 +98,8 @@ impl Theme {
         name: String,
         parent: Option<String>,
         styles: HashMap<Meaning, ContentStyle>,
-    ) -> Theme {
-        Theme {
+    ) -> Self {
+        Self {
             name,
             parent,
             styles,
@@ -128,10 +128,10 @@ impl Theme {
     // defaults on error, so that a TOML file does not break loading
     pub fn from_foreground_colors(
         name: String,
-        parent: Option<&Theme>,
-        foreground_colors: HashMap<Meaning, String>,
+        parent: Option<&Self>,
+        foreground_colors: &HashMap<Meaning, String>,
         debug: bool,
-    ) -> Theme {
+    ) -> Self {
         let styles: HashMap<Meaning, ContentStyle> = foreground_colors
             .iter()
             .map(|(name, color)| {
@@ -149,16 +149,16 @@ impl Theme {
                 )
             })
             .collect();
-        Theme::from_map(name, parent, &styles)
+        Self::from_map(name, parent, &styles)
     }
 
     // Boil down a meaning-color hashmap into a theme, by taking the defaults
     // for any unknown colors
     fn from_map(
         name: String,
-        parent: Option<&Theme>,
+        parent: Option<&Self>,
         overrides: &HashMap<Meaning, ContentStyle>,
-    ) -> Theme {
+    ) -> Self {
         let styles = match parent {
             Some(theme) => Box::new(theme.styles.clone()),
             None => Box::new(DEFAULT_THEME.styles.clone()),
@@ -169,7 +169,7 @@ impl Theme {
             None => (*name, *color),
         })
         .collect();
-        Theme::new(name, parent.map(|p| p.name.clone()), styles)
+        Self::new(name, parent.map(|p| p.name.clone()), styles)
     }
 }
 
@@ -442,7 +442,7 @@ impl ThemeManager {
             );
         }
 
-        let theme = Theme::from_foreground_colors(theme_config.theme.name, parent, colors, debug);
+        let theme = Theme::from_foreground_colors(theme_config.theme.name, parent, &colors, debug);
         let name = name.to_string();
         self.loaded_themes.insert(name.clone(), theme);
         let theme = self.loaded_themes.get(&name).unwrap();
@@ -668,8 +668,8 @@ mod theme_tests {
         ",
         );
         manager.load_theme_from_config("config_theme", config, 1).unwrap();
-        let captured_logs = logs.get();
         if debug {
+            let captured_logs = logs.get();
             assert_eq!(captured_logs.len(), 2);
             assert_eq!(
                 captured_logs[0].message,
@@ -683,8 +683,9 @@ mod theme_tests {
                  color in palette"
             );
             assert_eq!(captured_logs[1].level, tracing::Level::WARN);
+            drop(captured_logs);
         } else {
-            assert_eq!(captured_logs.len(), 0);
+            assert_eq!(logs.get().len(), 0);
         }
     }
 

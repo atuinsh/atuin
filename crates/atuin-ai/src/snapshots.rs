@@ -25,7 +25,7 @@ use time::OffsetDateTime;
 /// canonical paths, alongside a `manifest.json` that maps filenames
 /// back to original paths with timestamps.
 #[derive(Debug)]
-pub(crate) struct SnapshotStore {
+pub struct SnapshotStore {
     session_dir: PathBuf,
     manifest: SnapshotManifest,
 }
@@ -114,7 +114,7 @@ impl SnapshotStore {
 ///
 /// Example (Unix): `/Users/me/.config/foo.toml` → `Users%2Fme%2F.config%2Ffoo.toml`
 /// Example (Windows): `C:\Users\me\config.toml` → `Users%5Cme%5Cconfig.toml`
-pub(crate) fn sanitize_path(path: &Path) -> String {
+pub fn sanitize_path(path: &Path) -> String {
     let s = path.to_string_lossy();
     // Strip drive letter prefix on Windows (e.g. "C:\")
     let s = s.strip_prefix('/').unwrap_or_else(|| {
@@ -137,7 +137,7 @@ pub(crate) fn sanitize_path(path: &Path) -> String {
 /// Creates a temporary file in the same directory as `target`, writes
 /// content, fsyncs, then renames into place. Preserves permissions from
 /// the original file if it exists.
-pub(crate) fn atomic_write_file(target: &Path, content: &[u8]) -> Result<()> {
+pub fn atomic_write_file(target: &Path, content: &[u8]) -> Result<()> {
     let dir = target.parent().ok_or_else(|| eyre!("target path has no parent directory"))?;
     fs_err::create_dir_all(dir)?;
 

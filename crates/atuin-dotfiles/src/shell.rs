@@ -67,7 +67,7 @@ impl Var {
             "trailing bytes in encoded dotfiles env record, malformed"
         );
 
-        Ok(Var {
+        Ok(Self {
             name: key.to_owned(),
             value: value.to_owned(),
             export,

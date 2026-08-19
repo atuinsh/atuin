@@ -119,7 +119,7 @@ impl<Data> Record<Data> {
 
     /// Apply a transformation to the data, creating a new record with it.
     pub fn map_data<New>(self, f: impl FnOnce(Data) -> New) -> Record<New> {
-        let Record {
+        let Self {
             id,
             idx,
             host,
@@ -196,8 +196,8 @@ impl Extend<(HostId, RecordTag, RecordIdx)> for RecordStatus {
 }
 
 impl RecordStatus {
-    pub fn new() -> RecordStatus {
-        RecordStatus {
+    pub fn new() -> Self {
+        Self {
             hosts: HashMap::new(),
         }
     }
@@ -212,7 +212,7 @@ impl RecordStatus {
     }
 
     pub fn get(&self, host: HostId, tag: &RecordTag) -> Option<RecordIdx> {
-        self.hosts.get(&host).and_then(|v| v.get(tag)).cloned()
+        self.hosts.get(&host).and_then(|v| v.get(tag)).copied()
     }
 
     /// Diff this index with another, likely remote index.
@@ -226,8 +226,8 @@ impl RecordStatus {
         let mut ret = Vec::new();
 
         // First, we check if other has everything that self has
-        for (host, tag_map) in self.hosts.iter() {
-            for (tag, idx) in tag_map.iter() {
+        for (host, tag_map) in &self.hosts {
+            for (tag, idx) in tag_map {
                 match other.get(*host, tag) {
                     // The other store is all up to date! No diff.
                     Some(t) if t.eq(idx) => continue,
@@ -255,8 +255,8 @@ impl RecordStatus {
         // If the other store knows of a tag that we are not yet aware of, then the diff will be missed
 
         // account for that!
-        for (host, tag_map) in other.hosts.iter() {
-            for (tag, idx) in tag_map.iter() {
+        for (host, tag_map) in &other.hosts {
+            for (tag, idx) in tag_map {
                 match self.get(*host, tag) {
                     // If we have this host/tag combo, the comparison and diff will have already happened above
                     Some(_) => continue,
