@@ -14,7 +14,7 @@ pub struct SelectState {
     pub cursor: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum SelectMsg {
     Up,
     Down,

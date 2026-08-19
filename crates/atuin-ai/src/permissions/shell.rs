@@ -371,9 +371,9 @@ pub fn any_subcommand_matches(
 
     if scope.contains('*') {
         // Middle wildcard: `git * amend` — each `*` matches zero or more words
-        return subcommands
-            .iter()
-            .any(|cmd| scope_matches_words(scope, cmd.full.split_whitespace().collect()));
+        return subcommands.iter().any(|cmd| {
+            scope_matches_words(scope, &cmd.full.split_whitespace().collect::<Vec<_>>())
+        });
     }
 
     // No wildcard: exact or prefix depending on context
@@ -391,7 +391,7 @@ pub fn any_subcommand_matches(
 
 /// Match a scope pattern containing `*` wildcards against a sequence of words.
 /// Each `*` matches zero or more words. Consecutive `*` collapse into one.
-fn scope_matches_words(scope: &str, words: Vec<&str>) -> bool {
+fn scope_matches_words(scope: &str, words: &[&str]) -> bool {
     let parts: Vec<&str> = scope.split('*').collect();
     if parts.len() == 1 {
         // No wildcard (shouldn't reach here, but handle it)
@@ -675,10 +675,7 @@ mod adversarial {
         got.sort_unstable();
         let mut want: Vec<&str> = expected.to_vec();
         want.sort_unstable();
-        assert_eq!(
-            got, want,
-            "{kind:?} parse of {code:?}:\n  got:  {got:?}\n  want: {want:?}"
-        );
+        assert_eq!(got, want, "{kind:?} parse of {code:?}:\n  got:  {got:?}\n  want: {want:?}");
     }
 
     #[rstest]

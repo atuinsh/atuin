@@ -481,13 +481,13 @@ mod tests {
         (store, host_id, history_store)
     }
 
-    fn assert_record_roundtrip(record: HistoryRecord, expected_bytes: &[u8]) {
+    fn assert_record_roundtrip(record: &HistoryRecord, expected_bytes: &[u8]) {
         let serialized = record.serialize().expect("failed to serialize history");
         assert_eq!(serialized.0, expected_bytes);
 
         let deserialized = HistoryRecord::deserialize(&serialized, Version::LATEST.name())
             .expect("failed to deserialize HistoryRecord");
-        assert_eq!(deserialized, record);
+        assert_eq!(&deserialized, record);
 
         // check the snapshot too
         let deserialized = HistoryRecord::deserialize(
@@ -495,7 +495,7 @@ mod tests {
             Version::LATEST.name(),
         )
         .expect("failed to deserialize HistoryRecord");
-        assert_eq!(deserialized, record);
+        assert_eq!(&deserialized, record);
     }
 
     #[rstest]
@@ -534,7 +534,7 @@ mod tests {
         ]
     )]
     fn test_serialize_deserialize(#[case] record: HistoryRecord, #[case] expected_bytes: Vec<u8>) {
-        assert_record_roundtrip(record, &expected_bytes);
+        assert_record_roundtrip(&record, &expected_bytes);
     }
 
     #[rstest]

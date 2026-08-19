@@ -75,7 +75,7 @@ pub struct ClientContext {
 impl ClientContext {
     pub(crate) fn detect() -> Self {
         let os = detect_os();
-        let shell = crate::commands::detect_shell();
+        let shell = Some(crate::commands::detect_shell());
         let distro = if os == "linux" {
             Some(detect_linux_distribution())
         } else {

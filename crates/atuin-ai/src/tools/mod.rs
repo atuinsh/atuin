@@ -175,12 +175,8 @@ impl TryFrom<(&str, &serde_json::Value)> for ClientToolCall {
             "edit_file" => Ok(Self::Edit(EditToolCall::try_from(input)?)),
             "write_file" => Ok(Self::Write(WriteToolCall::try_from(input)?)),
             "execute_shell_command" => Ok(Self::Shell(ShellToolCall::try_from(input)?)),
-            "atuin_history" => {
-                Ok(Self::AtuinHistory(AtuinHistoryToolCall::try_from(input)?))
-            }
-            "atuin_output" => {
-                Ok(Self::AtuinOutput(AtuinOutputToolCall::try_from(input)?))
-            }
+            "atuin_history" => Ok(Self::AtuinHistory(AtuinHistoryToolCall::try_from(input)?)),
+            "atuin_output" => Ok(Self::AtuinOutput(AtuinOutputToolCall::try_from(input)?)),
             "load_skill" => Ok(Self::LoadSkill(LoadSkillToolCall::try_from(input)?)),
             _ => Err(eyre::eyre!("Unknown tool call: {name}")),
         }
@@ -224,10 +220,9 @@ impl ClientToolCall {
             Self::Read(tool) => Some(tool.resolved_path()),
             Self::Edit(tool) => Some(tool.resolved_path()),
             Self::Write(tool) => Some(tool.resolved_path()),
-            Self::Shell(_)
-            | Self::AtuinHistory(_)
-            | Self::AtuinOutput(_)
-            | Self::LoadSkill(_) => None,
+            Self::Shell(_) | Self::AtuinHistory(_) | Self::AtuinOutput(_) | Self::LoadSkill(_) => {
+                None
+            }
         }
     }
 }

@@ -101,11 +101,7 @@ impl UserContextCache {
 /// Walks from `start` up to the filesystem root looking for
 /// `.atuin/TERMINAL.md`, then checks `global_path`. Returns contexts
 /// ordered from most general (global/root) to most specific (deepest).
-pub async fn gather(
-    start: &Path,
-    global_path: Option<&Path>,
-    shell: &str,
-) -> Vec<UserContext> {
+pub async fn gather(start: &Path, global_path: Option<&Path>, shell: &str) -> Vec<UserContext> {
     let raw_files = match walker::walk(start, global_path).await {
         Ok(files) => files,
         Err(e) => {

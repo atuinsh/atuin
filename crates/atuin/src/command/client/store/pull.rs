@@ -54,7 +54,7 @@ impl Pull {
                 .map_err(crate::print_error::format_sync_error)?;
         }
 
-        let operations = sync::operations(diff, &store).await?;
+        let operations = sync::operations(diff, &store)?;
 
         let operations = operations
             .into_iter()

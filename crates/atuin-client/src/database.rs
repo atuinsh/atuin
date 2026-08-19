@@ -330,7 +330,7 @@ impl Sqlite {
         Ok(())
     }
 
-    fn row_to_history(row: SqliteRow) -> History {
+    fn row_to_history(row: &SqliteRow) -> History {
         let deleted_at: Option<i64> = row.get("deleted_at");
         let hostname: String = row.get("hostname");
         let author: Option<String> = row.try_get("author").ok().flatten();
@@ -392,7 +392,7 @@ impl Sqlite {
 
         let res = sqlx::query("select * from history where id = ?1")
             .bind(id)
-            .map(Self::row_to_history)
+            .map(|row| Self::row_to_history(&row))
             .fetch_optional(&self.pool)
             .await?;
 
@@ -440,7 +440,7 @@ impl Sqlite {
                 query = query.bind(id.0.as_str());
             }
 
-            let rows = query.map(Self::row_to_history).fetch_all(&self.pool).await?;
+            let rows = query.map(|row| Self::row_to_history(&row)).fetch_all(&self.pool).await?;
             out.extend(rows);
         }
 
@@ -534,7 +534,7 @@ impl Sqlite {
         let query = query.sql().expect("bug in list query. please report");
 
         let res = sqlx::query(sqlx::AssertSqlSafe(query))
-            .map(Self::row_to_history)
+            .map(|row| Self::row_to_history(&row))
             .fetch_all(&self.pool)
             .await?;
 
@@ -550,7 +550,7 @@ impl Sqlite {
         )
         .bind(from.unix_timestamp_nanos() as i64)
         .bind(to.unix_timestamp_nanos() as i64)
-        .map(Self::row_to_history)
+        .map(|row| Self::row_to_history(&row))
         .fetch_all(&self.pool)
         .await?;
 
@@ -561,7 +561,7 @@ impl Sqlite {
         let res = sqlx::query(
             "select * from history where duration >= 0 order by timestamp desc limit 1",
         )
-        .map(Self::row_to_history)
+        .map(|row| Self::row_to_history(&row))
         .fetch_optional(&self.pool)
         .await?;
 
@@ -574,7 +574,7 @@ impl Sqlite {
         )
         .bind(timestamp.unix_timestamp_nanos() as i64)
         .bind(count)
-        .map(Self::row_to_history)
+        .map(|row| Self::row_to_history(&row))
         .fetch_all(&self.pool)
         .await?;
 
@@ -760,7 +760,7 @@ impl Sqlite {
         };
 
         let res = sqlx::query(sqlx::AssertSqlSafe(query))
-            .map(Self::row_to_history)
+            .map(|row| Self::row_to_history(&row))
             .fetch_all(&self.pool)
             .await?;
 
@@ -780,7 +780,7 @@ impl Sqlite {
 
     pub async fn query_history(&self, query: &str) -> Result<Vec<History>> {
         let res = sqlx::query(sqlx::AssertSqlSafe(query))
-            .map(Self::row_to_history)
+            .map(|row| Self::row_to_history(&row))
             .fetch_all(&self.pool)
             .await?;
 
@@ -817,7 +817,7 @@ impl Sqlite {
         let res = sqlx::query(sqlx::AssertSqlSafe(query))
             .map(|row: SqliteRow| {
                 let count: i32 = row.get("count");
-                (Self::row_to_history(row), count)
+                (Self::row_to_history(&row), count)
             })
             .fetch_all(&self.pool)
             .await?;
@@ -931,12 +931,12 @@ impl Sqlite {
             sqlx::query(sqlx::AssertSqlSafe(prev))
                 .bind(h.timestamp.unix_timestamp_nanos() as i64)
                 .bind(&h.session)
-                .map(Self::row_to_history)
+                .map(|row| Self::row_to_history(&row))
                 .fetch_optional(&self.pool),
             sqlx::query(sqlx::AssertSqlSafe(next))
                 .bind(h.timestamp.unix_timestamp_nanos() as i64)
                 .bind(&h.session)
-                .map(Self::row_to_history)
+                .map(|row| Self::row_to_history(&row))
                 .fetch_optional(&self.pool),
             sqlx::query_as(sqlx::AssertSqlSafe(total)).bind(&h.command).fetch_one(&self.pool),
             sqlx::query_as(sqlx::AssertSqlSafe(average)).bind(&h.command).fetch_one(&self.pool),
@@ -974,7 +974,7 @@ impl Sqlite {
         )
         .bind(dupkeep)
         .bind(before)
-        .map(Self::row_to_history)
+        .map(|row| Self::row_to_history(&row))
         .fetch_all(&self.pool)
         .await?;
 
@@ -1147,11 +1147,12 @@ impl<'a> Iterator for QueryTokenizer<'a> {
                 return Some(QueryToken::Or);
             }
 
-            let mut is_inverse = false;
-            if let Some(s) = part.strip_prefix('!') {
+            let is_inverse = if let Some(s) = part.strip_prefix('!') {
                 part = s;
-                is_inverse = true;
-            }
+                true
+            } else {
+                false
+            };
             let token = if let Some(s) = part.strip_prefix('^') {
                 QueryToken::MatchStart(s, is_inverse)
             } else if let Some(s) = part.strip_suffix('$') {
@@ -1200,9 +1201,7 @@ mod test {
     ) -> Result<Vec<History>> {
         let context = new_context();
 
-        let results = db
-            .search(mode, filter_mode, &context, query, Default::default())
-            .await?;
+        let results = db.search(mode, filter_mode, &context, query, Default::default()).await?;
 
         assert_eq!(
             results.len(),
@@ -1227,12 +1226,12 @@ mod test {
         assert_eq!(commands, expected_commands);
     }
 
-    async fn new_history_item(db: &mut Sqlite, cmd: &str) -> Result<()> {
+    async fn new_history_item(db: &Sqlite, cmd: &str) -> Result<()> {
         new_history_item_at(db, cmd, None).await
     }
 
     async fn new_history_item_at(
-        db: &mut Sqlite,
+        db: &Sqlite,
         cmd: &str,
         timestamp: Option<OffsetDateTime>,
     ) -> Result<()> {
@@ -1412,10 +1411,10 @@ mod test {
     }
 
     async fn db_with(commands: &[&str]) -> Sqlite {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
 
         for command in commands {
-            new_history_item(&mut db, command).await.unwrap();
+            new_history_item(&db, command).await.unwrap();
         }
 
         db
@@ -1436,9 +1435,9 @@ mod test {
     ) {
         let t = OffsetDateTime::from_unix_timestamp(1708330400).unwrap();
 
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
-        new_history_item_at(&mut db, "ls /home/ellie", Some(t)).await.unwrap();
-        new_history_item_at(&mut db, "ls /home/frank", None).await.unwrap();
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        new_history_item_at(&db, "ls /home/ellie", Some(t)).await.unwrap();
+        new_history_item_at(&db, "ls /home/frank", None).await.unwrap();
 
         let context = new_context();
 
@@ -1591,11 +1590,10 @@ mod test {
         #[from(empty_db)]
         db: Sqlite,
     ) {
-        let mut db = db;
         // test ordering of results: we should choose the first, even though it happened longer ago.
 
-        new_history_item(&mut db, "curl").await.unwrap();
-        new_history_item(&mut db, "corburl").await.unwrap();
+        new_history_item(&db, "curl").await.unwrap();
+        new_history_item(&db, "corburl").await.unwrap();
 
         // if fuzzy reordering is on, it should come back in a more sensible order
         assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, "curl", vec![
@@ -1640,15 +1638,13 @@ mod test {
     #[case::daemon_fuzzy(SearchMode::DaemonFuzzy)]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_interactive_only_modes_rank_like_fuzzy(#[case] mode: SearchMode) {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
 
         // "corburl" is strictly newer, so an unranked query would return it first and the assertion
         // below would fail.
         let now = OffsetDateTime::now_utc();
-        new_history_item_at(&mut db, "curl", Some(now - time::Duration::seconds(10)))
-            .await
-            .unwrap();
-        new_history_item_at(&mut db, "corburl", Some(now)).await.unwrap();
+        new_history_item_at(&db, "curl", Some(now - time::Duration::seconds(10))).await.unwrap();
+        new_history_item_at(&db, "corburl", Some(now)).await.unwrap();
 
         assert_search_commands(&db, mode.closest_db_mode(), FilterMode::Global, "curl", vec![
             "curl", "corburl",
@@ -1663,7 +1659,7 @@ mod test {
     #[case::trailing_space("screen ")]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_fuzzy_trailing_space(#[case] query: &str) {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
 
         let now = OffsetDateTime::now_utc();
         let irssi = "screen irssi";
@@ -1671,16 +1667,16 @@ mod test {
         let ls_ld = "ls -ld secrets/rendered";
         let screen_r = "screen -r";
 
-        new_history_item_at(&mut db, irssi, Some(now - time::Duration::days(5))).await.unwrap();
-        new_history_item_at(&mut db, ls_l, Some(now - time::Duration::days(4))).await.unwrap();
+        new_history_item_at(&db, irssi, Some(now - time::Duration::days(5))).await.unwrap();
+        new_history_item_at(&db, ls_l, Some(now - time::Duration::days(4))).await.unwrap();
         new_history_item_at(
-            &mut db,
+            &db,
             ls_ld,
             Some(now - time::Duration::days(4) + time::Duration::seconds(1)),
         )
         .await
         .unwrap();
-        new_history_item_at(&mut db, screen_r, Some(now - time::Duration::hours(1))).await.unwrap();
+        new_history_item_at(&db, screen_r, Some(now - time::Duration::hours(1))).await.unwrap();
 
         let results =
             assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, 4).await.unwrap();
@@ -1709,11 +1705,11 @@ mod test {
         #[case] close: &str,
         #[case] far: &str,
     ) {
-        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
 
         let now = OffsetDateTime::now_utc();
-        new_history_item_at(&mut db, close, Some(now - time::Duration::days(5))).await.unwrap();
-        new_history_item_at(&mut db, far, Some(now - time::Duration::hours(1))).await.unwrap();
+        new_history_item_at(&db, close, Some(now - time::Duration::days(5))).await.unwrap();
+        new_history_item_at(&db, far, Some(now - time::Duration::hours(1))).await.unwrap();
 
         assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, vec![
             close, far,
@@ -1740,10 +1736,9 @@ mod test {
         #[from(empty_db)]
         db: Sqlite,
     ) {
-        let mut db = db;
         // Add 5 history items
         for i in 0..5 {
-            new_history_item(&mut db, &format!("command{i}")).await.unwrap();
+            new_history_item(&db, &format!("command{i}")).await.unwrap();
         }
 
         // Create a paged iterator with page_size of 2
@@ -1791,12 +1786,11 @@ mod test {
         #[from(empty_db)]
         db: Sqlite,
     ) {
-        let mut db = db;
         // Add duplicate commands
-        new_history_item(&mut db, "duplicate").await.unwrap();
-        new_history_item(&mut db, "duplicate").await.unwrap();
-        new_history_item(&mut db, "unique1").await.unwrap();
-        new_history_item(&mut db, "unique2").await.unwrap();
+        new_history_item(&db, "duplicate").await.unwrap();
+        new_history_item(&db, "duplicate").await.unwrap();
+        new_history_item(&db, "unique1").await.unwrap();
+        new_history_item(&db, "unique2").await.unwrap();
 
         // Without unique flag - should get all 4
         let mut paged = db.all_paged(10, false, false);
@@ -1816,11 +1810,10 @@ mod test {
         #[from(empty_db)]
         db: Sqlite,
     ) {
-        let mut db = db;
         // Add items
-        new_history_item(&mut db, "keep1").await.unwrap();
-        new_history_item(&mut db, "keep2").await.unwrap();
-        new_history_item(&mut db, "delete_me").await.unwrap();
+        new_history_item(&db, "keep1").await.unwrap();
+        new_history_item(&db, "keep2").await.unwrap();
+        new_history_item(&db, "delete_me").await.unwrap();
 
         // Delete one item
         let all = db
@@ -1875,11 +1868,10 @@ mod test {
         #[from(empty_db)]
         db: Sqlite,
     ) {
-        let mut db = db;
         let context = new_context();
 
         for _i in 1..10000 {
-            new_history_item(&mut db, "i am a duplicated command").await.unwrap();
+            new_history_item(&db, "i am a duplicated command").await.unwrap();
         }
         let start = Instant::now();
         let _results = db

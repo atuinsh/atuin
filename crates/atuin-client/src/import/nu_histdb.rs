@@ -48,8 +48,8 @@ impl From<HistDbEntry> for History {
             .duration(histdb_item.duration_ms)
             .session(format!("{:x}", histdb_item.session_id))
             .cmd_origin(CmdOrigin::new(
-                CmdHost::from(String::from_utf8_lossy(&histdb_item.hostname).into_owned()),
-                CmdUser::default(),
+                &CmdHost::from(String::from_utf8_lossy(&histdb_item.hostname).into_owned()),
+                &CmdUser::default(),
             ));
 
         imported.build().into()

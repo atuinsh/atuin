@@ -581,10 +581,10 @@ impl AiApp {
             use crate::permissions::check::PermissionResponse as Check;
             let response =
                 match crate::permissions::resolver::PermissionResolver::new(working_dir).await {
-                    Ok(resolver) => match resolver.check(&tool).await {
-                        Ok(Check::Allowed) => PermissionResponse::Allowed,
-                        Ok(Check::Denied) => PermissionResponse::Denied,
-                        Ok(Check::Ask) | Err(_) => PermissionResponse::Ask,
+                    Ok(resolver) => match resolver.check(&tool) {
+                        Check::Allowed => PermissionResponse::Allowed,
+                        Check::Denied => PermissionResponse::Denied,
+                        Check::Ask => PermissionResponse::Ask,
                     },
                     Err(_) => PermissionResponse::Ask,
                 };

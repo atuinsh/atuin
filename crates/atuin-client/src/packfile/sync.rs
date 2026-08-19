@@ -142,7 +142,7 @@ mod tests {
     /// A [`Client`] pointed at a wiremock server, authenticated with a dummy token.
     fn mock_client(addr: &url::Url) -> Client {
         let caps = caps_client(addr, &HashMap::new()).unwrap();
-        Client::new(addr.clone(), AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
+        Client::new(addr.clone(), &AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
             .unwrap()
     }
 
@@ -357,7 +357,7 @@ mod tests {
         let caps = caps_client(&sync_addr, &HashMap::new()).unwrap();
         let client = Client::new(
             sync_addr.clone(),
-            AuthToken::Token("t".into()),
+            &AuthToken::Token("t".into()),
             1,
             1,
             &HashMap::new(),
@@ -505,7 +505,7 @@ mod tests {
         let caps = caps_client(&sync_addr, &HashMap::new()).unwrap();
         let client = Client::new(
             sync_addr.clone(),
-            AuthToken::Token("t".into()),
+            &AuthToken::Token("t".into()),
             1,
             1,
             &HashMap::new(),

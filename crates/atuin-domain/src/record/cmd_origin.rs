@@ -86,7 +86,7 @@ pub struct CmdOrigin {
 }
 
 impl CmdOrigin {
-    pub fn new<H: AsRef<str>, U: AsRef<str>>(host: CmdHost<H>, user: CmdUser<U>) -> Self {
+    pub fn new<H: AsRef<str>, U: AsRef<str>>(host: &CmdHost<H>, user: &CmdUser<U>) -> Self {
         let host = host.as_ref();
         let sep = host.len();
         Self {
@@ -96,7 +96,7 @@ impl CmdOrigin {
     }
 
     pub fn probe_current() -> Self {
-        Self::new(CmdHost::probe_current(), CmdUser::probe_current())
+        Self::new(&CmdHost::probe_current(), &CmdUser::probe_current())
     }
 
     /// The host portion, as a zero-copy view.
@@ -135,7 +135,7 @@ impl CmdOrigin {
                 raw: value.into(),
                 sep,
             },
-            None => Self::new(CmdHost::from(value.into()), CmdUser::default()),
+            None => Self::new(&CmdHost::from(value.into()), &CmdUser::default()),
         }
     }
 }

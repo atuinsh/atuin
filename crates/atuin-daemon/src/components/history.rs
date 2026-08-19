@@ -200,15 +200,22 @@ impl HistorySvc for HistoryGrpcService {
                 value => i64::try_from(value).unwrap_or(i64::MAX),
             };
 
-            // Get the handle and store to save the history
-            let handle_guard = self.inner.handle.read().await;
-            let handle = handle_guard
-                .as_ref()
+            // Get the handle and store to save the history, cloning them out so the
+            // component locks are not held for the duration of the save.
+            let handle = self
+                .inner
+                .handle
+                .read()
+                .await
+                .clone()
                 .ok_or_else(|| Status::internal("component not initialized"))?;
 
-            let store_guard = self.inner.history_store.read().await;
-            let history_store = store_guard
-                .as_ref()
+            let history_store = self
+                .inner
+                .history_store
+                .read()
+                .await
+                .clone()
                 .ok_or_else(|| Status::internal("component not initialized"))?;
 
             // Save to database
@@ -275,10 +282,12 @@ impl HistorySvc for HistoryGrpcService {
         &self,
         _request: Request<TailHistoryRequest>,
     ) -> Result<Response<Self::TailHistoryStream>, Status> {
-        let handle_guard = self.inner.handle.read().await;
-        let handle = handle_guard
-            .as_ref()
-            .cloned()
+        let handle = self
+            .inner
+            .handle
+            .read()
+            .await
+            .clone()
             .ok_or_else(|| Status::internal("component not initialized"))?;
 
         let mut rx = handle.subscribe();

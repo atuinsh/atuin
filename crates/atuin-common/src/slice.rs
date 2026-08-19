@@ -75,13 +75,12 @@ where
     // value of `STACK_SIZE`.
     fn eq_with_buffer(self, buffer: &mut [bool]) -> bool {
         let mut seen_heap;
-        let seen;
-        if self.slice.len() <= buffer.len() {
-            seen = &mut buffer[..self.slice.len()];
+        let seen = if self.slice.len() <= buffer.len() {
+            &mut buffer[..self.slice.len()]
         } else {
             seen_heap = vec![false; self.slice.len()];
-            seen = seen_heap.as_mut_slice();
-        }
+            seen_heap.as_mut_slice()
+        };
         for item in self.iter {
             match self.slice.binary_search_by_key(&item, |s| s.borrow()) {
                 Ok(pos) => seen[pos] = true,

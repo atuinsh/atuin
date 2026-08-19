@@ -24,8 +24,8 @@ impl PermissionResolver {
     }
 
     /// Check whether `tool` is allowed, denied, or needs user confirmation.
-    pub async fn check(&self, tool: &ClientToolCall) -> Result<PermissionResponse> {
+    pub fn check(&self, tool: &ClientToolCall) -> PermissionResponse {
         let request = PermissionRequest::new(tool);
-        self.checker.check(&request).await
+        self.checker.check(&request)
     }
 }

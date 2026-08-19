@@ -194,7 +194,7 @@ impl SemanticState {
 
         let record = SemanticCommandRecord { capture, history };
         log_record(&record, "recorded semantic command capture");
-        self.push_record(session_id, history_id, record);
+        self.push_record(&session_id, history_id, record);
         true
     }
 
@@ -260,11 +260,11 @@ impl SemanticState {
 
     fn push_record(
         &mut self,
-        session_id: SessionId,
+        session_id: &SessionId,
         history_id: HistoryId,
         record: SemanticCommandRecord,
     ) {
-        self.touch_session(&session_id);
+        self.touch_session(session_id);
 
         let (capture_id, evicted) = {
             let session = self.sessions.entry(session_id.clone()).or_default();
@@ -279,7 +279,7 @@ impl SemanticState {
 
         for evicted in evicted {
             self.remove_history_index_if_matches(
-                &session_id,
+                session_id,
                 &evicted.history_id,
                 evicted.capture_id,
             );

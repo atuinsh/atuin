@@ -129,7 +129,7 @@ impl Theme {
     pub fn from_foreground_colors(
         name: String,
         parent: Option<&Self>,
-        foreground_colors: HashMap<Meaning, String>,
+        foreground_colors: &HashMap<Meaning, String>,
         debug: bool,
     ) -> Self {
         let styles: HashMap<Meaning, ContentStyle> = foreground_colors
@@ -442,7 +442,7 @@ impl ThemeManager {
             );
         }
 
-        let theme = Theme::from_foreground_colors(theme_config.theme.name, parent, colors, debug);
+        let theme = Theme::from_foreground_colors(theme_config.theme.name, parent, &colors, debug);
         let name = name.to_string();
         self.loaded_themes.insert(name.clone(), theme);
         let theme = self.loaded_themes.get(&name).unwrap();
@@ -668,8 +668,8 @@ mod theme_tests {
         ",
         );
         manager.load_theme_from_config("config_theme", config, 1).unwrap();
-        let captured_logs = logs.get();
         if debug {
+            let captured_logs = logs.get();
             assert_eq!(captured_logs.len(), 2);
             assert_eq!(
                 captured_logs[0].message,
@@ -683,8 +683,9 @@ mod theme_tests {
                  color in palette"
             );
             assert_eq!(captured_logs[1].level, tracing::Level::WARN);
+            drop(captured_logs);
         } else {
-            assert_eq!(captured_logs.len(), 0);
+            assert_eq!(logs.get().len(), 0);
         }
     }
 

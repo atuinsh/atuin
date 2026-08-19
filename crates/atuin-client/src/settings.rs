@@ -1410,6 +1410,10 @@ impl Settings {
     }
 
     #[cfg(not(feature = "check-update"))]
+    #[allow(
+        clippy::unused_async,
+        reason = "needs to match the `check-update` version of this method"
+    )]
     pub async fn needs_update(&self) -> Option<Version> {
         None
     }
@@ -1636,7 +1640,7 @@ impl Settings {
         // An unset optional path (`daemon.socket_path`) must stay unset rather
         // than be overridden with an empty one.
         .filter(|(_, value)| !value.is_empty())
-        .filter_map(|(key, value)| match Self::expand_path(value) {
+        .filter_map(|(key, value)| match Self::expand_path(&value) {
             Ok(expanded) => Some((key, expanded)),
             Err(e) => {
                 tracing::warn!("failed to expand path for {key}: {e}");
@@ -1750,8 +1754,8 @@ impl Settings {
         Ok(settings)
     }
 
-    fn expand_path(path: String) -> Result<String> {
-        shellexpand::full(&path)
+    fn expand_path(path: &str) -> Result<String> {
+        shellexpand::full(path)
             .map(|p| p.to_string())
             .map_err(|e| eyre!("failed to expand path: {}", e))
     }

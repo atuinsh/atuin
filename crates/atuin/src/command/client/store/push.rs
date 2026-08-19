@@ -47,7 +47,7 @@ impl Push {
             )?;
             let client = Client::new(
                 settings.sync_address.clone(),
-                settings.sync_auth_token().await?,
+                &settings.sync_auth_token().await?,
                 settings.network_connect_timeout,
                 settings.network_timeout * 10, // we may be deleting a lot of data... so up the
                 // timeout
@@ -77,7 +77,7 @@ impl Push {
                 .map_err(crate::print_error::format_sync_error)?;
         }
 
-        let operations = sync::operations(diff, &store).await?;
+        let operations = sync::operations(diff, &store)?;
 
         let operations = operations
             .into_iter()

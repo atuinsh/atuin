@@ -141,7 +141,7 @@ pub enum Event {
 }
 
 /// Result of the permission resolver check.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionResponse {
     /// Rule allows this tool call — execute immediately.
     Allowed,
@@ -154,7 +154,7 @@ pub enum PermissionResponse {
 }
 
 /// User's choice from the permission dialog.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionChoice {
     /// Allow this one time.
     Allow,

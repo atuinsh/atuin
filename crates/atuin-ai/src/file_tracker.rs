@@ -62,15 +62,14 @@ impl FileReadTracker {
     ///
     /// Uses mtime as a fast path — only re-hashes if mtime differs.
     pub fn check_freshness(&self, path: &Path) -> Result<FreshnessCheck> {
-        let state = match self.reads.get(path) {
-            Some(s) => s,
-            None => return Ok(FreshnessCheck::NotRead),
+        let Some(state) = self.reads.get(path) else {
+            return Ok(FreshnessCheck::NotRead);
         };
 
         // Stat the file
-        let metadata = match std::fs::metadata(path) {
-            Ok(m) => m,
-            Err(_) => return Ok(FreshnessCheck::Stale), // file deleted or inaccessible
+        // file deleted or inaccessible
+        let Ok(metadata) = std::fs::metadata(path) else {
+            return Ok(FreshnessCheck::Stale);
         };
 
         let current_mtime_ms =

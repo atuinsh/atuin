@@ -38,7 +38,7 @@ impl TestServer {
 
         api_client::Client::new(
             self.address.clone(),
-            api_client::AuthToken::Token(resp.session),
+            &api_client::AuthToken::Token(resp.session),
             5,
             30,
             &Default::default(),
@@ -155,7 +155,7 @@ async fn download(
     }
 
     let (diff, _) = sync::diff(&client, &store).await.unwrap();
-    let operations = sync::operations(diff, &store).await.unwrap();
+    let operations = sync::operations(diff, &store).unwrap();
     let (_, downloaded) =
         sync::sync_remote(&client, operations, &store, page_size, &key()).await.unwrap();
 
@@ -214,7 +214,7 @@ async fn upload(
     }
 
     let (diff, _) = sync::diff(&client, &store).await.unwrap();
-    let operations = sync::operations(diff, &store).await.unwrap();
+    let operations = sync::operations(diff, &store).unwrap();
     let (uploaded, _) =
         sync::sync_remote(&client, operations, &store, page_size, &key()).await.unwrap();
 

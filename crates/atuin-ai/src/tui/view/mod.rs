@@ -77,11 +77,7 @@ pub struct Working<'a> {
 
 /// Render one turn. `first` suppresses the leading blank row; `working`
 /// shows the spinner (and tip) on the last agent turn while streaming.
-pub fn turn_view(
-    turn: &UiTurn,
-    first: bool,
-    working: Option<Working<'_>>,
-) -> AnyElement<'static> {
+pub fn turn_view(turn: &UiTurn, first: bool, working: Option<Working<'_>>) -> AnyElement<'static> {
     match &turn.kind {
         UiTurnKind::User { events } => user_turn_view(events, first),
         UiTurnKind::Agent { events } => agent_turn_view(events, working),
@@ -109,10 +105,7 @@ pub fn user_turn_view(events: &[UiEvent], first_turn: bool) -> AnyElement<'stati
         .any()
 }
 
-pub fn agent_turn_view(
-    events: &[UiEvent],
-    working: Option<Working<'_>>,
-) -> AnyElement<'static> {
+pub fn agent_turn_view(events: &[UiEvent], working: Option<Working<'_>>) -> AnyElement<'static> {
     let label_style = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD)

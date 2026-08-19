@@ -97,13 +97,13 @@ impl Importer for Resh {
 
     async fn load(self, h: &mut impl Loader) -> Result<()> {
         for b in unix_byte_lines(&self.bytes) {
-            let s = match std::str::from_utf8(b) {
-                Ok(s) => s,
-                Err(_) => continue, // we can skip past things like invalid utf8
+            // we can skip past things like invalid utf8
+            let Ok(s) = std::str::from_utf8(b) else {
+                continue;
             };
-            let entry = match serde_json::from_str::<ReshEntry>(s) {
-                Ok(e) => e,
-                Err(_) => continue, // skip invalid json :shrug:
+            // skip invalid json :shrug:
+            let Ok(entry) = serde_json::from_str::<ReshEntry>(s) else {
+                continue;
             };
 
             #[allow(clippy::cast_possible_truncation)]
@@ -144,7 +144,7 @@ impl Importer for Resh {
                 .duration(duration)
                 .exit(entry.exit_code)
                 .cwd(entry.pwd)
-                .cmd_origin(CmdOrigin::new(CmdHost::from(entry.host), CmdUser::default()))
+                .cmd_origin(CmdOrigin::new(&CmdHost::from(entry.host), &CmdUser::default()))
                 // CHECK: should we add uuid here? It's not set in the other importers
                 .session(uuid_v7().as_simple().to_string());
 

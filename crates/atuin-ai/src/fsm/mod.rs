@@ -555,7 +555,7 @@ impl AgentFsm {
                     outcome,
                     preview,
                 },
-            ) => self.handle_tool_done(tool_id, outcome, preview),
+            ) => self.handle_tool_done(tool_id, &outcome, preview),
 
             (
                 AgentState::Turn { .. },
@@ -918,7 +918,7 @@ impl AgentFsm {
             PermissionResponse::Allowed | PermissionResponse::SessionGranted => {
                 tracked.state = ToolState::Executing;
                 let tool = tracked.tool.clone();
-                self.emit_execute_tool(tool_id, tool)
+                self.emit_execute_tool(tool_id, &tool)
             }
             PermissionResponse::Ask => {
                 tracked.state = ToolState::AwaitingPermission;
@@ -956,12 +956,12 @@ impl AgentFsm {
             PermissionChoice::Allow => {
                 tracked.state = ToolState::Executing;
                 let tool = tracked.tool.clone();
-                self.emit_execute_tool(tool_id, tool)
+                self.emit_execute_tool(tool_id, &tool)
             }
             PermissionChoice::AllowForSession => {
                 tracked.state = ToolState::Executing;
                 let tool = tracked.tool.clone();
-                let mut effects = self.emit_execute_tool(tool_id, tool.clone());
+                let mut effects = self.emit_execute_tool(tool_id, &tool);
                 if let Some(path) = tool.resolved_file_path() {
                     effects.push(Effect::CacheSessionGrant { path });
                 }
@@ -974,7 +974,7 @@ impl AgentFsm {
                     tool: tool.rule_name().to_string(),
                     scope: None, // project file provides the scoping
                 };
-                let mut effects = self.emit_execute_tool(tool_id, tool);
+                let mut effects = self.emit_execute_tool(tool_id, &tool);
                 effects.push(Effect::WritePermissionRule {
                     target: PermissionTarget::Project,
                     rule,
@@ -990,7 +990,7 @@ impl AgentFsm {
                     tool: tool.rule_name().to_string(),
                     scope,
                 };
-                let mut effects = self.emit_execute_tool(tool_id, tool);
+                let mut effects = self.emit_execute_tool(tool_id, &tool);
                 effects.push(Effect::WritePermissionRule {
                     target: PermissionTarget::Global,
                     rule,
@@ -1016,7 +1016,7 @@ impl AgentFsm {
     fn handle_tool_done(
         &mut self,
         tool_id: String,
-        outcome: crate::tools::ToolOutcome,
+        outcome: &crate::tools::ToolOutcome,
         preview: Option<tools::ToolPreviewData>,
     ) -> Vec<Effect> {
         let Some(tracked) = self.ctx.tools.get_mut(&tool_id) else {
@@ -1035,7 +1035,7 @@ impl AgentFsm {
         let reason = tracked.interrupt_reason.take().or({
             if let crate::tools::ToolOutcome::Structured {
                 interrupted: true, ..
-            } = &outcome
+            } = outcome
             {
                 Some(tools::InterruptReason::User)
             } else {
@@ -1059,7 +1059,7 @@ impl AgentFsm {
                 }),
             ) => {
                 *exit_code = final_exit;
-                *interrupted = reason.clone();
+                interrupted.clone_from(&reason);
             }
             (_, Some(mut p)) => {
                 if let tools::ToolPreviewData::Shell {
@@ -1067,7 +1067,7 @@ impl AgentFsm {
                     ..
                 } = p
                 {
-                    *interrupted = reason.clone();
+                    interrupted.clone_from(&reason);
                 }
                 tracked.preview = Some(p);
             }
@@ -1125,14 +1125,14 @@ impl AgentFsm {
     fn emit_execute_tool(
         &mut self,
         tool_id: String,
-        tool: crate::tools::ClientToolCall,
+        tool: &crate::tools::ClientToolCall,
     ) -> Vec<Effect> {
         let mut effects = vec![Effect::ExecuteTool {
             tool_id: tool_id.clone(),
             tool: tool.clone(),
         }];
 
-        if let crate::tools::ClientToolCall::Shell(ref shell) = tool {
+        if let crate::tools::ClientToolCall::Shell(shell) = tool {
             let timeout_id = self.ctx.next_timeout_id();
             self.ctx.tool_timeout_ids.insert(timeout_id, tool_id.clone());
             effects.push(Effect::ScheduleTimeout {

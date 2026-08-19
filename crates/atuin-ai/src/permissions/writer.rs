@@ -21,11 +21,7 @@ pub enum RuleDisposition {
 /// **Not concurrent-safe.** The read-modify-write cycle is not atomic. In the
 /// current UI this is fine — the Select widget serializes permission decisions —
 /// but callers should not invoke this concurrently for the same file.
-pub async fn write_rule(
-    file_path: &Path,
-    rule: &Rule,
-    disposition: RuleDisposition,
-) -> Result<()> {
+pub async fn write_rule(file_path: &Path, rule: &Rule, disposition: RuleDisposition) -> Result<()> {
     let content = if tokio::fs::try_exists(file_path).await.unwrap_or(false) {
         tokio::fs::read_to_string(file_path).await?
     } else {

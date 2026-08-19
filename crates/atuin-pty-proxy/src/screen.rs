@@ -223,9 +223,8 @@ pub fn spawn_parser_thread(rows: u16, cols: u16, msg_rx: Receiver<Msg>) {
         let mut state = ParserState::new(rows, cols);
 
         loop {
-            let first = match msg_rx.recv() {
-                Ok(msg) => msg,
-                Err(_) => break,
+            let Ok(first) = msg_rx.recv() else {
+                break;
             };
 
             state.handle(first);

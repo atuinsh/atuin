@@ -147,6 +147,7 @@ async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>
                 // Skip periodic ticks if auto_sync is disabled AND we're not retrying
                 // a previous failure. Retries must continue regardless of auto_sync.
                 if !settings.auto_sync && sync_state == SyncState::Idle {
+                    drop(settings);
                     tracing::debug!("auto_sync disabled, skipping periodic sync tick");
                     continue;
                 }

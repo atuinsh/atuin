@@ -50,12 +50,12 @@ impl Shell {
         let shell = parent.name().trim().to_lowercase();
         let shell = shell.strip_prefix('-').unwrap_or(&shell);
 
-        Self::from_string(shell.to_string())
+        Self::from_string(shell)
     }
 
     pub fn from_env() -> Self {
         std::env::var("ATUIN_SHELL")
-            .map_or(Self::Unknown, |shell| Self::from_string(shell.trim().to_lowercase()))
+            .map_or(Self::Unknown, |shell| Self::from_string(&shell.trim().to_lowercase()))
     }
 
     pub fn config_file(&self) -> Option<std::path::PathBuf> {
@@ -99,11 +99,11 @@ impl Shell {
             return Err(ShellError::NotSupported);
         }
 
-        Ok(Self::from_string(shell.unwrap().to_string_lossy().to_string()))
+        Ok(Self::from_string(&shell.unwrap().to_string_lossy()))
     }
 
-    pub fn from_string(name: String) -> Self {
-        match name.as_str() {
+    pub fn from_string(name: &str) -> Self {
+        match name {
             "bash" => Self::Bash,
             "fish" => Self::Fish,
             "zsh" => Self::Zsh,

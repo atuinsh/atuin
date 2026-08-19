@@ -154,7 +154,7 @@ impl Importer for ZshHistDb {
             let hostname = String::from_utf8(entry.host)
                 .map(CmdHost::from)
                 .unwrap_or_else(|_e| CmdHost::probe_current());
-            let cmd_origin = CmdOrigin::new(hostname, self.username.clone());
+            let cmd_origin = CmdOrigin::new(&hostname, &self.username);
             let session = session_map.entry(entry.session).or_insert_with(uuid_v7);
 
             let imported = History::import()
