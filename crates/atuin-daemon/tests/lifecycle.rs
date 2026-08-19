@@ -4,7 +4,6 @@
 //! connects a client, and exercises the daemon RPCs.
 
 #[cfg(unix)]
-#[allow(deprecated)]
 mod unix {
     use std::time::Duration;
 
@@ -129,6 +128,7 @@ mod unix {
 
         let (mut client, _handle, _tmp) = daemon.await;
 
+        #[allow(deprecated)]
         let history = History::daemon()
             .timestamp(time::OffsetDateTime::now_utc())
             .command("echo hello".to_string())

@@ -310,7 +310,6 @@ pub fn draw_full(
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use atuin_client::history::{History, HistoryId, HistoryStats};
     use atuin_client::theme::ThemeManager;
@@ -324,6 +323,7 @@ mod tests {
 
     #[fixture]
     fn mock_history_stats() -> (History, HistoryStats) {
+        #[allow(deprecated)]
         let history = History {
             id: HistoryId::from("test1".to_string()),
             timestamp: OffsetDateTime::now_utc(),
@@ -338,6 +338,7 @@ mod tests {
             deleted_at: None,
             shell: None,
         };
+        #[allow(deprecated)]
         let next = History {
             id: HistoryId::from("test2".to_string()),
             timestamp: OffsetDateTime::now_utc(),
@@ -352,6 +353,7 @@ mod tests {
             deleted_at: None,
             shell: Some("bash".into()),
         };
+        #[allow(deprecated)]
         let prev = History {
             id: HistoryId::from("test3".to_string()),
             timestamp: OffsetDateTime::now_utc(),

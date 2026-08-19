@@ -6,7 +6,6 @@
 //! rebuild through the actual client.
 
 #[cfg(unix)]
-#[allow(deprecated)]
 mod unix {
     use std::time::Duration;
 
@@ -34,6 +33,7 @@ mod unix {
         session: &str,
         shell: Option<&str>,
     ) -> History {
+        #[allow(deprecated)]
         let mut history: History = History::import()
             .timestamp(time::OffsetDateTime::now_utc())
             .command(command)
@@ -130,6 +130,7 @@ mod unix {
     }
 
     fn context(cwd: &str, hostname: &str, session: &str, git_root: Option<&str>) -> Context {
+        #[allow(deprecated)]
         Context {
             session: session.to_string(),
             cwd: cwd.to_string(),
@@ -170,6 +171,7 @@ mod unix {
     }
 
     fn ids_of(entries: &[&History]) -> Vec<String> {
+        #[allow(deprecated)]
         let mut ids: Vec<String> =
             entries.iter().map(|h| Uuid::parse_str(&h.id.0).unwrap().to_string()).collect();
         ids.sort();

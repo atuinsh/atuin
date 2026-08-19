@@ -275,7 +275,6 @@ impl History {
         Ok(DecryptedData(output.into_vec()))
     }
 
-    #[allow(deprecated)]
     pub fn deserialize(bytes: &[u8], version: &str) -> Result<History> {
         let Some(version) = Version::from_name(version) else {
             bail!("unknown version {version:?}");
@@ -302,6 +301,7 @@ impl History {
         let command = decode::read_string(&mut bytes)?;
         let cwd = decode::read_string(&mut bytes)?;
         let session = decode::read_string(&mut bytes)?;
+        #[allow(deprecated)]
         let cmd_origin = CmdOrigin::parse_fuzzy(decode::read_string(&mut bytes)?);
         let deleted_at = decode::read_optional(&mut bytes, decode::read_u64)?;
 

@@ -641,7 +641,6 @@ struct TailJsonHistory<'a> {
 
 #[cfg(feature = "daemon")]
 impl TailEvent {
-    #[allow(deprecated)]
     fn from_proto(reply: TailHistoryReply) -> Result<Self> {
         let history = reply
             .history
@@ -655,6 +654,7 @@ impl TailEvent {
             HistoryEventKind::Unspecified => bail!("daemon sent an unspecified history tail event"),
         };
 
+        #[allow(deprecated)]
         Ok(Self {
             kind,
             history: History {

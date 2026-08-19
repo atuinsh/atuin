@@ -1167,7 +1167,6 @@ impl<'a> Iterator for QueryTokenizer<'a> {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod test {
     use std::time::{Duration, Instant};
 
@@ -1249,6 +1248,7 @@ mod test {
         captured.exit = 0;
         captured.duration = 1;
         captured.session = "beep boop".to_string();
+        #[allow(deprecated)]
         captured.cmd_origin = CmdOrigin::parse_fuzzy("booop");
 
         db.save(&captured).await
@@ -1265,6 +1265,7 @@ mod test {
         captured.exit = 0;
         captured.duration = 1;
         captured.session = "beep boop".to_string();
+        #[allow(deprecated)]
         captured.cmd_origin = CmdOrigin::parse_fuzzy("booop");
 
         db.save(&captured).await.unwrap();
@@ -1281,6 +1282,7 @@ mod test {
         #[from(empty_db)]
         db: Sqlite,
     ) {
+        #[allow(deprecated)]
         let context = Context {
             cmd_origin: CmdOrigin::parse_fuzzy("booop"),
             session: "beep boop".to_string(),
@@ -1298,6 +1300,7 @@ mod test {
             .build()
             .into();
         past.session = "beep boop".to_string();
+        #[allow(deprecated)]
         past.cmd_origin = CmdOrigin::parse_fuzzy("booop");
         db.save(&past).await.unwrap();
         save_history_item(&db, "ls /home/frank").await;
@@ -1816,6 +1819,7 @@ mod test {
         new_history_item(&mut db, "delete_me").await.unwrap();
 
         // Delete one item
+        #[allow(deprecated)]
         let all = db
             .list(
                 [],
@@ -1919,6 +1923,7 @@ mod test {
             db.save(&history).await.unwrap();
         }
 
+        #[allow(deprecated)]
         let context = Context {
             cmd_origin: CmdOrigin::parse_fuzzy("hostname"),
             session: "session".into(),
@@ -1971,6 +1976,7 @@ mod test {
             db.save(&history).await.unwrap();
         }
 
+        #[allow(deprecated)]
         let context = Context {
             cmd_origin: CmdOrigin::parse_fuzzy("hostname"),
             session: "session".into(),
