@@ -24,3 +24,6 @@ async-trait = { workspace = true }
 uuid = { workspace = true }
 metrics = "0.24"
 rand.workspace = true
+
+[lints]
+workspace = true

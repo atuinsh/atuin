@@ -29,3 +29,6 @@ rstest = { workspace = true }
 [[bench]]
 name = "smart_sort"
 harness = false
+
+[lints]
+workspace = true
