@@ -88,7 +88,7 @@ pub enum Version {
 
 impl Version {
     pub const VARIANTS: [Self; 3] = [Self::Zero, Self::One, Self::Two];
-    pub const LATEST: Self = Version::Two;
+    pub const LATEST: Self = Self::Two;
 
     pub fn from_name(s: &str) -> Option<Self> {
         match s {
@@ -275,7 +275,7 @@ impl History {
         Ok(DecryptedData(output.into_vec()))
     }
 
-    pub fn deserialize(bytes: &[u8], version: &str) -> Result<History> {
+    pub fn deserialize(bytes: &[u8], version: &str) -> Result<Self> {
         let Some(version) = Version::from_name(version) else {
             bail!("unknown version {version:?}");
         };
@@ -331,7 +331,7 @@ impl History {
             bail!("trailing bytes in encoded history. malformed");
         }
 
-        Ok(History {
+        Ok(Self {
             id: id.into(),
             timestamp: OffsetDateTime::from_unix_nanos_u64(timestamp),
             duration,

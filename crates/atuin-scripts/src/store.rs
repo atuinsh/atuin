@@ -19,7 +19,7 @@ pub struct ScriptStore {
 
 impl ScriptStore {
     pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
-        ScriptStore {
+        Self {
             store,
             host_id,
             encryption_key,
@@ -68,7 +68,7 @@ impl ScriptStore {
         let mut ret = Vec::with_capacity(records.len());
         let mut skipped = 0;
 
-        for record in records.into_iter() {
+        for record in records {
             // Skip records we can't decrypt or decode, rather than failing the entire build.
             let script = match record.version {
                 RecordVersion::V0 => record.decrypt(&self.encryption_key).and_then(|decrypted| {

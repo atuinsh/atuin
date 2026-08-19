@@ -13,7 +13,7 @@ use crate::usage::UsageSnapshot;
 // non-test code, since they're part of the schema and used in tests.
 #[derive(Debug)]
 #[allow(dead_code)]
-pub(crate) struct StoredSession {
+pub struct StoredSession {
     pub id: String,
     pub head_id: Option<String>,
     pub server_session_id: Option<String>,
@@ -26,7 +26,7 @@ pub(crate) struct StoredSession {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-pub(crate) struct StoredEvent {
+pub struct StoredEvent {
     pub id: String,
     pub session_id: String,
     pub parent_id: Option<String>,
@@ -43,7 +43,7 @@ type SessionRow =
 /// Row type returned by event queries.
 type EventRow = (String, String, Option<String>, String, String, String, i64);
 
-pub(crate) struct AiSessionStore {
+pub struct AiSessionStore {
     pool: SqlitePool,
 }
 

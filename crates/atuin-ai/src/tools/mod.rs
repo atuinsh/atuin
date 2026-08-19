@@ -14,7 +14,7 @@ use uuid::Uuid;
 const DEFAULT_FILE_READ_LINES: u64 = 100;
 const MAX_FILE_READ_LINES: u64 = 1000;
 
-pub(crate) mod descriptor;
+pub mod descriptor;
 
 use crate::permissions::rule::Rule;
 
@@ -62,7 +62,7 @@ fn path_matches_scope(path: &Path, scope: &str) -> bool {
 
 /// Result of executing a client-side tool.
 #[derive(Debug, Clone)]
-pub(crate) enum ToolOutcome {
+pub enum ToolOutcome {
     /// Simple success with a text result (used by Read, AtuinHistory).
     Success(String),
     /// Error with a message.
@@ -87,9 +87,9 @@ impl ToolOutcome {
         interrupt_reason: Option<&crate::fsm::tools::InterruptReason>,
     ) -> String {
         match self {
-            ToolOutcome::Success(s) => s.clone(),
-            ToolOutcome::Error(e) => e.clone(),
-            ToolOutcome::Structured {
+            Self::Success(s) => s.clone(),
+            Self::Error(e) => e.clone(),
+            Self::Structured {
                 stdout,
                 stderr,
                 exit_code,
@@ -135,8 +135,8 @@ impl ToolOutcome {
     /// Whether this outcome represents an error.
     pub fn is_error(&self) -> bool {
         match self {
-            ToolOutcome::Error(_) => true,
-            ToolOutcome::Structured {
+            Self::Error(_) => true,
+            Self::Structured {
                 exit_code: Some(code),
                 ..
             } if *code != 0 => true,
@@ -147,7 +147,7 @@ impl ToolOutcome {
 
 /// Cached VT100 preview data for a shell tool call.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ToolPreview {
+pub struct ToolPreview {
     pub lines: Vec<String>,
     pub exit_code: Option<i32>,
     pub interrupted: Option<crate::fsm::tools::InterruptReason>,
@@ -156,7 +156,7 @@ pub(crate) struct ToolPreview {
 /// A tool call from the server, with parsed input parameters.
 #[derive(Debug, Clone)]
 #[enum_dispatch(PermissibleToolCall)]
-pub(crate) enum ClientToolCall {
+pub enum ClientToolCall {
     Read(ReadToolCall),
     Edit(EditToolCall),
     Write(WriteToolCall),
@@ -171,17 +171,17 @@ impl TryFrom<(&str, &serde_json::Value)> for ClientToolCall {
 
     fn try_from((name, input): (&str, &serde_json::Value)) -> Result<Self, Self::Error> {
         match name {
-            "read_file" => Ok(ClientToolCall::Read(ReadToolCall::try_from(input)?)),
-            "edit_file" => Ok(ClientToolCall::Edit(EditToolCall::try_from(input)?)),
-            "write_file" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
-            "execute_shell_command" => Ok(ClientToolCall::Shell(ShellToolCall::try_from(input)?)),
+            "read_file" => Ok(Self::Read(ReadToolCall::try_from(input)?)),
+            "edit_file" => Ok(Self::Edit(EditToolCall::try_from(input)?)),
+            "write_file" => Ok(Self::Write(WriteToolCall::try_from(input)?)),
+            "execute_shell_command" => Ok(Self::Shell(ShellToolCall::try_from(input)?)),
             "atuin_history" => {
-                Ok(ClientToolCall::AtuinHistory(AtuinHistoryToolCall::try_from(input)?))
+                Ok(Self::AtuinHistory(AtuinHistoryToolCall::try_from(input)?))
             }
             "atuin_output" => {
-                Ok(ClientToolCall::AtuinOutput(AtuinOutputToolCall::try_from(input)?))
+                Ok(Self::AtuinOutput(AtuinOutputToolCall::try_from(input)?))
             }
-            "load_skill" => Ok(ClientToolCall::LoadSkill(LoadSkillToolCall::try_from(input)?)),
+            "load_skill" => Ok(Self::LoadSkill(LoadSkillToolCall::try_from(input)?)),
             _ => Err(eyre::eyre!("Unknown tool call: {name}")),
         }
     }
@@ -190,13 +190,13 @@ impl TryFrom<(&str, &serde_json::Value)> for ClientToolCall {
 impl ClientToolCall {
     pub(crate) fn descriptor(&self) -> &'static descriptor::ToolDescriptor {
         match self {
-            ClientToolCall::Read(_) => descriptor::READ,
-            ClientToolCall::Edit(_) => descriptor::EDIT,
-            ClientToolCall::Write(_) => descriptor::WRITE,
-            ClientToolCall::Shell(_) => descriptor::SHELL,
-            ClientToolCall::AtuinHistory(_) => descriptor::ATUIN_HISTORY,
-            ClientToolCall::AtuinOutput(_) => descriptor::ATUIN_OUTPUT,
-            ClientToolCall::LoadSkill(_) => descriptor::LOAD_SKILL,
+            Self::Read(_) => descriptor::READ,
+            Self::Edit(_) => descriptor::EDIT,
+            Self::Write(_) => descriptor::WRITE,
+            Self::Shell(_) => descriptor::SHELL,
+            Self::AtuinHistory(_) => descriptor::ATUIN_HISTORY,
+            Self::AtuinOutput(_) => descriptor::ATUIN_OUTPUT,
+            Self::LoadSkill(_) => descriptor::LOAD_SKILL,
         }
     }
 
@@ -207,13 +207,13 @@ impl ClientToolCall {
     /// implies Read (checked in `ReadToolCall::matches_rule`).
     pub(crate) fn rule_name(&self) -> &'static str {
         match self {
-            ClientToolCall::Read(_) => "Read",
-            ClientToolCall::Edit(_) => "Write",
-            ClientToolCall::Write(_) => "Write",
-            ClientToolCall::Shell(_) => "Shell",
-            ClientToolCall::AtuinHistory(_) => "AtuinHistory",
-            ClientToolCall::AtuinOutput(_) => "AtuinOutput",
-            ClientToolCall::LoadSkill(_) => "LoadSkill",
+            Self::Read(_) => "Read",
+            Self::Edit(_) => "Write",
+            Self::Write(_) => "Write",
+            Self::Shell(_) => "Shell",
+            Self::AtuinHistory(_) => "AtuinHistory",
+            Self::AtuinOutput(_) => "AtuinOutput",
+            Self::LoadSkill(_) => "LoadSkill",
         }
     }
 
@@ -221,20 +221,20 @@ impl ClientToolCall {
     /// Used to build scoped permission rules like `Write(/abs/path/to/file)`.
     pub(crate) fn resolved_file_path(&self) -> Option<PathBuf> {
         match self {
-            ClientToolCall::Read(tool) => Some(tool.resolved_path()),
-            ClientToolCall::Edit(tool) => Some(tool.resolved_path()),
-            ClientToolCall::Write(tool) => Some(tool.resolved_path()),
-            ClientToolCall::Shell(_)
-            | ClientToolCall::AtuinHistory(_)
-            | ClientToolCall::AtuinOutput(_)
-            | ClientToolCall::LoadSkill(_) => None,
+            Self::Read(tool) => Some(tool.resolved_path()),
+            Self::Edit(tool) => Some(tool.resolved_path()),
+            Self::Write(tool) => Some(tool.resolved_path()),
+            Self::Shell(_)
+            | Self::AtuinHistory(_)
+            | Self::AtuinOutput(_)
+            | Self::LoadSkill(_) => None,
         }
     }
 }
 
 /// A trait for tool calls that can be checked against permission rules.
 #[enum_dispatch]
-pub(crate) trait PermissibleToolCall {
+pub trait PermissibleToolCall {
     /// Checks if this tool call matches the given permission rule.
     fn matches_rule(&self, rule: &Rule) -> bool;
 
@@ -255,7 +255,7 @@ pub(crate) trait PermissibleToolCall {
 /// Returns true if this tool call should bypass the permission system entirely.
 impl ClientToolCall {
     pub(crate) fn is_auto_approved(&self) -> bool {
-        matches!(self, ClientToolCall::LoadSkill(_))
+        matches!(self, Self::LoadSkill(_))
     }
 }
 
@@ -268,7 +268,7 @@ fn expand_path(path: &str) -> PathBuf {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ReadToolCall {
+pub struct ReadToolCall {
     pub path: PathBuf,
     pub offset: u64,
     pub limit: u64,
@@ -288,7 +288,7 @@ impl TryFrom<&serde_json::Value> for ReadToolCall {
             .unwrap_or(DEFAULT_FILE_READ_LINES)
             .min(MAX_FILE_READ_LINES);
 
-        Ok(ReadToolCall {
+        Ok(Self {
             path: expand_path(path),
             offset,
             limit,
@@ -391,7 +391,7 @@ impl PermissibleToolCall for ReadToolCall {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct EditToolCall {
+pub struct EditToolCall {
     pub path: PathBuf,
     pub old_string: String,
     pub new_string: String,
@@ -419,7 +419,7 @@ impl TryFrom<&serde_json::Value> for EditToolCall {
 
         let replace_all = value.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
 
-        Ok(EditToolCall {
+        Ok(Self {
             path: expand_path(path),
             old_string: old_string.to_string(),
             new_string: new_string.to_string(),
@@ -589,7 +589,7 @@ impl PermissibleToolCall for EditToolCall {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct WriteToolCall {
+pub struct WriteToolCall {
     pub path: PathBuf,
     pub content: String,
     pub overwrite: bool,
@@ -609,7 +609,7 @@ impl TryFrom<&serde_json::Value> for WriteToolCall {
 
         let overwrite = value.get("overwrite").and_then(|v| v.as_bool()).unwrap_or(false);
 
-        Ok(WriteToolCall {
+        Ok(Self {
             path: expand_path(path),
             content: content.to_string(),
             overwrite,
@@ -697,7 +697,7 @@ impl PermissibleToolCall for WriteToolCall {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ShellToolCall {
+pub struct ShellToolCall {
     pub dir: Option<PathBuf>,
     pub command: String,
     pub shell: String,
@@ -724,7 +724,7 @@ impl TryFrom<&serde_json::Value> for ShellToolCall {
 
         let description = value.get("description").and_then(|v| v.as_str()).map(|s| s.to_string());
 
-        Ok(ShellToolCall {
+        Ok(Self {
             dir: dir.map(expand_path),
             command: command.to_string(),
             shell,
@@ -826,7 +826,7 @@ fn vt100_screen_lines(screen: &vt100::Screen) -> Vec<String> {
 ///
 /// Captures the FULL stdout and stderr separately for the tool result sent to the LLM.
 /// Returns a `ToolOutcome::Structured` with full output, exit code, and duration.
-pub(crate) async fn execute_shell_command_streaming(
+pub async fn execute_shell_command_streaming(
     shell_call: &ShellToolCall,
     output_tx: tokio::sync::mpsc::Sender<Vec<String>>,
     mut interrupt_rx: tokio::sync::oneshot::Receiver<()>,
@@ -960,7 +960,7 @@ pub(crate) async fn execute_shell_command_streaming(
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct AtuinHistoryToolCall {
+pub struct AtuinHistoryToolCall {
     pub filter_modes: Vec<HistorySearchFilterMode>,
     pub query: String,
     pub limit: i64,
@@ -969,7 +969,7 @@ pub(crate) struct AtuinHistoryToolCall {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum HistorySearchFilterMode {
+pub enum HistorySearchFilterMode {
     Global,
     Host,
     Session,
@@ -1036,7 +1036,7 @@ impl TryFrom<&serde_json::Value> for AtuinHistoryToolCall {
         // An omitted or empty `authors` array means no author filtering.
         let authors = OrFilter::from_list(authors).unwrap_or_default();
 
-        Ok(AtuinHistoryToolCall {
+        Ok(Self {
             filter_modes,
             query: query.to_string(),
             limit,
@@ -1120,7 +1120,7 @@ impl AtuinHistoryToolCall {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct AtuinOutputToolCall {
+pub struct AtuinOutputToolCall {
     pub history_id: Uuid,
     pub ranges: Vec<(i64, i64)>,
     /// The command the history entry ran, resolved from the local history
@@ -1252,7 +1252,7 @@ impl AtuinOutputToolCall {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct LoadSkillToolCall {
+pub struct LoadSkillToolCall {
     pub name: String,
 }
 
@@ -1263,7 +1263,7 @@ impl TryFrom<&serde_json::Value> for LoadSkillToolCall {
         let name =
             value.get("name").and_then(|v| v.as_str()).ok_or(eyre::eyre!("Missing skill name"))?;
 
-        Ok(LoadSkillToolCall {
+        Ok(Self {
             name: name.to_string(),
         })
     }

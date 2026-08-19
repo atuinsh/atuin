@@ -70,7 +70,7 @@ where
 
         tracing::debug!(user.id = user.id, user.username = %user.username, "request authenticated");
 
-        Ok(UserAuth(user))
+        Ok(Self(user))
     }
 }
 

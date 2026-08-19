@@ -98,7 +98,7 @@ mod test {
 
     #[tokio::test]
     async fn parse_complex() {
-        let bytes = r#"### 2024-02-10 22:16:28.302
+        let bytes = r"### 2024-02-10 22:16:28.302
 select * from remote('127.0.0.1:20222', view(select 1))
 ### 2024-02-10 22:16:36.919
 select * from numbers(10)
@@ -108,7 +108,7 @@ select * from system.numbers
 select 1
 ### 2024-02-22 11:15:33.046
 CREATE TABLE test( stamp DateTime('UTC'))ENGINE = MergeTreePARTITION BY toDate(stamp)order by tuple() as select toDateTime('2020-01-01')+number*60 from numbers(80000);
-"#
+"
         .as_bytes()
         .to_owned();
 

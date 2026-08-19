@@ -1,8 +1,8 @@
 use crate::osc133::{Event, Parser};
 
-pub(crate) const RESET: &[u8] = b"\x1b[0m";
+pub const RESET: &[u8] = b"\x1b[0m";
 
-pub(crate) struct Osc133DebugHighlighter {
+pub struct Osc133DebugHighlighter {
     parser: Parser,
 }
 

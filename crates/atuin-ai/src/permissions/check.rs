@@ -3,7 +3,7 @@ use eyre::Result;
 use crate::permissions::file::RuleFile;
 use crate::tools::PermissibleToolCall;
 
-pub(crate) struct PermissionRequest<'t> {
+pub struct PermissionRequest<'t> {
     call: &'t (dyn PermissibleToolCall + Send + Sync),
 }
 
@@ -13,13 +13,13 @@ impl<'t> PermissionRequest<'t> {
     }
 }
 
-pub(crate) enum PermissionResponse {
+pub enum PermissionResponse {
     Allowed,
     Denied,
     Ask,
 }
 
-pub(crate) struct PermissionChecker {
+pub struct PermissionChecker {
     files: Vec<RuleFile>,
 }
 

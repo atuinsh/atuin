@@ -385,7 +385,7 @@ impl SqliteStore {
     pub async fn purge(&self, key: &paseto_v4::Key) -> Result<()> {
         let all = self.load_all().await?;
 
-        for record in all.iter() {
+        for record in &all {
             match record.clone().decrypt(key) {
                 Ok(_) => continue,
                 Err(_) => {
@@ -610,7 +610,7 @@ mod tests {
         store.re_encrypt(&key, &new_key).await.expect("failed to re-encrypt store");
 
         let all = store.all_tagged(&RecordTag::Other("test".to_owned())).await.unwrap();
-        for record in all.iter() {
+        for record in &all {
             assert!(
                 record.clone().decrypt(&key).is_err(),
                 "old key still decrypts after re-encrypt"

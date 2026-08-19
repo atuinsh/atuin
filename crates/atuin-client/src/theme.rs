@@ -98,8 +98,8 @@ impl Theme {
         name: String,
         parent: Option<String>,
         styles: HashMap<Meaning, ContentStyle>,
-    ) -> Theme {
-        Theme {
+    ) -> Self {
+        Self {
             name,
             parent,
             styles,
@@ -128,10 +128,10 @@ impl Theme {
     // defaults on error, so that a TOML file does not break loading
     pub fn from_foreground_colors(
         name: String,
-        parent: Option<&Theme>,
+        parent: Option<&Self>,
         foreground_colors: HashMap<Meaning, String>,
         debug: bool,
-    ) -> Theme {
+    ) -> Self {
         let styles: HashMap<Meaning, ContentStyle> = foreground_colors
             .iter()
             .map(|(name, color)| {
@@ -149,16 +149,16 @@ impl Theme {
                 )
             })
             .collect();
-        Theme::from_map(name, parent, &styles)
+        Self::from_map(name, parent, &styles)
     }
 
     // Boil down a meaning-color hashmap into a theme, by taking the defaults
     // for any unknown colors
     fn from_map(
         name: String,
-        parent: Option<&Theme>,
+        parent: Option<&Self>,
         overrides: &HashMap<Meaning, ContentStyle>,
-    ) -> Theme {
+    ) -> Self {
         let styles = match parent {
             Some(theme) => Box::new(theme.styles.clone()),
             None => Box::new(DEFAULT_THEME.styles.clone()),
@@ -169,7 +169,7 @@ impl Theme {
             None => (*name, *color),
         })
         .collect();
-        Theme::new(name, parent.map(|p| p.name.clone()), styles)
+        Self::new(name, parent.map(|p| p.name.clone()), styles)
     }
 }
 

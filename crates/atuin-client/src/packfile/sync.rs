@@ -71,9 +71,9 @@ impl DownloadError {
     /// Whether repeating the same download operation would definitively fail.
     pub fn is_permanent(&self) -> bool {
         match self {
-            DownloadError::PackManifest(_) => true,
-            DownloadError::Unpack(_) => true,
-            DownloadError::Api(_) | DownloadError::Store(_) => false,
+            Self::PackManifest(_) => true,
+            Self::Unpack(_) => true,
+            Self::Api(_) | Self::Store(_) => false,
         }
     }
 }

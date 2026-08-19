@@ -14,7 +14,7 @@ use crate::tui::state::ConversationEvent;
 use crate::usage::UsageSnapshot;
 
 #[derive(Debug)]
-pub(crate) enum PersistJob {
+pub enum PersistJob {
     /// Snapshot of the conversation and its trackers.
     Session {
         events: Vec<ConversationEvent>,
@@ -35,7 +35,7 @@ pub(crate) enum PersistJob {
 /// sender (with the app) ends the worker after it drains pending jobs;
 /// await the returned handle to guarantee the drain completed — the
 /// process must not exit between a queued session snapshot and its write.
-pub(crate) fn spawn_persist_worker(
+pub fn spawn_persist_worker(
     mut session_mgr: SessionManager,
 ) -> (UnboundedSender<PersistJob>, tokio::task::JoinHandle<()>) {
     let (tx, mut rx) = unbounded_channel();

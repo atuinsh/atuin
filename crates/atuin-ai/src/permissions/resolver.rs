@@ -8,7 +8,7 @@ use crate::permissions::writer;
 use crate::tools::ClientToolCall;
 
 /// Resolves permissions for client tool calls by walking the filesystem to find permission files,
-pub(crate) struct PermissionResolver {
+pub struct PermissionResolver {
     checker: PermissionChecker,
 }
 

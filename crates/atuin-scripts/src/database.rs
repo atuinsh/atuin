@@ -82,7 +82,7 @@ impl Database {
         .execute(&mut **tx)
         .await?;
 
-        for tag in s.tags.iter() {
+        for tag in &s.tags {
             sqlx::query(
                 "insert or ignore into script_tags(script_id, tag)
                 values(?1, ?2)",
@@ -179,7 +179,7 @@ impl Database {
             .await?;
 
         // Fetch all the tags for each script
-        for script in res.iter_mut() {
+        for script in &mut res {
             let tags = sqlx::query("select tag from script_tags where script_id = ?1")
                 .bind(script.id.to_string())
                 .map(Self::query_script_tags)
@@ -240,7 +240,7 @@ impl Database {
             .await?;
 
         // Insert new tags
-        for tag in s.tags.iter() {
+        for tag in &s.tags {
             sqlx::query(
                 "insert or ignore into script_tags(script_id, tag)
                 values(?1, ?2)",

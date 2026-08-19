@@ -1,6 +1,6 @@
 /// Extracted command info from a shell command string.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ShellCommand {
+pub struct ShellCommand {
     /// The command name (first word), e.g. "git"
     pub name: String,
     /// The full invocation including arguments, e.g. "git commit -m msg"
@@ -9,13 +9,13 @@ pub(crate) struct ShellCommand {
 
 /// A parsed shell command with all subcommands extracted.
 #[derive(Debug)]
-pub(crate) struct ParsedShellCommand {
+pub struct ParsedShellCommand {
     pub subcommands: Vec<ShellCommand>,
 }
 
 /// Supported shell families for parsing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ShellKind {
+pub enum ShellKind {
     /// POSIX sh, bash, zsh — all share similar syntax
     Posix,
     /// fish shell
@@ -35,7 +35,7 @@ impl ShellKind {
 }
 
 /// Parse a shell command string and extract all subcommands.
-pub(crate) fn parse_shell_command(code: &str, shell: ShellKind) -> ParsedShellCommand {
+pub fn parse_shell_command(code: &str, shell: ShellKind) -> ParsedShellCommand {
     #[cfg(feature = "tree-sitter")]
     match shell {
         ShellKind::Posix => ts::parse_posix(code),
@@ -340,7 +340,7 @@ fn push_segment(segment: &mut String, commands: &mut Vec<ShellCommand>) {
 /// Allow rules should pass `prefix_bare: false` (strict), while deny/ask rules
 /// should pass `prefix_bare: true` (broad) so that denying `rm` also blocks
 /// `rm -rf /`.
-pub(crate) fn any_subcommand_matches(
+pub fn any_subcommand_matches(
     subcommands: &[ShellCommand],
     prefix_bare: bool,
     scope: &str,
@@ -672,13 +672,12 @@ mod adversarial {
     ) {
         let result = parse_shell_command(code, kind);
         let mut got: Vec<&str> = result.subcommands.iter().map(|c| c.name.as_str()).collect();
-        got.sort();
+        got.sort_unstable();
         let mut want: Vec<&str> = expected.to_vec();
-        want.sort();
+        want.sort_unstable();
         assert_eq!(
             got, want,
-            "{:?} parse of {:?}:\n  got:  {:?}\n  want: {:?}",
-            kind, code, got, want
+            "{kind:?} parse of {code:?}:\n  got:  {got:?}\n  want: {want:?}"
         );
     }
 

@@ -73,7 +73,7 @@ pub struct PluginContext {
 
 impl PluginContext {
     pub fn new(_subcommand: &str) -> Self {
-        PluginContext {
+        Self {
             #[cfg(windows)]
             _update_on_windows: (_subcommand == "update").then(UpdateOnWindowsContext::new),
         }

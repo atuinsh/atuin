@@ -5,7 +5,7 @@ use atuin_client::settings::Settings;
 
 /// Facts a tip's relevance predicate may consult. Assembled fresh at each
 /// pull so predicates see current session state, not startup state.
-pub(crate) struct TipContext<'a> {
+pub struct TipContext<'a> {
     pub settings: &'a Settings,
     /// A model is pinned — via `ai.model` or /model this session.
     pub model_set: bool,
@@ -14,7 +14,7 @@ pub(crate) struct TipContext<'a> {
     pub has_context_files: Option<bool>,
 }
 
-pub(crate) struct Tip {
+pub struct Tip {
     /// Stable key — the hook for cross-session "already seen" persistence.
     #[cfg_attr(not(test), allow(dead_code))]
     pub id: &'static str,
@@ -24,7 +24,7 @@ pub(crate) struct Tip {
     pub relevant: Option<fn(&TipContext) -> bool>,
 }
 
-pub(crate) const TIPS: &[Tip] = &[
+pub const TIPS: &[Tip] = &[
     Tip {
         id: "esc-interrupt",
         text: "press Esc to interrupt a response",
@@ -90,7 +90,7 @@ pub(crate) const TIPS: &[Tip] = &[
 /// Walks `TIPS` in order, skipping tips whose predicate says no. The start
 /// offset is randomized per session so long-running users don't always see
 /// the head of the list.
-pub(crate) struct TipRotation {
+pub struct TipRotation {
     cursor: usize,
 }
 

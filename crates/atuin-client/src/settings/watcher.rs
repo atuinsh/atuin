@@ -186,12 +186,12 @@ impl SettingsWatcher {
         if !watch_path.exists() {
             warn!("config directory does not exist, creating it: {:?}", watch_path);
             std::fs::create_dir_all(watch_path)
-                .wrap_err_with(|| format!("failed to create config directory: {:?}", watch_path))?;
+                .wrap_err_with(|| format!("failed to create config directory: {watch_path:?}"))?;
         }
 
         watcher
             .watch(watch_path, RecursiveMode::NonRecursive)
-            .wrap_err_with(|| format!("failed to watch config directory: {:?}", watch_path))?;
+            .wrap_err_with(|| format!("failed to watch config directory: {watch_path:?}"))?;
 
         info!("config file watcher initialized for: {:?}", watch_path);
         Ok(watcher)

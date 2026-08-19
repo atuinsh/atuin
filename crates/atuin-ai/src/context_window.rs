@@ -23,7 +23,7 @@ const FROZEN_PREFIX_TURNS: usize = 1;
 
 /// Builds API messages from conversation events while respecting a character
 /// budget using frozen prefix + live tail truncation.
-pub(crate) struct ContextWindowBuilder {
+pub struct ContextWindowBuilder {
     budget: usize,
 }
 

@@ -30,13 +30,13 @@ fn fit_middle(command: &str, cols: usize) -> String {
 /// A tool spinner labeled `prefix` + command, the command middle-elided to
 /// the render width. Styling matches [`super::tool_spinner`]; the done
 /// checkmark is always hidden, as in the shell tool view.
-pub(crate) struct CommandSpinner {
+pub struct CommandSpinner {
     prefix: &'static str,
     command: String,
     done: bool,
 }
 
-pub(crate) fn command_spinner(
+pub fn command_spinner(
     prefix: &'static str,
     command: impl Into<String>,
     done: bool,
@@ -85,14 +85,14 @@ impl Element for CommandSpinner {
 
 /// A one-line `prefix` + value, the value middle-elided to the render
 /// width rather than wrapped.
-pub(crate) struct TruncatedLine {
+pub struct TruncatedLine {
     prefix: String,
     prefix_style: Style,
     value: String,
     value_style: Style,
 }
 
-pub(crate) fn truncated_line(
+pub fn truncated_line(
     prefix: impl Into<String>,
     prefix_style: Style,
     value: impl Into<String>,

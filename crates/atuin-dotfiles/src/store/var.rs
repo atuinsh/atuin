@@ -26,12 +26,12 @@ impl VarRecord {
         let mut output = vec![];
 
         match self {
-            VarRecord::Create(env) => {
+            Self::Create(env) => {
                 encode::write_u8(&mut output, 0)?; // create
 
                 env.serialize(&mut output)?;
             }
-            VarRecord::Delete(env) => {
+            Self::Delete(env) => {
                 encode::write_u8(&mut output, 1)?; // delete
                 encode::write_array_len(&mut output, 1)?; // 1 field
 
@@ -59,7 +59,7 @@ impl VarRecord {
                     // create
                     0 => {
                         let env = Var::deserialize(&mut bytes)?;
-                        Ok(VarRecord::Create(env))
+                        Ok(Self::Create(env))
                     }
 
                     // delete
@@ -76,7 +76,7 @@ impl VarRecord {
                             bail!("trailing bytes in encoded dotfiles var record. malformed");
                         }
 
-                        Ok(VarRecord::Delete(key.to_owned()))
+                        Ok(Self::Delete(key.to_owned()))
                     }
 
                     n => {
@@ -100,8 +100,8 @@ pub struct VarStore {
 
 impl VarStore {
     // will want to init the actual kv store when that is done
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> VarStore {
-        VarStore {
+    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
+        Self {
             store,
             host_id,
             encryption_key,

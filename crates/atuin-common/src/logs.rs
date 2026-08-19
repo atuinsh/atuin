@@ -19,11 +19,11 @@ impl LogLevel {
     pub fn to_tracing(&self) -> tracing::Level {
         use tracing::Level;
         match self {
-            LogLevel::Trace => Level::TRACE,
-            LogLevel::Debug => Level::DEBUG,
-            LogLevel::Info => Level::INFO,
-            LogLevel::Warn => Level::WARN,
-            LogLevel::Error => Level::ERROR,
+            Self::Trace => Level::TRACE,
+            Self::Debug => Level::DEBUG,
+            Self::Info => Level::INFO,
+            Self::Warn => Level::WARN,
+            Self::Error => Level::ERROR,
         }
     }
 }

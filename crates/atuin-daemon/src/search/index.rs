@@ -85,7 +85,7 @@ impl FrecencyData {
         };
 
         // Frequency boost: more uses = higher score (with diminishing returns)
-        let frequency_score = ((self.count as f64).ln() * 20.0).min(100.0);
+        let frequency_score = (f64::from(self.count).ln() * 20.0).min(100.0);
 
         // Apply multipliers and combine scores, then round to u32
         ((recency_score * recency_mul) + (frequency_score * frequency_mul)).round() as u32
@@ -558,7 +558,7 @@ impl SearchIndex {
                         let frecency =
                             data.global_frecency.compute(now, recency_mul, frequency_mul);
                         // Apply overall frecency multiplier and round to u32
-                        (frecency as f64 * frecency_mul).round() as u32
+                        (f64::from(frecency) * frecency_mul).round() as u32
                     })
                 })
                 .collect()

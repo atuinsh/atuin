@@ -156,7 +156,7 @@ echo baz
 
     #[rstest]
     #[case::lf(INPUT.to_string())]
-    #[case::crlf(INPUT.replace("\n", "\r\n"))]
+    #[case::crlf(INPUT.replace('\n', "\r\n"))]
     #[tokio::test]
     async fn imports_commands(#[case] input: String) {
         let loader = import(input.as_str()).await;

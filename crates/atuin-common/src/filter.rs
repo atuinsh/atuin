@@ -239,7 +239,7 @@ impl<T: Ord> FilterStorage for Vec<T> {
 
 impl<T: Ord> FilterStorageMut for Vec<T> {
     fn dedup(mut self) -> Self {
-        Vec::dedup(&mut self);
+        Self::dedup(&mut self);
         self
     }
 }

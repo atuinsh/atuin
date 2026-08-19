@@ -110,8 +110,8 @@ impl Serialize for Shells {
         S: Serializer,
     {
         match self {
-            Shells::Auto => serializer.serialize_str("auto"),
-            Shells::Fixed(filter) => match filter.items() {
+            Self::Auto => serializer.serialize_str("auto"),
+            Self::Fixed(filter) => match filter.items() {
                 filter::Items::All => serializer.serialize_str("all"),
                 filter::Items::Some(items) => items.serialize(serializer),
             },
@@ -136,7 +136,7 @@ mod tests {
     #[case::auto(r#""auto""#, Some(Shells::Auto))]
     #[case::array(r#"["bash", "", "zsh"]"#, Some(fixed(&["bash", "", "zsh"])))]
     #[case::array_with_duplicates(r#"["zsh", "bash", "zsh"]"#, Some(fixed(&["bash", "zsh"])))]
-    #[case::empty_array(r#"[]"#, Some(Shells::all()))]
+    #[case::empty_array(r"[]", Some(Shells::all()))]
     #[case::invalid_string(r#""hello""#, None)]
     fn deserialize(#[case] toml: &str, #[case] expected: Option<Shells>) {
         let result = parse(toml);

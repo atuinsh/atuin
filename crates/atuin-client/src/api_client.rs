@@ -41,8 +41,8 @@ impl AuthToken {
     /// Format the token as an Authorization header value
     fn to_header_value(&self) -> String {
         match self {
-            AuthToken::Bearer(token) => format!("Bearer {token}"),
-            AuthToken::Token(token) => format!("Token {token}"),
+            Self::Bearer(token) => format!("Bearer {token}"),
+            Self::Token(token) => format!("Token {token}"),
         }
     }
 }
@@ -287,7 +287,7 @@ impl Client {
             .build()?
             .with_capabilities(caps.clone(), CapMismatch::Continue);
 
-        Ok(Client {
+        Ok(Self {
             sync_addr,
             client,
             lfs_client: reqwest::Client::builder()

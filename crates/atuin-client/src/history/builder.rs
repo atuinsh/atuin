@@ -36,7 +36,7 @@ impl HistoryImported {
 
 impl From<HistoryImported> for History {
     fn from(imported: HistoryImported) -> Self {
-        History::new(
+        Self::new(
             imported.timestamp,
             imported.command,
             imported.cwd,
@@ -75,7 +75,7 @@ pub struct HistoryCaptured {
 
 impl From<HistoryCaptured> for History {
     fn from(captured: HistoryCaptured) -> Self {
-        History::new(
+        Self::new(
             captured.timestamp,
             captured.command,
             captured.cwd,
@@ -113,7 +113,7 @@ pub struct HistoryFromDb {
 impl From<HistoryFromDb> for History {
     // Reads a `hostname` column that predates the strict `host:user` format.
     fn from(from_db: HistoryFromDb) -> Self {
-        History {
+        Self {
             id: from_db.id.into(),
             timestamp: from_db.timestamp,
             exit: from_db.exit,
@@ -157,7 +157,7 @@ pub struct HistoryDaemonCapture {
 
 impl From<HistoryDaemonCapture> for History {
     fn from(captured: HistoryDaemonCapture) -> Self {
-        History::new(
+        Self::new(
             captured.timestamp,
             captured.command,
             captured.cwd,

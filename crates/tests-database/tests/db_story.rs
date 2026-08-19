@@ -25,7 +25,7 @@ impl Drop for TestDb {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             rt.block_on(async {
                 if let Err(e) = destroy_test_db(&settings).await {
-                    eprintln!("Failed to destroy test db: {:?}", e);
+                    eprintln!("Failed to destroy test db: {e:?}");
                 }
             });
         })

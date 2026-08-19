@@ -18,7 +18,7 @@ impl ScriptRecord {
         let mut output = vec![];
 
         match self {
-            ScriptRecord::Create(script) => {
+            Self::Create(script) => {
                 // 0 -> a script create
                 encode::write_u8(&mut output, 0)?;
 
@@ -27,13 +27,13 @@ impl ScriptRecord {
                 encode::write_bin(&mut output, &bytes.0)?;
             }
 
-            ScriptRecord::Delete(id) => {
+            Self::Delete(id) => {
                 // 1 -> a script delete
                 encode::write_u8(&mut output, 1)?;
                 encode::write_str(&mut output, id.to_string().as_str())?;
             }
 
-            ScriptRecord::Update(script) => {
+            Self::Update(script) => {
                 // 2 -> a script update
                 encode::write_u8(&mut output, 2)?;
                 let bytes = script.serialize()?;
@@ -63,14 +63,14 @@ impl ScriptRecord {
                         // written by encode::write_bin above
                         let _ = decode::read_bin_len(&mut bytes).map_err(error_report)?;
                         let script = Script::deserialize(bytes.remaining_slice())?;
-                        Ok(ScriptRecord::Create(script))
+                        Ok(Self::Create(script))
                     }
 
                     // delete
                     1 => {
                         let bytes = bytes.remaining_slice();
                         let (id, _) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-                        Ok(ScriptRecord::Delete(Uuid::parse_str(id)?))
+                        Ok(Self::Delete(Uuid::parse_str(id)?))
                     }
 
                     // update
@@ -78,7 +78,7 @@ impl ScriptRecord {
                         // written by encode::write_bin above
                         let _ = decode::read_bin_len(&mut bytes).map_err(error_report)?;
                         let script = Script::deserialize(bytes.remaining_slice())?;
-                        Ok(ScriptRecord::Update(script))
+                        Ok(Self::Update(script))
                     }
 
                     _ => Err(eyre!("unknown script record type {record_type}")),

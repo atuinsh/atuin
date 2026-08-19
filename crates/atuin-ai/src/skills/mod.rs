@@ -5,7 +5,7 @@
 //! is sent to the server; full content is loaded on demand via `load_skill`.
 
 mod frontmatter;
-pub(crate) mod walker;
+pub mod walker;
 
 use std::path::Path;
 
@@ -27,7 +27,7 @@ const PER_ENTRY_OVERHEAD: usize = 30;
 /// Metadata for a discovered skill. Produced at discovery time from
 /// frontmatter only — the body is not read until `load()`.
 #[derive(Debug, Clone)]
-pub(crate) struct SkillDescriptor {
+pub struct SkillDescriptor {
     pub name: String,
     pub description: String,
     pub source_path: std::path::PathBuf,
@@ -36,14 +36,14 @@ pub(crate) struct SkillDescriptor {
 
 /// A name + description pair ready to serialize into the request payload.
 #[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct SkillSummary {
+pub struct SkillSummary {
     pub name: String,
     pub description: String,
 }
 
 /// Holds discovered skills and provides lookup, budget packing, and loading.
 #[derive(Debug, Clone)]
-pub(crate) struct SkillRegistry {
+pub struct SkillRegistry {
     skills: Vec<SkillDescriptor>,
 }
 

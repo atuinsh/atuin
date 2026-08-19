@@ -89,7 +89,7 @@ pub async fn current_context() -> eyre::Result<Context> {
 
 impl Context {
     pub fn from_history(entry: &History) -> Self {
-        Context {
+        Self {
             session: entry.session.to_string(),
             cwd: entry.cwd.to_string(),
             cmd_origin: entry.cmd_origin.clone(),
@@ -163,7 +163,7 @@ fn get_session_start_time(session_id: &str) -> Option<i64> {
         && let Some(timestamp) = uuid.get_timestamp()
     {
         let (seconds, nanos) = timestamp.to_unix();
-        return Some(seconds as i64 * 1_000_000_000 + nanos as i64);
+        return Some(seconds as i64 * 1_000_000_000 + i64::from(nanos));
     }
     None
 }
@@ -230,9 +230,9 @@ impl SearchMode {
     /// [`DbSearchMode::Fuzzy`].
     pub fn closest_db_mode(self) -> DbSearchMode {
         match self {
-            SearchMode::Prefix => DbSearchMode::Prefix,
-            SearchMode::FullText => DbSearchMode::FullText,
-            SearchMode::Fuzzy | SearchMode::DaemonFuzzy => DbSearchMode::Fuzzy,
+            Self::Prefix => DbSearchMode::Prefix,
+            Self::FullText => DbSearchMode::FullText,
+            Self::Fuzzy | Self::DaemonFuzzy => DbSearchMode::Fuzzy,
         }
     }
 }
@@ -1089,7 +1089,7 @@ pub enum QueryToken<'a> {
     Regex(&'a str),
 }
 
-impl<'a> QueryToken<'a> {
+impl QueryToken<'_> {
     pub fn has_uppercase(&self) -> bool {
         match self {
             Self::Match(term, _)
@@ -1201,9 +1201,7 @@ mod test {
         let context = new_context();
 
         let results = db
-            .search(mode, filter_mode, &context, query, OptFilters {
-                ..Default::default()
-            })
+            .search(mode, filter_mode, &context, query, Default::default())
             .await?;
 
         assert_eq!(
@@ -1745,7 +1743,7 @@ mod test {
         let mut db = db;
         // Add 5 history items
         for i in 0..5 {
-            new_history_item(&mut db, &format!("command{}", i)).await.unwrap();
+            new_history_item(&mut db, &format!("command{i}")).await.unwrap();
         }
 
         // Create a paged iterator with page_size of 2
@@ -1885,9 +1883,7 @@ mod test {
         }
         let start = Instant::now();
         let _results = db
-            .search(DbSearchMode::Fuzzy, FilterMode::Global, &context, "", OptFilters {
-                ..Default::default()
-            })
+            .search(DbSearchMode::Fuzzy, FilterMode::Global, &context, "", Default::default())
             .await
             .unwrap();
         let duration = start.elapsed();

@@ -26,9 +26,9 @@ pub trait UtcOffsetExt {
 
 impl UtcOffsetExt for UtcOffset {
     fn local_or_utc() -> UtcOffset {
-        UtcOffset::current_local_offset().unwrap_or_else(|e| {
+        Self::current_local_offset().unwrap_or_else(|e| {
             warn!("could not determine local UTC offset, falling back to UTC: {e}");
-            UtcOffset::UTC
+            Self::UTC
         })
     }
 
@@ -36,18 +36,18 @@ impl UtcOffsetExt for UtcOffset {
         let spec = spec.as_ref().to_lowercase();
 
         if matches!(spec.as_str(), "l" | "local") {
-            return Ok(UtcOffset::current_local_offset()?);
+            return Ok(Self::current_local_offset()?);
         }
 
         if matches!(spec.as_str(), "0" | "utc") {
-            return Ok(UtcOffset::UTC);
+            return Ok(Self::UTC);
         }
 
         // IDEA: Currently named timezones are not supported, because the well-known crate for this
         // is `chrono_tz`, which is not really interoperable with the datetime crate that we
         // currently use - `time`. If ever we migrate to using `chrono`, this would be a good
         // feature to add.
-        Ok(UtcOffset::parse(&spec, OFFSET_FMT)?)
+        Ok(Self::parse(&spec, OFFSET_FMT)?)
     }
 }
 

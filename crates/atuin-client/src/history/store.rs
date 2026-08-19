@@ -57,7 +57,7 @@ impl HistoryRecord {
         let mut output = vec![];
 
         match self {
-            HistoryRecord::Create(history) => {
+            Self::Create(history) => {
                 // 0 -> a history create
                 encode::write_u8(&mut output, 0)?;
 
@@ -65,7 +65,7 @@ impl HistoryRecord {
 
                 encode::write_bin(&mut output, &bytes.0)?;
             }
-            HistoryRecord::Delete(id) => {
+            Self::Delete(id) => {
                 // 1 -> a history delete
                 encode::write_u8(&mut output, 1)?;
                 encode::write_str(&mut output, id.0.as_str())?;
@@ -95,7 +95,7 @@ impl HistoryRecord {
 
                 let record = History::deserialize(bytes.remaining_slice(), version)?;
 
-                Ok(HistoryRecord::Create(record))
+                Ok(Self::Create(record))
             }
 
             // 1 -> HistoryRecord::Delete
@@ -109,7 +109,7 @@ impl HistoryRecord {
                     );
                 }
 
-                Ok(HistoryRecord::Delete(id.to_string().into()))
+                Ok(Self::Delete(id.to_string().into()))
             }
 
             n => {
@@ -130,7 +130,7 @@ const DECODE_CONCURRENCY: usize = 4;
 
 impl HistoryStore {
     pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
-        HistoryStore {
+        Self {
             store,
             host_id,
             encryption_key,
@@ -221,7 +221,7 @@ impl HistoryStore {
         let mut ret = Vec::with_capacity(records.len());
         let mut skipped = 0;
 
-        for record in records.into_iter() {
+        for record in records {
             let id = record.id;
             let version = record.version.clone();
 
