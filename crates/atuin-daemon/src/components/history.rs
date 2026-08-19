@@ -200,8 +200,8 @@ impl HistorySvc for HistoryGrpcService {
                 value => i64::try_from(value).unwrap_or(i64::MAX),
             };
 
-            // Get the handle and store to save the history, cloning them out so the
-            // component locks are not held for the duration of the save.
+            // Get the handle and store to save the history. Clone the handles to avoid holding the
+            // `RwLock`s for a long period of time.
             let handle = self
                 .inner
                 .handle

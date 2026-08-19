@@ -156,17 +156,16 @@ impl CapClient {
     ) -> Result<Option<C>, ServerSupportError> {
         let _ = self.warmed.clone().wait_for(|&done| done).await;
 
-        // The read guard lives only for this statement, so it is not held across the deserialize.
-        let fetched =
-            self.server.read().as_ref().map(|server| server.caps.get(C::static_name()).cloned());
-
-        let Some(advertised) = fetched else {
+        let server_guard = self.server.read();
+        let Some(server) = server_guard.as_ref() else {
             return Err(ServerSupportError::NotFetched);
         };
-        let Some(raw) = advertised else {
+        let Some(raw) = server.caps.get(C::static_name()).cloned() else {
             return Ok(None);
         };
 
+        // Release the server lock
+        drop(server_guard);
         serde_json::from_value(raw).map(Some).map_err(|source| ServerSupportError::Malformed {
             name: C::static_name(),
             source,
