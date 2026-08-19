@@ -654,7 +654,6 @@ impl TailEvent {
             HistoryEventKind::Unspecified => bail!("daemon sent an unspecified history tail event"),
         };
 
-        #[allow(deprecated)]
         Ok(Self {
             kind,
             history: History {
@@ -665,6 +664,7 @@ impl TailEvent {
                 command: history.command,
                 cwd: history.cwd,
                 session: history.session,
+                #[allow(deprecated)]
                 cmd_origin: CmdOrigin::parse_lenient(history.hostname),
                 author: history.author,
                 intent: normalize_optional_string(history.intent),

@@ -112,7 +112,6 @@ pub struct HistoryFromDb {
 
 impl From<HistoryFromDb> for History {
     // Reads a `hostname` column that predates the strict `host:user` format.
-    #[allow(deprecated)]
     fn from(from_db: HistoryFromDb) -> Self {
         History {
             id: from_db.id.into(),
@@ -122,6 +121,7 @@ impl From<HistoryFromDb> for History {
             cwd: from_db.cwd,
             duration: from_db.duration,
             session: from_db.session,
+            #[allow(deprecated)]
             cmd_origin: CmdOrigin::parse_lenient(from_db.hostname),
             author: from_db.author,
             intent: from_db.intent,

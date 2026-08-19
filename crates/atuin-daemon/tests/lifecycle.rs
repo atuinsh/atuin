@@ -128,13 +128,15 @@ mod unix {
 
         let (mut client, _handle, _tmp) = daemon.await;
 
-        #[allow(deprecated)]
         let history = History::daemon()
             .timestamp(time::OffsetDateTime::now_utc())
             .command("echo hello".to_string())
             .cwd("/tmp".to_string())
             .session("test-session".to_string())
-            .cmd_origin(atuin_domain::record::CmdOrigin::parse_lenient("test-host"))
+            .cmd_origin(
+                #[allow(deprecated)]
+                atuin_domain::record::CmdOrigin::parse_lenient("test-host"),
+            )
             .build()
             .into();
 

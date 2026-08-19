@@ -606,7 +606,7 @@ mod tests {
         Context {
             session: "018cd4fead897597852527a31c998059".to_owned(),
             cwd: "/".to_owned(),
-            hostname: "test:test".to_owned(),
+            cmd_origin: CmdOrigin::try_from("test:test").unwrap(),
             host_id: "test".to_owned(),
             git_root: None,
         }

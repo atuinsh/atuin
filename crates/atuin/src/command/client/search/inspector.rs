@@ -323,7 +323,6 @@ mod tests {
 
     #[fixture]
     fn mock_history_stats() -> (History, HistoryStats) {
-        #[allow(deprecated)]
         let history = History {
             id: HistoryId::from("test1".to_string()),
             timestamp: OffsetDateTime::now_utc(),
@@ -332,13 +331,13 @@ mod tests {
             command: "/bin/cmd".to_string(),
             cwd: "/toot".to_string(),
             session: "sesh1".to_string(),
+            #[allow(deprecated)]
             cmd_origin: CmdOrigin::parse_lenient("hostn"),
             author: "hostn".to_string(),
             intent: None,
             deleted_at: None,
             shell: None,
         };
-        #[allow(deprecated)]
         let next = History {
             id: HistoryId::from("test2".to_string()),
             timestamp: OffsetDateTime::now_utc(),
@@ -347,13 +346,13 @@ mod tests {
             command: "/bin/cmd -os".to_string(),
             cwd: "/toot".to_string(),
             session: "sesh1".to_string(),
+            #[allow(deprecated)]
             cmd_origin: CmdOrigin::parse_lenient("hostn"),
             author: "hostn".to_string(),
             intent: None,
             deleted_at: None,
             shell: Some("bash".into()),
         };
-        #[allow(deprecated)]
         let prev = History {
             id: HistoryId::from("test3".to_string()),
             timestamp: OffsetDateTime::now_utc(),
@@ -362,6 +361,7 @@ mod tests {
             command: "/bin/cmd -a".to_string(),
             cwd: "/toot".to_string(),
             session: "sesh1".to_string(),
+            #[allow(deprecated)]
             cmd_origin: CmdOrigin::parse_lenient("hostn"),
             author: "hostn".to_string(),
             intent: None,

@@ -1249,7 +1249,9 @@ mod test {
         captured.duration = 1;
         captured.session = "beep boop".to_string();
         #[allow(deprecated)]
-        captured.cmd_origin = CmdOrigin::parse_lenient("booop");
+        {
+            captured.cmd_origin = CmdOrigin::parse_lenient("booop");
+        }
 
         db.save(&captured).await
     }
@@ -1266,7 +1268,9 @@ mod test {
         captured.duration = 1;
         captured.session = "beep boop".to_string();
         #[allow(deprecated)]
-        captured.cmd_origin = CmdOrigin::parse_lenient("booop");
+        {
+            captured.cmd_origin = CmdOrigin::parse_lenient("booop");
+        }
 
         db.save(&captured).await.unwrap();
         captured
@@ -1282,8 +1286,8 @@ mod test {
         #[from(empty_db)]
         db: Sqlite,
     ) {
-        #[allow(deprecated)]
         let context = Context {
+            #[allow(deprecated)]
             cmd_origin: CmdOrigin::parse_lenient("booop"),
             session: "beep boop".to_string(),
             cwd: "/home/ellie".to_string(),
@@ -1301,7 +1305,9 @@ mod test {
             .into();
         past.session = "beep boop".to_string();
         #[allow(deprecated)]
-        past.cmd_origin = CmdOrigin::parse_lenient("booop");
+        {
+            past.cmd_origin = CmdOrigin::parse_lenient("booop");
+        }
         db.save(&past).await.unwrap();
         save_history_item(&db, "ls /home/frank").await;
 
@@ -1819,11 +1825,11 @@ mod test {
         new_history_item(&mut db, "delete_me").await.unwrap();
 
         // Delete one item
-        #[allow(deprecated)]
         let all = db
             .list(
                 [],
                 &Context {
+                    #[allow(deprecated)]
                     cmd_origin: CmdOrigin::parse_lenient(""),
                     session: "".to_string(),
                     cwd: "".to_string(),
@@ -1923,8 +1929,8 @@ mod test {
             db.save(&history).await.unwrap();
         }
 
-        #[allow(deprecated)]
         let context = Context {
+            #[allow(deprecated)]
             cmd_origin: CmdOrigin::parse_lenient("hostname"),
             session: "session".into(),
             cwd: "/tmp".into(),
@@ -1976,8 +1982,8 @@ mod test {
             db.save(&history).await.unwrap();
         }
 
-        #[allow(deprecated)]
         let context = Context {
+            #[allow(deprecated)]
             cmd_origin: CmdOrigin::parse_lenient("hostname"),
             session: "session".into(),
             cwd: "/tmp".into(),
