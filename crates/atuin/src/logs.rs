@@ -40,16 +40,10 @@ pub struct LogCtx {
     /// Handle to open-telemetry traces. Kept alive because it's RAII.
     ///
     /// OTEL may be disabled, in which case this is [`Option::None`].
-    otel: Option<OtelCtx>,
+    _otel: Option<OtelCtx>,
 }
 
 impl LogCtx {
-    /// Check whether open-telemetry is enabled.
-    #[must_use]
-    pub const fn otel_enabled(&self) -> bool {
-        self.otel.is_some()
-    }
-
     /// Try to enable the logging for atuin.
     ///
     /// TODO(markovejnovic): Clean up this [`LogConfig`] structure. It feels very out-of-place where
@@ -114,7 +108,7 @@ impl LogCtx {
             tracing::warn!("failed to initialize the log file: {e}");
         }
 
-        Ok(Self { otel })
+        Ok(Self { _otel: otel })
     }
 }
 
