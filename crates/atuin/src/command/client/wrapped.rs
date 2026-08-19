@@ -334,7 +334,8 @@ pub async fn run(
     // stats.ignored_commands, which is not an error.
     let Some(stats) = compute(settings, &history, 10, 1) else {
         println!(
-            "Every command in your {year} history is in stats.ignored_commands, so there is nothing to wrap up!"
+            "No commands found in your {year} history. Run a command or check your config for \
+            for commands ignored by stats.ignored_commands."
         );
         return Ok(());
     };
