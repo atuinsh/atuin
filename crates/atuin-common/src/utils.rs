@@ -133,9 +133,10 @@ where
 #[allow(unsafe_code)]
 #[cfg(test)]
 mod tests {
+    use std::env;
+
     use pretty_assertions::assert_ne;
     use rstest::rstest;
-    use std::env;
 
     use super::*;
 

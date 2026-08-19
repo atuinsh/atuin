@@ -1,8 +1,6 @@
-use std::{
-    path::{Path, PathBuf},
-    str::FromStr,
-    time::Duration,
-};
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::time::Duration;
 
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::time::OffsetDateTimeExt;
@@ -510,11 +508,8 @@ impl Sqlite {
             query.and_where_is_null("deleted_at");
         }
 
-        let git_root = context
-            .git_root
-            .as_deref()
-            .and_then(Path::to_str)
-            .unwrap_or(context.cwd.as_str());
+        let git_root =
+            context.git_root.as_deref().and_then(Path::to_str).unwrap_or(context.cwd.as_str());
 
         let session_start = get_session_start_time(&context.session);
 
@@ -625,11 +620,8 @@ impl Sqlite {
         // built below, so that the timestamp-ordered scan can early-terminate.
         let mut sql = SqlBuilder::select_from("history");
 
-        let git_root = context
-            .git_root
-            .as_deref()
-            .and_then(Path::to_str)
-            .unwrap_or(context.cwd.as_str());
+        let git_root =
+            context.git_root.as_deref().and_then(Path::to_str).unwrap_or(context.cwd.as_str());
 
         let session_start = get_session_start_time(&context.session);
 

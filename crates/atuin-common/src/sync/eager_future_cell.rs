@@ -65,10 +65,12 @@ impl<T: Send + Sync + 'static> EagerFutureCell<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::EagerFutureCell;
-    use rstest::rstest;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use rstest::rstest;
+
+    use super::EagerFutureCell;
 
     #[rstest]
     #[case(42)]

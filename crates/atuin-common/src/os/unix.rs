@@ -1,6 +1,7 @@
 //! Unix-specific utilities.
 
 use std::path::Path;
+
 use whoami;
 
 use crate::string::NonNulStr;
@@ -13,9 +14,7 @@ impl PosixHostname {
 
     /// Equivalent to [`whoami::hostname`].
     pub fn get() -> Result<Self, super::HostnameGetError> {
-        whoami::hostname()
-            .map(Self)
-            .map_err(super::HostnameGetError::FailedToQuery)
+        whoami::hostname().map(Self).map_err(super::HostnameGetError::FailedToQuery)
     }
 }
 

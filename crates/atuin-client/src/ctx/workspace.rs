@@ -29,9 +29,8 @@ impl Cwd {
     pub fn resolve() -> Self {
         let absolute =
             std::env::current_dir().expect("failed to determine the current working directory");
-        let logical = std::env::var_os("PWD")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| absolute.clone());
+        let logical =
+            std::env::var_os("PWD").map(PathBuf::from).unwrap_or_else(|| absolute.clone());
         Self { logical, absolute }
     }
 }

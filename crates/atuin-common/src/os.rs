@@ -47,9 +47,7 @@ impl TryFrom<&str> for DnsHostname {
 
         for byte in l.bytes() {
             if !(byte.is_ascii_alphanumeric() || byte == b'-') {
-                return Err(HostnameStringConversionError::InvalidCharacters(
-                    char::from(byte),
-                ));
+                return Err(HostnameStringConversionError::InvalidCharacters(char::from(byte)));
             }
         }
 

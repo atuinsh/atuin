@@ -13,11 +13,11 @@ mod app;
 mod git_ctx;
 mod workspace;
 
+use std::sync::LazyLock;
+
 pub use app::AppCtx;
 pub use git_ctx::GitRepoCtx;
 pub use workspace::{Cwd, WorkspaceCtx};
-
-use std::sync::LazyLock;
 
 static APP: LazyLock<AppCtx> = LazyLock::new(AppCtx::new);
 
