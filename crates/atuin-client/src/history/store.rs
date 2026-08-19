@@ -696,10 +696,9 @@ mod tests {
 
         // Had the delete been applied before the create, `first` would still be present.
         let stored = db.list([], &context(), None, false, true, None).await.unwrap();
-        assert_eq!(
-            stored.iter().map(|h| h.command.as_str()).collect::<Vec<_>>(),
-            vec!["command 2"]
-        );
+        assert_eq!(stored.iter().map(|h| h.command.as_str()).collect::<Vec<_>>(), vec![
+            "command 2"
+        ]);
     }
 
     #[rstest]
