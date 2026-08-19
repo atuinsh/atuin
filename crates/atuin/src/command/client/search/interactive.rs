@@ -2350,6 +2350,8 @@ mod tests {
             accept_past_line_end: true,
             accept_past_line_start: false,
             accept_with_backspace: false,
+            bind_ctrl_r: true,
+            bind_up_arrow: true,
             prefix: "a".to_string(),
         };
         state.keymaps = KeymapSet::defaults(&settings);

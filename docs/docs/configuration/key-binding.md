@@ -25,21 +25,48 @@ Our default up-arrow binding can be a bit contentious. Some people love it, some
 
 It becomes much more powerful if you consider binding a different filter mode to the up arrow. For example, on "up" Atuin can default to searching all history for the current directory only, while Ctrl-r searches history globally. See the [config](config.md#filter_mode_shell_up_key_binding) for more.
 
-Otherwise, if you don't like it, you can disable it.
+Otherwise, if you don't like it, you can disable it in either of these ways:
 
-You can also disable either the up-arrow or ++ctrl+r++ bindings individually, by passing
-`--disable-up-arrow` or `--disable-ctrl-r` to the call to `atuin init` in your shell config file:
+### Via config.toml (recommended)
 
-An example for zsh:
+In `~/.config/atuin/config.toml`:
+
+```toml
+[keys]
+bind_up_arrow = false   # keep native ↑ history; Ctrl-R still opens Atuin
+# bind_ctrl_r = false   # optional: also leave Ctrl-R alone
+```
+
+Then keep a normal init line (no extra flags):
+
 ```shell
-# Bind ctrl-r but not up arrow
+# fish
+atuin init fish | source
+
+# zsh / bash
+eval "$(atuin init zsh)"
+```
+
+### Via `atuin init` flags
+
+You can also disable either the up-arrow or ++ctrl+r++ bindings per shell by passing
+`--disable-up-arrow` (alias: `--no-up-arrow`) or `--disable-ctrl-r` (alias: `--no-ctrl-r`)
+to `atuin init`:
+
+```shell
+# fish — Ctrl-R still Atuin; ↑ is plain fish history
+atuin init fish --disable-up-arrow | source
+
+# zsh
 eval "$(atuin init zsh --disable-up-arrow)"
 
-# Bind up-arrow but not ctrl-r
+# leave up-arrow, unbind ctrl-r
 eval "$(atuin init zsh --disable-ctrl-r)"
 ```
 
-If you don't want either key to be bound, either pass both `--disable` arguments, or set the
+CLI flags and config combine with **disable wins**: if either the flag is set or the config is `false`, the key isn't bound.
+
+If you don't want either key to be bound, either pass both `--disable` arguments, set both config keys to `false`, or set the
 environment variable `ATUIN_NOBIND` to any value before the call to `atuin init`:
 
 ```shell
