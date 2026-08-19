@@ -10,6 +10,7 @@ use eyre::Result;
 use futures::{StreamExt, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use thiserror::Error;
+use tracing::instrument;
 
 use super::sqlite_store::SqliteStore;
 use crate::api_client::{Client, caps_client};
@@ -73,6 +74,7 @@ pub enum Operation {
     },
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn build_client_with_caps(
     settings: &Settings,
     caps: Arc<CapClient>,
@@ -91,12 +93,14 @@ pub async fn build_client_with_caps(
     .map_err(|e| SyncError::OperationalError { msg: e.to_string() })
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn build_client(settings: &Settings) -> Result<Client, SyncError> {
     let caps = caps_client(&settings.sync_address, &settings.extra_headers)
         .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?;
     build_client_with_caps(settings, caps).await
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn diff(
     client: &Client,
     store: &SqliteStore,
@@ -118,6 +122,7 @@ pub async fn diff(
 // With the store as context, we can determine if a tail exists locally or not and therefore if it needs uploading or download.
 // In theory this could be done as a part of the diffing stage, but it's easier to reason
 // about and test this way
+#[instrument(level = "trace", skip_all, fields(n_diffs = diffs.len()), err)]
 pub async fn operations(
     diffs: Vec<Diff>,
     _store: &SqliteStore,
@@ -201,6 +206,12 @@ pub async fn operations(
     clippy::too_many_arguments,
     reason = "threading the key for packfile uploads pushes this one param over the limit"
 )]
+#[instrument(
+    level = "trace",
+    skip_all,
+    fields(host = ?host, tag = ?tag, local, remote = ?remote, page_size),
+    err
+)]
 async fn sync_upload(
     store: &SqliteStore,
     client: &Client,
@@ -277,6 +288,12 @@ async fn sync_upload(
 #[allow(
     clippy::too_many_arguments,
     reason = "threading the key for packfile downloads pushes this one param over the limit"
+)]
+#[instrument(
+    level = "trace",
+    skip_all,
+    fields(host = ?host, tag = ?tag, remote = ?remote, page_size),
+    err
 )]
 async fn sync_download(
     store: &SqliteStore,
@@ -391,6 +408,7 @@ async fn sync_download(
     Ok(ret)
 }
 
+#[instrument(level = "trace", skip_all, fields(page_size), err)]
 pub async fn sync_remote(
     client: &Client,
     operations: Vec<Operation>,
@@ -447,6 +465,7 @@ pub async fn sync_remote(
     Ok((uploaded, downloaded))
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn check_encryption_key(
     client: &Client,
     remote_index: &RecordStatus,
@@ -478,6 +497,7 @@ pub async fn check_encryption_key(
     Ok(())
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn sync(
     settings: &Settings,
     store: &SqliteStore,
