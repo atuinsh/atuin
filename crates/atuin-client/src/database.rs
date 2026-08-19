@@ -336,6 +336,11 @@ impl Sqlite {
     }
 
     pub async fn save_bulk<'a>(&self, h: impl IntoIterator<Item = &'a History>) -> Result<()> {
+        let mut h = h.into_iter().peekable();
+        if h.peek().is_none() {
+            return Ok(());
+        }
+
         debug!("saving history to sqlite");
 
         let mut tx = self.pool.begin().await?;
@@ -804,13 +809,15 @@ impl Sqlite {
     // that were never pushed to the store - so just delete the row.
     // deleted_at is still read to keep tombstones from older versions working.
     pub async fn delete(&self, h: History) -> Result<()> {
-        self.delete_rows(&[h.id]).await
+        self.delete_rows([h.id]).await
     }
 
-    pub async fn delete_rows<'a>(
-        &self,
-        ids: impl IntoIterator<Item = &'a HistoryId>,
-    ) -> Result<()> {
+    pub async fn delete_rows(&self, ids: impl IntoIterator<Item = HistoryId>) -> Result<()> {
+        let mut ids = ids.into_iter().peekable();
+        if ids.peek().is_none() {
+            return Ok(());
+        }
+
         let mut tx = self.pool.begin().await?;
 
         for id in ids {
