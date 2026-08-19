@@ -121,10 +121,11 @@ impl Serialize for Shells {
 
 #[cfg(test)]
 mod tests {
-    use super::Shells;
     use atuin_common::filter::{self, OrFilter};
     use rstest::rstest;
     use serde::Deserialize;
+
+    use super::Shells;
 
     fn parse(toml: &str) -> Result<Shells, toml::de::Error> {
         Shells::deserialize(toml::de::ValueDeserializer::parse(toml).unwrap())

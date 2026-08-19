@@ -78,9 +78,7 @@ impl<T> Vec<T> {
     /// Returns the number of elements in the vector.
     #[inline]
     pub fn count(&self) -> u32 {
-        self.inflight
-            .load(Ordering::Acquire)
-            .min(MAX_ENTRIES as u64) as u32
+        self.inflight.load(Ordering::Acquire).min(MAX_ENTRIES as u64) as u32
     }
 
     // Returns a reference to the element at the given index.
@@ -130,10 +128,7 @@ impl<T> Vec<T> {
             let entry = Bucket::<T>::get(entries, location.entry, self.columns);
 
             // safety: the entry is active
-            (*entry)
-                .active
-                .load(Ordering::Acquire)
-                .then(|| Entry::read(entry, self.columns))
+            (*entry).active.load(Ordering::Acquire).then(|| Entry::read(entry, self.columns))
         }
     }
 
@@ -188,10 +183,7 @@ impl<T> Vec<T> {
     where
         I: IntoIterator<Item = T> + ExactSizeIterator,
     {
-        let count: u32 = values
-            .len()
-            .try_into()
-            .expect("overflowed maximum capacity");
+        let count: u32 = values.len().try_into().expect("overflowed maximum capacity");
         if count == 0 {
             assert!(
                 values.into_iter().next().is_none(),
@@ -292,10 +284,7 @@ impl<T> Vec<T> {
     /// the iterator is deterministically sized and will not grow
     /// as more elements are pushed
     pub unsafe fn snapshot(&self, start: u32) -> Iter<'_, T> {
-        let end = self
-            .inflight
-            .load(Ordering::Acquire)
-            .min(MAX_ENTRIES as u64) as u32;
+        let end = self.inflight.load(Ordering::Acquire).min(MAX_ENTRIES as u64) as u32;
         assert!(start <= end, "index {start} is out of bounds!");
         Iter {
             location: Location::of(start),
@@ -309,10 +298,7 @@ impl<T> Vec<T> {
     /// the iterator is deterministically sized and will not grow
     /// as more elements are pushed
     pub unsafe fn par_snapshot(&self, start: u32) -> ParIter<'_, T> {
-        let end = self
-            .inflight
-            .load(Ordering::Acquire)
-            .min(MAX_ENTRIES as u64) as u32;
+        let end = self.inflight.load(Ordering::Acquire).min(MAX_ENTRIES as u64) as u32;
         assert!(start <= end, "index {start} is out of bounds!");
 
         ParIter {
@@ -355,10 +341,7 @@ impl<T> Iter<'_, T> {
 impl<'v, T> Iterator for Iter<'v, T> {
     type Item = SnapshotItem<'v, T>;
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (
-            (self.end - self.idx) as usize,
-            Some((self.end - self.idx) as usize),
-        )
+        ((self.end - self.idx) as usize, Some((self.end - self.idx) as usize))
     }
 
     fn next(&mut self) -> Option<SnapshotItem<'v, T>> {
@@ -566,10 +549,7 @@ impl<T> Entry<T> {
     fn layout(cols: u32) -> Layout {
         let head = Layout::new::<Self>();
         let tail = Layout::array::<Utf32String>(cols as usize).expect("invalid memory layout");
-        head.extend(tail)
-            .expect("invalid memory layout")
-            .0
-            .pad_to_align()
+        head.extend(tail).expect("invalid memory layout").0.pad_to_align()
     }
 
     unsafe fn matcher_cols_raw<'a>(

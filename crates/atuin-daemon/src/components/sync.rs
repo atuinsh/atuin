@@ -2,25 +2,23 @@
 //!
 //! Handles periodic synchronization with the Atuin cloud server.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
+use std::time::Duration;
 
+use atuin_client::history::HistoryId;
+use atuin_client::history::store::HistoryStore;
+use atuin_client::record::sync;
+use atuin_client::settings::Settings;
+use atuin_dotfiles::store::AliasStore;
+use atuin_dotfiles::store::var::VarStore;
 use eyre::Result;
 use futures::StreamExt;
 use rand::Rng;
 use tokio::sync::mpsc;
 use tokio::time::{self, MissedTickBehavior};
 
-use atuin_client::{
-    history::{HistoryId, store::HistoryStore},
-    record::sync,
-    settings::Settings,
-};
-use atuin_dotfiles::store::{AliasStore, var::VarStore};
-
-use crate::{
-    daemon::{Component, DaemonHandle},
-    events::DaemonEvent,
-};
+use crate::daemon::{Component, DaemonHandle};
+use crate::events::DaemonEvent;
 
 /// Commands that can be sent to the sync task.
 enum SyncCommand {
@@ -217,13 +215,8 @@ async fn do_sync_tick(
     }
 
     // Perform the sync
-    let res = sync::sync(
-        settings,
-        handle.store(),
-        handle.encryption_key(),
-        handle.caps().clone(),
-    )
-    .await;
+    let res =
+        sync::sync(settings, handle.store(), handle.encryption_key(), handle.caps().clone()).await;
 
     match res {
         Err(e) => {

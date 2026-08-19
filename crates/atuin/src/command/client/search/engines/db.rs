@@ -1,15 +1,13 @@
-use super::{SearchEngine, SearchState};
-use atuin_client::{
-    database::Database,
-    database::OptFilters,
-    database::{DbSearchMode, QueryToken, QueryTokenizer},
-    history::{History, all_user_author_filter},
-};
+use std::ops::Range;
+
+use atuin_client::database::{Database, DbSearchMode, OptFilters, QueryToken, QueryTokenizer};
+use atuin_client::history::{History, all_user_author_filter};
 use eyre::Result;
 use norm::Metric;
 use norm::fzf::{FzfParser, FzfV2};
-use std::ops::Range;
 use tracing::{Level, instrument};
+
+use super::{SearchEngine, SearchState};
 
 pub struct Search(pub DbSearchMode);
 
@@ -22,18 +20,12 @@ impl SearchEngine for Search {
     ) -> Result<Vec<History>> {
         let shells = state.shells.to_filter();
         let results = db
-            .search(
-                self.0,
-                state.filter_mode,
-                &state.context,
-                state.input.as_str(),
-                OptFilters {
-                    limit: Some(200),
-                    authors: all_user_author_filter(),
-                    shells: shells.as_filter(),
-                    ..Default::default()
-                },
-            )
+            .search(self.0, state.filter_mode, &state.context, state.input.as_str(), OptFilters {
+                limit: Some(200),
+                authors: all_user_author_filter(),
+                shells: shells.as_filter(),
+                ..Default::default()
+            })
             .await
             // ignore errors as it may be caused by incomplete regex
             .map_or(Vec::new(), |r| r.into_iter().collect());

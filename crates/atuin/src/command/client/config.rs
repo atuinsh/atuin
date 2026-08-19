@@ -82,9 +82,8 @@ impl GetCmd {
 
         match current {
             Some(item) if item.is_table() || item.is_inline_table() => {
-                let table = item
-                    .as_table_like()
-                    .expect("is_table()/is_inline_table() but no table");
+                let table =
+                    item.as_table_like().expect("is_table()/is_inline_table() but no table");
                 println!("{prefix}[{key}]");
                 dump_table(table, prefix, &mut vec![key.to_string()])?;
             }
@@ -170,7 +169,7 @@ impl SetCmd {
         Settings::validate_str(&updated).map_err(|e| {
             eyre::eyre!(
                 "cannot update config: setting '{key}' to '{}' would make your configuration \
-                invalid\n\n{e}",
+                 invalid\n\n{e}",
                 self.value,
             )
         })?;
@@ -192,21 +191,17 @@ impl SetCmd {
         match effective_type {
             ValueType::String => Ok(Value::from(raw.as_str())),
             ValueType::Boolean => {
-                let b: bool = raw
-                    .parse()
-                    .map_err(|_| eyre::eyre!("invalid boolean value: {raw}"))?;
+                let b: bool =
+                    raw.parse().map_err(|_| eyre::eyre!("invalid boolean value: {raw}"))?;
                 Ok(Value::from(b))
             }
             ValueType::Integer => {
-                let i: i64 = raw
-                    .parse()
-                    .map_err(|_| eyre::eyre!("invalid integer value: {raw}"))?;
+                let i: i64 =
+                    raw.parse().map_err(|_| eyre::eyre!("invalid integer value: {raw}"))?;
                 Ok(Value::from(i))
             }
             ValueType::Float => {
-                let f: f64 = raw
-                    .parse()
-                    .map_err(|_| eyre::eyre!("invalid float value: {raw}"))?;
+                let f: f64 = raw.parse().map_err(|_| eyre::eyre!("invalid float value: {raw}"))?;
                 Ok(Value::from(f))
             }
             ValueType::Auto => {
@@ -244,9 +239,7 @@ impl PrintCmd {
                 if current.is_table() || current.is_inline_table() {
                     println!("[{key}]");
                     dump_table(
-                        current
-                            .as_table_like()
-                            .expect("is_table()/is_inline_table() but no table"),
+                        current.as_table_like().expect("is_table()/is_inline_table() but no table"),
                         "",
                         &mut vec![key.clone()],
                     )?;
@@ -269,9 +262,7 @@ fn dump_table(table: &dyn TableLike, prefix: &str, stack: &mut Vec<String>) -> R
         if value.is_table() || value.is_inline_table() {
             stack.push(key.to_string());
 
-            let table = value
-                .as_table_like()
-                .expect("is_table()/is_inline_table() but no table");
+            let table = value.as_table_like().expect("is_table()/is_inline_table() but no table");
 
             println!("\n{}[{}]", prefix, stack.join("."));
 
@@ -291,9 +282,7 @@ fn get_deep_key<'doc>(doc: &'doc Document<String>, key: &str) -> Option<&'doc It
     let mut current: Option<&Item> = Some(doc.as_item());
 
     for part in parts {
-        current = current
-            .and_then(|item| item.as_table_like())
-            .and_then(|table| table.get(part));
+        current = current.and_then(|item| item.as_table_like()).and_then(|table| table.get(part));
     }
 
     current
@@ -375,8 +364,9 @@ fn set_deep_key(doc: &mut DocumentMut, key: &str, value: Value) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     /// Call [`set_deep_key`] and reserialize.
     fn set(input: &str, key: &str, value: Value) -> String {
@@ -460,7 +450,8 @@ mod tests {
         "# atuin config\n\n## enable sync\n# auto_sync = true\n\nenter_accept = true\n",
         "auto_sync",
         Value::from(false),
-        "# atuin config\n\n## enable sync\n# auto_sync = true\n\nenter_accept = true\nauto_sync = false\n"
+        "# atuin config\n\n## enable sync\n# auto_sync = true\n\nenter_accept = true\nauto_sync = \
+         false\n"
     )]
     fn set_adds_a_missing_key_without_touching_existing_content(
         #[case] input: &str,
@@ -479,10 +470,7 @@ mod tests {
             Value::from("10m"),
         );
         let twice = set(&once, "sync.frequency", Value::from("30m"));
-        assert_eq!(
-            twice,
-            "[sync]\n# how often to sync\nfrequency = \"30m\" # unit is flexible\n"
-        );
+        assert_eq!(twice, "[sync]\n# how often to sync\nfrequency = \"30m\" # unit is flexible\n");
     }
 
     /// Helper for building a [`SetCmd`].
@@ -519,9 +507,8 @@ mod tests {
         #[case] value: &str,
         #[case] expected: &str,
     ) {
-        let updated = set_cmd(key, value)
-            .get_updated_config(input)
-            .expect("the update should be accepted");
+        let updated =
+            set_cmd(key, value).get_updated_config(input).expect("the update should be accepted");
 
         assert_eq!(updated, expected);
     }
@@ -555,10 +542,7 @@ mod tests {
             .to_string();
 
         for fragment in expected_err {
-            assert!(
-                err.contains(fragment),
-                "error should mention `{fragment}`, got: {err}"
-            );
+            assert!(err.contains(fragment), "error should mention `{fragment}`, got: {err}");
         }
     }
 }

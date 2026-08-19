@@ -1,8 +1,6 @@
-use atuin_client::{
-    database::{Database, DbSearchMode, OptFilters},
-    history::{History, all_user_author_filter},
-    settings::Settings,
-};
+use atuin_client::database::{Database, DbSearchMode, OptFilters};
+use atuin_client::history::{History, all_user_author_filter};
+use atuin_client::settings::Settings;
 use atuin_daemon::client::{SearchClient, SearchParams};
 use atuin_daemon::search::{normalize_diacritics, truncate_query};
 use eyre::Result;
@@ -274,10 +272,8 @@ impl SearchEngine for Search {
                 .enumerate()
                 .map(|(char_idx, (byte_idx, _))| (byte_idx, char_idx))
                 .collect();
-            let command_char_to_byte: Vec<usize> = command
-                .char_indices()
-                .map(|(byte_idx, _)| byte_idx)
-                .collect();
+            let command_char_to_byte: Vec<usize> =
+                command.char_indices().map(|(byte_idx, _)| byte_idx).collect();
             let mut bytes: Vec<usize> = indices
                 .into_iter()
                 .filter_map(|i| matchable_byte_to_char.get(&(i as usize)))

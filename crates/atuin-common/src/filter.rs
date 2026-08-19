@@ -1,6 +1,8 @@
-use crate::slice::{SortedDedupedSliceComparer, partition_dedup};
-use itertools::Itertools;
 use std::borrow::Borrow;
+
+use itertools::Itertools;
+
+use crate::slice::{SortedDedupedSliceComparer, partition_dedup};
 
 /// Represents a filter with "or" semantics.
 ///
@@ -35,20 +37,10 @@ impl<L: FilterStorage> OrFilter<L> {
 
     /// Create a [`OrFilter`] from a sorted, deduped, non-empty list.
     pub fn new_unchecked(sorted_deduped: L) -> Self {
+        debug_assert!(!sorted_deduped.as_ref().is_empty(), "`sorted` cannot be empty");
+        debug_assert!(sorted_deduped.as_ref().is_sorted(), "`sorted` must be sorted");
         debug_assert!(
-            !sorted_deduped.as_ref().is_empty(),
-            "`sorted` cannot be empty"
-        );
-        debug_assert!(
-            sorted_deduped.as_ref().is_sorted(),
-            "`sorted` must be sorted"
-        );
-        debug_assert!(
-            !sorted_deduped
-                .as_ref()
-                .iter()
-                .tuple_windows()
-                .any(|(a, b)| a == b),
+            !sorted_deduped.as_ref().iter().tuple_windows().any(|(a, b)| a == b),
             "`sorted` must not contain duplicates",
         );
         Self {
@@ -117,10 +109,7 @@ impl<L: FilterStorage> OrFilter<L> {
         if self.is_all() {
             return true;
         }
-        self.inner
-            .as_ref()
-            .binary_search_by_key(&item, |item| item.borrow())
-            .is_ok()
+        self.inner.as_ref().binary_search_by_key(&item, |item| item.borrow()).is_ok()
     }
 
     /// Turn this filter into a list of the items in the filter.
@@ -316,10 +305,12 @@ mod sealed {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::BTreeSet;
+
     use proptest::prelude::*;
     use rstest::rstest;
-    use std::collections::BTreeSet;
+
+    use super::*;
 
     /// Build a filter from a nonempty list of items.
     fn filter(items: &[&str]) -> OrFilter<Vec<String>> {
@@ -361,10 +352,7 @@ mod tests {
     #[test]
     fn from_list_sorts_and_dedupes() {
         let expected = ["", "bash", "zsh"].map(str::to_owned);
-        assert_eq!(
-            filter(&["zsh", "bash", "zsh", ""]).items(),
-            Items::Some(expected.as_slice())
-        );
+        assert_eq!(filter(&["zsh", "bash", "zsh", ""]).items(), Items::Some(expected.as_slice()));
     }
 
     #[rstest]
@@ -446,12 +434,7 @@ mod tests {
     }
 
     fn sort_dedup(items: &[String]) -> Vec<String> {
-        items
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
+        items.iter().cloned().collect::<BTreeSet<_>>().into_iter().collect()
     }
 
     proptest! {

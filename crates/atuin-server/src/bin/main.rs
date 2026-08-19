@@ -6,18 +6,13 @@ use atuin_server::{Settings, example_config, launch, launch_metrics_server};
 use atuin_server_database::DbType;
 use atuin_server_postgres::Postgres;
 use atuin_server_sqlite::Sqlite;
-
 use clap::Parser;
 use eyre::{Context, Result, eyre};
-use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::{EnvFilter, fmt};
 
 #[derive(Parser, Debug)]
-#[clap(
-    name = "atuin-server",
-    about = "Atuin sync server",
-    version,
-    infer_subcommands = true
-)]
+#[clap(name = "atuin-server", about = "Atuin sync server", version, infer_subcommands = true)]
 enum Cmd {
     /// Start the server
     Start {
@@ -38,10 +33,7 @@ enum Cmd {
 async fn main() -> Result<()> {
     let cmd = Cmd::parse();
 
-    tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(EnvFilter::from_default_env())
-        .init();
+    tracing_subscriber::registry().with(fmt::layer()).with(EnvFilter::from_default_env()).init();
 
     tracing::trace!(command = ?cmd, "server command");
 

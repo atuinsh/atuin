@@ -1,8 +1,8 @@
-use std::alloc::{alloc_zeroed, dealloc, handle_alloc_error, Layout};
+use std::alloc::{Layout, alloc_zeroed, dealloc, handle_alloc_error};
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::ptr::{slice_from_raw_parts_mut, NonNull};
+use std::ptr::{NonNull, slice_from_raw_parts_mut};
 
 use crate::chars::Char;
 
@@ -64,13 +64,7 @@ impl<C: Char> MatrixLayout<C> {
     unsafe fn fieds_from_ptr(
         &self,
         ptr: NonNull<u8>,
-    ) -> (
-        *mut [C],
-        *mut [u8],
-        *mut [u16],
-        *mut [ScoreCell],
-        *mut [MatrixCell],
-    ) {
+    ) -> (*mut [C], *mut [u8], *mut [u16], *mut [ScoreCell], *mut [MatrixCell]) {
         let base = ptr.as_ptr();
         let haystack = base.add(self.haystack_off) as *mut C;
         let haystack = slice_from_raw_parts_mut(haystack, self.haystack_len);
@@ -177,9 +171,7 @@ impl MatrixSlab {
                 matrix_layout.fieds_from_ptr(self.0);
             // copy haystack before creating references to ensure we don't create
             // references to invalid chars (which may or may not be UB)
-            haystack_
-                .as_ptr()
-                .copy_to_nonoverlapping(haystack as *mut _, haystack_.len());
+            haystack_.as_ptr().copy_to_nonoverlapping(haystack as *mut _, haystack_.len());
             Some(MatcherDataView {
                 haystack: &mut *haystack,
                 row_offs: &mut *rows,

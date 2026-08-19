@@ -1,13 +1,11 @@
 use std::collections::HashMap;
 
-use rand::Rng;
-
 use async_trait::async_trait;
 use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus, RecordTag};
 use atuin_server_database::models::{NewSession, NewUser, Session, User};
 use atuin_server_database::{Database, DbError, DbResult, DbSettings};
+use rand::Rng;
 use sqlx::postgres::PgPoolOptions;
-
 use tracing::instrument;
 use uuid::Uuid;
 use wrappers::{DbRecord, DbSession, DbUser};
@@ -34,25 +32,22 @@ impl Postgres {
 #[async_trait]
 impl Database for Postgres {
     async fn new(settings: &DbSettings) -> DbResult<Self> {
-        let pool = PgPoolOptions::new()
-            .max_connections(100)
-            .connect(settings.db_uri.as_str())
-            .await?;
+        let pool =
+            PgPoolOptions::new().max_connections(100).connect(settings.db_uri.as_str()).await?;
 
         // Call server_version_num to get the DB server's major version number
         // The call returns None for servers older than 8.x.
-        let pg_major_version: u32 =
-            pool.acquire()
-                .await?
-                .server_version_num()
-                .ok_or(DbError::Other(eyre::Report::msg(
-                    "could not get PostgreSQL version",
-                )))?
-                / 10000;
+        let pg_major_version: u32 = pool
+            .acquire()
+            .await?
+            .server_version_num()
+            .ok_or(DbError::Other(eyre::Report::msg("could not get PostgreSQL version")))?
+            / 10000;
 
         if pg_major_version < MIN_PG_VERSION {
             return Err(DbError::Other(eyre::Report::msg(format!(
-                "unsupported PostgreSQL version {pg_major_version}, minimum required is {MIN_PG_VERSION}"
+                "unsupported PostgreSQL version {pg_major_version}, minimum required is \
+                 {MIN_PG_VERSION}"
             ))));
         }
 
@@ -64,24 +59,19 @@ impl Database for Postgres {
         // Create read replica pool if configured
         let read_pool = if let Some(read_db_uri) = &settings.read_db_uri {
             tracing::info!("Connecting to read replica database");
-            let read_pool = PgPoolOptions::new()
-                .max_connections(100)
-                .connect(read_db_uri.as_str())
-                .await?;
+            let read_pool =
+                PgPoolOptions::new().max_connections(100).connect(read_db_uri.as_str()).await?;
 
             // Verify the read replica is also a supported PostgreSQL version
-            let read_pg_major_version: u32 = read_pool
-                .acquire()
-                .await?
-                .server_version_num()
-                .ok_or(DbError::Other(eyre::Report::msg(
-                    "could not get PostgreSQL version from read replica",
-                )))?
-                / 10000;
+            let read_pg_major_version: u32 =
+                read_pool.acquire().await?.server_version_num().ok_or(DbError::Other(
+                    eyre::Report::msg("could not get PostgreSQL version from read replica"),
+                ))? / 10000;
 
             if read_pg_major_version < MIN_PG_VERSION {
                 return Err(DbError::Other(eyre::Report::msg(format!(
-                    "unsupported PostgreSQL version {read_pg_major_version} on read replica, minimum required is {MIN_PG_VERSION}"
+                    "unsupported PostgreSQL version {read_pg_major_version} on read replica, \
+                     minimum required is {MIN_PG_VERSION}"
                 ))));
             }
 
@@ -164,20 +154,14 @@ impl Database for Postgres {
             .execute(&self.pool)
             .await?;
 
-        sqlx::query("delete from store where user_id = $1")
-            .bind(u.id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query("delete from store where user_id = $1").bind(u.id).execute(&self.pool).await?;
 
         sqlx::query("delete from total_history_count_user where user_id = $1")
             .bind(u.id)
             .execute(&self.pool)
             .await?;
 
-        sqlx::query("delete from users where id = $1")
-            .bind(u.id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query("delete from users where id = $1").bind(u.id).execute(&self.pool).await?;
 
         Ok(())
     }
@@ -300,7 +284,8 @@ impl Database for Postgres {
                 "insert into store_idx_cache
                     (user_id, host, tag, idx)
                 values ($1, $2, $3, $4)
-                on conflict(user_id, host, tag) do update set idx = greatest(store_idx_cache.idx, $4)
+                on conflict(user_id, host, tag) do update set idx = greatest(store_idx_cache.idx, \
+                 $4)
                 ",
             )
             .bind(user.id)
@@ -308,8 +293,7 @@ impl Database for Postgres {
             .bind(tag)
             .bind(idx as i64)
             .execute(&mut *tx)
-            .await
-            ?;
+            .await?;
         }
 
         tx.commit().await?;
@@ -391,10 +375,7 @@ impl Database for Postgres {
                 .await?
         } else {
             tracing::debug!("using aggregate query for user {}", user.id);
-            sqlx::query_as(STATUS_SQL)
-                .bind(user.id)
-                .fetch_all(self.read_pool())
-                .await?
+            sqlx::query_as(STATUS_SQL).bind(user.id).fetch_all(self.read_pool()).await?
         };
 
         res.sort();

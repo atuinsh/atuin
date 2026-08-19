@@ -33,13 +33,7 @@ pub(crate) const TIPS: &[Tip] = &[
     Tip {
         id: "ctrl-c-interrupt",
         text: "Ctrl+C interrupts a running command",
-        relevant: Some(|ctx| {
-            ctx.settings
-                .ai
-                .capabilities
-                .enable_command_execution
-                .unwrap_or(true)
-        }),
+        relevant: Some(|ctx| ctx.settings.ai.capabilities.enable_command_execution.unwrap_or(true)),
     },
     Tip {
         id: "model",
@@ -58,7 +52,8 @@ pub(crate) const TIPS: &[Tip] = &[
     },
     Tip {
         id: "send-cwd",
-        text: "You can include your working directory in AI requests automatically: `atuin config set ai.opening.send_cwd true`",
+        text: "You can include your working directory in AI requests automatically: `atuin config \
+               set ai.opening.send_cwd true`",
         relevant: Some(|ctx| {
             let ai = &ctx.settings.ai;
             !ai.opening.send_cwd.or(ai.send_cwd).unwrap_or(false)
@@ -71,7 +66,8 @@ pub(crate) const TIPS: &[Tip] = &[
     },
     Tip {
         id: "send-last-command",
-        text: "Send your last command to Atuin AI automatically with `atuin config set ai.opening.send_last_command true`",
+        text: "Send your last command to Atuin AI automatically with `atuin config set \
+               ai.opening.send_last_command true`",
         relevant: Some(|ctx| !ctx.settings.ai.opening.send_last_command.unwrap_or(false)),
     },
     Tip {
@@ -165,10 +161,7 @@ mod tests {
             .filter(|t| t.relevant.is_none_or(|applies| applies(&c)))
             .map(|t| t.id)
             .collect();
-        assert!(
-            relevant_ids.len() >= 2,
-            "test needs at least two relevant tips"
-        );
+        assert!(relevant_ids.len() >= 2, "test needs at least two relevant tips");
 
         let mut rotation = TipRotation::starting_at(0);
         // Pull two full cycles: tips come back in order, then wrap.

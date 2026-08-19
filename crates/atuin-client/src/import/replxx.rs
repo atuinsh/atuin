@@ -1,9 +1,11 @@
-use std::{path::PathBuf, str};
+use std::path::PathBuf;
+use std::str;
 
 use async_trait::async_trait;
 use directories::UserDirs;
 use eyre::{Result, eyre};
-use time::{OffsetDateTime, PrimitiveDateTime, macros::format_description};
+use time::macros::format_description;
+use time::{OffsetDateTime, PrimitiveDateTime};
 
 use super::{Importer, Loader, get_histfile_path, unix_byte_lines};
 use crate::history::History;
@@ -63,10 +65,8 @@ impl Importer for Replxx {
                 None => {
                     // replxx uses ETB character (0x17) as line breaker
                     let cmd = s.replace('\u{0017}', "\n");
-                    let imported = History::import()
-                        .shell("replxx")
-                        .timestamp(timestamp)
-                        .command(cmd);
+                    let imported =
+                        History::import().shell("replxx").timestamp(timestamp).command(cmd);
 
                     h.push(imported.build().into()).await?;
                 }
@@ -92,9 +92,9 @@ fn try_parse_line_as_timestamp(line: &str) -> Option<OffsetDateTime> {
 #[cfg(test)]
 mod test {
 
-    use crate::import::{Importer, tests::TestLoader};
-
     use super::Replxx;
+    use crate::import::Importer;
+    use crate::import::tests::TestLoader;
 
     #[tokio::test]
     async fn parse_complex() {
@@ -127,16 +127,15 @@ CREATE TABLE test( stamp DateTime('UTC'))ENGINE = MergeTreePARTITION BY toDat
             };
         }
 
-        history!(
-            1707603388,
-            "select * from remote('127.0.0.1:20222', view(select 1))"
-        );
+        history!(1707603388, "select * from remote('127.0.0.1:20222', view(select 1))");
         history!(1707603396, "select * from numbers(10)");
         history!(1707603401, "select * from system.numbers");
         history!(1707603568, "select 1");
         history!(
             1708600533,
-            "CREATE TABLE test\n( stamp DateTime('UTC'))\nENGINE = MergeTree\nPARTITION BY toDate(stamp)\norder by tuple() as select toDateTime('2020-01-01')+number*60 from numbers(80000);"
+            "CREATE TABLE test\n( stamp DateTime('UTC'))\nENGINE = MergeTree\nPARTITION BY \
+             toDate(stamp)\norder by tuple() as select toDateTime('2020-01-01')+number*60 from \
+             numbers(80000);"
         );
     }
 
@@ -149,10 +148,7 @@ CREATE TABLE test( stamp DateTime('UTC'))ENGINE = MergeTreePARTITION BY toDat
         let replxx = Replxx { bytes };
 
         let mut loader = TestLoader::default();
-        replxx
-            .load(&mut loader)
-            .await
-            .expect("import must not fail");
+        replxx.load(&mut loader).await.expect("import must not fail");
 
         let commands: Vec<&str> = loader.buf.iter().map(|h| h.command.as_str()).collect();
         assert_eq!(commands, ["select 1", "select 2"]);

@@ -2,14 +2,10 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus, RecordTag};
-use atuin_server_database::{
-    Database, DbError, DbResult, DbSettings,
-    models::{NewSession, NewUser, Session, User},
-};
-use sqlx::{
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
-    types::Uuid,
-};
+use atuin_server_database::models::{NewSession, NewUser, Session, User};
+use atuin_server_database::{Database, DbError, DbResult, DbSettings};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+use sqlx::types::Uuid;
 use tracing::instrument;
 use wrappers::{DbRecord, DbSession, DbUser};
 
@@ -142,10 +138,7 @@ impl Database for Sqlite {
             .execute(&self.pool)
             .await?;
 
-        sqlx::query("delete from users where id = $1")
-            .bind(u.id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query("delete from users where id = $1").bind(u.id).execute(&self.pool).await?;
 
         sqlx::query("delete from history where user_id = $1")
             .bind(u.id)
@@ -256,10 +249,8 @@ impl Database for Sqlite {
         const STATUS_SQL: &str =
             "select host, tag, max(idx) from store where user_id = $1 group by host, tag";
 
-        let res: Vec<(Uuid, String, i64)> = sqlx::query_as(STATUS_SQL)
-            .bind(user.id)
-            .fetch_all(&self.pool)
-            .await?;
+        let res: Vec<(Uuid, String, i64)> =
+            sqlx::query_as(STATUS_SQL).bind(user.id).fetch_all(&self.pool).await?;
 
         let mut status = RecordStatus::new();
 

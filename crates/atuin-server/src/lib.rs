@@ -12,8 +12,7 @@ mod metrics;
 mod router;
 mod trace;
 
-pub use settings::Settings;
-pub use settings::example_config;
+pub use settings::{Settings, example_config};
 
 pub mod settings;
 
@@ -36,19 +35,14 @@ async fn shutdown_signal() {
 
 #[cfg(target_family = "windows")]
 async fn shutdown_signal() {
-    signal::windows::ctrl_c()
-        .expect("failed to register signal handler")
-        .recv()
-        .await;
+    signal::windows::ctrl_c().expect("failed to register signal handler").recv().await;
     eprintln!("Shutting down gracefully...");
 }
 
 pub async fn launch<Db: Database>(settings: Settings, addr: SocketAddr) -> Result<()> {
     launch_with_tcp_listener::<Db>(
         settings,
-        TcpListener::bind(addr)
-            .await
-            .context("could not connect to socket")?,
+        TcpListener::bind(addr).await.context("could not connect to socket")?,
         shutdown_signal(),
     )
     .await
@@ -61,12 +55,9 @@ pub async fn launch_with_tcp_listener<Db: Database>(
 ) -> Result<()> {
     let r = make_router::<Db>(settings).await?;
 
-    serve(
-        listener,
-        r.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown)
-    .await?;
+    serve(listener, r.into_make_service_with_connect_info::<SocketAddr>())
+        .with_graceful_shutdown(shutdown)
+        .await?;
 
     Ok(())
 }
@@ -74,9 +65,7 @@ pub async fn launch_with_tcp_listener<Db: Database>(
 // The separate listener means it's much easier to ensure metrics are not accidentally exposed to
 // the public.
 pub async fn launch_metrics_server(host: String, port: u16) -> Result<()> {
-    let listener = TcpListener::bind((host, port))
-        .await
-        .context("failed to bind metrics tcp")?;
+    let listener = TcpListener::bind((host, port)).await.context("failed to bind metrics tcp")?;
 
     let recorder_handle = metrics::setup_metrics_recorder();
 
@@ -85,9 +74,7 @@ pub async fn launch_metrics_server(host: String, port: u16) -> Result<()> {
         axum::routing::get(move || std::future::ready(recorder_handle.render())),
     );
 
-    serve(listener, router.into_make_service())
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    serve(listener, router.into_make_service()).with_graceful_shutdown(shutdown_signal()).await?;
 
     Ok(())
 }

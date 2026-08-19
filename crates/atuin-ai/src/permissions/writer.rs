@@ -89,8 +89,9 @@ pub(crate) fn global_permissions_path() -> std::path::PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::*;
+
+    use super::*;
 
     #[fixture]
     fn perm_file() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -152,9 +153,7 @@ allow = ["AtuinHistory"]
             tool: "AtuinHistory".to_string(),
             scope: None,
         };
-        write_rule(&file, &rule, RuleDisposition::Allow)
-            .await
-            .unwrap();
+        write_rule(&file, &rule, RuleDisposition::Allow).await.unwrap();
 
         let content = tokio::fs::read_to_string(&file).await.unwrap();
         // Should appear exactly once

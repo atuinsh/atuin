@@ -23,7 +23,6 @@ mod trunc;
 pub(crate) mod turn;
 
 use trunc::{command_spinner, truncated_line};
-
 use turn::{
     ConfidenceLevel, DangerLevel, OutOfBandOutputDetails, SuggestedCommandDetails, ToolCallDetails,
     ToolGroup, ToolGroupKind, ToolRenderData, ToolResultStatus, ToolSummary, UiEvent, UiTurn,
@@ -61,9 +60,7 @@ fn md(source: impl Into<String>) -> Markdown {
             code_block: Style::default().fg(Color::Green),
             bold: Style::default().add_modifier(Modifier::BOLD),
             italic: Style::default().add_modifier(Modifier::ITALIC),
-            heading: Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            heading: Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
             table_border: Style::default().fg(Color::DarkGray),
             table_header: Style::default().add_modifier(Modifier::BOLD),
         })
@@ -104,7 +101,11 @@ pub(crate) fn user_turn_view(events: &[UiEvent], first_turn: bool) -> AnyElement
             UiEvent::Text { content } => Some(text(content.clone()).pad_left(2)),
             _ => None,
         }))
-        .pad_top(if first_turn { 0 } else { 1 })
+        .pad_top(if first_turn {
+            0
+        } else {
+            1
+        })
         .any()
 }
 
@@ -119,24 +120,16 @@ pub(crate) fn agent_turn_view(
 
     col()
         .child(text(" Atuin AI ").style(label_style))
-        .children(events.iter().enumerate().map(|(i, event)| {
-            col()
-                .when(i > 0, |c| c.child(text("")))
-                .child(event_view(event))
-        }))
+        .children(
+            events.iter().enumerate().map(|(i, event)| {
+                col().when(i > 0, |c| c.child(text(""))).child(event_view(event))
+            }),
+        )
         .when_some(working, |c, working| {
             c.child(
                 spinner(working.status.unwrap_or(""))
-                    .spinner_style(
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
-                    )
-                    .label_style(
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::BOLD),
-                    )
+                    .spinner_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+                    .label_style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD))
                     .pad_left(2)
                     .pad_top(1),
             )
@@ -164,9 +157,7 @@ pub(crate) fn responded_view(
 /// the line it hangs off.
 fn tip_line(tip: &'static Tip) -> impl Element + 'static {
     let dim = Style::default().fg(Color::DarkGray);
-    row()
-        .fixed(2, text("└ ").style(dim))
-        .fill(text(format!("Tip: {}", tip.text)).style(dim))
+    row().fixed(2, text("└ ").style(dim)).fill(text(format!("Tip: {}", tip.text)).style(dim))
 }
 
 /// Humanized elapsed time: sub-minute in seconds ("3.2 seconds",
@@ -246,10 +237,7 @@ fn tool_status_view(name: &str, status: &ToolResultStatus) -> AnyElement<'static
         ToolResultStatus::Success => tool_spinner(format!("Ran: {name}"), true).any(),
         ToolResultStatus::Error { content } => text("✗ ")
             .style(Style::default().fg(Color::Red))
-            .span(
-                format!("{name}: {}", error_label(content)),
-                Style::default().fg(Color::Red),
-            )
+            .span(format!("{name}: {}", error_label(content)), Style::default().fg(Color::Red))
             .any(),
     }
 }
@@ -276,19 +264,21 @@ fn shell_tool_view(command: &str, preview: Option<&ToolPreview>) -> AnyElement<'
     match preview {
         Some(preview) => col()
             .child(command_spinner(
-                if done { "Ran: " } else { "Running: " },
+                if done {
+                    "Ran: "
+                } else {
+                    "Running: "
+                },
                 command,
                 done,
             ))
             .child(
-                row()
-                    .fixed(2, text("└ ").style(Style::default().fg(Color::DarkGray)))
-                    .fill(
-                        viewport(preview.lines.iter().cloned())
-                            .height((preview.lines.len() as u16).clamp(1, MAX_SHELL_PREVIEW_LINES))
-                            .style(Style::default().fg(Color::Gray))
-                            .wrap(false),
-                    ),
+                row().fixed(2, text("└ ").style(Style::default().fg(Color::DarkGray))).fill(
+                    viewport(preview.lines.iter().cloned())
+                        .height((preview.lines.len() as u16).clamp(1, MAX_SHELL_PREVIEW_LINES))
+                        .style(Style::default().fg(Color::Gray))
+                        .wrap(false),
+                ),
             )
             .child(shell_tool_footer(preview, done))
             .any(),
@@ -307,9 +297,7 @@ fn shell_tool_footer(preview: &ToolPreview, done: bool) -> AnyElement<'static> {
             .any();
     }
     if !done {
-        return text("[Ctrl+C] Interrupt")
-            .style(Style::default().fg(Color::DarkGray))
-            .any();
+        return text("[Ctrl+C] Interrupt").style(Style::default().fg(Color::DarkGray)).any();
     }
     if let Some(code) = preview.exit_code {
         let style = if code == 0 {
@@ -347,9 +335,7 @@ fn file_edit_tool_view(
     col()
         .child(status_line)
         .child(
-            col()
-                .children(preview.hunks.iter().map(|hunk| hunk_view(hunk, gutter_w)))
-                .pad_left(2),
+            col().children(preview.hunks.iter().map(|hunk| hunk_view(hunk, gutter_w))).pad_left(2),
         )
         .any()
 }
@@ -400,14 +386,8 @@ fn file_write_tool_view(
         (ToolResultStatus::Success, Some(p)) => format!(" ({} lines)", p.total_lines),
         _ => String::new(),
     };
-    let status_line = tool_status_line(
-        status,
-        "Writing",
-        "Wrote",
-        "Write",
-        &display_path,
-        &line_info,
-    );
+    let status_line =
+        tool_status_line(status, "Writing", "Wrote", "Write", &display_path, &line_info);
 
     let Some(preview) = preview else {
         return status_line;
@@ -480,7 +460,11 @@ fn group_view(group: &ToolGroup) -> AnyElement<'static> {
 
 /// Tree-connector marker: `└ ` for the first visible row, spaces after.
 fn tree_marker(is_first: bool) -> &'static str {
-    if is_first { "└ " } else { "  " }
+    if is_first {
+        "└ "
+    } else {
+        "  "
+    }
 }
 
 /// 2-char status marker column: ✓ / ✗ / blank.
@@ -505,10 +489,7 @@ fn group_row_view(
     content: AnyElement<'static>,
 ) -> AnyElement<'static> {
     row()
-        .fixed(
-            2,
-            text(tree_marker(is_first)).style(Style::default().fg(Color::DarkGray)),
-        )
+        .fixed(2, text(tree_marker(is_first)).style(Style::default().fg(Color::DarkGray)))
         .fixed(2, status_marker_view(status))
         .fill(content)
         .any()
@@ -568,21 +549,15 @@ fn history_search_row(is_first: bool, details: &ToolCallDetails) -> AnyElement<'
 
     let content = if query.trim().is_empty() {
         text("recent commands")
-            .style(
-                Style::default()
-                    .fg(Color::Gray)
-                    .add_modifier(Modifier::ITALIC),
-            )
+            .style(Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC))
             .when(!filter_label.is_empty(), |t| {
-                t.span(" ", Style::default())
-                    .span(&filter_label, filter_style)
+                t.span(" ", Style::default()).span(&filter_label, filter_style)
             })
             .any()
     } else {
         text(query)
             .when(!filter_label.is_empty(), |t| {
-                t.span(" ", Style::default())
-                    .span(&filter_label, filter_style)
+                t.span(" ", Style::default()).span(&filter_label, filter_style)
             })
             .any()
     };
@@ -615,10 +590,8 @@ fn format_filter_modes(modes: &[HistorySearchFilterMode]) -> String {
 // ───────────────────────────────────────────────────────────────────
 
 fn suggested_command_view(details: &SuggestedCommandDetails) -> AnyElement<'static> {
-    let is_dangerous = matches!(
-        details.danger_level,
-        DangerLevel::High(_) | DangerLevel::Medium(_)
-    );
+    let is_dangerous =
+        matches!(details.danger_level, DangerLevel::High(_) | DangerLevel::Medium(_));
     let danger_notes = details.danger_level.notes().cloned();
     let danger_style = match details.danger_level {
         DangerLevel::High(_) => Style::default().fg(Color::Red),
@@ -632,10 +605,8 @@ fn suggested_command_view(details: &SuggestedCommandDetails) -> AnyElement<'stat
         DangerLevel::Unknown(_) => "Unknown",
     };
 
-    let low_confidence = matches!(
-        details.confidence_level,
-        ConfidenceLevel::Low(_) | ConfidenceLevel::Medium(_)
-    );
+    let low_confidence =
+        matches!(details.confidence_level, ConfidenceLevel::Low(_) | ConfidenceLevel::Medium(_));
     let confidence_level = match details.confidence_level {
         ConfidenceLevel::Low(_) => "Low",
         ConfidenceLevel::Medium(_) => "Medium",
@@ -666,41 +637,33 @@ fn suggested_command_view(details: &SuggestedCommandDetails) -> AnyElement<'stat
                     .pad_left(2),
             )
         })
-        .when_some(
-            is_dangerous.then_some(danger_notes).flatten(),
-            |c, notes| {
-                c.child(
-                    row()
-                        .fixed(2, text("└").style(Style::default().fg(Color::DarkGray)))
-                        .fill(md(notes))
-                        .pad_left(2),
-                )
-            },
-        )
+        .when_some(is_dangerous.then_some(danger_notes).flatten(), |c, notes| {
+            c.child(
+                row()
+                    .fixed(2, text("└").style(Style::default().fg(Color::DarkGray)))
+                    .fill(md(notes))
+                    .pad_left(2),
+            )
+        })
         .when(low_confidence, |c| {
             c.child(
                 text("Confidence: ")
                     .style(Style::default().fg(Color::Blue))
                     .span(
                         confidence_level,
-                        Style::default()
-                            .fg(Color::Blue)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
                     )
                     .pad_left(2),
             )
         })
-        .when_some(
-            low_confidence.then_some(confidence_notes).flatten(),
-            |c, notes| {
-                c.child(
-                    row()
-                        .fixed(2, text("└").style(Style::default().fg(Color::DarkGray)))
-                        .fill(md(notes))
-                        .pad_left(2),
-                )
-            },
-        )
+        .when_some(low_confidence.then_some(confidence_notes).flatten(), |c, notes| {
+            c.child(
+                row()
+                    .fixed(2, text("└").style(Style::default().fg(Color::DarkGray)))
+                    .fill(md(notes))
+                    .pad_left(2),
+            )
+        })
         .any()
 }
 
@@ -720,10 +683,7 @@ pub(crate) fn permission_options(
     match tool {
         ClientToolCall::Edit(_) | ClientToolCall::Write(_) => vec![
             ("Allow", PermissionResult::Allow),
-            (
-                "Allow this file for this session",
-                PermissionResult::AllowFileForSession,
-            ),
+            ("Allow this file for this session", PermissionResult::AllowFileForSession),
             ("Always allow", PermissionResult::AlwaysAllow),
             ("Deny", PermissionResult::Deny),
         ],
@@ -765,10 +725,7 @@ pub(crate) fn permission_prompt_view(
         // command is context here, not the thing being approved, so one
         // middle-elided line beats wrapping.
         ClientToolCall::AtuinOutput(tool) => {
-            let desc = tool
-                .command
-                .clone()
-                .unwrap_or_else(|| tool.history_id.to_string());
+            let desc = tool.command.clone().unwrap_or_else(|| tool.history_id.to_string());
             truncated_line(prefix.clone(), Style::default(), desc, desc_style).any()
         }
         ClientToolCall::LoadSkill(tool) => wrapped(format!("skill: {}", tool.name)),
@@ -800,7 +757,11 @@ pub(crate) fn model_picker_view(
         .models
         .iter()
         .map(|m| {
-            let marker = if m.alias == in_use { " (current)" } else { "" };
+            let marker = if m.alias == in_use {
+                " (current)"
+            } else {
+                ""
+            };
             format!("{} — {}{}", m.name, m.description, marker)
         })
         .collect();
@@ -837,10 +798,7 @@ pub(crate) fn status_bar_view(
 
     let left = text(" Model: ")
         .style(Style::default())
-        .span(
-            model.unwrap_or("default"),
-            Style::default().add_modifier(Modifier::BOLD),
-        )
+        .span(model.unwrap_or("default"), Style::default().add_modifier(Modifier::BOLD))
         .span(" (/model to change)", Style::default().fg(Color::Gray));
 
     let Some((pct, resets_in)) = usage else {
@@ -890,8 +848,9 @@ fn format_path_for_display(path: &std::path::Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::format_elapsed;
     use std::time::Duration;
+
+    use super::format_elapsed;
 
     #[test]
     fn elapsed_formats_by_magnitude() {

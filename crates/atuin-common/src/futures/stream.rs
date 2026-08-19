@@ -1,4 +1,5 @@
-use std::{num::NonZeroUsize, pin::Pin};
+use std::num::NonZeroUsize;
+use std::pin::Pin;
 
 use futures::{Stream, StreamExt, stream};
 
@@ -39,32 +40,30 @@ where
     F: FnMut(&S::Item) -> K,
 {
     let max = max.get();
-    stream::unfold(
-        (stream.peekable(), key),
-        move |(mut stream, mut key)| async move {
-            let target = key(Pin::new(&mut stream).peek().await?);
+    stream::unfold((stream.peekable(), key), move |(mut stream, mut key)| async move {
+        let target = key(Pin::new(&mut stream).peek().await?);
 
-            let mut chunk = Vec::new();
-            while chunk.len() < max {
-                match Pin::new(&mut stream).peek().await {
-                    Some(item) if key(item) == target => {}
-                    _ => break,
-                }
-
-                // The peek above returned `Some`, so `next` does too.
-                chunk.push(stream.next().await.expect("peeked item is present"));
+        let mut chunk = Vec::new();
+        while chunk.len() < max {
+            match Pin::new(&mut stream).peek().await {
+                Some(item) if key(item) == target => {}
+                _ => break,
             }
 
-            Some(((target, chunk), (stream, key)))
-        },
-    )
+            // The peek above returned `Some`, so `next` does too.
+            chunk.push(stream.next().await.expect("peeked item is present"));
+        }
+
+        Some(((target, chunk), (stream, key)))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroUsize;
 
-    use futures::{StreamExt, executor::block_on, stream};
+    use futures::executor::block_on;
+    use futures::{StreamExt, stream};
     use proptest::prelude::*;
     use rstest::rstest;
 
@@ -75,9 +74,7 @@ mod tests {
     fn chunks_of(items: Vec<i32>, max: usize) -> Vec<Vec<i32>> {
         let max = NonZeroUsize::new(max).expect("test max is non-zero");
         block_on(
-            chunk_by_bounded(stream::iter(items), max, |x| *x)
-                .map(|(_, chunk)| chunk)
-                .collect(),
+            chunk_by_bounded(stream::iter(items), max, |x| *x).map(|(_, chunk)| chunk).collect(),
         )
     }
 
@@ -102,18 +99,13 @@ mod tests {
         // The key collapses values into residue classes; equal residues chunk together, and each
         // chunk is tagged with that residue.
         let chunks: Vec<(i32, Vec<i32>)> = block_on(
-            chunk_by_bounded(
-                stream::iter([2, 4, 3, 6, 5]),
-                NonZeroUsize::new(5).unwrap(),
-                |x| x % 2,
-            )
+            chunk_by_bounded(stream::iter([2, 4, 3, 6, 5]), NonZeroUsize::new(5).unwrap(), |x| {
+                x % 2
+            })
             .collect(),
         );
 
-        assert_eq!(
-            chunks,
-            vec![(0, vec![2, 4]), (1, vec![3]), (0, vec![6]), (1, vec![5])]
-        );
+        assert_eq!(chunks, vec![(0, vec![2, 4]), (1, vec![3]), (0, vec![6]), (1, vec![5])]);
     }
 
     proptest! {

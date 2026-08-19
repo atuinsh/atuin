@@ -169,10 +169,8 @@ mod unix {
     }
 
     fn ids_of(entries: &[&History]) -> Vec<String> {
-        let mut ids: Vec<String> = entries
-            .iter()
-            .map(|h| Uuid::parse_str(&h.id.0).unwrap().to_string())
-            .collect();
+        let mut ids: Vec<String> =
+            entries.iter().map(|h| Uuid::parse_str(&h.id.0).unwrap().to_string()).collect();
         ids.sort();
         ids
     }
@@ -187,13 +185,7 @@ mod unix {
         // alpha: bash, host-a, session A, inside the workspace
         // beta:  zsh, host-b, session B, outside the workspace
         // gamma: unknown shell, host-a, session A, workspace root
-        let alpha = seed_history(
-            "echo alpha",
-            "/work/repo/sub",
-            "host-a",
-            SESSION_A,
-            Some("bash"),
-        );
+        let alpha = seed_history("echo alpha", "/work/repo/sub", "host-a", SESSION_A, Some("bash"));
         let beta = seed_history("echo beta", "/elsewhere", "host-b", SESSION_B, Some("zsh"));
         let gamma = seed_history("echo gamma", "/work/repo", "host-a", SESSION_A, None);
         let seeded = [alpha.clone(), beta.clone(), gamma.clone()];
@@ -206,15 +198,8 @@ mod unix {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
             query_id += 1;
-            let results = search(
-                &mut client,
-                query_id,
-                "echo",
-                FilterMode::Global,
-                ctx(),
-                &[],
-            )
-            .await;
+            let results =
+                search(&mut client, query_id, "echo", FilterMode::Global, ctx(), &[]).await;
             if results.len() == 3 {
                 break;
             }
@@ -227,15 +212,8 @@ mod unix {
 
         // Directory: exact cwd match only.
         query_id += 1;
-        let results = search(
-            &mut client,
-            query_id,
-            "echo",
-            FilterMode::Directory,
-            ctx(),
-            &[],
-        )
-        .await;
+        let results =
+            search(&mut client, query_id, "echo", FilterMode::Directory, ctx(), &[]).await;
         assert_eq!(sorted(results), ids_of(&[&gamma]), "directory filter");
 
         // Workspace: everything under the git root.
@@ -266,15 +244,7 @@ mod unix {
 
         // Session: both session-A commands.
         query_id += 1;
-        let results = search(
-            &mut client,
-            query_id,
-            "echo",
-            FilterMode::Session,
-            ctx(),
-            &[],
-        )
-        .await;
+        let results = search(&mut client, query_id, "echo", FilterMode::Session, ctx(), &[]).await;
         assert_eq!(sorted(results), ids_of(&[&alpha, &gamma]), "session");
 
         // Unknown filter targets match nothing rather than erroring.
@@ -299,15 +269,8 @@ mod unix {
             (vec![], ids_of(&[&alpha, &beta, &gamma]), "back to all"),
         ] {
             query_id += 1;
-            let results = search(
-                &mut client,
-                query_id,
-                "echo",
-                FilterMode::Global,
-                ctx(),
-                &shells,
-            )
-            .await;
+            let results =
+                search(&mut client, query_id, "echo", FilterMode::Global, ctx(), &shells).await;
             assert_eq!(sorted(results), expected, "shell filter: {label}");
         }
 

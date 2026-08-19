@@ -49,7 +49,10 @@ pub(crate) enum Outbound {
     Keyframe(Frame),
     /// The host's terminal geometry (already minus the bar row), for the hub
     /// to negotiate viewer sizes against.
-    HostSize { cols: u16, rows: u16 },
+    HostSize {
+        cols: u16,
+        rows: u16,
+    },
     /// Kill switch / clean exit: end the session and invalidate the link now.
     End,
 }
@@ -107,16 +110,16 @@ impl Inbound {
     /// E2EE blob, which the transport opens before dispatching to the session.
     pub(crate) fn from_event(event: &str, payload: &Value) -> Option<Self> {
         match event {
-            "input" => b64_decode(payload["data"].as_str().unwrap_or_default())
-                .ok()
-                .map(Self::Input),
+            "input" => {
+                b64_decode(payload["data"].as_str().unwrap_or_default()).ok().map(Self::Input)
+            }
             "set_size" => Some(Self::SetSize {
                 cols: u16::try_from(payload["cols"].as_u64()?).ok()?,
                 rows: u16::try_from(payload["rows"].as_u64()?).ok()?,
             }),
-            "participants" => Some(Self::Participants(
-                u32::try_from(payload["count"].as_u64()?).ok()?,
-            )),
+            "participants" => {
+                Some(Self::Participants(u32::try_from(payload["count"].as_u64()?).ok()?))
+            }
             "request_keyframe" => Some(Self::RequestKeyframe),
             _ => None,
         }
@@ -297,8 +300,8 @@ impl SessionTask {
         self.input_disabled = true;
         self.dirty = true;
         eprintln!(
-            "\r\n[atuin lab share] viewer input disabled: the replay-protection budget is \
-             spent. Output and viewing continue; restart the share to re-enable typing.\r"
+            "\r\n[atuin lab share] viewer input disabled: the replay-protection budget is spent. \
+             Output and viewing continue; restart the share to re-enable typing.\r"
         );
     }
 
@@ -321,7 +324,8 @@ impl SessionTask {
         match &self.url_sink {
             Some(sink) => sink(join_url),
             None if fresh_session => println!(
-                "\r\n  Reconnected as a NEW session -- the previous link is dead.\r\n  New link: {join_url}\r"
+                "\r\n  Reconnected as a NEW session -- the previous link is dead.\r\n  New link: \
+                 {join_url}\r"
             ),
             None => println!("\r\n  Share this link: {join_url}\r"),
         }
@@ -970,10 +974,7 @@ mod tests {
 
     #[test]
     fn resize_notice_does_not_blame_a_viewer_when_nobody_is_watching() {
-        assert_eq!(
-            resize_notice(OLD, NEW, 0),
-            Some("resized to 100x30".to_string())
-        );
+        assert_eq!(resize_notice(OLD, NEW, 0), Some("resized to 100x30".to_string()));
     }
 
     #[test]
@@ -1044,9 +1045,7 @@ mod tests {
                 "the source is resized to the clamped geometry, once"
             );
             // ...and the model built at that geometry survives wrapping text.
-            let _ = task
-                .screen
-                .process_chunk(b"wrap this well past the end\r\nmore\r\n");
+            let _ = task.screen.process_chunk(b"wrap this well past the end\r\nmore\r\n");
         }
         let (mut task, _) = resize_task(Size { cols: 80, rows: 23 });
         task.apply_host_window(1, 1);
@@ -1060,20 +1059,14 @@ mod tests {
     #[test]
     fn a_hub_negotiated_size_below_the_floor_is_clamped_not_honoured() {
         let (task, _) = resize_task(Size { cols: 80, rows: 23 });
-        assert_eq!(
-            task.clamp_child(Size { cols: 0, rows: 0 }),
-            Size {
-                cols: crate::MIN_COLS,
-                rows: crate::MIN_CHILD_ROWS
-            }
-        );
-        assert_eq!(
-            task.clamp_child(Size { cols: 80, rows: 1 }),
-            Size {
-                cols: 80,
-                rows: crate::MIN_CHILD_ROWS
-            }
-        );
+        assert_eq!(task.clamp_child(Size { cols: 0, rows: 0 }), Size {
+            cols: crate::MIN_COLS,
+            rows: crate::MIN_CHILD_ROWS
+        });
+        assert_eq!(task.clamp_child(Size { cols: 80, rows: 1 }), Size {
+            cols: 80,
+            rows: crate::MIN_CHILD_ROWS
+        });
         // The physical maximum still wins over an oversized request.
         assert_eq!(
             task.clamp_child(Size {
@@ -1222,10 +1215,10 @@ mod tests {
             // Startup order is fixed: geometry first, then the bootstrap
             // snapshot as chunk 0 — the very first `Output` frame — with the
             // initial keyframe riding it.
-            assert!(matches!(
-                next_outbound(&mut out_rx).await,
-                Outbound::HostSize { cols: 80, rows: 24 }
-            ));
+            assert!(matches!(next_outbound(&mut out_rx).await, Outbound::HostSize {
+                cols: 80,
+                rows: 24
+            }));
             match next_outbound(&mut out_rx).await {
                 Outbound::Output(frame) => {
                     assert_eq!(frame.seq, 1, "the bootstrap is chunk 0: seq 1");
@@ -1233,15 +1226,10 @@ mod tests {
                 }
                 _ => panic!("the bootstrap must be the first Output frame"),
             }
-            assert!(matches!(
-                next_outbound(&mut out_rx).await,
-                Outbound::Keyframe(_)
-            ));
+            assert!(matches!(next_outbound(&mut out_rx).await, Outbound::Keyframe(_)));
 
             // Live source bytes flow out as `Output` frames.
-            source_tx
-                .send(ReadEvent::Output(b"hello".to_vec()))
-                .expect("reader alive");
+            source_tx.send(ReadEvent::Output(b"hello".to_vec())).expect("reader alive");
             match next_non_keyframe(&mut out_rx).await {
                 Outbound::Output(frame) => assert_eq!(frame.data, b"hello"),
                 _ => panic!("source bytes must surface as Output"),
@@ -1249,9 +1237,7 @@ mod tests {
 
             // Viewer input (write mode) reaches the source's writer via the
             // detached pty-writer thread; poll until it lands.
-            in_tx
-                .send(Inbound::Input(b"typed".to_vec()))
-                .expect("session alive");
+            in_tx.send(Inbound::Input(b"typed".to_vec())).expect("session alive");
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
             while sink.lock().expect("writer lock").as_slice() != b"typed" {
                 assert!(
@@ -1270,17 +1256,11 @@ mod tests {
                     rows: 30,
                 }))
                 .expect("reader alive");
-            assert!(matches!(
-                next_outbound(&mut out_rx).await,
-                Outbound::Keyframe(_)
-            ));
-            assert!(matches!(
-                next_non_keyframe(&mut out_rx).await,
-                Outbound::HostSize {
-                    cols: 100,
-                    rows: 30
-                }
-            ));
+            assert!(matches!(next_outbound(&mut out_rx).await, Outbound::Keyframe(_)));
+            assert!(matches!(next_non_keyframe(&mut out_rx).await, Outbound::HostSize {
+                cols: 100,
+                rows: 30
+            }));
 
             // Source EOF plus the wait closure's code ends the session with
             // exactly that code.
@@ -1343,10 +1323,10 @@ mod tests {
             };
             let run = tokio::spawn(session.run());
 
-            assert!(matches!(
-                next_outbound(&mut out_rx).await,
-                Outbound::HostSize { cols: 80, rows: 24 }
-            ));
+            assert!(matches!(next_outbound(&mut out_rx).await, Outbound::HostSize {
+                cols: 80,
+                rows: 24
+            }));
 
             // First join, then a reconnect the hub turned into a NEW session:
             // both URLs must reach the sink, in order — the fresh_session
@@ -1371,13 +1351,10 @@ mod tests {
                 );
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            assert_eq!(
-                urls.lock().expect("url lock").as_slice(),
-                [
-                    "https://hub.example/s/one#key".to_string(),
-                    "https://hub.example/s/two#key".to_string(),
-                ]
-            );
+            assert_eq!(urls.lock().expect("url lock").as_slice(), [
+                "https://hub.example/s/one#key".to_string(),
+                "https://hub.example/s/two#key".to_string(),
+            ]);
 
             // EOF + wait still end a headless session with the wait's code.
             drop(source_tx);

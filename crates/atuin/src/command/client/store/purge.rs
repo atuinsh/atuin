@@ -1,8 +1,8 @@
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
+use atuin_common::encryption::paseto_v4;
 use clap::Args;
 use eyre::Result;
-
-use atuin_client::{record::sqlite_store::SqliteStore, settings::Settings};
-use atuin_common::encryption::paseto_v4;
 
 #[derive(Args, Debug)]
 pub struct Purge {}

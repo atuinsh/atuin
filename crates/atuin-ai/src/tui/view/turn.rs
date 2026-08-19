@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 
 use crate::fsm::tools::ToolManager;
-use crate::tools::descriptor;
-use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview};
+use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview, descriptor};
 use crate::tui::ConversationEvent;
 
 /// Server-sent danger level for a suggested command
@@ -106,9 +105,7 @@ pub(crate) struct ToolGroup {
 impl ToolGroup {
     /// True if any call in the group is still pending.
     pub(crate) fn any_pending(&self) -> bool {
-        self.calls
-            .iter()
-            .any(|c| c.status == ToolResultStatus::Pending)
+        self.calls.iter().any(|c| c.status == ToolResultStatus::Pending)
     }
 }
 
@@ -135,7 +132,9 @@ pub(crate) enum ToolRenderData {
         preview: Option<ToolPreview>,
     },
     /// File read operation.
-    FileRead { path: PathBuf },
+    FileRead {
+        path: PathBuf,
+    },
     /// File edit (str_replace) operation.
     FileEdit {
         path: PathBuf,
@@ -152,7 +151,9 @@ pub(crate) enum ToolRenderData {
         filter_modes: Vec<HistorySearchFilterMode>,
     },
     /// Skill loading — read-only, auto-approved.
-    SkillLoad { _name: String },
+    SkillLoad {
+        _name: String,
+    },
     /// Server-side tool — no client rendering data available.
     Remote,
 }
@@ -214,9 +215,15 @@ pub(crate) struct UiTurn {
 
 #[derive(Debug)]
 pub(crate) enum UiTurnKind {
-    User { events: Vec<UiEvent> },
-    Agent { events: Vec<UiEvent> },
-    OutOfBand { events: Vec<UiEvent> },
+    User {
+        events: Vec<UiEvent>,
+    },
+    Agent {
+        events: Vec<UiEvent>,
+    },
+    OutOfBand {
+        events: Vec<UiEvent>,
+    },
 }
 
 pub(crate) struct TurnBuilder<'a> {
@@ -388,11 +395,7 @@ impl<'a> TurnBuilder<'a> {
     }
 
     fn add_suggested_command(&mut self, input: &serde_json::Value) {
-        let command = input
-            .get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
         if command.is_empty() {
             return;
@@ -401,39 +404,23 @@ impl<'a> TurnBuilder<'a> {
         self.start_agent_turn();
         {
             let events = self.current_events_mut();
-            let danger_level = input
-                .get("danger")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let danger_level =
+                input.get("danger").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
-            let confidence_level = input
-                .get("confidence")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let confidence_level =
+                input.get("confidence").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
-            let danger_notes = input
-                .get("danger_notes")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let danger_notes =
+                input.get("danger_notes").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
-            let confidence_notes = input
-                .get("confidence_notes")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let confidence_notes =
+                input.get("confidence_notes").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
             let danger = DangerLevel::from((&danger_level, &danger_notes));
             let confidence = ConfidenceLevel::from((&confidence_level, &confidence_notes));
 
             events.push(UiEvent::SuggestedCommand(SuggestedCommandDetails {
-                command: input
-                    .get("command")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+                command: input.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 danger_level: danger,
                 confidence_level: confidence,
             }));
@@ -444,13 +431,12 @@ impl<'a> TurnBuilder<'a> {
         let render_data = self.build_render_data(id, name);
 
         self.start_agent_turn();
-        self.current_events_mut()
-            .push(UiEvent::ToolCall(ToolCallDetails {
-                tool_use_id: id.to_string(),
-                name: name.to_string(),
-                status: ToolResultStatus::Pending,
-                render_data,
-            }));
+        self.current_events_mut().push(UiEvent::ToolCall(ToolCallDetails {
+            tool_use_id: id.to_string(),
+            name: name.to_string(),
+            status: ToolResultStatus::Pending,
+            render_data,
+        }));
     }
 
     /// Build tool-type-specific render data from the ToolTracker.
@@ -513,11 +499,10 @@ impl<'a> TurnBuilder<'a> {
 
     fn add_out_of_band_output(&mut self, _name: &str, command: Option<&str>, content: &str) {
         self.start_out_of_band_turn();
-        self.current_events_mut()
-            .push(UiEvent::OutOfBandOutput(OutOfBandOutputDetails {
-                command: command.map(|c| c.to_string()),
-                content: content.to_string(),
-            }));
+        self.current_events_mut().push(UiEvent::OutOfBandOutput(OutOfBandOutputDetails {
+            command: command.map(|c| c.to_string()),
+            content: content.to_string(),
+        }));
     }
 }
 
@@ -553,11 +538,8 @@ impl ToolSummary {
     pub(crate) fn summary(&self) -> String {
         if self.any_pending() {
             // Find the last pending tool for the active verb
-            if let Some(pending) = self
-                .tool_calls
-                .iter()
-                .rev()
-                .find(|t| t.status == ToolResultStatus::Pending)
+            if let Some(pending) =
+                self.tool_calls.iter().rev().find(|t| t.status == ToolResultStatus::Pending)
             {
                 return Self::progressive_verb(&pending.name);
             }
@@ -572,9 +554,7 @@ impl ToolSummary {
 
     /// Determines if the spinner should be spinning
     pub(crate) fn any_pending(&self) -> bool {
-        self.tool_calls
-            .iter()
-            .any(|tool_call| tool_call.status == ToolResultStatus::Pending)
+        self.tool_calls.iter().any(|tool_call| tool_call.status == ToolResultStatus::Pending)
     }
 
     /// Present-tense progressive verb for a tool name (e.g. "Searching...")

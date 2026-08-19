@@ -4,7 +4,9 @@ use std::str::FromStr;
 
 use serde::Serialize;
 use serde_with::DeserializeFromStr;
-use time::{UtcOffset, format_description::FormatItem, macros::format_description};
+use time::UtcOffset;
+use time::format_description::FormatItem;
+use time::macros::format_description;
 use tracing::warn;
 
 /// Extensions to [`UtcOffset`].
@@ -79,7 +81,8 @@ impl FromStr for UtcOffsetSpec {
 
 /// format: `<+|-><hour>[:<minute>[:<second>]]`
 static OFFSET_FMT: &[FormatItem<'_>] = format_description!(
-    "[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional [:[offset_second padding:none]]]]]"
+    "[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional \
+     [:[offset_second padding:none]]]]]"
 );
 
 #[derive(Debug, Clone, Copy, thiserror::Error)]
@@ -92,8 +95,9 @@ pub enum TimezoneDecodingError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     #[rstest]
     #[case::no_sign("09:30")]

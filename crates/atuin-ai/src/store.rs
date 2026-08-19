@@ -6,7 +6,8 @@ use eyre::{Result, eyre};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 use time::OffsetDateTime;
 
-use crate::{session::CachedUsageSnapshot, usage::UsageSnapshot};
+use crate::session::CachedUsageSnapshot;
+use crate::usage::UsageSnapshot;
 
 // Database row mappings — all columns are kept even if not yet read in
 // non-test code, since they're part of the schema and used in tests.
@@ -36,16 +37,8 @@ pub(crate) struct StoredEvent {
 }
 
 /// Row type returned by session queries (avoids clippy::type_complexity).
-type SessionRow = (
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    i64,
-    i64,
-    Option<i64>,
-);
+type SessionRow =
+    (String, Option<String>, Option<String>, Option<String>, Option<String>, i64, i64, Option<i64>);
 
 /// Row type returned by event queries.
 type EventRow = (String, String, Option<String>, String, String, String, i64);
@@ -225,7 +218,8 @@ impl AiSessionStore {
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
-            "INSERT INTO session_events (id, session_id, parent_id, invocation_id, event_type, event_data, created_at)
+            "INSERT INTO session_events (id, session_id, parent_id, invocation_id, event_type, \
+             event_data, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )
         .bind(event_id)
@@ -376,9 +370,10 @@ impl AiSessionStore {
 
 #[cfg(test)]
 mod tests {
+    use rstest::*;
+
     use super::*;
     use crate::usage::UsageSnapshot;
-    use rstest::*;
 
     #[fixture]
     async fn store() -> AiSessionStore {
@@ -388,10 +383,7 @@ mod tests {
     #[fixture]
     async fn store_with_s1(#[future] store: AiSessionStore) -> AiSessionStore {
         let store = store.await;
-        store
-            .create_session("s1", Some("/tmp"), None)
-            .await
-            .unwrap();
+        store.create_session("s1", Some("/tmp"), None).await.unwrap();
         store
     }
 
@@ -426,25 +418,11 @@ mod tests {
         let store = store_with_s1.await;
 
         store
-            .append_event(
-                "s1",
-                "e1",
-                None,
-                "inv1",
-                "user_message",
-                r#"{"content":"hello"}"#,
-            )
+            .append_event("s1", "e1", None, "inv1", "user_message", r#"{"content":"hello"}"#)
             .await
             .unwrap();
         store
-            .append_event(
-                "s1",
-                "e2",
-                Some("e1"),
-                "inv1",
-                "text",
-                r#"{"content":"hi there"}"#,
-            )
+            .append_event("s1", "e2", Some("e1"), "inv1", "text", r#"{"content":"hi there"}"#)
             .await
             .unwrap();
 
@@ -464,15 +442,10 @@ mod tests {
     #[tokio::test]
     async fn test_find_resumable_session(#[future] store: AiSessionStore) {
         let store = store.await;
-        store
-            .create_session("s1", Some("/home/user/project"), None)
-            .await
-            .unwrap();
+        store.create_session("s1", Some("/home/user/project"), None).await.unwrap();
 
-        let found = store
-            .find_resumable_session(Some("/home/user/project"), None, 3600)
-            .await
-            .unwrap();
+        let found =
+            store.find_resumable_session(Some("/home/user/project"), None, 3600).await.unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().id, "s1");
     }
@@ -482,11 +455,7 @@ mod tests {
     async fn test_find_resumable_by_git_root(#[future] store: AiSessionStore) {
         let store = store.await;
         store
-            .create_session(
-                "s1",
-                Some("/home/user/project/sub"),
-                Some("/home/user/project"),
-            )
+            .create_session("s1", Some("/home/user/project/sub"), Some("/home/user/project"))
             .await
             .unwrap();
 
@@ -502,16 +471,10 @@ mod tests {
     #[tokio::test]
     async fn test_find_resumable_skips_archived(#[future] store: AiSessionStore) {
         let store = store.await;
-        store
-            .create_session("s1", Some("/tmp"), None)
-            .await
-            .unwrap();
+        store.create_session("s1", Some("/tmp"), None).await.unwrap();
         store.archive_session("s1").await.unwrap();
 
-        let found = store
-            .find_resumable_session(Some("/tmp"), None, 3600)
-            .await
-            .unwrap();
+        let found = store.find_resumable_session(Some("/tmp"), None, 3600).await.unwrap();
         assert!(found.is_none());
     }
 
@@ -519,15 +482,9 @@ mod tests {
     #[tokio::test]
     async fn test_find_resumable_no_match_different_dir(#[future] store: AiSessionStore) {
         let store = store.await;
-        store
-            .create_session("s1", Some("/home/user/project"), None)
-            .await
-            .unwrap();
+        store.create_session("s1", Some("/home/user/project"), None).await.unwrap();
 
-        let found = store
-            .find_resumable_session(Some("/other/dir"), None, 3600)
-            .await
-            .unwrap();
+        let found = store.find_resumable_session(Some("/other/dir"), None, 3600).await.unwrap();
         assert!(found.is_none());
     }
 
@@ -547,10 +504,7 @@ mod tests {
     async fn test_update_server_session_id(#[future] store_with_s1: AiSessionStore) {
         let store = store_with_s1.await;
 
-        store
-            .update_server_session_id("s1", "server-abc")
-            .await
-            .unwrap();
+        store.update_server_session_id("s1", "server-abc").await.unwrap();
 
         let session = store.get_session("s1").await.unwrap().unwrap();
         assert_eq!(session.server_session_id.as_deref(), Some("server-abc"));
@@ -562,11 +516,7 @@ mod tests {
         let store = store_with_s1.await;
 
         let before = store.get_session("s1").await.unwrap().unwrap();
-        store
-            .find_resumable_session(Some("/tmp"), None, 3600)
-            .await
-            .unwrap()
-            .unwrap();
+        store.find_resumable_session(Some("/tmp"), None, 3600).await.unwrap().unwrap();
         let after = store.get_session("s1").await.unwrap().unwrap();
 
         assert_eq!(before.updated_at, after.updated_at);
@@ -613,18 +563,9 @@ mod tests {
     async fn test_events_ordered_chronologically(#[future] store_with_s1: AiSessionStore) {
         let store = store_with_s1.await;
 
-        store
-            .append_event("s1", "e1", None, "inv1", "user_message", "{}")
-            .await
-            .unwrap();
-        store
-            .append_event("s1", "e2", Some("e1"), "inv1", "text", "{}")
-            .await
-            .unwrap();
-        store
-            .append_event("s1", "e3", Some("e2"), "inv2", "user_message", "{}")
-            .await
-            .unwrap();
+        store.append_event("s1", "e1", None, "inv1", "user_message", "{}").await.unwrap();
+        store.append_event("s1", "e2", Some("e1"), "inv1", "text", "{}").await.unwrap();
+        store.append_event("s1", "e3", Some("e2"), "inv2", "user_message", "{}").await.unwrap();
 
         let events = store.load_events("s1").await.unwrap();
         assert_eq!(events.len(), 3);

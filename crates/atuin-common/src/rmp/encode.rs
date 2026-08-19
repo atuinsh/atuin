@@ -1,12 +1,11 @@
 use std::convert::Infallible;
 
 use rmp::Marker;
-pub use rmp::encode::{ByteBuf, RmpWrite, RmpWriteErr, ValueWriteError};
-pub use rmp::encode::{write_array_len, write_bin_len, write_map_len, write_str_len};
-pub use rmp::encode::{write_bin, write_bool, write_nil, write_str};
-pub use rmp::encode::{write_i8, write_i16, write_i32, write_i64};
-pub use rmp::encode::{write_sint, write_uint, write_uint8};
-pub use rmp::encode::{write_u8, write_u16, write_u32, write_u64};
+pub use rmp::encode::{
+    ByteBuf, RmpWrite, RmpWriteErr, ValueWriteError, write_array_len, write_bin, write_bin_len,
+    write_bool, write_i8, write_i16, write_i32, write_i64, write_map_len, write_nil, write_sint,
+    write_str, write_str_len, write_u8, write_u16, write_u32, write_u64, write_uint, write_uint8,
+};
 
 /// An error encountered while trying to encode a message with [`rmp`].
 ///
@@ -74,11 +73,7 @@ where
         writer,
         bytes.into_iter().map(Ok::<_, Infallible>),
         write_bin_len,
-        |writer, byte| {
-            writer
-                .write_u8(byte)
-                .map_err(ValueWriteError::InvalidDataWrite)
-        },
+        |writer, byte| writer.write_u8(byte).map_err(ValueWriteError::InvalidDataWrite),
     )
     .map_err(Into::into)
 }
@@ -164,9 +159,6 @@ where
         write(writer, item).map_err(|e| TryEncodeError::from(e.into()))
     })?;
 
-    assert_eq!(
-        len, count,
-        "programming error: incorrect implementation of ExactSizeIterator"
-    );
+    assert_eq!(len, count, "programming error: incorrect implementation of ExactSizeIterator");
     Ok(())
 }

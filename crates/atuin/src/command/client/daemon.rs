@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use atuin_client::{
-    database::Sqlite, history::History, record::sqlite_store::SqliteStore, settings::Settings,
-};
+use atuin_client::database::Sqlite;
+use atuin_client::history::History;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
 use atuin_daemon::DaemonEvent;
 use atuin_daemon::client::{ControlClient, DaemonClientErrorKind, HistoryClient, classify_error};
 use clap::Subcommand;
@@ -114,10 +115,9 @@ impl PidfileGuard {
 
         match file.try_lock() {
             Ok(()) => {}
-            Err(TryLockError::WouldBlock) => bail!(
-                "daemon already running (pidfile lock busy at {})",
-                path.display()
-            ),
+            Err(TryLockError::WouldBlock) => {
+                bail!("daemon already running (pidfile lock busy at {})", path.display())
+            }
             Err(TryLockError::Error(err)) => {
                 return Err(err)
                     .wrap_err_with(|| format!("could not lock daemon pidfile {}", path.display()));
@@ -215,8 +215,7 @@ async fn wait_for_lock(path: &Path, timeout: Duration) -> Result<File> {
 
 async fn wait_for_pidfile_available(path: &Path, timeout: Duration) -> Result<()> {
     let file = wait_for_lock(path, timeout).await?;
-    file.unlock()
-        .wrap_err_with(|| format!("failed to unlock {}", path.display()))?;
+    file.unlock().wrap_err_with(|| format!("failed to unlock {}", path.display()))?;
     Ok(())
 }
 
@@ -258,11 +257,7 @@ fn spawn_daemon_process() -> Result<()> {
     let exe = std::env::current_exe().wrap_err("could not locate atuin executable")?;
 
     let mut cmd = Command::new(exe);
-    cmd.arg("daemon")
-        .arg("start")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    cmd.arg("daemon").arg("start").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
 
     #[cfg(unix)]
     cmd.arg("--daemonize");
@@ -306,10 +301,7 @@ fn remove_sockets(
             && e.kind() != ErrorKind::NotFound
         {
             // Log the error because we only return the first error when multiple occur.
-            tracing::error!(
-                "failed to remove daemon socket {}: {e}",
-                socket_path.display()
-            );
+            tracing::error!("failed to remove daemon socket {}: {e}", socket_path.display());
             error.get_or_insert_with(|| RemoveSocketError {
                 path: socket_path.into_owned(),
                 source: e,
@@ -366,7 +358,8 @@ fn ensure_autostart_supported(settings: &Settings) -> Result<()> {
     #[cfg(unix)]
     if settings.daemon.systemd_socket {
         bail!(
-            "daemon autostart is incompatible with `daemon.systemd_socket = true`; use systemd to manage the daemon"
+            "daemon autostart is incompatible with `daemon.systemd_socket = true`; use systemd to \
+             manage the daemon"
         );
     }
     #[cfg(not(unix))]
@@ -593,10 +586,7 @@ async fn status_cmd(settings: &Settings) -> Result<()> {
             println!("  Protocol: {}", status.protocol);
             println!("  Healthy:  {}", status.healthy);
             #[cfg(unix)]
-            println!(
-                "  Socket:   {}",
-                settings.daemon.existing_socket_path().display()
-            );
+            println!("  Socket:   {}", settings.daemon.existing_socket_path().display());
             #[cfg(not(unix))]
             println!("  Port:     {}", settings.daemon.tcp_port);
         }
@@ -678,10 +668,7 @@ pub fn daemonize_current_process() -> Result<()> {
     let cwd =
         std::env::current_dir().wrap_err("could not determine current directory for daemon")?;
 
-    Daemonize::new()
-        .working_directory(cwd)
-        .start()
-        .wrap_err("failed to daemonize process")?;
+    Daemonize::new().working_directory(cwd).start().wrap_err("failed to daemonize process")?;
 
     Ok(())
 }
@@ -758,8 +745,9 @@ fn kill_process(pid: u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::{fixture, rstest};
+
+    use super::*;
 
     #[rstest]
     #[case::matches(DAEMON_VERSION, DAEMON_PROTOCOL_VERSION, true)]

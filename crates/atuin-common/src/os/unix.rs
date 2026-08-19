@@ -1,7 +1,8 @@
 //! Unix-specific utilities.
 
-use rustix::fs;
 use std::path::Path;
+
+use rustix::fs;
 
 /// Get the current UID.
 pub fn uid() -> std::ffi::c_uint {
@@ -30,9 +31,10 @@ pub fn touch_file(path: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::os::unix::fs::{MetadataExt, symlink};
     use std::os::unix::net::UnixListener;
+
+    use super::*;
 
     /// Set a file's timestamp to the Unix epoch.
     fn backdate(path: &Path) {

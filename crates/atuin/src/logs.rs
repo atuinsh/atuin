@@ -1,6 +1,7 @@
-use atuin_common::logs::{FileConfig, LogConfig, StderrConfig};
 use std::fs::OpenOptions;
 use std::io::IsTerminal;
+
+use atuin_common::logs::{FileConfig, LogConfig, StderrConfig};
 use tracing::Level;
 use tracing_appender::rolling::{self, RollingFileAppender, Rotation};
 use tracing_subscriber::filter::{self, EnvFilter, LevelFilter};
@@ -20,10 +21,7 @@ pub fn init_logging(config: &LogConfig) {
 }
 
 fn get_base_filter(config: &LogConfig) -> EnvFilter {
-    let level = config
-        .file
-        .as_ref()
-        .map_or(Level::WARN, |f| f.level.to_tracing());
+    let level = config.file.as_ref().map_or(Level::WARN, |f| f.level.to_tracing());
     EnvFilter::default().add_directive(level.into())
 }
 
@@ -73,10 +71,7 @@ enum FileWriterError {
 }
 
 fn make_file_writer(config: &FileConfig) -> Result<RollingFileAppender, FileWriterError> {
-    let prefix = config
-        .name()
-        .to_str()
-        .ok_or(FileWriterError::NonUtf8Filename)?;
+    let prefix = config.name().to_str().ok_or(FileWriterError::NonUtf8Filename)?;
     let writer = RollingFileAppender::builder()
         .rotation(Rotation::DAILY)
         .filename_prefix(prefix)
@@ -90,10 +85,7 @@ where
 {
     // ATUIN_LOG env var overrides config file level settings
     let filter: EnvFilter = std::env::var("ATUIN_LOG")
-        .map_or_else(
-            |_| get_base_filter(config),
-            |s| filter::Builder::default().parse_lossy(s),
-        )
+        .map_or_else(|_| get_base_filter(config), |s| filter::Builder::default().parse_lossy(s))
         .add_directive("sqlx_sqlite::regexp=off".parse().unwrap());
 
     if let Some(file) = &config.file {
@@ -102,10 +94,7 @@ where
 
     let file_layer = config.file.as_ref().map(|file| {
         let writer = make_file_writer(file)?;
-        let layer = fmt::layer()
-            .with_writer(writer)
-            .with_ansi(false)
-            .with_filter(filter.clone());
+        let layer = fmt::layer().with_writer(writer).with_ansi(false).with_filter(filter.clone());
         Ok::<_, FileWriterError>(layer)
     });
 
@@ -124,12 +113,7 @@ where
         } else {
             value
         };
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(path)
-            .ok()?;
+        let file = OpenOptions::new().create(true).truncate(true).write(true).open(path).ok()?;
         let layer = fmt::layer()
             .json()
             .with_writer(file)
