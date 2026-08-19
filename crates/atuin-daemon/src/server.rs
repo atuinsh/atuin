@@ -1,5 +1,5 @@
 use atuin_client::settings::Settings;
-use eyre::Result;
+use eyre::{Context, Result};
 
 use crate::components::history::HistoryGrpcService;
 use crate::components::search::SearchGrpcService;
@@ -77,9 +77,17 @@ pub async fn run_grpc_server(
         #[cfg(not(target_os = "linux"))]
         unreachable!()
     } else {
+        use atuin_common::path::DisplayRichExt;
+
         socket_path.create_default_dir_if_needed()?;
         tracing::info!("listening on unix socket {:?}", socket_path.as_path());
-        (UnixListener::bind(&socket_path)?, Some(socket_path.into_owned()))
+        (
+            UnixListener::bind(&socket_path).context(format!(
+                "reading socket: {}",
+                socket_path.display_rich().relative_to_cwd()
+            ))?,
+            Some(socket_path.into_owned()),
+        )
     };
 
     let uds_stream = UnixListenerStream::new(uds);
