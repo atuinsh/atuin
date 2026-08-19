@@ -106,7 +106,7 @@ impl Drop for PlainTextEncodedKey {
 /// Intentionally **not** Copy to support zeroing out on Drop. Intentionally not `Serialize` so it
 /// doesn't end up across the wire.
 #[derive(Clone, PartialEq, Eq, derive_more::From, derive_more::Debug)]
-#[debug("Key(*******)")]
+#[debug("paseto_v4::Key(*******)")]
 pub struct Key([u8; 32]);
 
 impl Key {

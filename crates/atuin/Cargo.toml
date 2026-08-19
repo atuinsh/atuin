@@ -107,7 +107,7 @@ futures-util = "0.3"
 colored = "2.0.4"
 open = "5"
 ratatui = { workspace = true }
-tracing = "0.1"
+tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = "0.2"
 uuid = { workspace = true }

@@ -12,6 +12,7 @@ use atuin_domain::record::{
 use eyre::{Result, bail, eyre};
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
+use tracing::instrument;
 
 use super::{History, HistoryId, Version};
 use crate::database::{Sqlite, current_context};
@@ -137,6 +138,7 @@ impl HistoryStore {
         }
     }
 
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     async fn push_record(&self, record: HistoryRecord) -> Result<(RecordId, RecordIdx)> {
         let bytes = record.serialize()?;
         let idx =
@@ -157,6 +159,7 @@ impl HistoryStore {
         Ok((id, idx))
     }
 
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     async fn push_batch(&self, records: impl Iterator<Item = HistoryRecord>) -> Result<()> {
         let mut ret = Vec::new();
 
@@ -186,6 +189,7 @@ impl HistoryStore {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id, id = ?id), err)]
     pub async fn delete(&self, id: HistoryId) -> Result<(RecordId, RecordIdx)> {
         let record = HistoryRecord::Delete(id);
 
@@ -194,6 +198,7 @@ impl HistoryStore {
 
     /// Delete a batch of history entries via the record store.
     /// Returns the record IDs so the caller can run incremental_build when ready.
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     pub async fn delete_entries(
         &self,
         entries: impl IntoIterator<Item = History>,
@@ -206,6 +211,7 @@ impl HistoryStore {
         Ok(record_ids)
     }
 
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     pub async fn push(&self, history: History) -> Result<(RecordId, RecordIdx)> {
         // TODO(ellie): move the history store to its own file
         // it's tiny rn so fine as is
@@ -214,6 +220,7 @@ impl HistoryStore {
         self.push_record(record).await
     }
 
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     pub async fn history(&self) -> Result<Vec<HistoryRecord>> {
         // Atm this loads all history into memory
         // Not ideal as that is potentially quite a lot, although history will be small.
@@ -255,6 +262,7 @@ impl HistoryStore {
         Ok(ret)
     }
 
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     pub async fn build(&self, database: &Sqlite) -> Result<()> {
         // I'd like to change how we rebuild and not couple this with the database, but need to
         // consider the structure more deeply. This will be easy to change.
@@ -335,6 +343,7 @@ impl HistoryStore {
     }
 
     /// Read a record and decode it, or `None` if it is missing, not history, or undecodable.
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id, id = ?id))]
     async fn decode(&self, id: RecordId) -> Option<HistoryRecord> {
         let record = self.store.get(id).await.ok()?;
 
@@ -365,6 +374,7 @@ impl HistoryStore {
     ///
     /// Use this when you want the database writes but not the values. Callers that need
     /// the created entries should use [`HistoryStore::incremental_build`] directly.
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id, n_ids = ids.len()), err)]
     pub async fn build_all(&self, database: &Sqlite, ids: &[RecordId]) -> Result<()> {
         self.incremental_build(database, ids).try_for_each(|_| future::ready(Ok(()))).await
     }
@@ -372,6 +382,7 @@ impl HistoryStore {
     /// Get a list of history IDs that exist in the store
     /// Note: This currently involves loading all history into memory. This is not going to be a
     /// large amount in absolute terms, but do not all it in a hot loop.
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     pub async fn history_ids(&self) -> Result<HashSet<HistoryId>> {
         let history = self.history().await?;
 
@@ -383,6 +394,7 @@ impl HistoryStore {
         Ok(ret)
     }
 
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     pub async fn init_store(&self, db: &Sqlite) -> Result<()> {
         let pb = ProgressBar::new_spinner();
         pb.set_style(
