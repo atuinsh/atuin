@@ -199,7 +199,6 @@ impl Cmd {
         // doing anything else. History commands are performance-sensitive and run before and after
         // every shell command, so we want to skip any unnecessary initialization for them.
         let settings = Settings::new().wrap_err("could not load client settings")?;
-        // Held until the command returns so the OTLP exporter (ATUIN_OTEL) is flushed on exit.
         let _logging = self
             .log_config(&settings)
             .map(|c| LogCtx::try_enable("atuin", &c))

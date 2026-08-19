@@ -581,15 +581,12 @@ mod tests {
 
         assert_eq!(operations.len(), 1);
 
-        assert_eq!(
-            operations[0],
-            Operation::Upload {
-                host: record.host.id,
-                tag: record.tag.clone(),
-                local: record.idx,
-                remote: None,
-            }
-        );
+        assert_eq!(operations[0], Operation::Upload {
+            host: record.host.id,
+            tag: record.tag.clone(),
+            local: record.idx,
+            remote: None,
+        });
     }
 
     #[rstest]
@@ -613,24 +610,21 @@ mod tests {
 
         assert_eq!(operations.len(), 2);
 
-        assert_eq!(
-            operations,
-            vec![
-                // Or in otherwords, local is ahead by one
-                Operation::Upload {
-                    host: local_ahead.host.id,
-                    tag: local_ahead.tag.clone(),
-                    local: 1,
-                    remote: Some(0),
-                },
-                // Or in other words, remote knows of a record in an entirely new store (tag)
-                Operation::Download {
-                    host: remote_ahead.host.id,
-                    tag: remote_ahead.tag.clone(),
-                    remote: 0,
-                },
-            ]
-        );
+        assert_eq!(operations, vec![
+            // Or in otherwords, local is ahead by one
+            Operation::Upload {
+                host: local_ahead.host.id,
+                tag: local_ahead.tag.clone(),
+                local: 1,
+                remote: Some(0),
+            },
+            // Or in other words, remote knows of a record in an entirely new store (tag)
+            Operation::Download {
+                host: remote_ahead.host.id,
+                tag: remote_ahead.tag.clone(),
+                remote: 0,
+            },
+        ]);
     }
 
     #[rstest]
@@ -1453,14 +1447,11 @@ mod packfile_capability_tests {
 
         sync_remote(
             &client,
-            vec![
-                packfile_download_op(host, 3),
-                Operation::Download {
-                    remote: 3,
-                    host,
-                    tag: RecordTag::History,
-                },
-            ],
+            vec![packfile_download_op(host, 3), Operation::Download {
+                remote: 3,
+                host,
+                tag: RecordTag::History,
+            }],
             &down,
             100,
             &key,

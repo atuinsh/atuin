@@ -47,8 +47,6 @@ impl AtuinCmd {
         #[cfg(not(windows))]
         let prev_umask = umask(Mode::RWXG | Mode::RWXO);
 
-        // Held until the command returns so the OTLP exporter (ATUIN_OTEL) is
-        // flushed on exit. Client commands initialize their own logging.
         let _log_guard = match &self {
             #[cfg(feature = "client")]
             Self::Client(_) => None,

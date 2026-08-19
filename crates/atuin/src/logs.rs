@@ -6,7 +6,6 @@ use std::str::FromStr;
 use atuin_common::logs::{FileConfig, LogConfig, StderrConfig};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::{ExporterBuildError, WithExportConfig as _};
-use thiserror;
 use tracing::Level;
 use tracing_appender::rolling::{self, RollingFileAppender, Rotation};
 use tracing_subscriber::filter::{self, EnvFilter, LevelFilter};
@@ -48,7 +47,7 @@ impl LogCtx {
     ///
     /// TODO(markovejnovic): Clean up this [`LogConfig`] structure. It feels very out-of-place where
     /// it is.
-    #[must_use]
+    #[must_use = "returns an RAII guard which is required for tracing support"]
     pub fn try_enable(
         service_name: &'static str,
         config: &LogConfig,
@@ -97,10 +96,13 @@ impl LogCtx {
             })
         );
         if show_time {
-            base.with(stderr_layer::<_, fmt::time::SystemTime>(config.stderr.as_ref(), filter))
-                .try_init()?;
+            base.with(
+                config.stderr.as_ref().map(|c| stderr_layer::<_, fmt::time::SystemTime>(c, filter)),
+            )
+            .try_init()?;
         } else {
-            base.with(stderr_layer::<_, ()>(config.stderr.as_ref(), filter)).try_init()?;
+            base.with(config.stderr.as_ref().map(|c| stderr_layer::<_, ()>(c, filter)))
+                .try_init()?;
         }
 
         // Non-fatal: the subscriber is live now, so this reaches stderr/otel if configured.
@@ -115,22 +117,17 @@ impl LogCtx {
 /// [`tracing_subscriber::Layer`] is generic, so we need a monomorphic helper here.
 ///
 /// See <https://github.com/tokio-rs/tracing/issues/3180> for more details.
-fn stderr_layer<S, T>(
-    config: Option<&StderrConfig>,
-    filter: EnvFilter,
-) -> Option<impl tracing_subscriber::Layer<S>>
+fn stderr_layer<S, T>(config: &StderrConfig, filter: EnvFilter) -> impl tracing_subscriber::Layer<S>
 where
     S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
     T: fmt::time::FormatTime + Default + 'static,
 {
-    config.map(|cfg| {
-        fmt::layer()
-            .with_writer(std::io::stderr)
-            .with_ansi(std::io::stderr().is_terminal())
-            .with_target(cfg.show_target)
-            .map_event_format(|f| f.with_timer(T::default()))
-            .with_filter(filter)
-    })
+    fmt::layer()
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
+        .with_target(config.show_target)
+        .map_event_format(|f| f.with_timer(T::default()))
+        .with_filter(filter)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -206,12 +203,12 @@ impl Drop for OtelCtx {
     fn drop(&mut self) {
         if let Err(err) = self.provider.force_flush() {
             // Intentional eprintln! here since we cannot safely use error!
-            eprintln!("Unexpected error flushing OTEL spans: {}", err);
+            eprintln!("Unexpected error flushing OTEL spans: {err}");
         }
 
         if let Err(err) = self.provider.shutdown() {
             // Intentional eprintln! here since we cannot safely use error!
-            eprintln!("Unexpected error shutting down the OTEL tracc provider: {}", err);
+            eprintln!("Unexpected error shutting down the OTEL tracc provider: {err}");
         }
     }
 }
