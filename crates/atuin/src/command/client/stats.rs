@@ -46,8 +46,16 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(&self, db: &Sqlite, settings: &Settings, theme: &Theme) -> Result<()> {
-        let context = current_context().await?;
+    pub async fn run(
+        &self,
+        db: &Sqlite,
+        settings: &Settings,
+        theme: &Theme,
+        app: &atuin_client::ctx::AppCtx,
+    ) -> Result<()> {
+        let workspace = atuin_client::ctx::WorkspaceCtx::new(app);
+        let git = atuin_client::ctx::GitCtx::new(&workspace);
+        let context = current_context(app, &workspace, &git).await?;
         let words = if self.period.is_empty() {
             String::from("all")
         } else {

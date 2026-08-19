@@ -159,7 +159,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub fn run(self) -> Result<()> {
+    pub fn run(self, app: &atuin_client::ctx::AppCtx) -> Result<()> {
         // Daemonize before creating the async runtime – fork() inside a live
         // tokio runtime corrupts its internal state.
         #[cfg(all(unix, feature = "daemon"))]
@@ -199,7 +199,7 @@ impl Cmd {
         let settings = Settings::new().wrap_err("could not load client settings")?;
         self.init_logging(&settings);
         let theme_manager = theme::ThemeManager::new(settings.theme.debug, None);
-        let res = runtime.block_on(self.run_inner(settings, theme_manager));
+        let res = runtime.block_on(self.run_inner(settings, theme_manager, app));
 
         runtime.shutdown_timeout(std::time::Duration::from_millis(50));
 
@@ -214,6 +214,7 @@ impl Cmd {
         self,
         mut settings: Settings,
         mut theme_manager: theme::ThemeManager,
+        app: &atuin_client::ctx::AppCtx,
     ) -> Result<()> {
         tracing::trace!(command = ?self, "client command");
 
@@ -221,8 +222,8 @@ impl Cmd {
         // This is a pretty hot path, as it runs before and after every single command the user
         // runs
         match self {
-            Self::History(history) => return history.run(&settings).await,
-            Self::Hook(hook) => return hook.run(&settings).await,
+            Self::History(history) => return history.run(&settings, app).await,
+            Self::Hook(hook) => return hook.run(&settings, app).await,
             Self::Init(init) => return init.run(&settings).await,
             Self::Doctor => return doctor::run(&settings).await,
             #[cfg(feature = "self-update")]
@@ -249,8 +250,8 @@ impl Cmd {
         match self {
             Self::Setup => setup::run(&settings).await,
             Self::Import(import) => import.run(&db).await,
-            Self::Stats(stats) => stats.run(&db, &settings, theme).await,
-            Self::Search(search) => search.run(db, &mut settings, sqlite_store, theme).await,
+            Self::Stats(stats) => stats.run(&db, &settings, theme, app).await,
+            Self::Search(search) => search.run(db, &mut settings, sqlite_store, theme, app).await,
 
             #[cfg(feature = "sync")]
             Self::Sync(sync) => sync.run(settings, &db, sqlite_store).await,
@@ -264,7 +265,7 @@ impl Cmd {
 
             Self::Dotfiles(dotfiles) => dotfiles.run(&settings, sqlite_store).await,
 
-            Self::Scripts(scripts) => scripts.run(&settings, sqlite_store, &db).await,
+            Self::Scripts(scripts) => scripts.run(&settings, sqlite_store, &db, app).await,
 
             Self::Info => {
                 info::run(&settings);
@@ -296,10 +297,10 @@ impl Cmd {
             Self::Update(_) => unreachable!(),
 
             #[cfg(feature = "ai")]
-            Self::Ai(cli) => atuin_ai::commands::run(cli, &settings).await,
+            Self::Ai(cli) => atuin_ai::commands::run(cli, &settings, app).await,
 
             #[cfg(feature = "ai")]
-            Self::Mcp => atuin_ai::mcp::run(&db).await,
+            Self::Mcp => atuin_ai::mcp::run(&db, app).await,
         }
     }
 

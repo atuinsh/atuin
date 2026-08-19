@@ -392,10 +392,12 @@ fn make_starting_history(
     command: &str,
     author: Option<&str>,
     intent: Option<&str>,
+    app: &atuin_client::ctx::AppCtx,
 ) -> Option<History> {
     // It's better for atuin to silently fail here and attempt to
     // store whatever is ran, than to throw an error to the terminal
-    let cwd = atuin_client::ctx::app().workspace().cwd().to_string();
+    let workspace = atuin_client::ctx::WorkspaceCtx::new(app);
+    let cwd = workspace.cwd().to_string();
     let command = normalize_command_for_storage(command, settings);
 
     // A command containing a NUL byte could never have been executed by a shell
@@ -410,6 +412,7 @@ fn make_starting_history(
         .timestamp(OffsetDateTime::now_utc())
         .command(command)
         .cwd(cwd)
+        .session_opt(app.session())
         .author_opt(author.map(String::from))
         .intent_opt(intent.map(String::from))
         .shell_opt(std::env::var("ATUIN_SHELL").ok())
@@ -425,8 +428,9 @@ async fn handle_start(
     command: &str,
     author: Option<&str>,
     intent: Option<&str>,
+    app: &atuin_client::ctx::AppCtx,
 ) -> Result<Option<String>> {
-    let Some(h) = make_starting_history(settings, command, author, intent) else {
+    let Some(h) = make_starting_history(settings, command, author, intent, app) else {
         return Ok(None);
     };
 
@@ -445,8 +449,9 @@ async fn handle_daemon_start(
     command: &str,
     author: Option<&str>,
     intent: Option<&str>,
+    app: &atuin_client::ctx::AppCtx,
 ) -> Result<Option<String>> {
-    let Some(h) = make_starting_history(settings, command, author, intent) else {
+    let Some(h) = make_starting_history(settings, command, author, intent, app) else {
         return Ok(None);
     };
 
@@ -554,15 +559,16 @@ pub(super) async fn start_history_entry(
     command: &str,
     author: Option<&str>,
     intent: Option<&str>,
+    app: &atuin_client::ctx::AppCtx,
 ) -> Result<Option<String>> {
     #[cfg(feature = "daemon")]
     if settings.daemon.enabled {
-        return handle_daemon_start(settings, command, author, intent).await;
+        return handle_daemon_start(settings, command, author, intent, app).await;
     }
 
     let db_path = &settings.db_path;
     let db = Sqlite::new(db_path, settings.local_timeout).await?;
-    handle_start(&db, settings, command, author, intent).await
+    handle_start(&db, settings, command, author, intent, app).await
 }
 
 pub(super) async fn end_history_entry(
@@ -1034,7 +1040,11 @@ impl Cmd {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub async fn run(self, settings: &Settings) -> Result<()> {
+    pub async fn run(
+        self,
+        settings: &Settings,
+        app: &atuin_client::ctx::AppCtx,
+    ) -> Result<()> {
         match self {
             Self::Start {
                 cmd_env,
@@ -1049,9 +1059,14 @@ impl Cmd {
                     command.join(" ")
                 };
 
-                if let Some(id) =
-                    start_history_entry(settings, &command, author.as_deref(), intent.as_deref())
-                        .await?
+                if let Some(id) = start_history_entry(
+                    settings,
+                    &command,
+                    author.as_deref(),
+                    intent.as_deref(),
+                    app,
+                )
+                .await?
                 {
                     println!("{id}");
                 }
@@ -1071,7 +1086,9 @@ impl Cmd {
                 bail!("`atuin history tail` requires Atuin to be built with the `daemon` feature");
             }
             cmd => {
-                let context = current_context().await?;
+                let workspace = atuin_client::ctx::WorkspaceCtx::new(app);
+                let git = atuin_client::ctx::GitCtx::new(&workspace);
+                let context = current_context(app, &workspace, &git).await?;
 
                 let db_path = &settings.db_path;
                 let record_store_path = &settings.record_store_path;
@@ -1216,7 +1233,8 @@ mod tests {
             ..Settings::utc()
         };
 
-        handle_start(&db, &settings, "ls   \t", None, None).await.unwrap();
+        let app = atuin_client::ctx::AppCtx::new();
+        handle_start(&db, &settings, "ls   \t", None, None, &app).await.unwrap();
 
         let history = db
             .before(OffsetDateTime::now_utc() + time::Duration::SECOND, 1)
@@ -1234,7 +1252,8 @@ mod tests {
 
         // A command containing a NUL byte can never have been executed by a shell;
         // it should be dropped rather than committed to history.
-        let id = handle_start(&db, &settings, "hello\0world", None, None).await.unwrap();
+        let app = atuin_client::ctx::AppCtx::new();
+        let id = handle_start(&db, &settings, "hello\0world", None, None, &app).await.unwrap();
         assert!(id.is_none());
 
         let stored =

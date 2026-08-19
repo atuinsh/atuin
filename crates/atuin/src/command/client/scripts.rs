@@ -220,12 +220,15 @@ impl Cmd {
         script_store: ScriptStore,
         script_db: atuin_scripts::database::Database,
         history_db: &Sqlite,
+        app: &atuin_client::ctx::AppCtx,
     ) -> Result<()> {
         let mut stdin = std::io::stdin();
         let script_content = if let Some(count_opt) = new_script.last {
             // Get the last N commands from history, plus 1 to exclude the command that runs this script
             let count = count_opt.unwrap_or(1) + 1; // Add 1 to the count to exclude the current command
-            let context = atuin_client::database::current_context().await?;
+            let workspace = atuin_client::ctx::WorkspaceCtx::new(app);
+            let git = atuin_client::ctx::GitCtx::new(&workspace);
+            let context = atuin_client::database::current_context(app, &workspace, &git).await?;
 
             // Get the last N+1 commands, filtering by the default mode
             let filters = [settings.default_filter_mode(context.git_root.is_some())];
@@ -552,6 +555,7 @@ impl Cmd {
         settings: &Settings,
         store: SqliteStore,
         history_db: &Sqlite,
+        app: &atuin_client::ctx::AppCtx,
     ) -> Result<()> {
         let host_id = Settings::host_id().await?;
         let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
@@ -562,8 +566,15 @@ impl Cmd {
 
         match self {
             Self::New(new_script) => {
-                Self::handle_new_script(settings, new_script, script_store, script_db, history_db)
-                    .await
+                Self::handle_new_script(
+                    settings,
+                    new_script,
+                    script_store,
+                    script_db,
+                    history_db,
+                    app,
+                )
+                .await
             }
             Self::Run(run) => Self::handle_run(settings, run, script_db).await,
             Self::List(list) => Self::handle_list(settings, list, script_db).await,

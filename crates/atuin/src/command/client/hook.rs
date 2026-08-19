@@ -155,10 +155,14 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(self, settings: &Settings) -> Result<()> {
+    pub async fn run(
+        self,
+        settings: &Settings,
+        app: &atuin_client::ctx::AppCtx,
+    ) -> Result<()> {
         match (self.action, self.agent) {
             (Some(Action::Install { agent }), None) => install(&agent),
-            (None, Some(agent)) => handle(&agent, settings).await,
+            (None, Some(agent)) => handle(&agent, settings, app).await,
             (None, None) => {
                 bail!("expected `atuin hook <agent>` or `atuin hook install <agent>`");
             }
@@ -173,7 +177,11 @@ fn id_file_path(tool_use_id: &str) -> PathBuf {
     std::env::temp_dir().join(format!("atuin-hook-{tool_use_id}"))
 }
 
-async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
+async fn handle(
+    agent_name: &str,
+    settings: &Settings,
+    app: &atuin_client::ctx::AppCtx,
+) -> Result<()> {
     let agent = Agent::from_name(agent_name)?;
 
     if let InstallKind::Extension { reload_hint, .. } = agent.install_kind() {
@@ -201,6 +209,7 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
                 &command,
                 Some(agent.actor_name()),
                 intent.as_deref(),
+                app,
             )
             .await?
             {

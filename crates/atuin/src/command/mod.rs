@@ -39,7 +39,7 @@ pub enum AtuinCmd {
 }
 
 impl AtuinCmd {
-    pub fn run(self) -> Result<()> {
+    pub fn run(self, app: &atuin_client::ctx::AppCtx) -> Result<()> {
         // set umask before we potentially open/create files
         // or in other words, 077. Do not allow any access to any other user.
         // Keep the previous umask so pty-proxy can restore it in the shell it
@@ -56,7 +56,7 @@ impl AtuinCmd {
 
         match self {
             #[cfg(feature = "client")]
-            Self::Client(client) => client.run(),
+            Self::Client(client) => client.run(app),
 
             #[cfg(all(feature = "pty-proxy", unix))]
             Self::PtyProxy(proxy) => {

@@ -175,6 +175,7 @@ impl Cmd {
         settings: &mut Settings,
         store: SqliteStore,
         theme: &Theme,
+        app: &atuin_client::ctx::AppCtx,
     ) -> Result<()> {
         let query = if self.query.is_empty() {
             std::env::var("ATUIN_QUERY").map_or_else(
@@ -238,7 +239,8 @@ impl Cmd {
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         if self.interactive {
-            let item = interactive::history(&query, settings, db, &history_store, theme).await?;
+            let item =
+                interactive::history(&query, settings, db, &history_store, theme, app).await?;
 
             if let Some(result_file) = self.result_file {
                 let mut file = File::create(result_file)?;
@@ -274,7 +276,7 @@ impl Cmd {
                 shells: shells.as_slice_filter(),
             };
 
-            let mut entries = run_non_interactive(settings, opt_filter, &query, &db).await?;
+            let mut entries = run_non_interactive(settings, opt_filter, &query, &db, app).await?;
 
             if entries.is_empty() {
                 std::process::exit(1)
@@ -293,7 +295,7 @@ impl Cmd {
                     let ids = history_store.delete_entries(entries).await?;
                     history_store.build_all(&db, &ids).await?;
 
-                    entries = run_non_interactive(settings, opt_filter, &query, &db).await?;
+                    entries = run_non_interactive(settings, opt_filter, &query, &db, app).await?;
                 }
             } else {
                 let format = self.format.as_deref().unwrap_or(settings.history_format.as_str());
@@ -320,16 +322,20 @@ async fn run_non_interactive(
     filter_options: OptFilters<'_>,
     query: &[String],
     db: &Sqlite,
+    app: &atuin_client::ctx::AppCtx,
 ) -> Result<Vec<History>> {
+    let workspace = atuin_client::ctx::WorkspaceCtx::new(app);
+
     let current_dir;
     let dir = if filter_options.cwd == Some(".") {
-        current_dir = atuin_client::ctx::app().workspace().cwd().to_string();
+        current_dir = workspace.cwd().to_string();
         Some(current_dir.as_str())
     } else {
         filter_options.cwd
     };
 
-    let context = current_context().await?;
+    let git = atuin_client::ctx::GitCtx::new(&workspace);
+    let context = current_context(app, &workspace, &git).await?;
 
     let opt_filter = OptFilters {
         cwd: dir,

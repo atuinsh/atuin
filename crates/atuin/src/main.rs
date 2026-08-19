@@ -53,11 +53,12 @@ struct Atuin {
 }
 
 impl Atuin {
-    fn run(self) -> Result<()> {
-        self.atuin.run()
+    fn run(self, app: &atuin_client::ctx::AppCtx) -> Result<()> {
+        self.atuin.run(app)
     }
 }
 
 fn main() -> Result<()> {
-    Atuin::parse().run()
+    let app = atuin_client::ctx::AppCtx::new();
+    Atuin::parse().run(&app)
 }
