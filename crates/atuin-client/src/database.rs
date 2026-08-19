@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils;
@@ -169,7 +168,7 @@ fn get_session_start_time(session_id: &str) -> Option<i64> {
     None
 }
 
-/// Controls the type of search [`Database::search`] performs.
+/// Controls the type of search [`Sqlite::search`] performs.
 ///
 /// This is a narrower set of modes than [`SearchMode`], which also contains modes that apply only
 /// to interactive searches.
@@ -204,66 +203,6 @@ impl SearchMode {
             SearchMode::Fuzzy | SearchMode::DaemonFuzzy => DbSearchMode::Fuzzy,
         }
     }
-}
-
-#[async_trait]
-pub trait Database: Send + Sync + 'static {
-    async fn save(&self, h: &History) -> Result<()>;
-    async fn save_bulk(&self, h: &[History]) -> Result<()>;
-
-    async fn load(&self, id: &str) -> Result<Option<History>>;
-
-    /// Load the *active* (not soft-deleted) entries for the given IDs.
-    ///
-    /// Unlike [`load`](Self::load), this filters out soft-deleted rows -- an ID whose
-    /// row exists but is deleted is omitted, exactly like an ID that isn't present at
-    /// all. Ordering is unspecified. Prefer this over calling `load` in a loop: it
-    /// chunks into a handful of queries rather than one round trip per ID.
-    async fn load_active(&self, ids: &[HistoryId]) -> Result<Vec<History>>;
-    async fn list(
-        &self,
-        filters: &[FilterMode],
-        context: &Context,
-        max: Option<usize>,
-        unique: bool,
-        include_deleted: bool,
-        range: Option<(OffsetDateTime, OffsetDateTime)>,
-    ) -> Result<Vec<History>>;
-    async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>>;
-
-    async fn update(&self, h: &History) -> Result<()>;
-    async fn history_count(&self, include_deleted: bool) -> Result<i64>;
-
-    async fn last(&self) -> Result<Option<History>>;
-    async fn before(&self, timestamp: OffsetDateTime, count: i64) -> Result<Vec<History>>;
-
-    async fn delete(&self, h: History) -> Result<()>;
-    async fn delete_rows(&self, ids: &[HistoryId]) -> Result<()>;
-
-    // Yes I know, it's a lot.
-    // Could maybe break it down to a searchparams struct or smth but that feels a little... pointless.
-    // Been debating maybe a DSL for search? eg "before:time limit:1 the query"
-    #[allow(clippy::too_many_arguments)]
-    async fn search(
-        &self,
-        search_mode: DbSearchMode,
-        filter: FilterMode,
-        context: &Context,
-        query: &str,
-        filter_options: OptFilters<'_>,
-    ) -> Result<Vec<History>>;
-
-    async fn query_history(&self, query: &str) -> Result<Vec<History>>;
-
-    async fn all_with_count(&self) -> Result<Vec<(History, i32)>>;
-
-    fn all_paged(&self, page_size: usize, include_deleted: bool, unique: bool) -> Paged;
-
-    async fn stats(&self, h: &History) -> Result<HistoryStats>;
-
-    async fn get_dups(&self, before: i64, dupkeep: u32) -> Result<Vec<History>>;
-
-    fn clone_boxed(&self) -> Box<dyn Database + 'static>;
 }
 
 // Intended for use on a developer machine and not a sync server.
@@ -359,7 +298,7 @@ impl Sqlite {
         Ok(())
     }
 
-    fn query_history(row: SqliteRow) -> History {
+    fn row_to_history(row: SqliteRow) -> History {
         let deleted_at: Option<i64> = row.get("deleted_at");
         let hostname: String = row.get("hostname");
         let author: Option<String> = row.try_get("author").ok().flatten();
@@ -386,11 +325,8 @@ impl Sqlite {
             .build()
             .into()
     }
-}
 
-#[async_trait]
-impl Database for Sqlite {
-    async fn save(&self, h: &History) -> Result<()> {
+    pub async fn save(&self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
         let mut tx = self.pool.begin().await?;
         Self::save_raw(&mut tx, h).await?;
@@ -399,7 +335,7 @@ impl Database for Sqlite {
         Ok(())
     }
 
-    async fn save_bulk(&self, h: &[History]) -> Result<()> {
+    pub async fn save_bulk<'a>(&self, h: impl IntoIterator<Item = &'a History>) -> Result<()> {
         debug!("saving history to sqlite");
 
         let mut tx = self.pool.begin().await?;
@@ -413,46 +349,67 @@ impl Database for Sqlite {
         Ok(())
     }
 
-    async fn load(&self, id: &str) -> Result<Option<History>> {
+    pub async fn load(&self, id: &str) -> Result<Option<History>> {
         debug!("loading history item {}", id);
 
         let res = sqlx::query("select * from history where id = ?1")
             .bind(id)
-            .map(Self::query_history)
+            .map(Self::row_to_history)
             .fetch_optional(&self.pool)
             .await?;
 
         Ok(res)
     }
 
-    async fn load_active(&self, ids: &[HistoryId]) -> Result<Vec<History>> {
+    pub async fn load_active(
+        &self,
+        ids: impl IntoIterator<Item = HistoryId>,
+    ) -> Result<Vec<History>> {
+        let mut iter_ids = ids.into_iter();
+        let size_hint = iter_ids.size_hint();
+
         // sqlite caps bound parameters per statement (SQLITE_MAX_VARIABLE_NUMBER, as low as 999).
         // Chunk well under that.
         const CHUNK: usize = 500;
 
-        debug!("loading {} history items", ids.len());
+        if let Some(upper) = size_hint.1
+            && size_hint.0 == upper
+        {
+            debug!("loading {} history items", size_hint.0);
+        } else {
+            debug!("loading somewhere around {} history items", size_hint.0);
+        }
 
-        let mut out = Vec::with_capacity(ids.len());
+        let mut out = Vec::with_capacity(size_hint.0);
 
-        for chunk in ids.chunks(CHUNK) {
+        // Buffer reused across multiple chunks to avoid reallocating.
+        let mut chunk: Vec<HistoryId> = Vec::with_capacity(CHUNK);
+
+        loop {
+            chunk.clear();
+            chunk.extend(iter_ids.by_ref().take(CHUNK));
+            if chunk.is_empty() {
+                break;
+            }
+
             let placeholders = ["?"].repeat(chunk.len()).join(",");
             let sql = format!(
                 "select * from history where id in ({placeholders}) and deleted_at is null"
             );
 
             let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
-            for id in chunk {
+            for id in &chunk {
                 query = query.bind(id.0.as_str());
             }
 
-            let rows = query.map(Self::query_history).fetch_all(&self.pool).await?;
+            let rows = query.map(Self::row_to_history).fetch_all(&self.pool).await?;
             out.extend(rows);
         }
 
         Ok(out)
     }
 
-    async fn update(&self, h: &History) -> Result<()> {
+    pub async fn update(&self, h: &History) -> Result<()> {
         debug!("updating sqlite history");
 
         sqlx::query(
@@ -479,9 +436,9 @@ impl Database for Sqlite {
     }
 
     // make a unique list, that only shows the *newest* version of things
-    async fn list(
+    pub async fn list(
         &self,
-        filters: &[FilterMode],
+        filters: impl IntoIterator<Item = FilterMode>,
         context: &Context,
         max: Option<usize>,
         unique: bool,
@@ -544,14 +501,14 @@ impl Database for Sqlite {
         let query = query.sql().expect("bug in list query. please report");
 
         let res = sqlx::query(sqlx::AssertSqlSafe(query))
-            .map(Self::query_history)
+            .map(Self::row_to_history)
             .fetch_all(&self.pool)
             .await?;
 
         Ok(res)
     }
 
-    async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>> {
+    pub async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>> {
         debug!("listing history from {:?} to {:?}", from, to);
 
         let res = sqlx::query(
@@ -560,38 +517,38 @@ impl Database for Sqlite {
         )
         .bind(from.unix_timestamp_nanos() as i64)
         .bind(to.unix_timestamp_nanos() as i64)
-        .map(Self::query_history)
+        .map(Self::row_to_history)
         .fetch_all(&self.pool)
         .await?;
 
         Ok(res)
     }
 
-    async fn last(&self) -> Result<Option<History>> {
+    pub async fn last(&self) -> Result<Option<History>> {
         let res = sqlx::query(
             "select * from history where duration >= 0 order by timestamp desc limit 1",
         )
-        .map(Self::query_history)
+        .map(Self::row_to_history)
         .fetch_optional(&self.pool)
         .await?;
 
         Ok(res)
     }
 
-    async fn before(&self, timestamp: OffsetDateTime, count: i64) -> Result<Vec<History>> {
+    pub async fn before(&self, timestamp: OffsetDateTime, count: i64) -> Result<Vec<History>> {
         let res = sqlx::query(
             "select * from history where timestamp < ?1 order by timestamp desc limit ?2",
         )
         .bind(timestamp.unix_timestamp_nanos() as i64)
         .bind(count)
-        .map(Self::query_history)
+        .map(Self::row_to_history)
         .fetch_all(&self.pool)
         .await?;
 
         Ok(res)
     }
 
-    async fn history_count(&self, include_deleted: bool) -> Result<i64> {
+    pub async fn history_count(&self, include_deleted: bool) -> Result<i64> {
         let query = if include_deleted {
             "select count(1) from history"
         } else {
@@ -602,7 +559,7 @@ impl Database for Sqlite {
         Ok(res.0)
     }
 
-    async fn search(
+    pub async fn search(
         &self,
         search_mode: DbSearchMode,
         filter: FilterMode,
@@ -772,7 +729,7 @@ impl Database for Sqlite {
         };
 
         let res = sqlx::query(sqlx::AssertSqlSafe(query))
-            .map(Self::query_history)
+            .map(Self::row_to_history)
             .fetch_all(&self.pool)
             .await?;
 
@@ -790,16 +747,16 @@ impl Database for Sqlite {
         Ok(ordering::reorder_fuzzy(search_mode, &reorder_query, res))
     }
 
-    async fn query_history(&self, query: &str) -> Result<Vec<History>> {
+    pub async fn query_history(&self, query: &str) -> Result<Vec<History>> {
         let res = sqlx::query(sqlx::AssertSqlSafe(query))
-            .map(Self::query_history)
+            .map(Self::row_to_history)
             .fetch_all(&self.pool)
             .await?;
 
         Ok(res)
     }
 
-    async fn all_with_count(&self) -> Result<Vec<(History, i32)>> {
+    pub async fn all_with_count(&self) -> Result<Vec<(History, i32)>> {
         debug!("listing history");
 
         let mut query = SqlBuilder::select_from(SqlName::new("history").alias("h").baquoted());
@@ -829,7 +786,7 @@ impl Database for Sqlite {
         let res = sqlx::query(sqlx::AssertSqlSafe(query))
             .map(|row: SqliteRow| {
                 let count: i32 = row.get("count");
-                (Self::query_history(row), count)
+                (Self::row_to_history(row), count)
             })
             .fetch_all(&self.pool)
             .await?;
@@ -837,8 +794,8 @@ impl Database for Sqlite {
         Ok(res)
     }
 
-    fn all_paged(&self, page_size: usize, include_deleted: bool, unique: bool) -> Paged {
-        Paged::new(Box::new(self.clone()), page_size, include_deleted, unique)
+    pub fn all_paged(&self, page_size: usize, include_deleted: bool, unique: bool) -> Paged {
+        Paged::new(self.clone(), page_size, include_deleted, unique)
     }
 
     // This used to scramble the command and set deleted_at, so that sync v1 could
@@ -846,11 +803,14 @@ impl Database for Sqlite {
     // instead (HistoryRecord::Delete), and the only remaining caller deletes entries
     // that were never pushed to the store - so just delete the row.
     // deleted_at is still read to keep tombstones from older versions working.
-    async fn delete(&self, h: History) -> Result<()> {
+    pub async fn delete(&self, h: History) -> Result<()> {
         self.delete_rows(&[h.id]).await
     }
 
-    async fn delete_rows(&self, ids: &[HistoryId]) -> Result<()> {
+    pub async fn delete_rows<'a>(
+        &self,
+        ids: impl IntoIterator<Item = &'a HistoryId>,
+    ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
         for id in ids {
@@ -862,7 +822,7 @@ impl Database for Sqlite {
         Ok(())
     }
 
-    async fn stats(&self, h: &History) -> Result<HistoryStats> {
+    pub async fn stats(&self, h: &History) -> Result<HistoryStats> {
         // We select the previous in the session by time. Excluding deleted
         // history matches every other read path, and lets the query use the
         // partial (session, timestamp) index.
@@ -925,6 +885,7 @@ impl Database for Sqlite {
             duration_over_time.sql().expect("issue in stats duration over time query");
 
         // The queries are all independent, so run them concurrently on the pool.
+        #[allow(clippy::type_complexity)]
         let (prev, next, total, average, exits, day_of_week, duration_over_time): (
             _,
             _,
@@ -937,12 +898,12 @@ impl Database for Sqlite {
             sqlx::query(sqlx::AssertSqlSafe(prev))
                 .bind(h.timestamp.unix_timestamp_nanos() as i64)
                 .bind(&h.session)
-                .map(Self::query_history)
+                .map(Self::row_to_history)
                 .fetch_optional(&self.pool),
             sqlx::query(sqlx::AssertSqlSafe(next))
                 .bind(h.timestamp.unix_timestamp_nanos() as i64)
                 .bind(&h.session)
-                .map(Self::query_history)
+                .map(Self::row_to_history)
                 .fetch_optional(&self.pool),
             sqlx::query_as(sqlx::AssertSqlSafe(total)).bind(&h.command).fetch_one(&self.pool),
             sqlx::query_as(sqlx::AssertSqlSafe(average)).bind(&h.command).fetch_one(&self.pool),
@@ -967,7 +928,7 @@ impl Database for Sqlite {
         })
     }
 
-    async fn get_dups(&self, before: i64, dupkeep: u32) -> Result<Vec<History>> {
+    pub async fn get_dups(&self, before: i64, dupkeep: u32) -> Result<Vec<History>> {
         let res = sqlx::query(
             "SELECT * FROM (
                 SELECT *, ROW_NUMBER()
@@ -980,20 +941,16 @@ impl Database for Sqlite {
         )
         .bind(dupkeep)
         .bind(before)
-        .map(Self::query_history)
+        .map(Self::row_to_history)
         .fetch_all(&self.pool)
         .await?;
 
         Ok(res)
     }
-
-    fn clone_boxed(&self) -> Box<dyn Database + 'static> {
-        Box::new(self.clone())
-    }
 }
 
 pub struct Paged {
-    database: Box<dyn Database + 'static>,
+    database: Sqlite,
     page_size: usize,
     last_id: Option<String>,
     include_deleted: bool,
@@ -1001,12 +958,7 @@ pub struct Paged {
 }
 
 impl Paged {
-    pub fn new(
-        database: Box<dyn Database + 'static>,
-        page_size: usize,
-        include_deleted: bool,
-        unique: bool,
-    ) -> Self {
+    pub fn new(database: Sqlite, page_size: usize, include_deleted: bool, unique: bool) -> Self {
         Self {
             database,
             page_size,
@@ -1207,7 +1159,7 @@ mod test {
     }
 
     async fn assert_search_eq(
-        db: &impl Database,
+        db: &Sqlite,
         mode: DbSearchMode,
         filter_mode: FilterMode,
         query: &str,
@@ -1232,7 +1184,7 @@ mod test {
     }
 
     async fn assert_search_commands(
-        db: &impl Database,
+        db: &Sqlite,
         mode: DbSearchMode,
         filter_mode: FilterMode,
         query: &str,
@@ -1244,12 +1196,12 @@ mod test {
         assert_eq!(commands, expected_commands);
     }
 
-    async fn new_history_item(db: &mut impl Database, cmd: &str) -> Result<()> {
+    async fn new_history_item(db: &mut Sqlite, cmd: &str) -> Result<()> {
         new_history_item_at(db, cmd, None).await
     }
 
     async fn new_history_item_at(
-        db: &mut impl Database,
+        db: &mut Sqlite,
         cmd: &str,
         timestamp: Option<OffsetDateTime>,
     ) -> Result<()> {
@@ -1268,7 +1220,7 @@ mod test {
         db.save(&captured).await
     }
 
-    async fn save_history_item(db: &impl Database, cmd: &str) -> History {
+    async fn save_history_item(db: &Sqlite, cmd: &str) -> History {
         let mut captured: History = History::capture()
             .timestamp(OffsetDateTime::now_utc())
             .command(cmd)
@@ -1317,12 +1269,12 @@ mod test {
         save_history_item(&db, "ls /home/frank").await;
 
         // No range -> everything.
-        let all = db.list(&[], &context, None, false, false, None).await.unwrap();
+        let all = db.list([], &context, None, false, false, None).await.unwrap();
         assert_eq!(all.len(), 2);
 
         // A zero-width window on the item's exact timestamp matches it, because the
         // bounds are inclusive (`timestamp >= from AND timestamp <= to`).
-        let hits = db.list(&[], &context, None, false, false, Some((at, at))).await.unwrap();
+        let hits = db.list([], &context, None, false, false, Some((at, at))).await.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].command, "ls /home/ellie");
     }
@@ -1338,7 +1290,7 @@ mod test {
         let bravo = save_history_item(&db, "echo bravo").await;
         let _charlie = save_history_item(&db, "echo charlie").await;
 
-        let loaded = db.load_active(&[alpha.id.clone(), bravo.id.clone()]).await.unwrap();
+        let loaded = db.load_active([alpha.id.clone(), bravo.id.clone()]).await.unwrap();
 
         let mut commands: Vec<String> = loaded.into_iter().map(|h| h.command).collect();
         commands.sort();
@@ -1356,7 +1308,7 @@ mod test {
 
         // `select ... where id in ()` is a syntax error, so the empty case must
         // short-circuit rather than build a query.
-        let loaded = db.load_active(&[]).await.unwrap();
+        let loaded = db.load_active(std::iter::empty::<HistoryId>()).await.unwrap();
 
         assert!(loaded.is_empty());
     }
@@ -1375,7 +1327,7 @@ mod test {
         alpha.command = String::new();
         db.update(&alpha).await.unwrap();
 
-        let loaded = db.load_active(&[alpha.id.clone(), bravo.id.clone()]).await.unwrap();
+        let loaded = db.load_active([alpha.id.clone(), bravo.id.clone()]).await.unwrap();
 
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].command, "echo bravo");
@@ -1391,7 +1343,7 @@ mod test {
         let alpha = save_history_item(&db, "echo alpha").await;
 
         let loaded = db
-            .load_active(&[alpha.id.clone(), HistoryId("does-not-exist".to_string())])
+            .load_active([alpha.id.clone(), HistoryId("does-not-exist".to_string())])
             .await
             .unwrap();
 
@@ -1413,7 +1365,7 @@ mod test {
             ids.push(save_history_item(&db, &format!("echo {i}")).await.id);
         }
 
-        let loaded = db.load_active(&ids).await.unwrap();
+        let loaded = db.load_active(ids).await.unwrap();
 
         assert_eq!(loaded.len(), 1200);
     }
@@ -1832,7 +1784,7 @@ mod test {
         // Delete one item
         let all = db
             .list(
-                &[],
+                [],
                 &Context {
                     hostname: "".to_string(),
                     session: "".to_string(),

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use atuin_client::database::Database;
+use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::theme::Theme;
@@ -272,7 +272,7 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
 
 pub async fn run(
     year: Option<i32>,
-    db: &impl Database,
+    db: &Sqlite,
     settings: &Settings,
     store: SqliteStore,
     theme: &Theme,

@@ -1,4 +1,4 @@
-use atuin_client::database::Database;
+use atuin_client::database::Sqlite;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
@@ -22,7 +22,7 @@ impl Rebuild {
         &self,
         settings: &Settings,
         store: SqliteStore,
-        database: &dyn Database,
+        database: &Sqlite,
     ) -> Result<()> {
         // keep it as a string and not an enum atm
         // would be super cool to build this dynamically in the future
@@ -53,7 +53,7 @@ impl Rebuild {
         &self,
         settings: &Settings,
         store: SqliteStore,
-        database: &dyn Database,
+        database: &Sqlite,
     ) -> Result<()> {
         let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
 

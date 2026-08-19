@@ -1,4 +1,4 @@
-use atuin_client::database::Database;
+use atuin_client::database::Sqlite;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
@@ -19,7 +19,7 @@ use eyre::{Context, Result};
 pub async fn build(
     settings: &Settings,
     store: &SqliteStore,
-    db: &dyn Database,
+    db: &Sqlite,
     downloaded: Option<&[RecordId]>,
 ) -> Result<()> {
     let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)

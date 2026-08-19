@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use atuin_client::database::{Database, DbSearchMode, OptFilters, QueryToken, QueryTokenizer};
+use atuin_client::database::{DbSearchMode, OptFilters, QueryToken, QueryTokenizer, Sqlite};
 use atuin_client::history::{History, all_user_author_filter};
 use eyre::Result;
 use norm::Metric;
@@ -13,11 +13,7 @@ pub struct Search(pub DbSearchMode);
 
 impl SearchEngine for Search {
     #[instrument(skip_all, level = Level::TRACE, name = "db_search", fields(mode = ?self.0, query = %state.input.as_str()))]
-    async fn full_query(
-        &mut self,
-        state: &SearchState,
-        db: &mut dyn Database,
-    ) -> Result<Vec<History>> {
+    async fn full_query(&mut self, state: &SearchState, db: &mut Sqlite) -> Result<Vec<History>> {
         let shells = state.shells.to_filter();
         let results = db
             .search(self.0, state.filter_mode, &state.context, state.input.as_str(), OptFilters {

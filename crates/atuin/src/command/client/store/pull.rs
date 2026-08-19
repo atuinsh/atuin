@@ -1,4 +1,4 @@
-use atuin_client::database::Database;
+use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync;
 use atuin_client::record::sync::Operation;
@@ -28,12 +28,7 @@ pub struct Pull {
 }
 
 impl Pull {
-    pub async fn run(
-        &self,
-        settings: &Settings,
-        store: SqliteStore,
-        db: &dyn Database,
-    ) -> Result<()> {
+    pub async fn run(&self, settings: &Settings, store: SqliteStore, db: &Sqlite) -> Result<()> {
         if self.force {
             println!("Forcing local overwrite!");
             println!("Clearing local store");
