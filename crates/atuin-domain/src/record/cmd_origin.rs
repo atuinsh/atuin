@@ -27,9 +27,9 @@ impl CmdHost<String> {
     }
 }
 
-impl<T: AsRef<str>> CmdHost<T> {
-    pub fn as_str(&self) -> &str {
-        self.0.as_ref()
+impl<'a> CmdHost<&'a str> {
+    pub fn as_str(&self) -> &'a str {
+        self.0
     }
 }
 
@@ -65,9 +65,9 @@ impl CmdUser<String> {
     }
 }
 
-impl<T: AsRef<str>> CmdUser<T> {
-    pub fn as_str(&self) -> &str {
-        self.0.as_ref()
+impl<'a> CmdUser<&'a str> {
+    pub fn as_str(&self) -> &'a str {
+        self.0
     }
 }
 
