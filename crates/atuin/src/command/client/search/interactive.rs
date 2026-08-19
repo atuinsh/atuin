@@ -1706,7 +1706,7 @@ pub async fn history(
     mut db: Sqlite,
     history_store: &HistoryStore,
     theme: &Theme,
-    app: &atuin_client::ctx::AppCtx,
+    ctx: &atuin_client::ctx::AppCtx,
 ) -> Result<String> {
     let inline_height = if settings.shell_up_key_binding {
         settings.inline_height_shell_up_key_binding.unwrap_or(settings.inline_height)
@@ -1837,9 +1837,9 @@ pub async fn history(
     let history_count = tokio::spawn(async move { count_db.history_count(false).await }).fuse();
     tokio::pin!(history_count);
 
-    let workspace = atuin_client::ctx::WorkspaceCtx::new(app);
+    let workspace = atuin_client::ctx::WorkspaceCtx::new(ctx);
     let git = atuin_client::ctx::GitCtx::new(&workspace);
-    let initial_context = current_context(app, &workspace, &git).await?;
+    let initial_context = current_context(ctx, &workspace, &git).await?;
     let search_mode_state = SearchModeState::new(settings);
     let default_filter_mode = settings
         .filter_mode_shell_up_key_binding

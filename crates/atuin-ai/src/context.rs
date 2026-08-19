@@ -88,8 +88,9 @@ impl ClientContext {
     }
 
     /// Serialize to the JSON format the API expects for the "context" field.
-    /// The `pwd` field is always dynamic (current working directory), so it's
-    /// computed fresh on each call if `send_cwd` is true.
+    /// The caller passes `cwd` as a pre-captured snapshot of the current
+    /// working directory (or `None` if it shouldn't be sent); this method
+    /// just serializes it, it does not compute it.
     pub(crate) fn to_json(
         &self,
         cwd: Option<&str>,
