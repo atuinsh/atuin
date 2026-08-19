@@ -665,7 +665,7 @@ impl TailEvent {
                 command: history.command,
                 cwd: history.cwd,
                 session: history.session,
-                cmd_origin: CmdOrigin::parse_fuzzy(history.hostname),
+                cmd_origin: CmdOrigin::parse_lenient(history.hostname),
                 author: history.author,
                 intent: normalize_optional_string(history.intent),
                 shell: normalize_optional_string(history.shell),

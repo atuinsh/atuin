@@ -1249,7 +1249,7 @@ mod test {
         captured.duration = 1;
         captured.session = "beep boop".to_string();
         #[allow(deprecated)]
-        captured.cmd_origin = CmdOrigin::parse_fuzzy("booop");
+        captured.cmd_origin = CmdOrigin::parse_lenient("booop");
 
         db.save(&captured).await
     }
@@ -1266,7 +1266,7 @@ mod test {
         captured.duration = 1;
         captured.session = "beep boop".to_string();
         #[allow(deprecated)]
-        captured.cmd_origin = CmdOrigin::parse_fuzzy("booop");
+        captured.cmd_origin = CmdOrigin::parse_lenient("booop");
 
         db.save(&captured).await.unwrap();
         captured
@@ -1284,7 +1284,7 @@ mod test {
     ) {
         #[allow(deprecated)]
         let context = Context {
-            cmd_origin: CmdOrigin::parse_fuzzy("booop"),
+            cmd_origin: CmdOrigin::parse_lenient("booop"),
             session: "beep boop".to_string(),
             cwd: "/home/ellie".to_string(),
             host_id: "test-host".to_string(),
@@ -1301,7 +1301,7 @@ mod test {
             .into();
         past.session = "beep boop".to_string();
         #[allow(deprecated)]
-        past.cmd_origin = CmdOrigin::parse_fuzzy("booop");
+        past.cmd_origin = CmdOrigin::parse_lenient("booop");
         db.save(&past).await.unwrap();
         save_history_item(&db, "ls /home/frank").await;
 
@@ -1824,7 +1824,7 @@ mod test {
             .list(
                 [],
                 &Context {
-                    cmd_origin: CmdOrigin::parse_fuzzy(""),
+                    cmd_origin: CmdOrigin::parse_lenient(""),
                     session: "".to_string(),
                     cwd: "".to_string(),
                     host_id: "".to_string(),
@@ -1925,7 +1925,7 @@ mod test {
 
         #[allow(deprecated)]
         let context = Context {
-            cmd_origin: CmdOrigin::parse_fuzzy("hostname"),
+            cmd_origin: CmdOrigin::parse_lenient("hostname"),
             session: "session".into(),
             cwd: "/tmp".into(),
             host_id: "host".into(),
@@ -1978,7 +1978,7 @@ mod test {
 
         #[allow(deprecated)]
         let context = Context {
-            cmd_origin: CmdOrigin::parse_fuzzy("hostname"),
+            cmd_origin: CmdOrigin::parse_lenient("hostname"),
             session: "session".into(),
             cwd: "/tmp".into(),
             host_id: "host".into(),

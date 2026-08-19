@@ -106,7 +106,7 @@ impl CmdOrigin {
 
     /// The user portion.
     ///
-    /// May be `""` if [`CmdOrigin`] was created through [`CmdOrigin::parse_fuzzy`] and no user was
+    /// May be `""` if [`CmdOrigin`] was created through [`CmdOrigin::parse_lenient`] and no user was
     /// found in the string.
     pub fn user(&self) -> CmdUser<&str> {
         CmdUser(self.raw.get(self.sep + 1..).unwrap_or(""))
@@ -129,7 +129,7 @@ impl CmdOrigin {
     #[deprecated(note = "this function is considered an anti-pattern and should not be used \
                          moving forwards. it is mostly used to interface with legacy code and \
                          need to deserialize potentially malformed data.")]
-    pub fn parse_fuzzy<T: Into<String> + AsRef<str>>(value: T) -> Self {
+    pub fn parse_lenient<T: Into<String> + AsRef<str>>(value: T) -> Self {
         match value.as_ref().find(':') {
             Some(sep) => Self {
                 raw: value.into(),

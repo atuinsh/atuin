@@ -134,7 +134,7 @@ mod unix {
             .command("echo hello".to_string())
             .cwd("/tmp".to_string())
             .session("test-session".to_string())
-            .cmd_origin(atuin_domain::record::CmdOrigin::parse_fuzzy("test-host"))
+            .cmd_origin(atuin_domain::record::CmdOrigin::parse_lenient("test-host"))
             .build()
             .into();
 
