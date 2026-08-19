@@ -397,7 +397,10 @@ impl HistoryStore {
 
         pb.set_message("Fetching history from old database");
 
-        let context = current_context().await?;
+        let app = crate::ctx::AppCtx::new();
+        let workspace = crate::ctx::WorkspaceCtx::new(&app);
+        let git = crate::ctx::GitCtx::new(&workspace);
+        let context = current_context(&app, &workspace, &git).await?;
         let history = db.list([], &context, None, false, true, None).await?;
 
         pb.set_message("Fetching history already in store");

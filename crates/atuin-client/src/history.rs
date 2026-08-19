@@ -211,9 +211,7 @@ impl History {
         deleted_at: Option<OffsetDateTime>,
         shell: Option<String>,
     ) -> Self {
-        let session = session
-            .or_else(|| crate::ctx::app().session())
-            .unwrap_or_else(|| uuid_v7().as_simple().to_string());
+        let session = session.unwrap_or_else(|| uuid_v7().as_simple().to_string());
         let cmd_origin = cmd_origin.unwrap_or_else(CmdOrigin::probe_current);
         let author = normalize_optional_string(author)
             .or_else(|| normalize_optional_string(env::var(HISTORY_AUTHOR_ENV).ok()))
@@ -734,5 +732,24 @@ mod tests {
         } else {
             assert!(got.is_err(), "unexpected success deserializing as {decode_as}");
         }
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn build_without_session_generates_uuid_not_env() {
+        // SAFETY: single-threaded test; we set then restore the var.
+        unsafe { std::env::set_var("ATUIN_SESSION", "from-env") };
+        // `capture().build()` yields a `HistoryCaptured`; `.into()` runs `History::new`.
+        let h: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("echo hi")
+            .cwd("/tmp")
+            .build()
+            .into();
+        unsafe { std::env::remove_var("ATUIN_SESSION") };
+        // Session must be a generated uuid-simple (32 hex chars), NOT the env value.
+        assert_ne!(h.session, "from-env");
+        assert_eq!(h.session.len(), 32);
+        assert!(h.session.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }

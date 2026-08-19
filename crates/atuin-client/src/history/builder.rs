@@ -71,6 +71,8 @@ pub struct HistoryCaptured {
     intent: Option<String>,
     #[builder(default, setter(into))]
     shell: Option<String>,
+    #[builder(default, setter(into))]
+    session: Option<String>,
 }
 
 impl From<HistoryCaptured> for History {
@@ -81,7 +83,7 @@ impl From<HistoryCaptured> for History {
             captured.cwd,
             -1,
             -1,
-            None,
+            captured.session,
             None,
             captured.author,
             captured.intent,

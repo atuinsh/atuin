@@ -1,34 +1,25 @@
-use std::sync::LazyLock;
-
-use super::workspace::WorkspaceCtx;
-
-/// Effectively-global application state, constructed once and held by the [`app()`](super::app)
-/// static.
-pub struct AppCtx {
-    /// Constructed lazily since some subcommands of atuin don't need workspace-specific
-    /// information, so we can save the some cycles.
-    workspace: LazyLock<WorkspaceCtx>,
-}
+/// Effectively-global application state, constructed once in `main` and threaded explicitly.
+///
+/// Runtime-free: safe to construct before the tokio runtime exists.
+pub struct AppCtx {}
 
 impl AppCtx {
-    pub(crate) fn new() -> Self {
-        Self {
-            workspace: LazyLock::new(WorkspaceCtx::new),
-        }
-    }
-
-    /// A workspace is the current working directory that atuin is invoked in.
     #[must_use]
-    pub fn workspace(&self) -> &WorkspaceCtx {
-        &self.workspace
+    pub fn new() -> Self {
+        Self {}
     }
 
     /// The current session id, as exported by the shell integration in `ATUIN_SESSION`.
     ///
-    /// [`None`] when the variable is unset (e.g. atuin invoked outside a hooked shell). Probed
-    /// live, as the value is fixed for the life of a process but set by the environment.
+    /// [`None`] when the variable is unset (e.g. atuin invoked outside a hooked shell).
     #[must_use]
     pub fn session(&self) -> Option<String> {
         std::env::var("ATUIN_SESSION").ok()
+    }
+}
+
+impl Default for AppCtx {
+    fn default() -> Self {
+        Self::new()
     }
 }

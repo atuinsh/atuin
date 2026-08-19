@@ -59,20 +59,21 @@ pub struct OptFilters<'a> {
 /// Outside of an atuin-hooked shell (e.g. when running as an MCP server),
 /// `ATUIN_SESSION` is unset; the session is left empty so session-scoped
 /// filters simply match nothing.
-pub async fn query_context() -> eyre::Result<Context> {
-    // Touch the workspace up front so its background git discovery overlaps the awaits below
-    // (host_id) rather than starting only when we await git_ctx at the end.
-    let workspace = crate::ctx::app().workspace();
-    let session = crate::ctx::app().session().unwrap_or_default();
+pub async fn query_context(
+    app: &crate::ctx::AppCtx,
+    workspace: &crate::ctx::WorkspaceCtx,
+    git: &crate::ctx::GitCtx,
+) -> eyre::Result<Context> {
+    let session = app.session().unwrap_or_default();
     let cmd_origin = CmdOrigin::probe_current();
     let cwd = workspace.cwd().to_string();
     let host_id = Settings::host_id().await?;
-    let git_root = workspace
-        .git_ctx()
+    let git_root = git
+        .repo_ctx()
         .await
         .ok()
         .flatten()
-        .and_then(|git| git.repo().work_dir())
+        .and_then(|repo| repo.repo().work_dir())
         .map(|p| p.to_path_buf());
 
     Ok(Context {
@@ -84,26 +85,29 @@ pub async fn query_context() -> eyre::Result<Context> {
     })
 }
 
-pub async fn current_context() -> eyre::Result<Context> {
-    if crate::ctx::app().session().is_none() {
+pub async fn current_context(
+    app: &crate::ctx::AppCtx,
+    workspace: &crate::ctx::WorkspaceCtx,
+    git: &crate::ctx::GitCtx,
+) -> eyre::Result<Context> {
+    if app.session().is_none() {
         return Err(eyre::eyre!(
             "Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set \
              up your shell."
         ));
     }
 
-    query_context().await
+    query_context(app, workspace, git).await
 }
 
 impl Context {
-    pub async fn from_history(entry: &History) -> Self {
-        let git_root = crate::ctx::app()
-            .workspace()
-            .git_ctx()
+    pub async fn from_history(entry: &History, git: &crate::ctx::GitCtx) -> Self {
+        let git_root = git
+            .repo_ctx()
             .await
             .ok()
             .flatten()
-            .and_then(|git| git.repo().work_dir())
+            .and_then(|repo| repo.repo().work_dir())
             .map(|p| p.to_path_buf());
 
         Context {
