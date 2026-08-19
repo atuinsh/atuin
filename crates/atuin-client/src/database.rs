@@ -325,9 +325,7 @@ impl Sqlite {
             .build()
             .into()
     }
-}
 
-impl Sqlite {
     pub async fn save(&self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
         let mut tx = self.pool.begin().await?;
@@ -363,15 +361,10 @@ impl Sqlite {
         Ok(res)
     }
 
-    pub async fn load_active<'a>(
-        &self,
-        ids: impl IntoIterator<Item = &'a HistoryId>,
-    ) -> Result<Vec<History>> {
+    pub async fn load_active(&self, ids: &[HistoryId]) -> Result<Vec<History>> {
         // sqlite caps bound parameters per statement (SQLITE_MAX_VARIABLE_NUMBER, as low as 999).
         // Chunk well under that.
         const CHUNK: usize = 500;
-
-        let ids: Vec<&HistoryId> = ids.into_iter().collect();
 
         debug!("loading {} history items", ids.len());
 
@@ -422,9 +415,9 @@ impl Sqlite {
     }
 
     // make a unique list, that only shows the *newest* version of things
-    pub async fn list<'a>(
+    pub async fn list(
         &self,
-        filters: impl IntoIterator<Item = &'a FilterMode>,
+        filters: impl IntoIterator<Item = FilterMode>,
         context: &Context,
         max: Option<usize>,
         unique: bool,
@@ -1255,12 +1248,12 @@ mod test {
         save_history_item(&db, "ls /home/frank").await;
 
         // No range -> everything.
-        let all = db.list(&[], &context, None, false, false, None).await.unwrap();
+        let all = db.list([], &context, None, false, false, None).await.unwrap();
         assert_eq!(all.len(), 2);
 
         // A zero-width window on the item's exact timestamp matches it, because the
         // bounds are inclusive (`timestamp >= from AND timestamp <= to`).
-        let hits = db.list(&[], &context, None, false, false, Some((at, at))).await.unwrap();
+        let hits = db.list([], &context, None, false, false, Some((at, at))).await.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].command, "ls /home/ellie");
     }
@@ -1770,7 +1763,7 @@ mod test {
         // Delete one item
         let all = db
             .list(
-                &[],
+                [],
                 &Context {
                     hostname: "".to_string(),
                     session: "".to_string(),

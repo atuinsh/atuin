@@ -54,8 +54,8 @@ impl Cmd {
             self.period.join(" ")
         };
 
-        // A single filter mode, or none. `list` takes a slice so it can OR several,
-        // but stats only ever scopes to one at a time.
+        // A single filter mode, or none. `list` takes an iterator of modes so it can
+        // OR several, but stats only ever scopes to one at a time.
         let filter = self.filter_mode.map(|f| vec![f]).unwrap_or_default();
 
         let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
@@ -85,7 +85,7 @@ impl Cmd {
             Some((start, end))
         };
 
-        let history = db.list(filter.as_slice(), &context, None, false, false, range).await?;
+        let history = db.list(filter, &context, None, false, false, range).await?;
 
         let stats = compute(settings, &history, self.count, self.ngram_size);
 
