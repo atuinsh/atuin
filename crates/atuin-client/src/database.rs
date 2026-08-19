@@ -169,6 +169,38 @@ fn get_session_start_time(session_id: &str) -> Option<i64> {
     None
 }
 
+/// SQL predicate to match for a [`CmdOrigin`].
+fn origin_sql_filter(origin: &CmdOrigin) -> String {
+    // This helper implements logic to support host-only matching against a combined host:user pair.
+    // Normally, you'd think we could just do
+    // `lower(hostname) = {origin.host().as_str().to_lowercase()}`, but that does not work.
+    //
+    // Normally, `CmdOrigin` is intended to be serialized as a string "<host>:<user>", but, certain
+    // parsing logic we historically had would parse a string "<host>", rather than
+    // "<host>:unknown-user" (which other logic did). An example offender is the `nushell` importer.
+    //
+    // The database column `hostname` is a misnomer -- it actually refers to the `cmd_origin`. Some
+    // importers, have parsed it as "<host>:<user>", others as "<host>" and others yet as "<host>:".
+    //
+    // In effect, there's this crappy data in the database. Another case for writing
+    // application-specific types.
+    //
+    // You'd think that we could apply a migration and call it a day, but unfortunately that doesn't
+    // work -- the `history` table is actually a cache over the `records` table, and the records
+    // table only holds this information in encrypted, synced form. If we want to get it, we need to
+    // decrypt all the local `records` rows, patch them up, re-encrypt them and then sync that to
+    // the cloud. Recipe for disaster.
+    //
+    // So this function exists.
+    let host = origin.host().as_str().to_lowercase();
+    format!(
+        "(lower(hostname) = {eq} OR (lower(hostname) >= {lo} AND lower(hostname) < {hi}))",
+        eq = quote(&host),
+        lo = quote(format!("{host}:")),
+        hi = quote(format!("{host};")),
+    )
+}
+
 /// Controls the type of search [`Database::search`] performs.
 ///
 /// This is a narrower set of modes than [`SearchMode`], which also contains modes that apply only
@@ -508,12 +540,7 @@ impl Database for Sqlite {
         for filter in filters {
             match filter {
                 FilterMode::Global => &mut query,
-                FilterMode::Host => query.and_where_eq(
-                    // Case-insensitive, matching `search()` - the reported casing of a
-                    // hostname changes over time. lower() is indexed as an expression.
-                    "lower(hostname)",
-                    quote(context.cmd_origin.as_str().to_lowercase()),
-                ),
+                FilterMode::Host => query.and_where(origin_sql_filter(&context.cmd_origin)),
                 FilterMode::Session => query.and_where_eq("session", quote(&context.session)),
                 FilterMode::SessionPreload => {
                     query.and_where_eq("session", quote(&context.session));
@@ -627,8 +654,7 @@ impl Database for Sqlite {
 
         match filter {
             FilterMode::Global => &mut sql,
-            FilterMode::Host => sql
-                .and_where_eq("lower(hostname)", quote(context.cmd_origin.as_str().to_lowercase())),
+            FilterMode::Host => sql.and_where(origin_sql_filter(&context.cmd_origin)),
             FilterMode::Session => sql.and_where_eq("session", quote(&context.session)),
             FilterMode::SessionPreload => {
                 sql.and_where_eq("session", quote(&context.session));
