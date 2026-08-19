@@ -1,101 +1,228 @@
+use std::env::VarError;
+use std::ffi::OsString;
 use std::io::IsTerminal;
+use std::str::FromStr;
 
 use atuin_common::logs::{FileConfig, LogConfig, StderrConfig};
 use opentelemetry::trace::TracerProvider as _;
-use opentelemetry_otlp::WithExportConfig as _;
+use opentelemetry_otlp::{ExporterBuildError, WithExportConfig as _};
+use thiserror;
 use tracing::Level;
 use tracing_appender::rolling::{self, RollingFileAppender, Rotation};
 use tracing_subscriber::filter::{self, EnvFilter, LevelFilter};
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
+use tracing_subscriber::util::TryInitError;
+use url::Url;
 
-/// Held for the lifetime of a command. When `ATUIN_OTEL` is set it owns the
-/// OpenTelemetry tracer provider; dropping it flushes and shuts down the OTLP
-/// exporter, so callers must keep it alive until the command has finished.
-#[must_use = "dropping the guard immediately flushes and shuts down the OTLP exporter"]
-pub struct LogGuard {
-    _otel: Option<OtelGuard>,
+#[derive(Debug, thiserror::Error)]
+pub enum LogCtxEnableError {
+    #[error("failed to build the otel collector: {0}")]
+    OtelCtx(#[from] OtelCtxEnableError),
+    #[error("failed to initialize subscriber: {0}")]
+    Subscriber(#[from] TryInitError),
 }
 
-impl LogGuard {
-    /// A guard that owns nothing, for when logging was not initialized.
-    pub(crate) fn disabled() -> Self {
-        Self { _otel: None }
+/// Application-level log context.
+///
+/// RAII object which must be kept alive for as long as you want to do logs through [`tracing`].
+///
+/// ## OpenTelemetry
+///
+/// [`opentelemetry`] traces can be enabled by passing an `ATUIN_OTEL=<url>` environment variable,
+/// which will publish spans to the given endpoint, eg.
+///
+/// ```bash
+/// ATUIN_OTEL=http://localhost:4318 atuin foo bar baz.
+/// ```
+///
+pub struct LogCtx {
+    /// Handle to open-telemetry traces. Kept alive because it's RAII.
+    ///
+    /// OTEL may be disabled, in which case this is [`Option::None`].
+    otel: Option<OtelCtx>,
+}
+
+impl LogCtx {
+    /// Check whether open-telemetry is enabled.
+    #[must_use]
+    pub const fn otel_enabled(&self) -> bool {
+        self.otel.is_some()
+    }
+
+    /// Try to enable the logging for atuin.
+    ///
+    /// TODO(markovejnovic): Clean up this [`LogConfig`] structure. It feels very out-of-place where
+    /// it is.
+    #[must_use]
+    pub fn try_enable(
+        service_name: &'static str,
+        config: &LogConfig,
+    ) -> Result<Self, LogCtxEnableError> {
+        // ATUIN_LOG env var overrides config file level settings
+        let filter: EnvFilter = std::env::var("ATUIN_LOG")
+            .map_or_else(|_| get_base_filter(config), |s| filter::Builder::default().parse_lossy(s))
+            .add_directive("sqlx_sqlite::regexp=off".parse().unwrap());
+
+        if let Some(file_config) = &config.file {
+            clean_up_old_logs(file_config);
+        }
+
+        // A misconfigured log file is non-fatal: drop the file layer and warn once
+        // the subscriber is up, so logging still works via stderr / otel.
+        let file_layer = config.file.as_ref().map(|file| {
+            let writer = make_file_writer(file)?;
+            Ok::<_, FileWriterError>(
+                fmt::layer().with_writer(writer).with_ansi(false).with_filter(filter.clone()),
+            )
+        });
+        let (file_layer, file_error) = match file_layer.transpose() {
+            Ok(layer) => (layer, None),
+            Err(e) => (None, Some(e)),
+        };
+
+        let otel = OtelCtx::try_enable(service_name)?;
+
+        let otel_layer = otel.as_ref().map(|ctx| {
+            tracing_opentelemetry::layer()
+                .with_tracer(ctx.provider.tracer(service_name))
+                .with_context_activation(false)
+                .with_filter(LevelFilter::TRACE)
+        });
+
+        // The stderr layer is added last because its type varies with the timer
+        // dispatch below; the file and otel layers must be layered first so `base`
+        // has a single type shared by both branches (otherwise the otel layer's
+        // subscriber type `S` can't unify across the two stderr layer types).
+        let base = tracing_subscriber::registry().with(file_layer).with(otel_layer);
+        let show_time = matches!(
+            config.stderr,
+            Some(StderrConfig {
+                show_time: true,
+                ..
+            })
+        );
+        if show_time {
+            base.with(stderr_layer::<_, fmt::time::SystemTime>(config.stderr.as_ref(), filter))
+                .try_init()?;
+        } else {
+            base.with(stderr_layer::<_, ()>(config.stderr.as_ref(), filter)).try_init()?;
+        }
+
+        // Non-fatal: the subscriber is live now, so this reaches stderr/otel if configured.
+        if let Some(e) = file_error {
+            tracing::warn!("failed to initialize the log file: {e}");
+        }
+
+        Ok(Self { otel })
     }
 }
 
-/// Owns the OpenTelemetry tracer provider for a command's lifetime. Dropping it
-/// flushes any batched spans and stops the exporter's background thread. The
-/// default exporter is blocking HTTP driven from a dedicated thread, so both
-/// export and this shutdown need no tokio runtime -- it is safe to drop from
-/// anywhere, including outside `block_on`.
-struct OtelGuard(opentelemetry_sdk::trace::SdkTracerProvider);
+/// Build the stderr `fmt` layer, if stderr logging is configured.
+///
+/// The timer type `T` is a generic rather than a runtime value because
+/// [`fmt::format::Format::with_timer`] bakes the timer into the event-formatter type;
+/// `()` (no timestamp) and [`fmt::time::SystemTime`] are therefore distinct types.
+/// Callers dispatch `T` so only this one axis is monomorphized instead of duplicating
+/// the whole subscriber build. `S` is inferred at the `.with(...)` call site.
+fn stderr_layer<S, T>(
+    config: Option<&StderrConfig>,
+    filter: EnvFilter,
+) -> Option<impl tracing_subscriber::Layer<S>>
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+    T: fmt::time::FormatTime + Default + 'static,
+{
+    config.map(|cfg| {
+        fmt::layer()
+            .with_writer(std::io::stderr)
+            .with_ansi(std::io::stderr().is_terminal())
+            .with_target(cfg.show_target)
+            .map_event_format(|f| f.with_timer(T::default()))
+            .with_filter(filter)
+    })
+}
 
-impl Drop for OtelGuard {
+#[derive(Debug, thiserror::Error)]
+pub enum OtelCtxEnableError {
+    #[error("the given ATUIN_OTEL URL does not appear to be a utf-8 string")]
+    NonUtf8EnvVar(OsString),
+    #[error("the given ATUIN_OTEL failed to parse as URL: {0}")]
+    InvalidUrl(#[from] url::ParseError),
+    #[error("the given ATUIN_OTEL URL does not appear to be an HTTP(s) URL")]
+    NonHttpUrl,
+    #[error("failed to construct the exporter: {0}")]
+    ExporterBuild(#[from] ExporterBuildError),
+}
+
+struct OtelCtx {
+    provider: opentelemetry_sdk::trace::SdkTracerProvider,
+}
+
+impl OtelCtx {
+    /// Try to enable the opentelemetry logging context, if it was requested through the
+    fn try_enable(service_name: &'static str) -> Result<Option<Self>, OtelCtxEnableError> {
+        // TODO(markovejnovic): We should really have our own env-var parsing logic to avoid this
+        // annoying error handling here.
+        let otel_env: Option<String> = match std::env::var("ATUIN_OTEL") {
+            Ok(v) => Some(v),
+            Err(e) => match e {
+                VarError::NotPresent => None,
+                VarError::NotUnicode(e) => {
+                    return Err(OtelCtxEnableError::NonUtf8EnvVar(e));
+                }
+            },
+        };
+
+        let otel_env: String = match otel_env {
+            Some(var) => var,
+            None => {
+                return Ok(None);
+            }
+        };
+
+        // TODO(markovejnovic): A better env library could also handle this.
+        // TODO(markovejnovic): I want an HttpUrl type so bad...
+        let mut otel_url = Url::from_str(&otel_env)?;
+        if !(otel_url.scheme() == "http" || otel_url.scheme() == "https") {
+            return Err(OtelCtxEnableError::NonHttpUrl);
+        }
+
+        if !otel_url.path().ends_with("/v1/traces") {
+            otel_url
+                .path_segments_mut()
+                .expect("checked above that it's an http url")
+                .extend(["v1", "traces"]);
+        }
+
+        let exporter = opentelemetry_otlp::SpanExporter::builder()
+            .with_http()
+            .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
+            .with_endpoint(otel_url.as_str())
+            .build()?;
+
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_batch_exporter(exporter)
+            .with_resource(
+                opentelemetry_sdk::Resource::builder().with_service_name(service_name).build(),
+            )
+            .build();
+
+        Ok(Some(Self { provider }))
+    }
+}
+
+impl Drop for OtelCtx {
     fn drop(&mut self) {
-        let _ = self.0.shutdown();
-    }
-}
+        if let Err(err) = self.provider.force_flush() {
+            // Intentional eprintln! here since we cannot safely use error!
+            eprintln!("Unexpected error flushing OTEL spans: {}", err);
+        }
 
-/// Build an OTLP tracer provider when `ATUIN_OTEL` is set. Returns `None` when
-/// disabled, or if the exporter cannot be built.
-///
-/// The env var's value selects the collector's OTLP/HTTP endpoint:
-/// - a URL (e.g. `http://localhost:4318`) is used as the endpoint; the standard
-///   `/v1/traces` path is appended if absent. Note this is the OTLP *ingest* port
-///   (4318), NOT the Jaeger UI (16686).
-/// - anything else (e.g. `1`) just enables export to the default,
-///   `http://localhost:4318/v1/traces`.
-///
-/// Uses the blocking HTTP exporter and the default dedicated-thread batch
-/// processor, so it requires no async runtime and is safe to construct here
-/// (which runs before the tokio runtime is entered).
-fn build_otel_provider() -> Option<opentelemetry_sdk::trace::SdkTracerProvider> {
-    // Unset (or non-utf8) env var -> OTel disabled.
-    let value = std::env::var("ATUIN_OTEL").ok()?;
-
-    let mut builder = opentelemetry_otlp::SpanExporter::builder()
-        .with_http()
-        .with_protocol(opentelemetry_otlp::Protocol::HttpBinary);
-
-    let endpoint = value.trim();
-    if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
-        builder = builder.with_endpoint(otlp_traces_endpoint(endpoint));
-    }
-
-    let exporter = builder
-        .build()
-        .map_err(|e| eprintln!("atuin: failed to initialize OTLP exporter: {e}"))
-        .ok()?;
-
-    let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
-        .with_batch_exporter(exporter)
-        .with_resource(opentelemetry_sdk::Resource::builder().with_service_name("atuin").build())
-        .build();
-
-    Some(provider)
-}
-
-/// The OTLP/HTTP traces endpoint for a base URL. `SpanExporter::with_endpoint`
-/// uses its argument verbatim (it does not append the OTLP signal path), so add
-/// the standard `/v1/traces` suffix when the caller supplied only a base.
-fn otlp_traces_endpoint(base: &str) -> String {
-    let base = base.trim_end_matches('/');
-    if base.ends_with("/v1/traces") {
-        base.to_owned()
-    } else {
-        format!("{base}/v1/traces")
-    }
-}
-
-pub fn init_logging(config: &LogConfig) -> LogGuard {
-    // We have to dispatch the time config statically; see
-    // https://github.com/tokio-rs/tracing/issues/3180
-    match &config.stderr {
-        Some(StderrConfig {
-            show_time: false, ..
-        }) => with_stderr_time::<()>(config),
-        _ => with_stderr_time::<fmt::time::SystemTime>(config),
+        if let Err(err) = self.provider.shutdown() {
+            // Intentional eprintln! here since we cannot safely use error!
+            eprintln!("Unexpected error shutting down the OTEL tracc provider: {}", err);
+        }
     }
 }
 
@@ -156,78 +283,4 @@ fn make_file_writer(config: &FileConfig) -> Result<RollingFileAppender, FileWrit
         .filename_prefix(prefix)
         .build(config.directory())?;
     Ok(writer)
-}
-
-fn with_stderr_time<StderrTime>(config: &LogConfig) -> LogGuard
-where
-    StderrTime: fmt::time::FormatTime + Default + Send + Sync + 'static,
-{
-    // ATUIN_LOG env var overrides config file level settings
-    let filter: EnvFilter = std::env::var("ATUIN_LOG")
-        .map_or_else(|_| get_base_filter(config), |s| filter::Builder::default().parse_lossy(s))
-        .add_directive("sqlx_sqlite::regexp=off".parse().unwrap());
-
-    if let Some(file) = &config.file {
-        clean_up_old_logs(file);
-    }
-
-    let file_layer = config.file.as_ref().map(|file| {
-        let writer = make_file_writer(file)?;
-        let layer = fmt::layer().with_writer(writer).with_ansi(false).with_filter(filter.clone());
-        Ok::<_, FileWriterError>(layer)
-    });
-
-    let stderr_layer = config.stderr.as_ref().map(|stderr| {
-        fmt::layer()
-            .with_writer(std::io::stderr)
-            .with_ansi(std::io::stderr().is_terminal())
-            .with_target(stderr.show_target)
-            .map_event_format(|f| f.with_timer(StderrTime::default()))
-            .with_filter(filter)
-    });
-
-    let (file_layer, file_error) = match file_layer.transpose() {
-        Ok(layer) => (layer, None),
-        Err(e) => (None, Some(e)),
-    };
-    let has_stderr_layer = stderr_layer.is_some();
-
-    // OpenTelemetry -> OTLP -> Jaeger. `ATUIN_OTEL` exports the `#[instrument]`
-    // spans as an async-native waterfall (view at http://localhost:16686). Built
-    // inline so the layer's subscriber type is inferred at the registry site.
-    // Requires the `#[instrument(level = "trace")]` spans to be compiled in, i.e.
-    // a debug build or the `profiling-traced` profile.
-    let (otel_layer, otel_guard) = build_otel_provider().map_or((None, None), |provider| {
-        let layer = tracing_opentelemetry::layer()
-            .with_tracer(provider.tracer("atuin"))
-            // Parent spans by the `tracing` span tree (the `#[instrument]` nesting)
-            // rather than the OpenTelemetry thread-local context, which nothing here
-            // populates -- with the default (`true`) every span becomes its own root
-            // trace instead of nesting under the command span.
-            .with_context_activation(false)
-            .with_filter(LevelFilter::TRACE);
-        (Some(layer), Some(OtelGuard(provider)))
-    });
-
-    if let Err(e) = tracing_subscriber::registry()
-        .with(file_layer)
-        .with(stderr_layer)
-        .with(otel_layer)
-        .try_init()
-    {
-        if has_stderr_layer || cfg!(debug_assertions) {
-            eprintln!("failed to initialize logging: {e}");
-        }
-        return LogGuard::disabled();
-    }
-
-    if let Some(e) = file_error {
-        if has_stderr_layer {
-            tracing::warn!("failed to initialize log file: {e}");
-        } else if cfg!(debug_assertions) {
-            eprintln!("failed to initialize log file: {e}");
-        }
-    }
-
-    LogGuard { _otel: otel_guard }
 }

@@ -52,7 +52,7 @@ impl AtuinCmd {
         let _log_guard = match &self {
             #[cfg(feature = "client")]
             Self::Client(_) => None,
-            _ => Some(crate::logs::init_logging(&LogConfig::stderr_only())),
+            _ => Some(crate::logs::LogCtx::try_enable("atuin", &LogConfig::stderr_only())?),
         };
 
         match self {
