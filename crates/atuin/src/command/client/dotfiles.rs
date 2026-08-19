@@ -1,7 +1,7 @@
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
 use clap::Subcommand;
 use eyre::Result;
-
-use atuin_client::{record::sqlite_store::SqliteStore, settings::Settings};
 
 mod alias;
 mod var;

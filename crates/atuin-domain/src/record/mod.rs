@@ -22,18 +22,21 @@ pub struct Diff {
     pub remote: Option<RecordIdx>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Host {
     pub id: HostId,
-    pub name: String,
+    /// At some point in history, this field used to carry some meaning.
+    ///
+    /// But the protocol requires we carry it around, so we carry an empty string here.
+    ///
+    /// TODO(ATU-589): Remove the field.
+    #[serde(rename = "name", skip_deserializing)]
+    _name: &'static str,
 }
 
 impl Host {
     pub fn new(id: HostId) -> Self {
-        Host {
-            id,
-            name: String::new(),
-        }
+        Self { id, _name: "" }
     }
 }
 
@@ -274,16 +277,14 @@ impl RecordStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
-
-    use super::{DecryptedData, Diff, Record, RecordStatus};
+    use paseto_v4::ImplicitAssertion;
     use pretty_assertions::assert_eq;
     use rstest::{fixture, rstest};
     use uuid::Uuid;
 
-    use paseto_v4::ImplicitAssertion;
+    use super::{DecryptedData, Diff, Record, RecordStatus, *};
 
     /// Serialize `AdditionalData` into the JSON used as the paseto implicit assertion.
     ///
@@ -359,9 +360,7 @@ mod tests {
             },
         };
 
-        let decrypted = record
-            .decrypt(&key)
-            .expect("frozen record blob must still decrypt");
+        let decrypted = record.decrypt(&key).expect("frozen record blob must still decrypt");
         assert_eq!(decrypted.data.0, [1, 2, 3, 4, 5]);
     }
 
@@ -373,11 +372,7 @@ mod tests {
 
         let tail = index.get(record.host.id, &record.tag);
 
-        assert_eq!(
-            record.idx,
-            tail.expect("tail not in store"),
-            "tail in store did not match"
-        );
+        assert_eq!(record.idx, tail.expect("tail not in store"), "tail in store did not match");
     }
 
     #[rstest]
@@ -390,11 +385,7 @@ mod tests {
 
         let tail = index.get(record.host.id, &record.tag);
 
-        assert_eq!(
-            child.idx,
-            tail.expect("tail not in store"),
-            "tail in store did not match"
-        );
+        assert_eq!(child.idx, tail.expect("tail not in store"), "tail in store did not match");
     }
 
     #[rstest]
@@ -427,15 +418,12 @@ mod tests {
         let diff = index1.diff(&index2);
 
         assert_eq!(1, diff.len(), "expected single diff");
-        assert_eq!(
-            diff[0],
-            Diff {
-                host: record2.host.id,
-                tag: record2.tag,
-                remote: Some(1),
-                local: Some(0)
-            }
-        );
+        assert_eq!(diff[0], Diff {
+            host: record2.host.id,
+            tag: record2.tag,
+            remote: Some(1),
+            local: Some(0)
+        });
     }
 
     #[rstest]
@@ -568,10 +556,7 @@ mod tests {
         .unwrap_err();
         let message = error.to_string();
 
-        assert!(
-            message.contains("bad key"),
-            "unexpected error message: {message}"
-        );
+        assert!(message.contains("bad key"), "unexpected error message: {message}");
         assert!(
             message.contains(&format!(
                 "encrypted key id: {}, given decryption key: {}",
@@ -597,9 +582,7 @@ mod tests {
             paseto_v4::decrypt_sync(&encrypted, None::<ImplicitAssertion>, &key).unwrap_err();
 
         assert!(
-            error
-                .to_string()
-                .contains("failed to deserialize the given key"),
+            error.to_string().contains("failed to deserialize the given key"),
             "unexpected error message: {error}"
         );
     }
@@ -662,12 +645,9 @@ mod tests {
         assert_eq!(encrypted1.raw, encrypted2.raw);
         assert_ne!(encrypted1.cek, encrypted2.cek);
 
-        let decrypted = paseto_v4::decrypt_sync(
-            &encrypted2,
-            Some(ImplicitAssertion::from(aj.as_str())),
-            &key2,
-        )
-        .unwrap();
+        let decrypted =
+            paseto_v4::decrypt_sync(&encrypted2, Some(ImplicitAssertion::from(aj.as_str())), &key2)
+                .unwrap();
 
         assert_eq!(DecryptedData(decrypted), data);
     }
@@ -692,15 +672,13 @@ mod tests {
 
         let mut enc1 = encrypted.clone();
         enc1.host = Host::new(HostId(uuid_v7()));
-        let _ = enc1
-            .decrypt(&key)
-            .expect_err("tampering with the host should result in auth failure");
+        let _ =
+            enc1.decrypt(&key).expect_err("tampering with the host should result in auth failure");
 
         let mut enc2 = encrypted;
         enc2.id = RecordId(uuid_v7());
-        let _ = enc2
-            .decrypt(&key)
-            .expect_err("tampering with the id should result in auth failure");
+        let _ =
+            enc2.decrypt(&key).expect_err("tampering with the id should result in auth failure");
     }
 
     #[test]
@@ -717,10 +695,7 @@ mod tests {
 
         let round: RecordStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(round.get(host, &RecordTag::History), Some(6));
-        assert_eq!(
-            round.get(host, &RecordTag::Other("custom".to_owned())),
-            Some(2)
-        );
+        assert_eq!(round.get(host, &RecordTag::Other("custom".to_owned())), Some(2));
     }
 
     /// Do *not* modify this test if it fails! It means the serialization of [`AdditionalData`]

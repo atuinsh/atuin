@@ -55,10 +55,7 @@ fn spawn_proxy(rows: u16, cols: u16) -> TestProxy {
             pixel_height: 0,
         })
         .expect("openpty");
-    let child = pair
-        .slave
-        .spawn_command(CommandBuilder::new("/bin/cat"))
-        .expect("spawn /bin/cat");
+    let child = pair.slave.spawn_command(CommandBuilder::new("/bin/cat")).expect("spawn /bin/cat");
     drop(pair.slave);
 
     let reader = pair.master.try_clone_reader().expect("clone reader");
@@ -124,9 +121,7 @@ fn legacy_snapshot(sock: &Path) -> Result<Vec<u8>, String> {
         .set_read_timeout(Some(CLIENT_READ_TIMEOUT))
         .map_err(|e| format!("set read timeout: {e}"))?;
     let mut blob = Vec::new();
-    stream
-        .read_to_end(&mut blob)
-        .map_err(|e| format!("read: {e}"))?;
+    stream.read_to_end(&mut blob).map_err(|e| format!("read: {e}"))?;
     Ok(blob)
 }
 
@@ -162,10 +157,7 @@ fn socket_server_survives_fd_exhaustion() {
 
     let proxy = spawn_proxy(ROWS, COLS);
     paint_and_wait(&proxy, ROWS, COLS, MIN_SNAPSHOT_BYTES);
-    assert!(
-        legacy_snapshot(&proxy.sock).is_ok(),
-        "the server must serve before the flood"
-    );
+    assert!(legacy_snapshot(&proxy.sock).is_ok(), "the server must serve before the flood");
 
     // Everything that needs an fd to start is up; squeeze the process.
     let original_soft = set_nofile(NOFILE_LIMIT);
@@ -213,21 +205,15 @@ fn socket_server_survives_fd_exhaustion() {
 
     // ...and so does a v2 subscribe, the other client of the same loop.
     let mut client = UnixStream::connect(&proxy.sock).expect("v2 connect after fd exhaustion");
-    client
-        .set_read_timeout(Some(CLIENT_READ_TIMEOUT))
-        .expect("set read timeout");
+    client.set_read_timeout(Some(CLIENT_READ_TIMEOUT)).expect("set read timeout");
     client.write_all(&protocol::MAGIC).expect("write magic");
-    client
-        .write_all(&protocol::subscribe_frame(false, b""))
-        .expect("write subscribe");
-    let (frame_type, payload) = protocol::read_frame(&mut client)
-        .expect("read hello")
-        .expect("hello, not EOF");
+    client.write_all(&protocol::subscribe_frame(false, b"")).expect("write subscribe");
+    let (frame_type, payload) =
+        protocol::read_frame(&mut client).expect("read hello").expect("hello, not EOF");
     assert_eq!(frame_type, protocol::FRAME_HELLO);
     assert!(protocol::decode_hello(&payload).is_some());
-    let (frame_type, payload) = protocol::read_frame(&mut client)
-        .expect("read keyframe")
-        .expect("keyframe, not EOF");
+    let (frame_type, payload) =
+        protocol::read_frame(&mut client).expect("read keyframe").expect("keyframe, not EOF");
     assert_eq!(frame_type, protocol::FRAME_KEYFRAME);
     let snapshot = Snapshot::decode(&payload).expect("decode keyframe");
     assert_eq!((snapshot.rows, snapshot.cols), (ROWS, COLS));

@@ -1,9 +1,7 @@
 use atuin_common::utils::{crypto_random_string, uuid_v7};
 use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordIdx, RecordTag};
-use atuin_server_database::{
-    Database, DbSettings, DbType,
-    models::{NewSession, NewUser, User},
-};
+use atuin_server_database::models::{NewSession, NewUser, User};
+use atuin_server_database::{Database, DbSettings, DbType};
 use atuin_server_postgres::Postgres;
 use atuin_server_sqlite::Sqlite;
 use rstest::rstest;
@@ -24,10 +22,7 @@ impl Drop for TestDb {
     fn drop(&mut self) {
         let settings = self.settings.clone();
         let _ = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             rt.block_on(async {
                 if let Err(e) = destroy_test_db(&settings).await {
                     eprintln!("Failed to destroy test db: {:?}", e);
@@ -111,48 +106,24 @@ async fn run_the_test<DB: Database>(settings: &DbSettings) -> eyre::Result<()> {
     let status = db.status(&user).await?;
     assert!(status.hosts.contains_key(&host_a.id));
     assert!(status.hosts.contains_key(&host_b.id));
-    assert_eq!(
-        status
-            .hosts
-            .get(&host_a.id)
-            .unwrap()
-            .get(&RecordTag::History)
-            .unwrap()
-            .clone(),
-        6
-    );
-    assert_eq!(
-        status
-            .hosts
-            .get(&host_b.id)
-            .unwrap()
-            .get(&RecordTag::History)
-            .unwrap()
-            .clone(),
-        2
-    );
+    assert_eq!(status.hosts.get(&host_a.id).unwrap().get(&RecordTag::History).unwrap().clone(), 6);
+    assert_eq!(status.hosts.get(&host_b.id).unwrap().get(&RecordTag::History).unwrap().clone(), 2);
 
     // Get 3 records from the beginning
-    let recs = db
-        .next_records(&user, host_a.id, RecordTag::History, None, 3)
-        .await?;
+    let recs = db.next_records(&user, host_a.id, RecordTag::History, None, 3).await?;
     assert_eq!(recs.len(), 3);
     assert_eq!(recs[0].idx, 1);
     assert_eq!(recs.last().unwrap().idx, 3);
 
     // Get from the end, for host a. Get more than exists
-    let recs = db
-        .next_records(&user, host_a.id, RecordTag::History, Some(4), 10)
-        .await?;
+    let recs = db.next_records(&user, host_a.id, RecordTag::History, Some(4), 10).await?;
     assert_eq!(recs.len(), 3);
     assert_eq!(recs[0].idx, 4); // check the head record is idx 4
     assert_eq!(recs.last().unwrap().idx, 6);
 
     // delete_store
     db.delete_store(&user).await?;
-    let recs = db
-        .next_records(&user, host_a.id, RecordTag::History, Some(4), 10)
-        .await?;
+    let recs = db.next_records(&user, host_a.id, RecordTag::History, Some(4), 10).await?;
     assert_eq!(recs.len(), 0);
 
     Ok(())

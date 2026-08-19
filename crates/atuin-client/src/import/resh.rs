@@ -1,12 +1,11 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use atuin_common::time::OffsetDateTimeExt;
+use atuin_common::utils::uuid_v7;
 use directories::UserDirs;
 use eyre::{Result, eyre};
 use serde::Deserialize;
-
-use atuin_common::time::OffsetDateTimeExt;
-use atuin_common::utils::uuid_v7;
 use time::OffsetDateTime;
 
 use super::{Importer, Loader, get_histfile_path, unix_byte_lines};
@@ -157,9 +156,10 @@ impl Importer for Resh {
 
 #[cfg(test)]
 mod test {
+    use rstest::rstest;
+
     use super::*;
     use crate::import::tests::TestLoader;
-    use rstest::rstest;
 
     /// resh writes one JSON object per line. Every field on `ReshEntry` is
     /// required, so spell them all out once here.
@@ -195,14 +195,8 @@ mod test {
         m.insert("timezoneAfter".into(), serde_json::json!("+0000"));
         m.insert("realtimeBefore".into(), serde_json::json!(realtime_before));
         m.insert("realtimeAfter".into(), serde_json::json!(realtime_after));
-        m.insert(
-            "realtimeBeforeLocal".into(),
-            serde_json::json!(realtime_before),
-        );
-        m.insert(
-            "realtimeAfterLocal".into(),
-            serde_json::json!(realtime_after),
-        );
+        m.insert("realtimeBeforeLocal".into(), serde_json::json!(realtime_before));
+        m.insert("realtimeAfterLocal".into(), serde_json::json!(realtime_after));
         m.insert("realtimeDuration".into(), serde_json::json!(0.0));
         m.insert("realtimeSinceSessionStart".into(), serde_json::json!(0.0));
         m.insert("realtimeSinceBoot".into(), serde_json::json!(0.0));
@@ -297,14 +291,7 @@ mod test {
         let mut loader = TestLoader::default();
         resh.load(&mut loader).await.expect("import must not fail");
 
-        assert_eq!(
-            loader
-                .buf
-                .iter()
-                .map(|h| h.command.as_str())
-                .collect::<Vec<_>>(),
-            [cmd]
-        );
+        assert_eq!(loader.buf.iter().map(|h| h.command.as_str()).collect::<Vec<_>>(), [cmd]);
         assert_eq!(loader.buf[0].timestamp.unix_timestamp(), expected_unix_ts);
         assert_eq!(loader.buf[0].duration, expected_duration);
     }

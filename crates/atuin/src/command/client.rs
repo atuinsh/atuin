@@ -1,11 +1,11 @@
+use atuin_client::database::Sqlite;
+use atuin_client::logs::FromSettings;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
+use atuin_client::theme;
+use atuin_common::logs::{self, LogConfig};
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
-
-use atuin_client::logs::FromSettings;
-use atuin_client::{
-    database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings, theme,
-};
-use atuin_common::logs::{self, LogConfig};
 
 #[cfg(feature = "sync")]
 mod sync;
@@ -103,7 +103,9 @@ pub enum Cmd {
     Update(update::Cmd),
 
     #[command()]
-    Wrapped { year: Option<i32> },
+    Wrapped {
+        year: Option<i32>,
+    },
 
     /// *Experimental* Manage the background daemon
     #[cfg(feature = "daemon")]
@@ -305,10 +307,9 @@ impl Cmd {
         match self {
             Self::History(cmd) => cmd.log_config(),
 
-            Self::Search(cmd) if cmd.is_interactive() => Some(LogConfig::from_settings(
-                &settings.logs,
-                &settings.logs.search,
-            )),
+            Self::Search(cmd) if cmd.is_interactive() => {
+                Some(LogConfig::from_settings(&settings.logs, &settings.logs.search))
+            }
 
             #[cfg(feature = "daemon")]
             Self::Daemon(cmd) => Some(LogConfig {

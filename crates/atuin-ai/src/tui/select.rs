@@ -32,9 +32,7 @@ impl SelectState {
     }
 
     pub fn keymap() -> Keymap<SelectMsg> {
-        keymap()
-            .on(key(KeyCode::Up), SelectMsg::Up)
-            .on(key(KeyCode::Down), SelectMsg::Down)
+        keymap().on(key(KeyCode::Up), SelectMsg::Up).on(key(KeyCode::Down), SelectMsg::Down)
     }
 }
 

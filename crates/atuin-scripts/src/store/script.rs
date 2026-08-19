@@ -1,12 +1,9 @@
 use atuin_domain::record::DecryptedData;
 use eyre::{Result, bail, ensure};
-use uuid::Uuid;
-
-use rmp::{
-    decode::{self, Bytes},
-    encode,
-};
+use rmp::decode::{self, Bytes};
+use rmp::encode;
 use typed_builder::TypedBuilder;
+use uuid::Uuid;
 
 pub const SCRIPT_LEN: usize = 20000; // 20kb max total len
 
@@ -118,15 +115,12 @@ mod tests {
         };
 
         let serialized = script.serialize().unwrap();
-        assert_eq!(
-            serialized.0,
-            vec![
-                150, 217, 36, 48, 49, 57, 53, 99, 56, 50, 53, 45, 97, 51, 53, 102, 45, 55, 57, 56,
-                50, 45, 98, 100, 98, 48, 45, 49, 54, 49, 54, 56, 56, 56, 49, 99, 98, 99, 54, 164,
-                116, 101, 115, 116, 164, 116, 101, 115, 116, 164, 116, 101, 115, 116, 145, 164,
-                116, 101, 115, 116, 164, 116, 101, 115, 116
-            ]
-        );
+        assert_eq!(serialized.0, vec![
+            150, 217, 36, 48, 49, 57, 53, 99, 56, 50, 53, 45, 97, 51, 53, 102, 45, 55, 57, 56, 50,
+            45, 98, 100, 98, 48, 45, 49, 54, 49, 54, 56, 56, 56, 49, 99, 98, 99, 54, 164, 116, 101,
+            115, 116, 164, 116, 101, 115, 116, 164, 116, 101, 115, 116, 145, 164, 116, 101, 115,
+            116, 164, 116, 101, 115, 116
+        ]);
     }
 
     #[test]

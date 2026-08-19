@@ -1,4 +1,5 @@
-use std::{env, time::Duration};
+use std::env;
+use std::time::Duration;
 
 use atuin_client::api_client;
 use atuin_common::utils::uuid_v7;
@@ -6,9 +7,12 @@ use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
 use atuin_server_database::DbSettings;
 use atuin_server_postgres::Postgres;
 use futures_util::TryFutureExt;
-use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
+use tokio::net::TcpListener;
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tracing::{Dispatch, dispatcher};
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt};
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
 
 pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHandle<()>) {
     let formatting_layer = tracing_tree::HierarchicalLayer::default()

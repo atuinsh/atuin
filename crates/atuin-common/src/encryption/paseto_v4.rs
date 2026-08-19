@@ -1,20 +1,17 @@
 //! PASETO v4 / PASERK envelope encryption for atuin records.
 //!
 //! See [`encrypt_sync`] for the encryption description.
-use std::{
-    array::TryFromSliceError,
-    fs,
-    io::{Read, Write},
-    path::Path,
-};
+use std::array::TryFromSliceError;
+use std::fs;
+use std::io::{Read, Write};
+use std::path::Path;
 
-use base64::{
-    Engine,
-    engine::general_purpose::{STANDARD as B64_STANDARD, URL_SAFE_NO_PAD as B64_URL_SAFE_NO_PAD},
+use base64::Engine;
+use base64::engine::general_purpose::{
+    STANDARD as B64_STANDARD, URL_SAFE_NO_PAD as B64_URL_SAFE_NO_PAD,
 };
 use crypto_secretbox::{KeyInit, XSalsa20Poly1305, aead};
-use rusty_paseto::Paseto;
-use rusty_paseto::core as rusty_paseto;
+use rusty_paseto::{Paseto, core as rusty_paseto};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeroize::Zeroize;
@@ -645,8 +642,9 @@ pub fn reencrypt_sync(
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use rstest::{fixture, rstest};
+
+    use super::*;
 
     #[fixture]
     fn key() -> Key {
@@ -726,19 +724,14 @@ mod test {
         let old = Key::from([0x11u8; 32]);
         let new = Key::from([0x22u8; 32]);
 
-        old.try_write_path(&path)
-            .expect("first write creates the file");
+        old.try_write_path(&path).expect("first write creates the file");
 
         // try_write_path refuses to replace a *different* key (correct for create-if-missing)...
-        assert!(matches!(
-            new.try_write_path(&path),
-            Err(KeyFileStoringError::AlreadyExists)
-        ));
+        assert!(matches!(new.try_write_path(&path), Err(KeyFileStoringError::AlreadyExists)));
         assert_eq!(Key::try_load_from_path(&path).unwrap(), old);
 
         // ...but overwrite_path deliberately replaces it, as key rotation requires.
-        new.overwrite_path(&path)
-            .expect("overwrite replaces the key");
+        new.overwrite_path(&path).expect("overwrite replaces the key");
         assert_eq!(Key::try_load_from_path(&path).unwrap(), new);
 
         let _ = fs::remove_dir_all(&dir);

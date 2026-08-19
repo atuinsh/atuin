@@ -68,10 +68,7 @@ impl EditPreview {
         merged_groups.push(current_group);
 
         // Build structured hunks from merged groups
-        let hunks = merged_groups
-            .into_iter()
-            .map(|group| build_hunk(&group, &input))
-            .collect();
+        let hunks = merged_groups.into_iter().map(|group| build_hunk(&group, &input)).collect();
 
         EditPreview { hunks }
     }
@@ -121,11 +118,7 @@ impl WritePreview {
     pub fn from_content(content: &str) -> Self {
         let all_lines: Vec<&str> = content.lines().collect();
         let total_lines = all_lines.len();
-        let lines = all_lines
-            .into_iter()
-            .take(WRITE_PREVIEW_LINES)
-            .map(String::from)
-            .collect();
+        let lines = all_lines.into_iter().take(WRITE_PREVIEW_LINES).map(String::from).collect();
         WritePreview { lines, total_lines }
     }
 
@@ -199,8 +192,9 @@ fn token_text(input: &InternedInput<&str>, is_before: bool, idx: u32) -> String 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     #[test]
     fn no_changes_produces_empty_preview() {
@@ -308,14 +302,8 @@ mod tests {
 
         assert_eq!(preview.hunks.len(), 1);
         let hunk = &preview.hunks[0];
-        assert!(
-            hunk.lines
-                .contains(&DiffLine::Removed("key1 = old1".into()))
-        );
-        assert!(
-            hunk.lines
-                .contains(&DiffLine::Removed("key2 = old2".into()))
-        );
+        assert!(hunk.lines.contains(&DiffLine::Removed("key1 = old1".into())));
+        assert!(hunk.lines.contains(&DiffLine::Removed("key2 = old2".into())));
         assert!(hunk.lines.contains(&DiffLine::Added("key1 = new1".into())));
         assert!(hunk.lines.contains(&DiffLine::Added("key2 = new2".into())));
     }

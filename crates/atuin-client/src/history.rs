@@ -7,7 +7,6 @@ use atuin_common::rmp::encode::{self, ByteBuf, EncodeError};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::{normalize_optional_string, uuid_v7};
 use atuin_domain::record::DecryptedData;
-
 use eyre::{Result, bail};
 use time::OffsetDateTime;
 
@@ -199,9 +198,7 @@ pub struct HistoryStats {
 
 impl History {
     pub(crate) fn author_from_hostname(hostname: &str) -> String {
-        hostname
-            .split_once(':')
-            .map_or_else(|| hostname.to_owned(), |(_, user)| user.to_owned())
+        hostname.split_once(':').map_or_else(|| hostname.to_owned(), |(_, user)| user.to_owned())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -516,14 +513,14 @@ impl History {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::filter::OrFilter;
     use regex::RegexSet;
     use rstest::*;
     use time::macros::datetime;
 
-    use crate::{history::Version, settings::Settings};
-
     use super::{AuthorPattern, History, all_user_author_filter, is_known_agent};
-    use atuin_common::filter::OrFilter;
+    use crate::history::Version;
+    use crate::settings::Settings;
 
     /// Whether an author filter permits `author`, mirroring the SQL that
     /// [`apply_author_filter`](crate::database::OptFilters::authors) builds.
@@ -658,11 +655,7 @@ mod tests {
     })]
     fn serialize_deserialize_roundtrip(#[case] history: History) {
         let serialized = history.serialize().expect("failed to serialize history");
-        assert_eq!(
-            &serialized.0[0..3],
-            [205, 0, 2],
-            "should encode as history v2"
-        );
+        assert_eq!(&serialized.0[0..3], [205, 0, 2], "should encode as history v2");
 
         let deserialized = History::deserialize(&serialized.0, Version::LATEST.name())
             .expect("failed to deserialize history");
@@ -741,10 +734,7 @@ mod tests {
         if decode_as == source {
             assert_eq!(got.unwrap(), expected, "{decode_as}");
         } else {
-            assert!(
-                got.is_err(),
-                "unexpected success deserializing as {decode_as}"
-            );
+            assert!(got.is_err(), "unexpected success deserializing as {decode_as}");
         }
     }
 }

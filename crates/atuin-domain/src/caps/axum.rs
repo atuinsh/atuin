@@ -7,23 +7,19 @@
 
 use std::sync::Arc;
 
-use axum::{
-    Router,
-    extract::{Request, State},
-    http::{HeaderName, HeaderValue, StatusCode, header::CONTENT_TYPE},
-    middleware::Next,
-    response::{IntoResponse, Response},
-};
+use axum::Router;
+use axum::extract::{Request, State};
+use axum::http::header::CONTENT_TYPE;
+use axum::http::{HeaderName, HeaderValue, StatusCode};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
 
 use super::http::{AVAILABLE_HEADER, ENFORCE_HEADER, KNOWN_HEADER};
 use super::{CapServer, Negotiation};
 
 /// `GET /api/v0/capabilities` -- serve the pre-serialized capability document.
 pub async fn get(State(caps): State<Arc<CapServer>>) -> Response {
-    (
-        [(CONTENT_TYPE, HeaderValue::from_static("application/json"))],
-        caps.body().to_owned(),
-    )
+    ([(CONTENT_TYPE, HeaderValue::from_static("application/json"))], caps.body().to_owned())
         .into_response()
 }
 
@@ -40,10 +36,7 @@ pub async fn get(State(caps): State<Arc<CapServer>>) -> Response {
 async fn check_token(State(caps): State<Arc<CapServer>>, request: Request, next: Next) -> Response {
     let enforce = request.headers().contains_key(ENFORCE_HEADER);
     let negotiation = {
-        let known = request
-            .headers()
-            .get(KNOWN_HEADER)
-            .and_then(|value| value.to_str().ok());
+        let known = request.headers().get(KNOWN_HEADER).and_then(|value| value.to_str().ok());
         caps.negotiate(known)
     };
 
@@ -60,9 +53,7 @@ async fn check_token(State(caps): State<Arc<CapServer>>, request: Request, next:
                 next.run(request).await
             };
             if let Some(value) = available {
-                response
-                    .headers_mut()
-                    .insert(HeaderName::from_static(AVAILABLE_HEADER), value);
+                response.headers_mut().insert(HeaderName::from_static(AVAILABLE_HEADER), value);
             }
             response
         }
@@ -87,19 +78,18 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{CapabilitiesRouterExt, get};
     use std::sync::Arc;
 
-    use crate::caps::CapServer;
-    use crate::caps::http::{AVAILABLE_HEADER, ENFORCE_HEADER, KNOWN_HEADER};
-    use axum::{
-        Router,
-        body::Body,
-        http::{HeaderValue, Request, StatusCode},
-        routing::get as axum_get,
-    };
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::{HeaderValue, Request, StatusCode};
+    use axum::routing::get as axum_get;
     use rstest::{fixture, rstest};
-    use tower::ServiceExt; // oneshot
+    use tower::ServiceExt;
+
+    use super::{CapabilitiesRouterExt, get};
+    use crate::caps::CapServer;
+    use crate::caps::http::{AVAILABLE_HEADER, ENFORCE_HEADER, KNOWN_HEADER}; // oneshot
 
     /// An empty capability set -- advertises nothing, but still issues a stable token.
     #[fixture]
@@ -110,47 +100,29 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn endpoint_serves_the_document(caps: Arc<CapServer>) {
-        let app: Router = Router::new()
-            .route("/api/v0/capabilities", axum_get(get))
-            .with_state(caps.clone());
+        let app: Router =
+            Router::new().route("/api/v0/capabilities", axum_get(get)).with_state(caps.clone());
 
         let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v0/capabilities")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri("/api/v0/capabilities").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(
-            resp.headers().get("content-type").unwrap(),
-            "application/json"
-        );
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        assert_eq!(resp.headers().get("content-type").unwrap(), "application/json");
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         assert_eq!(bytes.as_ref(), caps.body().as_bytes());
     }
 
     fn negotiating_app(caps: Arc<CapServer>) -> Router {
-        Router::new()
-            .route("/probe", axum_get(|| async { "ok" }))
-            .negotiate_capabilities(caps)
+        Router::new().route("/probe", axum_get(|| async { "ok" })).negotiate_capabilities(caps)
     }
 
     #[rstest]
     #[tokio::test]
     async fn absent_known_header_passes(caps: Arc<CapServer>) {
         let resp = negotiating_app(caps)
-            .oneshot(
-                Request::builder()
-                    .uri("/probe")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri("/probe").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -206,14 +178,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::PRECONDITION_FAILED);
-        assert_eq!(
-            resp.headers()
-                .get(AVAILABLE_HEADER)
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            caps.token()
-        );
+        assert_eq!(resp.headers().get(AVAILABLE_HEADER).unwrap().to_str().unwrap(), caps.token());
     }
 
     #[rstest]
@@ -232,13 +197,6 @@ mod tests {
         // No enforce header -> the request is served despite the stale token...
         assert_eq!(resp.status(), StatusCode::OK);
         // ...but the server still advertises its token so the client can refresh.
-        assert_eq!(
-            resp.headers()
-                .get(AVAILABLE_HEADER)
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            caps.token()
-        );
+        assert_eq!(resp.headers().get(AVAILABLE_HEADER).unwrap().to_str().unwrap(), caps.token());
     }
 }

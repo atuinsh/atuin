@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::time::Duration;
 
+use atuin_common::ansi::{Vt100ParserExt as _, Vt100ScreenExt as _};
 use rand::RngCore;
 
 use crate::protocol;
@@ -139,11 +140,7 @@ pub(crate) fn fallback_proxy_dir() -> PathBuf {
 fn proxy_dir_name() -> String {
     let mut suffix = [0u8; 4];
     rand::thread_rng().fill_bytes(&mut suffix);
-    format!(
-        "atuin-pty-proxy-{}-{}",
-        std::process::id(),
-        hex_encode(&suffix)
-    )
+    format!("atuin-pty-proxy-{}-{}", std::process::id(), hex_encode(&suffix))
 }
 
 pub(crate) fn socket_path_in(dir: &Path) -> PathBuf {
@@ -254,11 +251,10 @@ struct ParserState {
 
 impl ParserState {
     fn new(rows: u16, cols: u16) -> Self {
-        // vt100 0.16 underflows (and panics in debug builds) on a 0-row or
-        // 0-column grid; clamp here and in the Resize arm.
-        let (rows, cols) = (rows.max(1), cols.max(1));
+        let parser = vt100::Parser::new_safe(rows, cols, 0);
+        let (rows, cols) = parser.screen().size();
         Self {
-            parser: vt100::Parser::new(rows, cols, 0),
+            parser,
             subscribers: Vec::new(),
             rows,
             cols,
@@ -285,7 +281,7 @@ impl ParserState {
         let caught =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(&mut self.parser)));
         if caught.is_err() {
-            self.parser = vt100::Parser::new(self.rows, self.cols, 0);
+            self.parser = vt100::Parser::new_safe(self.rows, self.cols, 0);
         }
     }
 
@@ -302,10 +298,10 @@ impl ParserState {
                 }
             }
             Msg::Resize { rows, cols } => {
-                let (rows, cols) = (rows.max(1), cols.max(1));
+                self.vt100_guarded(|parser| parser.screen_mut().set_size_safe(rows, cols));
+                let (rows, cols) = self.parser.screen().size();
                 self.rows = rows;
                 self.cols = cols;
-                self.vt100_guarded(|parser| parser.screen_mut().set_size(rows, cols));
                 let frame = protocol::resize_frame(rows, cols);
                 self.fan_out(&frame);
             }
@@ -379,8 +375,7 @@ impl ParserState {
     /// whose connection is gone. Never blocks (see the invariant on
     /// [`spawn_parser_thread`]).
     fn fan_out(&mut self, frame: &[u8]) {
-        self.subscribers
-            .retain(|(_, subscriber)| subscriber.try_send(frame.to_vec()).is_ok());
+        self.subscribers.retain(|(_, subscriber)| subscriber.try_send(frame.to_vec()).is_ok());
     }
 }
 
@@ -679,25 +674,18 @@ fn write_frames(mut stream: UnixStream, frames_rx: &Receiver<Vec<u8>>) {
     let _ = stream.shutdown(std::net::Shutdown::Both);
 }
 
-#[cfg(any(
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "freebsd",
-    target_os = "dragonfly"
-))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "dragonfly"))]
 fn peer_uid(stream: &UnixStream) -> Option<u32> {
-    use nix::sys::socket::{getsockopt, sockopt::LocalPeerCred};
-    getsockopt(stream, LocalPeerCred)
-        .ok()
-        .map(|cred| cred.uid())
+    use nix::sys::socket::getsockopt;
+    use nix::sys::socket::sockopt::LocalPeerCred;
+    getsockopt(stream, LocalPeerCred).ok().map(|cred| cred.uid())
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn peer_uid(stream: &UnixStream) -> Option<u32> {
-    use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
-    getsockopt(stream, PeerCredentials)
-        .ok()
-        .map(|cred| cred.uid())
+    use nix::sys::socket::getsockopt;
+    use nix::sys::socket::sockopt::PeerCredentials;
+    getsockopt(stream, PeerCredentials).ok().map(|cred| cred.uid())
 }
 
 #[cfg(not(any(
@@ -720,6 +708,8 @@ fn peer_uid_matches(stream: &UnixStream) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     #[test]
@@ -740,18 +730,18 @@ mod tests {
         state.handle(Msg::ScreenRequest(reply_tx));
         let blob = reply_rx.recv().unwrap();
         let snapshot = protocol::Snapshot::decode(&blob).unwrap();
-        assert_eq!((snapshot.rows, snapshot.cols), (1, 1));
+
+        // Dimensions need to be clamped to (2, 2) to avoid an upstream vt100 issue.
+        assert_eq!((snapshot.rows, snapshot.cols), (2, 2));
     }
 
-    /// vt100 0.16 panics in `col_wrap` when text wraps on a 1-row grid.
-    /// The guard must absorb it: the parser thread is the sole owner of the
-    /// screen model, so an unwinding one leaves every connection thread with
-    /// nothing to serve — no snapshots, no subscribers, and `--active` gone
-    /// for the shell's remaining lifetime. Raw-byte fan-out and the snapshot
-    /// service must both survive the panic.
-    #[test]
-    fn vt100_wrap_panic_does_not_kill_the_parser() {
-        let mut state = ParserState::new(1, 3);
+    /// Make sure <https://github.com/doy/vt100-rust/issues/37> doesn't kill our parser.
+    #[rstest]
+    fn vt100_wrap_panic_does_not_kill_the_parser(
+        #[values(0, 1, 2, 3)] rows: u16,
+        #[values(0, 1, 2, 3)] cols: u16,
+    ) {
+        let mut state = ParserState::new(rows, cols);
         let (frames_tx, frames_rx) = mpsc::sync_channel(SUBSCRIBER_QUEUE_FRAMES);
         state.handle(Msg::Subscribe {
             id: 1,
@@ -772,7 +762,10 @@ mod tests {
         state.handle(Msg::ScreenRequest(reply_tx));
         let blob = reply_rx.recv().expect("parser still answering");
         let snapshot = protocol::Snapshot::decode(&blob).unwrap();
-        assert_eq!((snapshot.rows, snapshot.cols), (1, 3));
+
+        // To avoid the upstream vt100 issue, the snapshot size needs to be clamped so neither
+        // dimension is less than 2.
+        assert_eq!((snapshot.rows, snapshot.cols), (rows.max(2), cols.max(2)));
     }
 
     #[test]
@@ -795,7 +788,9 @@ mod tests {
         let mut cursor = std::io::Cursor::new(resize);
         let (frame_type, payload) = protocol::read_frame(&mut cursor).unwrap().unwrap();
         assert_eq!(frame_type, protocol::FRAME_RESIZE);
-        assert_eq!(protocol::decode_resize(&payload), Some((1, 1)));
+
+        // Due to an upstream issue in vt100, each dimension is clamped to 2.
+        assert_eq!(protocol::decode_resize(&payload), Some((2, 2)));
     }
 
     #[test]
@@ -815,10 +810,7 @@ mod tests {
         // Drain everything that was queued before the drop...
         while frames_rx.try_recv().is_ok() {}
         // ...after which the channel reports disconnection.
-        assert!(matches!(
-            frames_rx.try_recv(),
-            Err(mpsc::TryRecvError::Disconnected)
-        ));
+        assert!(matches!(frames_rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)));
     }
 
     /// The registry is capped: a same-uid client cannot accumulate
@@ -909,17 +901,11 @@ mod tests {
         }
         // A signal or a peer that gave up between connect and accept.
         for code in [libc::EINTR, libc::ECONNABORTED] {
-            assert!(
-                matches!(classify(code), AcceptFailure::Retry),
-                "errno {code}"
-            );
+            assert!(matches!(classify(code), AcceptFailure::Retry), "errno {code}");
         }
         // The listener itself is gone: nothing left to accept.
         for code in [libc::EBADF, libc::EINVAL, libc::ENOTSOCK] {
-            assert!(
-                matches!(classify(code), AcceptFailure::Fatal),
-                "errno {code}"
-            );
+            assert!(matches!(classify(code), AcceptFailure::Fatal), "errno {code}");
         }
     }
 
@@ -933,10 +919,7 @@ mod tests {
             .map(|_| ConnectionSlot::acquire(&live).expect("under the cap"))
             .collect();
         assert_eq!(live.load(Ordering::Acquire), MAX_LIVE_CONNECTIONS);
-        assert!(
-            ConnectionSlot::acquire(&live).is_none(),
-            "the cap must hold"
-        );
+        assert!(ConnectionSlot::acquire(&live).is_none(), "the cap must hold");
 
         held.pop();
         assert_eq!(live.load(Ordering::Acquire), MAX_LIVE_CONNECTIONS - 1);

@@ -1,7 +1,6 @@
 use atuin_common::logs::LogConfig;
 use clap::Subcommand;
 use eyre::Result;
-
 #[cfg(not(windows))]
 use rustix::{fs::Mode, process::umask};
 
@@ -112,10 +111,7 @@ fn semantic_command_capture_sink() -> Option<atuin_pty_proxy::CommandCaptureSink
     let (tx, rx) = mpsc::sync_channel::<atuin_pty_proxy::CommandCapture>(128);
 
     std::thread::spawn(move || {
-        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        else {
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
             return;
         };
 

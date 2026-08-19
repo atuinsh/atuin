@@ -121,20 +121,13 @@ fn detect_shell(cli_shell: Option<Shell>) -> Result<Shell, String> {
         return Ok(shell);
     }
 
-    Err(
-        "could not detect a supported shell. Please specify one explicitly: bash, zsh, fish, or nu"
-            .to_string(),
-    )
+    Err("could not detect a supported shell. Please specify one explicitly: bash, zsh, fish, or nu"
+        .to_string())
 }
 
 fn shell_from_name(name: &str) -> Option<Shell> {
-    let shell = name
-        .trim()
-        .rsplit('/')
-        .next()
-        .unwrap_or(name)
-        .trim_start_matches('-')
-        .to_ascii_lowercase();
+    let shell =
+        name.trim().rsplit('/').next().unwrap_or(name).trim_start_matches('-').to_ascii_lowercase();
 
     match shell.as_str() {
         "bash" => Some(Shell::Bash),
@@ -147,10 +140,7 @@ fn shell_from_name(name: &str) -> Option<Shell> {
 
 fn env_flag(name: &str) -> bool {
     std::env::var(name).is_ok_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
+        matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
     })
 }
 

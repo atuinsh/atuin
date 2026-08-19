@@ -35,9 +35,11 @@ fn read_record<'a>(bytes: &mut Bytes<'a>) -> Result<Record<DecryptedData>, Decod
     Ok(Record {
         id: RecordId(read_uuid(bytes)?),
         idx: decode::read_u64(bytes)?,
-        host: Host {
-            id: HostId(read_uuid(bytes)?),
-            name: decode::read_string(bytes)?,
+        host: {
+            let id = HostId(read_uuid(bytes)?);
+            // TODO(ATU-589): Remove the vestigial `Host::_name` serialization.
+            let _name = decode::read_string(bytes)?;
+            Host::new(id)
         },
         timestamp: decode::read_u64(bytes)?,
         version: decode::with_str(bytes, RecordVersion::from)?,
@@ -56,7 +58,8 @@ where
     write_uuid(writer, record.id.0)?;
     encode::write_u64(writer, record.idx)?;
     write_uuid(writer, record.host.id.0)?;
-    encode::write_str(writer, &record.host.name)?;
+    // TODO(ATU-589): Remove the vestigial `Host::_name` serialization.
+    encode::write_str(writer, "")?;
     encode::write_u64(writer, record.timestamp)?;
     encode::write_str(writer, record.version.as_str())?;
     encode::write_str(writer, record.tag.as_str())?;
@@ -384,11 +387,12 @@ impl<'a> PackManifestRecordView<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::Host;
     use rstest::{fixture, rstest};
     use uuid::Uuid;
+
+    use super::*;
 
     #[fixture]
     fn key() -> paseto_v4::Key {

@@ -1,11 +1,12 @@
 //! Turns accumulated history into plaintext `packfile` manifest records.
 
-use super::record::{PackManifestData, PackManifestDataV1, ParsingError};
-use crate::record::sqlite_store::SqliteStore;
 use atuin_domain::caps::PackfileCap;
 use atuin_domain::record::{Host, HostId, Record, RecordTag, RecordVersion};
 use thiserror::Error;
 use tracing::{instrument, trace};
+
+use super::record::{PackManifestData, PackManifestDataV1, ParsingError};
+use crate::record::sqlite_store::SqliteStore;
 
 #[derive(Debug, Error)]
 pub enum PackingError {
@@ -35,10 +36,7 @@ pub async fn try_pack(
         return Ok(());
     };
 
-    let last_pack = store
-        .last(host, &RecordTag::Packfile)
-        .await
-        .map_err(PackingError::Store)?;
+    let last_pack = store.last(host, &RecordTag::Packfile).await.map_err(PackingError::Store)?;
 
     // `start` is the first unpacked source idx; `pack_idx` is the next idx in the *packfile*
     // stream (a separate sequence). Both come from the same latest manifest record.
@@ -48,11 +46,8 @@ pub async fn try_pack(
     };
     let mut pack_idx = last_pack.map_or(0, |record| record.idx + 1);
 
-    let Some(ceiling) = store
-        .last(host, tag)
-        .await
-        .map_err(PackingError::Store)?
-        .map(|record| record.idx)
+    let Some(ceiling) =
+        store.last(host, tag).await.map_err(PackingError::Store)?.map(|record| record.idx)
     else {
         trace!("no history yet; nothing to pack");
         return Ok(());
@@ -66,10 +61,7 @@ pub async fn try_pack(
     let mut cursor = start;
     while cursor <= ceiling && ceiling - cursor + 1 >= count {
         // The loop guard guarantees at least `count` records remain, so each run is exactly `count`.
-        let run = store
-            .next(host, tag, cursor, count)
-            .await
-            .map_err(PackingError::Store)?;
+        let run = store.next(host, tag, cursor, count).await.map_err(PackingError::Store)?;
 
         let Some(end) = run.last().map(|record| record.idx) else {
             break;
@@ -101,19 +93,17 @@ pub async fn try_pack(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::EncryptedData;
     use proptest::prelude::*;
     use rstest::{fixture, rstest};
 
+    use super::*;
     use crate::settings::test_local_timeout;
 
     #[fixture]
     async fn store() -> SqliteStore {
-        SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap()
+        SqliteStore::new(":memory:", test_local_timeout()).await.unwrap()
     }
 
     #[fixture]
@@ -181,10 +171,7 @@ mod tests {
     }
 
     fn runtime() -> tokio::runtime::Runtime {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
     }
 
     proptest! {

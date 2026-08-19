@@ -99,10 +99,7 @@ mod tests {
 
     #[test]
     fn multiple_probes_in_one_chunk_are_all_answered_in_order() {
-        assert_eq!(
-            replies(b"\x1b[6n\x1b[0c", (2, 3)),
-            b"\x1b[3;4R\x1b[?6c".as_slice()
-        );
+        assert_eq!(replies(b"\x1b[6n\x1b[0c", (2, 3)), b"\x1b[3;4R\x1b[?6c".as_slice());
     }
 
     #[test]

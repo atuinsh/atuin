@@ -3,10 +3,9 @@
 
 use std::time::{Duration, Instant};
 
-use crate::Size;
 use crate::backpressure::Frame;
-use crate::query;
 use crate::render::keyframe_bytes;
+use crate::{Size, query};
 
 /// Bytes of child output after which a fresh keyframe is emitted.
 const KEYFRAME_BYTES: u64 = 256 * 1024;
@@ -230,9 +229,7 @@ mod tests {
         let outcome = state.process_chunk(b"hi");
         assert_eq!(outcome.output.seq, 1);
         assert_eq!(outcome.output.data, b"hi");
-        let keyframe = outcome
-            .keyframe
-            .expect("the initial keyframe rides the first chunk");
+        let keyframe = outcome.keyframe.expect("the initial keyframe rides the first chunk");
         assert_eq!(keyframe.seq, 2, "minted after the output it reflects");
     }
 
@@ -297,10 +294,7 @@ mod tests {
 
         let expected = vt100::Parser::new(10, 40, 0);
         assert_eq!(keyframe.data, expected.screen().contents_formatted());
-        assert!(
-            !state.keyframe_due(),
-            "set_size serviced the pending request"
-        );
+        assert!(!state.keyframe_due(), "set_size serviced the pending request");
     }
 
     /// The degenerate-geometry floor, end to end through the model.
@@ -333,10 +327,7 @@ mod tests {
         // Newlines, carriage returns and SGR on the same tiny grid.
         let _ = state.process_chunk(b"\r\n\x1b[31mred\x1b[0m\r\nmore\r\n");
         let keyframe = state.emit_keyframe();
-        assert!(
-            !keyframe.data.is_empty(),
-            "a keyframe at the floor is still a real repaint"
-        );
+        assert!(!keyframe.data.is_empty(), "a keyframe at the floor is still a real repaint");
     }
 
     /// `set_size` floors the same way, including the mid-session shrink to a
@@ -346,10 +337,7 @@ mod tests {
         let mut state = ScreenState::new(SIZE);
         let _ = state.process_chunk(b"hello world");
         let keyframe = state.set_size(Size { cols: 1, rows: 1 });
-        assert_eq!(
-            state.screen().size(),
-            (crate::MIN_CHILD_ROWS, crate::MIN_COLS)
-        );
+        assert_eq!(state.screen().size(), (crate::MIN_CHILD_ROWS, crate::MIN_COLS));
         assert!(!keyframe.data.is_empty());
         // ...and the floored grid still takes wrapping text afterwards.
         let _ = state.process_chunk(b"and more text that wraps repeatedly");

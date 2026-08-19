@@ -31,10 +31,9 @@
 // IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-use std::cmp;
 use std::mem::{self, MaybeUninit};
-use std::ptr;
 use std::sync::atomic::{self, AtomicBool};
+use std::{cmp, ptr};
 
 /// When dropped, copies from `src` into `dest`.
 struct CopyOnDrop<T> {
@@ -564,10 +563,7 @@ where
             }
         }
 
-        (
-            l + partition_in_blocks(&mut v[l..r], pivot, is_less),
-            l >= r,
-        )
+        (l + partition_in_blocks(&mut v[l..r], pivot, is_less), l >= r)
 
         // `_pivot_guard` goes out of scope and writes the pivot (which is a stack-allocated
         // variable) back into the slice where it originally was. This step is critical in ensuring

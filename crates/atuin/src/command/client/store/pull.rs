@@ -1,14 +1,12 @@
-use clap::Args;
-use eyre::Result;
-
-use atuin_client::{
-    database::Database,
-    record::sync::Operation,
-    record::{sqlite_store::SqliteStore, sync},
-    settings::Settings,
-};
+use atuin_client::database::Sqlite;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::record::sync;
+use atuin_client::record::sync::Operation;
+use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::RecordTag;
+use clap::Args;
+use eyre::Result;
 
 #[derive(Args, Debug)]
 pub struct Pull {
@@ -30,12 +28,7 @@ pub struct Pull {
 }
 
 impl Pull {
-    pub async fn run(
-        &self,
-        settings: &Settings,
-        store: SqliteStore,
-        db: &dyn Database,
-    ) -> Result<()> {
+    pub async fn run(&self, settings: &Settings, store: SqliteStore, db: &Sqlite) -> Result<()> {
         if self.force {
             println!("Forcing local overwrite!");
             println!("Clearing local store");

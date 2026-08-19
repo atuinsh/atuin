@@ -3,13 +3,12 @@ use std::process::{Command, Stdio};
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
+use atuin_client::settings::Settings;
 use clap::Subcommand;
 #[cfg(unix)]
 use eyre::bail;
 use eyre::{Result, WrapErr};
 use url::Url;
-
-use atuin_client::settings::Settings;
 
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
@@ -143,10 +142,8 @@ impl Cmd {
 /// before any session, pidfile lock, spawned child, or raw-mode terminal
 /// exists, so there is nothing whose `Drop` must run.
 fn report_refusal(result: Result<()>) -> Result<()> {
-    if let Some(refusal @ atuin_lab_share::Error::ActiveShareUnsupported) = result
-        .as_ref()
-        .err()
-        .and_then(eyre::Report::downcast_ref::<atuin_lab_share::Error>)
+    if let Some(refusal @ atuin_lab_share::Error::ActiveShareUnsupported) =
+        result.as_ref().err().and_then(eyre::Report::downcast_ref::<atuin_lab_share::Error>)
     {
         eprintln!("error: {refusal}");
         std::process::exit(1);
@@ -184,20 +181,21 @@ const STOP_TIMED_OUT: &str =
 #[cfg(unix)]
 const URL_STILL_CONNECTING: &str = "the share is still connecting; try again shortly";
 #[cfg(unix)]
-const SPAWN_TIMED_OUT: &str = "timed out waiting for the background share to connect; run \
-     `atuin lab share --active --foreground` to debug, or `atuin lab share --stop` to clean up";
+const SPAWN_TIMED_OUT: &str = "timed out waiting for the background share to connect; run `atuin \
+                               lab share --active --foreground` to debug, or `atuin lab share \
+                               --stop` to clean up";
 #[cfg(unix)]
-const SPAWN_CHILD_DIED: &str = "the background share exited before publishing a URL; run \
-     `atuin lab share --active --foreground` to see why";
+const SPAWN_CHILD_DIED: &str = "the background share exited before publishing a URL; run `atuin \
+                                lab share --active --foreground` to see why";
 
 /// The success copy after the background share published its URL. Pure
 /// ASCII, byte-pinned by a test.
 #[cfg(unix)]
 fn attach_copy(url: &str) -> String {
     format!(
-        "Sharing this session at: {url}\n\
-         Run `atuin lab share --stop` to end sharing. `atuin lab share --url` reprints the link.\n\
-         This session has no warning bar; viewers stay connected until you stop or the shell exits."
+        "Sharing this session at: {url}\nRun `atuin lab share --stop` to end sharing. `atuin lab \
+         share --url` reprints the link.\nThis session has no warning bar; viewers stay connected \
+         until you stop or the shell exits."
     )
 }
 
@@ -247,12 +245,8 @@ async fn spawn_background_share(write: bool, yes: bool) -> Result<()> {
         cmd.arg("--write");
     }
     cmd.env(lifecycle::SPAWN_ID_ENV, &spawn_id);
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let mut child = cmd
-        .spawn()
-        .wrap_err("failed to spawn the background share process")?;
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    let mut child = cmd.spawn().wrap_err("failed to spawn the background share process")?;
 
     let start = Instant::now();
     loop {
@@ -299,10 +293,7 @@ async fn stop_share() -> Result<()> {
     }
 
     let Some(pid) = lifecycle::read_pidfile_pid(&pidfile) else {
-        bail!(
-            "a share is running but its pidfile at {} is unreadable",
-            pidfile.display()
-        );
+        bail!("a share is running but its pidfile at {} is unreadable", pidfile.display());
     };
 
     // Remember whose URL file we are about to orphan, so the backstop
@@ -370,7 +361,11 @@ fn lab_ws_url(settings: &Settings) -> Result<Url> {
         return Url::parse(&u).wrap_err("ATUIN_LAB_HUB_URL is not a valid URL");
     }
     let mut url = settings.hub_endpoint();
-    let ws_scheme = if url.scheme() == "http" { "ws" } else { "wss" };
+    let ws_scheme = if url.scheme() == "http" {
+        "ws"
+    } else {
+        "wss"
+    };
     let _ = url.set_scheme(ws_scheme);
     Ok(url)
 }
@@ -408,9 +403,9 @@ mod tests {
         let copy = attach_copy("https://hub.example/s/abc#key");
         assert_eq!(
             copy,
-            "Sharing this session at: https://hub.example/s/abc#key\n\
-             Run `atuin lab share --stop` to end sharing. `atuin lab share --url` reprints the link.\n\
-             This session has no warning bar; viewers stay connected until you stop or the shell exits."
+            "Sharing this session at: https://hub.example/s/abc#key\nRun `atuin lab share --stop` \
+             to end sharing. `atuin lab share --url` reprints the link.\nThis session has no \
+             warning bar; viewers stay connected until you stop or the shell exits."
         );
         assert!(copy.is_ascii());
     }
