@@ -1,6 +1,8 @@
 /// A hostname, generic over its backing storage so it can be an owned
 /// `CmdHost<String>` or a zero-copy `CmdHost<&str>` view into a [`CmdOrigin`].
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, derive_more::Display, derive_more::From)]
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, derive_more::Display, derive_more::From,
+)]
 pub struct CmdHost<T: AsRef<str> = String>(T);
 
 impl<T: AsRef<str>> AsRef<str> for CmdHost<T> {
@@ -9,14 +11,14 @@ impl<T: AsRef<str>> AsRef<str> for CmdHost<T> {
     }
 }
 
-impl<T: AsRef<str>> CmdHost<T> {
-    pub fn owned(&self) -> CmdHost<String> {
-        CmdHost(self.0.as_ref().to_string())
+impl<T: AsRef<str> + Into<String>> CmdHost<T> {
+    pub fn into_owned(self) -> CmdHost<String> {
+        CmdHost(self.0.into())
     }
 }
 
 impl CmdHost<String> {
-    pub fn probe() -> Self {
+    pub fn probe_current() -> Self {
         std::env::var("ATUIN_HOST_NAME")
             .ok()
             .or_else(|| whoami::hostname().ok())
@@ -36,6 +38,7 @@ impl Default for CmdHost<String> {
         Self(String::from("unknown-host"))
     }
 }
+
 /// A username, generic over its backing storage (owned `String` or `&str` view).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, derive_more::Display, derive_more::From)]
 pub struct CmdUser<T: AsRef<str> = String>(T);
@@ -46,14 +49,14 @@ impl<T: AsRef<str>> AsRef<str> for CmdUser<T> {
     }
 }
 
-impl<T: AsRef<str>> CmdUser<T> {
-    pub fn owned(&self) -> CmdUser<String> {
-        CmdUser(self.0.as_ref().to_string())
+impl<T: AsRef<str> + Into<String>> CmdUser<T> {
+    pub fn into_owned(self) -> CmdUser<String> {
+        CmdUser(self.0.into())
     }
 }
 
 impl CmdUser<String> {
-    pub fn probe() -> Self {
+    pub fn probe_current() -> Self {
         std::env::var("ATUIN_HOST_USER")
             .ok()
             .or_else(|| whoami::username().ok())
@@ -92,8 +95,8 @@ impl CmdOrigin {
         }
     }
 
-    pub fn probe() -> Self {
-        Self::new(CmdHost::probe(), CmdUser::probe())
+    pub fn probe_current() -> Self {
+        Self::new(CmdHost::probe_current(), CmdUser::probe_current())
     }
 
     /// The host portion, as a zero-copy view.
@@ -101,7 +104,10 @@ impl CmdOrigin {
         CmdHost(&self.raw[..self.sep])
     }
 
-    /// The user portion, as a zero-copy view (empty when there is no `:`).
+    /// The user portion.
+    ///
+    /// May be `""` if [`CmdOrigin`] was created through [`CmdOrigin::parse_fuzzy`] and no user was
+    /// found in the string.
     pub fn user(&self) -> CmdUser<&str> {
         CmdUser(self.raw.get(self.sep + 1..).unwrap_or(""))
     }

@@ -132,7 +132,7 @@ impl Importer for ZshHistDb {
         let histdb_entry_vec = hist_from_db(dbpath).await?;
         Ok(Self {
             histdb: histdb_entry_vec,
-            username: CmdUser::probe(),
+            username: CmdUser::probe_current(),
         })
     }
 
@@ -153,7 +153,7 @@ impl Importer for ZshHistDb {
             };
             let hostname = String::from_utf8(entry.host)
                 .map(CmdHost::from)
-                .unwrap_or_else(|_e| CmdHost::probe());
+                .unwrap_or_else(|_e| CmdHost::probe_current());
             let cmd_origin = CmdOrigin::new(hostname, self.username.clone());
             let session = session_map.entry(entry.session).or_insert_with(uuid_v7);
 
@@ -267,7 +267,7 @@ mod test {
         let histdb_vec = hist_from_db_conn(pool).await.unwrap();
         let histdb = ZshHistDb {
             histdb: histdb_vec,
-            username: CmdUser::probe(),
+            username: CmdUser::probe_current(),
         };
 
         println!("h: {:#?}", histdb.histdb);

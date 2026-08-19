@@ -63,7 +63,7 @@ pub struct OptFilters<'a> {
 /// filters simply match nothing.
 pub async fn query_context() -> eyre::Result<Context> {
     let session = env::var("ATUIN_SESSION").unwrap_or_default();
-    let cmd_origin = CmdOrigin::probe();
+    let cmd_origin = CmdOrigin::probe_current();
     let cwd = utils::get_current_dir();
     let host_id = Settings::host_id().await?;
     let git_root = utils::in_git_repo(cwd.as_str());

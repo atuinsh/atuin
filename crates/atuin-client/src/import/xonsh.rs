@@ -108,7 +108,7 @@ impl Importer for Xonsh {
         let xonsh_data_dir = env::var("XONSH_DATA_DIR").ok();
         let hist_dir = get_histdir_path(|| xonsh_hist_dir(xonsh_data_dir))?;
         let sessions = load_sessions(&hist_dir)?;
-        let cmd_origin = CmdOrigin::probe();
+        let cmd_origin = CmdOrigin::probe_current();
         Ok(Xonsh {
             sessions,
             cmd_origin,

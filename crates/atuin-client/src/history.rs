@@ -214,7 +214,7 @@ impl History {
         let session = session
             .or_else(|| env::var("ATUIN_SESSION").ok())
             .unwrap_or_else(|| uuid_v7().as_simple().to_string());
-        let cmd_origin = cmd_origin.unwrap_or_else(CmdOrigin::probe);
+        let cmd_origin = cmd_origin.unwrap_or_else(CmdOrigin::probe_current);
         let author = normalize_optional_string(author)
             .or_else(|| normalize_optional_string(env::var(HISTORY_AUTHOR_ENV).ok()))
             .unwrap_or_else(|| cmd_origin.user().to_string());

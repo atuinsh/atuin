@@ -92,7 +92,7 @@ impl Importer for XonshSqlite {
         })?;
 
         let pool = SqlitePool::connect(connection_str).await?;
-        let cmd_origin = CmdOrigin::probe();
+        let cmd_origin = CmdOrigin::probe_current();
         Ok(XonshSqlite { pool, cmd_origin })
     }
 
