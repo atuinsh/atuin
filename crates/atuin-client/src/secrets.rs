@@ -11,11 +11,7 @@ pub enum TestValue<'a> {
 
 /// A list of `(name, regex, test)`, where `test` should match against `regex`.
 pub static SECRET_PATTERNS: &[(&str, &str, TestValue)] = &[
-    (
-        "AWS Access Key ID",
-        "A[KS]IA[0-9A-Z]{16}",
-        TestValue::Single("AKIAIOSFODNN7EXAMPLE"),
-    ),
+    ("AWS Access Key ID", "A[KS]IA[0-9A-Z]{16}", TestValue::Single("AKIAIOSFODNN7EXAMPLE")),
     (
         "AWS Secret Access Key env var",
         "AWS_SECRET_ACCESS_KEY",
@@ -86,11 +82,7 @@ pub static SECRET_PATTERNS: &[(&str, &str, TestValue)] = &[
         "v1\\.[0-9A-Fa-f]{40}",
         TestValue::Single("v1.1234567890abcdef1234567890abcdef12345678"), // not a real token
     ),
-    (
-        "GitLab PAT",
-        "glpat-[a-zA-Z0-9_]{20}",
-        TestValue::Single("glpat-RkE_BG5p_bbjML21WSfy"),
-    ),
+    ("GitLab PAT", "glpat-[a-zA-Z0-9_]{20}", TestValue::Single("glpat-RkE_BG5p_bbjML21WSfy")),
     (
         "Slack OAuth v2 bot",
         "xoxb-[0-9]{11}-[0-9]{11}-[0-9a-zA-Z]{24}",
