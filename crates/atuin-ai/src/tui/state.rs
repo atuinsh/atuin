@@ -7,9 +7,13 @@
 #[derive(Debug, Clone)]
 pub(crate) enum ConversationEvent {
     /// User message (what the user typed)
-    UserMessage { content: String },
+    UserMessage {
+        content: String,
+    },
     /// Text content from assistant (streamed or complete)
-    Text { content: String },
+    Text {
+        content: String,
+    },
     /// Tool call from assistant
     ToolCall {
         id: String,
@@ -35,7 +39,9 @@ pub(crate) enum ConversationEvent {
     },
     /// Context injected for the LLM that is not rendered in the TUI.
     /// Converted to a user message in the API protocol.
-    SystemContext { content: String },
+    SystemContext {
+        content: String,
+    },
     /// A skill was loaded and its content injected into the conversation.
     /// Serialized as a full user message for the API but rendered compactly
     /// in the TUI (just the `/name args` invocation line).

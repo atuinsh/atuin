@@ -57,9 +57,8 @@ pub(crate) fn spawn_persist_worker(
                         tracing::warn!("failed to persist server session ID: {e}");
                     }
                     if let Some(json) = file_tracker
-                        && let Err(e) = session_mgr
-                            .set_metadata(crate::file_tracker::METADATA_KEY, &json)
-                            .await
+                        && let Err(e) =
+                            session_mgr.set_metadata(crate::file_tracker::METADATA_KEY, &json).await
                     {
                         tracing::warn!("failed to persist file tracker: {e}");
                     }

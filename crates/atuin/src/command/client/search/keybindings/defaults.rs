@@ -29,13 +29,10 @@ fn bind_scroll_key(
 ) {
     let k = key(key_str);
     if scroll_exits && toward_index_zero {
-        km.bind_conditional(
-            k,
-            vec![
-                KeyRule::when(ConditionAtom::ListAtStart, Action::Exit),
-                KeyRule::always(action),
-            ],
-        );
+        km.bind_conditional(k, vec![
+            KeyRule::when(ConditionAtom::ListAtStart, Action::Exit),
+            KeyRule::always(action),
+        ]);
     } else {
         km.bind(k, action);
     }
@@ -119,13 +116,10 @@ pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
 
     // right: behavior at end of line
     if settings.keys.accept_past_line_end {
-        km.bind_conditional(
-            key("right"),
-            vec![
-                KeyRule::when(ConditionAtom::CursorAtEnd, Action::ReturnSelection),
-                KeyRule::always(Action::CursorRight),
-            ],
-        );
+        km.bind_conditional(key("right"), vec![
+            KeyRule::when(ConditionAtom::CursorAtEnd, Action::ReturnSelection),
+            KeyRule::always(Action::CursorRight),
+        ]);
     } else {
         km.bind(key("right"), Action::CursorRight);
     }
@@ -133,21 +127,15 @@ pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
     // left: behavior at start of line
     // accept_past_line_start takes precedence over exit_past_line_start
     if settings.keys.accept_past_line_start {
-        km.bind_conditional(
-            key("left"),
-            vec![
-                KeyRule::when(ConditionAtom::CursorAtStart, Action::ReturnSelection),
-                KeyRule::always(Action::CursorLeft),
-            ],
-        );
+        km.bind_conditional(key("left"), vec![
+            KeyRule::when(ConditionAtom::CursorAtStart, Action::ReturnSelection),
+            KeyRule::always(Action::CursorLeft),
+        ]);
     } else if settings.keys.exit_past_line_start {
-        km.bind_conditional(
-            key("left"),
-            vec![
-                KeyRule::when(ConditionAtom::CursorAtStart, Action::Exit),
-                KeyRule::always(Action::CursorLeft),
-            ],
-        );
+        km.bind_conditional(key("left"), vec![
+            KeyRule::when(ConditionAtom::CursorAtStart, Action::Exit),
+            KeyRule::always(Action::CursorLeft),
+        ]);
     } else {
         km.bind(key("left"), Action::CursorLeft);
     }
@@ -162,13 +150,10 @@ pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
 
     // backspace: behavior at start of line
     if settings.keys.accept_with_backspace {
-        km.bind_conditional(
-            key("backspace"),
-            vec![
-                KeyRule::when(ConditionAtom::CursorAtStart, Action::ReturnSelection),
-                KeyRule::always(Action::DeleteCharBefore),
-            ],
-        );
+        km.bind_conditional(key("backspace"), vec![
+            KeyRule::when(ConditionAtom::CursorAtStart, Action::ReturnSelection),
+            KeyRule::always(Action::DeleteCharBefore),
+        ]);
     } else {
         km.bind(key("backspace"), Action::DeleteCharBefore);
     }
@@ -188,10 +173,7 @@ pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
         "alt"
     };
     for n in 1..=9u8 {
-        km.bind(
-            key(&format!("{num_mod}-{n}")),
-            Action::ReturnSelectionNth(n),
-        );
+        km.bind(key(&format!("{num_mod}-{n}")), Action::ReturnSelectionNth(n));
     }
 
     // --- Cursor movement ---
@@ -219,13 +201,10 @@ pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
     km.bind(key("alt-d"), Action::DeleteWordAfter);
     km.bind(key("delete"), Action::DeleteCharAfter);
     // ctrl-d: if input empty → return original, otherwise delete char
-    km.bind_conditional(
-        key("ctrl-d"),
-        vec![
-            KeyRule::when(ConditionAtom::InputEmpty, Action::ReturnOriginal),
-            KeyRule::always(Action::DeleteCharAfter),
-        ],
-    );
+    km.bind_conditional(key("ctrl-d"), vec![
+        KeyRule::when(ConditionAtom::InputEmpty, Action::ReturnOriginal),
+        KeyRule::always(Action::DeleteCharAfter),
+    ]);
     km.bind(key("ctrl-w"), Action::DeleteToWordBoundary);
     km.bind(key("ctrl-u"), Action::ClearLine);
 
@@ -390,10 +369,7 @@ pub fn default_inspector_keymap(settings: &Settings) -> Keymap {
     km.bind(key("pagedown"), Action::InspectNext);
 
     // For vim users, add j/k navigation
-    if matches!(
-        settings.keymap_mode,
-        KeymapMode::VimNormal | KeymapMode::VimInsert
-    ) {
+    if matches!(settings.keymap_mode, KeymapMode::VimNormal | KeymapMode::VimInsert) {
         km.bind(key("j"), Action::InspectNext);
         km.bind(key("k"), Action::InspectPrevious);
     }
@@ -412,13 +388,10 @@ pub fn default_prefix_keymap() -> Keymap {
     km.bind(key("d"), Action::Delete);
     km.bind(key("D"), Action::DeleteAll);
     km.bind(key("a"), Action::CursorStart);
-    km.bind_conditional(
-        key("c"),
-        vec![
-            KeyRule::when(ConditionAtom::HasContext, Action::ClearContext),
-            KeyRule::always(Action::SwitchContext),
-        ],
-    );
+    km.bind_conditional(key("c"), vec![
+        KeyRule::when(ConditionAtom::HasContext, Action::ClearContext),
+        KeyRule::always(Action::SwitchContext),
+    ]);
 
     km
 }
@@ -533,9 +506,10 @@ impl KeymapSet {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
     use crate::command::client::search::keybindings::conditions::EvalContext;
-    use rstest::rstest;
 
     fn make_ctx(cursor: usize, width: usize, selected: usize, len: usize) -> EvalContext {
         EvalContext {
@@ -744,10 +718,7 @@ mod tests {
         let ctx = make_ctx(0, 0, 0, 10);
 
         // ctrl-x should be prefix mode
-        assert_eq!(
-            km.resolve(&key("ctrl-x"), &ctx),
-            Some(Action::EnterPrefixMode)
-        );
+        assert_eq!(km.resolve(&key("ctrl-x"), &ctx), Some(Action::EnterPrefixMode));
         // ctrl-a should now be CursorStart (not prefix)
         assert_eq!(km.resolve(&key("ctrl-a"), &ctx), Some(Action::CursorStart));
     }
@@ -760,10 +731,7 @@ mod tests {
         let ctx = make_ctx(0, 0, 0, 10);
 
         // ctrl-1 should work
-        assert_eq!(
-            km.resolve(&key("ctrl-1"), &ctx),
-            Some(Action::ReturnSelectionNth(1))
-        );
+        assert_eq!(km.resolve(&key("ctrl-1"), &ctx), Some(Action::ReturnSelectionNth(1)));
         // alt-1 should NOT be bound
         assert_eq!(km.resolve(&key("alt-1"), &ctx), None);
     }
@@ -775,10 +743,7 @@ mod tests {
         let ctx = make_ctx(0, 0, 0, 10);
 
         // alt-1 should work by default
-        assert_eq!(
-            km.resolve(&key("alt-1"), &ctx),
-            Some(Action::ReturnSelectionNth(1))
-        );
+        assert_eq!(km.resolve(&key("alt-1"), &ctx), Some(Action::ReturnSelectionNth(1)));
     }
 
     // -----------------------------------------------------------------------
@@ -835,24 +800,20 @@ mod tests {
 
     #[test]
     fn config_override_replaces_key() {
-        use atuin_client::settings::KeyBindingConfig;
         use std::collections::HashMap;
+
+        use atuin_client::settings::KeyBindingConfig;
 
         let mut settings = default_settings();
         let set = KeymapSet::defaults(&settings);
 
         // Default: ctrl-c → ReturnOriginal
         let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(
-            set.emacs.resolve(&key("ctrl-c"), &ctx),
-            Some(Action::ReturnOriginal)
-        );
+        assert_eq!(set.emacs.resolve(&key("ctrl-c"), &ctx), Some(Action::ReturnOriginal));
 
         // Override ctrl-c → Exit via config
-        settings.keymap.emacs = HashMap::from([(
-            "ctrl-c".to_string(),
-            KeyBindingConfig::Simple("exit".to_string()),
-        )]);
+        settings.keymap.emacs =
+            HashMap::from([("ctrl-c".to_string(), KeyBindingConfig::Simple("exit".to_string()))]);
 
         let set = KeymapSet::from_settings(&settings);
         assert_eq!(set.emacs.resolve(&key("ctrl-c"), &ctx), Some(Action::Exit));
@@ -860,15 +821,14 @@ mod tests {
 
     #[test]
     fn config_override_preserves_unoverridden_keys() {
-        use atuin_client::settings::KeyBindingConfig;
         use std::collections::HashMap;
+
+        use atuin_client::settings::KeyBindingConfig;
 
         let mut settings = default_settings();
         // Override only ctrl-c; enter should keep its default
-        settings.keymap.emacs = HashMap::from([(
-            "ctrl-c".to_string(),
-            KeyBindingConfig::Simple("exit".to_string()),
-        )]);
+        settings.keymap.emacs =
+            HashMap::from([("ctrl-c".to_string(), KeyBindingConfig::Simple("exit".to_string()))]);
 
         let set = KeymapSet::from_settings(&settings);
         let ctx = make_ctx(0, 0, 0, 10);
@@ -876,16 +836,14 @@ mod tests {
         // ctrl-c overridden
         assert_eq!(set.emacs.resolve(&key("ctrl-c"), &ctx), Some(Action::Exit));
         // enter still has default (enter_accept=false → ReturnSelection)
-        assert_eq!(
-            set.emacs.resolve(&key("enter"), &ctx),
-            Some(Action::ReturnSelection)
-        );
+        assert_eq!(set.emacs.resolve(&key("enter"), &ctx), Some(Action::ReturnSelection));
     }
 
     #[test]
     fn config_conditional_override() {
-        use atuin_client::settings::{KeyBindingConfig, KeyRuleConfig};
         use std::collections::HashMap;
+
+        use atuin_client::settings::{KeyBindingConfig, KeyRuleConfig};
 
         let mut settings = default_settings();
         // Override "up" with a custom conditional
@@ -911,10 +869,7 @@ mod tests {
 
         // With results → select-previous
         let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(
-            set.emacs.resolve(&key("up"), &ctx),
-            Some(Action::SelectPrevious)
-        );
+        assert_eq!(set.emacs.resolve(&key("up"), &ctx), Some(Action::SelectPrevious));
     }
 
     #[test]
@@ -925,9 +880,7 @@ mod tests {
 
         // Verify a sample of keys produce the same results
         let ctx = make_ctx(0, 0, 0, 10);
-        let test_keys = [
-            "ctrl-c", "enter", "esc", "tab", "up", "down", "left", "right",
-        ];
+        let test_keys = ["ctrl-c", "enter", "esc", "tab", "up", "down", "left", "right"];
         for k in &test_keys {
             assert_eq!(
                 defaults.emacs.resolve(&key(k), &ctx),
@@ -961,10 +914,8 @@ mod tests {
 
         // With [keymap] present (even just one override), [keys] is ignored
         // so the standard defaults (scroll_exits=true) apply
-        settings.keymap.emacs = HashMap::from([(
-            "ctrl-c".to_string(),
-            KeyBindingConfig::Simple("exit".to_string()),
-        )]);
+        settings.keymap.emacs =
+            HashMap::from([("ctrl-c".to_string(), KeyBindingConfig::Simple("exit".to_string()))]);
         let set_keymap = KeymapSet::from_settings(&settings);
 
         // Not at boundary (selected=5): should SelectNext normally
@@ -1001,10 +952,8 @@ mod tests {
         );
 
         // Add a [keymap] entry (for a different key)
-        settings.keymap.emacs = HashMap::from([(
-            "ctrl-c".to_string(),
-            KeyBindingConfig::Simple("exit".to_string()),
-        )]);
+        settings.keymap.emacs =
+            HashMap::from([("ctrl-c".to_string(), KeyBindingConfig::Simple("exit".to_string()))]);
         let set_keymap = KeymapSet::from_settings(&settings);
 
         // Now left should use standard defaults (exit_past_line_start=true)
@@ -1042,8 +991,9 @@ mod tests {
 
     #[test]
     fn original_input_empty_condition_in_config() {
-        use atuin_client::settings::{KeyBindingConfig, KeyRuleConfig};
         use std::collections::HashMap;
+
+        use atuin_client::settings::{KeyBindingConfig, KeyRuleConfig};
 
         let mut settings = default_settings();
         // Configure esc to: if original-input-empty -> return-query, else return-original

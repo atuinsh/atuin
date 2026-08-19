@@ -11,9 +11,8 @@
 
 use std::time::Duration;
 
-use atuin_common::string::EllipsizeExt as _;
-use atuin_common::string::Measure;
 use atuin_common::string::ellipsis::{Indicator, Pos};
+use atuin_common::string::{EllipsizeExt as _, Measure};
 use eye_declare::{Element, Spinner};
 use ratatui_core::buffer::Buffer;
 use ratatui_core::layout::Rect;
@@ -25,9 +24,7 @@ use unicode_width::UnicodeWidthStr as _;
 /// spaces, and the middle is elided when it still doesn't fit.
 fn fit_middle(command: &str, cols: usize) -> String {
     let one_line = command.split_whitespace().collect::<Vec<_>>().join(" ");
-    one_line
-        .ellipsize(Measure::Columns(cols), Pos::Middle, Indicator::UNICODE)
-        .to_string()
+    one_line.ellipsize(Measure::Columns(cols), Pos::Middle, Indicator::UNICODE).to_string()
 }
 
 /// A tool spinner labeled `prefix` + command, the command middle-elided to
@@ -55,10 +52,13 @@ impl CommandSpinner {
     fn spinner_at(&self, width: u16) -> Spinner {
         // Marker glyph + trailing space while animating; a done spinner
         // with a hidden checkmark has no marker (see Spinner::render).
-        let marker_cols = if self.done { 0 } else { 2 };
-        let budget = (width as usize)
-            .saturating_sub(marker_cols)
-            .saturating_sub(self.prefix.width());
+        let marker_cols = if self.done {
+            0
+        } else {
+            2
+        };
+        let budget =
+            (width as usize).saturating_sub(marker_cols).saturating_sub(self.prefix.width());
         let label = format!("{}{}", self.prefix, fit_middle(&self.command, budget));
         super::tool_spinner(label, self.done).hide_checkmark()
     }
@@ -66,7 +66,11 @@ impl CommandSpinner {
 
 impl Element for CommandSpinner {
     fn height(&self, width: u16) -> u16 {
-        if width == 0 { 0 } else { 1 }
+        if width == 0 {
+            0
+        } else {
+            1
+        }
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -104,7 +108,11 @@ pub(crate) fn truncated_line(
 
 impl Element for TruncatedLine {
     fn height(&self, width: u16) -> u16 {
-        if width == 0 { 0 } else { 1 }
+        if width == 0 {
+            0
+        } else {
+            1
+        }
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -130,8 +138,9 @@ impl Element for TruncatedLine {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     fn render_line(el: &impl Element, width: u16) -> String {
         let area = Rect::new(0, 0, width, 1);

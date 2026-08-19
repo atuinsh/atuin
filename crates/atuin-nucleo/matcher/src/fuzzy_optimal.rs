@@ -121,11 +121,7 @@ impl<H: Char> MatcherDataView<'_, H> {
         let mut row_iter = needle.iter().copied().zip(self.row_offs.iter_mut());
         let (mut needle_char, mut row_start) = row_iter.next().unwrap();
 
-        let col_iter = self
-            .haystack
-            .iter_mut()
-            .zip(self.bonus.iter_mut())
-            .enumerate();
+        let col_iter = self.haystack.iter_mut().zip(self.bonus.iter_mut()).enumerate();
 
         let mut matched = false;
         for (i, (c_, bonus_)) in col_iter {
@@ -271,11 +267,8 @@ impl<H: Char> MatcherDataView<'_, H> {
         H: PartialEq<N>,
     {
         let mut matrix_cells = &mut self.matrix_cells[self.current_row.len()..];
-        let mut row_iter = needle[1..]
-            .iter()
-            .copied()
-            .zip(self.row_offs[1..].iter().copied())
-            .enumerate();
+        let mut row_iter =
+            needle[1..].iter().copied().zip(self.row_offs[1..].iter().copied()).enumerate();
         let (mut needle_idx, (mut needle_char, mut row_off)) = row_iter.next().unwrap();
         for (next_needle_idx, (next_needle_char, next_row_off)) in row_iter {
             Self::score_row::<false, INDICES, _>(
@@ -312,18 +305,16 @@ impl<H: Char> MatcherDataView<'_, H> {
 
         let mut matrix_cells = &self.matrix_cells[..matrix_len];
         let width = self.current_row.len();
-        let mut row_iter = self.row_offs[..self.row_offs.len() - 1]
-            .iter()
-            .copied()
-            .enumerate()
-            .rev()
-            .map(|(i, off)| {
-                let relative_off = off as usize - i;
-                let row;
-                (matrix_cells, row) =
-                    matrix_cells.split_at(matrix_cells.len() - (width - relative_off));
-                (i, off, row)
-            });
+        let mut row_iter =
+            self.row_offs[..self.row_offs.len() - 1].iter().copied().enumerate().rev().map(
+                |(i, off)| {
+                    let relative_off = off as usize - i;
+                    let row;
+                    (matrix_cells, row) =
+                        matrix_cells.split_at(matrix_cells.len() - (width - relative_off));
+                    (i, off, row)
+                },
+            );
         let (mut row_idx, mut row_off, mut row) = row_iter.next().unwrap();
         let mut col = max_score_end;
         let relative_last_row_off = last_row_off as usize + 1 - self.row_offs.len();

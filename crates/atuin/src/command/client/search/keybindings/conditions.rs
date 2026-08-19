@@ -369,8 +369,9 @@ impl<'de> Deserialize<'de> for ConditionExpr {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     fn ctx(
         cursor: usize,
@@ -646,10 +647,7 @@ mod tests {
         let expr = ConditionExpr::Atom(ConditionAtom::CursorAtStart)
             .or(ConditionExpr::Atom(ConditionAtom::InputEmpty))
             .and(ConditionExpr::Atom(ConditionAtom::NoResults));
-        assert_eq!(
-            expr.to_string(),
-            "(cursor-at-start || input-empty) && no-results"
-        );
+        assert_eq!(expr.to_string(), "(cursor-at-start || input-empty) && no-results");
     }
 
     #[test]
@@ -658,10 +656,7 @@ mod tests {
         let inner_and = ConditionExpr::Atom(ConditionAtom::InputEmpty)
             .and(ConditionExpr::Atom(ConditionAtom::NoResults));
         let expr = ConditionExpr::Atom(ConditionAtom::CursorAtStart).or(inner_and);
-        assert_eq!(
-            expr.to_string(),
-            "cursor-at-start || input-empty && no-results"
-        );
+        assert_eq!(expr.to_string(), "cursor-at-start || input-empty && no-results");
     }
 
     // -- Display round-trip --
@@ -697,9 +692,7 @@ mod tests {
         let parsed: ConditionExpr = serde_json::from_str(json).unwrap();
         let expected = ConditionExpr::And(
             Box::new(ConditionExpr::Atom(ConditionAtom::CursorAtStart)),
-            Box::new(ConditionExpr::Not(Box::new(ConditionExpr::Atom(
-                ConditionAtom::InputEmpty,
-            )))),
+            Box::new(ConditionExpr::Not(Box::new(ConditionExpr::Atom(ConditionAtom::InputEmpty)))),
         );
         assert_eq!(parsed, expected);
     }
@@ -728,9 +721,6 @@ mod tests {
             .and(ConditionExpr::from(ConditionAtom::InputEmpty).not())
             .or(ConditionExpr::from(ConditionAtom::NoResults));
         // And binds tighter than Or, so no parens needed around the And
-        assert_eq!(
-            expr.to_string(),
-            "cursor-at-start && !input-empty || no-results"
-        );
+        assert_eq!(expr.to_string(), "cursor-at-start && !input-empty || no-results");
     }
 }

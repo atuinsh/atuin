@@ -1,15 +1,16 @@
 use std::cell::UnsafeCell;
 use std::mem::take;
-use std::sync::atomic::{self, AtomicBool, AtomicU32};
 use std::sync::Arc;
+use std::sync::atomic::{self, AtomicBool, AtomicU32};
 
 use atuin_nucleo_matcher::Config;
 use parking_lot::Mutex;
-use rayon::{prelude::*, ThreadPool};
+use rayon::ThreadPool;
+use rayon::prelude::*;
 
 use crate::par_sort::par_quicksort;
 use crate::pattern::{self, MultiPattern};
-use crate::{boxcar, Filter, Match, Scorer};
+use crate::{Filter, Match, Scorer, boxcar};
 
 struct Matchers(Box<[UnsafeCell<atuin_nucleo_matcher::Matcher>]>);
 
@@ -299,8 +300,7 @@ impl<T: Sync + Send + 'static> Worker<T> {
         if canceled {
             self.was_canceled = true;
         } else {
-            self.matches
-                .truncate(self.matches.len() - take(unmatched.get_mut()) as usize);
+            self.matches.truncate(self.matches.len() - take(unmatched.get_mut()) as usize);
             if self.should_notify.load(atomic::Ordering::Relaxed) {
                 (self.notify)();
             }
@@ -327,16 +327,10 @@ impl<T: Sync + Send + 'static> Worker<T> {
                     // array here which involves some pointer chasing
                     let item1 = self.items.get_unchecked(match1.idx);
                     let item2 = &self.items.get_unchecked(match2.idx);
-                    let len1: u32 = item1
-                        .matcher_columns
-                        .iter()
-                        .map(|haystack| haystack.len() as u32)
-                        .sum();
-                    let len2 = item2
-                        .matcher_columns
-                        .iter()
-                        .map(|haystack| haystack.len() as u32)
-                        .sum();
+                    let len1: u32 =
+                        item1.matcher_columns.iter().map(|haystack| haystack.len() as u32).sum();
+                    let len2 =
+                        item2.matcher_columns.iter().map(|haystack| haystack.len() as u32).sum();
                     if len1 == len2 {
                         if self.reverse_items {
                             match2.idx < match1.idx
@@ -392,12 +386,11 @@ impl<T: Sync + Send + 'static> Worker<T> {
             }
         } else {
             // No filter - add all items
-            self.matches
-                .extend((0..self.last_snapshot).map(|idx| Match {
-                    score: 0,
-                    external_score: 0,
-                    idx,
-                }));
+            self.matches.extend((0..self.last_snapshot).map(|idx| Match {
+                score: 0,
+                external_score: 0,
+                idx,
+            }));
         }
         // there are usually only very few in flight items (one for each writer)
         self.remove_in_flight_matches();

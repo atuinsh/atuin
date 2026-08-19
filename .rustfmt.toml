@@ -1,4 +1,17 @@
+comment_width = 100
+#error_on_line_overflow = true
+#error_on_unformatted = true
+format_macro_bodies = true
+format_macro_matchers = true
+format_strings = true
+group_imports = "StdExternalCrate"
+imports_granularity = "Module"
+max_width = 100
+newline_style = "Unix"
+overflow_delimited_expr = true
 reorder_imports = true
-# uncomment once stable
-#imports_granularity = "crate"
-#group_imports = "StdExternalCrate"
+struct_lit_width = 18
+style_edition = "2024"
+unstable_features = true
+use_field_init_shorthand = true
+use_small_heuristics = "Off"

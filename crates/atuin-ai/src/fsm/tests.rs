@@ -1,20 +1,16 @@
 //! Pure FSM transition tests. No IO, no async.
 
-use serde_json::json;
-
+use effects::{Effect, ExitAction};
+use events::{Event, PermissionChoice, PermissionResponse};
 use rstest::{fixture, rstest};
+use serde_json::json;
 
 use super::tools::{InterruptReason, ToolPreviewData};
 use super::*;
-use effects::{Effect, ExitAction};
-use events::{Event, PermissionChoice, PermissionResponse};
 
 #[fixture]
 fn new_fsm() -> AgentFsm {
-    AgentFsm::new(
-        vec!["client_v1_read_file".to_string()],
-        "test-inv".to_string(),
-    )
+    AgentFsm::new(vec!["client_v1_read_file".to_string()], "test-inv".to_string())
 }
 
 // ============================================================================
@@ -25,12 +21,9 @@ fn new_fsm() -> AgentFsm {
 fn user_submit_starts_turn(#[from(new_fsm)] mut fsm: AgentFsm) {
     let effects = fsm.handle(Event::UserSubmit("hello".into()));
 
-    assert!(matches!(
-        fsm.state,
-        AgentState::Turn {
-            stream: StreamPhase::Connecting
-        }
-    ));
+    assert!(matches!(fsm.state, AgentState::Turn {
+        stream: StreamPhase::Connecting
+    }));
     assert_eq!(effects.len(), 1);
     assert!(matches!(effects[0], Effect::StartStream { .. }));
     // User message was pushed to events
@@ -46,12 +39,9 @@ fn stream_started_transitions_to_streaming(#[from(new_fsm)] mut fsm: AgentFsm) {
 
     let effects = fsm.handle(Event::StreamStarted);
 
-    assert!(matches!(
-        fsm.state,
-        AgentState::Turn {
-            stream: StreamPhase::Streaming { status: None }
-        }
-    ));
+    assert!(matches!(fsm.state, AgentState::Turn {
+        stream: StreamPhase::Streaming { status: None }
+    }));
     assert!(effects.is_empty());
 }
 
@@ -167,10 +157,7 @@ fn stream_tool_call_tracks_tool_and_emits_check_permission(#[from(new_fsm)] mut 
 
 #[rstest]
 fn atuin_output_call_emits_command_lookup_and_stores_result() {
-    let mut fsm = AgentFsm::new(
-        vec!["client_v1_atuin_output".to_string()],
-        "test-inv".to_string(),
-    );
+    let mut fsm = AgentFsm::new(vec!["client_v1_atuin_output".to_string()], "test-inv".to_string());
     fsm.handle(Event::UserSubmit("show output".into()));
     fsm.handle(Event::StreamStarted);
 
@@ -255,17 +242,10 @@ fn tool_done_after_stream_done_continues_conversation(#[from(new_fsm)] mut fsm: 
     });
 
     // Turn complete → continuation
-    assert!(matches!(
-        fsm.state,
-        AgentState::Turn {
-            stream: StreamPhase::Connecting
-        }
-    ));
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::StartStream { .. }))
-    );
+    assert!(matches!(fsm.state, AgentState::Turn {
+        stream: StreamPhase::Connecting
+    }));
+    assert!(effects.iter().any(|e| matches!(e, Effect::StartStream { .. })));
 }
 
 #[rstest]
@@ -290,12 +270,9 @@ fn continuation_turn_without_new_tools_goes_idle(#[from(new_fsm)] mut fsm: Agent
         outcome: crate::tools::ToolOutcome::Success("contents".into()),
         preview: None,
     });
-    assert!(matches!(
-        fsm.state,
-        AgentState::Turn {
-            stream: StreamPhase::Connecting
-        }
-    ));
+    assert!(matches!(fsm.state, AgentState::Turn {
+        stream: StreamPhase::Connecting
+    }));
 
     // Continuation stream: text only, no new tools
     fsm.handle(Event::StreamStarted);
@@ -307,11 +284,7 @@ fn continuation_turn_without_new_tools_goes_idle(#[from(new_fsm)] mut fsm: Agent
     // Should go Idle, NOT start another continuation
     assert_eq!(fsm.state, AgentState::Idle { confirmation: None });
     assert!(effects.iter().any(|e| matches!(e, Effect::Persist)));
-    assert!(
-        !effects
-            .iter()
-            .any(|e| matches!(e, Effect::StartStream { .. }))
-    );
+    assert!(!effects.iter().any(|e| matches!(e, Effect::StartStream { .. })));
 }
 
 #[rstest]
@@ -336,12 +309,9 @@ fn tool_done_before_stream_done_stays_in_turn(#[from(new_fsm)] mut fsm: AgentFsm
     });
 
     // Still in Turn — stream phase is Streaming, not Done
-    assert!(matches!(
-        fsm.state,
-        AgentState::Turn {
-            stream: StreamPhase::Streaming { .. }
-        }
-    ));
+    assert!(matches!(fsm.state, AgentState::Turn {
+        stream: StreamPhase::Streaming { .. }
+    }));
     assert!(effects.is_empty());
 }
 
@@ -418,11 +388,7 @@ fn cancel_during_turn_with_pending_tools(#[from(new_fsm)] mut fsm: AgentFsm) {
     let effects = fsm.handle(Event::Cancel);
 
     assert_eq!(fsm.state, AgentState::Idle { confirmation: None });
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::AbortTool { .. }))
-    );
+    assert!(effects.iter().any(|e| matches!(e, Effect::AbortTool { .. })));
     // Error ToolResult injected
     assert!(fsm.ctx.events.iter().any(|e| matches!(
         e,
@@ -479,17 +445,10 @@ fn dangerous_command_enters_confirmation(#[from(new_fsm)] mut fsm: AgentFsm) {
 
     let effects = fsm.handle(Event::ExecuteCommand);
 
-    assert!(matches!(
-        fsm.state,
-        AgentState::Idle {
-            confirmation: Some(_)
-        }
-    ));
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::ScheduleTimeout { .. }))
-    );
+    assert!(matches!(fsm.state, AgentState::Idle {
+        confirmation: Some(_)
+    }));
+    assert!(effects.iter().any(|e| matches!(e, Effect::ScheduleTimeout { .. })));
 }
 
 #[rstest]
@@ -551,17 +510,10 @@ fn retry_from_error_starts_new_stream(#[from(new_fsm)] mut fsm: AgentFsm) {
 
     let effects = fsm.handle(Event::Retry);
 
-    assert!(matches!(
-        fsm.state,
-        AgentState::Turn {
-            stream: StreamPhase::Connecting
-        }
-    ));
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::StartStream { .. }))
-    );
+    assert!(matches!(fsm.state, AgentState::Turn {
+        stream: StreamPhase::Connecting
+    }));
+    assert!(effects.iter().any(|e| matches!(e, Effect::StartStream { .. })));
 }
 
 // ============================================================================
@@ -592,17 +544,10 @@ fn permission_deny_completes_turn_and_continues(#[from(new_fsm)] mut fsm: AgentF
 
     // Turn should complete since all tools resolved and stream is done
     // → continuation needed (there was a tool result to send back)
-    assert!(matches!(
-        fsm.state,
-        AgentState::Turn {
-            stream: StreamPhase::Connecting
-        }
-    ));
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::StartStream { .. }))
-    );
+    assert!(matches!(fsm.state, AgentState::Turn {
+        stream: StreamPhase::Connecting
+    }));
+    assert!(effects.iter().any(|e| matches!(e, Effect::StartStream { .. })));
     // Error result was injected
     assert!(fsm.ctx.events.iter().any(|e| matches!(
         e,
@@ -642,17 +587,10 @@ fn unknown_tool_call_gets_error_result(#[from(new_fsm)] mut fsm: AgentFsm) {
     // turn like a completed tool: the continuation starts immediately so
     // the model sees the error and can retry.
     assert!(fsm.ctx.tools.get("t1").is_none());
-    assert!(matches!(
-        fsm.state,
-        AgentState::Turn {
-            stream: StreamPhase::Connecting
-        }
-    ));
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::StartStream { .. }))
-    );
+    assert!(matches!(fsm.state, AgentState::Turn {
+        stream: StreamPhase::Connecting
+    }));
+    assert!(effects.iter().any(|e| matches!(e, Effect::StartStream { .. })));
 }
 
 #[rstest]
@@ -679,12 +617,9 @@ fn unknown_tool_alongside_real_tool_waits_for_both(#[from(new_fsm)] mut fsm: Age
 
     // Still waiting on the real tool — the pre-answered unknown call must
     // not complete the turn early.
-    assert!(matches!(
-        fsm.state,
-        AgentState::Turn {
-            stream: StreamPhase::Done
-        }
-    ));
+    assert!(matches!(fsm.state, AgentState::Turn {
+        stream: StreamPhase::Done
+    }));
 
     let effects = fsm.handle(Event::ToolExecutionDone {
         tool_id: "t1".into(),
@@ -693,11 +628,7 @@ fn unknown_tool_alongside_real_tool_waits_for_both(#[from(new_fsm)] mut fsm: Age
     });
 
     // Both results now ride the same continuation.
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::StartStream { .. }))
-    );
+    assert!(effects.iter().any(|e| matches!(e, Effect::StartStream { .. })));
 }
 
 // ============================================================================
@@ -707,10 +638,7 @@ fn unknown_tool_alongside_real_tool_waits_for_both(#[from(new_fsm)] mut fsm: Age
 #[fixture]
 fn fsm_with_shell() -> AgentFsm {
     AgentFsm::new(
-        vec![
-            "client_v1_read_file".to_string(),
-            "client_v1_execute_shell_command".to_string(),
-        ],
+        vec!["client_v1_read_file".to_string(), "client_v1_execute_shell_command".to_string()],
         "test-inv".to_string(),
     )
 }
@@ -740,11 +668,7 @@ fn shell_tool_schedules_execution_timeout(#[from(fsm_with_shell)] mut fsm: Agent
     });
 
     // Should have ExecuteTool + ScheduleTimeout
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::ExecuteTool { .. }))
-    );
+    assert!(effects.iter().any(|e| matches!(e, Effect::ExecuteTool { .. })));
     assert!(effects.iter().any(|e| matches!(
         e,
         Effect::ScheduleTimeout { kind: effects::TimeoutKind::ToolExecution { tool_id }, .. }
@@ -768,16 +692,8 @@ fn read_tool_does_not_schedule_timeout(#[from(new_fsm)] mut fsm: AgentFsm) {
         response: PermissionResponse::Allowed,
     });
 
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::ExecuteTool { .. }))
-    );
-    assert!(
-        !effects
-            .iter()
-            .any(|e| matches!(e, Effect::ScheduleTimeout { .. }))
-    );
+    assert!(effects.iter().any(|e| matches!(e, Effect::ExecuteTool { .. })));
+    assert!(!effects.iter().any(|e| matches!(e, Effect::ScheduleTimeout { .. })));
     assert!(fsm.ctx.tool_timeout_ids.is_empty());
 }
 
@@ -885,9 +801,7 @@ fn timeout_respects_llm_specified_duration(#[from(fsm_with_shell)] mut fsm: Agen
         response: PermissionResponse::Allowed,
     });
 
-    let timeout_effect = effects
-        .iter()
-        .find(|e| matches!(e, Effect::ScheduleTimeout { .. }));
+    let timeout_effect = effects.iter().find(|e| matches!(e, Effect::ScheduleTimeout { .. }));
     assert!(matches!(
         timeout_effect,
         Some(Effect::ScheduleTimeout { duration, .. }) if *duration == std::time::Duration::from_secs(120)
@@ -918,12 +832,7 @@ fn cancel_clears_timeout_mappings(#[from(fsm_with_shell)] mut fsm: AgentFsm) {
     "[Timed out after 60s]",
     Some("[Interrupted by user]")
 )]
-#[case::user_interrupt(
-    Event::InterruptTools,
-    InterruptReason::User,
-    "[Interrupted by user]",
-    None
-)]
+#[case::user_interrupt(Event::InterruptTools, InterruptReason::User, "[Interrupted by user]", None)]
 fn interrupt_propagates_reason_to_preview_and_llm(
     #[from(fsm_with_shell)] mut fsm: AgentFsm,
     #[case] trigger: Event,

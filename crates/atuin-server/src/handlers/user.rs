@@ -3,31 +3,22 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use argon2::{
-    Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version,
-    password_hash::SaltString,
-};
-use axum::{
-    Json,
-    extract::{ConnectInfo, Path, State},
-    http::StatusCode,
-};
+use argon2::password_hash::SaltString;
+use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
+use atuin_common::utils::crypto_random_string;
+use atuin_domain::api::*;
+use atuin_server_database::models::{NewSession, NewUser};
+use atuin_server_database::{Database, DbError};
+use axum::Json;
+use axum::extract::{ConnectInfo, Path, State};
+use axum::http::StatusCode;
 use metrics::counter;
-
 use rand::rngs::OsRng;
+use reqwest::header::CONTENT_TYPE;
 use tracing::{debug, error, info, instrument, warn};
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::router::{AppState, UserAuth};
-use atuin_server_database::{
-    Database, DbError,
-    models::{NewSession, NewUser},
-};
-
-use reqwest::header::CONTENT_TYPE;
-
-use atuin_common::utils::crypto_random_string;
-use atuin_domain::api::*;
 
 pub fn verify_str(hash: &str, password: &str) -> bool {
     let arg2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default());
@@ -91,10 +82,8 @@ pub async fn register<DB: Database>(
     Json(register): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, ErrorResponseStatus<'static>> {
     if !state.settings.open_registration {
-        return Err(
-            ErrorResponse::reply("this server is not open for registrations")
-                .with_status(StatusCode::BAD_REQUEST),
-        );
+        return Err(ErrorResponse::reply("this server is not open for registrations")
+            .with_status(StatusCode::BAD_REQUEST));
     }
 
     for c in register.username.chars() {
@@ -193,10 +182,7 @@ pub async fn change_password<DB: Database>(
 ) -> Result<Json<ChangePasswordResponse>, ErrorResponseStatus<'static>> {
     let db = &state.0.database;
 
-    let verified = verify_str(
-        user.password.as_str(),
-        change_password.current_password.borrow(),
-    );
+    let verified = verify_str(user.password.as_str(), change_password.current_password.borrow());
     if !verified {
         return Err(
             ErrorResponse::reply("password is not correct").with_status(StatusCode::UNAUTHORIZED)

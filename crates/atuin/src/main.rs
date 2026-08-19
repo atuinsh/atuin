@@ -4,9 +4,8 @@
 use clap::Parser;
 use clap::builder::Styles;
 use clap::builder::styling::{AnsiColor, Effects};
-use eyre::Result;
-
 use command::AtuinCmd;
+use eyre::Result;
 
 mod command;
 pub(crate) mod logs;

@@ -116,10 +116,12 @@ pub fn onlcr<B: Borrow<u8>>(bytes: impl IntoIterator<Item = B>) -> impl Iterator
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::num::NonZeroU16;
+
     use proptest::prelude::*;
     use rstest::rstest;
-    use std::num::NonZeroU16;
+
+    use super::*;
 
     fn nz(cols: u16) -> NonZeroU16 {
         NonZeroU16::new(cols).expect("test column width must be nonzero")
@@ -127,9 +129,7 @@ mod tests {
 
     fn assert_no_terminal_controls(text: &str) {
         assert!(
-            !text
-                .chars()
-                .any(|ch| ch.is_control() && ch != '\n' && ch != '\t'),
+            !text.chars().any(|ch| ch.is_control() && ch != '\n' && ch != '\t'),
             "text still contains terminal controls: {text:?}"
         );
     }

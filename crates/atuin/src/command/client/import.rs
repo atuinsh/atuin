@@ -1,19 +1,23 @@
 use std::env;
 
 use async_trait::async_trait;
+use atuin_client::database::Database;
+use atuin_client::history::History;
+use atuin_client::import::bash::Bash;
+use atuin_client::import::fish::Fish;
+use atuin_client::import::nu::Nu;
+use atuin_client::import::nu_histdb::NuHistDb;
+use atuin_client::import::powershell::PowerShell;
+use atuin_client::import::replxx::Replxx;
+use atuin_client::import::resh::Resh;
+use atuin_client::import::xonsh::Xonsh;
+use atuin_client::import::xonsh_sqlite::XonshSqlite;
+use atuin_client::import::zsh::Zsh;
+use atuin_client::import::zsh_histdb::ZshHistDb;
+use atuin_client::import::{Importer, Loader};
 use clap::Parser;
 use eyre::Result;
 use indicatif::ProgressBar;
-
-use atuin_client::{
-    database::Database,
-    history::History,
-    import::{
-        Importer, Loader, bash::Bash, fish::Fish, nu::Nu, nu_histdb::NuHistDb,
-        powershell::PowerShell, replxx::Replxx, resh::Resh, xonsh::Xonsh,
-        xonsh_sqlite::XonshSqlite, zsh::Zsh, zsh_histdb::ZshHistDb,
-    },
-};
 
 #[derive(Parser, Debug)]
 #[command(infer_subcommands = true)]

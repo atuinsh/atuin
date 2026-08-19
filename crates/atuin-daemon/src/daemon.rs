@@ -11,10 +11,10 @@
 
 use std::sync::Arc;
 
-use atuin_client::{
-    api_client::caps_client, database::Sqlite as HistoryDatabase,
-    record::sqlite_store::SqliteStore, settings::Settings,
-};
+use atuin_client::api_client::caps_client;
+use atuin_client::database::Sqlite as HistoryDatabase;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::caps::CapClient;
 use enum_dispatch::enum_dispatch;
@@ -227,10 +227,7 @@ impl std::fmt::Debug for DaemonHandle {
 /// }
 /// ```
 #[enum_dispatch]
-#[allow(
-    async_fn_in_trait,
-    reason = "only used within our code and we don't need it to be Send"
-)]
+#[allow(async_fn_in_trait, reason = "only used within our code and we don't need it to be Send")]
 pub trait Component: Send + Sync + Into<AnyComponent> {
     /// Human-readable name for logging and debugging.
     fn name(&self) -> &'static str;
@@ -334,10 +331,7 @@ impl Daemon {
                     self.dispatch_event(&event).await;
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(
-                        skipped = n,
-                        "event receiver lagged, some events were dropped"
-                    );
+                    tracing::warn!(skipped = n, "event receiver lagged, some events were dropped");
                 }
                 Err(broadcast::error::RecvError::Closed) => {
                     tracing::info!("event bus closed, stopping daemon");
@@ -453,9 +447,7 @@ impl DaemonBuilder {
     /// This loads the encryption key and creates the daemon state.
     pub async fn build(self) -> Result<Daemon> {
         let store = self.store.ok_or_else(|| eyre::eyre!("store is required"))?;
-        let history_db = self
-            .history_db
-            .ok_or_else(|| eyre::eyre!("history_db is required"))?;
+        let history_db = self.history_db.ok_or_else(|| eyre::eyre!("history_db is required"))?;
 
         // Load encryption key
         let encryption_key = paseto_v4::Key::try_load_or_generate(&self.settings.key_path)

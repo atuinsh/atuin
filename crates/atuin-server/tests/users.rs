@@ -3,11 +3,7 @@ use rstest::{fixture, rstest};
 
 mod common;
 
-type TestServer = (
-    url::Url,
-    tokio::sync::oneshot::Sender<()>,
-    tokio::task::JoinHandle<()>,
-);
+type TestServer = (url::Url, tokio::sync::oneshot::Sender<()>, tokio::task::JoinHandle<()>);
 
 #[fixture]
 async fn server() -> TestServer {
@@ -62,9 +58,7 @@ async fn change_password(#[future] server: TestServer) {
 
     let current_password = password;
     let new_password = uuid_v7().as_simple().to_string();
-    let result = client
-        .change_password(current_password, new_password.clone())
-        .await;
+    let result = client.change_password(current_password, new_password.clone()).await;
 
     // the password change request succeeded
     assert!(result.is_ok());
@@ -109,9 +103,7 @@ async fn multi_user_test(#[future] server: TestServer) {
 
     let current_password = password_one;
     let new_password = uuid_v7().as_simple().to_string();
-    let result = client_one
-        .change_password(current_password, new_password.clone())
-        .await;
+    let result = client_one.change_password(current_password, new_password.clone()).await;
 
     // the password change request succeeded
     assert!(result.is_ok());

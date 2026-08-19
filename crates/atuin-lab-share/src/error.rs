@@ -52,7 +52,10 @@ pub enum Error {
         "couldn't reach the hub at {url} within {timeout_secs}s -- is it running, and is \
          ATUIN_LAB_HUB_URL correct?"
     )]
-    HubUnreachable { url: Url, timeout_secs: u64 },
+    HubUnreachable {
+        url: Url,
+        timeout_secs: u64,
+    },
 
     /// The transport task ended (dropped its oneshot) before delivering the
     /// first join URL.
@@ -102,8 +105,8 @@ pub enum Error {
     /// old proxy writes its one-shot snapshot blob and closes). The proxy's
     /// version is fixed at shell startup, so the fix is a new session.
     #[error(
-        "the running atuin pty-proxy is too old to attach to -- start a new shell session \
-         (with the current atuin) and run --active there"
+        "the running atuin pty-proxy is too old to attach to -- start a new shell session (with \
+         the current atuin) and run --active there"
     )]
     ProxyTooOld,
 
@@ -124,9 +127,9 @@ pub enum Error {
     /// answer), keeps the retry advice, and points `lsof` at *whatever* holds
     /// the socket rather than at a client that may not exist.
     #[error(
-        "the atuin pty-proxy socket accepted the connection but did not answer in time -- \
-         wait a moment and retry; if it persists, check what is holding the socket with \
-         `lsof $ATUIN_PTY_PROXY_SOCKET`"
+        "the atuin pty-proxy socket accepted the connection but did not answer in time -- wait a \
+         moment and retry; if it persists, check what is holding the socket with `lsof \
+         $ATUIN_PTY_PROXY_SOCKET`"
     )]
     ProxyUnresponsive,
 
@@ -149,19 +152,22 @@ pub enum Error {
     /// `cols`/`rows` are what the proxy reported, so the message quotes back
     /// the size of the terminal the user is looking at.
     #[error(
-        "the terminal behind the atuin pty-proxy is too small to share: {cols}x{rows} -- \
-         atuin lab share needs at least {}x{} -- resize that terminal and run \
-         `atuin lab share --active` again",
+        "the terminal behind the atuin pty-proxy is too small to share: {cols}x{rows} -- atuin \
+         lab share needs at least {}x{} -- resize that terminal and run `atuin lab share \
+         --active` again",
         crate::MIN_COLS,
         crate::MIN_CHILD_ROWS
     )]
-    ProxyTerminalTooSmall { cols: u16, rows: u16 },
+    ProxyTerminalTooSmall {
+        cols: u16,
+        rows: u16,
+    },
 
     /// `--active --write` asked the proxy for input access and was refused:
     /// the token we sent did not match the proxy's token file.
     #[error(
-        "the pty-proxy denied write access -- the token next to ATUIN_PTY_PROXY_SOCKET did \
-         not match; share read-only (drop --write) or start a new shell session"
+        "the pty-proxy denied write access -- the token next to ATUIN_PTY_PROXY_SOCKET did not \
+         match; share read-only (drop --write) or start a new shell session"
     )]
     ProxyInputDenied,
 
@@ -194,7 +200,10 @@ pub enum Error {
         crate::MIN_CHILD_ROWS + 1,
         crate::MIN_CHILD_ROWS,
     )]
-    TerminalTooSmall { cols: u16, rows: u16 },
+    TerminalTooSmall {
+        cols: u16,
+        rows: u16,
+    },
 
     /// `atuin lab share` is unix-only for now (it needs a PTY).
     #[error("atuin lab share currently supports unix platforms only")]

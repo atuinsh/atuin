@@ -124,11 +124,12 @@ impl Default for CapServer {
 
 #[cfg(test)]
 mod tests {
+    use rstest::{fixture, rstest};
+    use serde::{Deserialize, Serialize};
+
     use super::*;
     use crate::api::CapabilitiesResponse;
     use crate::caps::{CapabilitiesCap, Capability};
-    use rstest::{fixture, rstest};
-    use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     struct TestCap {
@@ -182,11 +183,7 @@ mod tests {
     fn token_is_16_char_lowercase_hex(empty: CapServer) {
         let token = empty.token();
         assert_eq!(token.len(), 16);
-        assert!(
-            token
-                .chars()
-                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-        );
+        assert!(token.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
     }
 
     #[rstest]
@@ -213,10 +210,7 @@ mod tests {
         let caps = CapServer::new().add(TestCap { n }).unwrap();
         let resp: CapabilitiesResponse = serde_json::from_str(caps.body()).unwrap();
         assert_eq!(resp.version, caps.token());
-        assert_eq!(
-            resp.capabilities.get("test/cap"),
-            Some(&serde_json::json!({ "n": n }))
-        );
+        assert_eq!(resp.capabilities.get("test/cap"), Some(&serde_json::json!({ "n": n })));
     }
 
     #[rstest]
@@ -230,11 +224,8 @@ mod tests {
         assert_eq!(many.caps().get::<OtherCap>().unwrap().m, 2);
 
         // A batch bakes to the same set -- and therefore the same token -- as chained `add`s.
-        let chained = CapServer::new()
-            .add(TestCap { n: 1 })
-            .unwrap()
-            .add(OtherCap { m: 2 })
-            .unwrap();
+        let chained =
+            CapServer::new().add(TestCap { n: 1 }).unwrap().add(OtherCap { m: 2 }).unwrap();
         assert_eq!(many.token(), chained.token());
         assert_eq!(many.body(), chained.body());
 
@@ -252,11 +243,8 @@ mod tests {
 
     #[rstest]
     fn add_rejects_a_duplicate_name() {
-        let err = CapServer::new()
-            .add(TestCap { n: 1 })
-            .unwrap()
-            .add(TestCap { n: 2 })
-            .unwrap_err();
+        let err =
+            CapServer::new().add(TestCap { n: 1 }).unwrap().add(TestCap { n: 2 }).unwrap_err();
         assert_eq!(err.name, "test/cap");
     }
 

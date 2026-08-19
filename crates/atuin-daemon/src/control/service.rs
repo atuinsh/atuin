@@ -7,12 +7,11 @@ use atuin_client::history::HistoryId;
 use tonic::{Request, Response, Status};
 use tracing::{Level, info, instrument};
 
-use super::{
-    SendEventRequest, SendEventResponse,
-    control_server::{Control, ControlServer},
-    send_event_request::Event,
-};
-use crate::{daemon::DaemonHandle, events::DaemonEvent};
+use super::control_server::{Control, ControlServer};
+use super::send_event_request::Event;
+use super::{SendEventRequest, SendEventResponse};
+use crate::daemon::DaemonHandle;
+use crate::events::DaemonEvent;
 
 /// The Control gRPC service.
 ///
@@ -43,9 +42,7 @@ impl Control for ControlService {
     ) -> Result<Response<SendEventResponse>, Status> {
         let req = request.into_inner();
 
-        let event = req
-            .event
-            .ok_or_else(|| Status::invalid_argument("event is required"))?;
+        let event = req.event.ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         let daemon_event = proto_event_to_daemon_event(event)?;
 

@@ -32,8 +32,9 @@ impl Drop for TestProxy {
 }
 
 fn disable_echo(master: &dyn MasterPty) {
-    use nix::sys::termios;
     use std::os::fd::BorrowedFd;
+
+    use nix::sys::termios;
 
     let raw_fd = master.as_raw_fd().expect("MasterPty::as_raw_fd");
     // SAFETY: The file descriptor is owned by `master`, which cannot get dropped during the life
@@ -59,10 +60,7 @@ fn spawn_proxy(rows: u16, cols: u16) -> TestProxy {
     // that don't stretch the full width of the screen, causing certain tests to fail. Disable echo
     // so we're only testing the output of `cat`, which is reliable.
     disable_echo(&*pair.master);
-    let child = pair
-        .slave
-        .spawn_command(CommandBuilder::new("/bin/cat"))
-        .expect("spawn /bin/cat");
+    let child = pair.slave.spawn_command(CommandBuilder::new("/bin/cat")).expect("spawn /bin/cat");
     drop(pair.slave);
 
     let reader = pair.master.try_clone_reader().expect("clone reader");
@@ -103,20 +101,14 @@ struct Client {
 impl Client {
     fn connect(sock: &Path, want_input: bool, token: &[u8]) -> Self {
         let mut stream = UnixStream::connect(sock).expect("connect");
-        stream
-            .set_read_timeout(Some(CLIENT_READ_TIMEOUT))
-            .expect("set read timeout");
+        stream.set_read_timeout(Some(CLIENT_READ_TIMEOUT)).expect("set read timeout");
         stream.write_all(&protocol::MAGIC).expect("write magic");
-        stream
-            .write_all(&protocol::subscribe_frame(want_input, token))
-            .expect("write subscribe");
+        stream.write_all(&protocol::subscribe_frame(want_input, token)).expect("write subscribe");
         Self { stream }
     }
 
     fn read_frame(&mut self) -> (u8, Vec<u8>) {
-        protocol::read_frame(&mut self.stream)
-            .expect("read frame")
-            .expect("unexpected EOF")
+        protocol::read_frame(&mut self.stream).expect("read frame").expect("unexpected EOF")
     }
 
     fn expect_hello(&mut self, want_granted: bool) {
@@ -156,10 +148,7 @@ fn authenticated_input_roundtrips_through_the_shell() {
     let marker = b"itest-marker-4242";
     let mut line = marker.to_vec();
     line.push(b'\n');
-    client
-        .stream
-        .write_all(&protocol::input_frame(&line))
-        .expect("write input");
+    client.stream.write_all(&protocol::input_frame(&line)).expect("write input");
 
     // Wait for `cat`'s output.
     let mut seen = Vec::new();
@@ -203,10 +192,7 @@ fn input_without_the_token_is_refused_and_closed() {
     client.expect_hello(false);
     client.expect_keyframe();
 
-    client
-        .stream
-        .write_all(&protocol::input_frame(b"nope\n"))
-        .expect("write input");
+    client.stream.write_all(&protocol::input_frame(b"nope\n")).expect("write input");
 
     // The server must close the connection. Buffered frames may still
     // arrive first; a reset instead of a clean EOF also counts as closed.
@@ -273,9 +259,7 @@ fn legacy_one_shot_snapshot_still_works() {
     let proxy = spawn_proxy(24, 80);
 
     let mut stream = UnixStream::connect(&proxy.sock).expect("connect");
-    stream
-        .set_read_timeout(Some(CLIENT_READ_TIMEOUT))
-        .expect("set read timeout");
+    stream.set_read_timeout(Some(CLIENT_READ_TIMEOUT)).expect("set read timeout");
     let mut blob = Vec::new();
     stream.read_to_end(&mut blob).expect("read snapshot");
 
@@ -305,9 +289,7 @@ fn wait_for_snapshot_of_at_least(sock: &Path, min_bytes: usize) {
     let deadline = Instant::now() + DEADLINE;
     loop {
         let mut stream = UnixStream::connect(sock).expect("connect probe");
-        stream
-            .set_read_timeout(Some(CLIENT_READ_TIMEOUT))
-            .expect("set read timeout");
+        stream.set_read_timeout(Some(CLIENT_READ_TIMEOUT)).expect("set read timeout");
         let mut blob = Vec::new();
         stream.read_to_end(&mut blob).expect("read snapshot");
         let len = blob.len();
@@ -355,9 +337,7 @@ fn a_stalled_client_does_not_wedge_the_socket_server() {
     // The search popup's contract, while the staller stalls.
     let start = Instant::now();
     let mut legacy = UnixStream::connect(&proxy.sock).expect("connect legacy");
-    legacy
-        .set_read_timeout(Some(WEDGE_TIMEOUT))
-        .expect("set read timeout");
+    legacy.set_read_timeout(Some(WEDGE_TIMEOUT)).expect("set read timeout");
     let mut blob = Vec::new();
     legacy
         .read_to_end(&mut blob)
@@ -373,10 +353,7 @@ fn a_stalled_client_does_not_wedge_the_socket_server() {
     // ...and a v2 subscribe, the other client of the same loop.
     let start = Instant::now();
     let mut client = Client::connect(&proxy.sock, false, b"");
-    client
-        .stream
-        .set_read_timeout(Some(WEDGE_TIMEOUT))
-        .expect("set read timeout");
+    client.stream.set_read_timeout(Some(WEDGE_TIMEOUT)).expect("set read timeout");
     client.expect_hello(false);
     let snapshot = client.expect_keyframe();
     assert_eq!((snapshot.rows, snapshot.cols), (80, 200));
@@ -388,7 +365,5 @@ fn a_stalled_client_does_not_wedge_the_socket_server() {
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|window| window == needle)
+    haystack.windows(needle.len()).any(|window| window == needle)
 }
