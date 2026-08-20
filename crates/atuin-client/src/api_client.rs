@@ -20,6 +20,8 @@ use reqwest_middleware::ClientWithMiddleware;
 use semver::Version;
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
+const RECORD_UPLOAD_MAX_ATTEMPTS: usize = 3;
+const RECORD_UPLOAD_RETRY_BASE_DELAY: Duration = Duration::from_millis(100);
 
 /// Authentication token for sync API requests.
 ///
@@ -247,6 +249,15 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
     Ok(resp)
 }
 
+fn is_transient_record_upload_error(error: &reqwest_middleware::Error) -> bool {
+    match error {
+        reqwest_middleware::Error::Reqwest(error) => {
+            error.is_connect() || error.is_timeout() || error.is_request()
+        }
+        reqwest_middleware::Error::Middleware(_) => false,
+    }
+}
+
 /// Build the capability reader for a sync server.
 pub fn caps_client(
     sync_addr: &Url,
@@ -327,13 +338,33 @@ impl Client {
 
     pub async fn post_records(&self, records: &[Record<EncryptedData>]) -> Result<()> {
         let url = self.sync_addr.append_path("api/v0/record")?;
+        let request = self.client.post(url).json(records).build()?;
 
-        debug!("uploading {} records to {url}", records.len());
+        debug!("uploading {} records to {}", records.len(), request.url());
 
-        let resp = self.client.post(url).json(records).send().await?;
-        handle_resp_error(resp).await?;
+        for attempt in 0..RECORD_UPLOAD_MAX_ATTEMPTS {
+            let request = request.try_clone().expect("JSON record upload bodies must be reusable");
+            let result = self.client.execute(request).await;
 
-        Ok(())
+            match result {
+                Ok(resp) => {
+                    handle_resp_error(resp).await?;
+                    return Ok(());
+                }
+                Err(error)
+                    if attempt + 1 < RECORD_UPLOAD_MAX_ATTEMPTS
+                        && is_transient_record_upload_error(&error) =>
+                {
+                    let delay = RECORD_UPLOAD_RETRY_BASE_DELAY * 2u32.pow(attempt as u32);
+                    debug!("record upload transport failed, retrying in {delay:?}: {error:#}");
+                    tokio::time::sleep(delay).await;
+                }
+                Err(reqwest_middleware::Error::Reqwest(error)) => return Err(error.into()),
+                Err(error) => return Err(error.into()),
+            }
+        }
+
+        unreachable!("record upload attempts are bounded to at least one attempt")
     }
 
     /// Upload the given packfile.
@@ -488,7 +519,11 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
+    use atuin_domain::record::{Host, RecordVersion};
     use rstest::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use wiremock::matchers::{body_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
 
@@ -526,12 +561,148 @@ mod tests {
 
     /// Serve a single connection with a canned HTTP response.
     async fn serve_one(listener: &tokio::net::TcpListener, response: String) {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
         let (mut sock, _) = listener.accept().await.unwrap();
         let mut buf = [0u8; 4096];
         let _ = sock.read(&mut buf).await;
         sock.write_all(response.as_bytes()).await.unwrap();
+    }
+
+    fn test_client(address: Url) -> Client {
+        let caps_address = "http://127.0.0.1:1".parse().unwrap();
+        let caps = caps_client(&caps_address, &HashMap::new()).unwrap();
+        Client::new(address, &AuthToken::Token("test-token".into()), 1, 1, &HashMap::new(), caps)
+            .unwrap()
+    }
+
+    fn encrypted_record() -> Record<EncryptedData> {
+        Record::builder()
+            .idx(7)
+            .host(Host::new(HostId(uuid::Uuid::now_v7())))
+            .version(RecordVersion::V1)
+            .tag(RecordTag::History)
+            .data(EncryptedData {
+                raw: "encrypted-data".into(),
+                cek: "encrypted-key".into(),
+            })
+            .build()
+    }
+
+    async fn read_request_body(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
+        let mut request = Vec::new();
+        let mut buffer = [0; 4096];
+
+        loop {
+            let read = socket.read(&mut buffer).await.unwrap();
+            assert_ne!(read, 0, "connection closed before request headers arrived");
+            request.extend_from_slice(&buffer[..read]);
+
+            let Some(headers_end) = request.windows(4).position(|window| window == b"\r\n\r\n")
+            else {
+                continue;
+            };
+            let body_start = headers_end + 4;
+            let headers = std::str::from_utf8(&request[..headers_end]).unwrap();
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .map(str::parse::<usize>)
+                })
+                .unwrap()
+                .unwrap();
+
+            while request.len() < body_start + content_length {
+                let read = socket.read(&mut buffer).await.unwrap();
+                assert_ne!(read, 0, "connection closed before request body arrived");
+                request.extend_from_slice(&buffer[..read]);
+            }
+
+            return request[body_start..body_start + content_length].to_vec();
+        }
+    }
+
+    async fn serve_record_attempts(
+        listener: tokio::net::TcpListener,
+        attempts: usize,
+        succeed_last: bool,
+    ) -> Vec<Vec<u8>> {
+        let mut bodies = Vec::with_capacity(attempts);
+
+        for attempt in 0..attempts {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            bodies.push(read_request_body(&mut socket).await);
+
+            if succeed_last && attempt + 1 == attempts {
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await
+                    .unwrap();
+            }
+        }
+
+        bodies
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn post_records_succeeds_without_retry() {
+        let server = MockServer::start().await;
+        let records = vec![encrypted_record()];
+        Mock::given(method("POST"))
+            .and(path("/api/v0/record"))
+            .and(body_json(&records))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        test_client(server.uri().parse().unwrap()).post_records(&records).await.unwrap();
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn post_records_retries_transport_failure_with_same_body() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap()).parse().unwrap();
+        let server = tokio::spawn(serve_record_attempts(listener, 2, true));
+        let records = vec![encrypted_record()];
+
+        test_client(address).post_records(&records).await.unwrap();
+        let bodies = server.await.unwrap();
+
+        assert_eq!(bodies.len(), 2);
+        assert_eq!(bodies[0], serde_json::to_vec(&records).unwrap());
+        assert_eq!(bodies[0], bodies[1]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn post_records_returns_final_transport_error_after_bounded_attempts() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap()).parse().unwrap();
+        let server =
+            tokio::spawn(serve_record_attempts(listener, RECORD_UPLOAD_MAX_ATTEMPTS, false));
+
+        let error = test_client(address).post_records(&[]).await.unwrap_err();
+        let bodies = server.await.unwrap();
+
+        assert!(error.chain().any(|cause| cause.is::<reqwest::Error>()));
+        assert_eq!(bodies.len(), RECORD_UPLOAD_MAX_ATTEMPTS);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn post_records_does_not_retry_http_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v0/record"))
+            .respond_with(ResponseTemplate::new(400))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let _ = test_client(server.uri().parse().unwrap()).post_records(&[]).await.unwrap_err();
     }
 
     #[rstest]
