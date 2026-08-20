@@ -70,12 +70,7 @@ new_uuid!(HostId);
 
 pub type RecordIdx = u64;
 
-/// The composite key identifying a single append-only record stream.
-///
-/// Every [`Record`] belongs to exactly one stream, addressed by its owning [`HostId`] and its
-/// [`RecordTag`]; a record's [`RecordIdx`] is only unique *within* one such stream. This pair
-/// travels together through nearly every record-store and sync API, so we give it a name rather
-/// than threading `(HostId, RecordTag)` as two separate arguments everywhere.
+/// The composite key identifying record WAL journal uniqueness.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RecordSeriesKey {
     pub host: HostId,
