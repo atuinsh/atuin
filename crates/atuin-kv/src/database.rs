@@ -3,11 +3,10 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use atuin_common::utils;
+use sqlx::Result;
 use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
-    SqliteSynchronous,
+    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
 };
-use sqlx::{Result, Row};
 use tokio::fs;
 use tracing::debug;
 
@@ -118,23 +117,15 @@ impl Database {
         Ok(())
     }
 
-    fn query_kv_entry(row: &SqliteRow) -> KvEntry {
-        let namespace = row.get("namespace");
-        let key = row.get("key");
-        let value = row.get("value");
-
-        KvEntry::builder().namespace(namespace).key(key).value(value).build()
-    }
-
     pub async fn load(&self, namespace: &str, key: &str) -> Result<Option<KvEntry>> {
         debug!("loading kv entry {namespace}.{key}");
 
-        let res = sqlx::query("select * from kv where namespace = ?1 and key = ?2")
-            .bind(namespace)
-            .bind(key)
-            .map(|row| Self::query_kv_entry(&row))
-            .fetch_optional(&self.pool)
-            .await?;
+        let res =
+            sqlx::query_as::<_, KvEntry>("select * from kv where namespace = ?1 and key = ?2")
+                .bind(namespace)
+                .bind(key)
+                .fetch_optional(&self.pool)
+                .await?;
 
         Ok(res)
     }
@@ -143,14 +134,12 @@ impl Database {
         debug!("listing kv entries");
 
         let res = if let Some(namespace) = namespace {
-            sqlx::query("select * from kv where namespace = ?1 order by key asc")
+            sqlx::query_as::<_, KvEntry>("select * from kv where namespace = ?1 order by key asc")
                 .bind(namespace)
-                .map(|row| Self::query_kv_entry(&row))
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            sqlx::query("select * from kv order by namespace, key asc")
-                .map(|row| Self::query_kv_entry(&row))
+            sqlx::query_as::<_, KvEntry>("select * from kv order by namespace, key asc")
                 .fetch_all(&self.pool)
                 .await?
         };
@@ -172,11 +161,11 @@ mod test {
 
     #[fixture]
     fn entry() -> KvEntry {
-        KvEntry::builder()
-            .namespace("test".to_string())
-            .key("test".to_string())
-            .value("test".to_string())
-            .build()
+        KvEntry {
+            namespace: "test".to_string(),
+            key: "test".to_string(),
+            value: "test".to_string(),
+        }
     }
 
     #[rstest]

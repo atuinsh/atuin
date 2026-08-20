@@ -10,7 +10,6 @@ use sqlx::sqlite::{
 use sqlx::{Result, Row};
 use tokio::fs;
 use tracing::{debug, instrument};
-use uuid::Uuid;
 
 use crate::store::script::Script;
 
@@ -122,25 +121,6 @@ impl Database {
         Ok(())
     }
 
-    fn query_script(row: &SqliteRow) -> Script {
-        let id = row.get("id");
-        let name = row.get("name");
-        let description = row.get("description");
-        let shebang = row.get("shebang");
-        let script = row.get("script");
-
-        let id = Uuid::parse_str(id).unwrap();
-
-        Script {
-            id,
-            name,
-            description,
-            shebang,
-            script,
-            tags: vec![],
-        }
-    }
-
     fn query_script_tags(row: &SqliteRow) -> String {
         row.get("tag")
     }
@@ -149,9 +129,8 @@ impl Database {
     async fn load(&self, id: &str) -> Result<Option<Script>> {
         debug!("loading script item {}", id);
 
-        let res = sqlx::query("select * from scripts where id = ?1")
+        let res = sqlx::query_as::<_, Script>("select * from scripts where id = ?1")
             .bind(id)
-            .map(|row| Self::query_script(&row))
             .fetch_optional(&self.pool)
             .await?;
 
@@ -173,10 +152,8 @@ impl Database {
     pub async fn list(&self) -> Result<Vec<Script>> {
         debug!("listing scripts");
 
-        let mut res = sqlx::query("select * from scripts")
-            .map(|row| Self::query_script(&row))
-            .fetch_all(&self.pool)
-            .await?;
+        let mut res =
+            sqlx::query_as::<_, Script>("select * from scripts").fetch_all(&self.pool).await?;
 
         // Fetch all the tags for each script
         for script in &mut res {
@@ -257,9 +234,8 @@ impl Database {
     }
 
     pub async fn get_by_name(&self, name: &str) -> Result<Option<Script>> {
-        let res = sqlx::query("select * from scripts where name = ?1")
+        let res = sqlx::query_as::<_, Script>("select * from scripts where name = ?1")
             .bind(name)
-            .map(|row| Self::query_script(&row))
             .fetch_optional(&self.pool)
             .await?;
 
