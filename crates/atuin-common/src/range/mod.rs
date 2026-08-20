@@ -1,5 +1,5 @@
 //! Utilities for working with index [`Range`](std::ops::Range)s.
 
-mod chunks;
+mod tiled;
 
-pub use chunks::{ChunkIdx, Chunks, RangeChunksExt};
+pub use tiled::{RangeTiledExt, TileIdx, Tiled};

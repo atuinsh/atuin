@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_stream::try_stream;
-use atuin_common::range::Chunks;
+use atuin_common::range::Tiled;
 use atuin_common::url::UrlAppendExt;
 use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION, ChangePasswordRequest, ErrorResponse,
@@ -416,7 +416,7 @@ impl Client {
         &self,
         host: HostId,
         tag: RecordTag,
-        chunks: Chunks<RecordIdx>,
+        chunks: Tiled<RecordIdx>,
     ) -> impl Stream<Item = Result<Vec<Record<EncryptedData>>>> + '_ {
         try_stream! {
             let mut base_url = self.sync_addr.append_path("api/v0/record/next")?;
@@ -473,20 +473,25 @@ impl Client {
             //
             // A server could misbehave and return less data than we requested. If it does, then we
             // fall back to the serialized path, on the first misbehavior.
-            if short_page {
-                let start = chunks.start();
-                let end = chunks.end();
-                let page_size = chunks.size().get();
-
-                let mut cursor = start + progress;
-                while cursor < end {
-                    let stop = (cursor + page_size).min(end);
-                    let (_, page) = fetch_page(cursor..stop).await?;
-                    if page.is_empty() {
-                        return;
+            let recovery = stream::unfold(chunks.start() + progress, move |cursor| async move {
+                if cursor >= chunks.end(){
+                    return None;
+                }
+                let stop = (cursor + chunks.size().get()).min(chunks.end());
+                match fetch_page(cursor..stop).await {
+                    Ok((_, page)) if page.is_empty() => None,
+                    Ok((_, page)) => {
+                        let next = cursor + page.len() as u64;
+                        Some((Ok(page), next))
                     }
-                    cursor += page.len() as u64;
-                    yield page;
+                    Err(e) => Some((Err(e), chunks.end())),
+                }
+            });
+
+            if short_page {
+                futures::pin_mut!(recovery);
+                while let Some(p) = recovery.next().await {
+                    yield p?;
                 }
             }
         }
@@ -712,7 +717,7 @@ mod tests {
 mod records_stream_tests {
     use std::num::NonZeroU64;
 
-    use atuin_common::range::RangeChunksExt;
+    use atuin_common::range::RangeTiledExt;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordTag};
     use futures::TryStreamExt;
@@ -794,7 +799,7 @@ mod records_stream_tests {
         let client = mock_client(&addr);
 
         let idxs =
-            collect_idxs(client.records(host, RecordTag::History, (0..5).chunks(nz(2)))).await;
+            collect_idxs(client.records(host, RecordTag::History, (0..5).tiled(nz(2)))).await;
         assert_eq!(idxs, vec![0, 1, 2, 3, 4]);
     }
 
@@ -815,7 +820,7 @@ mod records_stream_tests {
         let client = mock_client(&addr);
 
         let idxs =
-            collect_idxs(client.records(host, RecordTag::History, (0..6).chunks(nz(4)))).await;
+            collect_idxs(client.records(host, RecordTag::History, (0..6).tiled(nz(4)))).await;
         assert_eq!(idxs, vec![0, 1, 2, 3, 4, 5], "a short mid-stream page must not skip records");
     }
 
@@ -836,7 +841,7 @@ mod records_stream_tests {
         let client = mock_client(&addr);
 
         let idxs =
-            collect_idxs(client.records(host, RecordTag::History, (0..10).chunks(nz(4)))).await;
+            collect_idxs(client.records(host, RecordTag::History, (0..10).tiled(nz(4)))).await;
         assert!(idxs.is_empty(), "an empty server must yield no records");
     }
 }

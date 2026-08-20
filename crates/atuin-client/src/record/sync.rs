@@ -5,7 +5,7 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use atuin_common::encryption::paseto_v4;
-use atuin_common::range::RangeChunksExt;
+use atuin_common::range::RangeTiledExt;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus, RecordTag};
 use eyre::Result;
@@ -401,7 +401,7 @@ async fn download_packfile_pages(
     let pages = client.records(
         host,
         tag.clone(),
-        (first_missing_local..first_missing_local + expected).chunks(page_size_or_min(page_size)),
+        (first_missing_local..first_missing_local + expected).tiled(page_size_or_min(page_size)),
     );
     futures::pin_mut!(pages);
     while let Some(page) = pages.next().await {
@@ -465,7 +465,7 @@ async fn download_loose_pages(
     let pages = client.records(
         host,
         tag.clone(),
-        (first_missing_local..first_missing_local + expected).chunks(page_size_or_min(page_size)),
+        (first_missing_local..first_missing_local + expected).tiled(page_size_or_min(page_size)),
     );
     futures::pin_mut!(pages);
     while let Some(page) = pages.next().await {
@@ -557,7 +557,7 @@ pub async fn check_encryption_key(
         return Ok(());
     };
 
-    let pages = client.records(host, tag, (0..1).chunks(NonZeroU64::MIN));
+    let pages = client.records(host, tag, (0..1).tiled(NonZeroU64::MIN));
     futures::pin_mut!(pages);
     let Some(page) = pages.next().await else {
         return Ok(());
