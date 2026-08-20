@@ -1,3 +1,6 @@
+/// The placeholder username [`CmdOrigin::parse_lenient`] assigns to a legacy value with no `:`.
+pub const UNKNOWN_USER: &str = "unknown-user";
+
 /// A hostname, generic over its backing storage so it can be an owned
 /// `CmdHost<String>` or a zero-copy `CmdHost<&str>` view into a [`CmdOrigin`].
 #[derive(
@@ -73,7 +76,7 @@ impl<T> CmdUser<T> {
 
 impl Default for CmdUser<String> {
     fn default() -> Self {
-        Self(String::from("unknown-user"))
+        Self(String::from(UNKNOWN_USER))
     }
 }
 

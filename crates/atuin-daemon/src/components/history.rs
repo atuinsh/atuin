@@ -23,9 +23,9 @@ use crate::daemon::{Component, DaemonHandle};
 use crate::events::DaemonEvent;
 use crate::history::history_server::{History as HistorySvc, HistoryServer};
 use crate::history::{
-    CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest, HistoryEntry,
-    HistoryEventKind, ShutdownReply, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
-    StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
+    AuthorKind, CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest,
+    HistoryEntry, HistoryEventKind, ShutdownReply, ShutdownRequest, StartHistoryReply,
+    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
 };
 
 const DAEMON_PROTOCOL_VERSION: u32 = 1;
@@ -131,6 +131,7 @@ fn history_to_tail_reply(kind: HistoryEventKind, history: History) -> TailHistor
             exit: history.exit,
             duration: history.duration,
             shell: history.shell.unwrap_or_default(),
+            author_kind: AuthorKind::from(history.author_kind) as i32,
         }),
     }
 }
@@ -147,6 +148,7 @@ impl HistorySvc for HistoryGrpcService {
         let req = request.into_inner();
 
         let timestamp = OffsetDateTime::from_unix_nanos_u64(req.timestamp);
+        let author_kind = req.author_kind();
 
         let cmd_origin = CmdOrigin::try_from(req.hostname)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
@@ -159,6 +161,7 @@ impl HistorySvc for HistoryGrpcService {
             .author(req.author)
             .intent(req.intent)
             .shell(req.shell)
+            .author_kind(author_kind.into())
             .build()
             .into();
 
