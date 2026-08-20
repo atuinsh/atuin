@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
+use sqlx::migrate::Migrator;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
 
 use super::{Sqlite, SqliteOpenOrCreateError};
@@ -35,6 +36,7 @@ pub struct SqliteBuilder {
     foreign_keys: bool,
     restrict_permissions: bool,
     regexp: bool,
+    migrator: Option<Migrator>,
 }
 
 impl SqliteBuilder {
@@ -47,6 +49,7 @@ impl SqliteBuilder {
             foreign_keys: true,
             restrict_permissions: false,
             regexp: false,
+            migrator: None,
         }
     }
 
@@ -86,6 +89,12 @@ impl SqliteBuilder {
         self
     }
 
+    #[must_use]
+    pub fn with_migrations(mut self, migrator: Migrator) -> Self {
+        self.migrator = Some(migrator);
+        self
+    }
+
     pub async fn open(self) -> Result<Sqlite, SqliteOpenOrCreateError> {
         let opts = match &self.location {
             SqliteLocation::File(path) => {
@@ -118,6 +127,10 @@ impl SqliteBuilder {
         }
 
         let sqlite = Sqlite::connect(opts, self.timeout).await?;
+
+        if let Some(migrator) = &self.migrator {
+            migrator.run(sqlite.pool()).await.map_err(SqliteOpenOrCreateError::Migrate)?;
+        }
 
         #[cfg(unix)]
         if self.restrict_permissions

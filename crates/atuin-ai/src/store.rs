@@ -10,7 +10,7 @@ use crate::usage::UsageSnapshot;
 
 // Database row mappings — all columns are kept even if not yet read in
 // non-test code, since they're part of the schema and used in tests.
-#[derive(Debug)]
+#[derive(Debug, sqlx::FromRow)]
 #[allow(dead_code)]
 pub struct StoredSession {
     pub id: String,
@@ -23,7 +23,7 @@ pub struct StoredSession {
     pub archived_at: Option<i64>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, sqlx::FromRow)]
 #[allow(dead_code)]
 pub struct StoredEvent {
     pub id: String,
@@ -34,13 +34,6 @@ pub struct StoredEvent {
     pub event_data: String,
     pub created_at: i64,
 }
-
-/// Row type returned by session queries (avoids clippy::type_complexity).
-type SessionRow =
-    (String, Option<String>, Option<String>, Option<String>, Option<String>, i64, i64, Option<i64>);
-
-/// Row type returned by event queries.
-type EventRow = (String, String, Option<String>, String, String, String, i64);
 
 pub struct AiSessionStore {
     sqlite: Sqlite,
@@ -53,19 +46,22 @@ impl AiSessionStore {
             .timeout(timeout)
             .foreign_keys(false)
             .restrict_permissions()
+            .with_migrations(sqlx::migrate!("./migrations"))
             .open()
             .await?;
-
-        sqlx::migrate!("./migrations").run(sqlite.pool()).await?;
 
         Ok(Self { sqlite })
     }
 
     #[cfg(test)]
     pub async fn in_memory(timeout: Duration) -> Result<Self> {
-        let sqlite = Sqlite::builder().memory().timeout(timeout).foreign_keys(false).open().await?;
-
-        sqlx::migrate!("./migrations").run(sqlite.pool()).await?;
+        let sqlite = Sqlite::builder()
+            .memory()
+            .timeout(timeout)
+            .foreign_keys(false)
+            .with_migrations(sqlx::migrate!("./migrations"))
+            .open()
+            .await?;
 
         Ok(Self { sqlite })
     }
@@ -103,7 +99,7 @@ impl AiSessionStore {
 
     #[allow(dead_code)] // used in tests; will be used by daemon service
     pub async fn get_session(&self, id: &str) -> Result<Option<StoredSession>> {
-        let row: Option<SessionRow> = sqlx::query_as(
+        let session = sqlx::query_as::<_, StoredSession>(
             "SELECT id, head_id, server_session_id, directory, git_root,
                     created_at, updated_at, archived_at
              FROM sessions WHERE id = ?1",
@@ -112,29 +108,7 @@ impl AiSessionStore {
         .fetch_optional(self.sqlite.pool())
         .await?;
 
-        Ok(row.map(
-            |(
-                id,
-                head_id,
-                server_session_id,
-                directory,
-                git_root,
-                created_at,
-                updated_at,
-                archived_at,
-            )| {
-                StoredSession {
-                    id,
-                    head_id,
-                    server_session_id,
-                    directory,
-                    git_root,
-                    created_at,
-                    updated_at,
-                    archived_at,
-                }
-            },
-        ))
+        Ok(session)
     }
 
     /// Find the most recent non-archived session matching the given directory or git
@@ -147,7 +121,7 @@ impl AiSessionStore {
     ) -> Result<Option<StoredSession>> {
         let cutoff = OffsetDateTime::now_utc().unix_timestamp() - max_age_secs;
 
-        let row: Option<SessionRow> = sqlx::query_as(
+        let session = sqlx::query_as::<_, StoredSession>(
             "SELECT id, head_id, server_session_id, directory, git_root,
                     created_at, updated_at, archived_at
              FROM sessions
@@ -163,29 +137,7 @@ impl AiSessionStore {
         .fetch_optional(self.sqlite.pool())
         .await?;
 
-        Ok(row.map(
-            |(
-                id,
-                head_id,
-                server_session_id,
-                directory,
-                git_root,
-                created_at,
-                updated_at,
-                archived_at,
-            )| {
-                StoredSession {
-                    id,
-                    head_id,
-                    server_session_id,
-                    directory,
-                    git_root,
-                    created_at,
-                    updated_at,
-                    archived_at,
-                }
-            },
-        ))
+        Ok(session)
     }
 
     /// Append a single event and update the session's `head_id` and `updated_at`.
@@ -230,7 +182,7 @@ impl AiSessionStore {
 
     /// Load all events for a session, ordered chronologically.
     pub async fn load_events(&self, session_id: &str) -> Result<Vec<StoredEvent>> {
-        let rows: Vec<EventRow> = sqlx::query_as(
+        let events = sqlx::query_as::<_, StoredEvent>(
             "SELECT id, session_id, parent_id, invocation_id, event_type, event_data, created_at
                  FROM session_events
                  WHERE session_id = ?1
@@ -240,22 +192,7 @@ impl AiSessionStore {
         .fetch_all(self.sqlite.pool())
         .await?;
 
-        Ok(rows
-            .into_iter()
-            .map(
-                |(id, session_id, parent_id, invocation_id, event_type, event_data, created_at)| {
-                    StoredEvent {
-                        id,
-                        session_id,
-                        parent_id,
-                        invocation_id,
-                        event_type,
-                        event_data,
-                        created_at,
-                    }
-                },
-            )
-            .collect())
+        Ok(events)
     }
 
     pub async fn update_server_session_id(

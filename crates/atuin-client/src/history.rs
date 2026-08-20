@@ -145,7 +145,7 @@ pub struct HistoryId(pub String);
 //
 // New fields must be added to `History::{serialize,deserialize}` in a backwards
 // compatible way (sensible defaults and careful `nfields` handling).
-#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct History {
     /// A client-generated ID, used to identify the entry when syncing.
     ///
@@ -164,7 +164,6 @@ pub struct History {
     /// The session ID, associated with a terminal session.
     pub session: String,
     /// The hostname of the machine the command was run on.
-    #[sqlx(rename = "hostname", try_from = "String")]
     pub cmd_origin: CmdOrigin,
     /// Who wrote this command (human user or automation/agent identity).
     pub author: String,
@@ -176,7 +175,7 @@ pub struct History {
     pub shell: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryStats {
     /// The command that was ran after this one in the session
     pub next: Option<History>,

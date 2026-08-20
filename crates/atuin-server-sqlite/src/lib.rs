@@ -7,7 +7,7 @@ use atuin_server_database::{Database, DbError, DbResult, DbSettings};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::types::Uuid;
 use tracing::instrument;
-use wrappers::{DbRecord, DbSession, DbUser};
+use wrappers::DbRecord;
 
 mod wrappers;
 
@@ -40,7 +40,6 @@ impl Database for Sqlite {
             .fetch_one(&self.pool)
             .await
             .map_err(Into::into)
-            .map(|DbSession(session)| session)
     }
 
     #[instrument(skip_all)]
@@ -55,7 +54,6 @@ impl Database for Sqlite {
         .fetch_one(&self.pool)
         .await
         .map_err(Into::into)
-        .map(|DbUser(user)| user)
     }
 
     #[instrument(skip_all)]
@@ -82,7 +80,6 @@ impl Database for Sqlite {
             .fetch_one(&self.pool)
             .await
             .map_err(Into::into)
-            .map(|DbUser(user)| user)
     }
 
     #[instrument(skip_all)]
@@ -92,7 +89,6 @@ impl Database for Sqlite {
             .fetch_one(&self.pool)
             .await
             .map_err(Into::into)
-            .map(|DbSession(session)| session)
     }
 
     #[instrument(skip_all)]

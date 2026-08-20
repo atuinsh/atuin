@@ -44,11 +44,11 @@ impl KvStore {
 
         self.push_record(kv_record).await?;
 
-        let kv = KvEntry::builder()
-            .namespace(namespace.to_string())
-            .key(key.to_string())
-            .value(value.to_string())
-            .build();
+        let kv = KvEntry {
+            namespace: namespace.to_string(),
+            key: key.to_string(),
+            value: value.to_string(),
+        };
 
         self.kv_db.save(&kv).await?;
 
@@ -138,13 +138,11 @@ impl KvStore {
                 match kv.value {
                     Some(value) => {
                         self.kv_db
-                            .save(
-                                &KvEntry::builder()
-                                    .namespace(kv.namespace.clone())
-                                    .key(kv.key.clone())
-                                    .value(value)
-                                    .build(),
-                            )
+                            .save(&KvEntry {
+                                namespace: kv.namespace.clone(),
+                                key: kv.key.clone(),
+                                value,
+                            })
                             .await?;
                     }
                     None => {
@@ -198,13 +196,11 @@ mod tests {
         assert_eq!(records.len(), 1);
 
         let list = store.list(Some("test")).await.unwrap();
-        let expected = vec![
-            KvEntry::builder()
-                .namespace("test".to_string())
-                .key("key".to_string())
-                .value("value".to_string())
-                .build(),
-        ];
+        let expected = vec![KvEntry {
+            namespace: "test".to_string(),
+            key: "key".to_string(),
+            value: "value".to_string(),
+        }];
         assert_eq!(list, expected);
 
         let ns_list = store.list(None).await.unwrap();

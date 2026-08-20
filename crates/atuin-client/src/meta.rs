@@ -42,10 +42,9 @@ impl MetaStore {
             .journal(SqliteJournalMode::Delete)
             .foreign_keys(false)
             .restrict_permissions()
+            .with_migrations(sqlx::migrate!("./meta-migrations"))
             .open()
             .await?;
-
-        sqlx::migrate!("./meta-migrations").run(sqlite.pool()).await?;
 
         let store = Self {
             sqlite,
@@ -63,10 +62,9 @@ impl MetaStore {
             .timeout(timeout)
             .journal(SqliteJournalMode::Delete)
             .foreign_keys(false)
+            .with_migrations(sqlx::migrate!("./meta-migrations"))
             .open()
             .await?;
-
-        sqlx::migrate!("./meta-migrations").run(sqlite.pool()).await?;
 
         Ok(Self {
             sqlite,

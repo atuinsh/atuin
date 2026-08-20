@@ -3,14 +3,14 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use atuin_common::filter::{self, OrFilter};
-use atuin_common::sqlite::Sqlite as CommonSqlite;
+use atuin_common::sqlite::{Sqlite as CommonSqlite, TableView};
 use atuin_common::time::OffsetDateTimeExt;
-use atuin_common::utils;
+use atuin_common::{table, utils};
 use atuin_domain::record::CmdOrigin;
 use itertools::Itertools;
 use sql_builder::bind::Bind;
 use sql_builder::{SqlBuilder, SqlName, esc, quote};
-use sqlx::sqlite::{SqlitePool, SqliteRow};
+use sqlx::sqlite::SqliteRow;
 use sqlx::{Result, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -238,138 +238,43 @@ impl SearchMode {
 #[derive(Debug, Clone)]
 pub struct Sqlite {
     sqlite: CommonSqlite,
+    table: TableView<History>,
 }
 
 impl From<CommonSqlite> for Sqlite {
     fn from(value: CommonSqlite) -> Self {
-        Self { sqlite: value }
+        let table = TableView::new(value.clone());
+        Self {
+            sqlite: value,
+            table,
+        }
     }
 }
 
-impl Sqlite {
-    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> eyre::Result<Self> {
-        let path = path.as_ref();
-        debug!("opening sqlite database at {path:?}");
+table!(History {
+    name: "history",
+    key: "id",
+    conflict: ignore,
+    columns: {
+        id         => |h| h.id.0.as_str(),
+        timestamp  => |h| h.timestamp.unix_timestamp_nanos() as i64,
+        duration   => |h| h.duration,
+        exit       => |h| h.exit,
+        command    => |h| h.command.as_str(),
+        cwd        => |h| h.cwd.as_str(),
+        session    => |h| h.session.as_str(),
+        hostname   => |h| h.cmd_origin.as_str(),
+        author     => |h| h.author.as_str(),
+        intent     => |h| h.intent.as_deref(),
+        deleted_at => |h| h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64),
+        shell      => |h| h.shell.as_deref(),
+    },
+});
 
-        let sqlite = CommonSqlite::builder().file(path).timeout(timeout).regexp().open().await?;
-
-        Self::setup_db(sqlite.pool()).await?;
-
-        Ok(Self { sqlite })
-    }
-
-    /// Open a transient, in-memory history database. Intended for tests and one-off probes.
-    pub async fn in_memory(timeout: Duration) -> eyre::Result<Self> {
-        let sqlite = CommonSqlite::builder().memory().timeout(timeout).regexp().open().await?;
-
-        Self::setup_db(sqlite.pool()).await?;
-
-        Ok(Self { sqlite })
-    }
-
-    pub async fn sqlite_version(&self) -> Result<String> {
-        sqlx::query_scalar("SELECT sqlite_version()").fetch_one(self.sqlite.pool()).await
-    }
-
-    /// Close the underlying connection pool. Test-only: used to force query errors.
-    #[cfg(test)]
-    pub(crate) async fn close(&self) {
-        self.sqlite.close().await;
-    }
-
-    async fn setup_db(pool: &SqlitePool) -> Result<()> {
-        debug!("running sqlite database setup");
-
-        sqlx::migrate!("./migrations").run(pool).await?;
-
-        Ok(())
-    }
-
-    async fn save_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, h: &History) -> Result<()> {
-        sqlx::query(
-            "insert or ignore into history(
-                id, timestamp, duration, exit, command, cwd, session, hostname, author, intent,
-                deleted_at, shell
-            ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        )
-        .bind(h.id.0.as_str())
-        .bind(h.timestamp.unix_timestamp_nanos() as i64)
-        .bind(h.duration)
-        .bind(h.exit)
-        .bind(h.command.as_str())
-        .bind(h.cwd.as_str())
-        .bind(h.session.as_str())
-        .bind(h.cmd_origin.as_str())
-        .bind(h.author.as_str())
-        .bind(h.intent.as_deref())
-        .bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
-        .bind(h.shell.as_deref())
-        .execute(&mut **tx)
-        .await?;
-
-        Ok(())
-    }
-
-    /// Columns bound per row by [`Self::save_raw_many`]'s multi-row INSERT.
-    const HISTORY_INSERT_COLUMNS: usize = 12;
-
-    async fn save_raw_many<'a>(
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-        h: impl IntoIterator<Item = &'a History>,
-        rows_per_insert: usize,
-    ) -> Result<()> {
-        let mut h = h.into_iter().peekable();
-
-        // Stream fixed-size chunks straight into a multi-row INSERT: `QueryBuilder`
-        // writes the `values (..),(..)` and binds each row in a single pass, so we
-        // never materialise the input. `take` bounds each statement under SQLite's
-        // parameter limit (`rows_per_insert` rows * HISTORY_INSERT_COLUMNS params);
-        // the outer `peek` guard guarantees every chunk is non-empty, which
-        // `push_values` requires.
-        while h.peek().is_some() {
-            let mut builder = sqlx::QueryBuilder::new(
-                "insert or ignore into history(
-                    id, timestamp, duration, exit, command, cwd, session, hostname, author, intent,
-                    deleted_at, shell
-                ) ",
-            );
-
-            builder.push_values(h.by_ref().take(rows_per_insert), |mut b, h| {
-                b.push_bind(h.id.0.as_str())
-                    .push_bind(h.timestamp.unix_timestamp_nanos() as i64)
-                    .push_bind(h.duration)
-                    .push_bind(h.exit)
-                    .push_bind(h.command.as_str())
-                    .push_bind(h.cwd.as_str())
-                    .push_bind(h.session.as_str())
-                    .push_bind(h.cmd_origin.as_str())
-                    .push_bind(h.author.as_str())
-                    .push_bind(h.intent.as_deref())
-                    .push_bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
-                    .push_bind(h.shell.as_deref());
-            });
-
-            builder.build().execute(&mut **tx).await?;
-        }
-
-        Ok(())
-    }
-
-    async fn delete_row_raw(
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-        id: HistoryId,
-    ) -> Result<()> {
-        sqlx::query("delete from history where id = ?1")
-            .bind(id.0.as_str())
-            .execute(&mut **tx)
-            .await?;
-
-        Ok(())
-    }
-
-    fn row_to_history(row: &SqliteRow) -> History {
-        let deleted_at: Option<i64> = row.get("deleted_at");
-        let hostname: String = row.get("hostname");
+impl<'r> ::sqlx::FromRow<'r, SqliteRow> for History {
+    fn from_row(row: &'r SqliteRow) -> ::sqlx::Result<Self> {
+        let deleted_at: Option<i64> = row.try_get("deleted_at")?;
+        let hostname: String = row.try_get("hostname")?;
         let author: Option<String> = row.try_get("author").ok().flatten();
         let author = author.filter(|author| !author.trim().is_empty()).unwrap_or_else(|| {
             CmdOrigin::try_from(hostname.clone())
@@ -379,62 +284,74 @@ impl Sqlite {
         let intent = intent.filter(|intent| !intent.trim().is_empty());
         let shell: Option<String> = row.try_get("shell").ok().flatten();
 
-        History::from_db()
-            .id(row.get("id"))
-            .timestamp(OffsetDateTime::from_unix_nanos_i64(row.get("timestamp")))
-            .duration(row.get("duration"))
-            .exit(row.get("exit"))
-            .command(row.get("command"))
-            .cwd(row.get("cwd"))
-            .session(row.get("session"))
+        Ok(Self::from_db()
+            .id(row.try_get("id")?)
+            .timestamp(OffsetDateTime::from_unix_nanos_i64(row.try_get("timestamp")?))
+            .duration(row.try_get("duration")?)
+            .exit(row.try_get("exit")?)
+            .command(row.try_get("command")?)
+            .cwd(row.try_get("cwd")?)
+            .session(row.try_get("session")?)
             .hostname(hostname)
             .author(author)
             .intent(intent)
             .deleted_at(deleted_at.map(OffsetDateTime::from_unix_nanos_i64))
             .shell(shell)
             .build()
-            .into()
+            .into())
+    }
+}
+
+impl Sqlite {
+    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> eyre::Result<Self> {
+        let path = path.as_ref();
+        debug!("opening sqlite database at {path:?}");
+
+        let sqlite = CommonSqlite::builder()
+            .file(path)
+            .timeout(timeout)
+            .regexp()
+            .with_migrations(sqlx::migrate!("./migrations"))
+            .open()
+            .await?;
+
+        let table = TableView::new(sqlite.clone());
+        Ok(Self { sqlite, table })
+    }
+
+    /// Open a transient, in-memory history database. Intended for tests and one-off probes.
+    pub async fn in_memory(timeout: Duration) -> eyre::Result<Self> {
+        let sqlite = CommonSqlite::builder()
+            .memory()
+            .timeout(timeout)
+            .regexp()
+            .with_migrations(sqlx::migrate!("./migrations"))
+            .open()
+            .await?;
+
+        let table = TableView::new(sqlite.clone());
+        Ok(Self { sqlite, table })
+    }
+
+    /// Close the underlying connection pool. Test-only: used to force query errors.
+    #[cfg(test)]
+    pub(crate) async fn close(&self) {
+        self.sqlite.close().await;
     }
 
     pub async fn save(&self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
-        let mut tx = self.sqlite.pool().begin().await?;
-        Self::save_raw(&mut tx, h).await?;
-        tx.commit().await?;
-
-        Ok(())
+        self.table.insert_one(h).await
     }
 
     pub async fn save_bulk<'a>(&self, h: impl IntoIterator<Item = &'a History>) -> Result<()> {
-        let mut h = h.into_iter().peekable();
-        if h.peek().is_none() {
-            return Ok(());
-        }
-
         debug!("saving history to sqlite");
-
-        // One parameter per column, per row, must stay within the bind-parameter
-        // limit; `max(1)` keeps the chunk non-empty on any (implausible) tiny limit.
-        let rows_per_insert =
-            (self.sqlite.info().await.variable_number_limit / Self::HISTORY_INSERT_COLUMNS).max(1);
-
-        let mut tx = self.sqlite.pool().begin().await?;
-        Self::save_raw_many(&mut tx, h, rows_per_insert).await?;
-        tx.commit().await?;
-
-        Ok(())
+        self.table.insert_bulk(h).await
     }
 
     pub async fn load(&self, id: &str) -> Result<Option<History>> {
         debug!("loading history item {}", id);
-
-        let res = sqlx::query("select * from history where id = ?1")
-            .bind(id)
-            .map(|row| Self::row_to_history(&row))
-            .fetch_optional(self.sqlite.pool())
-            .await?;
-
-        Ok(res)
+        self.table.get(id).await
     }
 
     pub async fn load_active(
@@ -474,13 +391,12 @@ impl Sqlite {
                 "select * from history where id in ({placeholders}) and deleted_at is null"
             );
 
-            let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+            let mut query = sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(sql));
             for id in &chunk {
                 query = query.bind(id.0.as_str());
             }
 
-            let rows =
-                query.map(|row| Self::row_to_history(&row)).fetch_all(self.sqlite.pool()).await?;
+            let rows = query.fetch_all(self.sqlite.pool()).await?;
             out.extend(rows);
         }
 
@@ -573,8 +489,7 @@ impl Sqlite {
 
         let query = query.sql().expect("bug in list query. please report");
 
-        let res = sqlx::query(sqlx::AssertSqlSafe(query))
-            .map(|row| Self::row_to_history(&row))
+        let res = sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(query))
             .fetch_all(self.sqlite.pool())
             .await?;
 
@@ -584,13 +499,12 @@ impl Sqlite {
     pub async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>> {
         debug!("listing history from {:?} to {:?}", from, to);
 
-        let res = sqlx::query(
+        let res = sqlx::query_as::<_, History>(
             "select * from history where timestamp >= ?1 and timestamp <= ?2 order by timestamp \
              asc",
         )
         .bind(from.unix_timestamp_nanos() as i64)
         .bind(to.unix_timestamp_nanos() as i64)
-        .map(|row| Self::row_to_history(&row))
         .fetch_all(self.sqlite.pool())
         .await?;
 
@@ -598,10 +512,9 @@ impl Sqlite {
     }
 
     pub async fn last(&self) -> Result<Option<History>> {
-        let res = sqlx::query(
+        let res = sqlx::query_as::<_, History>(
             "select * from history where duration >= 0 order by timestamp desc limit 1",
         )
-        .map(|row| Self::row_to_history(&row))
         .fetch_optional(self.sqlite.pool())
         .await?;
 
@@ -609,12 +522,11 @@ impl Sqlite {
     }
 
     pub async fn before(&self, timestamp: OffsetDateTime, count: i64) -> Result<Vec<History>> {
-        let res = sqlx::query(
+        let res = sqlx::query_as::<_, History>(
             "select * from history where timestamp < ?1 order by timestamp desc limit ?2",
         )
         .bind(timestamp.unix_timestamp_nanos() as i64)
         .bind(count)
-        .map(|row| Self::row_to_history(&row))
         .fetch_all(self.sqlite.pool())
         .await?;
 
@@ -799,8 +711,7 @@ impl Sqlite {
             )
         };
 
-        let res = sqlx::query(sqlx::AssertSqlSafe(query))
-            .map(|row| Self::row_to_history(&row))
+        let res = sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(query))
             .fetch_all(self.sqlite.pool())
             .await?;
 
@@ -819,46 +730,7 @@ impl Sqlite {
     }
 
     pub async fn query_history(&self, query: &str) -> Result<Vec<History>> {
-        let res = sqlx::query(sqlx::AssertSqlSafe(query))
-            .map(|row| Self::row_to_history(&row))
-            .fetch_all(self.sqlite.pool())
-            .await?;
-
-        Ok(res)
-    }
-
-    pub async fn all_with_count(&self) -> Result<Vec<(History, i32)>> {
-        debug!("listing history");
-
-        let mut query = SqlBuilder::select_from(SqlName::new("history").alias("h").baquoted());
-
-        query
-            .fields(&[
-                "id",
-                "max(timestamp) as timestamp",
-                "max(duration) as duration",
-                "exit",
-                "command",
-                "deleted_at",
-                "null as author",
-                "null as intent",
-                "group_concat(cwd, ':') as cwd",
-                "group_concat(session) as session",
-                "group_concat(hostname, ',') as hostname",
-                "count(*) as count",
-            ])
-            .group_by("command")
-            .group_by("exit")
-            .and_where("deleted_at is null")
-            .order_desc("timestamp");
-
-        let query = query.sql().expect("bug in list query. please report");
-
-        let res = sqlx::query(sqlx::AssertSqlSafe(query))
-            .map(|row: SqliteRow| {
-                let count: i32 = row.get("count");
-                (Self::row_to_history(&row), count)
-            })
+        let res = sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(query))
             .fetch_all(self.sqlite.pool())
             .await?;
 
@@ -879,18 +751,9 @@ impl Sqlite {
     }
 
     pub async fn delete_rows(&self, ids: impl IntoIterator<Item = HistoryId>) -> Result<()> {
-        let mut ids = ids.into_iter().peekable();
-        if ids.peek().is_none() {
-            return Ok(());
-        }
-
-        let mut tx = self.sqlite.pool().begin().await?;
-
         for id in ids {
-            Self::delete_row_raw(&mut tx, id.clone()).await?;
+            self.table.delete(id.0.as_str()).await?;
         }
-
-        tx.commit().await?;
 
         Ok(())
     }
@@ -968,15 +831,13 @@ impl Sqlite {
             Vec<(String, i64)>,
             Vec<(String, f64)>,
         ) = tokio::try_join!(
-            sqlx::query(sqlx::AssertSqlSafe(prev))
+            sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(prev))
                 .bind(h.timestamp.unix_timestamp_nanos() as i64)
                 .bind(&h.session)
-                .map(|row| Self::row_to_history(&row))
                 .fetch_optional(self.sqlite.pool()),
-            sqlx::query(sqlx::AssertSqlSafe(next))
+            sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(next))
                 .bind(h.timestamp.unix_timestamp_nanos() as i64)
                 .bind(&h.session)
-                .map(|row| Self::row_to_history(&row))
                 .fetch_optional(self.sqlite.pool()),
             sqlx::query_as(sqlx::AssertSqlSafe(total))
                 .bind(&h.command)
@@ -1010,7 +871,7 @@ impl Sqlite {
     }
 
     pub async fn get_dups(&self, before: i64, dupkeep: u32) -> Result<Vec<History>> {
-        let res = sqlx::query(
+        let res = sqlx::query_as::<_, History>(
             "SELECT * FROM (
                 SELECT *, ROW_NUMBER()
                   OVER (PARTITION BY command, cwd, hostname ORDER BY timestamp DESC)
@@ -1022,7 +883,6 @@ impl Sqlite {
         )
         .bind(dupkeep)
         .bind(before)
-        .map(|row| Self::row_to_history(&row))
         .fetch_all(self.sqlite.pool())
         .await?;
 

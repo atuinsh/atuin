@@ -2,6 +2,7 @@
 
 mod builder;
 mod info;
+mod table;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -9,6 +10,7 @@ use std::time::Duration;
 pub use builder::{SqliteBuilder, SqliteBuilderRoot};
 pub use info::{Info, VersionError};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+pub use table::{Col, ColKind, Conflict, KeyBind, Schema, Table, TableView, is_key};
 use thiserror::Error;
 
 use crate::sync::EagerFutureCell;
@@ -42,6 +44,9 @@ pub enum SqliteOpenOrCreateError {
 
     #[error("failed to restrict permissions on the sqlite database: {0}")]
     FailedToSetPermissions(std::io::Error),
+
+    #[error("failed to run sqlite migrations: {0}")]
+    Migrate(sqlx::migrate::MigrateError),
 }
 
 impl Sqlite {

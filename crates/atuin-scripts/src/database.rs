@@ -1,93 +1,85 @@
 use std::path::Path;
 use std::time::Duration;
 
-use atuin_common::sqlite::Sqlite;
-use sqlx::sqlite::{SqlitePool, SqliteRow};
+use atuin_common::sqlite::{Sqlite, TableView};
+use atuin_common::table;
+use sqlx::sqlite::SqliteRow;
 use sqlx::{Result, Row};
 use tracing::{debug, instrument};
-use uuid::Uuid;
 
-use crate::store::script::Script;
+use crate::store::script::{Script, ScriptTag};
+
+table!(Script {
+    name: "scripts",
+    key: "id",
+    conflict: ignore,
+    columns: {
+        id          => |s| s.id.to_string(),
+        name        => |s| s.name.as_str(),
+        description => |s| s.description.as_str(),
+        shebang     => |s| s.shebang.as_str(),
+        script      => |s| s.script.as_str(),
+    },
+});
+
+table!(ScriptTag {
+    name: "script_tags",
+    key: ["script_id", "tag"],
+    conflict: ignore,
+    columns: {
+        script_id => |t| t.script_id.to_string(),
+        tag       => |t| t.tag.as_str(),
+    },
+});
 
 #[derive(Debug, Clone)]
 pub struct Database {
     sqlite: Sqlite,
+    scripts: TableView<Script>,
+    tags: TableView<ScriptTag>,
 }
 
 impl Database {
-    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> Result<Self> {
+    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> eyre::Result<Self> {
         let path = path.as_ref();
         debug!("opening script sqlite database at {:?}", path);
 
         let sqlite = Sqlite::builder()
             .file(path)
             .timeout(timeout)
+            .with_migrations(sqlx::migrate!("./migrations"))
             .open()
-            .await
-            .map_err(|e| sqlx::Error::Configuration(Box::new(e)))?;
+            .await?;
 
-        Self::setup_db(sqlite.pool()).await?;
-        Ok(Self { sqlite })
+        let scripts = TableView::new(sqlite.clone());
+        let tags = TableView::new(sqlite.clone());
+        Ok(Self {
+            sqlite,
+            scripts,
+            tags,
+        })
     }
 
-    pub async fn in_memory(timeout: Duration) -> Result<Self> {
+    pub async fn in_memory(timeout: Duration) -> eyre::Result<Self> {
         let sqlite = Sqlite::builder()
             .memory()
             .timeout(timeout)
+            .with_migrations(sqlx::migrate!("./migrations"))
             .open()
-            .await
-            .map_err(|e| sqlx::Error::Configuration(Box::new(e)))?;
-
-        Self::setup_db(sqlite.pool()).await?;
-        Ok(Self { sqlite })
-    }
-
-    pub async fn sqlite_version(&self) -> Result<String> {
-        sqlx::query_scalar("SELECT sqlite_version()").fetch_one(self.sqlite.pool()).await
-    }
-
-    async fn setup_db(pool: &SqlitePool) -> Result<()> {
-        debug!("running sqlite database setup");
-
-        sqlx::migrate!("./migrations").run(pool).await?;
-
-        Ok(())
-    }
-
-    async fn save_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, s: &Script) -> Result<()> {
-        sqlx::query(
-            "insert or ignore into scripts(id, name, description, shebang, script)
-                values(?1, ?2, ?3, ?4, ?5)",
-        )
-        .bind(s.id.to_string())
-        .bind(s.name.as_str())
-        .bind(s.description.as_str())
-        .bind(s.shebang.as_str())
-        .bind(s.script.as_str())
-        .execute(&mut **tx)
-        .await?;
-
-        for tag in &s.tags {
-            sqlx::query(
-                "insert or ignore into script_tags(script_id, tag)
-                values(?1, ?2)",
-            )
-            .bind(s.id.to_string())
-            .bind(tag)
-            .execute(&mut **tx)
             .await?;
-        }
 
-        Ok(())
+        let scripts = TableView::new(sqlite.clone());
+        let tags = TableView::new(sqlite.clone());
+        Ok(Self {
+            sqlite,
+            scripts,
+            tags,
+        })
     }
 
     pub async fn save(&self, s: &Script) -> Result<()> {
         debug!("saving script to sqlite");
-        let mut tx = self.sqlite.pool().begin().await?;
-        Self::save_raw(&mut tx, s).await?;
-        tx.commit().await?;
-
-        Ok(())
+        self.save_bulk(std::slice::from_ref(s)).await
     }
 
     #[instrument(level = "debug", skip(self, s), fields(count = s.len()))]
@@ -98,32 +90,22 @@ impl Database {
 
         let mut tx = self.sqlite.pool().begin().await?;
 
-        for i in s {
-            Self::save_raw(&mut tx, i).await?;
-        }
+        self.scripts.insert_bulk_tx(&mut tx, s).await?;
+
+        let tag_rows: Vec<ScriptTag> = s
+            .iter()
+            .flat_map(|script| {
+                script.tags.iter().map(|tag| ScriptTag {
+                    script_id: script.id,
+                    tag: tag.clone(),
+                })
+            })
+            .collect();
+        self.tags.insert_bulk_tx(&mut tx, &tag_rows).await?;
 
         tx.commit().await?;
 
         Ok(())
-    }
-
-    fn query_script(row: &SqliteRow) -> Script {
-        let id = row.get("id");
-        let name = row.get("name");
-        let description = row.get("description");
-        let shebang = row.get("shebang");
-        let script = row.get("script");
-
-        let id = Uuid::parse_str(id).unwrap();
-
-        Script {
-            id,
-            name,
-            description,
-            shebang,
-            script,
-            tags: vec![],
-        }
     }
 
     fn query_script_tags(row: &SqliteRow) -> String {
@@ -134,9 +116,8 @@ impl Database {
     async fn load(&self, id: &str) -> Result<Option<Script>> {
         debug!("loading script item {}", id);
 
-        let res = sqlx::query("select * from scripts where id = ?1")
+        let res = sqlx::query_as::<_, Script>("select * from scripts where id = ?1")
             .bind(id)
-            .map(|row| Self::query_script(&row))
             .fetch_optional(self.sqlite.pool())
             .await?;
 
@@ -158,8 +139,7 @@ impl Database {
     pub async fn list(&self) -> Result<Vec<Script>> {
         debug!("listing scripts");
 
-        let mut res = sqlx::query("select * from scripts")
-            .map(|row| Self::query_script(&row))
+        let mut res = sqlx::query_as::<_, Script>("select * from scripts")
             .fetch_all(self.sqlite.pool())
             .await?;
 
@@ -180,8 +160,8 @@ impl Database {
     pub async fn clear(&self) -> Result<()> {
         debug!("clearing all scripts from sqlite");
 
-        sqlx::query("delete from script_tags").execute(self.sqlite.pool()).await?;
-        sqlx::query("delete from scripts").execute(self.sqlite.pool()).await?;
+        self.tags.delete_all().await?;
+        self.scripts.delete_all().await?;
 
         Ok(())
     }
@@ -189,15 +169,13 @@ impl Database {
     pub async fn delete(&self, id: &str) -> Result<()> {
         debug!("deleting script {}", id);
 
-        sqlx::query("delete from scripts where id = ?1")
-            .bind(id)
-            .execute(self.sqlite.pool())
-            .await?;
+        self.scripts.delete(id).await?;
 
-        // delete all the tags for the script
+        // delete all the tags for the script (delete-by-FK, not by PK, so this
+        // stays a bespoke query rather than `TableView::delete`)
         sqlx::query("delete from script_tags where script_id = ?1")
             .bind(id)
-            .execute(self.sqlite.pool())
+            .execute(self.tags.sqlite().pool())
             .await?;
 
         Ok(())
@@ -245,9 +223,8 @@ impl Database {
     }
 
     pub async fn get_by_name(&self, name: &str) -> Result<Option<Script>> {
-        let res = sqlx::query("select * from scripts where name = ?1")
+        let res = sqlx::query_as::<_, Script>("select * from scripts where name = ?1")
             .bind(name)
-            .map(|row| Self::query_script(&row))
             .fetch_optional(self.sqlite.pool())
             .await?;
 
@@ -350,6 +327,39 @@ mod test {
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].name, "test name");
         assert_eq!(loaded[1].name, "test name 2");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_save_bulk_with_tags(#[future] db: Database) {
+        let db = db.await;
+
+        let scripts = vec![
+            Script::builder()
+                .name("tagged one".to_string())
+                .description("test description".to_string())
+                .shebang("test shebang".to_string())
+                .script("test script".to_string())
+                .tags(vec!["a".to_string(), "b".to_string()])
+                .build(),
+            Script::builder()
+                .name("tagged two".to_string())
+                .description("test description 2".to_string())
+                .shebang("test shebang 2".to_string())
+                .script("test script 2".to_string())
+                .tags(vec!["c".to_string()])
+                .build(),
+        ];
+
+        db.save_bulk(&scripts).await.unwrap();
+
+        let loaded = db.list().await.unwrap();
+        assert_eq!(loaded.len(), 2);
+
+        let mut first_tags = loaded[0].tags.clone();
+        first_tags.sort();
+        assert_eq!(first_tags, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(loaded[1].tags, vec!["c".to_string()]);
     }
 
     #[rstest]

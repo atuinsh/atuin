@@ -7,18 +7,73 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use atuin_common::encryption::paseto_v4;
-use atuin_common::sqlite::Sqlite;
+use atuin_common::sqlite::{Sqlite, TableView};
+use atuin_common::table;
 use atuin_domain::record::{
     Host, HostId, Record, RecordId, RecordIdx, RecordStatus, RecordTag, RecordVersion,
 };
 use eyre::{Result, eyre};
+use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
+
+/// The row type is `Record<EncryptedData>`, defined in `atuin-domain`: foreign
+/// to this crate, so the orphan rule blocks implementing foreign traits
+/// (`Table`, `sqlx::FromRow`) on it directly here. This newtype is local, so
+/// the impls below are legal; unwrap back to the inner record with `.into()`.
+#[derive(Debug, Clone, derive_more::From, derive_more::Into)]
+struct StoreRecord(Record<paseto_v4::EncryptedData>);
+
+table!(StoreRecord {
+    name: "store",
+    key: "id",
+    conflict: ignore,
+    columns: {
+        id        => |r| r.0.id.0.as_hyphenated().to_string(),
+        idx       => |r| r.0.idx as i64,
+        host      => |r| r.0.host.id.0.as_hyphenated().to_string(),
+        tag       => |r| r.0.tag.as_str(),
+        timestamp => |r| r.0.timestamp as i64,
+        version   => |r| r.0.version.as_str(),
+        data      => |r| r.0.data.raw.as_str(),
+        cek       => |r| r.0.data.cek.as_str(),
+    },
+});
+
+impl<'r> ::sqlx::FromRow<'r, SqliteRow> for StoreRecord {
+    fn from_row(row: &'r SqliteRow) -> ::sqlx::Result<Self> {
+        let idx: i64 = row.try_get("idx")?;
+        let timestamp: i64 = row.try_get("timestamp")?;
+
+        // UUIDs are stored as hyphenated TEXT, so decode as a string and parse
+        // rather than relying on sqlx's blob-oriented `Uuid` decoding.
+        let parse_uuid = |column: &'static str| -> ::sqlx::Result<Uuid> {
+            let raw: &str = row.try_get(column)?;
+            Uuid::from_str(raw).map_err(|source| ::sqlx::Error::ColumnDecode {
+                index: column.to_owned(),
+                source: Box::new(source),
+            })
+        };
+
+        Ok(Self(Record {
+            id: RecordId(parse_uuid("id")?),
+            idx: idx as u64,
+            host: Host::new(HostId(parse_uuid("host")?)),
+            timestamp: timestamp as u64,
+            tag: RecordTag::from(row.try_get::<String, _>("tag")?),
+            version: RecordVersion::from(row.try_get::<String, _>("version")?),
+            data: paseto_v4::EncryptedData {
+                raw: row.try_get("data")?,
+                cek: row.try_get("cek")?,
+            },
+        }))
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct SqliteStore {
     sqlite: Sqlite,
+    table: TableView<StoreRecord>,
 }
 
 impl SqliteStore {
@@ -27,28 +82,28 @@ impl SqliteStore {
 
         debug!("opening sqlite database at {path:?}");
 
-        let sqlite = Sqlite::builder().file(path).timeout(timeout).open().await?;
+        let sqlite = Sqlite::builder()
+            .file(path)
+            .timeout(timeout)
+            .with_migrations(sqlx::migrate!("./record-migrations"))
+            .open()
+            .await?;
 
-        Self::setup_db(sqlite.pool()).await?;
-
-        Ok(Self { sqlite })
+        let table = TableView::new(sqlite.clone());
+        Ok(Self { sqlite, table })
     }
 
     /// Open a transient, in-memory record store. Intended for tests.
     pub async fn in_memory(timeout: Duration) -> Result<Self> {
-        let sqlite = Sqlite::builder().memory().timeout(timeout).open().await?;
+        let sqlite = Sqlite::builder()
+            .memory()
+            .timeout(timeout)
+            .with_migrations(sqlx::migrate!("./record-migrations"))
+            .open()
+            .await?;
 
-        Self::setup_db(sqlite.pool()).await?;
-
-        Ok(Self { sqlite })
-    }
-
-    async fn setup_db(pool: &SqlitePool) -> Result<()> {
-        debug!("running sqlite database setup");
-
-        sqlx::migrate!("./record-migrations").run(pool).await?;
-
-        Ok(())
+        let table = TableView::new(sqlite.clone());
+        Ok(Self { sqlite, table })
     }
 
     async fn save_raw(
@@ -74,35 +129,12 @@ impl SqliteStore {
         Ok(())
     }
 
-    fn query_row(row: &SqliteRow) -> Record<paseto_v4::EncryptedData> {
-        let idx: i64 = row.get("idx");
-        let timestamp: i64 = row.get("timestamp");
-
-        // tbh at this point things are pretty fucked so just panic
-        let id = Uuid::from_str(row.get("id")).expect("invalid id UUID format in sqlite DB");
-        let host = Uuid::from_str(row.get("host")).expect("invalid host UUID format in sqlite DB");
-
-        Record {
-            id: RecordId(id),
-            idx: idx as u64,
-            host: Host::new(HostId(host)),
-            timestamp: timestamp as u64,
-            tag: RecordTag::from(row.get::<String, _>("tag")),
-            version: RecordVersion::from(row.get::<String, _>("version")),
-            data: paseto_v4::EncryptedData {
-                raw: row.get("data"),
-                cek: row.get("cek"),
-            },
-        }
-    }
-
     async fn load_all(&self) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
-        let res = sqlx::query("select * from store ")
-            .map(|row| Self::query_row(&row))
+        let res = sqlx::query_as::<_, StoreRecord>("select * from store ")
             .fetch_all(self.sqlite.pool())
             .await?;
 
-        Ok(res)
+        Ok(res.into_iter().map(Into::into).collect())
     }
 
     pub async fn push(&self, record: &Record<paseto_v4::EncryptedData>) -> Result<()> {
@@ -113,64 +145,29 @@ impl SqliteStore {
         &self,
         records: impl Iterator<Item = &Record<paseto_v4::EncryptedData>> + Send + Sync,
     ) -> Result<()> {
-        // `store` has 8 columns, so each row binds 8 parameters; keep a full chunk
-        // within the bind-parameter limit. `max(1)` keeps the chunk non-empty on any
-        // (implausible) tiny limit.
-        const COLUMNS: usize = 8;
-        let rows_per_insert = (self.sqlite.info().await.variable_number_limit / COLUMNS).max(1);
-
-        let mut records = records.peekable();
-        let mut tx = self.sqlite.pool().begin().await?;
-
-        // Stream fixed-size chunks straight into a multi-row INSERT: `QueryBuilder`
-        // writes the `values (..),(..)` and binds each row in a single pass, so we
-        // never materialise the input. The `peek` guard keeps each chunk non-empty,
-        // which `push_values` requires.
-        while records.peek().is_some() {
-            let mut builder = sqlx::QueryBuilder::new(
-                "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek) ",
-            );
-
-            builder.push_values(records.by_ref().take(rows_per_insert), |mut b, r| {
-                b.push_bind(r.id.0.as_hyphenated().to_string())
-                    .push_bind(r.idx as i64)
-                    .push_bind(r.host.id.0.as_hyphenated().to_string())
-                    .push_bind(r.tag.as_str())
-                    .push_bind(r.timestamp as i64)
-                    .push_bind(r.version.as_str())
-                    .push_bind(r.data.raw.as_str())
-                    .push_bind(r.data.cek.as_str());
-            });
-
-            builder.build().execute(&mut *tx).await?;
-        }
-
-        tx.commit().await?;
+        let records: Vec<StoreRecord> = records.cloned().map(StoreRecord).collect();
+        self.table.insert_bulk(&records).await?;
 
         Ok(())
     }
 
     pub async fn get(&self, id: RecordId) -> Result<Record<paseto_v4::EncryptedData>> {
-        let res = sqlx::query("select * from store where store.id = ?1")
+        let res = sqlx::query_as::<_, StoreRecord>("select * from store where store.id = ?1")
             .bind(id.0.as_hyphenated().to_string())
-            .map(|row| Self::query_row(&row))
             .fetch_one(self.sqlite.pool())
             .await?;
 
-        Ok(res)
+        Ok(res.into())
     }
 
     pub async fn delete(&self, id: RecordId) -> Result<()> {
-        sqlx::query("delete from store where id = ?1")
-            .bind(id.0.as_hyphenated().to_string())
-            .execute(self.sqlite.pool())
-            .await?;
+        self.table.delete(id.0.as_hyphenated().to_string()).await?;
 
         Ok(())
     }
 
     pub async fn delete_all(&self) -> Result<()> {
-        sqlx::query("delete from store").execute(self.sqlite.pool()).await?;
+        self.table.delete_all().await?;
 
         Ok(())
     }
@@ -180,18 +177,18 @@ impl SqliteStore {
         host: HostId,
         tag: &RecordTag,
     ) -> Result<Option<Record<paseto_v4::EncryptedData>>> {
-        let res =
-            sqlx::query("select * from store where host=?1 and tag=?2 order by idx desc limit 1")
-                .bind(host.0.as_hyphenated().to_string())
-                .bind(tag.as_str())
-                .map(|row| Self::query_row(&row))
-                .fetch_one(self.sqlite.pool())
-                .await;
+        let res = sqlx::query_as::<_, StoreRecord>(
+            "select * from store where host=?1 and tag=?2 order by idx desc limit 1",
+        )
+        .bind(host.0.as_hyphenated().to_string())
+        .bind(tag.as_str())
+        .fetch_one(self.sqlite.pool())
+        .await;
 
         match res {
             Err(sqlx::Error::RowNotFound) => Ok(None),
             Err(e) => Err(eyre!("an error occurred: {}", e)),
-            Ok(record) => Ok(Some(record)),
+            Ok(record) => Ok(Some(record.into())),
         }
     }
 
@@ -260,7 +257,7 @@ impl SqliteStore {
         idx: RecordIdx,
         limit: u64,
     ) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
-        let res = sqlx::query(
+        let res = sqlx::query_as::<_, StoreRecord>(
             "select * from store where idx >= ?1 and host = ?2 and tag = ?3 order by idx asc \
              limit ?4",
         )
@@ -268,11 +265,10 @@ impl SqliteStore {
         .bind(host.0.as_hyphenated().to_string())
         .bind(tag.as_str())
         .bind(limit as i64)
-        .map(|row| Self::query_row(&row))
         .fetch_all(self.sqlite.pool())
         .await?;
 
-        Ok(res)
+        Ok(res.into_iter().map(Into::into).collect())
     }
 
     pub async fn idx(
@@ -281,18 +277,19 @@ impl SqliteStore {
         tag: &RecordTag,
         idx: RecordIdx,
     ) -> Result<Option<Record<paseto_v4::EncryptedData>>> {
-        let res = sqlx::query("select * from store where idx = ?1 and host = ?2 and tag = ?3")
-            .bind(idx as i64)
-            .bind(host.0.as_hyphenated().to_string())
-            .bind(tag.as_str())
-            .map(|row| Self::query_row(&row))
-            .fetch_one(self.sqlite.pool())
-            .await;
+        let res = sqlx::query_as::<_, StoreRecord>(
+            "select * from store where idx = ?1 and host = ?2 and tag = ?3",
+        )
+        .bind(idx as i64)
+        .bind(host.0.as_hyphenated().to_string())
+        .bind(tag.as_str())
+        .fetch_one(self.sqlite.pool())
+        .await;
 
         match res {
             Err(sqlx::Error::RowNotFound) => Ok(None),
             Err(e) => Err(eyre!("an error occurred: {}", e)),
-            Ok(v) => Ok(Some(v)),
+            Ok(v) => Ok(Some(v.into())),
         }
     }
 
@@ -324,13 +321,14 @@ impl SqliteStore {
         &self,
         tag: &RecordTag,
     ) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
-        let res = sqlx::query("select * from store where tag = ?1 order by timestamp asc")
-            .bind(tag.as_str())
-            .map(|row| Self::query_row(&row))
-            .fetch_all(self.sqlite.pool())
-            .await?;
+        let res = sqlx::query_as::<_, StoreRecord>(
+            "select * from store where tag = ?1 order by timestamp asc",
+        )
+        .bind(tag.as_str())
+        .fetch_all(self.sqlite.pool())
+        .await?;
 
-        Ok(res)
+        Ok(res.into_iter().map(Into::into).collect())
     }
 
     /// Reencrypt every single item in this store with a new key
