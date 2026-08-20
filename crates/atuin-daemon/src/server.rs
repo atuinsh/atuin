@@ -251,53 +251,77 @@ pub async fn run_grpc_server(
 mod unix_tests {
     use std::io::ErrorKind;
     use std::os::unix::net::UnixStream;
+    use std::path::{Path, PathBuf};
 
+    use rstest::*;
+    use tempfile::TempDir;
     use tokio::net::UnixListener;
 
     use super::bind_reclaiming_stale_socket;
 
+    /// A socket path inside a scratch directory, which is removed when the test ends.
+    struct Socket {
+        path: PathBuf,
+        _tmp: TempDir,
+    }
+
+    impl Socket {
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    #[fixture]
+    fn socket() -> Socket {
+        let tmp = tempfile::tempdir().unwrap();
+        Socket {
+            path: tmp.path().join("atuin.sock"),
+            _tmp: tmp,
+        }
+    }
+
+    #[rstest]
     #[tokio::test]
-    async fn binds_a_path_that_does_not_exist_yet() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("atuin.sock");
+    async fn binds_a_path_that_does_not_exist_yet(socket: Socket) {
+        let path = socket.path();
 
-        let _listener = bind_reclaiming_stale_socket(&path).unwrap();
+        let _listener = bind_reclaiming_stale_socket(path).unwrap();
 
-        UnixStream::connect(&path).expect("the new socket should accept connections");
+        UnixStream::connect(path).expect("the new socket should accept connections");
     }
 
     /// A daemon killed with `SIGKILL` runs no shutdown handler, so it leaves its socket
     /// file behind. The next start has to reclaim it, or it can never bind again.
+    #[rstest]
     #[tokio::test]
-    async fn reclaims_a_socket_left_behind_by_a_dead_daemon() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("atuin.sock");
+    async fn reclaims_a_socket_left_behind_by_a_dead_daemon(socket: Socket) {
+        let path = socket.path();
 
         // Closing a listener does not unlink its path, so this leaves behind exactly
         // what a process killed before its shutdown handler ran leaves behind.
-        drop(UnixListener::bind(&path).unwrap());
+        drop(UnixListener::bind(path).unwrap());
         assert!(path.exists(), "the stale socket file should still be there");
-        let probe = UnixStream::connect(&path).unwrap_err();
+        let probe = UnixStream::connect(path).unwrap_err();
         assert_eq!(probe.kind(), ErrorKind::ConnectionRefused);
 
-        let _listener = bind_reclaiming_stale_socket(&path).unwrap();
+        let _listener = bind_reclaiming_stale_socket(path).unwrap();
 
-        UnixStream::connect(&path).expect("the reclaimed socket should accept connections");
+        UnixStream::connect(path).expect("the reclaimed socket should accept connections");
     }
 
     /// The socket of a daemon that is alive and listening must never be unlinked: that
     /// would leave the first daemon running, but bound to a path no client reaches.
+    #[rstest]
     #[tokio::test]
-    async fn refuses_to_steal_a_live_daemons_socket() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("atuin.sock");
+    async fn refuses_to_steal_a_live_daemons_socket(socket: Socket) {
+        let path = socket.path();
 
-        let _live = UnixListener::bind(&path).unwrap();
+        let _live = UnixListener::bind(path).unwrap();
 
-        let error = bind_reclaiming_stale_socket(&path).unwrap_err();
+        let error = bind_reclaiming_stale_socket(path).unwrap_err();
 
         assert_eq!(error.kind(), ErrorKind::AddrInUse);
         assert!(path.exists(), "the live daemon's socket must not be removed");
-        UnixStream::connect(&path).expect("the live daemon should still be reachable");
+        UnixStream::connect(path).expect("the live daemon should still be reachable");
     }
 }
