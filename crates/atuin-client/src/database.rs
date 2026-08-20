@@ -118,15 +118,20 @@ fn apply_author_filter(sql: &mut SqlBuilder, authors: OrFilter<&[AuthorPattern]>
         write!(f, "CASE WHEN author IS NULL OR trim(author) = '' THEN {user_expr} ELSE author END")
     });
 
+    let defaulted_expr = "CASE WHEN instr(hostname, ':') = 0 THEN hostname WHEN substr(hostname, \
+                          instr(hostname, ':') + 1) = 'unknown-user' THEN substr(hostname, 1, \
+                          instr(hostname, ':') - 1) ELSE substr(hostname, instr(hostname, ':') + \
+                          1) END";
+
     // Mirrors [`History::is_agent`]: a recorded kind wins, and without one a known agent name means
-    // an agent, unless the author is only the username it defaulted to. A kind we don't recognise
+    // an agent, unless the author is only the name it defaulted to. A kind we don't recognise
     // (written by a newer version) falls through to the name heuristic, exactly like
     // [`AuthorKind::from_repr`] mapping it to `None` — and so does a NULL kind, because
     // `NULL IN (...)` is not true.
     let is_agent = || {
         format!(
             "CASE WHEN author_kind IN ({kinds}) THEN author_kind = {agent} ELSE {author_expr} IN \
-             ({names}) AND {author_expr} <> {user_expr} END",
+             ({names}) AND {author_expr} <> {defaulted_expr} END",
             kinds = AuthorKind::VARIANTS.iter().map(|kind| kind.as_u8()).join(", "),
             agent = AuthorKind::Agent.as_u8(),
             names = KNOWN_AGENTS.iter().map(quote).join(", "),
@@ -2090,6 +2095,45 @@ mod test {
         // `CmdOrigin` cannot represent a colonless hostname (parse_lenient rewrites it), so plant
         // the legacy shape directly.
         sqlx::query("update history set hostname = 'pi'").execute(&db.pool).await.unwrap();
+
+        let loaded = db.load(history.id.0.as_str()).await.unwrap().unwrap();
+        assert!(!loaded.is_agent());
+
+        let context = Context {
+            cmd_origin: CmdOrigin::try_from("pi:unknown-user".to_owned()).unwrap(),
+            session: "session".into(),
+            cwd: "/tmp".into(),
+            host_id: "host".into(),
+            git_root: None,
+        };
+        for (pattern, expected) in [(AuthorPattern::AllUser, 1), (AuthorPattern::AllAgent, 0)] {
+            let authors = OrFilter::from_list(vec![pattern]).unwrap();
+            let filters = OptFilters {
+                authors: authors.as_slice_filter(),
+                ..Default::default()
+            };
+            let results = db
+                .search(DbSearchMode::FullText, FilterMode::Global, &context, "echo", filters)
+                .await
+                .unwrap();
+            assert_eq!(results.len(), expected, "{authors:?}");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[rstest]
+    async fn author_filter_treats_a_placeholder_user_agent_hostname_as_human() {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+
+        let history: History = History::import()
+            .timestamp(OffsetDateTime::now_utc())
+            .command("echo hello")
+            .cwd("/tmp")
+            .cmd_origin(CmdOrigin::try_from("pi:unknown-user".to_owned()).unwrap())
+            .author("pi")
+            .build()
+            .into();
+        db.save(&history).await.unwrap();
 
         let loaded = db.load(history.id.0.as_str()).await.unwrap().unwrap();
         assert!(!loaded.is_agent());
