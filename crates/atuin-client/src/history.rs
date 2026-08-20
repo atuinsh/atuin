@@ -49,7 +49,7 @@ pub enum AuthorKind {
 
 impl AuthorKind {
     /// Every recognised kind. The SQL author filter derives its recognised-value list from this,
-    /// so it stays in lockstep with [`Self::from_u8`] (a test pins the two together).
+    /// so it stays in lockstep with [`Self::from_repr`] (a test pins the two together).
     pub const VARIANTS: [Self; 2] = [Self::User, Self::Agent];
 
     pub const fn as_u8(self) -> u8 {
@@ -271,9 +271,6 @@ impl History {
             .or_else(|| env::var("ATUIN_SESSION").ok())
             .unwrap_or_else(|| uuid_v7().as_simple().to_string());
         let cmd_origin = cmd_origin.unwrap_or_else(CmdOrigin::probe_current);
-        // `From<HistoryCaptured>` pre-resolves the same flag -> env chain to infer `author_kind`;
-        // a precedence change here must be mirrored there, or the stored kind can disagree with
-        // the stored author.
         let author = normalize_optional_string(author)
             .or_else(|| normalize_optional_string(env::var(HISTORY_AUTHOR_ENV).ok()))
             .unwrap_or_else(|| cmd_origin.user().to_string());
