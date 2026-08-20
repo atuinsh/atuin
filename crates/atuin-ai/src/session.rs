@@ -5,6 +5,8 @@
 //! (direct SQLite). When the daemon owns session state, a gRPC-backed
 //! implementation can be swapped in without changing the TUI code.
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use eyre::Result;
 
@@ -76,8 +78,14 @@ pub struct LocalSessionService {
 }
 
 impl LocalSessionService {
-    pub async fn open(path: impl AsRef<std::path::Path>, timeout: f64) -> Result<Self> {
+    pub async fn open(path: impl AsRef<std::path::Path>, timeout: Duration) -> Result<Self> {
         let store = AiSessionStore::new(path, timeout).await?;
+        Ok(Self { store })
+    }
+
+    #[cfg(test)]
+    pub async fn in_memory(timeout: Duration) -> Result<Self> {
+        let store = AiSessionStore::in_memory(timeout).await?;
         Ok(Self { store })
     }
 }
@@ -342,7 +350,7 @@ mod tests {
 
     #[fixture]
     async fn service() -> Box<dyn SessionService> {
-        Box::new(LocalSessionService::open("sqlite::memory:", 2.0).await.unwrap())
+        Box::new(LocalSessionService::in_memory(Duration::from_secs(2)).await.unwrap())
     }
 
     #[rstest]

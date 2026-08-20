@@ -13,7 +13,10 @@ pub mod path;
 pub mod rmp;
 pub mod shell;
 pub mod slice;
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
 pub mod string;
+pub mod sync;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
 pub mod time;

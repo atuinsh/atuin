@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordTag, RecordVersion};
@@ -61,12 +63,12 @@ struct BenchSqliteStore {
 }
 
 impl BenchSqliteStore {
-    const SQL_TIMEOUT_S: f64 = 5.0;
+    const SQL_TIMEOUT: Duration = Duration::from_secs(5);
 
     async fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("bench.db");
-        let store = SqliteStore::new(db_path, Self::SQL_TIMEOUT_S).await.unwrap();
+        let store = SqliteStore::new(db_path, Self::SQL_TIMEOUT).await.unwrap();
 
         Self {
             _temp_dir: dir,

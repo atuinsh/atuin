@@ -46,6 +46,10 @@ itertools = { workspace = true }
 rand = { workspace = true }
 shellexpand = { workspace = true }
 sqlx = { workspace = true, features = ["sqlite", "regexp"] }
+# Version range mirrors sqlx-sqlite's so cargo unifies both to a single
+# `links = "sqlite3"` package (one bundled SQLite). Used only to query the real
+# SQLITE_LIMIT_VARIABLE_NUMBER at startup; the `bundled` feature is inherited from sqlx.
+libsqlite3-sys = ">=0.30.1, <0.38.0"
 minspan = "0.1.5"
 regex = { workspace = true }
 serde_regex = "1.1.0"
@@ -86,7 +90,7 @@ serde_bytes = "0.11"
 [dependencies.atuin-common]
 path = "../atuin-common"
 version = "18.20.0-beta.3"
-features = ["os"]
+features = ["os", "sqlite"]
 
 [dependencies.atuin-domain]
 path = "../atuin-domain"

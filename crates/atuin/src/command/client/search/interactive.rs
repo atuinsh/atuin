@@ -2786,7 +2786,7 @@ mod tests {
         state.search_mode_state = SearchModeState::new(&settings);
         assert_eq!(state.search_mode(), SearchMode::DaemonFuzzy);
         state.engine = engines::engine(SearchMode::DaemonFuzzy, &settings);
-        let mut db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
+        let mut db = Sqlite::in_memory(std::time::Duration::from_secs(2)).await.unwrap();
         let history: History = History::capture()
             .timestamp(OffsetDateTime::now_utc())
             .command("echo query match")

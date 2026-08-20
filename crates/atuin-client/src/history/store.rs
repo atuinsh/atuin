@@ -475,7 +475,7 @@ mod tests {
     /// and the `HistoryStore` layered on it must originate from a single fixture.
     #[fixture]
     async fn stores() -> (SqliteStore, HostId, HistoryStore) {
-        let store = SqliteStore::new(":memory:", test_local_timeout()).await.unwrap();
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
         let host_id = HostId(atuin_common::utils::uuid_v7());
         let history_store = HistoryStore::new(store.clone(), host_id, [0u8; 32].into());
         (store, host_id, history_store)
@@ -589,7 +589,7 @@ mod tests {
     }
 
     async fn memory_db() -> Sqlite {
-        Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap()
+        Sqlite::in_memory(test_local_timeout()).await.unwrap()
     }
 
     fn history_n(n: usize) -> History {
@@ -744,7 +744,7 @@ mod tests {
         let (record_id, _) = history_store.push(history).await.unwrap();
 
         let db = memory_db().await;
-        db.pool.close().await;
+        db.close().await;
 
         assert!(history_store.build_all(&db, &[record_id]).await.is_err());
     }

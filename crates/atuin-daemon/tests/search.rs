@@ -78,11 +78,11 @@ mod unix {
             .try_deserialize()
             .expect("could not deserialize settings");
 
-        let history_db = Sqlite::new(&db_path, 5.0).await.unwrap();
+        let history_db = Sqlite::new(&db_path, Duration::from_secs(5)).await.unwrap();
         for history in seeded {
             history_db.save(history).await.unwrap();
         }
-        let store = SqliteStore::new(&record_path, 5.0).await.unwrap();
+        let store = SqliteStore::new(&record_path, Duration::from_secs(5)).await.unwrap();
 
         let search_component = SearchComponent::new();
         let search_service = search_component.grpc_service();
