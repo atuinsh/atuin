@@ -5,7 +5,10 @@
 use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_common::shell::{IsShell, ShellKind, Var as ShellVar};
+use atuin_common::shell::{
+    Var as ShellVar,
+    typed::{IsShell, Shell, VarCodec},
+};
 use atuin_domain::record::{DecryptedData, Host, HostId};
 use eyre::{Result, bail, ensure, eyre};
 
@@ -117,17 +120,17 @@ impl VarStore {
 
     pub async fn xonsh(&self) -> Result<String> {
         let env = self.vars().await?;
-        Ok(Self::render(ShellKind::Xonsh, &env))
+        Ok(Self::render(Shell::Xonsh, &env))
     }
 
     pub async fn fish(&self) -> Result<String> {
         let env = self.vars().await?;
-        Ok(Self::render(ShellKind::Fish, &env))
+        Ok(Self::render(Shell::Fish, &env))
     }
 
     pub async fn posix(&self) -> Result<String> {
         let env = self.vars().await?;
-        Ok(Self::render(ShellKind::Sh, &env))
+        Ok(Self::render(Shell::Sh, &env))
     }
 
     pub async fn powershell(&self) -> Result<String> {
@@ -137,23 +140,21 @@ impl VarStore {
 
     /// Render `env` into `shell`'s config syntax via the shared shell library,
     /// logging any variable the shell cannot represent.
-    fn render(shell: ShellKind, env: &[Var]) -> String {
-        let interface = shell
-            .interface()
-            .expect("a built-in shell always has an interface");
+    fn render(shell: Shell, env: &[Var]) -> String {
+        let vars = shell.vars();
 
         let mut shell_vars = Vec::with_capacity(env.len());
         for var in env {
-            let name = match interface.validate_var_name(var.name.clone().into()) {
+            let name = match vars.validate_name(var.name.as_bytes()) {
                 Ok(name) => name,
                 Err(err) => {
                     tracing::warn!("skipping var: {err}");
                     continue;
                 }
             };
-            let value = interface
-                .validate_var_value(var.value.clone().into())
-                .unwrap_or_else(|e| match e {});
+            let value = vars
+                .validate_value(var.value.as_bytes())
+                .expect("shell variable values are always representable");
             shell_vars.push(ShellVar {
                 name,
                 value,
@@ -161,7 +162,7 @@ impl VarStore {
             });
         }
 
-        let script = interface.render_vars(&shell_vars);
+        let script = vars.render(&shell_vars);
         String::from_utf8_lossy(script.as_slice()).into_owned()
     }
 
@@ -182,9 +183,9 @@ impl VarStore {
         let env = self.vars().await?;
 
         // Build for all supported shells.
-        let posix = Self::render(ShellKind::Sh, &env);
-        let fish = Self::render(ShellKind::Fish, &env);
-        let xonsh = Self::render(ShellKind::Xonsh, &env);
+        let posix = Self::render(Shell::Sh, &env);
+        let fish = Self::render(Shell::Fish, &env);
+        let xonsh = Self::render(Shell::Xonsh, &env);
         let powershell = Self::format_powershell(&env);
 
         let zsh_path = dir.join("vars.zsh");

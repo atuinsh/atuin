@@ -118,3 +118,56 @@ impl IsShell for Nu {
         var::render_vars(vars)
     }
 }
+
+/// The `nu` alias codec.
+#[derive(Clone, Copy)]
+pub struct NuAliases;
+
+impl crate::shell::typed::AliasCodec for NuAliases {
+    fn render(&self, aliases: &[Alias]) -> Rendered {
+        alias::render_aliases(aliases)
+    }
+
+    fn parse(&self, listing: &[u8]) -> Result<crate::shell::typed::Aliases, AliasesError> {
+        alias::parse_aliases(listing)
+    }
+}
+
+/// The `nu` variable codec.
+#[derive(Clone, Copy)]
+pub struct NuVars;
+
+impl crate::shell::typed::VarCodec for NuVars {
+    fn validate_name(&self, name: impl AsRef<BStr>) -> Result<VarName, VarParsingError> {
+        var::validate_var_name(name.as_ref().to_owned(), "nu")
+    }
+
+    #[allow(unsafe_code)]
+    fn validate_value(&self, value: impl AsRef<BStr>) -> Result<super::VarValue, VarParsingError> {
+        // SAFETY: any bytes are representable once quoted.
+        Ok(unsafe { super::VarValue::new_unchecked(value.as_ref().to_owned()) })
+    }
+
+    fn quote<'a>(&self, value: &'a [u8]) -> std::borrow::Cow<'a, BStr> {
+        var::quote_value(value)
+    }
+
+    fn render(&self, vars: &[Var]) -> BString {
+        var::render_vars(vars)
+    }
+}
+
+// New capability SPI: `nu::Nu` is the installed handle for the `Nu` marker.
+impl crate::shell::typed::InstalledShell for Nu {
+    fn abspath(&self) -> &std::path::Path {
+        self.exe.path()
+    }
+
+    async fn aliases(&self) -> Result<crate::shell::typed::Aliases, AliasesError> {
+        self.inner.aliases.clone().await
+    }
+
+    async fn run(&self, command: &str) -> Result<std::process::Output, RunError> {
+        self.exe.run(command).await
+    }
+}

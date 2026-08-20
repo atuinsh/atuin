@@ -5,7 +5,10 @@ use atuin_client::record::sqlite_store::SqliteStore;
 // This will be noticeable similar to the kv store, though I expect the two shall diverge
 // While we will support a range of shell config, I'd rather have a larger number of small records
 // + stores, rather than one mega config store.
-use atuin_common::shell::{AliasValue, IsShell, ShellKind};
+use atuin_common::shell::{
+    AliasValue,
+    typed::{AliasCodec, IsShell, Shell},
+};
 use atuin_domain::record::{DecryptedData, Host, HostId};
 use eyre::{Result, bail, ensure, eyre};
 
@@ -141,17 +144,17 @@ impl AliasStore {
 
     pub async fn posix(&self) -> Result<String> {
         let aliases = self.aliases().await?;
-        Ok(Self::render(ShellKind::Sh, &aliases))
+        Ok(Self::render(Shell::Sh, &aliases))
     }
 
     pub async fn fish(&self) -> Result<String> {
         let aliases = self.aliases().await?;
-        Ok(Self::render(ShellKind::Fish, &aliases))
+        Ok(Self::render(Shell::Fish, &aliases))
     }
 
     pub async fn xonsh(&self) -> Result<String> {
         let aliases = self.aliases().await?;
-        Ok(Self::render(ShellKind::Xonsh, &aliases))
+        Ok(Self::render(Shell::Xonsh, &aliases))
     }
 
     pub async fn powershell(&self) -> Result<String> {
@@ -161,7 +164,7 @@ impl AliasStore {
 
     /// Render `aliases` into `shell`'s config syntax via the shared shell
     /// library, logging any the shell cannot represent.
-    fn render(shell: ShellKind, aliases: &[Alias]) -> String {
+    fn render(shell: Shell, aliases: &[Alias]) -> String {
         let shell_aliases: Vec<atuin_common::shell::Alias> = aliases
             .iter()
             .map(|alias| atuin_common::shell::Alias {
@@ -170,10 +173,7 @@ impl AliasStore {
             })
             .collect();
 
-        let rendered = shell
-            .interface()
-            .expect("a built-in shell always has an interface")
-            .render_aliases(&shell_aliases);
+        let rendered = shell.aliases().render(&shell_aliases);
 
         for skipped in &rendered.skipped {
             tracing::warn!("skipping alias {:?}: {}", skipped.name, skipped.reason);
@@ -199,9 +199,9 @@ impl AliasStore {
         let aliases = self.aliases().await?;
 
         // Build for all supported shells.
-        let posix = Self::render(ShellKind::Sh, &aliases);
-        let fish = Self::render(ShellKind::Fish, &aliases);
-        let xonsh = Self::render(ShellKind::Xonsh, &aliases);
+        let posix = Self::render(Shell::Sh, &aliases);
+        let fish = Self::render(Shell::Fish, &aliases);
+        let xonsh = Self::render(Shell::Xonsh, &aliases);
         let powershell = Self::format_powershell(&aliases);
 
         let zsh_path = dir.join("aliases.zsh");

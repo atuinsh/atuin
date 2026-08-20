@@ -2,7 +2,7 @@ use eyre::{Result, ensure, eyre};
 use rmp::{decode, encode};
 use serde::Serialize;
 
-use atuin_common::shell::{IsShell, ShellKind};
+use atuin_common::shell::typed::{InstalledShell, IsShell, Shell};
 
 use crate::store::AliasStore;
 
@@ -81,11 +81,10 @@ impl Var {
 /// Aliases already present in the store are skipped. Returns the aliases that
 /// were newly set.
 pub async fn import_aliases(store: &AliasStore) -> Result<Vec<Alias>> {
-    let shell = ShellKind::current()
-        .interface()
+    let shell = Shell::current()
         .ok_or_else(|| eyre!("importing aliases is not supported for the current shell"))?;
 
-    let shell_aliases = shell.aliases().await?;
+    let shell_aliases = shell.install()?.aliases().await?;
     let store_aliases = store.aliases().await?;
 
     let mut res = Vec::new();

@@ -14,7 +14,19 @@
 
 use std::{borrow::Cow, collections::HashMap, io, path::Path, process::Output};
 
+use std::str::FromStr;
+
 use bstr::{BStr, BString};
+use enum_dispatch::enum_dispatch;
+use sysinfo::{System, get_current_pid};
+
+use super::{ShellError, UnknownShell};
+
+#[cfg(feature = "shell-syntax")]
+use super::{
+    Command, ShellParser, commands as classify, common::PosixParser, fish::FishParser,
+    parse::Fallback,
+};
 
 use super::{
     Alias, AliasValue, AliasesError, Rendered, RunError, Var, VarName, VarParsingError, VarValue,
@@ -25,6 +37,7 @@ pub type Aliases = HashMap<BString, AliasValue>;
 
 /// Renders atuin's aliases into a shell's config syntax, and parses that
 /// shell's own alias listing back into atuin's model. Pure — no subprocess.
+#[enum_dispatch]
 pub trait AliasCodec {
     /// Render `aliases` into this shell's config syntax (best-effort; anything
     /// the shell can't represent lands in [`Rendered::skipped`]).
@@ -51,6 +64,7 @@ pub trait VarCodec {
 
 /// A handle to an installed shell binary — the only capability that can spawn
 /// the shell.
+#[enum_dispatch]
 #[allow(
     async_fn_in_trait,
     reason = "dispatched only over AnyInstalled within our code; never needs to be Send"
@@ -95,7 +109,7 @@ pub trait IsShell: Copy {
 use super::{
     bash,
     common::{PosixAliases, PosixVars},
-    dash, ksh, sh, zsh,
+    dash, fish, ksh, nu, powershell, sh, xonsh, zsh,
 };
 
 /// The POSIX `sh` shell, as a zero-sized identity.
@@ -226,4 +240,359 @@ impl IsShell for Zsh {
     fn install(self) -> io::Result<zsh::Zsh> {
         Ok(zsh::Zsh::new(Path::new("zsh")))
     }
+}
+
+/// The `fish` shell.
+#[derive(Clone, Copy)]
+pub struct Fish;
+
+impl IsShell for Fish {
+    type Aliases = fish::FishAliases;
+    type Vars = fish::FishVars;
+    type Installed = fish::Fish;
+
+    fn name(self) -> &'static str {
+        "fish"
+    }
+
+    fn aliases(self) -> fish::FishAliases {
+        fish::FishAliases
+    }
+
+    fn vars(self) -> fish::FishVars {
+        fish::FishVars
+    }
+
+    fn install(self) -> io::Result<fish::Fish> {
+        Ok(fish::Fish::new(Path::new("fish")))
+    }
+}
+
+/// The `xonsh` shell.
+#[derive(Clone, Copy)]
+pub struct Xonsh;
+
+impl IsShell for Xonsh {
+    type Aliases = xonsh::XonshAliases;
+    type Vars = xonsh::XonshVars;
+    type Installed = xonsh::Xonsh;
+
+    fn name(self) -> &'static str {
+        "xonsh"
+    }
+
+    fn aliases(self) -> xonsh::XonshAliases {
+        xonsh::XonshAliases
+    }
+
+    fn vars(self) -> xonsh::XonshVars {
+        xonsh::XonshVars
+    }
+
+    fn install(self) -> io::Result<xonsh::Xonsh> {
+        Ok(xonsh::Xonsh::new(Path::new("xonsh")))
+    }
+}
+
+/// The `nu` shell.
+#[derive(Clone, Copy)]
+pub struct Nu;
+
+impl IsShell for Nu {
+    type Aliases = nu::NuAliases;
+    type Vars = nu::NuVars;
+    type Installed = nu::Nu;
+
+    fn name(self) -> &'static str {
+        "nu"
+    }
+
+    fn aliases(self) -> nu::NuAliases {
+        nu::NuAliases
+    }
+
+    fn vars(self) -> nu::NuVars {
+        nu::NuVars
+    }
+
+    fn install(self) -> io::Result<nu::Nu> {
+        Ok(nu::Nu::new(Path::new("nu")))
+    }
+}
+
+/// The `powershell` shell.
+#[derive(Clone, Copy)]
+pub struct Powershell;
+
+impl IsShell for Powershell {
+    type Aliases = powershell::PowershellAliases;
+    type Vars = powershell::PowershellVars;
+    type Installed = powershell::Powershell;
+
+    fn name(self) -> &'static str {
+        "powershell"
+    }
+
+    fn aliases(self) -> powershell::PowershellAliases {
+        powershell::PowershellAliases
+    }
+
+    fn vars(self) -> powershell::PowershellVars {
+        powershell::PowershellVars
+    }
+
+    fn install(self) -> io::Result<powershell::Powershell> {
+        Ok(powershell::Powershell::new(Path::new("pwsh")))
+    }
+}
+
+// ── Runtime erasure ───────────────────────────────────────────────────────
+// The associated types, erased to enums so a runtime `Shell` can carry them.
+// `AliasCodec`/`InstalledShell` dispatch via `enum_dispatch`; `AnyVarCodec` is
+// hand-rolled because `VarCodec`'s `impl AsRef<BStr>` argument is generic.
+
+/// A shell's alias codec, erased.
+#[enum_dispatch(AliasCodec)]
+pub enum AnyAliasCodec {
+    Posix(PosixAliases),
+    Zsh(zsh::ZshAliases),
+    Fish(fish::FishAliases),
+    Xonsh(xonsh::XonshAliases),
+    Nu(nu::NuAliases),
+    Powershell(powershell::PowershellAliases),
+}
+
+/// A shell's installed handle, erased.
+#[enum_dispatch(InstalledShell)]
+pub enum AnyInstalled {
+    Sh(sh::Sh),
+    Bash(bash::Bash),
+    Dash(dash::Dash),
+    Ksh(ksh::Ksh),
+    Zsh(zsh::Zsh),
+    Fish(fish::Fish),
+    Xonsh(xonsh::Xonsh),
+    Nu(nu::Nu),
+    Powershell(powershell::Powershell),
+}
+
+/// A shell's variable codec, erased. Hand-rolled dispatch (generic method).
+pub enum AnyVarCodec {
+    Posix(PosixVars),
+    Fish(fish::FishVars),
+    Xonsh(xonsh::XonshVars),
+    Nu(nu::NuVars),
+    Powershell(powershell::PowershellVars),
+}
+
+impl VarCodec for AnyVarCodec {
+    fn validate_name(&self, name: impl AsRef<BStr>) -> Result<VarName, VarParsingError> {
+        match self {
+            Self::Posix(v) => v.validate_name(name),
+            Self::Fish(v) => v.validate_name(name),
+            Self::Xonsh(v) => v.validate_name(name),
+            Self::Nu(v) => v.validate_name(name),
+            Self::Powershell(v) => v.validate_name(name),
+        }
+    }
+
+    fn validate_value(&self, value: impl AsRef<BStr>) -> Result<VarValue, VarParsingError> {
+        match self {
+            Self::Posix(v) => v.validate_value(value),
+            Self::Fish(v) => v.validate_value(value),
+            Self::Xonsh(v) => v.validate_value(value),
+            Self::Nu(v) => v.validate_value(value),
+            Self::Powershell(v) => v.validate_value(value),
+        }
+    }
+
+    fn quote<'a>(&self, value: &'a [u8]) -> Cow<'a, BStr> {
+        match self {
+            Self::Posix(v) => v.quote(value),
+            Self::Fish(v) => v.quote(value),
+            Self::Xonsh(v) => v.quote(value),
+            Self::Nu(v) => v.quote(value),
+            Self::Powershell(v) => v.quote(value),
+        }
+    }
+
+    fn render(&self, vars: &[Var]) -> BString {
+        match self {
+            Self::Posix(v) => v.render(vars),
+            Self::Fish(v) => v.render(vars),
+            Self::Xonsh(v) => v.render(vars),
+            Self::Nu(v) => v.render(vars),
+            Self::Powershell(v) => v.render(vars),
+        }
+    }
+}
+
+/// A shell determined at runtime — a `Copy` tag over the markers. Replaces the
+/// old `ShellKind` (identity) and the old `Shell` enum_dispatch wrapper (driver)
+/// in one type, with no `Unknown` variant: an unknown shell is `None`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Shell {
+    Sh,
+    Bash,
+    Fish,
+    Zsh,
+    Dash,
+    Ksh,
+    Xonsh,
+    Nu,
+    Powershell,
+}
+
+impl IsShell for Shell {
+    type Aliases = AnyAliasCodec;
+    type Vars = AnyVarCodec;
+    type Installed = AnyInstalled;
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Sh => Sh.name(),
+            Self::Bash => Bash.name(),
+            Self::Fish => Fish.name(),
+            Self::Zsh => Zsh.name(),
+            Self::Dash => Dash.name(),
+            Self::Ksh => Ksh.name(),
+            Self::Xonsh => Xonsh.name(),
+            Self::Nu => Nu.name(),
+            Self::Powershell => Powershell.name(),
+        }
+    }
+
+    fn aliases(self) -> AnyAliasCodec {
+        match self {
+            Self::Sh => Sh.aliases().into(),
+            Self::Bash => Bash.aliases().into(),
+            Self::Dash => Dash.aliases().into(),
+            Self::Ksh => Ksh.aliases().into(),
+            Self::Zsh => Zsh.aliases().into(),
+            Self::Fish => Fish.aliases().into(),
+            Self::Xonsh => Xonsh.aliases().into(),
+            Self::Nu => Nu.aliases().into(),
+            Self::Powershell => Powershell.aliases().into(),
+        }
+    }
+
+    fn vars(self) -> AnyVarCodec {
+        match self {
+            Self::Sh => AnyVarCodec::Posix(Sh.vars()),
+            Self::Bash => AnyVarCodec::Posix(Bash.vars()),
+            Self::Dash => AnyVarCodec::Posix(Dash.vars()),
+            Self::Ksh => AnyVarCodec::Posix(Ksh.vars()),
+            Self::Zsh => AnyVarCodec::Posix(Zsh.vars()),
+            Self::Fish => AnyVarCodec::Fish(Fish.vars()),
+            Self::Xonsh => AnyVarCodec::Xonsh(Xonsh.vars()),
+            Self::Nu => AnyVarCodec::Nu(Nu.vars()),
+            Self::Powershell => AnyVarCodec::Powershell(Powershell.vars()),
+        }
+    }
+
+    fn install(self) -> io::Result<AnyInstalled> {
+        Ok(match self {
+            Self::Sh => Sh.install()?.into(),
+            Self::Bash => Bash.install()?.into(),
+            Self::Dash => Dash.install()?.into(),
+            Self::Ksh => Ksh.install()?.into(),
+            Self::Zsh => Zsh.install()?.into(),
+            Self::Fish => Fish.install()?.into(),
+            Self::Xonsh => Xonsh.install()?.into(),
+            Self::Nu => Nu.install()?.into(),
+            Self::Powershell => Powershell.install()?.into(),
+        })
+    }
+}
+
+impl FromStr for Shell {
+    type Err = UnknownShell;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Ok(match name {
+            "sh" => Self::Sh,
+            "bash" => Self::Bash,
+            "fish" => Self::Fish,
+            "zsh" => Self::Zsh,
+            "dash" => Self::Dash,
+            "ksh" => Self::Ksh,
+            "xonsh" => Self::Xonsh,
+            "nu" => Self::Nu,
+            "powershell" => Self::Powershell,
+            other => return Err(UnknownShell(other.to_owned())),
+        })
+    }
+}
+
+impl std::fmt::Display for Shell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl Shell {
+    /// The shell running atuin, or `None` if it isn't one atuin knows.
+    pub fn current() -> Option<Self> {
+        let sys = System::new_all();
+        let process = sys.process(get_current_pid().ok()?)?;
+        let parent = sys.process(process.parent()?)?;
+        let name = parent.name().trim().to_lowercase();
+        let name = name.strip_prefix('-').unwrap_or(&name);
+        name.parse().ok()
+    }
+
+    /// The shell named by `$ATUIN_SHELL`, or `None`.
+    pub fn from_env() -> Option<Self> {
+        std::env::var("ATUIN_SHELL")
+            .ok()?
+            .trim()
+            .to_lowercase()
+            .parse()
+            .ok()
+    }
+
+    /// Best-effort detection of the user's default login shell (`None` if it
+    /// isn't one atuin knows).
+    pub fn default_shell() -> Result<Option<Self>, ShellError> {
+        let os = System::name().unwrap_or_default().to_lowercase();
+        let out = if os.contains("darwin") {
+            run_sh("dscl localhost -read \"/Local/Default/Users/$USER\" shell | awk '{print $2}'")?
+        } else if cfg!(windows) {
+            return Ok(Some(Self::Powershell));
+        } else {
+            run_sh("getent passwd $LOGNAME | cut -d: -f7")?
+        };
+        let path = Path::new(out.trim());
+        Ok(path
+            .file_name()
+            .and_then(|n| n.to_string_lossy().parse().ok()))
+    }
+}
+
+/// Run `command` under `sh -ic`, capturing stdout. Used by shell detection.
+fn run_sh(command: &str) -> Result<String, ShellError> {
+    let output = std::process::Command::new("sh")
+        .arg("-ic")
+        .arg(command)
+        .output()
+        .map_err(|e| ShellError::ExecError(e.to_string()))?;
+    String::from_utf8(output.stdout).map_err(|e| ShellError::ExecError(e.to_string()))
+}
+
+/// The syntax parser for `shell`'s dialect, falling back to the word-level
+/// parser when the shell is unknown (`None`) or has no grammar.
+#[cfg(feature = "shell-syntax")]
+pub fn parser(shell: Option<Shell>) -> &'static dyn ShellParser {
+    match shell {
+        Some(Shell::Bash | Shell::Sh | Shell::Zsh | Shell::Dash | Shell::Ksh) => &PosixParser,
+        Some(Shell::Fish) => &FishParser,
+        _ => &Fallback,
+    }
+}
+
+/// Every command that will run in `code`, per `shell`'s dialect (fallback when
+/// the shell is unknown).
+#[cfg(feature = "shell-syntax")]
+pub fn commands<'a>(shell: Option<Shell>, code: &'a str) -> Vec<Command<'a>> {
+    classify(parser(shell), code)
 }
