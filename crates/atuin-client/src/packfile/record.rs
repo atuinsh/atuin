@@ -6,8 +6,8 @@ use atuin_common::encryption::paseto_v4;
 use atuin_common::rmp::decode::{self, Bytes, DecodeError, RmpRead};
 use atuin_common::rmp::encode::{self, ByteBuf, EncodeError, RmpWrite, TryEncodeError};
 use atuin_domain::record::{
-    DecryptedData, EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag,
-    RecordVersion,
+    DecryptedData, EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey,
+    RecordTag, RecordVersion,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -290,7 +290,11 @@ impl<'a> PackManifestRecordView<'a> {
         let count = range.end - range.start;
 
         let run = store
-            .next(self.record.host.id, &RecordTag::History, range.start, count)
+            .next(
+                &RecordSeriesKey::new(self.record.host.id, RecordTag::History),
+                range.start,
+                count,
+            )
             .await
             .map_err(RecordLoadingError::StoreError)?;
 
