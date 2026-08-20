@@ -36,7 +36,7 @@ pub async fn try_pack(
     };
 
     let last_pack = store
-        .last(&(series.host, RecordTag::Packfile).into())
+        .last(&RecordSeriesKey::new(series.host, RecordTag::Packfile))
         .await
         .map_err(PackingError::Store)?;
 
@@ -138,7 +138,7 @@ mod tests {
     /// The `[start_idx, end_idx]` ranges of the manifest records currently in the store.
     async fn manifest_ranges(store: &SqliteStore, host: HostId) -> Vec<(u64, u64)> {
         store
-            .next(&(host, RecordTag::Packfile).into(), 0, 1000)
+            .next(&RecordSeriesKey::new(host, RecordTag::Packfile), 0, 1000)
             .await
             .unwrap()
             .iter()
@@ -151,7 +151,7 @@ mod tests {
     async fn pack(store: &SqliteStore, host: HostId, count: u64) {
         try_pack(
             store,
-            &(host, RecordTag::History).into(),
+            &RecordSeriesKey::new(host, RecordTag::History),
             Some(PackfileCap {
                 version: 1,
                 record_count: count,

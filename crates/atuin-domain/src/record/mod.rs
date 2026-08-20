@@ -84,12 +84,6 @@ impl RecordSeriesKey {
     }
 }
 
-impl From<(HostId, RecordTag)> for RecordSeriesKey {
-    fn from((host, tag): (HostId, RecordTag)) -> Self {
-        Self { host, tag }
-    }
-}
-
 /// A single record stored inside of our local database
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypedBuilder)]
 pub struct Record<Data> {
@@ -232,7 +226,7 @@ impl RecordStatus {
 
     /// Insert a new tail record into the store
     pub fn set(&mut self, tail: Record<DecryptedData>) {
-        self.set_raw((tail.host.id, tail.tag).into(), tail.idx)
+        self.set_raw(RecordSeriesKey::new(tail.host.id, tail.tag), tail.idx)
     }
 
     pub fn set_raw(&mut self, series: RecordSeriesKey, tail_id: RecordIdx) {
@@ -263,14 +257,14 @@ impl RecordStatus {
 
                     // The other store does exist, and it is either ahead or behind us. A diff regardless
                     Some(t) => ret.push(Diff {
-                        series: (*host, tag.clone()).into(),
+                        series: RecordSeriesKey::new(*host, tag.clone()),
                         local: Some(*idx),
                         remote: Some(t),
                     }),
 
                     // The other store does not exist :O
                     None => ret.push(Diff {
-                        series: (*host, tag.clone()).into(),
+                        series: RecordSeriesKey::new(*host, tag.clone()),
                         local: Some(*idx),
                         remote: None,
                     }),
@@ -290,7 +284,7 @@ impl RecordStatus {
                 }
 
                 ret.push(Diff {
-                    series: (*host, tag.clone()).into(),
+                    series: RecordSeriesKey::new(*host, tag.clone()),
                     remote: Some(*idx),
                     local: None,
                 });
@@ -712,8 +706,8 @@ mod tests {
     fn record_status_serializes_with_bare_string_tag_keys() {
         let host = HostId(Uuid::from_u128(0xabc));
         let mut status = RecordStatus::new();
-        status.set_raw((host, RecordTag::History).into(), 6);
-        status.set_raw((host, RecordTag::Other("custom".to_owned())).into(), 2);
+        status.set_raw(RecordSeriesKey::new(host, RecordTag::History), 6);
+        status.set_raw(RecordSeriesKey::new(host, RecordTag::Other("custom".to_owned())), 2);
 
         let json = serde_json::to_string(&status).unwrap();
         // Tag keys are bare strings, identical to the pre-refactor String-keyed shape.
@@ -721,8 +715,11 @@ mod tests {
         assert!(json.contains(r#""custom":2"#), "got {json}");
 
         let round: RecordStatus = serde_json::from_str(&json).unwrap();
-        assert_eq!(round.get(&(host, RecordTag::History).into()), Some(6));
-        assert_eq!(round.get(&(host, RecordTag::Other("custom".to_owned())).into()), Some(2));
+        assert_eq!(round.get(&RecordSeriesKey::new(host, RecordTag::History)), Some(6));
+        assert_eq!(
+            round.get(&RecordSeriesKey::new(host, RecordTag::Other("custom".to_owned()))),
+            Some(2)
+        );
     }
 
     /// Do *not* modify this test if it fails! It means the serialization of [`AdditionalData`]

@@ -7,7 +7,8 @@ use atuin_common::encryption::paseto_v4;
 use atuin_common::futures::stream::chunk_by_bounded;
 use atuin_common::rmp::decode::Bytes;
 use atuin_domain::record::{
-    DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag, RecordVersion,
+    DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
+    RecordVersion,
 };
 use eyre::{Result, bail, eyre};
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
@@ -144,7 +145,7 @@ impl HistoryStore {
         let bytes = record.serialize()?;
         let idx = self
             .store
-            .last(&(self.host_id, RecordTag::History).into())
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::History))
             .await?
             .map_or(0, |p| p.idx + 1);
 
@@ -169,7 +170,7 @@ impl HistoryStore {
 
         let idx = self
             .store
-            .last(&(self.host_id, RecordTag::History).into())
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::History))
             .await?
             .map_or(0, |p| p.idx + 1);
 

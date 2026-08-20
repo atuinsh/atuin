@@ -252,7 +252,7 @@ impl Database for Sqlite {
         let mut status = RecordStatus::new();
 
         for i in res {
-            status.set_raw((HostId(i.0), RecordTag::from(i.1)).into(), i.2 as u64);
+            status.set_raw(RecordSeriesKey::new(HostId(i.0), RecordTag::from(i.1)), i.2 as u64);
         }
 
         Ok(status)

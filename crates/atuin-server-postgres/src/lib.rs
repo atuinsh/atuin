@@ -380,7 +380,10 @@ impl Database for Postgres {
         let mut status = RecordStatus::new();
 
         for i in &res {
-            status.set_raw((HostId(i.0), RecordTag::from(i.1.clone())).into(), i.2 as u64);
+            status.set_raw(
+                RecordSeriesKey::new(HostId(i.0), RecordTag::from(i.1.clone())),
+                i.2 as u64,
+            );
         }
 
         Ok(status)

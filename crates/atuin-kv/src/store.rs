@@ -2,7 +2,9 @@ use std::collections::HashSet;
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4;
-use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx, RecordTag, RecordVersion};
+use atuin_domain::record::{
+    Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag, RecordVersion,
+};
 use entry::KvEntry;
 use eyre::{Result, eyre};
 use record::KvRecord;
@@ -85,7 +87,7 @@ impl KvStore {
         let bytes = record.serialize()?;
         let idx = self
             .record_store
-            .last(&(self.host_id, RecordTag::Kv).into())
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::Kv))
             .await?
             .map_or(0, |p| p.idx + 1);
 

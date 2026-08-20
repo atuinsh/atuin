@@ -334,7 +334,7 @@ impl SqliteStore {
                 Uuid::from_str(i.0.as_str()).expect("failed to parse uuid for local store status"),
             );
 
-            status.set_raw((host, RecordTag::from(i.1)).into(), i.2 as u64);
+            status.set_raw(RecordSeriesKey::new(host, RecordTag::from(i.1)), i.2 as u64);
         }
 
         Ok(status)
@@ -438,7 +438,9 @@ impl SqliteStore {
 mod tests {
     use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
-    use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordTag, RecordVersion};
+    use atuin_domain::record::{
+        DecryptedData, Host, HostId, Record, RecordSeriesKey, RecordTag, RecordVersion,
+    };
     use rstest::{fixture, rstest};
 
     use super::SqliteStore;
@@ -527,19 +529,19 @@ mod tests {
         };
 
         // Empty stream -> frontier is 0.
-        assert_eq!(store.first_gap(&(host, tag.clone()).into()).await.unwrap(), 0);
+        assert_eq!(store.first_gap(&RecordSeriesKey::new(host, tag.clone())).await.unwrap(), 0);
 
         // Contiguous 0,1,2 -> frontier is the next idx, 3.
         for idx in [0, 1, 2] {
             store.push(&at(idx)).await.unwrap();
         }
-        assert_eq!(store.first_gap(&(host, tag.clone()).into()).await.unwrap(), 3);
+        assert_eq!(store.first_gap(&RecordSeriesKey::new(host, tag.clone())).await.unwrap(), 3);
 
         // Add 4,5 but not 3: the frontier drops back to the hole, not the head + 1.
         for idx in [4, 5] {
             store.push(&at(idx)).await.unwrap();
         }
-        assert_eq!(store.first_gap(&(host, tag.clone()).into()).await.unwrap(), 3);
+        assert_eq!(store.first_gap(&RecordSeriesKey::new(host, tag.clone())).await.unwrap(), 3);
     }
 
     #[rstest]
@@ -656,7 +658,10 @@ mod tests {
         }
 
         assert_eq!(
-            store.len(&(host_id, RecordTag::Other("test".to_owned())).into()).await.unwrap(),
+            store
+                .len(&RecordSeriesKey::new(host_id, RecordTag::Other("test".to_owned())))
+                .await
+                .unwrap(),
             10
         );
     }

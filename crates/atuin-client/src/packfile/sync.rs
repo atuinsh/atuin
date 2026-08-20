@@ -15,7 +15,7 @@
 //! one with the local key, and pushes them into the local record store.
 
 use atuin_common::encryption::paseto_v4;
-use atuin_domain::record::{EncryptedData, Record, RecordId, RecordTag};
+use atuin_domain::record::{EncryptedData, Record, RecordId, RecordSeriesKey, RecordTag};
 use thiserror::Error;
 use tracing::instrument;
 
@@ -95,7 +95,7 @@ pub async fn download_packed(
 
     // Skip if we already have the whole range (history is contiguous, packfiles are prefixes).
     let head = store
-        .last(&(view.record.host.id, RecordTag::History).into())
+        .last(&RecordSeriesKey::new(view.record.host.id, RecordTag::History))
         .await
         .map_err(DownloadError::Store)?;
     if let Some(head) = head
@@ -220,7 +220,7 @@ mod tests {
         seed_history(&store, host, &key, 5).await;
         try_pack(
             &store,
-            &(host, RecordTag::History).into(),
+            &RecordSeriesKey::new(host, RecordTag::History),
             Some(PackfileCap {
                 version: 1,
                 record_count: 5,
@@ -229,7 +229,7 @@ mod tests {
         .await
         .unwrap();
         let manifest = store
-            .last(&(host, RecordTag::Packfile).into())
+            .last(&RecordSeriesKey::new(host, RecordTag::Packfile))
             .await
             .unwrap()
             .expect("packer should have written a manifest");
@@ -279,7 +279,7 @@ mod tests {
         seed_history(&up, host, &key, 5).await;
         try_pack(
             &up,
-            &(host, RecordTag::History).into(),
+            &RecordSeriesKey::new(host, RecordTag::History),
             Some(PackfileCap {
                 version: 1,
                 record_count: 5,
@@ -287,7 +287,8 @@ mod tests {
         )
         .await
         .unwrap();
-        let manifest = up.last(&(host, RecordTag::Packfile).into()).await.unwrap().unwrap();
+        let manifest =
+            up.last(&RecordSeriesKey::new(host, RecordTag::Packfile)).await.unwrap().unwrap();
         let (blob, _) = PackManifestRecordView::new(&manifest)
             .unwrap()
             .pack_records(&up, key.clone())
@@ -318,7 +319,7 @@ mod tests {
         assert_eq!(ids.len(), 5, "all five history records populated");
 
         // History is present locally and decrypts to the same commands.
-        let got = down.next(&(host, RecordTag::History).into(), 0, 5).await.unwrap();
+        let got = down.next(&RecordSeriesKey::new(host, RecordTag::History), 0, 5).await.unwrap();
         assert_eq!(got.len(), 5);
         let first = got[0].clone().decrypt(&key).unwrap();
         assert_eq!(first.data.0, b"command number 0");
@@ -332,7 +333,7 @@ mod tests {
         seed_history(&up, host, &key, 5).await;
         try_pack(
             &up,
-            &(host, RecordTag::History).into(),
+            &RecordSeriesKey::new(host, RecordTag::History),
             Some(PackfileCap {
                 version: 1,
                 record_count: 5,
@@ -340,13 +341,14 @@ mod tests {
         )
         .await
         .unwrap();
-        let manifest = up.last(&(host, RecordTag::Packfile).into()).await.unwrap().unwrap();
+        let manifest =
+            up.last(&RecordSeriesKey::new(host, RecordTag::Packfile)).await.unwrap().unwrap();
 
         // Downloader that already HAS the history the manifest covers.
         let down = memory_store().await;
         seed_history(&down, host, &key, 5).await;
         let expected_ids: Vec<RecordId> = down
-            .next(&(host, RecordTag::History).into(), 0, 5)
+            .next(&RecordSeriesKey::new(host, RecordTag::History), 0, 5)
             .await
             .unwrap()
             .iter()
@@ -411,7 +413,7 @@ mod tests {
         seed_history(&up, host, &key, 3).await;
         try_pack(
             &up,
-            &(host, RecordTag::History).into(),
+            &RecordSeriesKey::new(host, RecordTag::History),
             Some(PackfileCap {
                 version: 1,
                 record_count: 3,
@@ -419,7 +421,8 @@ mod tests {
         )
         .await
         .unwrap();
-        let good = up.last(&(host, RecordTag::Packfile).into()).await.unwrap().unwrap();
+        let good =
+            up.last(&RecordSeriesKey::new(host, RecordTag::Packfile)).await.unwrap().unwrap();
         let (blob, _) = PackManifestRecordView::new(&good)
             .unwrap()
             .pack_records(&up, key.clone())
@@ -468,7 +471,7 @@ mod tests {
             .expect("the valid manifest still expands");
         assert_eq!(ids.len(), 3, "the valid manifest's three records expand");
 
-        let got = down.next(&(host, RecordTag::History).into(), 0, 3).await.unwrap();
+        let got = down.next(&RecordSeriesKey::new(host, RecordTag::History), 0, 3).await.unwrap();
         assert_eq!(got.len(), 3, "the valid packfile's history is present locally");
     }
 
