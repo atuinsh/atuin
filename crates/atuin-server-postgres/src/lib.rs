@@ -8,7 +8,7 @@ use rand::Rng;
 use sqlx::postgres::PgPoolOptions;
 use tracing::instrument;
 use uuid::Uuid;
-use wrappers::{DbRecord, DbSession, DbUser};
+use wrappers::DbRecord;
 
 mod wrappers;
 
@@ -90,7 +90,6 @@ impl Database for Postgres {
             .fetch_one(self.read_pool())
             .await
             .map_err(Into::into)
-            .map(|DbSession(session)| session)
     }
 
     #[instrument(skip_all)]
@@ -100,7 +99,6 @@ impl Database for Postgres {
             .fetch_one(self.read_pool())
             .await
             .map_err(Into::into)
-            .map(|DbUser(user)| user)
     }
 
     #[instrument(skip_all)]
@@ -115,7 +113,6 @@ impl Database for Postgres {
         .fetch_one(self.read_pool())
         .await
         .map_err(Into::into)
-        .map(|DbUser(user)| user)
     }
 
     async fn delete_store(&self, user: &User) -> DbResult<()> {
@@ -226,7 +223,6 @@ impl Database for Postgres {
             .fetch_one(self.read_pool())
             .await
             .map_err(Into::into)
-            .map(|DbSession(session)| session)
     }
 
     #[instrument(skip_all)]
