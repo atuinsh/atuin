@@ -163,33 +163,29 @@ pub async fn run_grpc_server(
 /// A successful `connect` means another daemon owns it, and any other error is not evidence either
 /// way, so in both of those cases we leave the socket alone.
 #[cfg(unix)]
-fn bind_reclaiming_stale_socket(
-    path: &std::path::Path,
-) -> std::io::Result<tokio::net::UnixListener> {
-    use std::io::{Error, ErrorKind};
+fn bind_reclaiming_stale_socket(path: &std::path::Path) -> Result<tokio::net::UnixListener> {
+    use std::io::ErrorKind;
     use std::os::unix::net::UnixStream;
 
+    use eyre::bail;
     use tokio::net::UnixListener;
 
     let bind_error = match UnixListener::bind(path) {
         Ok(listener) => return Ok(listener),
         Err(e) if e.kind() == ErrorKind::AddrInUse => e,
-        Err(e) => return Err(e),
+        Err(e) => return Err(e.into()),
     };
 
     match UnixStream::connect(path) {
-        Ok(_) => {
-            let msg = format!("another daemon is already listening on {}", path.display());
-            Err(Error::new(ErrorKind::AddrInUse, msg))
-        }
+        Ok(_) => bail!("another daemon is already listening on {}", path.display()),
         Err(e) if e.kind() == ErrorKind::ConnectionRefused => {
             tracing::warn!("removing stale socket left behind at {}", path.display());
             std::fs::remove_file(path)?;
-            UnixListener::bind(path)
+            UnixListener::bind(path).context("rebinding after removing the stale socket")
         }
         Err(e) => {
             tracing::warn!("could not probe socket at {}: {e}", path.display());
-            Err(bind_error)
+            Err(bind_error.into())
         }
     }
 }
@@ -318,9 +314,9 @@ mod unix_tests {
 
         let _live = UnixListener::bind(path).unwrap();
 
-        let error = bind_reclaiming_stale_socket(path).unwrap_err();
+        let error = bind_reclaiming_stale_socket(path).unwrap_err().to_string();
 
-        assert_eq!(error.kind(), ErrorKind::AddrInUse);
+        assert!(error.contains("another daemon is already listening"), "got: {error}");
         assert!(path.exists(), "the live daemon's socket must not be removed");
         UnixStream::connect(path).expect("the live daemon should still be reachable");
     }
