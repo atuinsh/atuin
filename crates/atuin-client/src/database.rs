@@ -2071,6 +2071,50 @@ mod test {
         }
     }
 
+    /// A legacy row whose colonless hostname IS a known agent name (e.g. a machine hostnamed
+    /// `pi`, imported before hostnames were `host:user`): the author defaulted to the whole
+    /// hostname, so it tells us nothing — human on both the SQL and [`History::is_agent`] sides.
+    #[tokio::test(flavor = "multi_thread")]
+    #[rstest]
+    async fn author_filter_treats_a_colonless_agent_hostname_as_human() {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+
+        let history: History = History::import()
+            .timestamp(OffsetDateTime::now_utc())
+            .command("echo hello")
+            .cwd("/tmp")
+            .author("pi")
+            .build()
+            .into();
+        db.save(&history).await.unwrap();
+        // `CmdOrigin` cannot represent a colonless hostname (parse_lenient rewrites it), so plant
+        // the legacy shape directly.
+        sqlx::query("update history set hostname = 'pi'").execute(&db.pool).await.unwrap();
+
+        let loaded = db.load(history.id.0.as_str()).await.unwrap().unwrap();
+        assert!(!loaded.is_agent());
+
+        let context = Context {
+            cmd_origin: CmdOrigin::try_from("pi:unknown-user".to_owned()).unwrap(),
+            session: "session".into(),
+            cwd: "/tmp".into(),
+            host_id: "host".into(),
+            git_root: None,
+        };
+        for (pattern, expected) in [(AuthorPattern::AllUser, 1), (AuthorPattern::AllAgent, 0)] {
+            let authors = OrFilter::from_list(vec![pattern]).unwrap();
+            let filters = OptFilters {
+                authors: authors.as_slice_filter(),
+                ..Default::default()
+            };
+            let results = db
+                .search(DbSearchMode::FullText, FilterMode::Global, &context, "echo", filters)
+                .await
+                .unwrap();
+            assert_eq!(results.len(), expected, "{authors:?}");
+        }
+    }
+
     /// A user called `pi` shares a name with the `pi` agent, so on their machine the author name
     /// alone cannot say who ran a command: only an entry that states its kind is an agent's.
     #[tokio::test(flavor = "multi_thread")]

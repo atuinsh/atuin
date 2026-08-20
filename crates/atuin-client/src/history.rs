@@ -312,7 +312,19 @@ impl History {
     pub fn is_agent(&self) -> bool {
         match self.author_kind {
             Some(kind) => kind == AuthorKind::Agent,
-            None => is_known_agent(&self.author) && self.author != self.cmd_origin.user().as_ref(),
+            None => {
+                // The username the author would have defaulted to. `CmdOrigin::parse_lenient`
+                // maps a legacy colonless hostname to a placeholder user ("unknown-user"), but
+                // old writers defaulted the author to the whole hostname there — as does the SQL
+                // author filter's user expression — so compare against the host in that case.
+                let user = self.cmd_origin.user();
+                let defaulted = if user.as_ref() == "unknown-user" {
+                    self.cmd_origin.host().into_inner()
+                } else {
+                    user.into_inner()
+                };
+                is_known_agent(&self.author) && self.author != defaulted
+            }
         }
     }
 
@@ -745,6 +757,7 @@ mod tests {
     #[case::agent_name_is_the_username("pi", "raspberry:pi", None, false)]
     #[case::plain_user("ellie", "raspberry:ellie", None, false)]
     #[case::hostname_without_a_username("pi", "raspberry", None, true)]
+    #[case::colonless_hostname_is_the_agent_name("pi", "pi", None, false)]
     // A stated kind is authoritative, which is the only way to tell the `pi` agent apart from the
     // `pi` user on their own machine.
     #[case::stated_agent("pi", "raspberry:pi", Some(AuthorKind::Agent), true)]
