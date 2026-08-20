@@ -267,15 +267,11 @@ impl History {
         shell: Option<String>,
         author_kind: Option<AuthorKind>,
     ) -> Self {
-        let session = session
-            .or_else(|| env::var("ATUIN_SESSION").ok())
-            .unwrap_or_else(|| uuid_v7().as_simple().to_string());
+        let session = session.unwrap_or_else(|| uuid_v7().as_simple().to_string());
         let cmd_origin = cmd_origin.unwrap_or_else(CmdOrigin::probe_current);
-        let author = normalize_optional_string(author)
-            .or_else(|| normalize_optional_string(env::var(HISTORY_AUTHOR_ENV).ok()))
-            .unwrap_or_else(|| cmd_origin.user().to_string());
-        let intent = normalize_optional_string(intent)
-            .or_else(|| normalize_optional_string(env::var(HISTORY_INTENT_ENV).ok()));
+        let author =
+            normalize_optional_string(author).unwrap_or_else(|| cmd_origin.user().to_string());
+        let intent = normalize_optional_string(intent);
         let shell = normalize_optional_string(shell);
 
         Self {

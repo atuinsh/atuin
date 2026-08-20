@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use atuin_client::database::{Sqlite, current_context};
 use atuin_client::history::store::HistoryStore;
-use atuin_client::history::{AuthorKind, History, probe_author};
+use atuin_client::history::{AuthorKind, History};
 #[cfg(feature = "sync")]
 use atuin_client::record;
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -15,6 +15,7 @@ use atuin_common::logs::LogConfig;
 use atuin_common::string::{EscapeNonPrintablePosixExt as _, NonNulStr};
 use atuin_common::time::{DurationExt, OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::utils;
+#[cfg(feature = "daemon")]
 use atuin_common::utils::normalize_optional_string;
 #[cfg(feature = "daemon")]
 use atuin_daemon::history::{HistoryEventKind, TailHistoryReply};
@@ -414,22 +415,13 @@ fn make_starting_history(
         return None;
     }
 
-    // When the flags didn't state an identity, fall back to the one the invoking integration
-    // exported to the environment. The env kind only qualifies a stated author: a stray
-    // ATUIN_HISTORY_AUTHOR_KIND inherited by a nested interactive shell must not stamp the
-    // human's own commands.
-    let author = normalize_optional_string(author.map(String::from)).or_else(probe_author);
-    let author_kind =
-        author_kind.or_else(|| author.is_some().then(AuthorKind::probe_current).flatten());
-
     let h: History = History::capture()
         .timestamp(OffsetDateTime::now_utc())
         .command(command)
         .cwd(cwd)
-        .author_opt(author)
+        .author_opt(author.map(String::from))
         .author_kind_opt(author_kind)
         .intent_opt(intent.map(String::from))
-        .shell_opt(std::env::var("ATUIN_SHELL").ok())
         .build()
         .into();
 
