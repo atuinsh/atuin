@@ -122,7 +122,7 @@ fn apply_author_filter(sql: &mut SqlBuilder, authors: OrFilter<&[AuthorPattern]>
         "CASE WHEN instr(hostname, ':') = 0 THEN hostname WHEN substr(hostname, instr(hostname, \
          ':') + 1) = {unknown} THEN substr(hostname, 1, instr(hostname, ':') - 1) ELSE \
          substr(hostname, instr(hostname, ':') + 1) END",
-        unknown = quote(&UNKNOWN_USER),
+        unknown = quote(UNKNOWN_USER),
     );
 
     // Mirrors [`History::is_agent`]: a recorded kind wins, and without one a known agent name means
@@ -278,6 +278,9 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for History {
         let intent: Option<String> = row.try_get("intent").ok().flatten();
         let intent = intent.filter(|intent| !intent.trim().is_empty());
         let shell: Option<String> = row.try_get("shell").ok().flatten();
+        let author_kind: Option<i64> = row.try_get("author_kind").ok().flatten();
+        let author_kind =
+            author_kind.and_then(|kind| u8::try_from(kind).ok()).and_then(AuthorKind::from_repr);
 
         Ok(Self::from_db()
             .id(row.try_get("id")?)
@@ -292,6 +295,7 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for History {
             .intent(intent)
             .deleted_at(deleted_at.map(OffsetDateTime::from_unix_nanos_i64))
             .shell(shell)
+            .author_kind(author_kind)
             .build()
             .into())
     }
@@ -396,39 +400,6 @@ impl Sqlite {
             .await?;
 
         Ok(())
-    }
-
-    fn row_to_history(row: &SqliteRow) -> History {
-        let deleted_at: Option<i64> = row.get("deleted_at");
-        let hostname: String = row.get("hostname");
-        let author: Option<String> = row.try_get("author").ok().flatten();
-        let author = author.filter(|author| !author.trim().is_empty()).unwrap_or_else(|| {
-            CmdOrigin::try_from(hostname.clone())
-                .map_or_else(|err| err.0, |origin| origin.user().into_inner().to_owned())
-        });
-        let intent: Option<String> = row.try_get("intent").ok().flatten();
-        let intent = intent.filter(|intent| !intent.trim().is_empty());
-        let shell: Option<String> = row.try_get("shell").ok().flatten();
-        let author_kind: Option<i64> = row.try_get("author_kind").ok().flatten();
-        let author_kind =
-            author_kind.and_then(|kind| u8::try_from(kind).ok()).and_then(AuthorKind::from_repr);
-
-        History::from_db()
-            .id(row.get("id"))
-            .timestamp(OffsetDateTime::from_unix_nanos_i64(row.get("timestamp")))
-            .duration(row.get("duration"))
-            .exit(row.get("exit"))
-            .command(row.get("command"))
-            .cwd(row.get("cwd"))
-            .session(row.get("session"))
-            .hostname(hostname)
-            .author(author)
-            .intent(intent)
-            .deleted_at(deleted_at.map(OffsetDateTime::from_unix_nanos_i64))
-            .shell(shell)
-            .author_kind(author_kind)
-            .build()
-            .into()
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
