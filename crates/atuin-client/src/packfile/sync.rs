@@ -148,7 +148,7 @@ mod tests {
 
     /// A fresh in-memory record store.
     async fn memory_store() -> SqliteStore {
-        SqliteStore::new(":memory:", test_local_timeout()).await.unwrap()
+        SqliteStore::in_memory(test_local_timeout()).await.unwrap()
     }
 
     /// Push a contiguous run of `count` encrypted HISTORY records (idx `0..count`).

@@ -6,7 +6,7 @@ use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
 
 use atuin_common::logs::LogLevel;
-use atuin_common::utils;
+use atuin_common::path::PathExt;
 use atuin_domain::record::HostId;
 use clap::ValueEnum;
 use config::builder::DefaultState;
@@ -1154,7 +1154,11 @@ impl Settings {
                 let (db_path, timeout) = META_CONFIG.get().ok_or_else(|| {
                     eyre!("meta store config not set — Settings::new() has not been called")
                 })?;
-                crate::meta::MetaStore::new(db_path, *timeout).await
+                crate::meta::MetaStore::new(
+                    db_path,
+                    std::time::Duration::try_from_secs_f64(*timeout)?,
+                )
+                .await
             })
             .await
     }
@@ -1522,10 +1526,14 @@ impl Settings {
             .set_default("ai.opening.send_cwd", false)?
             .set_default("ai.opening.send_last_command", false)?
             .set_default("ui.syntax_highlight", true)?
-            .set_default(
-                "search.filters",
-                vec!["global", "host", "session", "workspace", "directory", "session-preload"],
-            )?
+            .set_default("search.filters", vec![
+                "global",
+                "host",
+                "session",
+                "workspace",
+                "directory",
+                "session-preload",
+            ])?
             .set_default("theme.name", "default")?
             .set_default("theme.debug", None::<bool>)?
             .set_default("tmux.enabled", false)?
@@ -1769,7 +1777,7 @@ impl Settings {
             self.key_path.as_path(),
             Path::new(&self.meta.db_path),
         ];
-        paths.iter().all(|p| !utils::broken_symlink(*p))
+        paths.iter().all(|p| !p.is_dangling_symlink())
     }
 
     /// Check that a TOML string can be successfully deserialized into a [`Settings`] object.
@@ -1830,12 +1838,13 @@ pub fn init_meta_config_for_testing(meta_db_path: impl Into<String>, local_timeo
 
 #[cfg(test)]
 pub(crate) fn test_local_timeout() -> Duration {
-    std::env::var("ATUIN_TEST_LOCAL_TIMEOUT")
+    let secs = std::env::var("ATUIN_TEST_LOCAL_TIMEOUT")
         .ok()
-        .and_then(|x| x.parse().ok())
+        .and_then(|x| x.parse::<f64>().ok())
         // this hardcoded value should be replaced by a simple way to get the
         // default local_timeout of Settings if possible
-        .unwrap_or(2.0)
+        .unwrap_or(2.0);
+    Duration::try_from_secs_f64(secs).unwrap_or_else(|_| Duration::from_secs(2))
 }
 
 #[cfg(test)]

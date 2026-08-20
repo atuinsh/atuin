@@ -1,13 +1,6 @@
-//! Sqlite-related utilities.
-
-use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
 
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
-};
+use sqlx::sqlite::SqlitePool;
 use thiserror::Error;
 use tracing::warn;
 
@@ -107,97 +100,15 @@ impl Info {
 
         drop(handle);
 
-        let limit_num = match usize::try_from(limit) {
+        match usize::try_from(limit) {
             Ok(l) => l,
             Err(err) => {
                 warn!(
                     "failed to convert {limit} to a number to compute bind param count: {err}. \
                      performance could be degraded."
                 );
-                return Self::MAX_BIND_PARAMS_FALLBACK;
+                Self::MAX_BIND_PARAMS_FALLBACK
             }
-        };
-
-        limit_num
-    }
-}
-
-/// An atuin-specific wrapper around Sqlite.
-///
-/// This has atuin-specific utilities.
-#[derive(Debug, Clone)]
-pub struct Sqlite {
-    pool: SqlitePool,
-
-    /// Sqlite has a limit on the total number of parameters you can bind in a single query.
-    ///
-    /// This value represents that.
-    info: EagerFutureCell<Info>,
-}
-
-#[derive(Debug, Error)]
-pub enum SqliteOpenOrCreateError {
-    #[error("non-utf8 path given")]
-    NonUtf8Path,
-
-    #[error("failed to create directory for sqlite database: {0}")]
-    FailedToCreateDir(std::io::Error),
-
-    #[error("failed to parse connection options: {0}")]
-    ConenctOptionsParsing(sqlx::Error),
-
-    #[error("failed to create the sqlite pool")]
-    PoolCreateError(sqlx::Error),
-}
-
-impl Sqlite {
-    /// Open an existing sqlite database, potentially creating the database if necessary.
-    ///
-    /// # Panics
-    ///
-    /// Panics if there is no active [`tokio::runtime::Handle`].
-    pub async fn open_or_create(
-        path: impl AsRef<Path>,
-        timeout: Duration,
-    ) -> Result<Self, SqliteOpenOrCreateError> {
-        let path = path.as_ref();
-
-        if !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            std::fs::create_dir_all(dir).map_err(SqliteOpenOrCreateError::FailedToCreateDir)?;
         }
-
-        let opts = SqliteConnectOptions::from_str(
-            path.as_os_str().to_str().ok_or(SqliteOpenOrCreateError::NonUtf8Path)?,
-        )
-        .map_err(SqliteOpenOrCreateError::ConenctOptionsParsing)?
-        .journal_mode(SqliteJournalMode::Wal)
-        .optimize_on_close(true, None)
-        .synchronous(SqliteSynchronous::Normal)
-        .foreign_keys(true)
-        .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(timeout)
-            .connect_with(opts)
-            .await
-            .map_err(SqliteOpenOrCreateError::PoolCreateError)?;
-
-        Ok(Self {
-            info: Info::eager_future(pool.clone()),
-            pool,
-        })
-    }
-
-    /// Get the pool of this structure.
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    /// Get metadata on the database.
-    #[must_use]
-    pub async fn info(&self) -> &Info {
-        self.info.get().await
     }
 }

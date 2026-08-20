@@ -8,12 +8,12 @@ use std::time::Duration;
 
 use atuin_common::encryption::paseto_v4;
 use atuin_common::sqlite::Sqlite;
-use atuin_common::utils;
 use atuin_domain::record::{
     Host, HostId, Record, RecordId, RecordIdx, RecordStatus, RecordTag, RecordVersion,
 };
 use eyre::{Result, eyre};
-use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
+use sqlx::sqlite::SqliteRow;
+use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -27,15 +27,16 @@ impl SqliteStore {
 
         debug!("opening sqlite database at {path:?}");
 
-        if utils::broken_symlink(path) {
-            eprintln!(
-                "Atuin: Sqlite db path ({path:?}) is a broken symlink. Unable to read or create \
-                 replacement."
-            );
-            std::process::exit(1);
-        }
+        let sqlite = Sqlite::builder().file(path).timeout(timeout).open().await?;
 
-        let sqlite = Sqlite::open_or_create(path, timeout).await?;
+        Self::setup_db(sqlite.pool()).await?;
+
+        Ok(Self { sqlite })
+    }
+
+    /// Open a transient, in-memory record store. Intended for tests.
+    pub async fn in_memory(timeout: Duration) -> Result<Self> {
+        let sqlite = Sqlite::builder().memory().timeout(timeout).open().await?;
 
         Self::setup_db(sqlite.pool()).await?;
 
@@ -420,7 +421,7 @@ mod tests {
 
     #[fixture]
     async fn store() -> SqliteStore {
-        SqliteStore::new(":memory:", test_local_timeout()).await.unwrap()
+        SqliteStore::in_memory(test_local_timeout()).await.unwrap()
     }
 
     #[fixture]
