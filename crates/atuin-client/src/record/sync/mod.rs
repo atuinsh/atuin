@@ -82,10 +82,6 @@ pub enum Operation {
 }
 
 /// Drives atuin's sync.
-///
-/// The intended way to use this is to build one with the [`SyncEngine::builder()`] method. Both
-/// fields are cheap, shared handles, so cloning an engine just hands out another handle to the same
-/// client and store.
 #[derive(Clone)]
 pub struct SyncEngine {
     client: Client,
@@ -104,8 +100,6 @@ pub struct Keyed<'k> {
 impl SyncEngine {
     /// Pair this engine with an encryption `key` to run the crypto-touching sync operations.
     pub fn keyed<'k>(&'k self, key: &'k paseto_v4::Key) -> Keyed<'k> {
-        // The eager cell's future must be `'static`, so it can't borrow `self`. Hand it an owned
-        // engine handle (a cheap clone) and key to verify in the background.
         let engine = self.clone();
         let key_for_check = key.clone();
         let key_check = EagerFutureCell::new(
@@ -120,12 +114,7 @@ impl SyncEngine {
         }
     }
 
-    /// Verify that `key` can decrypt the remote's data, fetching the remote index and sampling one
-    /// record from it.
-    ///
-    /// Returns `None` when the key is good (or there is nothing encrypted to test against), and
-    /// `Some` with the reason otherwise: [`SyncError::WrongKey`] on a decryption failure, or a
-    /// [`SyncError::RemoteRequestError`] if the remote index or sample could not be fetched.
+    /// Verify that `key` can decrypt the remote's data. [`Option::None`] when the key is good.
     async fn check_encryption_key(&self, key: &paseto_v4::Key) -> Option<SyncError> {
         let remote_index = match self.record_status().await {
             Ok(idx) => idx,
@@ -603,11 +592,14 @@ mod tests {
 
         assert_eq!(operations.len(), 1);
 
-        assert_eq!(operations[0], Operation::Upload {
-            series: RecordSeriesKey::new(record.host.id, record.tag.clone()),
-            local: record.idx,
-            remote: None,
-        });
+        assert_eq!(
+            operations[0],
+            Operation::Upload {
+                series: RecordSeriesKey::new(record.host.id, record.tag.clone()),
+                local: record.idx,
+                remote: None,
+            }
+        );
     }
 
     #[rstest]
@@ -631,19 +623,22 @@ mod tests {
 
         assert_eq!(operations.len(), 2);
 
-        assert_eq!(operations, vec![
-            // Or in otherwords, local is ahead by one
-            Operation::Upload {
-                series: RecordSeriesKey::new(local_ahead.host.id, local_ahead.tag.clone()),
-                local: 1,
-                remote: Some(0),
-            },
-            // Or in other words, remote knows of a record in an entirely new store (tag)
-            Operation::Download {
-                series: RecordSeriesKey::new(remote_ahead.host.id, remote_ahead.tag.clone()),
-                remote: 0,
-            },
-        ]);
+        assert_eq!(
+            operations,
+            vec![
+                // Or in otherwords, local is ahead by one
+                Operation::Upload {
+                    series: RecordSeriesKey::new(local_ahead.host.id, local_ahead.tag.clone()),
+                    local: 1,
+                    remote: Some(0),
+                },
+                // Or in other words, remote knows of a record in an entirely new store (tag)
+                Operation::Download {
+                    series: RecordSeriesKey::new(remote_ahead.host.id, remote_ahead.tag.clone()),
+                    remote: 0,
+                },
+            ]
+        );
     }
 
     #[rstest]
@@ -1526,10 +1521,13 @@ mod packfile_capability_tests {
             .await
             .keyed(&key)
             .sync_remote(
-                vec![packfile_download_op(host, 3), Operation::Download {
-                    remote: 3,
-                    series: RecordSeriesKey::new(host, RecordTag::History),
-                }],
+                vec![
+                    packfile_download_op(host, 3),
+                    Operation::Download {
+                        remote: 3,
+                        series: RecordSeriesKey::new(host, RecordTag::History),
+                    },
+                ],
                 100,
             )
             .await
