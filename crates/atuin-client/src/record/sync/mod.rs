@@ -10,12 +10,14 @@ use std::cmp::Ordering;
 use std::fmt::Write;
 
 use atuin_common::encryption::paseto_v4;
+use atuin_common::sync::EagerFutureCell;
 use atuin_domain::caps::PackfileCap;
 use atuin_domain::record::{Diff, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag};
 use eyre::Result;
 use futures::{StreamExt, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use thiserror::Error;
+use tokio::runtime::Handle;
 use tracing::instrument;
 
 use super::sqlite_store::SqliteStore;
@@ -28,7 +30,7 @@ pub use builder::{ClientSource, SyncEngineBuilder, SyncEngineInit};
 /// How many packfile blobs to transfer (upload or download) concurrently within a single page.
 const MAX_CONCURRENT_PACKFILE_TRANSFERS: usize = 16;
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum SyncError {
     #[error("the local store is ahead of the remote, but for another host. has remote lost data?")]
     LocalAheadOtherHost,
@@ -92,12 +94,31 @@ pub struct SyncEngine {
 pub struct Keyed<'k> {
     engine: &'k SyncEngine,
     key: &'k paseto_v4::Key,
+    /// The result of verifying `key` against the remote. Read via [`Self::key_valid`].
+    key_check: EagerFutureCell<Option<SyncError>>,
 }
 
 impl SyncEngine {
     /// Pair this engine with an encryption `key` to run the crypto-touching sync operations.
     pub fn keyed<'k>(&'k self, key: &'k paseto_v4::Key) -> Keyed<'k> {
-        Keyed { engine: self, key }
+        let client = self.client.clone();
+        let key_for_check = key.clone();
+        let key_check = EagerFutureCell::new(
+            async move {
+                let remote_index = match client.record_status().await {
+                    Ok(idx) => idx,
+                    Err(e) => return Some(SyncError::RemoteRequestError { msg: e.to_string() }),
+                };
+                check_key_against_index(&client, &key_for_check, &remote_index).await
+            },
+            &Handle::current(),
+        );
+
+        Keyed {
+            engine: self,
+            key,
+            key_check,
+        }
     }
 
     /// Fetch the remote's record status index.
@@ -453,50 +474,56 @@ impl Keyed<'_> {
         Ok((uploaded, downloaded))
     }
 
-    #[instrument(level = "trace", skip_all, err)]
-    pub async fn check_encryption_key(&self, remote_index: &RecordStatus) -> Result<(), SyncError> {
-        let sample = remote_index
-            .hosts
-            .iter()
-            .flat_map(|(host, tags)| {
-                tags.keys().map(move |tag| RecordSeriesKey::new(*host, tag.clone()))
-            })
-            // Note we have to skip `Packfile`s here because packfiles _aren't_ actually encrypted,
-            // so using the default CEK would fail decryption.
-            .find(|series| series.tag != RecordTag::Packfile);
-
-        let Some(series) = sample else {
-            return Ok(());
-        };
-
-        let records = self
-            .engine
-            .client
-            .next_records(&series, 0, 1)
-            .await
-            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
-
-        let Some(record) = records.into_iter().next() else {
-            return Ok(());
-        };
-
-        record.decrypt(self.key).map_err(|_| SyncError::WrongKey)?;
-
-        Ok(())
+    /// The verdict of verifying this `Keyed`'s key against the remote.
+    pub async fn key_valid(&self) -> Option<SyncError> {
+        self.key_check.get().await.clone()
     }
 
     /// Run a full sync: diff local against remote, verify the key can read the remote, resolve the
     /// diff into operations, then apply them.
     #[instrument(level = "trace", skip_all, err)]
     pub async fn sync(&self) -> Result<(u64, Vec<RecordId>), SyncError> {
-        let (diff, remote_index) = self.engine.diff().await?;
+        let (diff, _remote_index) = self.engine.diff().await?;
 
-        // Bail before mutating either side if the local key can't read the remote.
-        self.check_encryption_key(&remote_index).await?;
+        if let Some(err) = self.key_valid().await {
+            return Err(err);
+        }
 
         let operations = SyncEngine::operations(diff)?;
         self.sync_remote(operations, 100).await
     }
+}
+
+/// Verify that `key` can decrypt the remote's data, sampling one record from `remote_index`.
+///
+/// Returns `None` when the key is good (or there is nothing encrypted to test against), and `Some`
+/// with the reason otherwise: [`SyncError::WrongKey`] on a decryption failure, or a
+/// [`SyncError::RemoteRequestError`] if the sample could not be fetched.
+async fn check_key_against_index(
+    client: &Client,
+    key: &paseto_v4::Key,
+    remote_index: &RecordStatus,
+) -> Option<SyncError> {
+    let sample = remote_index
+        .hosts
+        .iter()
+        .flat_map(|(host, tags)| {
+            tags.keys().map(move |tag| RecordSeriesKey::new(*host, tag.clone()))
+        })
+        // Note we have to skip `Packfile`s here because packfiles _aren't_ actually encrypted,
+        // so using the default CEK would fail decryption.
+        .find(|series| series.tag != RecordTag::Packfile);
+
+    let series = sample?;
+
+    let records = match client.next_records(&series, 0, 1).await {
+        Ok(records) => records,
+        Err(e) => return Some(SyncError::RemoteRequestError { msg: e.to_string() }),
+    };
+
+    let record = records.into_iter().next()?;
+
+    record.decrypt(key).err().map(|_| SyncError::WrongKey)
 }
 
 #[cfg(test)]
@@ -923,14 +950,11 @@ mod packfile_download_tests {
             .await;
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
-        let store = memory_store().await;
 
-        build_engine(client, store)
-            .await
-            .keyed(&key)
-            .check_encryption_key(&remote_index)
-            .await
-            .expect("a plaintext packfile manifest must not be treated as a wrong key");
+        assert!(
+            super::check_key_against_index(&client, &key, &remote_index).await.is_none(),
+            "a plaintext packfile manifest must not be treated as a wrong key"
+        );
     }
 
     /// GUARD: excluding the packfile tag must not weaken real detection -- a genuinely wrong key
@@ -964,13 +988,8 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
 
         let wrong = paseto_v4::Key::from([9u8; 32]);
-        let err = build_engine(client, store)
-            .await
-            .keyed(&wrong)
-            .check_encryption_key(&remote_index)
-            .await
-            .expect_err("a wrong key on an encrypted record must still be detected");
-        assert!(matches!(err, SyncError::WrongKey), "expected WrongKey, got {err:?}");
+        let err = super::check_key_against_index(&client, &wrong, &remote_index).await;
+        assert!(matches!(err, Some(SyncError::WrongKey)), "expected WrongKey, got {err:?}");
     }
 
     #[rstest]

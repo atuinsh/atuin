@@ -52,15 +52,15 @@ impl Pull {
             .connect()
             .await?;
 
-        let (diff, remote_index) = engine.diff().await?;
+        // Construct `keyed` first so the key check starts in the background, overlapping the diff.
+        let keyed = engine.keyed(&key);
+        let (diff, _remote_index) = engine.diff().await?;
 
         // Skip on --force: local was already wiped above, mismatch is the user's call.
-        if !self.force {
-            engine
-                .keyed(&key)
-                .check_encryption_key(&remote_index)
-                .await
-                .map_err(crate::print_error::format_sync_error)?;
+        if !self.force
+            && let Some(err) = keyed.key_valid().await
+        {
+            return Err(crate::print_error::format_sync_error(err));
         }
 
         let operations = SyncEngine::operations(diff)?;
@@ -88,7 +88,7 @@ impl Pull {
             })
             .collect();
 
-        let (_, downloaded) = engine.keyed(&key).sync_remote(operations, self.page).await?;
+        let (_, downloaded) = keyed.sync_remote(operations, self.page).await?;
 
         println!("Downloaded {} records", downloaded.len());
 

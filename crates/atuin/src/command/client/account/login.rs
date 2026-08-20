@@ -282,21 +282,15 @@ async fn verify_key_against_remote(
         .build()
         .connect()
         .await?;
-    let remote_index = match engine.record_status().await {
-        Ok(idx) => idx,
-        Err(e) => {
-            tracing::warn!("could not fetch remote status to verify key: {e}");
-            return Ok(());
-        }
-    };
-
     loop {
-        let check = engine.keyed(&key).check_encryption_key(&remote_index).await;
+        // Constructing `keyed` kicks off the remote key check in the background; awaiting
+        // `key_valid` collects its verdict.
+        let check = engine.keyed(&key).key_valid().await;
         match check {
             // Only persist a key the server has confirmed can read the data, so
             // that cancelling out of a retry leaves the local store as it was.
-            Ok(()) => return store_key(settings, store, &key).await,
-            Err(SyncError::WrongKey) => {
+            None => return store_key(settings, store, &key).await,
+            Some(SyncError::WrongKey) => {
                 if !interactive {
                     logout_wrong_key().await;
                 }
@@ -321,7 +315,7 @@ async fn verify_key_against_remote(
                     _ => logout_wrong_key().await,
                 }
             }
-            Err(e) => {
+            Some(e) => {
                 // Non-key error (e.g. transient network issue). Don't fail the
                 // login — the user is authenticated and can sync later when the
                 // network recovers.
