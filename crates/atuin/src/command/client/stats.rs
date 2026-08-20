@@ -6,6 +6,7 @@ use clap::Parser;
 use eyre::Result;
 use interim::parse_date_string;
 use time::{Duration, OffsetDateTime, Time};
+use tracing::instrument;
 
 fn parse_ngram_size(s: &str) -> Result<usize, String> {
     let value = s.parse::<usize>().map_err(|_| format!("'{s}' is not a valid window size"))?;
@@ -46,6 +47,7 @@ pub struct Cmd {
 }
 
 impl Cmd {
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(&self, db: &Sqlite, settings: &Settings, theme: &Theme) -> Result<()> {
         let context = current_context().await?;
         let words = if self.period.is_empty() {

@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4;
-use atuin_domain::record::{DecryptedData, Host, HostId, RecordTag, RecordVersion};
+use atuin_domain::record::{
+    DecryptedData, Host, HostId, RecordSeriesKey, RecordTag, RecordVersion,
+};
 use eyre::{Result, bail, ensure, eyre};
 
 use crate::shell::Var;
@@ -272,7 +274,7 @@ impl VarStore {
 
         let idx = self
             .store
-            .last(self.host_id, &RecordTag::DotfilesVar)
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::DotfilesVar))
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
@@ -303,7 +305,7 @@ impl VarStore {
 
         let idx = self
             .store
-            .last(self.host_id, &RecordTag::DotfilesVar)
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::DotfilesVar))
             .await?
             .map_or(0, |entry| entry.idx + 1);
 

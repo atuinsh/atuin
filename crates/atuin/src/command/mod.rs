@@ -47,12 +47,11 @@ impl AtuinCmd {
         #[cfg(not(windows))]
         let prev_umask = umask(Mode::RWXG | Mode::RWXO);
 
-        match self {
-            // Client commands initialize their own logging
+        let _log_guard = match &self {
             #[cfg(feature = "client")]
-            Self::Client(_) => {}
-            _ => crate::logs::init_logging(&LogConfig::stderr_only()),
-        }
+            Self::Client(_) => None,
+            _ => Some(crate::logs::LogCtx::try_enable("atuin", &LogConfig::stderr_only())?),
+        };
 
         match self {
             #[cfg(feature = "client")]

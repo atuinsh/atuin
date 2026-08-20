@@ -1,22 +1,32 @@
-// do a sync :O
+//! The core sync engine that Atuin uses.
+//!
+//! This is the library that handles syncing records between a client and a server.
+//!
+//! TODO(markovejnovic): Migrate this outside of `record/`, since it handles a lot more than just
+//!                      records.
+//!
+//! > do a sync :O
 use std::cmp::Ordering;
 use std::fmt::Write;
 use std::num::NonZeroU64;
-use std::sync::Arc;
 
 use atuin_common::encryption::paseto_v4;
 use atuin_common::range::RangeTiledExt;
-use atuin_domain::caps::{CapClient, PackfileCap};
-use atuin_domain::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus, RecordTag};
+use atuin_domain::caps::PackfileCap;
+use atuin_domain::record::{Diff, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag};
 use eyre::Result;
 use futures::{StreamExt, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use thiserror::Error;
+use tracing::instrument;
 
+use self::packfile::pack;
 use super::sqlite_store::SqliteStore;
-use crate::api_client::{Client, caps_client};
-use crate::packfile::{download_packed, pack};
-use crate::settings::Settings;
+use crate::api_client::Client;
+
+mod builder;
+mod packfile;
+pub use builder::{ClientSource, SyncEngineBuilder, SyncEngineInit};
 
 /// How many packfile blobs to download concurrently within a single page. (Uploads are batched by
 /// [`Client::upload_packfiles`](crate::api_client::Client::upload_packfiles).)
@@ -67,544 +77,511 @@ pub enum Operation {
     Upload {
         local: RecordIdx,
         remote: Option<RecordIdx>,
-        host: HostId,
-        tag: RecordTag,
+        series: RecordSeriesKey,
     },
     Download {
         remote: RecordIdx,
-        host: HostId,
-        tag: RecordTag,
+        series: RecordSeriesKey,
     },
     Noop {
-        host: HostId,
-        tag: RecordTag,
+        series: RecordSeriesKey,
     },
 }
 
-pub async fn build_client_with_caps(
-    settings: &Settings,
-    caps: Arc<CapClient>,
-) -> Result<Client, SyncError> {
-    Client::new(
-        settings.sync_address.clone(),
-        &settings
-            .sync_auth_token()
+/// Drives atuin's sync.
+///
+/// The intended way to use this is to build one with the [`SyncEngine::builder()`] method.
+pub struct SyncEngine {
+    client: Client,
+    store: SqliteStore,
+}
+
+/// A [`SyncEngine`] paired with an encryption key, for the operations that encrypt or decrypt.
+/// Obtained from [`SyncEngine::keyed`].
+pub struct Keyed<'k> {
+    engine: &'k SyncEngine,
+    key: &'k paseto_v4::Key,
+}
+
+impl SyncEngine {
+    /// Pair this engine with an encryption `key` to run the crypto-touching sync operations.
+    pub fn keyed<'k>(&'k self, key: &'k paseto_v4::Key) -> Keyed<'k> {
+        Keyed { engine: self, key }
+    }
+
+    /// Fetch the remote's record status index.
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn record_status(&self) -> Result<RecordStatus, SyncError> {
+        self.client
+            .record_status()
             .await
-            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?,
-        settings.network_connect_timeout,
-        settings.network_timeout,
-        &settings.extra_headers,
-        caps,
-    )
-    .map_err(|e| SyncError::OperationalError { msg: e.to_string() })
-}
+            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })
+    }
 
-pub async fn build_client(settings: &Settings) -> Result<Client, SyncError> {
-    let caps = caps_client(&settings.sync_address, &settings.extra_headers)
-        .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?;
-    build_client_with_caps(settings, caps).await
-}
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn diff(&self) -> Result<(Vec<Diff>, RecordStatus), SyncError> {
+        let local_index = self
+            .store
+            .status()
+            .await
+            .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
 
-pub async fn diff(
-    client: &Client,
-    store: &SqliteStore,
-) -> Result<(Vec<Diff>, RecordStatus), SyncError> {
-    let local_index =
-        store.status().await.map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
+        let remote_index = self
+            .client
+            .record_status()
+            .await
+            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
 
-    let remote_index = client
-        .record_status()
-        .await
-        .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
+        let diff = local_index.diff(&remote_index);
 
-    let diff = local_index.diff(&remote_index);
+        Ok((diff, remote_index))
+    }
 
-    Ok((diff, remote_index))
-}
+    // Take a diff and resolve it into a set of operations. In theory this could be done as a part of
+    // the diffing stage, but it's easier to reason about and test this way. It needs none of the
+    // engine's state, so it's an associated function rather than a method.
+    #[instrument(level = "trace", skip_all, fields(n_diffs = diffs.len()), err)]
+    pub fn operations(diffs: Vec<Diff>) -> Result<Vec<Operation>, SyncError> {
+        let mut operations = diffs
+            .into_iter()
+            .map(|diff| match (diff.local, diff.remote) {
+                // We both have it! Could be either. Compare.
+                (Some(local), Some(remote)) => Ok(match local.cmp(&remote) {
+                    Ordering::Equal => Operation::Noop {
+                        series: diff.series,
+                    },
+                    Ordering::Greater => Operation::Upload {
+                        local,
+                        remote: Some(remote),
+                        series: diff.series,
+                    },
+                    Ordering::Less => Operation::Download {
+                        remote,
+                        series: diff.series,
+                    },
+                }),
 
-// Take a diff, along with a local store, and resolve it into a set of operations.
-// With the store as context, we can determine if a tail exists locally or not and therefore if it needs uploading or download.
-// In theory this could be done as a part of the diffing stage, but it's easier to reason
-// about and test this way
-pub fn operations(diffs: Vec<Diff>, _store: &SqliteStore) -> Result<Vec<Operation>, SyncError> {
-    let mut operations = Vec::with_capacity(diffs.len());
-
-    for diff in diffs {
-        let op = match (diff.local, diff.remote) {
-            // We both have it! Could be either. Compare.
-            (Some(local), Some(remote)) => match local.cmp(&remote) {
-                Ordering::Equal => Operation::Noop {
-                    host: diff.host,
-                    tag: diff.tag,
-                },
-                Ordering::Greater => Operation::Upload {
-                    local,
-                    remote: Some(remote),
-                    host: diff.host,
-                    tag: diff.tag,
-                },
-                Ordering::Less => Operation::Download {
+                // Remote has it, we don't. Gotta be download
+                (None, Some(remote)) => Ok(Operation::Download {
                     remote,
-                    host: diff.host,
-                    tag: diff.tag,
-                },
-            },
+                    series: diff.series,
+                }),
 
-            // Remote has it, we don't. Gotta be download
-            (None, Some(remote)) => Operation::Download {
-                remote,
-                host: diff.host,
-                tag: diff.tag,
-            },
+                // We have it, remote doesn't. Gotta be upload.
+                (Some(local), None) => Ok(Operation::Upload {
+                    local,
+                    remote: None,
+                    series: diff.series,
+                }),
 
-            // We have it, remote doesn't. Gotta be upload.
-            (Some(local), None) => Operation::Upload {
-                local,
-                remote: None,
-                host: diff.host,
-                tag: diff.tag,
-            },
-
-            // something is pretty fucked.
-            (None, None) => {
-                return Err(SyncError::SyncLogicError {
+                // something is pretty fucked.
+                (None, None) => Err(SyncError::SyncLogicError {
                     msg: String::from(
                         "diff has nothing for local or remote - (host, tag) does not exist",
                     ),
-                });
+                }),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // sort them - purely so we have a stable testing order, and can rely on
+        // same input = same output
+        // We can sort by ID so long as we continue to use UUIDv7 or something
+        // with the same properties
+        operations.sort_by_key(|op| match op {
+            Operation::Noop { series } => (0u8, series.host, 0u8, series.tag.clone()),
+            Operation::Upload { series, .. } => (1u8, series.host, 0u8, series.tag.clone()),
+            Operation::Download { series, .. } => {
+                // Packfile manifests must expand before the history download runs, as that
+                // `sync_download` will dedupe will have a chance at avoiding unnecessary downloads.
+                let tag_priority = if series.tag == RecordTag::Packfile {
+                    0u8
+                } else {
+                    1u8
+                };
+                (2u8, series.host, tag_priority, series.tag.clone())
             }
-        };
+        });
 
-        operations.push(op);
+        Ok(operations)
     }
-
-    // sort them - purely so we have a stable testing order, and can rely on
-    // same input = same output
-    // We can sort by ID so long as we continue to use UUIDv7 or something
-    // with the same properties
-
-    operations.sort_by_key(|op| match op {
-        Operation::Noop { host, tag } => (0u8, *host, 0u8, tag.clone()),
-        Operation::Upload { host, tag, .. } => (1u8, *host, 0u8, tag.clone()),
-        Operation::Download { host, tag, .. } => {
-            // Packfile manifests must expand before the history download runs, as that
-            // `sync_download` will dedupe will have a chance at avoiding unnecessary downloads.
-            let tag_priority = if *tag == RecordTag::Packfile {
-                0u8
-            } else {
-                1u8
-            };
-            (2u8, *host, tag_priority, tag.clone())
-        }
-    });
-
-    Ok(operations)
 }
 
-// TODO(markovejnovic): Seriously revisit the syncing logic and coupling.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "threading the key for packfile uploads pushes this one param over the limit"
-)]
-async fn sync_upload(
-    store: &SqliteStore,
-    client: &Client,
-    host: HostId,
-    tag: RecordTag,
-    local: RecordIdx,
-    remote: Option<RecordIdx>,
-    page_size: u64,
-    key: &paseto_v4::Key,
-) -> Result<u64, SyncError> {
-    // The first record the remote *doesn't* have.
-    let first_missing_remote = remote.map_or(0, |n| n + 1);
-    let plan = (first_missing_remote..local + 1).tiled(page_size_or_min(page_size));
-    let expected = plan.index_len();
-    let mut progress = 0u64;
+impl Keyed<'_> {
+    // TODO(markovejnovic): Seriously revisit the syncing logic and coupling.
+    #[instrument(
+        level = "trace",
+        skip_all,
+        fields(host = ?series.host, tag = ?series.tag, local, remote = ?remote, page_size),
+        err
+    )]
+    async fn sync_upload(
+        &self,
+        series: &RecordSeriesKey,
+        local: RecordIdx,
+        remote: Option<RecordIdx>,
+        page_size: u64,
+    ) -> Result<u64, SyncError> {
+        let store = &self.engine.store;
+        let client = &self.engine.client;
+        // The first record the remote *doesn't* have.
+        let first_missing_remote = remote.map_or(0, |n| n + 1);
+        let expected = local + 1 - first_missing_remote;
+        let mut progress = 0;
 
-    let pb = ProgressBar::new(expected);
-    pb.set_style(
-        ProgressStyle::with_template(
-            "{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {human_pos}/{human_len} \
-             ({eta})",
-        )
-        .unwrap()
-        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
-            write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
-        })
-        .progress_chars("#>-"),
-    );
+        let pb = ProgressBar::new(expected);
+        pb.set_style(
+            ProgressStyle::with_template(
+                "{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] \
+                 {human_pos}/{human_len} ({eta})",
+            )
+            .unwrap()
+            .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
+                write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+            })
+            .progress_chars("#>-"),
+        );
 
-    println!("Uploading {} records to {}/{}", expected, host.0.as_simple(), tag);
+        println!("Uploading {} records to {}/{}", expected, series.host.0.as_simple(), series.tag);
 
-    for tile in plan {
-        let page =
-            store.next(host, &tag, tile.start, tile.end - tile.start).await.map_err(|e| {
-                error!("failed to read upload page: {e:?}");
+        while progress < expected {
+            let page = store
+                .next(series, first_missing_remote + progress, page_size)
+                .await
+                .map_err(|e| {
+                    error!("failed to read upload page: {e:?}");
 
-                SyncError::LocalStoreError { msg: e.to_string() }
-            })?;
+                    SyncError::LocalStoreError { msg: e.to_string() }
+                })?;
 
-        if page.is_empty() {
-            break;
-        }
+            if page.is_empty() {
+                break;
+            }
 
-        if tag == RecordTag::Packfile {
-            // Pack each manifest's blob (local, on demand) and hand the stream to the client, which
-            // batches the transfers; packing errors ride the same result as upload errors. The
-            // futures capture owned handles (cheap Arc/copy clones) rather than borrows so they stay
-            // `Send` when the whole sync runs on a spawned, multi-threaded task (e.g. the daemon).
-            let store = store.clone();
-            let key = key.clone();
-            let packed = stream::iter(page.clone()).then(move |manifest| {
-                let store = store.clone();
-                let key = key.clone();
-                async move { pack(&manifest, &store, &key).await.map_err(eyre::Report::from) }
-            });
-            client.upload_packfiles(packed).await.map_err(|e| {
-                error!("failed to upload packfile: {e}");
+            if series.tag == RecordTag::Packfile {
+                // Pack every manifest in this page up front (local compress + encrypt), then hand
+                // the owned blobs to the client, which batches the transfers. Packing eagerly keeps
+                // the futures free of borrows, so the whole sync stays `Send` when it runs on a
+                // spawned, multi-threaded task (e.g. the daemon).
+                let mut packed = Vec::with_capacity(page.len());
+                for manifest in &page {
+                    packed.push(pack(manifest, store, self.key).await.map_err(|e| {
+                        error!("failed to pack packfile: {e}");
+                        SyncError::RemoteRequestError { msg: e.to_string() }
+                    })?);
+                }
+                client
+                    .upload_packfiles(stream::iter(packed.into_iter().map(Ok::<_, eyre::Report>)))
+                    .await
+                    .map_err(|e| {
+                        error!("failed to upload packfile: {e}");
+                        SyncError::RemoteRequestError { msg: e.to_string() }
+                    })?;
+            }
+
+            client.post_records(&page).await.map_err(|e| {
+                error!("failed to post records: {e:?}");
+
                 SyncError::RemoteRequestError { msg: e.to_string() }
             })?;
+
+            progress += page.len() as u64;
+            pb.set_position(progress);
         }
 
-        client.post_records(&page).await.map_err(|e| {
-            error!("failed to post records: {e:?}");
+        pb.finish_with_message("Uploaded records");
 
-            SyncError::RemoteRequestError { msg: e.to_string() }
-        })?;
-
-        progress += page.len() as u64;
-        pb.set_position(progress);
+        Ok(progress)
     }
 
-    pb.finish_with_message("Uploaded records");
+    // TODO(markovejnovic): Seriously revisit the syncing logic and coupling.
+    #[instrument(
+        level = "trace",
+        skip_all,
+        fields(host = ?series.host, tag = ?series.tag, remote = ?remote, page_size),
+        err
+    )]
+    async fn sync_download(
+        &self,
+        series: &RecordSeriesKey,
+        remote: RecordIdx,
+        page_size: u64,
+    ) -> Result<Vec<RecordId>, SyncError> {
+        let store = &self.engine.store;
+        // Scan the database to find the first missing local index, rather than assuming it's one more
+        // than the highest local index. A prior packfile op for this host may have expanded a pack
+        // whose history landed ABOVE a still-missing index; keying off the highest index would never
+        // fetch the hole before it. Start from the actual missing index; records already present above
+        // it will be "unnecessarily" redownloaded, but this is a no-op.
+        let first_missing_local = store
+            .first_gap(series)
+            .await
+            .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
 
-    Ok(progress)
-}
+        // One higher than the latest record index we have locally. The case described above where we
+        // have a hole in the sequence of record indices should not happen in practice; this variable is
+        // used to detect that situation so we can print a warning.
+        //
+        // TODO: This adds a slight runtime cost, but while the packfile feature is new, let's err on
+        // the side of catching potential problems.
+        let latest = store
+            .last(series)
+            .await
+            .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?
+            .map(|record| record.idx);
 
-// TODO(markovejnovic): Seriously revisit the syncing logic and coupling.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "threading the key for packfile downloads pushes this one param over the limit"
-)]
-async fn sync_download(
-    store: &SqliteStore,
-    client: &Client,
-    host: HostId,
-    tag: RecordTag,
-    remote: RecordIdx,
-    page_size: u64,
-    key: &paseto_v4::Key,
-) -> Result<Vec<RecordId>, SyncError> {
-    // Scan the database to find the first missing local index, rather than assuming it's one more
-    // than the highest local index. A prior packfile op for this host may have expanded a pack
-    // whose history landed ABOVE a still-missing index; keying off the highest index would never
-    // fetch the hole before it. Start from the actual missing index; records already present above
-    // it will be "unnecessarily" redownloaded, but this is a no-op.
-    let first_missing_local = store
-        .first_gap(host, &tag)
-        .await
-        .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
+        if first_missing_local != latest.map_or(0, |n| n + 1) {
+            tracing::warn!(
+                "first missing record index is {first_missing_local}, but latest record is {}",
+                std::fmt::from_fn(|f| {
+                    match latest {
+                        Some(n) => write!(f, "{n}"),
+                        None => write!(f, "(none)"),
+                    }
+                }),
+            );
+        }
 
-    // One higher than the latest record index we have locally. The case described above where we
-    // have a hole in the sequence of record indices should not happen in practice; this variable is
-    // used to detect that situation so we can print a warning.
-    //
-    // TODO: This adds a slight runtime cost, but while the packfile feature is new, let's err on
-    // the side of catching potential problems.
-    let latest = store
-        .last(host, &tag)
-        .await
-        .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?
-        .map(|record| record.idx);
+        let expected = (remote + 1).saturating_sub(first_missing_local);
 
-    if first_missing_local != latest.map_or(0, |n| n + 1) {
-        tracing::warn!(
-            "first missing record index is {first_missing_local}, but latest record is {}",
-            std::fmt::from_fn(|f| {
-                match latest {
-                    Some(n) => write!(f, "{n}"),
-                    None => write!(f, "(none)"),
-                }
-            }),
+        println!(
+            "Downloading {} records from {}/{}",
+            expected,
+            series.host.0.as_simple(),
+            series.tag
         );
+
+        let pb = ProgressBar::new(expected);
+        pb.set_style(
+            ProgressStyle::with_template(
+                "{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] \
+                 {human_pos}/{human_len} ({eta})",
+            )
+            .unwrap()
+            .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
+                write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+            })
+            .progress_chars("#>-"),
+        );
+
+        let ret = if series.tag == RecordTag::Packfile {
+            self.download_packfile_pages(series, first_missing_local, expected, page_size, &pb)
+                .await?
+        } else {
+            self.download_loose_pages(series, first_missing_local, expected, page_size, &pb)
+                .await?
+        };
+
+        pb.finish_with_message("Downloaded records");
+
+        Ok(ret)
     }
 
-    let expected = (remote + 1).saturating_sub(first_missing_local);
+    /// Download a run of packfile-manifest pages, expanding each manifest's history into the local
+    /// store *before* persisting the manifest (so a stored manifest always has its history). That
+    /// per-page ordering and the per-manifest permanent-failure handling keep the expansion strictly
+    /// serial across pages; [`Client::records`] may prefetch the manifest *pages* themselves, but
+    /// each page is fully expanded and persisted before the next is processed. Returns the record
+    /// ids touched (expanded history plus persisted manifests).
+    async fn download_packfile_pages(
+        &self,
+        series: &RecordSeriesKey,
+        first_missing_local: RecordIdx,
+        expected: u64,
+        page_size: u64,
+        pb: &ProgressBar,
+    ) -> Result<Vec<RecordId>, SyncError> {
+        let store = &self.engine.store;
+        let client = &self.engine.client;
+        let mut ret = Vec::new();
+        let mut progress = 0u64;
 
-    println!("Downloading {} records from {}/{}", expected, host.0.as_simple(), tag);
+        let pages = client.records(
+            series,
+            (first_missing_local..first_missing_local + expected).tiled(page_size_or_min(page_size)),
+        );
+        futures::pin_mut!(pages);
+        while let Some(page) = pages.next().await {
+            let page = page.map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
 
-    let pb = ProgressBar::new(expected);
-    pb.set_style(
-        ProgressStyle::with_template(
-            "{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {human_pos}/{human_len} \
-             ({eta})",
-        )
-        .unwrap()
-        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
-            write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
-        })
-        .progress_chars("#>-"),
-    );
+            let mut downloads = stream::iter(0..page.len())
+                .map(|i| self.download_packed(&page[i]))
+                .buffered(MAX_CONCURRENT_PACKFILE_TRANSFERS)
+                .enumerate();
 
-    let ret = if tag == RecordTag::Packfile {
-        download_packfile_pages(
-            store,
-            client,
-            host,
-            &tag,
-            key,
-            first_missing_local,
-            expected,
-            page_size,
-            &pb,
-        )
-        .await?
-    } else {
-        download_loose_pages(
-            store,
-            client,
-            host,
-            &tag,
-            first_missing_local,
-            expected,
-            page_size,
-            &pb,
-        )
-        .await?
-    };
-
-    pb.finish_with_message("Downloaded records");
-
-    Ok(ret)
-}
-
-/// Download a run of packfile-manifest pages, expanding each manifest's history into the local
-/// store *before* persisting the manifest (so a stored manifest always has its history). That
-/// per-page ordering and the per-manifest permanent-failure handling keep the expansion strictly
-/// serial across pages; [`Client::records`] may prefetch the manifest *pages* themselves, but each
-/// page is fully expanded and persisted before the next is processed. Returns the record ids
-/// touched (expanded history plus persisted manifests).
-#[allow(
-    clippy::too_many_arguments,
-    reason = "threads the same download context as its sync_download caller"
-)]
-async fn download_packfile_pages(
-    store: &SqliteStore,
-    client: &Client,
-    host: HostId,
-    tag: &RecordTag,
-    key: &paseto_v4::Key,
-    first_missing_local: RecordIdx,
-    expected: u64,
-    page_size: u64,
-    pb: &ProgressBar,
-) -> Result<Vec<RecordId>, SyncError> {
-    let mut ret = Vec::new();
-    let mut progress = 0u64;
-
-    let pages = client.records(
-        host,
-        tag.clone(),
-        (first_missing_local..first_missing_local + expected).tiled(page_size_or_min(page_size)),
-    );
-    futures::pin_mut!(pages);
-    while let Some(page) = pages.next().await {
-        let page = page.map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
-
-        let mut downloads = stream::iter(0..page.len())
-            .map(|i| download_packed(&page[i], store, key, client))
-            .buffered(MAX_CONCURRENT_PACKFILE_TRANSFERS)
-            .enumerate();
-
-        while let Some((i, result)) = downloads.next().await {
-            match result {
-                Ok(expanded) => ret.extend(expanded),
-                Err(e) if e.is_permanent() => error!(
-                    manifest_id = %page[i].id,
-                    host = %page[i].host.id,
-                    idx = page[i].idx,
-                    "skipping unexpandable packfile manifest: {e}. you have lost data."
-                ),
-                Err(e) => {
-                    error!("failed to download packfile: {e:?}");
-                    return Err(SyncError::RemoteRequestError { msg: e.to_string() });
+            while let Some((i, result)) = downloads.next().await {
+                match result {
+                    Ok(expanded) => ret.extend(expanded),
+                    Err(e) if e.is_permanent() => error!(
+                        manifest_id = %page[i].id,
+                        host = %page[i].host.id,
+                        idx = page[i].idx,
+                        "skipping unexpandable packfile manifest: {e}. you have lost data."
+                    ),
+                    Err(e) => {
+                        error!("failed to download packfile: {e:?}");
+                        return Err(SyncError::RemoteRequestError { msg: e.to_string() });
+                    }
                 }
+            }
+
+            store
+                .push_batch(page.iter())
+                .await
+                .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
+
+            ret.extend(page.iter().map(|f| f.id));
+
+            progress += page.len() as u64;
+            pb.set_position(progress);
+        }
+
+        Ok(ret)
+    }
+
+    /// Download a run of loose (non-packfile) record pages. [`Client::records`] owns the pagination
+    /// -- predicting offsets, pipelining fetches against these local `push_batch` writes, and
+    /// recovering from a short mid-stream page -- so this loop just persists each page as it arrives.
+    async fn download_loose_pages(
+        &self,
+        series: &RecordSeriesKey,
+        first_missing_local: RecordIdx,
+        expected: u64,
+        page_size: u64,
+        pb: &ProgressBar,
+    ) -> Result<Vec<RecordId>, SyncError> {
+        let store = &self.engine.store;
+        let client = &self.engine.client;
+        let mut ret = Vec::new();
+        let mut progress = 0u64;
+
+        let pages = client.records(
+            series,
+            (first_missing_local..first_missing_local + expected).tiled(page_size_or_min(page_size)),
+        );
+        futures::pin_mut!(pages);
+        while let Some(page) = pages.next().await {
+            let page = page.map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
+
+            store
+                .push_batch(page.iter())
+                .await
+                .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
+
+            ret.extend(page.iter().map(|f| f.id));
+            progress += page.len() as u64;
+            pb.set_position(progress);
+        }
+
+        Ok(ret)
+    }
+
+    #[instrument(level = "trace", skip_all, fields(page_size), err)]
+    pub async fn sync_remote(
+        &self,
+        operations: Vec<Operation>,
+        page_size: u64,
+    ) -> Result<(u64, Vec<RecordId>), SyncError> {
+        let mut uploaded = 0;
+        let mut downloaded = Vec::new();
+
+        let packfiles_enabled = matches!(
+            self.engine.client.caps().get_server::<PackfileCap>().await,
+            Ok(Some(cap)) if cap.record_count > 0
+        );
+
+        // this can totally run in parallel, but lets get it working first
+        for i in operations {
+            match i {
+                Operation::Upload {
+                    series,
+                    local,
+                    remote,
+                } => {
+                    if series.tag == RecordTag::Packfile && !packfiles_enabled {
+                        debug!(
+                            "server does not advertise PackfileCap; skipping packfile {} upload \
+                             op, loose history covers it",
+                            series.tag
+                        );
+                        continue;
+                    }
+                    uploaded += self.sync_upload(&series, local, remote, page_size).await?
+                }
+
+                Operation::Download { series, remote } => {
+                    if series.tag == RecordTag::Packfile && !packfiles_enabled {
+                        debug!(
+                            "server does not advertise PackfileCap; skipping packfile {} download \
+                             op, loose history covers it",
+                            series.tag
+                        );
+                        continue;
+                    }
+                    let mut d = self.sync_download(&series, remote, page_size).await?;
+                    downloaded.append(&mut d)
+                }
+
+                Operation::Noop { .. } => continue,
             }
         }
 
-        store
-            .push_batch(page.iter())
-            .await
-            .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
-
-        ret.extend(page.iter().map(|f| f.id));
-
-        progress += page.len() as u64;
-        pb.set_position(progress);
+        Ok((uploaded, downloaded))
     }
 
-    Ok(ret)
-}
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn check_encryption_key(&self, remote_index: &RecordStatus) -> Result<(), SyncError> {
+        let sample = remote_index
+            .hosts
+            .iter()
+            .flat_map(|(host, tags)| {
+                tags.keys().map(move |tag| RecordSeriesKey::new(*host, tag.clone()))
+            })
+            // Note we have to skip `Packfile`s here because packfiles _aren't_ actually encrypted,
+            // so using the default CEK would fail decryption.
+            .find(|series| series.tag != RecordTag::Packfile);
 
-/// Download a run of loose (non-packfile) record pages. [`Client::records`] owns the pagination --
-/// predicting offsets, pipelining fetches against these local `push_batch` writes, and recovering
-/// from a short mid-stream page -- so this loop just persists each page as it arrives.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "threads the same download context as its sync_download caller"
-)]
-async fn download_loose_pages(
-    store: &SqliteStore,
-    client: &Client,
-    host: HostId,
-    tag: &RecordTag,
-    first_missing_local: RecordIdx,
-    expected: u64,
-    page_size: u64,
-    pb: &ProgressBar,
-) -> Result<Vec<RecordId>, SyncError> {
-    let mut ret = Vec::new();
-    let mut progress = 0u64;
+        let Some(series) = sample else {
+            return Ok(());
+        };
 
-    let pages = client.records(
-        host,
-        tag.clone(),
-        (first_missing_local..first_missing_local + expected).tiled(page_size_or_min(page_size)),
-    );
-    futures::pin_mut!(pages);
-    while let Some(page) = pages.next().await {
+        let pages = self.engine.client.records(&series, (0..1).tiled(NonZeroU64::MIN));
+        futures::pin_mut!(pages);
+        let Some(page) = pages.next().await else {
+            return Ok(());
+        };
         let page = page.map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
 
-        store
-            .push_batch(page.iter())
-            .await
-            .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
+        let Some(record) = page.into_iter().next() else {
+            return Ok(());
+        };
 
-        ret.extend(page.iter().map(|f| f.id));
-        progress += page.len() as u64;
-        pb.set_position(progress);
+        record.decrypt(self.key).map_err(|_| SyncError::WrongKey)?;
+
+        Ok(())
     }
 
-    Ok(ret)
-}
+    /// Run a full sync: diff local against remote, verify the key can read the remote, resolve the
+    /// diff into operations, then apply them.
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn sync(&self) -> Result<(u64, Vec<RecordId>), SyncError> {
+        let (diff, remote_index) = self.engine.diff().await?;
 
-pub async fn sync_remote(
-    client: &Client,
-    operations: Vec<Operation>,
-    local_store: &SqliteStore,
-    page_size: u64,
-    key: &paseto_v4::Key,
-) -> Result<(u64, Vec<RecordId>), SyncError> {
-    let mut uploaded = 0;
-    let mut downloaded = Vec::new();
+        // Bail before mutating either side if the local key can't read the remote.
+        self.check_encryption_key(&remote_index).await?;
 
-    let packfiles_enabled = matches!(
-        client.caps().get_server::<PackfileCap>().await,
-        Ok(Some(cap)) if cap.record_count > 0
-    );
-
-    // this can totally run in parallel, but lets get it working first
-    for i in operations {
-        match i {
-            Operation::Upload {
-                host,
-                tag,
-                local,
-                remote,
-            } => {
-                if tag == RecordTag::Packfile && !packfiles_enabled {
-                    debug!(
-                        "server does not advertise PackfileCap; skipping packfile {tag} upload \
-                         op, loose history covers it"
-                    );
-                    continue;
-                }
-                uploaded +=
-                    sync_upload(local_store, client, host, tag, local, remote, page_size, key)
-                        .await?
-            }
-
-            Operation::Download { host, tag, remote } => {
-                if tag == RecordTag::Packfile && !packfiles_enabled {
-                    debug!(
-                        "server does not advertise PackfileCap; skipping packfile {tag} download \
-                         op, loose history covers it"
-                    );
-                    continue;
-                }
-                let mut d =
-                    sync_download(local_store, client, host, tag, remote, page_size, key).await?;
-                downloaded.append(&mut d)
-            }
-
-            Operation::Noop { .. } => continue,
-        }
+        let operations = SyncEngine::operations(diff)?;
+        self.sync_remote(operations, 100).await
     }
-
-    Ok((uploaded, downloaded))
-}
-
-pub async fn check_encryption_key(
-    client: &Client,
-    remote_index: &RecordStatus,
-    encryption_key: &paseto_v4::Key,
-) -> Result<(), SyncError> {
-    let sample = remote_index
-        .hosts
-        .iter()
-        .flat_map(|(host, tags)| tags.keys().map(move |tag| (*host, tag.clone())))
-        // Note we have to skip `Packfile`s here because packfiles _aren't_ actually encrypted, so
-        // using the default CEK would fail decryption.
-        .find(|(_, tag)| *tag != RecordTag::Packfile);
-
-    let Some((host, tag)) = sample else {
-        return Ok(());
-    };
-
-    let pages = client.records(host, tag, (0..1).tiled(NonZeroU64::MIN));
-    futures::pin_mut!(pages);
-    let Some(page) = pages.next().await else {
-        return Ok(());
-    };
-    let page = page.map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
-
-    let Some(record) = page.into_iter().next() else {
-        return Ok(());
-    };
-
-    record.decrypt(encryption_key).map_err(|_| SyncError::WrongKey)?;
-
-    Ok(())
-}
-
-pub async fn sync(
-    settings: &Settings,
-    store: &SqliteStore,
-    encryption_key: &paseto_v4::Key,
-    caps: Arc<CapClient>,
-) -> Result<(u64, Vec<RecordId>), SyncError> {
-    let client = build_client_with_caps(settings, caps).await?;
-    let (diff, remote_index) = diff(&client, store).await?;
-
-    // Bail before mutating either side if the local key can't read the remote.
-    check_encryption_key(&client, &remote_index, encryption_key).await?;
-
-    let operations = operations(diff, store)?;
-    let (uploaded, downloaded) =
-        sync_remote(&client, operations, store, 100, encryption_key).await?;
-
-    Ok((uploaded, downloaded))
 }
 
 #[cfg(test)]
 mod tests {
-    use atuin_domain::record::{Diff, EncryptedData, HostId, Record, RecordTag};
+    use atuin_domain::record::{Diff, EncryptedData, HostId, Record, RecordSeriesKey, RecordTag};
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
     use crate::record::sqlite_store::SqliteStore;
-    use crate::record::sync::{self, Operation};
+    use crate::record::sync::{Operation, SyncEngine};
     use crate::settings::test_local_timeout;
 
     fn test_record() -> Record<EncryptedData> {
@@ -656,17 +633,16 @@ mod tests {
         // a diff where local is ahead of remote. nothing else.
 
         let record = test_record();
-        let (store, diff) = build_test_diff(vec![record.clone()], vec![]).await;
+        let (_store, diff) = build_test_diff(vec![record.clone()], vec![]).await;
 
         assert_eq!(diff.len(), 1);
 
-        let operations = sync::operations(diff, &store).unwrap();
+        let operations = SyncEngine::operations(diff).unwrap();
 
         assert_eq!(operations.len(), 1);
 
         assert_eq!(operations[0], Operation::Upload {
-            host: record.host.id,
-            tag: record.tag.clone(),
+            series: RecordSeriesKey::new(record.host.id, record.tag.clone()),
             local: record.idx,
             remote: None,
         });
@@ -688,23 +664,21 @@ mod tests {
         let local = vec![shared_record.clone(), local_ahead.clone()]; // local knows about the already synced, and something newer in the same store
         let remote = vec![shared_record.clone(), remote_ahead.clone()]; // remote knows about the already-synced, and one new record in a new store
 
-        let (store, diff) = build_test_diff(local, remote).await;
-        let operations = sync::operations(diff, &store).unwrap();
+        let (_store, diff) = build_test_diff(local, remote).await;
+        let operations = SyncEngine::operations(diff).unwrap();
 
         assert_eq!(operations.len(), 2);
 
         assert_eq!(operations, vec![
             // Or in otherwords, local is ahead by one
             Operation::Upload {
-                host: local_ahead.host.id,
-                tag: local_ahead.tag.clone(),
+                series: RecordSeriesKey::new(local_ahead.host.id, local_ahead.tag.clone()),
                 local: 1,
                 remote: Some(0),
             },
             // Or in other words, remote knows of a record in an entirely new store (tag)
             Operation::Download {
-                host: remote_ahead.host.id,
-                tag: remote_ahead.tag.clone(),
+                series: RecordSeriesKey::new(remote_ahead.host.id, remote_ahead.tag.clone()),
                 remote: 0,
             },
         ]);
@@ -785,8 +759,8 @@ mod tests {
             fourth_shared_remote_ahead2.clone(),
         ]; // remote knows about the already-synced, and one new record in a new store
 
-        let (store, diff) = build_test_diff(local, remote).await;
-        let operations = sync::operations(diff, &store).unwrap();
+        let (_store, diff) = build_test_diff(local, remote).await;
+        let operations = SyncEngine::operations(diff).unwrap();
 
         assert_eq!(operations.len(), 7);
 
@@ -795,56 +769,55 @@ mod tests {
             // same store
             Operation::Download {
                 remote: 2,
-                host: second_shared_remote_ahead.host.id,
-                tag: second_shared_remote_ahead.tag.clone(),
+                series: RecordSeriesKey::new(
+                    second_shared_remote_ahead.host.id,
+                    second_shared_remote_ahead.tag.clone(),
+                ),
             },
             // We have a shared record, local knows of the first two but not the last
             Operation::Download {
                 remote: 2,
-                host: fourth_shared_remote_ahead2.host.id,
-                tag: fourth_shared_remote_ahead2.tag.clone(),
+                series: RecordSeriesKey::new(
+                    fourth_shared_remote_ahead2.host.id,
+                    fourth_shared_remote_ahead2.tag.clone(),
+                ),
             },
             // Remote knows of a store with a single record that local does not have
             Operation::Download {
                 remote: 0,
-                host: remote_only.host.id,
-                tag: remote_only.tag.clone(),
+                series: RecordSeriesKey::new(remote_only.host.id, remote_only.tag.clone()),
             },
             // Remote knows of a store with a bunch of records that local does not have
             Operation::Download {
                 remote: 4,
-                host: remote_only_20.host.id,
-                tag: remote_only_20.tag.clone(),
+                series: RecordSeriesKey::new(remote_only_20.host.id, remote_only_20.tag.clone()),
             },
             // Local knows of a record in a store that remote does not have
             Operation::Upload {
                 local: 0,
                 remote: None,
-                host: local_only.host.id,
-                tag: local_only.tag.clone(),
+                series: RecordSeriesKey::new(local_only.host.id, local_only.tag.clone()),
             },
             // Local knows of 4 records in a store that remote does not have
             Operation::Upload {
                 local: 3,
                 remote: None,
-                host: local_only_20.host.id,
-                tag: local_only_20.tag.clone(),
+                series: RecordSeriesKey::new(local_only_20.host.id, local_only_20.tag.clone()),
             },
             // Local knows of 2 more records in a shared store that remote only has one of
             Operation::Upload {
                 local: 2,
                 remote: Some(0),
-                host: third_shared.host.id,
-                tag: third_shared.tag.clone(),
+                series: RecordSeriesKey::new(third_shared.host.id, third_shared.tag.clone()),
             },
         ];
 
         result_ops.sort_by_key(|op| match op {
-            Operation::Noop { host, tag } => (0, *host, tag.clone()),
+            Operation::Noop { series } => (0, series.host, series.tag.clone()),
 
-            Operation::Upload { host, tag, .. } => (1, *host, tag.clone()),
+            Operation::Upload { series, .. } => (1, series.host, series.tag.clone()),
 
-            Operation::Download { host, tag, .. } => (2, *host, tag.clone()),
+            Operation::Download { series, .. } => (2, series.host, series.tag.clone()),
         });
 
         assert_eq!(result_ops, operations);
@@ -894,6 +867,17 @@ mod packfile_download_tests {
         SqliteStore::new(":memory:", test_local_timeout()).await.unwrap()
     }
 
+    /// Wrap a prebuilt client in a [`SyncEngine`] for tests.
+    pub(super) async fn build_engine(client: Client, store: SqliteStore) -> SyncEngine {
+        SyncEngine::builder()
+            .store(store)
+            .client_source(ClientSource::FromClient(client))
+            .build()
+            .connect()
+            .await
+            .unwrap()
+    }
+
     /// Push a contiguous run of `count` encrypted HISTORY records (idx `0..count`).
     pub(super) async fn seed_history(
         store: &SqliteStore,
@@ -936,16 +920,16 @@ mod packfile_download_tests {
         seed_history(&up, host, key, count).await;
         try_pack(
             &up,
-            host,
+            &RecordSeriesKey::new(host, RecordTag::History),
             Some(PackfileCap {
                 version: 1,
                 record_count: count,
             }),
-            &RecordTag::History,
         )
         .await
         .unwrap();
-        let manifest = up.last(host, &RecordTag::Packfile).await.unwrap().unwrap();
+        let manifest =
+            up.last(&RecordSeriesKey::new(host, RecordTag::Packfile)).await.unwrap().unwrap();
         let view = PackManifestRecordView::new(&manifest).unwrap();
         let (blob, ids) = view.pack_records(&up, key.clone()).await.unwrap();
         (manifest, blob, ids)
@@ -1014,8 +998,12 @@ mod packfile_download_tests {
             .await;
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
+        let store = memory_store().await;
 
-        check_encryption_key(&client, &remote_index, &key)
+        build_engine(client, store)
+            .await
+            .keyed(&key)
+            .check_encryption_key(&remote_index)
             .await
             .expect("a plaintext packfile manifest must not be treated as a wrong key");
     }
@@ -1031,7 +1019,9 @@ mod packfile_download_tests {
         let host = HostId(uuid_v7());
         let store = memory_store().await;
         seed_history(&store, host, &key, 1).await;
-        let rec = store.next(host, &RecordTag::History, 0, 1).await.unwrap()[0].clone();
+        let rec = store.next(&RecordSeriesKey::new(host, RecordTag::History), 0, 1).await.unwrap()
+            [0]
+        .clone();
 
         let mut tags = HashMap::new();
         tags.insert(RecordTag::History, rec.idx);
@@ -1049,7 +1039,10 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
 
         let wrong = paseto_v4::Key::from([9u8; 32]);
-        let err = check_encryption_key(&client, &remote_index, &wrong)
+        let err = build_engine(client, store)
+            .await
+            .keyed(&wrong)
+            .check_encryption_key(&remote_index)
             .await
             .expect_err("a wrong key on an encrypted record must still be detected");
         assert!(matches!(err, SyncError::WrongKey), "expected WrongKey, got {err:?}");
@@ -1073,11 +1066,21 @@ mod packfile_download_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        sync_download(&down, &client, host, RecordTag::Packfile, 1, 100, &key).await.unwrap();
+        build_engine(client, down.clone())
+            .await
+            .keyed(&key)
+            .sync_download(&RecordSeriesKey::new(host, RecordTag::Packfile), 1, 100)
+            .await
+            .unwrap();
 
         // The manifest is stored AND the history it covers was populated.
-        assert!(down.last(host, &RecordTag::Packfile).await.unwrap().is_some());
-        assert_eq!(down.next(host, &RecordTag::History, 0, 3).await.unwrap().len(), 3);
+        assert!(
+            down.last(&RecordSeriesKey::new(host, RecordTag::Packfile)).await.unwrap().is_some()
+        );
+        assert_eq!(
+            down.next(&RecordSeriesKey::new(host, RecordTag::History), 0, 3).await.unwrap().len(),
+            3
+        );
     }
 
     #[rstest]
@@ -1097,8 +1100,12 @@ mod packfile_download_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let returned =
-            sync_download(&down, &client, host, RecordTag::Packfile, 1, 100, &key).await.unwrap();
+        let returned = build_engine(client, down)
+            .await
+            .keyed(&key)
+            .sync_download(&RecordSeriesKey::new(host, RecordTag::Packfile), 1, 100)
+            .await
+            .unwrap();
 
         for id in &history_ids {
             assert!(
@@ -1158,10 +1165,19 @@ mod packfile_download_tests {
         let down = memory_store().await;
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
+        let engine = build_engine(client, down).await;
 
         // Packfile op first (populates history 0..=2), then the history op.
-        sync_download(&down, &client, host, RecordTag::Packfile, 1, 100, &key).await.unwrap();
-        sync_download(&down, &client, host, RecordTag::History, 3, 100, &key).await.unwrap();
+        engine
+            .keyed(&key)
+            .sync_download(&RecordSeriesKey::new(host, RecordTag::Packfile), 1, 100)
+            .await
+            .unwrap();
+        engine
+            .keyed(&key)
+            .sync_download(&RecordSeriesKey::new(host, RecordTag::History), 3, 100)
+            .await
+            .unwrap();
 
         // The history download must have started AFTER the packed prefix (idx 2), i.e. never
         // requested start=0 for RecordTag::History.
@@ -1199,8 +1215,12 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
 
         // remote (2) is BEHIND the live local head (4) -- must not underflow/panic.
-        let got =
-            sync_download(&down, &client, host, RecordTag::History, 2, 100, &key).await.unwrap();
+        let got = build_engine(client, down)
+            .await
+            .keyed(&key)
+            .sync_download(&RecordSeriesKey::new(host, RecordTag::History), 2, 100)
+            .await
+            .unwrap();
         assert!(got.is_empty(), "nothing to download when local head already exceeds remote");
     }
 
@@ -1246,7 +1266,7 @@ mod packfile_download_tests {
         let host = HostId(uuid_v7());
         let up = memory_store().await;
         seed_history(&up, host, &key, 5).await;
-        let all = up.next(host, &RecordTag::History, 0, 5).await.unwrap();
+        let all = up.next(&RecordSeriesKey::new(host, RecordTag::History), 0, 5).await.unwrap();
 
         let server = server.await;
         // page_size 2 -> offsets 0, 2, 4; the last page (idx 4) is a short tail.
@@ -1256,11 +1276,15 @@ mod packfile_download_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let returned =
-            sync_download(&down, &client, host, RecordTag::History, 4, 2, &key).await.unwrap();
+        let returned = build_engine(client, down.clone())
+            .await
+            .keyed(&key)
+            .sync_download(&RecordSeriesKey::new(host, RecordTag::History), 4, 2)
+            .await
+            .unwrap();
 
         assert_eq!(
-            down.next(host, &RecordTag::History, 0, 5).await.unwrap().len(),
+            down.next(&RecordSeriesKey::new(host, RecordTag::History), 0, 5).await.unwrap().len(),
             5,
             "every page must be reassembled"
         );
@@ -1279,7 +1303,7 @@ mod packfile_download_tests {
         let host = HostId(uuid_v7());
         let up = memory_store().await;
         seed_history(&up, host, &key, 6).await;
-        let all = up.next(host, &RecordTag::History, 0, 6).await.unwrap();
+        let all = up.next(&RecordSeriesKey::new(host, RecordTag::History), 0, 6).await.unwrap();
 
         let server = server.await;
         // Client asks for page_size 4, but the server only ever returns 2 (a clamp). Predicted
@@ -1290,11 +1314,15 @@ mod packfile_download_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let returned =
-            sync_download(&down, &client, host, RecordTag::History, 5, 4, &key).await.unwrap();
+        let returned = build_engine(client, down.clone())
+            .await
+            .keyed(&key)
+            .sync_download(&RecordSeriesKey::new(host, RecordTag::History), 5, 4)
+            .await
+            .unwrap();
 
         assert_eq!(
-            down.next(host, &RecordTag::History, 0, 6).await.unwrap().len(),
+            down.next(&RecordSeriesKey::new(host, RecordTag::History), 0, 6).await.unwrap().len(),
             6,
             "a short mid-stream page must not skip records"
         );
@@ -1315,17 +1343,17 @@ mod packfile_download_tests {
         seed_history(&up, host, &key, per * num_packs).await;
         try_pack(
             &up,
-            host,
+            &RecordSeriesKey::new(host, RecordTag::History),
             Some(PackfileCap {
                 version: 1,
                 record_count: per,
             }),
-            &RecordTag::History,
         )
         .await
         .unwrap();
 
-        let manifests = up.next(host, &RecordTag::Packfile, 0, num_packs).await.unwrap();
+        let manifests =
+            up.next(&RecordSeriesKey::new(host, RecordTag::Packfile), 0, num_packs).await.unwrap();
         assert_eq!(
             manifests.len() as u64,
             num_packs,
@@ -1340,7 +1368,7 @@ mod packfile_download_tests {
         }
 
         let history_ids: Vec<RecordId> = up
-            .next(host, &RecordTag::History, 0, per * num_packs)
+            .next(&RecordSeriesKey::new(host, RecordTag::History), 0, per * num_packs)
             .await
             .unwrap()
             .iter()
@@ -1399,12 +1427,16 @@ mod packfile_download_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let returned =
-            sync_download(&down, &client, host, RecordTag::Packfile, 1, 100, &key).await.unwrap();
+        let returned = build_engine(client, down.clone())
+            .await
+            .keyed(&key)
+            .sync_download(&RecordSeriesKey::new(host, RecordTag::Packfile), 1, 100)
+            .await
+            .unwrap();
 
         // Every batched packfile's history is populated, whichever download finished first.
         assert_eq!(
-            down.next(host, &RecordTag::History, 0, 6).await.unwrap().len(),
+            down.next(&RecordSeriesKey::new(host, RecordTag::History), 0, 6).await.unwrap().len(),
             6,
             "all history across the batch must be populated"
         );
@@ -1462,13 +1494,16 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
 
         // The permanent per-manifest failure is logged and skipped; the whole tick still succeeds.
-        let returned = sync_download(&down, &client, host, RecordTag::Packfile, 2, 100, &key)
+        let returned = build_engine(client, down.clone())
+            .await
+            .keyed(&key)
+            .sync_download(&RecordSeriesKey::new(host, RecordTag::Packfile), 2, 100)
             .await
             .expect("a permanent per-manifest failure must not fail the tick");
 
         // The two valid packfiles in the batch still expand despite the poisoned sibling.
         assert_eq!(
-            down.next(host, &RecordTag::History, 0, 6).await.unwrap().len(),
+            down.next(&RecordSeriesKey::new(host, RecordTag::History), 0, 6).await.unwrap().len(),
             6,
             "valid packfiles in the batch must still expand"
         );
@@ -1486,15 +1521,17 @@ mod packfile_capability_tests {
     use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::caps::{CapServer, CapabilitiesCap, PackfileCap};
-    use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordTag};
+    use atuin_domain::record::{
+        EncryptedData, HostId, Record, RecordIdx, RecordSeriesKey, RecordTag,
+    };
     use rstest::*;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    use super::Operation;
     use super::packfile_download_tests::{
-        memory_store, mock_client, mount_packfile, packed_packfile, seed_history,
+        build_engine, memory_store, mock_client, mount_packfile, packed_packfile, seed_history,
     };
-    use super::{Operation, sync_remote};
 
     /// A single fixed encryption key, matching the sibling packfile tests.
     #[fixture]
@@ -1524,15 +1561,14 @@ mod packfile_capability_tests {
     ) -> Vec<Record<EncryptedData>> {
         let up = memory_store().await;
         seed_history(&up, host, key, count).await;
-        up.next(host, &RecordTag::History, 0, count).await.unwrap()
+        up.next(&RecordSeriesKey::new(host, RecordTag::History), 0, count).await.unwrap()
     }
 
     /// A single PACKFILE download op covering `remote` manifests from `host`.
     fn packfile_download_op(host: HostId, remote: RecordIdx) -> Operation {
         Operation::Download {
             remote,
-            host,
-            tag: RecordTag::Packfile,
+            series: RecordSeriesKey::new(host, RecordTag::Packfile),
         }
     }
 
@@ -1561,12 +1597,22 @@ mod packfile_capability_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        sync_remote(&client, vec![packfile_download_op(host, 3)], &down, 100, &key).await.unwrap();
+        build_engine(client, down.clone())
+            .await
+            .keyed(&key)
+            .sync_remote(vec![packfile_download_op(host, 3)], 100)
+            .await
+            .unwrap();
 
         // Cap advertised -> the whole packfile op ran: the manifest was persisted and its history
         // was expanded into the store.
-        assert!(down.last(host, &RecordTag::Packfile).await.unwrap().is_some());
-        assert_eq!(down.next(host, &RecordTag::History, 0, 3).await.unwrap().len(), 3);
+        assert!(
+            down.last(&RecordSeriesKey::new(host, RecordTag::Packfile)).await.unwrap().is_some()
+        );
+        assert_eq!(
+            down.next(&RecordSeriesKey::new(host, RecordTag::History), 0, 3).await.unwrap().len(),
+            3
+        );
     }
 
     #[rstest]
@@ -1625,23 +1671,27 @@ mod packfile_capability_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        sync_remote(
-            &client,
-            vec![packfile_download_op(host, 3), Operation::Download {
-                remote: 3,
-                host,
-                tag: RecordTag::History,
-            }],
-            &down,
-            100,
-            &key,
-        )
-        .await
-        .unwrap();
+        build_engine(client, down.clone())
+            .await
+            .keyed(&key)
+            .sync_remote(
+                vec![packfile_download_op(host, 3), Operation::Download {
+                    remote: 3,
+                    series: RecordSeriesKey::new(host, RecordTag::History),
+                }],
+                100,
+            )
+            .await
+            .unwrap();
 
         // Packfile op skipped: manifest not persisted. Loose history still synced (no data loss).
-        assert!(down.last(host, &RecordTag::Packfile).await.unwrap().is_none());
-        assert_eq!(down.next(host, &RecordTag::History, 0, 3).await.unwrap().len(), 3);
+        assert!(
+            down.last(&RecordSeriesKey::new(host, RecordTag::Packfile)).await.unwrap().is_none()
+        );
+        assert_eq!(
+            down.next(&RecordSeriesKey::new(host, RecordTag::History), 0, 3).await.unwrap().len(),
+            3
+        );
     }
 
     #[rstest]
@@ -1657,10 +1707,17 @@ mod packfile_capability_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        sync_remote(&client, vec![packfile_download_op(host, 3)], &down, 100, &key).await.unwrap();
+        build_engine(client, down.clone())
+            .await
+            .keyed(&key)
+            .sync_remote(vec![packfile_download_op(host, 3)], 100)
+            .await
+            .unwrap();
 
         // Skipped: manifest not persisted, and no packfile endpoint was ever hit.
-        assert!(down.last(host, &RecordTag::Packfile).await.unwrap().is_none());
+        assert!(
+            down.last(&RecordSeriesKey::new(host, RecordTag::Packfile)).await.unwrap().is_none()
+        );
         let requests = server.received_requests().await.unwrap();
         assert!(
             !requests.iter().any(|r| r.url.path().starts_with("/api/v0/packfiles")),
@@ -1689,8 +1746,15 @@ mod packfile_capability_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        sync_remote(&client, vec![packfile_download_op(host, 3)], &down, 100, &key).await.unwrap();
+        build_engine(client, down.clone())
+            .await
+            .keyed(&key)
+            .sync_remote(vec![packfile_download_op(host, 3)], 100)
+            .await
+            .unwrap();
 
-        assert!(down.last(host, &RecordTag::Packfile).await.unwrap().is_none());
+        assert!(
+            down.last(&RecordSeriesKey::new(host, RecordTag::Packfile)).await.unwrap().is_none()
+        );
     }
 }

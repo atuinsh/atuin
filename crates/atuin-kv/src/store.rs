@@ -2,7 +2,9 @@ use std::collections::HashSet;
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4;
-use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx, RecordTag, RecordVersion};
+use atuin_domain::record::{
+    Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag, RecordVersion,
+};
 use entry::KvEntry;
 use eyre::{Result, eyre};
 use record::KvRecord;
@@ -44,11 +46,11 @@ impl KvStore {
 
         self.push_record(kv_record).await?;
 
-        let kv = KvEntry::builder()
-            .namespace(namespace.to_string())
-            .key(key.to_string())
-            .value(value.to_string())
-            .build();
+        let kv = KvEntry {
+            namespace: namespace.to_string(),
+            key: key.to_string(),
+            value: value.to_string(),
+        };
 
         self.kv_db.save(&kv).await?;
 
@@ -83,8 +85,11 @@ impl KvStore {
 
     async fn push_record(&self, record: KvRecord) -> Result<(RecordId, RecordIdx)> {
         let bytes = record.serialize()?;
-        let idx =
-            self.record_store.last(self.host_id, &RecordTag::Kv).await?.map_or(0, |p| p.idx + 1);
+        let idx = self
+            .record_store
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::Kv))
+            .await?
+            .map_or(0, |p| p.idx + 1);
 
         let record = Record::builder()
             .host(Host::new(self.host_id))
@@ -138,13 +143,11 @@ impl KvStore {
                 match kv.value {
                     Some(value) => {
                         self.kv_db
-                            .save(
-                                &KvEntry::builder()
-                                    .namespace(kv.namespace.clone())
-                                    .key(kv.key.clone())
-                                    .value(value)
-                                    .build(),
-                            )
+                            .save(&KvEntry {
+                                namespace: kv.namespace.clone(),
+                                key: kv.key.clone(),
+                                value,
+                            })
                             .await?;
                     }
                     None => {
@@ -198,13 +201,11 @@ mod tests {
         assert_eq!(records.len(), 1);
 
         let list = store.list(Some("test")).await.unwrap();
-        let expected = vec![
-            KvEntry::builder()
-                .namespace("test".to_string())
-                .key("key".to_string())
-                .value("value".to_string())
-                .build(),
-        ];
+        let expected = vec![KvEntry {
+            namespace: "test".to_string(),
+            key: "key".to_string(),
+            value: "value".to_string(),
+        }];
         assert_eq!(list, expected);
 
         let ns_list = store.list(None).await.unwrap();

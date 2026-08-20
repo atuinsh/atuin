@@ -11,6 +11,7 @@ use colored::Colorize;
 use eyre::Result;
 use serde::Serialize;
 use sysinfo::{Disks, System, get_current_pid};
+use tracing::instrument;
 
 #[derive(Debug, Serialize)]
 struct ShellInfo {
@@ -54,8 +55,7 @@ impl ShellInfo {
                 |atuin_preexec_backend| {
                     atuin_preexec_backend.rfind(':').and_then(|pos_colon| {
                         u32::from_str(&atuin_preexec_backend[..pos_colon])
-                            .ok()
-                            .is_some_and(|preexec_shlvl| {
+                            .is_ok_and(|preexec_shlvl| {
                                 env::var("SHLVL")
                                     .ok()
                                     .and_then(|shlvl| u32::from_str(&shlvl).ok())
@@ -423,6 +423,7 @@ fn checks(info: &DoctorDump) {
     }
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn run(settings: &Settings) -> Result<()> {
     println!("{}", "Atuin Doctor".bold());
     println!("Checking for diagnostics");

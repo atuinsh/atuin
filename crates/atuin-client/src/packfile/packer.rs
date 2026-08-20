@@ -1,7 +1,7 @@
 //! Turns accumulated history into plaintext `packfile` manifest records.
 
 use atuin_domain::caps::PackfileCap;
-use atuin_domain::record::{Host, HostId, Record, RecordTag, RecordVersion};
+use atuin_domain::record::{Host, Record, RecordSeriesKey, RecordTag, RecordVersion};
 use thiserror::Error;
 use tracing::{instrument, trace};
 
@@ -21,14 +21,13 @@ pub enum PackingError {
 }
 
 /// Write a `packfile` manifest record for each contiguous history run of `count` records.
-#[instrument(skip(store))]
+#[instrument(level = "trace", skip(store), err)]
 pub async fn try_pack(
     store: &SqliteStore,
-    host: HostId,
+    series: &RecordSeriesKey,
     cap: Option<PackfileCap>,
-    tag: &RecordTag,
 ) -> Result<(), PackingError> {
-    debug_assert!(*tag != RecordTag::Packfile);
+    debug_assert!(series.tag != RecordTag::Packfile);
 
     // Count is the pack size. Packing waits until at least `count` unpacked records have
     // accumulated and then emits manifests of exactly that many records.
@@ -36,7 +35,10 @@ pub async fn try_pack(
         return Ok(());
     };
 
-    let last_pack = store.last(host, &RecordTag::Packfile).await.map_err(PackingError::Store)?;
+    let last_pack = store
+        .last(&RecordSeriesKey::new(series.host, RecordTag::Packfile))
+        .await
+        .map_err(PackingError::Store)?;
 
     // `start` is the first unpacked source idx; `pack_idx` is the next idx in the *packfile*
     // stream (a separate sequence). Both come from the same latest manifest record.
@@ -47,7 +49,7 @@ pub async fn try_pack(
     let mut pack_idx = last_pack.map_or(0, |record| record.idx + 1);
 
     let Some(ceiling) =
-        store.last(host, tag).await.map_err(PackingError::Store)?.map(|record| record.idx)
+        store.last(series).await.map_err(PackingError::Store)?.map(|record| record.idx)
     else {
         trace!("no history yet; nothing to pack");
         return Ok(());
@@ -61,20 +63,20 @@ pub async fn try_pack(
     let mut cursor = start;
     while cursor <= ceiling && ceiling - cursor + 1 >= count {
         // The loop guard guarantees at least `count` records remain, so each run is exactly `count`.
-        let run = store.next(host, tag, cursor, count).await.map_err(PackingError::Store)?;
+        let run = store.next(series, cursor, count).await.map_err(PackingError::Store)?;
 
         let Some(end) = run.last().map(|record| record.idx) else {
             break;
         };
 
         let manifest = PackManifestDataV1 {
-            host,
-            tag: tag.clone(),
+            host: series.host,
+            tag: series.tag.clone(),
             start_idx: cursor,
             end_idx: end,
         };
         let record = Record::builder()
-            .host(Host::new(host))
+            .host(Host::new(series.host))
             .version(RecordVersion::V1)
             .tag(RecordTag::Packfile)
             .idx(pack_idx)
@@ -94,7 +96,7 @@ pub async fn try_pack(
 #[cfg(test)]
 mod tests {
     use atuin_common::utils::uuid_v7;
-    use atuin_domain::record::EncryptedData;
+    use atuin_domain::record::{EncryptedData, HostId};
     use proptest::prelude::*;
     use rstest::{fixture, rstest};
 
@@ -136,7 +138,7 @@ mod tests {
     /// The `[start_idx, end_idx]` ranges of the manifest records currently in the store.
     async fn manifest_ranges(store: &SqliteStore, host: HostId) -> Vec<(u64, u64)> {
         store
-            .next(host, &RecordTag::Packfile, 0, 1000)
+            .next(&RecordSeriesKey::new(host, RecordTag::Packfile), 0, 1000)
             .await
             .unwrap()
             .iter()
@@ -149,12 +151,11 @@ mod tests {
     async fn pack(store: &SqliteStore, host: HostId, count: u64) {
         try_pack(
             store,
-            host,
+            &RecordSeriesKey::new(host, RecordTag::History),
             Some(PackfileCap {
                 version: 1,
                 record_count: count,
             }),
-            &RecordTag::History,
         )
         .await
         .unwrap();

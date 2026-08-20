@@ -11,7 +11,7 @@ use atuin_client::packfile;
 use atuin_client::settings::Settings;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::caps::PackfileCap;
-use atuin_domain::record::{CmdOrigin, RecordTag};
+use atuin_domain::record::{CmdOrigin, RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
 use eyre::Result;
 use time::OffsetDateTime;
@@ -235,9 +235,8 @@ impl HistorySvc for HistoryGrpcService {
 
             if let Err(e) = packfile::try_pack(
                 &history_store.store,
-                history_store.host_id,
+                &RecordSeriesKey::new(history_store.host_id, RecordTag::History),
                 handle.caps().get_server::<PackfileCap>().await.ok().flatten(),
-                &RecordTag::History,
             )
             .await
             {

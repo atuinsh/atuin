@@ -1,0 +1,2 @@
+[alias]
+build-traced = "build -p atuin --profile profiling-traced --features profiling-traced"

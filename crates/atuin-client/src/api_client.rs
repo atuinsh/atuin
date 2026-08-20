@@ -14,7 +14,7 @@ use atuin_domain::api::{
 };
 use atuin_domain::caps::{CapClient, CapMismatch, CapabilitiesExt};
 use atuin_domain::record::{
-    EncryptedData, HostId, Record, RecordId, RecordIdx, RecordStatus, RecordTag,
+    EncryptedData, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus,
 };
 use eyre::{Result, bail};
 use futures::{Stream, StreamExt, TryStreamExt, stream};
@@ -22,6 +22,7 @@ use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AG
 use reqwest::{Response, StatusCode, Url};
 use reqwest_middleware::ClientWithMiddleware;
 use semver::Version;
+use tracing::{Instrument, instrument};
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
@@ -57,6 +58,7 @@ impl AuthToken {
     }
 }
 
+#[derive(Clone)]
 pub struct Client {
     sync_addr: Arc<Url>,
     client: ClientWithMiddleware,
@@ -114,6 +116,7 @@ pub(crate) fn extra_headers_map(extra_headers: &HashMap<String, String>) -> Resu
     Ok(headers)
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn register(
     address: &Url,
     username: &str,
@@ -151,6 +154,7 @@ pub async fn register(
     Ok(session)
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn login(
     address: &Url,
     req: LoginRequest,
@@ -174,6 +178,7 @@ pub async fn login(
 }
 
 #[cfg(feature = "check-update")]
+#[instrument(level = "trace", skip_all, err)]
 pub async fn latest_version() -> Result<Version> {
     use atuin_domain::api::IndexResponse;
 
@@ -218,6 +223,7 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
     Ok(true)
 }
 
+#[instrument(level = "trace", skip_all, err)]
 async fn handle_resp_error(resp: Response) -> Result<Response> {
     let status = resp.status();
     let url = resp.url().to_string();
@@ -258,6 +264,7 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
 }
 
 /// Build the capability reader for a sync server.
+#[instrument(level = "trace", skip_all, err)]
 pub fn caps_client(
     sync_addr: &Url,
     extra_headers: &HashMap<String, String>,
@@ -272,6 +279,7 @@ pub fn caps_client(
 }
 
 impl Client {
+    #[instrument(level = "trace", skip_all, fields(connect_timeout, timeout), err)]
     pub fn new(
         sync_addr: impl Into<Arc<Url>>,
         auth: &AuthToken,
@@ -314,6 +322,7 @@ impl Client {
         &self.caps
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn me(&self) -> Result<MeResponse> {
         let url = self.sync_addr.append_path("api/v0/me")?;
 
@@ -325,6 +334,7 @@ impl Client {
         Ok(status)
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn delete_store(&self) -> Result<()> {
         let url = self.sync_addr.append_path("api/v0/store")?;
 
@@ -335,6 +345,7 @@ impl Client {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(count = records.len()), err)]
     pub async fn post_records(&self, records: &[Record<EncryptedData>]) -> Result<()> {
         let url = self.sync_addr.append_path("api/v0/record")?;
 
@@ -346,15 +357,23 @@ impl Client {
         Ok(())
     }
 
-    /// Upload a stream of packfile blobs.
+    /// Upload a stream of packfile blobs, transferring several concurrently.
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn upload_packfiles(
         &self,
         packfiles: impl Stream<Item = Result<(RecordId, Vec<RecordId>, Vec<u8>)>>,
     ) -> Result<()> {
+        // Each upload future owns a client clone (a cheap Arc bump) rather than borrowing `&self`,
+        // so the stream stays `Send` for all lifetimes -- required when the whole sync runs on a
+        // spawned, multi-threaded task (e.g. the daemon).
+        let client = self.clone();
         packfiles
-            .map(|packfile| async move {
-                let (manifest_id, record_ids, blob) = packfile?;
-                self.upload_packfile(manifest_id, &record_ids, blob).await
+            .map(move |packfile| {
+                let client = client.clone();
+                async move {
+                    let (manifest_id, record_ids, blob) = packfile?;
+                    client.upload_packfile(manifest_id, &record_ids, blob).await
+                }
             })
             .buffered(MAX_CONCURRENT_PACKFILE_UPLOADS)
             .try_for_each(|()| async { Ok(()) })
@@ -362,6 +381,7 @@ impl Client {
     }
 
     /// Upload a single prepared packfile blob.
+    #[instrument(level = "trace", skip_all, fields(id = ?manifest_id, count = record_ids.len()), err)]
     async fn upload_packfile(
         &self,
         manifest_id: RecordId,
@@ -388,6 +408,7 @@ impl Client {
     }
 
     /// Confirm a packfile body upload with the server.
+    #[instrument(level = "trace", skip_all, fields(id = ?manifest_id), err)]
     async fn confirm_packfile(&self, manifest_id: RecordId) -> Result<()> {
         let path = format!("api/v0/packfiles/{}/confirm", manifest_id.0);
         let url = self.sync_addr.append(path.split('/').filter(|s| !s.is_empty()))?;
@@ -397,6 +418,7 @@ impl Client {
     }
 
     /// Upload a packfile body to a presigned URL. Unauthenticated by design.
+    #[instrument(level = "trace", skip_all, err)]
     async fn put_packfile(
         &self,
         upload_url: Url,
@@ -408,6 +430,7 @@ impl Client {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(id = ?manifest_id), err)]
     async fn get_packfile_download_url(&self, manifest_id: RecordId) -> Result<Url> {
         // `append_path` takes `&'static str`; the manifest id is dynamic, so inline its logic.
         let path = format!("api/v0/packfiles/{}", manifest_id.0);
@@ -420,22 +443,37 @@ impl Client {
     }
 
     /// Download the packfile for the given manifest id.
+    #[instrument(level = "trace", skip_all, fields(id = ?manifest_id), err)]
     pub async fn download_packfile(&self, manifest_id: RecordId) -> Result<Vec<u8>> {
         let download_url = self.get_packfile_download_url(manifest_id).await?;
-        let resp = self.lfs_client.get(download_url).send().await?;
+        let resp = self
+            .lfs_client
+            .get(download_url)
+            .send()
+            .instrument(tracing::trace_span!("lfs_download"))
+            .await?;
         let resp = handle_resp_error(resp).await?;
         Ok(resp.bytes().await?.to_vec())
     }
 
-    /// Stream the records the `chunks` plan covers for one `(host, tag)`.
+    /// Stream the records the `chunks` plan covers for one series (`host`, `tag`).
+    ///
+    /// The plan lets us prefetch several pages in parallel at predictable offsets; if the server
+    /// returns a short page mid-stream we fall back to a serial finish from real progress so no
+    /// records are skipped.
     pub fn records(
         &self,
-        host: HostId,
-        tag: RecordTag,
+        series: &RecordSeriesKey,
         chunks: Tiled<RecordIdx>,
-    ) -> impl Stream<Item = Result<Vec<Record<EncryptedData>>>> + '_ {
+    ) -> impl Stream<Item = Result<Vec<Record<EncryptedData>>>> + 'static {
+        // Own everything the stream needs (the client clone is a cheap Arc bump) so the returned
+        // stream borrows nothing external. That keeps it `Send` for all lifetimes -- required when
+        // the whole sync runs on a spawned, multi-threaded task (e.g. the daemon).
+        let client = self.clone();
+        let host = series.host;
+        let tag = series.tag.clone();
         try_stream! {
-            let mut base_url = self.sync_addr.append_path("api/v0/record/next")?;
+            let mut base_url = client.sync_addr.append_path("api/v0/record/next")?;
             base_url
                 .query_pairs_mut()
                 .append_pair("host", &host.0.to_string())
@@ -450,8 +488,9 @@ impl Client {
                 url.query_pairs_mut()
                     .append_pair("start", &page.start.to_string())
                     .append_pair("count", &width.to_string());
+                let client = client.clone();
                 async move {
-                    let resp = self.client.get(url).send().await?;
+                    let resp = client.client.get(url).send().await?;
                     let resp = handle_resp_error(resp).await?;
                     let records = resp.json::<Vec<Record<EncryptedData>>>().await?;
                     Ok::<_, eyre::Report>((width, records))
@@ -513,6 +552,7 @@ impl Client {
         }
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn record_status(&self) -> Result<RecordStatus> {
         let url = self.sync_addr.append_path("api/v0/record")?;
 
@@ -530,6 +570,7 @@ impl Client {
         Ok(index)
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn delete(&self) -> Result<()> {
         let url = self.sync_addr.append(["account"])?;
 
@@ -544,6 +585,7 @@ impl Client {
         }
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn change_password(
         &self,
         current_password: String,
@@ -735,7 +777,7 @@ mod records_stream_tests {
 
     use atuin_common::range::RangeTiledExt;
     use atuin_common::utils::uuid_v7;
-    use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordTag};
+    use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordSeriesKey, RecordTag};
     use futures::TryStreamExt;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -815,7 +857,7 @@ mod records_stream_tests {
         let client = mock_client(&addr);
 
         let idxs =
-            collect_idxs(client.records(host, RecordTag::History, (0..5).tiled(nz(2)))).await;
+            collect_idxs(client.records(&RecordSeriesKey::new(host, RecordTag::History), (0..5).tiled(nz(2)))).await;
         assert_eq!(idxs, vec![0, 1, 2, 3, 4]);
     }
 
@@ -836,7 +878,7 @@ mod records_stream_tests {
         let client = mock_client(&addr);
 
         let idxs =
-            collect_idxs(client.records(host, RecordTag::History, (0..6).tiled(nz(4)))).await;
+            collect_idxs(client.records(&RecordSeriesKey::new(host, RecordTag::History), (0..6).tiled(nz(4)))).await;
         assert_eq!(idxs, vec![0, 1, 2, 3, 4, 5], "a short mid-stream page must not skip records");
     }
 
@@ -857,7 +899,7 @@ mod records_stream_tests {
         let client = mock_client(&addr);
 
         let idxs =
-            collect_idxs(client.records(host, RecordTag::History, (0..10).tiled(nz(4)))).await;
+            collect_idxs(client.records(&RecordSeriesKey::new(host, RecordTag::History), (0..10).tiled(nz(4)))).await;
         assert!(idxs.is_empty(), "an empty server must yield no records");
     }
 }

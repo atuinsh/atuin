@@ -86,8 +86,8 @@
 //!
 //! ### Uploading
 //!
-//! During the uploading loop in [`crate::record::sync`], when we find the packed record, we invoke
-//! the [`sync::pack`] procedure to build its blob, then hand the blobs to
+//! During the uploading loop in [`crate::record::sync`], when we find the packed record, the sync
+//! engine packs its blob (via `Keyed::pack`) and hands the blobs to
 //! [`Client::upload_packfiles`](crate::api_client::Client::upload_packfiles) to ship in a batch.
 //!
 //! This operation will open up the manifest in the packfile, read the `"start"` and `"end"` values,
@@ -98,18 +98,15 @@
 //! ### Downloading
 //!
 //! During the downloading loop in [`crate::record::sync`], when we find a remote `packfile`
-//! manifest record, we invoke [`sync::download_packed`], which is responsible for turning that
-//! manifest back into local `history` records.
+//! manifest record, the sync engine turns that manifest back into local `history` records.
 //!
 //! This operation asks the server for the packfile's presigned download URL, fetches the packfile,
 //! unpacks it (via `PackManifestRecordView::unpack_records`) back into the individual history
 //! records for the manifest's `"start".."end"` range, re-encrypts each one with the local key, and
 //! pushes them into the local record store.
 mod packer;
-mod record;
-mod sync;
+pub(crate) mod record;
 
 pub use packer::{PackingError, try_pack};
 #[cfg(test)]
 pub(crate) use record::PackManifestRecordView;
-pub use sync::{DownloadError, PackError, download_packed, pack};

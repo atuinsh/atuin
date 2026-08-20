@@ -1,13 +1,15 @@
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus, RecordTag};
+use atuin_domain::record::{
+    EncryptedData, HostId, Record, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
+};
 use atuin_server_database::models::{NewSession, NewUser, Session, User};
 use atuin_server_database::{Database, DbError, DbResult, DbSettings};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::types::Uuid;
 use tracing::instrument;
-use wrappers::{DbRecord, DbSession, DbUser};
+use wrappers::DbRecord;
 
 mod wrappers;
 
@@ -40,7 +42,6 @@ impl Database for Sqlite {
             .fetch_one(&self.pool)
             .await
             .map_err(Into::into)
-            .map(|DbSession(session)| session)
     }
 
     #[instrument(skip_all)]
@@ -55,7 +56,6 @@ impl Database for Sqlite {
         .fetch_one(&self.pool)
         .await
         .map_err(Into::into)
-        .map(|DbUser(user)| user)
     }
 
     #[instrument(skip_all)]
@@ -82,7 +82,6 @@ impl Database for Sqlite {
             .fetch_one(&self.pool)
             .await
             .map_err(Into::into)
-            .map(|DbUser(user)| user)
     }
 
     #[instrument(skip_all)]
@@ -92,7 +91,6 @@ impl Database for Sqlite {
             .fetch_one(&self.pool)
             .await
             .map_err(Into::into)
-            .map(|DbSession(session)| session)
     }
 
     #[instrument(skip_all)]
@@ -197,12 +195,11 @@ impl Database for Sqlite {
     async fn next_records(
         &self,
         user: &User,
-        host: HostId,
-        tag: RecordTag,
+        series: &RecordSeriesKey,
         start: Option<RecordIdx>,
         count: u64,
     ) -> DbResult<Vec<Record<EncryptedData>>> {
-        tracing::debug!("{:?} - {:?} - {:?}", host, tag, start);
+        tracing::debug!("{:?} - {:?} - {:?}", series.host, series.tag, start);
         let start = start.unwrap_or(0);
 
         let records: Result<Vec<DbRecord>, DbError> = sqlx::query_as(
@@ -215,8 +212,8 @@ impl Database for Sqlite {
                     limit $5",
         )
         .bind(user.id)
-        .bind(tag.as_str())
-        .bind(host)
+        .bind(series.tag.as_str())
+        .bind(series.host)
         .bind(start as i64)
         .bind(count as i64)
         .fetch_all(&self.pool)
@@ -236,7 +233,7 @@ impl Database for Sqlite {
                 records
             }
             Err(DbError::NotFound) => {
-                tracing::debug!("no records found in store: {:?}/{}", host, tag);
+                tracing::debug!("no records found in store: {:?}/{}", series.host, series.tag);
                 return Ok(vec![]);
             }
             Err(e) => return Err(e),
@@ -255,7 +252,7 @@ impl Database for Sqlite {
         let mut status = RecordStatus::new();
 
         for i in res {
-            status.set_raw(HostId(i.0), RecordTag::from(i.1), i.2 as u64);
+            status.set_raw(RecordSeriesKey::new(HostId(i.0), RecordTag::from(i.1)), i.2 as u64);
         }
 
         Ok(status)

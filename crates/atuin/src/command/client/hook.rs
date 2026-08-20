@@ -7,6 +7,7 @@ use atuin_common::utils::home_dir;
 use clap::{Parser, Subcommand};
 use eyre::{Result, bail};
 use serde_json::Value;
+use tracing::instrument;
 
 use super::history;
 
@@ -155,6 +156,7 @@ pub struct Cmd {
 }
 
 impl Cmd {
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Settings) -> Result<()> {
         match (self.action, self.agent) {
             (Some(Action::Install { agent }), None) => install(&agent),
