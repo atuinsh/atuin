@@ -82,18 +82,13 @@ pub enum Operation {
 /// Drives atuin's sync.
 ///
 /// The intended way to use this is to build one with the [`SyncEngine::builder()`] method.
-///
-/// Operations that touch the encryption key live on [`Keyed`], obtained via [`SyncEngine::keyed`],
-/// so the key is never long-lived engine state.
 pub struct SyncEngine {
     client: Client,
     store: SqliteStore,
 }
 
 /// A [`SyncEngine`] paired with an encryption key, for the operations that encrypt or decrypt.
-///
-/// Obtained from [`SyncEngine::keyed`]; it borrows both the engine and the key only for the
-/// duration of the operations called on it, so the key stays out of the engine's own state.
+/// Obtained from [`SyncEngine::keyed`].
 pub struct Keyed<'k> {
     engine: &'k SyncEngine,
     key: &'k paseto_v4::Key,

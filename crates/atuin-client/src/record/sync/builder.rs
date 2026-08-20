@@ -12,20 +12,16 @@ use crate::settings::Settings;
 
 /// Where a [`SyncEngine`]'s API client comes from.
 pub enum ClientSource<'a> {
-    /// Wrap an already-built [`Client`] (tests, login).
+    /// Wrap an already-built [`Client`].
     FromClient(Client),
-    /// Build the client from settings, fetching the server capabilities during `connect` unless
-    /// they are supplied here.
+    /// Build from settings, fetching capabilities during `connect`, unless supplied here.
     FromSettings {
         settings: &'a Settings,
         caps: Option<Arc<CapClient>>,
     },
 }
 
-/// Inputs for constructing a [`SyncEngine`].
-///
-/// Obtain one with [`SyncEngine::builder`], set the [`ClientSource`], then finish with
-/// [`connect`](Self::connect).
+/// Inputs for constructing a [`SyncEngine`]. See [`SyncEngine::builder`].
 #[derive(TypedBuilder)]
 #[builder(builder_type(name = SyncEngineBuilder), builder_method(vis = "pub(crate)"))]
 pub struct SyncEngineInit<'a> {
@@ -35,9 +31,6 @@ pub struct SyncEngineInit<'a> {
 
 impl SyncEngineInit<'_> {
     /// Resolve the configured inputs into a live [`SyncEngine`].
-    ///
-    /// A directly-supplied client is wrapped as-is; otherwise the client is built from the
-    /// settings, fetching the server capabilities when they were not supplied.
     #[instrument(level = "trace", skip_all, err)]
     pub async fn connect(self) -> Result<SyncEngine, SyncError> {
         let client = match self.client_source {
