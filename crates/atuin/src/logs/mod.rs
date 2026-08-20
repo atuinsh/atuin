@@ -26,7 +26,7 @@ pub enum LogCtxEnableError {
 ///
 /// ## OpenTelemetry
 ///
-/// [`opentelemetry`] traces can be enabled by passing an `ATUIN_OTEL=<url>` environment variable,
+/// OpenTelemetry traces can be enabled by passing an `ATUIN_OTEL=<url>` environment variable,
 /// which will publish spans to the given endpoint, eg.
 ///
 /// ```bash
