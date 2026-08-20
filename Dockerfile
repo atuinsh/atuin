@@ -1,5 +1,10 @@
-FROM lukemathwalker/cargo-chef:latest-rust-1.97.0-slim-bookworm AS chef
+FROM lukemathwalker/cargo-chef:latest-rust-slim-bookworm@sha256:e406ad0baa7266cee09ca9f62f30d7ed330bdb25be9f337ff8090e7ae215f7fd AS chef
 WORKDIR app
+
+# Build with the toolchain pinned in rust-toolchain.toml, not the image's.
+COPY rust-toolchain.toml .
+RUN rustup toolchain install --profile minimal --no-self-update \
+      "$(sed -n 's/^ *channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)"
 
 FROM chef AS planner
 COPY . .
