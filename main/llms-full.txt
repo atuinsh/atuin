@@ -198,7 +198,7 @@ Note that the `$PROFILE` path may depend on your PowerShell version.
 
 If you don't wish to use the installer, the manual installation steps are as follows.
 
-Atuin requires a recent Rust toolchain. The minimum supported version is set by `rust-version` in the workspace [`Cargo.toml`](https://github.com/atuinsh/atuin/blob/main/Cargo.toml) (currently 1.97.0). Distribution package managers often ship an older Rust, so it's best to use [rustup](https://rustup.rs/) to set up an up-to-date toolchain, then you can run:
+Atuin requires a recent Rust toolchain. The minimum supported version is set by `rust-version` in the workspace [`Cargo.toml`](https://github.com/atuinsh/atuin/blob/main/Cargo.toml) (currently 1.98.0). Distribution package managers often ship an older Rust, so it's best to use [rustup](https://rustup.rs/) to set up an up-to-date toolchain, then you can run:
 
 ```
 cargo install atuin --locked
@@ -268,7 +268,7 @@ Atuin is available on WinGet:
 winget install -e Atuinsh.Atuin
 ```
 
-Atuin builds on the latest stable version of Rust, and we make no promises regarding older versions. The minimum supported version is set by `rust-version` in the workspace [`Cargo.toml`](https://github.com/atuinsh/atuin/blob/main/Cargo.toml) (currently 1.97.0). We recommend using [rustup](https://rustup.rs/).
+Atuin builds on the latest stable version of Rust, and we make no promises regarding older versions. The minimum supported version is set by `rust-version` in the workspace [`Cargo.toml`](https://github.com/atuinsh/atuin/blob/main/Cargo.toml) (currently 1.98.0). We recommend using [rustup](https://rustup.rs/).
 
 ```
 git clone https://github.com/atuinsh/atuin.git
@@ -630,13 +630,14 @@ If any of these conditions aren't met, Atuin won't install its hooks, and it won
 
 When Atuin initializes, it sets several environment variables:
 
-| Variable               | Purpose                                                                     |
-| ---------------------- | --------------------------------------------------------------------------- |
-| `ATUIN_SESSION`        | Unique identifier for this shell session                                    |
-| `ATUIN_SHLVL`          | Tracks shell nesting level                                                  |
-| `ATUIN_HISTORY_ID`     | Temporary ID for the currently executing command                            |
-| `ATUIN_HISTORY_AUTHOR` | Optional command author identity (for example `ellie`, `claude`, `copilot`) |
-| `ATUIN_HISTORY_INTENT` | Optional command intent/rationale text                                      |
+| Variable                    | Purpose                                                                                                                                                              |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ATUIN_SESSION`             | Unique identifier for this shell session                                                                                                                             |
+| `ATUIN_SHLVL`               | Tracks shell nesting level                                                                                                                                           |
+| `ATUIN_HISTORY_ID`          | Temporary ID for the currently executing command                                                                                                                     |
+| `ATUIN_HISTORY_AUTHOR`      | Optional command author identity (for example `ellie`, `claude`, `copilot`). A known agent name here marks entries as agent-run, unless it's also the local username |
+| `ATUIN_HISTORY_AUTHOR_KIND` | Optional: `user` or `agent`, overriding the classification inferred from the author name. Only applies when an author is stated                                      |
+| `ATUIN_HISTORY_INTENT`      | Optional command intent/rationale text                                                                                                                               |
 
 Atuin uses these variables internally to track command execution and associate commands with sessions. If `ATUIN_HISTORY_AUTHOR` isn't set, Atuin defaults to the local shell username.
 
@@ -806,14 +807,14 @@ By default, Atuin's interactive search shows only your own commands. Agent-run c
 
 Today this default is built into the search UI rather than configurable via `config.toml`. Interactive search uses the equivalent of:
 
-- `$all-user` — any author that's **not** a known AI agent
+- `$all-user` — any entry that's **not** agent-run
 
 For explicit author filtering, use the CLI `atuin search --author ...` flag. Special values:
 
-| Value        | Meaning                                    |
-| ------------ | ------------------------------------------ |
-| `$all-user`  | Any author that's **not** a known AI agent |
-| `$all-agent` | Any known AI agent author                  |
+| Value        | Meaning                            |
+| ------------ | ---------------------------------- |
+| `$all-user`  | Any entry that's **not** agent-run |
+| `$all-agent` | Any agent-run entry                |
 
 You can also use literal author names:
 
