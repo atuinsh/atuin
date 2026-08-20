@@ -1,0 +1,6 @@
+# Cargo cannot enable a feature from a build profile, so instrumented-profiling
+# builds must turn on both the `profiling-traced` profile and the matching
+# `profiling-traced` feature (which compiles in OpenTelemetry span export).
+# This alias couples them. See CONTRIBUTING.md's "Instrumented Profiling".
+[alias]
+build-traced = "build -p atuin --profile profiling-traced --features profiling-traced"
