@@ -1,3 +1,4 @@
+#[derive(sqlx::FromRow)]
 pub struct User {
     pub id: i64,
     pub username: String,
@@ -5,6 +6,7 @@ pub struct User {
     pub password: String,
 }
 
+#[derive(sqlx::FromRow)]
 pub struct Session {
     pub id: i64,
     pub user_id: i64,

@@ -7,11 +7,12 @@ use uuid::Uuid;
 
 pub const SCRIPT_LEN: usize = 20000; // 20kb max total len
 
-#[derive(Debug, Clone, PartialEq, Eq, TypedBuilder)]
+#[derive(Debug, Clone, PartialEq, Eq, TypedBuilder, sqlx::FromRow)]
 /// A script is a set of commands that can be run, with the specified shebang
 pub struct Script {
     /// The id of the script
     #[builder(default = uuid::Uuid::new_v4())]
+    #[sqlx(try_from = "String")]
     pub id: Uuid,
 
     /// The name of the script
@@ -26,7 +27,10 @@ pub struct Script {
     pub shebang: String,
 
     /// The tags of the script
+    ///
+    /// Not a column on `scripts`; populated from a separate `script_tags` query.
     #[builder(default = Vec::new())]
+    #[sqlx(skip)]
     pub tags: Vec<String>,
 
     /// The script content
