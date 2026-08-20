@@ -25,10 +25,8 @@ use semver::Version;
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
-/// How many record-download pages [`Client::records`] keeps in flight at once. Fetching the next
-/// page(s) (network) while the caller writes the current one (local sqlite) overlaps the two
-/// disjoint resources instead of strictly alternating them.
-const DOWNLOAD_PREFETCH: usize = 8;
+/// How many record pages to download in parallel. See [`Client::records`].
+const MAX_RECORDS_CONCURRENT_DOWNLOAD: usize = 8;
 
 /// How many packfile blobs [`Client::upload_packfiles`] transfers concurrently.
 const MAX_CONCURRENT_PACKFILE_UPLOADS: usize = 16;
@@ -348,10 +346,7 @@ impl Client {
         Ok(())
     }
 
-    /// Upload a stream of prepared packfile blobs -- each `(manifest_id, covered_record_ids,
-    /// bytes)` the output of packing one manifest -- with bounded concurrency, so callers batch the
-    /// transfers without hand-rolling the fan-out. Packing errors (the input `Err`s) and upload
-    /// errors flow through the same result; returns on the first failure.
+    /// Upload a stream of packfile blobs.
     pub async fn upload_packfiles(
         &self,
         packfiles: impl Stream<Item = Result<(RecordId, Vec<RecordId>, Vec<u8>)>>,
@@ -366,8 +361,7 @@ impl Client {
             .await
     }
 
-    /// Upload a single prepared packfile blob. Private: callers go through
-    /// [`Self::upload_packfiles`], which owns the batching.
+    /// Upload a single prepared packfile blob.
     async fn upload_packfile(
         &self,
         manifest_id: RecordId,
@@ -469,7 +463,7 @@ impl Client {
             // Normally we can query many pages in parallel. The `chunks` field contains
             // information on how many chunks there are, and what their sizes are, so we can make
             // parallel requests and start fetching data ahead of time.
-            let mut fetches = stream::iter(chunks).map(fetch_page).buffered(DOWNLOAD_PREFETCH);
+            let mut fetches = stream::iter(chunks).map(fetch_page).buffered(MAX_RECORDS_CONCURRENT_DOWNLOAD);
 
             let mut progress = 0u64;
             let mut short_page = false;
