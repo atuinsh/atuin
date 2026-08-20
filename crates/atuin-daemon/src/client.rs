@@ -24,9 +24,9 @@ use crate::control::{
 use crate::events::DaemonEvent;
 use crate::history::history_client::HistoryClient as HistoryServiceClient;
 use crate::history::{
-    AuthorKind, CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest,
-    ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest,
-    TailHistoryReply, TailHistoryRequest,
+    Author, AuthorKind, CancelHistoryReply, CancelHistoryRequest, EndHistoryReply,
+    EndHistoryRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply,
+    StatusRequest, TailHistoryReply, TailHistoryRequest,
 };
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
@@ -128,10 +128,13 @@ impl HistoryClient {
             hostname: h.cmd_origin.into_string(),
             session: h.session,
             timestamp: h.timestamp.unix_timestamp_nanos() as u64,
-            author: h.author,
+            legacy_author: h.author.clone(),
             intent: h.intent.unwrap_or_default(),
             shell: h.shell.unwrap_or_default(),
-            author_kind: AuthorKind::from(h.author_kind) as i32,
+            author: Some(Author {
+                kind: AuthorKind::from(h.author_kind) as i32,
+                name: h.author,
+            }),
         };
 
         Ok(self.client.start_history(req).await?.into_inner())

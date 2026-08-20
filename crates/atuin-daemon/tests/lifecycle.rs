@@ -178,7 +178,9 @@ mod unix {
         assert_eq!(started_history.command, "git status");
         assert_eq!(started_history.cwd, "/tmp/repo");
         assert_eq!(started_history.hostname, "test-host:ellie");
-        assert_eq!(started_history.author, "claude");
+        let started_author = started_history.author.as_ref().unwrap();
+        assert_eq!(started_author.name, "claude");
+        assert_eq!(started_history.legacy_author, "claude");
         assert_eq!(started_history.intent, "inspect repository state");
 
         client.end_history(start_reply.id.clone(), 1_000_000, 0).await.unwrap();
