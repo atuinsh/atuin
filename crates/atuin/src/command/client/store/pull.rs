@@ -1,7 +1,6 @@
 use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::record::sync;
-use atuin_client::record::sync::Operation;
+use atuin_client::record::sync::{Operation, SyncEngine};
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::RecordTag;
@@ -42,19 +41,20 @@ impl Pull {
         // 3. Filter operations by
         //  a) are they a download op?
         //  b) are they for the host/tag we are pushing here?
-        let client = sync::build_client(settings).await?;
-        let (diff, remote_index) = sync::diff(&client, &store).await?;
-
         let key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
+        let engine = SyncEngine::connect(settings, &store, &key).await?;
+
+        let (diff, remote_index) = engine.diff().await?;
 
         // Skip on --force: local was already wiped above, mismatch is the user's call.
         if !self.force {
-            sync::check_encryption_key(&client, &remote_index, &key)
+            engine
+                .check_encryption_key(&remote_index)
                 .await
                 .map_err(crate::print_error::format_sync_error)?;
         }
 
-        let operations = sync::operations(diff, &store)?;
+        let operations = SyncEngine::operations(diff)?;
 
         let operations = operations
             .into_iter()
@@ -79,8 +79,7 @@ impl Pull {
             })
             .collect();
 
-        let (_, downloaded) =
-            sync::sync_remote(&client, operations, &store, self.page, &key).await?;
+        let (_, downloaded) = engine.sync_remote(operations, self.page).await?;
 
         println!("Downloaded {} records", downloaded.len());
 

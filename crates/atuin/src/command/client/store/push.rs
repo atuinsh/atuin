@@ -1,7 +1,6 @@
 use atuin_client::api_client::Client;
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::record::sync;
-use atuin_client::record::sync::Operation;
+use atuin_client::record::sync::{Operation, SyncEngine};
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::{HostId, RecordTag};
@@ -65,19 +64,20 @@ impl Push {
         // 3. Filter operations by
         //  a) are they an upload op?
         //  b) are they for the host/tag we are pushing here?
-        let client = sync::build_client(settings).await?;
-        let (diff, remote_index) = sync::diff(&client, &store).await?;
-
         let key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
+        let engine = SyncEngine::connect(settings, &store, &key).await?;
+
+        let (diff, remote_index) = engine.diff().await?;
 
         // Skip on --force: that path intentionally replaces remote with local.
         if !self.force {
-            sync::check_encryption_key(&client, &remote_index, &key)
+            engine
+                .check_encryption_key(&remote_index)
                 .await
                 .map_err(crate::print_error::format_sync_error)?;
         }
 
-        let operations = sync::operations(diff, &store)?;
+        let operations = SyncEngine::operations(diff)?;
 
         let operations = operations
             .into_iter()
@@ -110,7 +110,7 @@ impl Push {
             })
             .collect();
 
-        let (uploaded, _) = sync::sync_remote(&client, operations, &store, self.page, &key).await?;
+        let (uploaded, _) = engine.sync_remote(operations, self.page).await?;
 
         println!("Uploaded {uploaded} records");
 

@@ -522,8 +522,15 @@ async fn handle_end(
                 &settings.sync_address,
                 &settings.extra_headers,
             )?;
-            let (_, downloaded) =
-                record::sync::sync(settings, &store, &history_store.encryption_key, caps).await?;
+            let (_, downloaded) = record::sync::SyncEngine::new(
+                settings,
+                &store,
+                &history_store.encryption_key,
+                caps,
+            )
+            .await?
+            .sync()
+            .await?;
             Settings::save_sync_time().await?;
 
             crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
