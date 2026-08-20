@@ -51,9 +51,6 @@ impl AuthorKind {
     pub const VARIANTS: [Self; 2] = [Self::User, Self::Agent];
 
     /// Decode the representation written by [`Self::as_u8`].
-    ///
-    /// Unknown values are treated as "not stated" rather than an error, so that entries written by
-    /// a future version with more kinds still decode.
     pub const fn from_u8(value: u8) -> Option<Self> {
         match value {
             1 => Some(Self::User),
