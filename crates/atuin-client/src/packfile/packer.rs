@@ -21,7 +21,7 @@ pub enum PackingError {
 }
 
 /// Write a `packfile` manifest record for each contiguous history run of `count` records.
-#[instrument(skip(store))]
+#[instrument(level = "trace", skip(store), err)]
 pub async fn try_pack(
     store: &SqliteStore,
     host: HostId,

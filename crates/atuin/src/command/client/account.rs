@@ -2,6 +2,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use clap::{Args, Subcommand};
 use eyre::Result;
+use tracing::instrument;
 
 pub mod change_password;
 pub mod delete;
@@ -38,6 +39,7 @@ pub enum Commands {
 }
 
 impl Cmd {
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: Settings, store: SqliteStore) -> Result<()> {
         match self.command {
             Commands::Login(l) => l.run(&settings, &store).await,

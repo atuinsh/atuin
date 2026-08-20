@@ -2,6 +2,7 @@
 
 use atuin_client::settings::Settings;
 use atuin_common::logs::LogConfig;
+use tracing::instrument;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Cmd {
@@ -9,6 +10,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Settings) -> eyre::Result<()> {
         match self {
             Self::PrepareSearchIndex => super::search::prepare_index(settings).await,

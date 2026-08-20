@@ -6,6 +6,7 @@ use clap::Subcommand;
 use eyre::Result;
 use itertools::Itertools;
 use time::OffsetDateTime;
+use tracing::instrument;
 
 #[cfg(feature = "sync")]
 mod push;
@@ -46,6 +47,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(
         &self,
         settings: &Settings,

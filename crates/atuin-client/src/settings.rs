@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::sync::OnceCell;
+use tracing::instrument;
 use url::Url;
 
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
@@ -1330,6 +1331,7 @@ impl Settings {
     /// `AuthToken`. Callers that need to distinguish between auth states
     /// (e.g. to show different UI) should call `resolve_sync_auth` directly.
     #[cfg(feature = "sync")]
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn sync_auth_token(&self) -> Result<crate::api_client::AuthToken> {
         self.resolve_sync_auth().await.into_auth_token()
     }

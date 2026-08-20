@@ -13,6 +13,7 @@ use sql_builder::{SqlBuilder, SqlName, esc, quote};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Result, Row};
 use time::OffsetDateTime;
+use tracing::instrument;
 use uuid::Uuid;
 
 use super::history::History;
@@ -56,6 +57,7 @@ pub struct OptFilters<'a> {
 /// Outside of an atuin-hooked shell (e.g. when running as an MCP server),
 /// `ATUIN_SESSION` is unset; the session is left empty so session-scoped
 /// filters simply match nothing.
+#[instrument(level = "trace", skip_all, err)]
 pub async fn query_context() -> eyre::Result<Context> {
     let session = env::var("ATUIN_SESSION").unwrap_or_default();
     let cmd_origin = CmdOrigin::probe_current();
@@ -72,6 +74,7 @@ pub async fn query_context() -> eyre::Result<Context> {
     })
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn current_context() -> eyre::Result<Context> {
     if env::var("ATUIN_SESSION").is_err() {
         return Err(eyre::eyre!(
@@ -303,6 +306,7 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for History {
 }
 
 impl Sqlite {
+    #[instrument(level = "trace", skip_all, fields(timeout), err)]
     pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> eyre::Result<Self> {
         let path = path.as_ref();
         debug!("opening sqlite database at {path:?}");
@@ -339,21 +343,30 @@ impl Sqlite {
         self.sqlite.close().await;
     }
 
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn sqlite_version(&self) -> Result<String> {
+        sqlx::query_scalar("SELECT sqlite_version()").fetch_one(self.sqlite.pool()).await
+    }
+
+    #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     pub async fn save(&self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
         self.table.insert_one(h).await
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn save_bulk<'a>(&self, h: impl IntoIterator<Item = &'a History>) -> Result<()> {
         debug!("saving history to sqlite");
         self.table.insert_bulk(h).await
     }
 
+    #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     pub async fn load(&self, id: &str) -> Result<Option<History>> {
         debug!("loading history item {}", id);
         self.table.get(id).await
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn load_active(
         &self,
         ids: impl IntoIterator<Item = HistoryId>,
@@ -403,6 +416,7 @@ impl Sqlite {
         Ok(out)
     }
 
+    #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     pub async fn update(&self, h: &History) -> Result<()> {
         debug!("updating sqlite history");
 
@@ -430,6 +444,7 @@ impl Sqlite {
     }
 
     // make a unique list, that only shows the *newest* version of things
+    #[instrument(level = "trace", skip_all, fields(unique, include_deleted), err)]
     pub async fn list(
         &self,
         filters: impl IntoIterator<Item = FilterMode>,
@@ -496,6 +511,7 @@ impl Sqlite {
         Ok(res)
     }
 
+    #[instrument(level = "trace", skip_all, fields(from = ?from, to = ?to), err)]
     pub async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>> {
         debug!("listing history from {:?} to {:?}", from, to);
 
@@ -511,6 +527,7 @@ impl Sqlite {
         Ok(res)
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn last(&self) -> Result<Option<History>> {
         let res = sqlx::query_as::<_, History>(
             "select * from history where duration >= 0 order by timestamp desc limit 1",
@@ -521,6 +538,7 @@ impl Sqlite {
         Ok(res)
     }
 
+    #[instrument(level = "trace", skip_all, fields(count), err)]
     pub async fn before(&self, timestamp: OffsetDateTime, count: i64) -> Result<Vec<History>> {
         let res = sqlx::query_as::<_, History>(
             "select * from history where timestamp < ?1 order by timestamp desc limit ?2",
@@ -533,6 +551,7 @@ impl Sqlite {
         Ok(res)
     }
 
+    #[instrument(level = "trace", skip_all, fields(include_deleted), err)]
     pub async fn history_count(&self, include_deleted: bool) -> Result<i64> {
         let query = if include_deleted {
             "select count(1) from history"
@@ -544,6 +563,7 @@ impl Sqlite {
         Ok(res.0)
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn search(
         &self,
         search_mode: DbSearchMode,
@@ -729,6 +749,7 @@ impl Sqlite {
         Ok(ordering::reorder_fuzzy(search_mode, &reorder_query, res))
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn query_history(&self, query: &str) -> Result<Vec<History>> {
         let res = sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(query))
             .fetch_all(self.sqlite.pool())
@@ -746,10 +767,12 @@ impl Sqlite {
     // instead (HistoryRecord::Delete), and the only remaining caller deletes entries
     // that were never pushed to the store - so just delete the row.
     // deleted_at is still read to keep tombstones from older versions working.
+    #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     pub async fn delete(&self, h: History) -> Result<()> {
         self.delete_rows([h.id]).await
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn delete_rows(&self, ids: impl IntoIterator<Item = HistoryId>) -> Result<()> {
         for id in ids {
             self.table.delete(id.0.as_str()).await?;
@@ -758,6 +781,7 @@ impl Sqlite {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     pub async fn stats(&self, h: &History) -> Result<HistoryStats> {
         // We select the previous in the session by time. Excluding deleted
         // history matches every other read path, and lets the query use the
@@ -870,6 +894,7 @@ impl Sqlite {
         })
     }
 
+    #[instrument(level = "trace", skip_all, fields(before, dupkeep), err)]
     pub async fn get_dups(&self, before: i64, dupkeep: u32) -> Result<Vec<History>> {
         let res = sqlx::query_as::<_, History>(
             "SELECT * FROM (
@@ -909,6 +934,7 @@ impl Paged {
         }
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn next(&mut self) -> Result<Option<Vec<History>>> {
         let mut query = SqlBuilder::select_from(SqlName::new("history").alias("h").baquoted());
 

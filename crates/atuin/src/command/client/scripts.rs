@@ -14,7 +14,7 @@ use atuin_scripts::store::script::Script;
 use clap::{Parser, Subcommand};
 use eyre::{OptionExt, Result, bail};
 use tempfile::NamedTempFile;
-use tracing::debug;
+use tracing::{debug, instrument};
 
 #[derive(Parser, Debug)]
 pub struct NewScript {
@@ -547,6 +547,7 @@ impl Cmd {
         }
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(
         self,
         settings: &Settings,

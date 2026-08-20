@@ -9,6 +9,8 @@ use atuin_common::logs::{self, LogConfig};
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
+use crate::logs::LogCtx;
+
 #[cfg(feature = "sync")]
 mod sync;
 
@@ -199,7 +201,11 @@ impl Cmd {
         // doing anything else. History commands are performance-sensitive and run before and after
         // every shell command, so we want to skip any unnecessary initialization for them.
         let settings = Settings::new().wrap_err("could not load client settings")?;
-        self.init_logging(&settings);
+        let _logging = self
+            .log_config(&settings)
+            .map(|c| LogCtx::try_enable("atuin", &c))
+            .transpose()
+            .wrap_err("failed to enable logging")?;
         let theme_manager = theme::ThemeManager::new(settings.theme.debug, None);
         let res = runtime.block_on(self.run_inner(settings, theme_manager));
 
@@ -329,12 +335,6 @@ impl Cmd {
             Self::Internal(cmd) => cmd.log_config(),
 
             _ => Some(LogConfig::stderr_only()),
-        }
-    }
-
-    fn init_logging(&self, settings: &Settings) {
-        if let Some(config) = self.log_config(settings) {
-            crate::logs::init_logging(&config);
         }
     }
 }
