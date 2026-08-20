@@ -52,7 +52,6 @@ impl Pull {
             .connect()
             .await?;
 
-        // Construct `keyed` first so the key check starts in the background, overlapping the diff.
         let keyed = engine.keyed(&key);
         let (diff, _remote_index) = engine.diff().await?;
 
