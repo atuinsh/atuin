@@ -114,8 +114,9 @@ fn apply_author_filter(sql: &mut SqlBuilder, authors: OrFilter<&[AuthorPattern]>
     let user_expr = "CASE WHEN instr(hostname, ':') > 0 THEN substr(hostname, instr(hostname, \
                      ':') + 1) ELSE hostname END";
 
-    let author_expr =
-        format!("CASE WHEN author IS NULL OR trim(author) = '' THEN {user_expr} ELSE author END");
+    let author_expr = std::fmt::from_fn(|f| {
+        write!(f, "CASE WHEN author IS NULL OR trim(author) = '' THEN {user_expr} ELSE author END")
+    });
 
     // Mirrors [`History::is_agent`]: a recorded kind wins, and without one a known agent name means
     // an agent, unless the author is only the username it defaulted to. A kind we don't recognise
