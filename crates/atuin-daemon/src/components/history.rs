@@ -23,9 +23,10 @@ use crate::daemon::{Component, DaemonHandle};
 use crate::events::DaemonEvent;
 use crate::history::history_server::{History as HistorySvc, HistoryServer};
 use crate::history::{
-    AuthorKind, CancelHistoryReply, CancelHistoryRequest, EndHistoryReply, EndHistoryRequest,
-    HistoryEntry, HistoryEventKind, ShutdownReply, ShutdownRequest, StartHistoryReply,
-    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
+    Author, AuthorKind, CancelHistoryReply, CancelHistoryRequest, EndHistoryReply,
+    EndHistoryRequest, HistoryEntry, HistoryEventKind, ShutdownReply, ShutdownRequest,
+    StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply,
+    TailHistoryRequest,
 };
 
 const DAEMON_PROTOCOL_VERSION: u32 = 1;
@@ -126,12 +127,15 @@ fn history_to_tail_reply(kind: HistoryEventKind, history: History) -> TailHistor
             cwd: history.cwd,
             session: history.session,
             hostname: history.cmd_origin.into_string(),
-            author: history.author,
+            legacy_author: history.author.clone(),
             intent: history.intent.unwrap_or_default(),
             exit: history.exit,
             duration: history.duration,
             shell: history.shell.unwrap_or_default(),
-            author_kind: AuthorKind::from(history.author_kind) as i32,
+            author: Some(Author {
+                kind: AuthorKind::from(history.author_kind) as i32,
+                name: history.author,
+            }),
         }),
     }
 }
@@ -148,7 +152,15 @@ impl HistorySvc for HistoryGrpcService {
         let req = request.into_inner();
 
         let timestamp = OffsetDateTime::from_unix_nanos_u64(req.timestamp);
-        let author_kind = req.author_kind();
+        // Clients from before `Author` existed only send `legacy_author`, and
+        // never stated a kind.
+        let (author, author_kind) = match req.author {
+            Some(author) => {
+                let kind = author.kind();
+                (author.name, kind.into())
+            }
+            None => (req.legacy_author, None),
+        };
 
         let cmd_origin = CmdOrigin::try_from(req.hostname)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
@@ -158,10 +170,10 @@ impl HistorySvc for HistoryGrpcService {
             .cwd(req.cwd)
             .session(req.session)
             .cmd_origin(cmd_origin)
-            .author(req.author)
+            .author(author)
             .intent(req.intent)
             .shell(req.shell)
-            .author_kind(author_kind.into())
+            .author_kind(author_kind)
             .build()
             .into();
 

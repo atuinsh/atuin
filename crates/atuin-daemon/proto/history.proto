@@ -11,17 +11,32 @@ enum AuthorKind {
   AUTHOR_KIND_AGENT = 2;
 }
 
+// Who ran a command. `name` is the author identity as stated by the
+// integration; `kind` says whether that is a human or an agent.
+message Author {
+  AuthorKind kind = 1;
+  string name = 2;
+}
+
 message StartHistoryRequest {
+  // Briefly held a flat `AuthorKind author_kind` while that feature was in
+  // review; it was never in a release, but reserve it anyway.
+  reserved 9;
+
   // If people are still using my software in ~530 years, they can figure out a u128 migration
   uint64 timestamp = 1; // nanosecond unix epoch
   string command = 2;
   string cwd = 3;
   string session = 4;
   string hostname = 5;
-  string author = 6;
+  // The author name alone, readable by daemons from before `Author` existed.
+  // Writers must keep setting this to `author.name`; readers only look at it
+  // when `author` is absent. This is the released `author` field renamed:
+  // field names are not part of the wire format, only the number is.
+  string legacy_author = 6;
   string intent = 7;
   string shell = 8;
-  AuthorKind author_kind = 9;
+  Author author = 10;
 }
 
 message EndHistoryRequest {
@@ -77,18 +92,24 @@ enum HistoryEventKind {
 }
 
 message HistoryEntry {
+  // Briefly held a flat `AuthorKind author_kind` while that feature was in
+  // review; it was never in a release, but reserve it anyway.
+  reserved 12;
+
   uint64 timestamp = 1; // nanosecond unix epoch
   string id = 2;
   string command = 3;
   string cwd = 4;
   string session = 5;
   string hostname = 6;
-  string author = 7;
+  // The author name alone, readable by clients from before `Author` existed.
+  // Same contract as `StartHistoryRequest.legacy_author`.
+  string legacy_author = 7;
   string intent = 8;
   int64 exit = 9;
   int64 duration = 10;
   string shell = 11;
-  AuthorKind author_kind = 12;
+  Author author = 13;
 }
 
 message TailHistoryReply {

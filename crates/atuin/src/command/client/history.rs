@@ -671,7 +671,15 @@ impl TailEvent {
             .history
             .ok_or_else(|| eyre::eyre!("daemon sent a history tail event without history"))?;
         let timestamp = OffsetDateTime::from_unix_nanos_u64(history.timestamp);
-        let author_kind = history.author_kind();
+        // Daemons from before `Author` existed only send `legacy_author`, and
+        // never stated a kind.
+        let (author, author_kind) = match history.author {
+            Some(author) => {
+                let kind = author.kind();
+                (author.name, kind.into())
+            }
+            None => (history.legacy_author, None),
+        };
         let kind = match HistoryEventKind::try_from(reply.kind)
             .unwrap_or(HistoryEventKind::Unspecified)
         {
@@ -692,11 +700,11 @@ impl TailEvent {
                 session: history.session,
                 #[allow(deprecated)]
                 cmd_origin: CmdOrigin::parse_lenient(history.hostname),
-                author: history.author,
+                author,
                 intent: normalize_optional_string(history.intent),
                 shell: normalize_optional_string(history.shell),
                 deleted_at: None,
-                author_kind: author_kind.into(),
+                author_kind,
             },
         })
     }
