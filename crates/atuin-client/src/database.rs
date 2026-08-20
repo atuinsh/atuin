@@ -121,7 +121,7 @@ fn apply_author_filter(sql: &mut SqlBuilder, authors: OrFilter<&[AuthorPattern]>
     // Mirrors [`History::is_agent`]: a recorded kind wins, and without one a known agent name means
     // an agent, unless the author is only the username it defaulted to. A kind we don't recognise
     // (written by a newer version) falls through to the name heuristic, exactly like
-    // [`AuthorKind::from_u8`] mapping it to `None` — and so does a NULL kind, because
+    // [`AuthorKind::from_repr`] mapping it to `None` — and so does a NULL kind, because
     // `NULL IN (...)` is not true.
     let is_agent = || {
         format!(
@@ -404,7 +404,7 @@ impl Sqlite {
         let shell: Option<String> = row.try_get("shell").ok().flatten();
         let author_kind: Option<i64> = row.try_get("author_kind").ok().flatten();
         let author_kind =
-            author_kind.and_then(|kind| u8::try_from(kind).ok()).and_then(AuthorKind::from_u8);
+            author_kind.and_then(|kind| u8::try_from(kind).ok()).and_then(AuthorKind::from_repr);
 
         History::from_db()
             .id(row.get("id"))
@@ -2023,7 +2023,7 @@ mod test {
     }
 
     /// An author_kind value this version doesn't recognise (written by a newer one) must fall
-    /// through to the name heuristic in SQL, exactly like [`AuthorKind::from_u8`] returning `None`
+    /// through to the name heuristic in SQL, exactly like [`AuthorKind::from_repr`] returning `None`
     /// does in [`History::is_agent`] — otherwise the two classifiers disagree on the same row.
     #[tokio::test(flavor = "multi_thread")]
     #[rstest]

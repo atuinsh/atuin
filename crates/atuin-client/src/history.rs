@@ -35,8 +35,10 @@ pub fn is_known_agent(author: &str) -> bool {
 ///
 /// This is stored as a small integer, both on the wire and in the database, and is optional: an
 /// entry captured before this field existed, or by an integration that does not set it, has no
-/// kind, and [`History::is_agent`] falls back to inspecting the author name.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, clap::ValueEnum)]
+/// kind, and [`History::is_agent`] falls back to inspecting the author name. A stored value we
+/// don't recognise (written by a future version with more kinds) decodes as "not stated" too:
+/// [`Self::from_repr`] returns `None` rather than an error.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, clap::ValueEnum, strum_macros::FromRepr)]
 #[repr(u8)]
 pub enum AuthorKind {
     /// A human ran this command.
@@ -49,15 +51,6 @@ impl AuthorKind {
     /// Every recognised kind. The SQL author filter derives its recognised-value list from this,
     /// so it stays in lockstep with [`Self::from_u8`] (a test pins the two together).
     pub const VARIANTS: [Self; 2] = [Self::User, Self::Agent];
-
-    /// Decode the representation written by [`Self::as_u8`].
-    pub const fn from_u8(value: u8) -> Option<Self> {
-        match value {
-            1 => Some(Self::User),
-            2 => Some(Self::Agent),
-            _ => None,
-        }
-    }
 
     pub const fn as_u8(self) -> u8 {
         self as u8
@@ -179,11 +172,6 @@ impl Version {
 /// This is deliberately not [`Version::min_fields`]: fields appended to V2 grow this count, while
 /// `min_fields` stays at the 12 fields V2 launched with so that entries written before the new
 /// fields existed still decode.
-///
-/// This count must never gate reading a field back. Each appended field gets its own frozen
-/// threshold constant (its position in the array, like [`V2_FIELDS_THROUGH_AUTHOR_KIND`]) —
-/// gating on this growing total would make records written before the *next* field silently lose
-/// this one.
 const V2_SERIALIZED_FIELDS: u32 = 13;
 
 /// A V2 record contains `author_kind` iff it has at least this many fields.
@@ -432,7 +420,7 @@ impl History {
 
         let author_kind = if version >= Version::Two && nfields >= V2_FIELDS_THROUGH_AUTHOR_KIND {
             decode::read_optional(&mut bytes, decode::read_int::<u8, _>)?
-                .and_then(AuthorKind::from_u8)
+                .and_then(AuthorKind::from_repr)
         } else {
             None
         };
@@ -690,13 +678,13 @@ mod tests {
     }
 
     /// The SQL author filter derives its recognised-kind list from [`AuthorKind::VARIANTS`] while
-    /// Rust decoding goes through [`AuthorKind::from_u8`]; a value present in one but not the
+    /// Rust decoding goes through [`AuthorKind::from_repr`]; a value present in one but not the
     /// other would split the two classifiers, so pin them to agree over the whole u8 range.
     #[test]
-    fn author_kind_variants_and_from_u8_agree() {
+    fn author_kind_variants_and_from_repr_agree() {
         for value in 0..=u8::MAX {
             assert_eq!(
-                AuthorKind::from_u8(value),
+                AuthorKind::from_repr(value),
                 AuthorKind::VARIANTS.iter().copied().find(|kind| kind.as_u8() == value),
                 "{value}"
             );
