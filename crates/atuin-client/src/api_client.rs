@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 use std::env;
+use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_stream::try_stream;
+use atuin_common::range::Chunks;
 use atuin_common::url::UrlAppendExt;
 use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION, ChangePasswordRequest, ErrorResponse,
@@ -14,12 +17,18 @@ use atuin_domain::record::{
     EncryptedData, HostId, Record, RecordId, RecordIdx, RecordStatus, RecordTag,
 };
 use eyre::{Result, bail};
+use futures::{Stream, StreamExt, stream};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use reqwest::{Response, StatusCode, Url};
 use reqwest_middleware::ClientWithMiddleware;
 use semver::Version;
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
+
+/// How many record-download pages [`Client::records`] keeps in flight at once. Fetching the next
+/// page(s) (network) while the caller writes the current one (local sqlite) overlaps the two
+/// disjoint resources instead of strictly alternating them.
+const DOWNLOAD_PREFETCH: usize = 8;
 
 /// Authentication token for sync API requests.
 ///
@@ -402,28 +411,85 @@ impl Client {
         Ok(resp.bytes().await?.to_vec())
     }
 
-    pub async fn next_records(
+    /// Stream the records the `chunks` plan covers for one `(host, tag)`.
+    pub fn records(
         &self,
         host: HostId,
         tag: RecordTag,
-        start: RecordIdx,
-        count: u64,
-    ) -> Result<Vec<Record<EncryptedData>>> {
-        debug!("fetching record/s from host {}/{}/{}", host.0, tag, start);
+        chunks: Chunks<RecordIdx>,
+    ) -> impl Stream<Item = Result<Vec<Record<EncryptedData>>>> + '_ {
+        try_stream! {
+            let mut base_url = self.sync_addr.append_path("api/v0/record/next")?;
+            base_url
+                .query_pairs_mut()
+                .append_pair("host", &host.0.to_string())
+                .append_pair("tag", tag.as_str());
 
-        let mut url = self.sync_addr.append_path("api/v0/record/next")?;
-        url.query_pairs_mut()
-            .append_pair("host", &host.0.to_string())
-            .append_pair("tag", tag.as_str())
-            .append_pair("count", &count.to_string())
-            .append_pair("start", &start.to_string());
+            // Returns `(count_requested, records)` so the caller can tell a legitimately short tail
+            // (got exactly what its chunk asked for) from a suspicious short page (got fewer).
+            let fetch_page = |page: Range<RecordIdx>| {
+                debug!("fetching records [{}, {}) from {}/{}", page.start, page.end, host.0, tag);
+                let width = page.end - page.start;
+                let mut url = base_url.clone();
+                url.query_pairs_mut()
+                    .append_pair("start", &page.start.to_string())
+                    .append_pair("count", &width.to_string());
+                async move {
+                    let resp = self.client.get(url).send().await?;
+                    let resp = handle_resp_error(resp).await?;
+                    let records = resp.json::<Vec<Record<EncryptedData>>>().await?;
+                    Ok::<_, eyre::Report>((width, records))
+                }
+            };
 
-        let resp = self.client.get(url).send().await?;
-        let resp = handle_resp_error(resp).await?;
+            // Download multiple pages in parallel.
+            //
+            // Normally we can query many pages in parallel. The `chunks` field contains
+            // information on how many chunks there are, and what their sizes are, so we can make
+            // parallel requests and start fetching data ahead of time.
+            let mut fetches = stream::iter(chunks).map(fetch_page).buffered(DOWNLOAD_PREFETCH);
 
-        let records = resp.json::<Vec<Record<EncryptedData>>>().await?;
+            let mut progress = 0u64;
+            let mut short_page = false;
+            while let Some(result) = fetches.next().await {
+                let (width, page) = result?;
+                if page.is_empty() {
+                    return;
+                }
 
-        Ok(records)
+                let len = page.len() as u64;
+                progress += len;
+                yield page;
+
+                // Something shat the bed, let's finish serially.
+                if len < width {
+                    short_page = true;
+                    break;
+                }
+            }
+            drop(fetches);
+
+            // Download pages in series.
+            //
+            // A server could misbehave and return less data than we requested. If it does, then we
+            // fall back to the serialized path, on the first misbehavior.
+            if short_page {
+                let start = chunks.start();
+                let end = chunks.end();
+                let page_size = chunks.size().get();
+
+                let mut cursor = start + progress;
+                while cursor < end {
+                    let stop = (cursor + page_size).min(end);
+                    let (_, page) = fetch_page(cursor..stop).await?;
+                    if page.is_empty() {
+                        return;
+                    }
+                    cursor += page.len() as u64;
+                    yield page;
+                }
+            }
+        }
     }
 
     pub async fn record_status(&self) -> Result<RecordStatus> {
@@ -639,5 +705,138 @@ mod tests {
                 record_count: 500,
             })
         );
+    }
+}
+
+#[cfg(test)]
+mod records_stream_tests {
+    use std::num::NonZeroU64;
+
+    use atuin_common::range::RangeChunksExt;
+    use atuin_common::utils::uuid_v7;
+    use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordTag};
+    use futures::TryStreamExt;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+
+    fn nz(n: u64) -> NonZeroU64 {
+        NonZeroU64::new(n).unwrap()
+    }
+
+    fn history_record(host: HostId, idx: u64) -> Record<EncryptedData> {
+        Record::builder()
+            .host(Host::new(host))
+            .version("v1".into())
+            .tag(RecordTag::History)
+            .idx(idx)
+            .data(EncryptedData {
+                raw: format!("r{idx}"),
+                cek: String::new(),
+            })
+            .build()
+    }
+
+    fn mock_client(addr: &Url) -> Client {
+        let caps = caps_client(addr, &HashMap::new()).unwrap();
+        Client::new(addr.clone(), &AuthToken::Token("t".into()), 30, 30, &HashMap::new(), caps)
+            .unwrap()
+    }
+
+    /// Serve `records` in pages of `serve_size`, keyed on the `start` query param
+    /// (`idx >= start ORDER BY idx ASC LIMIT count`, dense). `serve_size` may be smaller than the
+    /// client's page size to emulate a server that clamps `count`. Any `start` past the end -> empty.
+    async fn mount_paged(
+        server: &MockServer,
+        records: &[Record<EncryptedData>],
+        serve_size: usize,
+    ) {
+        for start in (0..records.len()).step_by(serve_size) {
+            let end = (start + serve_size).min(records.len());
+            Mock::given(method("GET"))
+                .and(path("/api/v0/record/next"))
+                .and(query_param("start", start.to_string()))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(records[start..end].to_vec()),
+                )
+                .mount(server)
+                .await;
+        }
+        Mock::given(method("GET"))
+            .and(path("/api/v0/record/next"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(Vec::<Record<EncryptedData>>::new()),
+            )
+            .mount(server)
+            .await;
+    }
+
+    async fn collect_idxs(
+        stream: impl Stream<Item = Result<Vec<Record<EncryptedData>>>>,
+    ) -> Vec<u64> {
+        let pages: Vec<Vec<Record<EncryptedData>>> = stream.try_collect().await.unwrap();
+        pages.into_iter().flatten().map(|r| r.idx).collect()
+    }
+
+    /// The fast path predicts offsets (`start + i * page_size`) and pipelines the fetches; every
+    /// page must still be reassembled in idx order.
+    #[tokio::test]
+    async fn records_reassembles_pages_in_order() {
+        let host = HostId(uuid_v7());
+        let all: Vec<_> = (0..5).map(|i| history_record(host, i)).collect();
+
+        let server = MockServer::start().await;
+        // page_size 2 -> offsets 0, 2, 4; the last page (idx 4) is a short tail.
+        mount_paged(&server, &all, 2).await;
+
+        let addr: Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let idxs =
+            collect_idxs(client.records(host, RecordTag::History, (0..5).chunks(nz(2)))).await;
+        assert_eq!(idxs, vec![0, 1, 2, 3, 4]);
+    }
+
+    /// GUARD: a server that clamps `count` below the client's `page_size` returns a short page
+    /// *mid-stream*. The predicted offsets past it would skip records, so the stream must detect the
+    /// short page and finish serially from the real progress -- losing nothing.
+    #[tokio::test]
+    async fn records_recovers_from_a_short_midstream_page() {
+        let host = HostId(uuid_v7());
+        let all: Vec<_> = (0..6).map(|i| history_record(host, i)).collect();
+
+        let server = MockServer::start().await;
+        // Client asks for page_size 4, but the server only ever returns 2 (a clamp). Predicted
+        // offsets would be 0 and 4, skipping idx 2..4 -- the guard must recover them.
+        mount_paged(&server, &all, 2).await;
+
+        let addr: Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let idxs =
+            collect_idxs(client.records(host, RecordTag::History, (0..6).chunks(nz(4)))).await;
+        assert_eq!(idxs, vec![0, 1, 2, 3, 4, 5], "a short mid-stream page must not skip records");
+    }
+
+    #[tokio::test]
+    async fn records_yields_nothing_when_server_is_empty() {
+        let host = HostId(uuid_v7());
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v0/record/next"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(Vec::<Record<EncryptedData>>::new()),
+            )
+            .mount(&server)
+            .await;
+
+        let addr: Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let idxs =
+            collect_idxs(client.records(host, RecordTag::History, (0..10).chunks(nz(4)))).await;
+        assert!(idxs.is_empty(), "an empty server must yield no records");
     }
 }

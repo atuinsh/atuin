@@ -10,6 +10,7 @@ pub mod logs;
 #[cfg(feature = "os")]
 pub mod os;
 pub mod path;
+pub mod range;
 pub mod rmp;
 pub mod shell;
 pub mod slice;

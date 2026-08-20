@@ -1,9 +1,11 @@
 // do a sync :O
 use std::cmp::Ordering;
 use std::fmt::Write;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use atuin_common::encryption::paseto_v4;
+use atuin_common::range::RangeChunksExt;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus, RecordTag};
 use eyre::Result;
@@ -19,10 +21,10 @@ use crate::settings::Settings;
 /// How many packfile blobs to transfer (upload or download) concurrently within a single page.
 const MAX_CONCURRENT_PACKFILE_TRANSFERS: usize = 16;
 
-/// How many loose-history download pages to keep in flight at once. Fetching the next
-/// page(s) (network) while the current one is written (local sqlite) overlaps the two
-/// disjoint resources instead of strictly alternating them.
-const DOWNLOAD_PREFETCH: usize = 8;
+/// A page size of 0 is a misconfiguration; fall back to one record per page rather than panicking.
+fn page_size_or_min(page_size: u64) -> NonZeroU64 {
+    NonZeroU64::new(page_size).unwrap_or(NonZeroU64::MIN)
+}
 
 #[derive(Error, Debug)]
 pub enum SyncError {
@@ -374,9 +376,10 @@ async fn sync_download(
 
 /// Download a run of packfile-manifest pages, expanding each manifest's history into the local
 /// store *before* persisting the manifest (so a stored manifest always has its history). That
-/// ordering and the per-manifest permanent-failure handling keep this path strictly serial across
-/// pages -- unlike the loose-history path in [`sync_download`], which pipelines. Returns the record
-/// ids touched (expanded history plus persisted manifests).
+/// per-page ordering and the per-manifest permanent-failure handling keep the expansion strictly
+/// serial across pages; [`Client::records`] may prefetch the manifest *pages* themselves, but each
+/// page is fully expanded and persisted before the next is processed. Returns the record ids
+/// touched (expanded history plus persisted manifests).
 #[allow(
     clippy::too_many_arguments,
     reason = "threads the same download context as its sync_download caller"
@@ -395,15 +398,14 @@ async fn download_packfile_pages(
     let mut ret = Vec::new();
     let mut progress = 0u64;
 
-    while progress < expected {
-        let page = client
-            .next_records(host, tag.clone(), first_missing_local + progress, page_size)
-            .await
-            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
-
-        if page.is_empty() {
-            break;
-        }
+    let pages = client.records(
+        host,
+        tag.clone(),
+        (first_missing_local..first_missing_local + expected).chunks(page_size_or_min(page_size)),
+    );
+    futures::pin_mut!(pages);
+    while let Some(page) = pages.next().await {
+        let page = page.map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
 
         let mut downloads = stream::iter(0..page.len())
             .map(|i| download_packed(&page[i], store, key, client))
@@ -440,13 +442,9 @@ async fn download_packfile_pages(
     Ok(ret)
 }
 
-/// Download a run of loose (non-packfile) record pages, pipelining the network fetches against the
-/// local `push_batch` writes instead of strictly alternating them. Page offsets are predictable --
-/// `first_missing_local + i * page_size` -- because the server paginates
-/// `idx >= start ORDER BY idx ASC LIMIT count` over dense records, so a page is short only at the
-/// tail. `insert or ignore` makes any overlap (e.g. from server-side idx gaps) a harmless no-op;
-/// the only way to *skip* records is a short *mid-stream* page (e.g. a server that clamps `count`
-/// below our `page_size`), which the guard catches by finishing serially from the actual progress.
+/// Download a run of loose (non-packfile) record pages. [`Client::records`] owns the pagination --
+/// predicting offsets, pipelining fetches against these local `push_batch` writes, and recovering
+/// from a short mid-stream page -- so this loop just persists each page as it arrives.
 #[allow(
     clippy::too_many_arguments,
     reason = "threads the same download context as its sync_download caller"
@@ -464,60 +462,23 @@ async fn download_loose_pages(
     let mut ret = Vec::new();
     let mut progress = 0u64;
 
-    let n_pages = expected.div_ceil(page_size);
-    let mut pages = stream::iter(0..n_pages)
-        .map(|i| {
-            client.next_records(host, tag.clone(), first_missing_local + i * page_size, page_size)
-        })
-        .buffered(DOWNLOAD_PREFETCH);
+    let pages = client.records(
+        host,
+        tag.clone(),
+        (first_missing_local..first_missing_local + expected).chunks(page_size_or_min(page_size)),
+    );
+    futures::pin_mut!(pages);
+    while let Some(page) = pages.next().await {
+        let page = page.map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
 
-    let mut short_page = false;
-    while let Some(result) = pages.next().await {
-        let page = result.map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
-
-        if page.is_empty() {
-            break;
-        }
-
-        let len = page.len() as u64;
         store
             .push_batch(page.iter())
             .await
             .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
 
         ret.extend(page.iter().map(|f| f.id));
-        progress += len;
+        progress += page.len() as u64;
         pb.set_position(progress);
-
-        // A short page mid-stream means the predicted offsets past it could skip records, so stop
-        // trusting them and finish from the real progress below.
-        if len < page_size {
-            short_page = true;
-            break;
-        }
-    }
-    drop(pages);
-
-    if short_page {
-        while progress < expected {
-            let page = client
-                .next_records(host, tag.clone(), first_missing_local + progress, page_size)
-                .await
-                .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
-
-            if page.is_empty() {
-                break;
-            }
-
-            store
-                .push_batch(page.iter())
-                .await
-                .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
-
-            ret.extend(page.iter().map(|f| f.id));
-            progress += page.len() as u64;
-            pb.set_position(progress);
-        }
     }
 
     Ok(ret)
@@ -596,12 +557,14 @@ pub async fn check_encryption_key(
         return Ok(());
     };
 
-    let records = client
-        .next_records(host, tag, 0, 1)
-        .await
-        .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
+    let pages = client.records(host, tag, (0..1).chunks(NonZeroU64::MIN));
+    futures::pin_mut!(pages);
+    let Some(page) = pages.next().await else {
+        return Ok(());
+    };
+    let page = page.map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
 
-    let Some(record) = records.into_iter().next() else {
+    let Some(record) = page.into_iter().next() else {
         return Ok(());
     };
 
