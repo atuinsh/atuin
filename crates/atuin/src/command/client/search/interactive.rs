@@ -49,6 +49,7 @@ pub enum InputAction {
     Accept(usize),
     AcceptInspecting,
     Copy(usize),
+    CopyDirectory(usize),
     Delete(usize),
     DeleteAllMatching(usize),
     ReturnOriginal,
@@ -668,6 +669,7 @@ impl State {
                 InputAction::Accept(self.results_state.selected() + *n as usize)
             }
             Action::Copy => InputAction::Copy(self.results_state.selected()),
+            Action::CopyDirectory => InputAction::CopyDirectory(self.results_state.selected()),
             Action::Delete => InputAction::Delete(self.results_state.selected()),
             Action::DeleteAll => InputAction::DeleteAllMatching(self.results_state.selected()),
             Action::ReturnOriginal => InputAction::ReturnOriginal,
@@ -2132,6 +2134,13 @@ pub async fn history(
             let cmd = results.swap_remove(index).command;
             if let Err(e) = set_clipboard(cmd) {
                 tracing::warn!(?e, "failed to copy to clipboard");
+            }
+            Ok(String::new())
+        }
+        InputAction::CopyDirectory(index) => {
+            let cwd = results.swap_remove(index).cwd;
+            if let Err(e) = set_clipboard(cwd) {
+                tracing::warn!(?e, "failed to copy directory to clipboard");
             }
             Ok(String::new())
         }
