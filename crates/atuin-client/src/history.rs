@@ -346,10 +346,6 @@ impl History {
     /// * `intent` is always written; if `None`, nil is written to the output.
     /// * Added new field `shell`.
     ///
-    /// Fields appended after V2 shipped (see [`V2_SERIALIZED_FIELDS`]) are read back only if the
-    /// encoded array is long enough to contain them, so older clients ignore them and newer clients
-    /// can still read older entries.
-    ///
     /// V2 is designed to allow new fields to be added without incrementing the version. V1 cannot
     /// accommodate this because its deserialization routine errors if more than 11 fields are
     /// provided.
