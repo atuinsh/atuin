@@ -127,7 +127,7 @@ fn apply_author_filter(sql: &mut SqlBuilder, authors: OrFilter<&[AuthorPattern]>
         format!(
             "CASE WHEN author_kind IN ({kinds}) THEN author_kind = {agent} ELSE {author_expr} IN \
              ({names}) AND {author_expr} <> {user_expr} END",
-            kinds = AuthorKind::VARIANTS.iter().map(|kind| kind.as_u8().to_string()).join(", "),
+            kinds = AuthorKind::VARIANTS.iter().map(|kind| kind.as_u8()).join(", "),
             agent = AuthorKind::Agent.as_u8(),
             names = KNOWN_AGENTS.iter().map(quote).join(", "),
         )
