@@ -17,6 +17,7 @@
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::{EncryptedData, Record, RecordId, RecordTag};
 use thiserror::Error;
+use tracing::instrument;
 
 use super::record::{PackManifestRecordView, PackingError, UnpackError};
 use crate::api_client::Client;
@@ -39,6 +40,7 @@ pub enum UploadError {
 }
 
 /// Build and upload the packfile blob for a single `packfile` manifest record.
+#[instrument(level = "trace", skip_all, fields(id = ?manifest.id), err)]
 pub async fn upload_packed(
     manifest: &Record<EncryptedData>,
     store: &SqliteStore,
@@ -82,6 +84,7 @@ impl DownloadError {
 ///
 /// Returns the ids of the history records the manifest's range covers, whether they were just
 /// inserted or were already present locally.
+#[instrument(level = "trace", skip_all, fields(id = ?manifest.id), err)]
 pub async fn download_packed(
     manifest: &Record<EncryptedData>,
     store: &SqliteStore,

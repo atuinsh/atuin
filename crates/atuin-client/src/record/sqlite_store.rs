@@ -18,6 +18,7 @@ use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
     SqliteSynchronous,
 };
+use tracing::instrument;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -62,6 +63,7 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for DbRecord {
 }
 
 impl SqliteStore {
+    #[instrument(level = "trace", skip_all, fields(timeout), err)]
     pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
         let path = path.as_ref();
 
@@ -98,6 +100,7 @@ impl SqliteStore {
         Ok(Self { pool })
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
         debug!("running sqlite database setup");
 
@@ -106,6 +109,7 @@ impl SqliteStore {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(id = ?r.id, idx = r.idx, host = ?r.host.id, tag = ?r.tag), err)]
     async fn save_raw(
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         r: &Record<paseto_v4::EncryptedData>,
@@ -129,6 +133,7 @@ impl SqliteStore {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     async fn load_all(&self) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
         let res =
             sqlx::query_as::<_, DbRecord>("select * from store ").fetch_all(&self.pool).await?;
@@ -136,10 +141,12 @@ impl SqliteStore {
         Ok(res.into_iter().map(Into::into).collect())
     }
 
+    #[instrument(level = "trace", skip_all, fields(id = ?record.id, idx = record.idx, host = ?record.host.id, tag = ?record.tag), err)]
     pub async fn push(&self, record: &Record<paseto_v4::EncryptedData>) -> Result<()> {
         self.push_batch(std::iter::once(record)).await
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn push_batch(
         &self,
         records: impl Iterator<Item = &Record<paseto_v4::EncryptedData>> + Send + Sync,
@@ -155,6 +162,7 @@ impl SqliteStore {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     pub async fn get(&self, id: RecordId) -> Result<Record<paseto_v4::EncryptedData>> {
         let res = sqlx::query_as::<_, DbRecord>("select * from store where store.id = ?1")
             .bind(id.0.as_hyphenated().to_string())
@@ -164,6 +172,7 @@ impl SqliteStore {
         Ok(res.into())
     }
 
+    #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     pub async fn delete(&self, id: RecordId) -> Result<()> {
         sqlx::query("delete from store where id = ?1")
             .bind(id.0.as_hyphenated().to_string())
@@ -173,12 +182,14 @@ impl SqliteStore {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn delete_all(&self) -> Result<()> {
         sqlx::query("delete from store").execute(&self.pool).await?;
 
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(host = ?host, tag = ?tag), err)]
     pub async fn last(
         &self,
         host: HostId,
@@ -199,6 +210,7 @@ impl SqliteStore {
         }
     }
 
+    #[instrument(level = "trace", skip_all, fields(host = ?host, tag = ?tag), err)]
     pub async fn first(
         &self,
         host: HostId,
@@ -207,6 +219,7 @@ impl SqliteStore {
         self.idx(host, tag, 0).await
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn len_all(&self) -> Result<u64> {
         let res: Result<(i64,), sqlx::Error> =
             sqlx::query_as("select count(*) from store").fetch_one(&self.pool).await;
@@ -216,6 +229,7 @@ impl SqliteStore {
         }
     }
 
+    #[instrument(level = "trace", skip_all, fields(tag = ?tag), err)]
     pub async fn len_tag(&self, tag: &RecordTag) -> Result<u64> {
         let res: Result<(i64,), sqlx::Error> =
             sqlx::query_as("select count(*) from store where tag=?1")
@@ -228,6 +242,7 @@ impl SqliteStore {
         }
     }
 
+    #[instrument(level = "trace", skip_all, fields(host = ?host, tag = ?tag), err)]
     pub async fn len(&self, host: HostId, tag: &RecordTag) -> Result<u64> {
         let last = self.last(host, tag).await?;
 
@@ -240,6 +255,7 @@ impl SqliteStore {
 
     /// The smallest `idx >= 0` with no record for `(host, tag)`: Unlike `last().idx + 1`, this
     /// points at an interior hole when one exists.
+    #[instrument(level = "trace", skip_all, fields(host = ?host, tag = ?tag), err)]
     pub async fn first_gap(&self, host: HostId, tag: &RecordTag) -> Result<RecordIdx> {
         let gap: Option<i64> = sqlx::query_scalar(
             "select min(idx) from (
@@ -257,6 +273,7 @@ impl SqliteStore {
         Ok(gap.unwrap_or(0) as u64)
     }
 
+    #[instrument(level = "trace", skip_all, fields(host = ?host, tag = ?tag, idx, limit), err)]
     pub async fn next(
         &self,
         host: HostId,
@@ -278,6 +295,7 @@ impl SqliteStore {
         Ok(res.into_iter().map(Into::into).collect())
     }
 
+    #[instrument(level = "trace", skip_all, fields(host = ?host, tag = ?tag, idx), err)]
     pub async fn idx(
         &self,
         host: HostId,
@@ -300,6 +318,7 @@ impl SqliteStore {
         }
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn status(&self) -> Result<RecordStatus> {
         let mut status = RecordStatus::new();
 
@@ -324,6 +343,7 @@ impl SqliteStore {
         Ok(status)
     }
 
+    #[instrument(level = "trace", skip_all, fields(tag = ?tag), err)]
     pub async fn all_tagged(
         &self,
         tag: &RecordTag,
@@ -340,6 +360,7 @@ impl SqliteStore {
 
     /// Reencrypt every single item in this store with a new key
     /// Be careful - this may mess with sync.
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn re_encrypt(
         &self,
         old_key: &paseto_v4::Key,
@@ -386,6 +407,7 @@ impl SqliteStore {
 
     /// Verify that every record in this store can be decrypted with the current key
     /// Someday maybe also check each tag/record can be deserialized, but not for now.
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn verify(&self, key: &paseto_v4::Key) -> Result<()> {
         let all = self.load_all().await?;
 
@@ -396,6 +418,7 @@ impl SqliteStore {
 
     /// Verify that every record in this store can be decrypted with the current key
     /// Someday maybe also check each tag/record can be deserialized, but not for now.
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn purge(&self, key: &paseto_v4::Key) -> Result<()> {
         let all = self.load_all().await?;
 

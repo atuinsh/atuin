@@ -64,7 +64,11 @@ rstest = "0.26.1"
 thiserror = "2"
 rustix = { version = "1.1.4", features = ["process", "fs"] }
 tower = "0.5"
-tracing = "0.1"
+# `release_max_level_info` compiles out trace/debug events in any build with
+# debug assertions off (release, dist, profiling). Builds that want the
+# `#[instrument(level = "trace")]` spans back must turn debug assertions on --
+# see the `profiling-traced` profile below.
+tracing = { version = "0.1", features = ["release_max_level_info"] }
 tree-sitter = "0.26.8"
 tree-sitter-bash = "0.25.1"
 crypto_secretbox = "0.1.1"
@@ -123,6 +127,17 @@ split-debuginfo = "packed"
 # RUSTFLAGS="-C llvm-args=--inline-threshold=25" (0 = flattest).
 lto = false
 codegen-units = 256
+
+# Same as `profiling`, but with the trace/debug `tracing` events compiled back
+# in. `profiling` inherits release (debug assertions off), so tracing's
+# `release_max_level_info` ceiling strips anything below info -- including the
+# `#[instrument(level = "trace")]` spans. Turning debug assertions on flips
+# tracing to its (permissive) `max_level_*` ceiling, so those spans compile in.
+# Emit them at runtime with `ATUIN_OTEL=1` (exports to Jaeger) or `ATUIN_LOG=trace`.
+# Build with: cargo build --profile profiling-traced
+[profile.profiling-traced]
+inherits = "profiling"
+debug-assertions = true
 
 # For local development against a local eye-declare, uncomment below
 #eye_declare = { path = "../eye_declare/crates/eye_declare" }

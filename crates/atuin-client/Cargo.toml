@@ -26,6 +26,7 @@ vendored-tls = ["reqwest?/native-tls-vendored"]
 [dependencies]
 derive_more = { workspace = true }
 tracing = { workspace = true }
+tracing-futures = { version = "0.2", features = ["futures-03"] }
 base64 = { workspace = true }
 zeroize = { workspace = true }
 time = { workspace = true, features = ["macros", "formatting", "parsing"] }

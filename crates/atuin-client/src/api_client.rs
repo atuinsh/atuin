@@ -18,6 +18,7 @@ use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AG
 use reqwest::{Response, StatusCode, Url};
 use reqwest_middleware::ClientWithMiddleware;
 use semver::Version;
+use tracing::{Instrument, instrument};
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
@@ -104,6 +105,7 @@ pub(crate) fn extra_headers_map(extra_headers: &HashMap<String, String>) -> Resu
     Ok(headers)
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn register(
     address: &Url,
     username: &str,
@@ -141,6 +143,7 @@ pub async fn register(
     Ok(session)
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn login(
     address: &Url,
     req: LoginRequest,
@@ -164,6 +167,7 @@ pub async fn login(
 }
 
 #[cfg(feature = "check-update")]
+#[instrument(level = "trace", skip_all, err)]
 pub async fn latest_version() -> Result<Version> {
     use atuin_domain::api::IndexResponse;
 
@@ -208,6 +212,7 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
     Ok(true)
 }
 
+#[instrument(level = "trace", skip_all, err)]
 async fn handle_resp_error(resp: Response) -> Result<Response> {
     let status = resp.status();
     let url = resp.url().to_string();
@@ -248,6 +253,7 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
 }
 
 /// Build the capability reader for a sync server.
+#[instrument(level = "trace", skip_all, err)]
 pub fn caps_client(
     sync_addr: &Url,
     extra_headers: &HashMap<String, String>,
@@ -262,6 +268,7 @@ pub fn caps_client(
 }
 
 impl Client {
+    #[instrument(level = "trace", skip_all, fields(connect_timeout, timeout), err)]
     pub fn new(
         sync_addr: impl Into<Arc<Url>>,
         auth: &AuthToken,
@@ -304,6 +311,7 @@ impl Client {
         &self.caps
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn me(&self) -> Result<MeResponse> {
         let url = self.sync_addr.append_path("api/v0/me")?;
 
@@ -315,6 +323,7 @@ impl Client {
         Ok(status)
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn delete_store(&self) -> Result<()> {
         let url = self.sync_addr.append_path("api/v0/store")?;
 
@@ -325,6 +334,7 @@ impl Client {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(count = records.len()), err)]
     pub async fn post_records(&self, records: &[Record<EncryptedData>]) -> Result<()> {
         let url = self.sync_addr.append_path("api/v0/record")?;
 
@@ -337,6 +347,7 @@ impl Client {
     }
 
     /// Upload the given packfile.
+    #[instrument(level = "trace", skip_all, fields(id = ?manifest_id, count = record_ids.len()), err)]
     pub async fn upload_packfile(
         &self,
         manifest_id: RecordId,
@@ -363,6 +374,7 @@ impl Client {
     }
 
     /// Confirm a packfile body upload with the server.
+    #[instrument(level = "trace", skip_all, fields(id = ?manifest_id), err)]
     async fn confirm_packfile(&self, manifest_id: RecordId) -> Result<()> {
         let path = format!("api/v0/packfiles/{}/confirm", manifest_id.0);
         let url = self.sync_addr.append(path.split('/').filter(|s| !s.is_empty()))?;
@@ -372,6 +384,7 @@ impl Client {
     }
 
     /// Upload a packfile body to a presigned URL. Unauthenticated by design.
+    #[instrument(level = "trace", skip_all, err)]
     async fn put_packfile(
         &self,
         upload_url: Url,
@@ -383,6 +396,7 @@ impl Client {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(id = ?manifest_id), err)]
     async fn get_packfile_download_url(&self, manifest_id: RecordId) -> Result<Url> {
         // `append_path` takes `&'static str`; the manifest id is dynamic, so inline its logic.
         let path = format!("api/v0/packfiles/{}", manifest_id.0);
@@ -395,13 +409,20 @@ impl Client {
     }
 
     /// Download the packfile for the given manifest id.
+    #[instrument(level = "trace", skip_all, fields(id = ?manifest_id), err)]
     pub async fn download_packfile(&self, manifest_id: RecordId) -> Result<Vec<u8>> {
         let download_url = self.get_packfile_download_url(manifest_id).await?;
-        let resp = self.lfs_client.get(download_url).send().await?;
+        let resp = self
+            .lfs_client
+            .get(download_url)
+            .send()
+            .instrument(tracing::trace_span!("lfs_download"))
+            .await?;
         let resp = handle_resp_error(resp).await?;
         Ok(resp.bytes().await?.to_vec())
     }
 
+    #[instrument(level = "trace", skip_all, fields(host = ?host, tag = ?tag, start = ?start, count), err)]
     pub async fn next_records(
         &self,
         host: HostId,
@@ -426,6 +447,7 @@ impl Client {
         Ok(records)
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn record_status(&self) -> Result<RecordStatus> {
         let url = self.sync_addr.append_path("api/v0/record")?;
 
@@ -443,6 +465,7 @@ impl Client {
         Ok(index)
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn delete(&self) -> Result<()> {
         let url = self.sync_addr.append(["account"])?;
 
@@ -457,6 +480,7 @@ impl Client {
         }
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn change_password(
         &self,
         current_password: String,

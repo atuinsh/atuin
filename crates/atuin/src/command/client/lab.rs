@@ -8,6 +8,7 @@ use clap::Subcommand;
 #[cfg(unix)]
 use eyre::bail;
 use eyre::{Result, WrapErr};
+use tracing::instrument;
 use url::Url;
 
 #[derive(Subcommand, Debug)]
@@ -71,6 +72,7 @@ impl Cmd {
     /// Async because the Hub credential accessor is async. Everything that
     /// needs `await` happens here; `run_share` receives plain data so it never
     /// has to build a nested tokio runtime.
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Settings) -> Result<()> {
         report_refusal(self.dispatch(settings).await)
     }

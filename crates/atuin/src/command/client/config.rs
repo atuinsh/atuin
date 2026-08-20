@@ -2,6 +2,7 @@ use atuin_client::settings::Settings;
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::Result;
 use toml_edit::{Document, DocumentMut, Item, Table, TableLike, Value};
+use tracing::instrument;
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
@@ -24,6 +25,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Settings) -> Result<()> {
         match self {
             Self::Get(get) => get.run(settings).await,

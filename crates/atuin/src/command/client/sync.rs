@@ -7,6 +7,7 @@ use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::RecordTag;
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
+use tracing::instrument;
 
 mod status;
 
@@ -43,6 +44,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: Settings, db: &Sqlite, store: SqliteStore) -> Result<()> {
         match self {
             Self::Sync { force } => run(&settings, force, db, store).await,
@@ -65,6 +67,7 @@ impl Cmd {
     }
 }
 
+#[instrument(level = "trace", skip_all, fields(force), err)]
 async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) -> Result<()> {
     let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
         .context("could not load encryption key")?;
