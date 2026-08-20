@@ -1,0 +1,203 @@
+//! Sqlite-related utilities.
+
+use std::path::Path;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
+};
+use thiserror::Error;
+use tracing::warn;
+
+use crate::sync::EagerFutureCell;
+
+#[derive(Debug, Error)]
+pub enum VersionError {
+    #[error("failed to parse the sqlite version: {0}")]
+    Parsing(#[from] semver::Error),
+    #[error("failed to query the sqlite version: {0}")]
+    Query(#[from] sqlx::Error),
+}
+
+/// Metadata which is queried on bootup, and never again.
+#[derive(Debug, Clone)]
+pub struct Info {
+    /// The best-effort estimate of the maximum parameters that this sqlite can bind to.
+    pub variable_number_limit: usize,
+
+    /// The version of the currently active database.
+    ///
+    /// Note that the error is behind an Arc. Annoyingly, [`VersionError`] cannot be [`Clone`], so
+    /// we have to wrap it in an [`Arc`]. It's the cold path anyways.
+    pub version: Result<semver::Version, Arc<VersionError>>,
+}
+
+impl Info {
+    /// Old versions of sqlite supported up to 999 params.
+    ///
+    /// This is used as a fallback in case our query fails.
+    const MAX_BIND_PARAMS_FALLBACK: usize = 999;
+
+    /// # Panics
+    ///
+    /// Panics if there is no active [`tokio::runtime::Handle`].
+    pub fn eager_future(pool: SqlitePool) -> EagerFutureCell<Self> {
+        EagerFutureCell::new(
+            async move {
+                // Please note that `query_variable_number_limit` will take a lock on the database
+                // pool, meaning that all connections will have to wait. We definitely want to do
+                // that last and parallelize the rest.
+
+                // First we do the things that do not need the whole connection lock.
+                let version = Self::query_version(&pool).await.map_err(Arc::new);
+
+                // Finally, we do the things that need that nasty lock.
+                let variable_number_limit = Self::query_variable_number_limit(&pool).await;
+
+                Self {
+                    variable_number_limit,
+                    version,
+                }
+            },
+            &tokio::runtime::Handle::current(),
+        )
+    }
+
+    async fn query_version(pool: &SqlitePool) -> Result<semver::Version, VersionError> {
+        let str: String = sqlx::query_scalar("SELECT sqlite_version()").fetch_one(pool).await?;
+        Ok(semver::Version::parse(&str)?)
+    }
+
+    /// Queries the database for the maximum number of bind parameters.
+    async fn query_variable_number_limit(pool: &SqlitePool) -> usize {
+        let mut conn = match pool.acquire().await {
+            Ok(c) => c,
+            Err(err) => {
+                warn!(
+                    "failed to grab a connection to query bind param count: {err}. performance \
+                     could be degraded."
+                );
+                return Self::MAX_BIND_PARAMS_FALLBACK;
+            }
+        };
+
+        let mut handle = match conn.lock_handle().await {
+            Ok(h) => h,
+            Err(err) => {
+                warn!(
+                    "failed to lock the connection to query bind param count: {err}. performance \
+                     could be degraded."
+                );
+                return Self::MAX_BIND_PARAMS_FALLBACK;
+            }
+        };
+
+        let raw_handle = handle.as_raw_handle();
+
+        #[allow(unsafe_code, reason = "FFI call to read SQLITE_LIMIT_VARIABLE_NUMBER")]
+        let limit = unsafe {
+            libsqlite3_sys::sqlite3_limit(
+                raw_handle.as_ptr(),
+                libsqlite3_sys::SQLITE_LIMIT_VARIABLE_NUMBER,
+                -1,
+            )
+        };
+
+        drop(handle);
+
+        let limit_num = match usize::try_from(limit) {
+            Ok(l) => l,
+            Err(err) => {
+                warn!(
+                    "failed to convert {limit} to a number to compute bind param count: {err}. \
+                     performance could be degraded."
+                );
+                return Self::MAX_BIND_PARAMS_FALLBACK;
+            }
+        };
+
+        limit_num
+    }
+}
+
+/// An atuin-specific wrapper around Sqlite.
+///
+/// This has atuin-specific utilities.
+#[derive(Debug, Clone)]
+pub struct Sqlite {
+    pool: SqlitePool,
+
+    /// Sqlite has a limit on the total number of parameters you can bind in a single query.
+    ///
+    /// This value represents that.
+    info: EagerFutureCell<Info>,
+}
+
+#[derive(Debug, Error)]
+pub enum SqliteOpenOrCreateError {
+    #[error("non-utf8 path given")]
+    NonUtf8Path,
+
+    #[error("failed to create directory for sqlite database: {0}")]
+    FailedToCreateDir(std::io::Error),
+
+    #[error("failed to parse connection options: {0}")]
+    ConenctOptionsParsing(sqlx::Error),
+
+    #[error("failed to create the sqlite pool")]
+    PoolCreateError(sqlx::Error),
+}
+
+impl Sqlite {
+    /// Open an existing sqlite database, potentially creating the database if necessary.
+    ///
+    /// # Panics
+    ///
+    /// Panics if there is no active [`tokio::runtime::Handle`].
+    pub async fn open_or_create(
+        path: impl AsRef<Path>,
+        timeout: Duration,
+    ) -> Result<Self, SqliteOpenOrCreateError> {
+        let path = path.as_ref();
+
+        if !path.exists()
+            && let Some(dir) = path.parent()
+        {
+            std::fs::create_dir_all(dir).map_err(SqliteOpenOrCreateError::FailedToCreateDir)?;
+        }
+
+        let opts = SqliteConnectOptions::from_str(
+            path.as_os_str().to_str().ok_or(SqliteOpenOrCreateError::NonUtf8Path)?,
+        )
+        .map_err(SqliteOpenOrCreateError::ConenctOptionsParsing)?
+        .journal_mode(SqliteJournalMode::Wal)
+        .optimize_on_close(true, None)
+        .synchronous(SqliteSynchronous::Normal)
+        .foreign_keys(true)
+        .create_if_missing(true);
+
+        let pool = SqlitePoolOptions::new()
+            .acquire_timeout(timeout)
+            .connect_with(opts)
+            .await
+            .map_err(SqliteOpenOrCreateError::PoolCreateError)?;
+
+        Ok(Self {
+            info: Info::eager_future(pool.clone()),
+            pool,
+        })
+    }
+
+    /// Get the pool of this structure.
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
+    /// Get metadata on the database.
+    #[must_use]
+    pub async fn info(&self) -> &Info {
+        self.info.get().await
+    }
+}

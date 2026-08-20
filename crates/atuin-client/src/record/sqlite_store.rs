@@ -7,31 +7,22 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use atuin_common::encryption::paseto_v4;
+use atuin_common::sqlite::Sqlite;
 use atuin_common::utils;
 use atuin_domain::record::{
     Host, HostId, Record, RecordId, RecordIdx, RecordStatus, RecordTag, RecordVersion,
 };
 use eyre::{Result, eyre};
-use fs_err as fs;
-use sqlx::Row;
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
-    SqliteSynchronous,
-};
+use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct SqliteStore {
-    pool: SqlitePool,
-
-    /// SQLite's `SQLITE_LIMIT_VARIABLE_NUMBER` for this database, queried at
-    /// construction. [`SqliteStore::push_batch`] chunks its multi-row INSERT against
-    /// this (one parameter per column, per row).
-    max_bind_params: usize,
+    sqlite: Sqlite,
 }
 
 impl SqliteStore {
-    pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
+    pub async fn new(path: impl AsRef<Path>, timeout: Duration) -> Result<Self> {
         let path = path.as_ref();
 
         debug!("opening sqlite database at {path:?}");
@@ -44,31 +35,11 @@ impl SqliteStore {
             std::process::exit(1);
         }
 
-        if !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            fs::create_dir_all(dir)?;
-        }
+        let sqlite = Sqlite::open_or_create(path, timeout).await?;
 
-        let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
-            .journal_mode(SqliteJournalMode::Wal)
-            .optimize_on_close(true, None)
-            .synchronous(SqliteSynchronous::Normal)
-            .foreign_keys(true)
-            .create_if_missing(true);
+        Self::setup_db(sqlite.pool()).await?;
 
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::try_from_secs_f64(timeout)?)
-            .connect_with(opts)
-            .await?;
-
-        Self::setup_db(&pool).await?;
-        let max_bind_params = crate::sqlite_util::max_bind_params(&pool).await?;
-
-        Ok(Self {
-            pool,
-            max_bind_params,
-        })
+        Ok(Self { sqlite })
     }
 
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
@@ -127,7 +98,7 @@ impl SqliteStore {
     async fn load_all(&self) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
         let res = sqlx::query("select * from store ")
             .map(|row| Self::query_row(&row))
-            .fetch_all(&self.pool)
+            .fetch_all(self.sqlite.pool())
             .await?;
 
         Ok(res)
@@ -145,10 +116,10 @@ impl SqliteStore {
         // within the bind-parameter limit. `max(1)` keeps the chunk non-empty on any
         // (implausible) tiny limit.
         const COLUMNS: usize = 8;
-        let rows_per_insert = (self.max_bind_params / COLUMNS).max(1);
+        let rows_per_insert = (self.sqlite.info().await.variable_number_limit / COLUMNS).max(1);
 
         let mut records = records.peekable();
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.sqlite.pool().begin().await?;
 
         // Stream fixed-size chunks straight into a multi-row INSERT: `QueryBuilder`
         // writes the `values (..),(..)` and binds each row in a single pass, so we
@@ -182,7 +153,7 @@ impl SqliteStore {
         let res = sqlx::query("select * from store where store.id = ?1")
             .bind(id.0.as_hyphenated().to_string())
             .map(|row| Self::query_row(&row))
-            .fetch_one(&self.pool)
+            .fetch_one(self.sqlite.pool())
             .await?;
 
         Ok(res)
@@ -191,14 +162,14 @@ impl SqliteStore {
     pub async fn delete(&self, id: RecordId) -> Result<()> {
         sqlx::query("delete from store where id = ?1")
             .bind(id.0.as_hyphenated().to_string())
-            .execute(&self.pool)
+            .execute(self.sqlite.pool())
             .await?;
 
         Ok(())
     }
 
     pub async fn delete_all(&self) -> Result<()> {
-        sqlx::query("delete from store").execute(&self.pool).await?;
+        sqlx::query("delete from store").execute(self.sqlite.pool()).await?;
 
         Ok(())
     }
@@ -213,7 +184,7 @@ impl SqliteStore {
                 .bind(host.0.as_hyphenated().to_string())
                 .bind(tag.as_str())
                 .map(|row| Self::query_row(&row))
-                .fetch_one(&self.pool)
+                .fetch_one(self.sqlite.pool())
                 .await;
 
         match res {
@@ -233,7 +204,7 @@ impl SqliteStore {
 
     pub async fn len_all(&self) -> Result<u64> {
         let res: Result<(i64,), sqlx::Error> =
-            sqlx::query_as("select count(*) from store").fetch_one(&self.pool).await;
+            sqlx::query_as("select count(*) from store").fetch_one(self.sqlite.pool()).await;
         match res {
             Err(e) => Err(eyre!("failed to fetch local store len: {}", e)),
             Ok(v) => Ok(v.0 as u64),
@@ -244,7 +215,7 @@ impl SqliteStore {
         let res: Result<(i64,), sqlx::Error> =
             sqlx::query_as("select count(*) from store where tag=?1")
                 .bind(tag.as_str())
-                .fetch_one(&self.pool)
+                .fetch_one(self.sqlite.pool())
                 .await;
         match res {
             Err(e) => Err(eyre!("failed to fetch local store len: {}", e)),
@@ -275,7 +246,7 @@ impl SqliteStore {
         )
         .bind(host.0.as_hyphenated().to_string())
         .bind(tag.as_str())
-        .fetch_one(&self.pool)
+        .fetch_one(self.sqlite.pool())
         .await?;
 
         Ok(gap.unwrap_or(0) as u64)
@@ -297,7 +268,7 @@ impl SqliteStore {
         .bind(tag.as_str())
         .bind(limit as i64)
         .map(|row| Self::query_row(&row))
-        .fetch_all(&self.pool)
+        .fetch_all(self.sqlite.pool())
         .await?;
 
         Ok(res)
@@ -314,7 +285,7 @@ impl SqliteStore {
             .bind(host.0.as_hyphenated().to_string())
             .bind(tag.as_str())
             .map(|row| Self::query_row(&row))
-            .fetch_one(&self.pool)
+            .fetch_one(self.sqlite.pool())
             .await;
 
         match res {
@@ -329,7 +300,7 @@ impl SqliteStore {
 
         let res: Result<Vec<(String, String, i64)>, sqlx::Error> =
             sqlx::query_as("select host, tag, max(idx) from store group by host, tag")
-                .fetch_all(&self.pool)
+                .fetch_all(self.sqlite.pool())
                 .await;
 
         let res = match res {
@@ -355,7 +326,7 @@ impl SqliteStore {
         let res = sqlx::query("select * from store where tag = ?1 order by timestamp asc")
             .bind(tag.as_str())
             .map(|row| Self::query_row(&row))
-            .fetch_all(&self.pool)
+            .fetch_all(self.sqlite.pool())
             .await?;
 
         Ok(res)
@@ -388,7 +359,7 @@ impl SqliteStore {
         // next up, we delete all the old data and reinsert the new stuff
         // do it in one transaction, so if anything fails we rollback OK
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.sqlite.pool().begin().await?;
 
         let res = sqlx::query("delete from store").execute(&mut *tx).await?;
 

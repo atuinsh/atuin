@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, OnceLock};
+#[cfg(test)]
+use std::time::Duration;
 
 use atuin_common::logs::LogLevel;
 use atuin_common::utils;
@@ -1520,14 +1522,10 @@ impl Settings {
             .set_default("ai.opening.send_cwd", false)?
             .set_default("ai.opening.send_last_command", false)?
             .set_default("ui.syntax_highlight", true)?
-            .set_default("search.filters", vec![
-                "global",
-                "host",
-                "session",
-                "workspace",
-                "directory",
-                "session-preload",
-            ])?
+            .set_default(
+                "search.filters",
+                vec!["global", "host", "session", "workspace", "directory", "session-preload"],
+            )?
             .set_default("theme.name", "default")?
             .set_default("theme.debug", None::<bool>)?
             .set_default("tmux.enabled", false)?
@@ -1831,7 +1829,7 @@ pub fn init_meta_config_for_testing(meta_db_path: impl Into<String>, local_timeo
 }
 
 #[cfg(test)]
-pub(crate) fn test_local_timeout() -> f64 {
+pub(crate) fn test_local_timeout() -> Duration {
     std::env::var("ATUIN_TEST_LOCAL_TIMEOUT")
         .ok()
         .and_then(|x| x.parse().ok())
