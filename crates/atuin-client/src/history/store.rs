@@ -7,7 +7,8 @@ use atuin_common::encryption::paseto_v4;
 use atuin_common::futures::stream::chunk_by_bounded;
 use atuin_common::rmp::decode::Bytes;
 use atuin_domain::record::{
-    DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag, RecordVersion,
+    DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
+    RecordVersion,
 };
 use eyre::{Result, bail, eyre};
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
@@ -142,8 +143,11 @@ impl HistoryStore {
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     async fn push_record(&self, record: HistoryRecord) -> Result<(RecordId, RecordIdx)> {
         let bytes = record.serialize()?;
-        let idx =
-            self.store.last(self.host_id, &RecordTag::History).await?.map_or(0, |p| p.idx + 1);
+        let idx = self
+            .store
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::History))
+            .await?
+            .map_or(0, |p| p.idx + 1);
 
         let record = Record::builder()
             .host(Host::new(self.host_id))
@@ -164,8 +168,11 @@ impl HistoryStore {
     async fn push_batch(&self, records: impl Iterator<Item = HistoryRecord>) -> Result<()> {
         let mut ret = Vec::new();
 
-        let idx =
-            self.store.last(self.host_id, &RecordTag::History).await?.map_or(0, |p| p.idx + 1);
+        let idx = self
+            .store
+            .last(&RecordSeriesKey::new(self.host_id, RecordTag::History))
+            .await?
+            .map_or(0, |p| p.idx + 1);
 
         // Could probably _also_ do this as an iterator, but let's see how this is for now.
         // optimizing for minimal sqlite transactions, this code can be optimised later

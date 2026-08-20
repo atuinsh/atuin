@@ -11,7 +11,7 @@ use atuin_domain::api::{
 };
 use atuin_domain::caps::{CapClient, CapMismatch, CapabilitiesExt};
 use atuin_domain::record::{
-    EncryptedData, HostId, Record, RecordId, RecordIdx, RecordStatus, RecordTag,
+    EncryptedData, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus,
 };
 use eyre::{Result, bail};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT};
@@ -423,20 +423,19 @@ impl Client {
         Ok(resp.bytes().await?.to_vec())
     }
 
-    #[instrument(level = "trace", skip_all, fields(host = ?host, tag = ?tag, start = ?start, count), err)]
+    #[instrument(level = "trace", skip_all, fields(host = ?series.host, tag = ?series.tag, start = ?start, count), err)]
     pub async fn next_records(
         &self,
-        host: HostId,
-        tag: RecordTag,
+        series: &RecordSeriesKey,
         start: RecordIdx,
         count: u64,
     ) -> Result<Vec<Record<EncryptedData>>> {
-        debug!("fetching record/s from host {}/{}/{}", host.0, tag, start);
+        debug!("fetching record/s from host {}/{}/{}", series.host.0, series.tag, start);
 
         let mut url = self.sync_addr.append_path("api/v0/record/next")?;
         url.query_pairs_mut()
-            .append_pair("host", &host.0.to_string())
-            .append_pair("tag", tag.as_str())
+            .append_pair("host", &series.host.0.to_string())
+            .append_pair("tag", series.tag.as_str())
             .append_pair("count", &count.to_string())
             .append_pair("start", &start.to_string());
 
