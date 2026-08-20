@@ -1,8 +1,10 @@
+use std::env;
+
 use atuin_common::utils::normalize_optional_string;
 use atuin_domain::record::CmdOrigin;
 use typed_builder::TypedBuilder;
 
-use super::{AuthorKind, History, is_known_agent};
+use super::{AuthorKind, HISTORY_INTENT_ENV, History, is_known_agent, probe_author};
 
 /// Builder for a history entry that is imported from shell history.
 ///
@@ -86,17 +88,24 @@ impl From<HistoryCaptured> for History {
         // Only agent integrations state an author; humans never do. That makes a stated
         // known-agent name a far stronger signal that an agent ran this than anything we can
         // infer after the fact — unless it is also the current username, which says nothing
-        // (see [`History::is_agent`]). An explicit kind still wins.
-        let author = normalize_optional_string(captured.author);
+        // (see [`History::is_agent`]). An explicit kind still wins, and an environment kind only
+        // qualifies a stated author.
+        let author = normalize_optional_string(captured.author).or_else(probe_author);
         let cmd_origin = captured.cmd_origin.unwrap_or_else(CmdOrigin::probe_current);
-        let author_kind = captured.author_kind.or_else(|| {
-            author
-                .as_deref()
-                .is_some_and(|author| {
-                    is_known_agent(author) && author != cmd_origin.user().into_inner()
-                })
-                .then_some(AuthorKind::Agent)
-        });
+        let author_kind = captured
+            .author_kind
+            .or_else(|| author.is_some().then(AuthorKind::probe_current).flatten())
+            .or_else(|| {
+                author
+                    .as_deref()
+                    .is_some_and(|author| {
+                        is_known_agent(author) && author != cmd_origin.user().into_inner()
+                    })
+                    .then_some(AuthorKind::Agent)
+            });
+        let intent = normalize_optional_string(captured.intent)
+            .or_else(|| normalize_optional_string(env::var(HISTORY_INTENT_ENV).ok()));
+        let shell = captured.shell.or_else(|| env::var("ATUIN_SHELL").ok());
 
         Self::new(
             captured.timestamp,
@@ -104,12 +113,12 @@ impl From<HistoryCaptured> for History {
             captured.cwd,
             -1,
             -1,
-            None,
+            env::var("ATUIN_SESSION").ok(),
             Some(cmd_origin),
             author,
-            captured.intent,
+            intent,
             None,
-            captured.shell,
+            shell,
             author_kind,
         )
     }
