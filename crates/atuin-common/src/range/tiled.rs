@@ -2,7 +2,7 @@
 //!
 //! [`slice::chunks`] exists for slices but not for [`Range`]s; this fills that gap. A
 //! `(start..end).tiled(size)` yields non-overlapping sub-ranges tiling the range in order, the
-//! last one clamped to `end` -- so the union of the tiles is exactly the original range.
+//! last one clamped to `end`.
 
 use std::iter::FusedIterator;
 use std::num::NonZeroU64;
@@ -10,6 +10,8 @@ use std::ops::Range;
 
 mod sealed {
     pub trait Sealed {}
+    impl Sealed for u8 {}
+    impl Sealed for u16 {}
     impl Sealed for u32 {}
     impl Sealed for u64 {}
     impl Sealed for usize {}
@@ -44,10 +46,11 @@ macro_rules! impl_tile_idx {
     )+};
 }
 
-impl_tile_idx!(u32, u64, usize);
+impl_tile_idx!(u8, u16, u32, u64, usize);
 
-/// Iterator of fixed-`size` sub-ranges tiling a [`Range`], the last clamped to the range end. See
-/// the [module docs](self). Build one with [`RangeTiledExt::tiled`].
+/// Iterator of fixed-`size` sub-ranges tiling a [`Range`], the last clamped to the range end.
+///
+/// See the [module docs](self). Build one with [`RangeTiledExt::tiled`].
 #[derive(Debug, Copy, Clone)]
 pub struct Tiled<T> {
     cursor: T,
@@ -74,8 +77,9 @@ impl<T: TileIdx> Tiled<T> {
         self.size
     }
 
-    /// The number of *indices* still to be covered -- not the number of tiles (that is
-    /// [`ExactSizeIterator::len`]).
+    /// The number of *indices* still to be covered.
+    ///
+    /// Note this is not the number of tiles, which is what [`ExactSizeIterator::len`] is.
     #[must_use]
     pub fn index_len(&self) -> u64 {
         self.cursor.distance_to(self.end)
