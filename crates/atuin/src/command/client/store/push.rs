@@ -1,6 +1,6 @@
 use atuin_client::api_client::Client;
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::record::sync::{Operation, SyncEngine};
+use atuin_client::record::sync::{ClientSource, Operation, SyncEngine};
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::{HostId, RecordTag};
@@ -65,7 +65,16 @@ impl Push {
         //  a) are they an upload op?
         //  b) are they for the host/tag we are pushing here?
         let key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
-        let engine = SyncEngine::connect(settings, &store, &key).await?;
+        let engine = SyncEngine::builder()
+            .store(store)
+            .key(&key)
+            .client_source(ClientSource::FromSettings {
+                settings,
+                caps: None,
+            })
+            .build()
+            .connect()
+            .await?;
 
         let (diff, remote_index) = engine.diff().await?;
 

@@ -1,10 +1,9 @@
 // do a sync :O
 use std::cmp::Ordering;
 use std::fmt::Write;
-use std::sync::Arc;
 
 use atuin_common::encryption::paseto_v4;
-use atuin_domain::caps::{CapClient, PackfileCap};
+use atuin_domain::caps::PackfileCap;
 use atuin_domain::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus, RecordTag};
 use eyre::Result;
 use futures::{StreamExt, stream};
@@ -13,9 +12,11 @@ use thiserror::Error;
 use tracing::instrument;
 
 use super::sqlite_store::SqliteStore;
-use crate::api_client::{Client, caps_client};
+use crate::api_client::Client;
 use crate::packfile::{download_packed, upload_packed};
-use crate::settings::Settings;
+
+mod builder;
+pub use builder::{ClientSource, SyncEngineBuilder, SyncEngineInit};
 
 /// How many packfile blobs to transfer (upload or download) concurrently within a single page.
 const MAX_CONCURRENT_PACKFILE_TRANSFERS: usize = 16;
@@ -74,63 +75,16 @@ pub enum Operation {
     },
 }
 
-/// Stateful driver for a sync session.
+/// Drives atuin's sync.
 ///
-/// Historically the sync logic was a bag of free functions that threaded the same trio of values
-/// -- the API `client`, the local `store`, and the encryption `key` -- through every call. The
-/// engine owns that shared state so the individual steps (`diff`, `operations`, `sync_remote`,
-/// `check_encryption_key`, ...) become methods that no longer have to pass it around.
-///
-/// The `client` is owned; `store` and `key` are borrowed for the lifetime of the session so the
-/// signatures line up with the borrow-based callers that build them.
+/// The intended way to use this is to build one with the [`SyncEngine::builder()`] method.
 pub struct SyncEngine<'a> {
     client: Client,
-    store: &'a SqliteStore,
+    store: SqliteStore,
     key: &'a paseto_v4::Key,
 }
 
-impl<'a> SyncEngine<'a> {
-    /// Build an engine using an explicitly-supplied capability client.
-    #[instrument(level = "trace", skip_all, err)]
-    pub async fn new(
-        settings: &Settings,
-        store: &'a SqliteStore,
-        key: &'a paseto_v4::Key,
-        caps: Arc<CapClient>,
-    ) -> Result<Self, SyncError> {
-        let client = Client::new(
-            settings.sync_address.clone(),
-            &settings
-                .sync_auth_token()
-                .await
-                .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?,
-            settings.network_connect_timeout,
-            settings.network_timeout,
-            &settings.extra_headers,
-            caps,
-        )
-        .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?;
-
-        Ok(Self::with_client(client, store, key))
-    }
-
-    /// Build an engine, fetching the server capabilities as part of construction.
-    #[instrument(level = "trace", skip_all, err)]
-    pub async fn connect(
-        settings: &Settings,
-        store: &'a SqliteStore,
-        key: &'a paseto_v4::Key,
-    ) -> Result<Self, SyncError> {
-        let caps = caps_client(&settings.sync_address, &settings.extra_headers)
-            .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?;
-        Self::new(settings, store, key, caps).await
-    }
-
-    /// Wrap an already-constructed client (e.g. in tests, or where the client is built directly).
-    pub fn with_client(client: Client, store: &'a SqliteStore, key: &'a paseto_v4::Key) -> Self {
-        Self { client, store, key }
-    }
-
+impl SyncEngine<'_> {
     /// The underlying API client, for callers that need to talk to the remote directly.
     pub fn client(&self) -> &Client {
         &self.client
@@ -160,12 +114,11 @@ impl<'a> SyncEngine<'a> {
     // engine's state, so it's an associated function rather than a method.
     #[instrument(level = "trace", skip_all, fields(n_diffs = diffs.len()), err)]
     pub fn operations(diffs: Vec<Diff>) -> Result<Vec<Operation>, SyncError> {
-        let mut operations = Vec::with_capacity(diffs.len());
-
-        for diff in diffs {
-            let op = match (diff.local, diff.remote) {
+        let mut operations = diffs
+            .into_iter()
+            .map(|diff| match (diff.local, diff.remote) {
                 // We both have it! Could be either. Compare.
-                (Some(local), Some(remote)) => match local.cmp(&remote) {
+                (Some(local), Some(remote)) => Ok(match local.cmp(&remote) {
                     Ordering::Equal => Operation::Noop {
                         host: diff.host,
                         tag: diff.tag,
@@ -181,41 +134,36 @@ impl<'a> SyncEngine<'a> {
                         host: diff.host,
                         tag: diff.tag,
                     },
-                },
+                }),
 
                 // Remote has it, we don't. Gotta be download
-                (None, Some(remote)) => Operation::Download {
+                (None, Some(remote)) => Ok(Operation::Download {
                     remote,
                     host: diff.host,
                     tag: diff.tag,
-                },
+                }),
 
                 // We have it, remote doesn't. Gotta be upload.
-                (Some(local), None) => Operation::Upload {
+                (Some(local), None) => Ok(Operation::Upload {
                     local,
                     remote: None,
                     host: diff.host,
                     tag: diff.tag,
-                },
+                }),
 
                 // something is pretty fucked.
-                (None, None) => {
-                    return Err(SyncError::SyncLogicError {
-                        msg: String::from(
-                            "diff has nothing for local or remote - (host, tag) does not exist",
-                        ),
-                    });
-                }
-            };
-
-            operations.push(op);
-        }
+                (None, None) => Err(SyncError::SyncLogicError {
+                    msg: String::from(
+                        "diff has nothing for local or remote - (host, tag) does not exist",
+                    ),
+                }),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         // sort them - purely so we have a stable testing order, and can rely on
         // same input = same output
         // We can sort by ID so long as we continue to use UUIDv7 or something
         // with the same properties
-
         operations.sort_by_key(|op| match op {
             Operation::Noop { host, tag } => (0u8, *host, 0u8, tag.clone()),
             Operation::Upload { host, tag, .. } => (1u8, *host, 0u8, tag.clone()),
@@ -249,7 +197,7 @@ impl<'a> SyncEngine<'a> {
         remote: Option<RecordIdx>,
         page_size: u64,
     ) -> Result<u64, SyncError> {
-        let store = self.store;
+        let store = &self.store;
         let client = &self.client;
         let key = self.key;
         // The first record the remote *doesn't* have.
@@ -328,7 +276,7 @@ impl<'a> SyncEngine<'a> {
         remote: RecordIdx,
         page_size: u64,
     ) -> Result<Vec<RecordId>, SyncError> {
-        let store = self.store;
+        let store = &self.store;
         let client = &self.client;
         let key = self.key;
         // Scan the database to find the first missing local index, rather than assuming it's one more
@@ -827,6 +775,22 @@ mod packfile_download_tests {
         SqliteStore::new(":memory:", test_local_timeout()).await.unwrap()
     }
 
+    /// Wrap a prebuilt client in a [`SyncEngine`] for tests.
+    pub(super) async fn build_engine(
+        client: Client,
+        store: SqliteStore,
+        key: &paseto_v4::Key,
+    ) -> SyncEngine<'_> {
+        SyncEngine::builder()
+            .store(store)
+            .key(key)
+            .client_source(ClientSource::FromClient(client))
+            .build()
+            .connect()
+            .await
+            .unwrap()
+    }
+
     /// Push a contiguous run of `count` encrypted HISTORY records (idx `0..count`).
     pub(super) async fn seed_history(
         store: &SqliteStore,
@@ -949,7 +913,8 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
         let store = memory_store().await;
 
-        SyncEngine::with_client(client, &store, &key)
+        build_engine(client, store, &key)
+            .await
             .check_encryption_key(&remote_index)
             .await
             .expect("a plaintext packfile manifest must not be treated as a wrong key");
@@ -984,7 +949,8 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
 
         let wrong = paseto_v4::Key::from([9u8; 32]);
-        let err = SyncEngine::with_client(client, &store, &wrong)
+        let err = build_engine(client, store, &wrong)
+            .await
             .check_encryption_key(&remote_index)
             .await
             .expect_err("a wrong key on an encrypted record must still be detected");
@@ -1009,7 +975,8 @@ mod packfile_download_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        SyncEngine::with_client(client, &down, &key)
+        build_engine(client, down.clone(), &key)
+            .await
             .sync_download(host, RecordTag::Packfile, 1, 100)
             .await
             .unwrap();
@@ -1036,7 +1003,8 @@ mod packfile_download_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let returned = SyncEngine::with_client(client, &down, &key)
+        let returned = build_engine(client, down, &key)
+            .await
             .sync_download(host, RecordTag::Packfile, 1, 100)
             .await
             .unwrap();
@@ -1099,7 +1067,7 @@ mod packfile_download_tests {
         let down = memory_store().await;
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
-        let engine = SyncEngine::with_client(client, &down, &key);
+        let engine = build_engine(client, down, &key).await;
 
         // Packfile op first (populates history 0..=2), then the history op.
         engine.sync_download(host, RecordTag::Packfile, 1, 100).await.unwrap();
@@ -1141,7 +1109,8 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
 
         // remote (2) is BEHIND the live local head (4) -- must not underflow/panic.
-        let got = SyncEngine::with_client(client, &down, &key)
+        let got = build_engine(client, down, &key)
+            .await
             .sync_download(host, RecordTag::History, 2, 100)
             .await
             .unwrap();
@@ -1246,7 +1215,8 @@ mod packfile_download_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let returned = SyncEngine::with_client(client, &down, &key)
+        let returned = build_engine(client, down.clone(), &key)
+            .await
             .sync_download(host, RecordTag::Packfile, 1, 100)
             .await
             .unwrap();
@@ -1311,7 +1281,8 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
 
         // The permanent per-manifest failure is logged and skipped; the whole tick still succeeds.
-        let returned = SyncEngine::with_client(client, &down, &key)
+        let returned = build_engine(client, down.clone(), &key)
+            .await
             .sync_download(host, RecordTag::Packfile, 2, 100)
             .await
             .expect("a permanent per-manifest failure must not fail the tick");
@@ -1341,10 +1312,10 @@ mod packfile_capability_tests {
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    use super::Operation;
     use super::packfile_download_tests::{
-        memory_store, mock_client, mount_packfile, packed_packfile, seed_history,
+        build_engine, memory_store, mock_client, mount_packfile, packed_packfile, seed_history,
     };
-    use super::{Operation, SyncEngine};
 
     /// A single fixed encryption key, matching the sibling packfile tests.
     #[fixture]
@@ -1411,7 +1382,8 @@ mod packfile_capability_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        SyncEngine::with_client(client, &down, &key)
+        build_engine(client, down.clone(), &key)
+            .await
             .sync_remote(vec![packfile_download_op(host, 3)], 100)
             .await
             .unwrap();
@@ -1478,7 +1450,8 @@ mod packfile_capability_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        SyncEngine::with_client(client, &down, &key)
+        build_engine(client, down.clone(), &key)
+            .await
             .sync_remote(
                 vec![packfile_download_op(host, 3), Operation::Download {
                     remote: 3,
@@ -1508,7 +1481,8 @@ mod packfile_capability_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        SyncEngine::with_client(client, &down, &key)
+        build_engine(client, down.clone(), &key)
+            .await
             .sync_remote(vec![packfile_download_op(host, 3)], 100)
             .await
             .unwrap();
@@ -1543,7 +1517,8 @@ mod packfile_capability_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        SyncEngine::with_client(client, &down, &key)
+        build_engine(client, down.clone(), &key)
+            .await
             .sync_remote(vec![packfile_download_op(host, 3)], 100)
             .await
             .unwrap();

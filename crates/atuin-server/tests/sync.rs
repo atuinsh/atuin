@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use atuin_client::api_client;
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::record::sync::SyncEngine;
+use atuin_client::record::sync::{ClientSource, SyncEngine};
 use atuin_common::encryption::paseto_v4;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag};
@@ -155,7 +155,14 @@ async fn download(
     }
 
     let key = key();
-    let engine = SyncEngine::with_client(client, &store, &key);
+    let engine = SyncEngine::builder()
+        .store(store.clone())
+        .key(&key)
+        .client_source(ClientSource::FromClient(client))
+        .build()
+        .connect()
+        .await
+        .unwrap();
     let (diff, _) = engine.diff().await.unwrap();
     let operations = SyncEngine::operations(diff).unwrap();
     let (_, downloaded) = engine.sync_remote(operations, page_size).await.unwrap();
@@ -215,7 +222,14 @@ async fn upload(
     }
 
     let key = key();
-    let engine = SyncEngine::with_client(client, &store, &key);
+    let engine = SyncEngine::builder()
+        .store(store)
+        .key(&key)
+        .client_source(ClientSource::FromClient(client))
+        .build()
+        .connect()
+        .await
+        .unwrap();
     let (diff, _) = engine.diff().await.unwrap();
     let operations = SyncEngine::operations(diff).unwrap();
     let (uploaded, _) = engine.sync_remote(operations, page_size).await.unwrap();

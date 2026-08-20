@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use atuin_client::history::HistoryId;
 use atuin_client::history::store::HistoryStore;
-use atuin_client::record::sync::SyncEngine;
+use atuin_client::record::sync::{ClientSource, SyncEngine};
 use atuin_client::settings::Settings;
 use atuin_dotfiles::store::AliasStore;
 use atuin_dotfiles::store::var::VarStore;
@@ -217,7 +217,15 @@ async fn do_sync_tick(
 
     // Perform the sync
     let res = async {
-        SyncEngine::new(settings, handle.store(), handle.encryption_key(), handle.caps().clone())
+        SyncEngine::builder()
+            .store(handle.store().clone())
+            .key(handle.encryption_key())
+            .client_source(ClientSource::FromSettings {
+                settings,
+                caps: Some(handle.caps().clone()),
+            })
+            .build()
+            .connect()
             .await?
             .sync()
             .await

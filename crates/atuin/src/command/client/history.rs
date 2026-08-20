@@ -522,15 +522,18 @@ async fn handle_end(
                 &settings.sync_address,
                 &settings.extra_headers,
             )?;
-            let (_, downloaded) = record::sync::SyncEngine::new(
-                settings,
-                &store,
-                &history_store.encryption_key,
-                caps,
-            )
-            .await?
-            .sync()
-            .await?;
+            let (_, downloaded) = record::sync::SyncEngine::builder()
+                .store(store.clone())
+                .key(&history_store.encryption_key)
+                .client_source(record::sync::ClientSource::FromSettings {
+                    settings,
+                    caps: Some(caps),
+                })
+                .build()
+                .connect()
+                .await?
+                .sync()
+                .await?;
             Settings::save_sync_time().await?;
 
             crate::sync::build(settings, &store, db, Some(&downloaded)).await?;

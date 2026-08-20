@@ -1,0 +1,82 @@
+use std::sync::Arc;
+
+use atuin_common::encryption::paseto_v4;
+use atuin_domain::caps::CapClient;
+use eyre::Result;
+use tracing::instrument;
+use typed_builder::TypedBuilder;
+
+use super::{SyncEngine, SyncError};
+use crate::api_client::{Client, caps_client};
+use crate::record::sqlite_store::SqliteStore;
+use crate::settings::Settings;
+
+/// Where a [`SyncEngine`]'s API client comes from.
+pub enum ClientSource<'a> {
+    /// Wrap an already-built [`Client`] (tests, login).
+    FromClient(Client),
+    /// Build the client from settings, fetching the server capabilities during `connect` unless
+    /// they are supplied here.
+    FromSettings {
+        settings: &'a Settings,
+        caps: Option<Arc<CapClient>>,
+    },
+}
+
+/// Inputs for constructing a [`SyncEngine`].
+///
+/// Obtain one with [`SyncEngine::builder`], set the [`ClientSource`], then finish with
+/// [`connect`](Self::connect).
+#[derive(TypedBuilder)]
+#[builder(builder_type(name = SyncEngineBuilder), builder_method(vis = "pub(crate)"))]
+pub struct SyncEngineInit<'a> {
+    store: SqliteStore,
+    key: &'a paseto_v4::Key,
+    client_source: ClientSource<'a>,
+}
+
+impl<'a> SyncEngineInit<'a> {
+    /// Resolve the configured inputs into a live [`SyncEngine`].
+    ///
+    /// A directly-supplied client is wrapped as-is; otherwise the client is built from the
+    /// settings, fetching the server capabilities when they were not supplied.
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn connect(self) -> Result<SyncEngine<'a>, SyncError> {
+        let client = match self.client_source {
+            ClientSource::FromClient(client) => client,
+            ClientSource::FromSettings { settings, caps } => {
+                let caps = match caps {
+                    Some(caps) => caps,
+                    None => caps_client(&settings.sync_address, &settings.extra_headers)
+                        .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?,
+                };
+
+                Client::new(
+                    settings.sync_address.clone(),
+                    &settings
+                        .sync_auth_token()
+                        .await
+                        .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?,
+                    settings.network_connect_timeout,
+                    settings.network_timeout,
+                    &settings.extra_headers,
+                    caps,
+                )
+                .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?
+            }
+        };
+
+        Ok(SyncEngine {
+            client,
+            store: self.store,
+            key: self.key,
+        })
+    }
+}
+
+impl<'a> SyncEngine<'a> {
+    /// Start building a [`SyncEngine`]. See [`SyncEngineInit`] for the construction paths.
+    pub fn builder() -> SyncEngineBuilder<'a, ((), (), ())> {
+        SyncEngineInit::builder()
+    }
+}

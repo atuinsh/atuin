@@ -2,7 +2,7 @@ use std::io::{self, IsTerminal};
 
 use atuin_client::auth::{self, AuthClient, AuthResponse};
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::record::sync::{SyncEngine, SyncError};
+use atuin_client::record::sync::{ClientSource, SyncEngine, SyncError};
 use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
 use clap::Parser;
@@ -273,7 +273,18 @@ async fn verify_key_against_remote(
 
     // Build the client once (this hits the network). The key can change between retries below, so
     // each iteration wraps a cheap clone of the client in a fresh engine rather than re-connecting.
-    let client = SyncEngine::connect(settings, store, &key).await?.client().clone();
+    let client = SyncEngine::builder()
+        .store(store.clone())
+        .key(&key)
+        .client_source(ClientSource::FromSettings {
+            settings,
+            caps: None,
+        })
+        .build()
+        .connect()
+        .await?
+        .client()
+        .clone();
     let remote_index = match client.record_status().await {
         Ok(idx) => idx,
         Err(e) => {
@@ -283,7 +294,13 @@ async fn verify_key_against_remote(
     };
 
     loop {
-        let check = SyncEngine::with_client(client.clone(), store, &key)
+        let check = SyncEngine::builder()
+            .store(store.clone())
+            .key(&key)
+            .client_source(ClientSource::FromClient(client.clone()))
+            .build()
+            .connect()
+            .await?
             .check_encryption_key(&remote_index)
             .await;
         match check {
