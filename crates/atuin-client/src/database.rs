@@ -159,13 +159,13 @@ fn apply_shell_filter(sql: &mut SqlBuilder, shells: OrFilter<&[String]>) {
 }
 
 fn get_session_start_time(session_id: &str) -> Option<i64> {
-    if let Ok(uuid) = Uuid::parse_str(session_id)
-        && let Some(timestamp) = uuid.get_timestamp()
-    {
-        let (seconds, nanos) = timestamp.to_unix();
-        return Some(seconds as i64 * 1_000_000_000 + i64::from(nanos));
-    }
-    None
+    // A session id is not guaranteed to be one of our UUIDv7s: ATUIN_SESSION comes from the
+    // environment, and a stray value whose version nibble reads as v1/v6/v7 can carry a timestamp
+    // far outside the unix-nanos range. Treat such a session as having no start time rather than
+    // overflowing.
+    let uuid = Uuid::parse_str(session_id).ok()?;
+    let (seconds, nanos) = uuid.get_timestamp()?.to_unix();
+    i64::try_from(seconds).ok()?.checked_mul(1_000_000_000)?.checked_add(i64::from(nanos))
 }
 
 /// SQL predicate to match for a [`CmdOrigin`].
@@ -1176,6 +1176,20 @@ mod test {
 
     use super::*;
     use crate::settings::test_local_timeout;
+
+    /// `ATUIN_SESSION` comes from the environment: a stray value whose version nibble reads as a
+    /// timestamped UUID can carry a timestamp far outside the unix-nanos range, which must mean
+    /// "no start time" rather than an overflow.
+    #[rstest]
+    #[case::a_real_v7_session(atuin_common::utils::uuid_v7().to_string(), true)]
+    #[case::not_a_uuid("not-a-uuid".to_string(), false)]
+    #[case::out_of_range_timestamp("ffffffff-ffff-1fff-bfff-ffffffffffff".to_string(), false)]
+    fn session_start_time_tolerates_hostile_session_ids(
+        #[case] session_id: String,
+        #[case] has_start: bool,
+    ) {
+        assert_eq!(get_session_start_time(&session_id).is_some(), has_start);
+    }
 
     fn new_context() -> Context {
         Context {
