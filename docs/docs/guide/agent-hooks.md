@@ -50,13 +50,13 @@ By default, Atuin's interactive search shows only your own commands. Agent-run c
 
 Today this default is built into the search UI rather than configurable via `config.toml`. Interactive search uses the equivalent of:
 
-- `$all-user` — any entry that is **not** agent-run
+- `$all-user` — any entry that's **not** agent-run
 
 For explicit author filtering, use the CLI `atuin search --author ...` flag. Special values:
 
 | Value | Meaning |
 |-------|---------|
-| `$all-user` | Any entry that is **not** agent-run |
+| `$all-user` | Any entry that's **not** agent-run |
 | `$all-agent` | Any agent-run entry |
 
 You can also use literal author names:
