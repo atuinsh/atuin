@@ -1,18 +1,16 @@
-use std::env::VarError;
-use std::ffi::OsString;
 use std::io::IsTerminal;
-use std::str::FromStr;
 
 use atuin_common::logs::{FileConfig, LogConfig, StderrConfig};
-use opentelemetry::trace::TracerProvider as _;
-use opentelemetry_otlp::{ExporterBuildError, WithExportConfig as _};
 use tracing::Level;
 use tracing_appender::rolling::{self, RollingFileAppender, Rotation};
-use tracing_subscriber::filter::{self, EnvFilter, LevelFilter};
+use tracing_subscriber::filter::{self, EnvFilter};
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::util::TryInitError;
-use url::Url;
+
+mod otel;
+use otel::OtelCtx;
+pub use otel::OtelCtxEnableError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LogCtxEnableError {
@@ -34,6 +32,9 @@ pub enum LogCtxEnableError {
 /// ```bash
 /// ATUIN_OTEL=http://localhost:4318 atuin foo bar baz.
 /// ```
+///
+/// OpenTelemetry support must be compiled in via the `profiling-traced` feature; without it, setting
+/// `ATUIN_OTEL` is an error (see [`OtelCtx`]).
 ///
 pub struct LogCtx {
     /// Handle to open-telemetry traces. Kept alive because it's RAII.
@@ -75,13 +76,7 @@ impl LogCtx {
         };
 
         let otel = OtelCtx::try_enable(service_name)?;
-
-        let otel_layer = otel.as_ref().map(|ctx| {
-            tracing_opentelemetry::layer()
-                .with_tracer(ctx.provider.tracer(service_name))
-                .with_context_activation(false)
-                .with_filter(LevelFilter::TRACE)
-        });
+        let otel_layer = otel.as_ref().map(|ctx| ctx.layer(service_name));
 
         // The stderr layer is added last because its type varies with the timer
         // dispatch below; the file and otel layers must be layered first so `base`
@@ -128,89 +123,6 @@ where
         .with_target(config.show_target)
         .map_event_format(|f| f.with_timer(T::default()))
         .with_filter(filter)
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum OtelCtxEnableError {
-    #[error("the given ATUIN_OTEL URL does not appear to be a utf-8 string")]
-    NonUtf8EnvVar(OsString),
-    #[error("the given ATUIN_OTEL failed to parse as URL: {0}")]
-    InvalidUrl(#[from] url::ParseError),
-    #[error("the given ATUIN_OTEL URL does not appear to be an HTTP(s) URL")]
-    NonHttpUrl,
-    #[error("failed to construct the exporter: {0}")]
-    ExporterBuild(#[from] ExporterBuildError),
-}
-
-struct OtelCtx {
-    provider: opentelemetry_sdk::trace::SdkTracerProvider,
-}
-
-impl OtelCtx {
-    /// Try to enable the opentelemetry logging context, if it was requested through the
-    fn try_enable(service_name: &'static str) -> Result<Option<Self>, OtelCtxEnableError> {
-        // TODO(markovejnovic): We should really have our own env-var parsing logic to avoid this
-        // annoying error handling here.
-        let otel_env: Option<String> = match std::env::var("ATUIN_OTEL") {
-            Ok(v) => Some(v),
-            Err(e) => match e {
-                VarError::NotPresent => None,
-                VarError::NotUnicode(e) => {
-                    return Err(OtelCtxEnableError::NonUtf8EnvVar(e));
-                }
-            },
-        };
-
-        let otel_env: String = match otel_env {
-            Some(var) => var,
-            None => {
-                return Ok(None);
-            }
-        };
-
-        // TODO(markovejnovic): A better env library could also handle this.
-        // TODO(markovejnovic): I want an HttpUrl type so bad...
-        let mut otel_url = Url::from_str(&otel_env)?;
-        if !(otel_url.scheme() == "http" || otel_url.scheme() == "https") {
-            return Err(OtelCtxEnableError::NonHttpUrl);
-        }
-
-        if !otel_url.path().ends_with("/v1/traces") {
-            otel_url
-                .path_segments_mut()
-                .expect("checked above that it's an http url")
-                .extend(["v1", "traces"]);
-        }
-
-        let exporter = opentelemetry_otlp::SpanExporter::builder()
-            .with_http()
-            .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
-            .with_endpoint(otel_url.as_str())
-            .build()?;
-
-        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
-            .with_batch_exporter(exporter)
-            .with_resource(
-                opentelemetry_sdk::Resource::builder().with_service_name(service_name).build(),
-            )
-            .build();
-
-        Ok(Some(Self { provider }))
-    }
-}
-
-impl Drop for OtelCtx {
-    fn drop(&mut self) {
-        if let Err(err) = self.provider.force_flush() {
-            // Intentional eprintln! here since we cannot safely use error!
-            eprintln!("Unexpected error flushing OTEL spans: {err}");
-        }
-
-        if let Err(err) = self.provider.shutdown() {
-            // Intentional eprintln! here since we cannot safely use error!
-            eprintln!("Unexpected error shutting down the OTEL tracc provider: {err}");
-        }
-    }
 }
 
 fn get_base_filter(config: &LogConfig) -> EnvFilter {

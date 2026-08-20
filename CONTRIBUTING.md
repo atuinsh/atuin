@@ -174,11 +174,19 @@ crates. These export [OTel](https://opentelemetry.io/) spans into
 [Jaeger](https://www.jaegertracing.io/).
 
 To get started , you **must** build Atuin from source, with the
-`profiling-traced` profile:
+`profiling-traced` profile **and** the matching `profiling-traced` feature (which
+compiles in the OpenTelemetry exporter). The `cargo build-traced` alias enables
+both:
 
 ```bash
-cargo build --profile profiling-traced
+cargo build-traced
+# equivalently:
+# cargo build -p atuin --profile profiling-traced --features profiling-traced
 ```
+
+> [!NOTE]
+>
+> The `profiling-traced` feature **must** be enabled.
 
 > [!WARNING]
 > 
