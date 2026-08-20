@@ -87,10 +87,7 @@ pub async fn next<DB: Database>(
     let params = params.0;
     let series = RecordSeriesKey::new(params.host, params.tag);
 
-    let records = match database
-        .next_records(&user, &series, params.start, params.count)
-        .await
-    {
+    let records = match database.next_records(&user, &series, params.start, params.count).await {
         Ok(records) => records,
         Err(e) => {
             error!("failed to get record index: {}", e);

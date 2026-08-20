@@ -227,10 +227,8 @@ async fn sync_upload(
     println!("Uploading {} records to {}/{}", expected, series.host.0.as_simple(), series.tag);
 
     while progress < expected {
-        let page = store
-            .next(series, first_missing_remote + progress, page_size)
-            .await
-            .map_err(|e| {
+        let page =
+            store.next(series, first_missing_remote + progress, page_size).await.map_err(|e| {
                 error!("failed to read upload page: {e:?}");
 
                 SyncError::LocalStoreError { msg: e.to_string() }
@@ -413,8 +411,8 @@ pub async fn sync_remote(
             } => {
                 if series.tag == RecordTag::Packfile && !packfiles_enabled {
                     debug!(
-                        "server does not advertise PackfileCap; skipping packfile {} upload \
-                         op, loose history covers it",
+                        "server does not advertise PackfileCap; skipping packfile {} upload op, \
+                         loose history covers it",
                         series.tag
                     );
                     continue;
@@ -426,8 +424,8 @@ pub async fn sync_remote(
             Operation::Download { series, remote } => {
                 if series.tag == RecordTag::Packfile && !packfiles_enabled {
                     debug!(
-                        "server does not advertise PackfileCap; skipping packfile {} download \
-                         op, loose history covers it",
+                        "server does not advertise PackfileCap; skipping packfile {} download op, \
+                         loose history covers it",
                         series.tag
                     );
                     continue;
@@ -453,7 +451,9 @@ pub async fn check_encryption_key(
     let sample = remote_index
         .hosts
         .iter()
-        .flat_map(|(host, tags)| tags.keys().map(move |tag| RecordSeriesKey::new(*host, tag.clone())))
+        .flat_map(|(host, tags)| {
+            tags.keys().map(move |tag| RecordSeriesKey::new(*host, tag.clone()))
+        })
         // Note we have to skip `Packfile`s here because packfiles _aren't_ actually encrypted, so
         // using the default CEK would fail decryption.
         .find(|series| series.tag != RecordTag::Packfile);
@@ -498,9 +498,7 @@ pub async fn sync(
 
 #[cfg(test)]
 mod tests {
-    use atuin_domain::record::{
-        Diff, EncryptedData, HostId, Record, RecordTag,
-    };
+    use atuin_domain::record::{Diff, EncryptedData, HostId, Record, RecordTag};
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
@@ -963,7 +961,9 @@ mod packfile_download_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        sync_download(&down, &client, &(host, RecordTag::Packfile).into(), 1, 100, &key).await.unwrap();
+        sync_download(&down, &client, &(host, RecordTag::Packfile).into(), 1, 100, &key)
+            .await
+            .unwrap();
 
         // The manifest is stored AND the history it covers was populated.
         assert!(down.last(&(host, RecordTag::Packfile).into()).await.unwrap().is_some());
@@ -988,7 +988,9 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
 
         let returned =
-            sync_download(&down, &client, &(host, RecordTag::Packfile).into(), 1, 100, &key).await.unwrap();
+            sync_download(&down, &client, &(host, RecordTag::Packfile).into(), 1, 100, &key)
+                .await
+                .unwrap();
 
         for id in &history_ids {
             assert!(
@@ -1050,8 +1052,12 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
 
         // Packfile op first (populates history 0..=2), then the history op.
-        sync_download(&down, &client, &(host, RecordTag::Packfile).into(), 1, 100, &key).await.unwrap();
-        sync_download(&down, &client, &(host, RecordTag::History).into(), 3, 100, &key).await.unwrap();
+        sync_download(&down, &client, &(host, RecordTag::Packfile).into(), 1, 100, &key)
+            .await
+            .unwrap();
+        sync_download(&down, &client, &(host, RecordTag::History).into(), 3, 100, &key)
+            .await
+            .unwrap();
 
         // The history download must have started AFTER the packed prefix (idx 2), i.e. never
         // requested start=0 for RecordTag::History.
@@ -1089,8 +1095,9 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
 
         // remote (2) is BEHIND the live local head (4) -- must not underflow/panic.
-        let got =
-            sync_download(&down, &client, &(host, RecordTag::History).into(), 2, 100, &key).await.unwrap();
+        let got = sync_download(&down, &client, &(host, RecordTag::History).into(), 2, 100, &key)
+            .await
+            .unwrap();
         assert!(got.is_empty(), "nothing to download when local head already exceeds remote");
     }
 
@@ -1192,7 +1199,9 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
 
         let returned =
-            sync_download(&down, &client, &(host, RecordTag::Packfile).into(), 1, 100, &key).await.unwrap();
+            sync_download(&down, &client, &(host, RecordTag::Packfile).into(), 1, 100, &key)
+                .await
+                .unwrap();
 
         // Every batched packfile's history is populated, whichever download finished first.
         assert_eq!(
@@ -1254,9 +1263,10 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
 
         // The permanent per-manifest failure is logged and skipped; the whole tick still succeeds.
-        let returned = sync_download(&down, &client, &(host, RecordTag::Packfile).into(), 2, 100, &key)
-            .await
-            .expect("a permanent per-manifest failure must not fail the tick");
+        let returned =
+            sync_download(&down, &client, &(host, RecordTag::Packfile).into(), 2, 100, &key)
+                .await
+                .expect("a permanent per-manifest failure must not fail the tick");
 
         // The two valid packfiles in the batch still expand despite the poisoned sibling.
         assert_eq!(
@@ -1278,9 +1288,7 @@ mod packfile_capability_tests {
     use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::caps::{CapServer, CapabilitiesCap, PackfileCap};
-    use atuin_domain::record::{
-        EncryptedData, HostId, Record, RecordIdx, RecordTag,
-    };
+    use atuin_domain::record::{EncryptedData, HostId, Record, RecordIdx, RecordTag};
     use rstest::*;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};

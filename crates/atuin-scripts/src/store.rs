@@ -1,8 +1,6 @@
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4;
-use atuin_domain::record::{
-    Host, HostId, Record, RecordId, RecordIdx, RecordTag, RecordVersion,
-};
+use atuin_domain::record::{Host, HostId, Record, RecordId, RecordIdx, RecordTag, RecordVersion};
 use eyre::{Result, eyre};
 use record::ScriptRecord;
 use script::Script;

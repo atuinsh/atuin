@@ -438,9 +438,7 @@ impl SqliteStore {
 mod tests {
     use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
-    use atuin_domain::record::{
-        DecryptedData, Host, HostId, Record, RecordTag, RecordVersion,
-    };
+    use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordTag, RecordVersion};
     use rstest::{fixture, rstest};
 
     use super::SqliteStore;
@@ -657,6 +655,9 @@ mod tests {
             assert_eq!(decrypted.data.0, data);
         }
 
-        assert_eq!(store.len(&(host_id, RecordTag::Other("test".to_owned())).into()).await.unwrap(), 10);
+        assert_eq!(
+            store.len(&(host_id, RecordTag::Other("test".to_owned())).into()).await.unwrap(),
+            10
+        );
     }
 }

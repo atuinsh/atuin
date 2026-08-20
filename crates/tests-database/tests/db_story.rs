@@ -1,7 +1,5 @@
 use atuin_common::utils::{crypto_random_string, uuid_v7};
-use atuin_domain::record::{
-    EncryptedData, Host, HostId, Record, RecordIdx, RecordTag,
-};
+use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordIdx, RecordTag};
 use atuin_server_database::models::{NewSession, NewUser, User};
 use atuin_server_database::{Database, DbSettings, DbType};
 use atuin_server_postgres::Postgres;
