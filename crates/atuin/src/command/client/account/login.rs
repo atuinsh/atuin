@@ -271,21 +271,18 @@ async fn verify_key_against_remote(
     let mut key = paseto_v4::Key::try_load_from_path(&settings.key_path)
         .context("could not load encryption key for verification")?;
 
-    // Build the client once (this hits the network). The key can change between retries below, so
-    // each iteration wraps a cheap clone of the client in a fresh engine rather than re-connecting.
-    let client = SyncEngine::builder()
+    // Build the engine once (this hits the network). The key can change between retries below, so
+    // each iteration re-keys the shared engine rather than reconnecting.
+    let engine = SyncEngine::builder()
         .store(store.clone())
-        .key(&key)
         .client_source(ClientSource::FromSettings {
             settings,
             caps: None,
         })
         .build()
         .connect()
-        .await?
-        .client()
-        .clone();
-    let remote_index = match client.record_status().await {
+        .await?;
+    let remote_index = match engine.record_status().await {
         Ok(idx) => idx,
         Err(e) => {
             tracing::warn!("could not fetch remote status to verify key: {e}");
@@ -294,15 +291,7 @@ async fn verify_key_against_remote(
     };
 
     loop {
-        let check = SyncEngine::builder()
-            .store(store.clone())
-            .key(&key)
-            .client_source(ClientSource::FromClient(client.clone()))
-            .build()
-            .connect()
-            .await?
-            .check_encryption_key(&remote_index)
-            .await;
+        let check = engine.keyed(&key).check_encryption_key(&remote_index).await;
         match check {
             // Only persist a key the server has confirmed can read the data, so
             // that cancelling out of a retry leaves the local store as it was.

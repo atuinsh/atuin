@@ -79,18 +79,16 @@ async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) 
         atuin_client::api_client::caps_client(&settings.sync_address, &settings.extra_headers)?;
 
     let (uploaded, downloaded) = async {
-        SyncEngine::builder()
+        let engine = SyncEngine::builder()
             .store(store.clone())
-            .key(&encryption_key)
             .client_source(ClientSource::FromSettings {
                 settings,
                 caps: Some(caps.clone()),
             })
             .build()
             .connect()
-            .await?
-            .sync()
-            .await
+            .await?;
+        engine.keyed(&encryption_key).sync().await
     }
     .await
     .map_err(crate::print_error::format_sync_error)?;
@@ -115,18 +113,16 @@ async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) 
 
         // we'll want to run sync once more, as there will now be stuff to upload
         let (uploaded, downloaded) = async {
-            SyncEngine::builder()
+            let engine = SyncEngine::builder()
                 .store(store.clone())
-                .key(&encryption_key)
                 .client_source(ClientSource::FromSettings {
                     settings,
                     caps: Some(caps.clone()),
                 })
                 .build()
                 .connect()
-                .await?
-                .sync()
-                .await
+                .await?;
+            engine.keyed(&encryption_key).sync().await
         }
         .await
         .map_err(crate::print_error::format_sync_error)?;

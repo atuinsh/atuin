@@ -44,7 +44,6 @@ impl Pull {
         let key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
         let engine = SyncEngine::builder()
             .store(store.clone())
-            .key(&key)
             .client_source(ClientSource::FromSettings {
                 settings,
                 caps: None,
@@ -58,6 +57,7 @@ impl Pull {
         // Skip on --force: local was already wiped above, mismatch is the user's call.
         if !self.force {
             engine
+                .keyed(&key)
                 .check_encryption_key(&remote_index)
                 .await
                 .map_err(crate::print_error::format_sync_error)?;
@@ -88,7 +88,7 @@ impl Pull {
             })
             .collect();
 
-        let (_, downloaded) = engine.sync_remote(operations, self.page).await?;
+        let (_, downloaded) = engine.keyed(&key).sync_remote(operations, self.page).await?;
 
         println!("Downloaded {} records", downloaded.len());
 

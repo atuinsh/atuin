@@ -217,18 +217,16 @@ async fn do_sync_tick(
 
     // Perform the sync
     let res = async {
-        SyncEngine::builder()
+        let engine = SyncEngine::builder()
             .store(handle.store().clone())
-            .key(handle.encryption_key())
             .client_source(ClientSource::FromSettings {
                 settings,
                 caps: Some(handle.caps().clone()),
             })
             .build()
             .connect()
-            .await?
-            .sync()
-            .await
+            .await?;
+        engine.keyed(handle.encryption_key()).sync().await
     }
     .await;
 

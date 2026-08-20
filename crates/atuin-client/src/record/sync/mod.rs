@@ -1,4 +1,11 @@
-// do a sync :O
+//! The core sync engine that Atuin uses.
+//!
+//! This is the library that handles syncing records between a client and a server.
+//!
+//! TODO(markovejnovic): Migrate this outside of `record/`, since it handles a lot more than just
+//!                      records.
+//!
+//! > do a sync :O
 use std::cmp::Ordering;
 use std::fmt::Write;
 
@@ -13,9 +20,9 @@ use tracing::instrument;
 
 use super::sqlite_store::SqliteStore;
 use crate::api_client::Client;
-use crate::packfile::{download_packed, upload_packed};
 
 mod builder;
+mod packfile;
 pub use builder::{ClientSource, SyncEngineBuilder, SyncEngineInit};
 
 /// How many packfile blobs to transfer (upload or download) concurrently within a single page.
@@ -78,16 +85,36 @@ pub enum Operation {
 /// Drives atuin's sync.
 ///
 /// The intended way to use this is to build one with the [`SyncEngine::builder()`] method.
-pub struct SyncEngine<'a> {
+///
+/// Operations that touch the encryption key live on [`Keyed`], obtained via [`SyncEngine::keyed`],
+/// so the key is never long-lived engine state.
+pub struct SyncEngine {
     client: Client,
     store: SqliteStore,
-    key: &'a paseto_v4::Key,
 }
 
-impl SyncEngine<'_> {
-    /// The underlying API client, for callers that need to talk to the remote directly.
-    pub fn client(&self) -> &Client {
-        &self.client
+/// A [`SyncEngine`] paired with an encryption key, for the operations that encrypt or decrypt.
+///
+/// Obtained from [`SyncEngine::keyed`]; it borrows both the engine and the key only for the
+/// duration of the operations called on it, so the key stays out of the engine's own state.
+pub struct Keyed<'k> {
+    engine: &'k SyncEngine,
+    key: &'k paseto_v4::Key,
+}
+
+impl SyncEngine {
+    /// Pair this engine with an encryption `key` to run the crypto-touching sync operations.
+    pub fn keyed<'k>(&'k self, key: &'k paseto_v4::Key) -> Keyed<'k> {
+        Keyed { engine: self, key }
+    }
+
+    /// Fetch the remote's record status index.
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn record_status(&self) -> Result<RecordStatus, SyncError> {
+        self.client
+            .record_status()
+            .await
+            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -181,7 +208,9 @@ impl SyncEngine<'_> {
 
         Ok(operations)
     }
+}
 
+impl Keyed<'_> {
     // TODO(markovejnovic): Seriously revisit the syncing logic and coupling.
     #[instrument(
         level = "trace",
@@ -197,9 +226,8 @@ impl SyncEngine<'_> {
         remote: Option<RecordIdx>,
         page_size: u64,
     ) -> Result<u64, SyncError> {
-        let store = &self.store;
-        let client = &self.client;
-        let key = self.key;
+        let store = &self.engine.store;
+        let client = &self.engine.client;
         // The first record the remote *doesn't* have.
         let first_missing_remote = remote.map_or(0, |n| n + 1);
         let expected = local + 1 - first_missing_remote;
@@ -236,7 +264,7 @@ impl SyncEngine<'_> {
 
             if tag == RecordTag::Packfile {
                 let mut uploads = stream::iter(0..page.len())
-                    .map(|i| upload_packed(&page[i], store, key, client))
+                    .map(|i| self.upload_packed(&page[i]))
                     .buffered(MAX_CONCURRENT_PACKFILE_TRANSFERS);
 
                 while let Some(result) = uploads.next().await {
@@ -276,9 +304,8 @@ impl SyncEngine<'_> {
         remote: RecordIdx,
         page_size: u64,
     ) -> Result<Vec<RecordId>, SyncError> {
-        let store = &self.store;
-        let client = &self.client;
-        let key = self.key;
+        let store = &self.engine.store;
+        let client = &self.engine.client;
         // Scan the database to find the first missing local index, rather than assuming it's one more
         // than the highest local index. A prior packfile op for this host may have expanded a pack
         // whose history landed ABOVE a still-missing index; keying off the highest index would never
@@ -346,7 +373,7 @@ impl SyncEngine<'_> {
             // a manifest we recorded always has its associated history.
             if tag == RecordTag::Packfile {
                 let mut downloads = stream::iter(0..page.len())
-                    .map(|i| download_packed(&page[i], store, key, client))
+                    .map(|i| self.download_packed(&page[i]))
                     .buffered(MAX_CONCURRENT_PACKFILE_TRANSFERS)
                     .enumerate();
 
@@ -393,7 +420,7 @@ impl SyncEngine<'_> {
         let mut downloaded = Vec::new();
 
         let packfiles_enabled = matches!(
-            self.client.caps().get_server::<PackfileCap>().await,
+            self.engine.client.caps().get_server::<PackfileCap>().await,
             Ok(Some(cap)) if cap.record_count > 0
         );
 
@@ -450,6 +477,7 @@ impl SyncEngine<'_> {
         };
 
         let records = self
+            .engine
             .client
             .next_records(host, tag, 0, 1)
             .await
@@ -468,12 +496,12 @@ impl SyncEngine<'_> {
     /// diff into operations, then apply them.
     #[instrument(level = "trace", skip_all, err)]
     pub async fn sync(&self) -> Result<(u64, Vec<RecordId>), SyncError> {
-        let (diff, remote_index) = self.diff().await?;
+        let (diff, remote_index) = self.engine.diff().await?;
 
         // Bail before mutating either side if the local key can't read the remote.
         self.check_encryption_key(&remote_index).await?;
 
-        let operations = Self::operations(diff)?;
+        let operations = SyncEngine::operations(diff)?;
         self.sync_remote(operations, 100).await
     }
 }
@@ -776,14 +804,9 @@ mod packfile_download_tests {
     }
 
     /// Wrap a prebuilt client in a [`SyncEngine`] for tests.
-    pub(super) async fn build_engine(
-        client: Client,
-        store: SqliteStore,
-        key: &paseto_v4::Key,
-    ) -> SyncEngine<'_> {
+    pub(super) async fn build_engine(client: Client, store: SqliteStore) -> SyncEngine {
         SyncEngine::builder()
             .store(store)
-            .key(key)
             .client_source(ClientSource::FromClient(client))
             .build()
             .connect()
@@ -913,8 +936,9 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
         let store = memory_store().await;
 
-        build_engine(client, store, &key)
+        build_engine(client, store)
             .await
+            .keyed(&key)
             .check_encryption_key(&remote_index)
             .await
             .expect("a plaintext packfile manifest must not be treated as a wrong key");
@@ -949,8 +973,9 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
 
         let wrong = paseto_v4::Key::from([9u8; 32]);
-        let err = build_engine(client, store, &wrong)
+        let err = build_engine(client, store)
             .await
+            .keyed(&wrong)
             .check_encryption_key(&remote_index)
             .await
             .expect_err("a wrong key on an encrypted record must still be detected");
@@ -975,8 +1000,9 @@ mod packfile_download_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        build_engine(client, down.clone(), &key)
+        build_engine(client, down.clone())
             .await
+            .keyed(&key)
             .sync_download(host, RecordTag::Packfile, 1, 100)
             .await
             .unwrap();
@@ -1003,8 +1029,9 @@ mod packfile_download_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let returned = build_engine(client, down, &key)
+        let returned = build_engine(client, down)
             .await
+            .keyed(&key)
             .sync_download(host, RecordTag::Packfile, 1, 100)
             .await
             .unwrap();
@@ -1067,11 +1094,11 @@ mod packfile_download_tests {
         let down = memory_store().await;
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
-        let engine = build_engine(client, down, &key).await;
+        let engine = build_engine(client, down).await;
 
         // Packfile op first (populates history 0..=2), then the history op.
-        engine.sync_download(host, RecordTag::Packfile, 1, 100).await.unwrap();
-        engine.sync_download(host, RecordTag::History, 3, 100).await.unwrap();
+        engine.keyed(&key).sync_download(host, RecordTag::Packfile, 1, 100).await.unwrap();
+        engine.keyed(&key).sync_download(host, RecordTag::History, 3, 100).await.unwrap();
 
         // The history download must have started AFTER the packed prefix (idx 2), i.e. never
         // requested start=0 for RecordTag::History.
@@ -1109,8 +1136,9 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
 
         // remote (2) is BEHIND the live local head (4) -- must not underflow/panic.
-        let got = build_engine(client, down, &key)
+        let got = build_engine(client, down)
             .await
+            .keyed(&key)
             .sync_download(host, RecordTag::History, 2, 100)
             .await
             .unwrap();
@@ -1215,8 +1243,9 @@ mod packfile_download_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let returned = build_engine(client, down.clone(), &key)
+        let returned = build_engine(client, down.clone())
             .await
+            .keyed(&key)
             .sync_download(host, RecordTag::Packfile, 1, 100)
             .await
             .unwrap();
@@ -1281,8 +1310,9 @@ mod packfile_download_tests {
         let client = mock_client(&addr);
 
         // The permanent per-manifest failure is logged and skipped; the whole tick still succeeds.
-        let returned = build_engine(client, down.clone(), &key)
+        let returned = build_engine(client, down.clone())
             .await
+            .keyed(&key)
             .sync_download(host, RecordTag::Packfile, 2, 100)
             .await
             .expect("a permanent per-manifest failure must not fail the tick");
@@ -1382,8 +1412,9 @@ mod packfile_capability_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        build_engine(client, down.clone(), &key)
+        build_engine(client, down.clone())
             .await
+            .keyed(&key)
             .sync_remote(vec![packfile_download_op(host, 3)], 100)
             .await
             .unwrap();
@@ -1450,8 +1481,9 @@ mod packfile_capability_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        build_engine(client, down.clone(), &key)
+        build_engine(client, down.clone())
             .await
+            .keyed(&key)
             .sync_remote(
                 vec![packfile_download_op(host, 3), Operation::Download {
                     remote: 3,
@@ -1481,8 +1513,9 @@ mod packfile_capability_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        build_engine(client, down.clone(), &key)
+        build_engine(client, down.clone())
             .await
+            .keyed(&key)
             .sync_remote(vec![packfile_download_op(host, 3)], 100)
             .await
             .unwrap();
@@ -1517,8 +1550,9 @@ mod packfile_capability_tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        build_engine(client, down.clone(), &key)
+        build_engine(client, down.clone())
             .await
+            .keyed(&key)
             .sync_remote(vec![packfile_download_op(host, 3)], 100)
             .await
             .unwrap();

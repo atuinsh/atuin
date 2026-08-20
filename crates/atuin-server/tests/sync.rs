@@ -157,7 +157,6 @@ async fn download(
     let key = key();
     let engine = SyncEngine::builder()
         .store(store.clone())
-        .key(&key)
         .client_source(ClientSource::FromClient(client))
         .build()
         .connect()
@@ -165,7 +164,7 @@ async fn download(
         .unwrap();
     let (diff, _) = engine.diff().await.unwrap();
     let operations = SyncEngine::operations(diff).unwrap();
-    let (_, downloaded) = engine.sync_remote(operations, page_size).await.unwrap();
+    let (_, downloaded) = engine.keyed(&key).sync_remote(operations, page_size).await.unwrap();
 
     let status = store.status().await.unwrap();
     let local_idx = *status.hosts.get(&host).unwrap().get(&tag).unwrap();
@@ -224,7 +223,6 @@ async fn upload(
     let key = key();
     let engine = SyncEngine::builder()
         .store(store)
-        .key(&key)
         .client_source(ClientSource::FromClient(client))
         .build()
         .connect()
@@ -232,9 +230,9 @@ async fn upload(
         .unwrap();
     let (diff, _) = engine.diff().await.unwrap();
     let operations = SyncEngine::operations(diff).unwrap();
-    let (uploaded, _) = engine.sync_remote(operations, page_size).await.unwrap();
+    let (uploaded, _) = engine.keyed(&key).sync_remote(operations, page_size).await.unwrap();
 
-    let status = engine.client().record_status().await.unwrap();
+    let status = engine.record_status().await.unwrap();
     let remote_idx = *status.hosts.get(&host).unwrap().get(&tag).unwrap();
 
     // The PR that added these tests also changed the type of `uploaded` from `i64` to `u64`; the

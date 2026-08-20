@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use atuin_common::encryption::paseto_v4;
 use atuin_domain::caps::CapClient;
 use eyre::Result;
 use tracing::instrument;
@@ -31,17 +30,16 @@ pub enum ClientSource<'a> {
 #[builder(builder_type(name = SyncEngineBuilder), builder_method(vis = "pub(crate)"))]
 pub struct SyncEngineInit<'a> {
     store: SqliteStore,
-    key: &'a paseto_v4::Key,
     client_source: ClientSource<'a>,
 }
 
-impl<'a> SyncEngineInit<'a> {
+impl SyncEngineInit<'_> {
     /// Resolve the configured inputs into a live [`SyncEngine`].
     ///
     /// A directly-supplied client is wrapped as-is; otherwise the client is built from the
     /// settings, fetching the server capabilities when they were not supplied.
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn connect(self) -> Result<SyncEngine<'a>, SyncError> {
+    pub async fn connect(self) -> Result<SyncEngine, SyncError> {
         let client = match self.client_source {
             ClientSource::FromClient(client) => client,
             ClientSource::FromSettings { settings, caps } => {
@@ -69,14 +67,13 @@ impl<'a> SyncEngineInit<'a> {
         Ok(SyncEngine {
             client,
             store: self.store,
-            key: self.key,
         })
     }
 }
 
-impl<'a> SyncEngine<'a> {
+impl SyncEngine {
     /// Start building a [`SyncEngine`]. See [`SyncEngineInit`] for the construction paths.
-    pub fn builder() -> SyncEngineBuilder<'a, ((), (), ())> {
+    pub fn builder<'a>() -> SyncEngineBuilder<'a, ((), ())> {
         SyncEngineInit::builder()
     }
 }

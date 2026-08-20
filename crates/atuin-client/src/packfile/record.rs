@@ -191,6 +191,8 @@ pub enum PackError {
     Decrypt(eyre::Report),
     #[error("failed to serialize the records: {0}")]
     Serialize(#[from] EncodeError),
+    // Never constructed today; kept as a documented guard for the record-count invariant.
+    #[allow(dead_code)]
     #[error("the record run yielded a different number of records than it reported")]
     BadLength,
     #[error("failed to compress the packfile: {0}")]

@@ -67,7 +67,6 @@ impl Push {
         let key = paseto_v4::Key::try_load_from_path(&settings.key_path)?;
         let engine = SyncEngine::builder()
             .store(store)
-            .key(&key)
             .client_source(ClientSource::FromSettings {
                 settings,
                 caps: None,
@@ -81,6 +80,7 @@ impl Push {
         // Skip on --force: that path intentionally replaces remote with local.
         if !self.force {
             engine
+                .keyed(&key)
                 .check_encryption_key(&remote_index)
                 .await
                 .map_err(crate::print_error::format_sync_error)?;
@@ -119,7 +119,7 @@ impl Push {
             })
             .collect();
 
-        let (uploaded, _) = engine.sync_remote(operations, self.page).await?;
+        let (uploaded, _) = engine.keyed(&key).sync_remote(operations, self.page).await?;
 
         println!("Uploaded {uploaded} records");
 
