@@ -169,16 +169,16 @@ impl Version {
 
 /// Number of fields [`History::serialize`] writes.
 ///
-/// This is deliberately not [`Version::min_fields`]: fields appended to V2 grow this count, while
-/// `min_fields` stays at the 12 fields V2 launched with so that entries written before the new
-/// fields existed still decode.
-const V2_SERIALIZED_FIELDS: u32 = 13;
+/// This is deliberately not [`Version::min_fields`]: fields appended to the latest version grow
+/// this count, while `min_fields` stays at the 12 fields V2 launched with so that entries written
+/// before the new fields existed still decode.
+const LATEST_SERIALIZED_FIELDS: u32 = 13;
 
 /// A V2 record contains `author_kind` iff it has at least this many fields.
 ///
 /// Frozen forever at the position `author_kind` was appended at; do not grow it alongside
-/// [`V2_SERIALIZED_FIELDS`].
-const V2_FIELDS_THROUGH_AUTHOR_KIND: u32 = 13;
+/// [`LATEST_SERIALIZED_FIELDS`].
+const V2_AUTHOR_KIND_FIELD_NUMBER: u32 = 13;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, derive_more::Display, derive_more::From)]
 #[display("{_0}")]
@@ -336,7 +336,7 @@ impl History {
 
         // write the version
         encode::write_u16(&mut output, Version::LATEST.as_int())?;
-        encode::write_array_len(&mut output, V2_SERIALIZED_FIELDS)?;
+        encode::write_array_len(&mut output, LATEST_SERIALIZED_FIELDS)?;
 
         encode::write_str(&mut output, &self.id.0)?;
         encode::write_u64(&mut output, self.timestamp.unix_timestamp_nanos() as u64)?;
@@ -415,7 +415,7 @@ impl History {
             None
         };
 
-        let author_kind = if version >= Version::Two && nfields >= V2_FIELDS_THROUGH_AUTHOR_KIND {
+        let author_kind = if version >= Version::Two && nfields >= V2_AUTHOR_KIND_FIELD_NUMBER {
             decode::read_optional(&mut bytes, decode::read_int::<u8, _>)?
                 .and_then(AuthorKind::from_repr)
         } else {
