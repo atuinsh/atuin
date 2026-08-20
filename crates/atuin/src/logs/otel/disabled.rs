@@ -12,8 +12,6 @@ pub enum OtelCtxEnableError {
     NotCompiled,
 }
 
-/// Uninhabited: without the `profiling-traced` feature an `OtelCtx` is never constructed. The
-/// symmetric surface keeps the parent module free of `cfg`.
 pub enum OtelCtx {}
 
 impl OtelCtx {
@@ -26,10 +24,12 @@ impl OtelCtx {
     }
 
     #[allow(clippy::unused_self)]
-    pub fn layer<S>(&self, _service_name: &'static str) -> Box<dyn Layer<S> + Send + Sync>
+    pub fn layer<S>(&self, _service_name: &'static str) -> impl Layer<S> + Send + Sync
     where
         S: tracing::Subscriber + for<'a> LookupSpan<'a> + Send + Sync,
     {
-        unreachable!("OtelCtx is uninhabited without the profiling-traced feature")
+        // Normally not reachable, but we can't call unreachable! here since the type signature
+        // requires something that `impl`'s `Layer`, we fake it.
+        None::<tracing_subscriber::fmt::Layer<S>>
     }
 }

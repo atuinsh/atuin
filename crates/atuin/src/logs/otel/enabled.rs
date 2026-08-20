@@ -81,16 +81,14 @@ impl OtelCtx {
     }
 
     /// The [`tracing_opentelemetry`] layer that exports spans through this context.
-    pub fn layer<S>(&self, service_name: &'static str) -> Box<dyn Layer<S> + Send + Sync>
+    pub fn layer<S>(&self, service_name: &'static str) -> impl Layer<S> + Send + Sync
     where
         S: tracing::Subscriber + for<'a> LookupSpan<'a> + Send + Sync,
     {
-        Box::new(
-            tracing_opentelemetry::layer()
-                .with_tracer(self.provider.tracer(service_name))
-                .with_context_activation(false)
-                .with_filter(LevelFilter::TRACE),
-        )
+        tracing_opentelemetry::layer()
+            .with_tracer(self.provider.tracer(service_name))
+            .with_context_activation(false)
+            .with_filter(LevelFilter::TRACE)
     }
 }
 
