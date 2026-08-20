@@ -89,10 +89,6 @@ mod inner {
             Box::new(
                 tracing_opentelemetry::layer()
                     .with_tracer(self.provider.tracer(service_name))
-                    // Parent spans by the `tracing` span tree (the `#[instrument]` nesting)
-                    // rather than the OpenTelemetry thread-local context, which nothing here
-                    // populates -- with the default (`true`) every span becomes its own root
-                    // trace instead of nesting under the command span.
                     .with_context_activation(false)
                     .with_filter(LevelFilter::TRACE),
             )
@@ -128,8 +124,6 @@ mod inner {
         NotCompiled,
     }
 
-    /// Uninhabited: without the `profiling-traced` feature an [`OtelCtx`] is never constructed.
-    /// The symmetric surface keeps [`super::super`] free of `cfg`.
     pub enum OtelCtx {}
 
     impl OtelCtx {
@@ -141,13 +135,11 @@ mod inner {
             Ok(None)
         }
 
-        /// Unreachable: [`OtelCtx`] is uninhabited, so there is never a value to call this on.
         #[allow(clippy::unused_self)]
         pub fn layer<S>(&self, _service_name: &'static str) -> Box<dyn Layer<S> + Send + Sync>
         where
             S: tracing::Subscriber + for<'a> LookupSpan<'a> + Send + Sync,
         {
-            // `OtelCtx` is uninhabited, so no value exists to call this on.
             unreachable!("OtelCtx is uninhabited without the profiling-traced feature")
         }
     }
