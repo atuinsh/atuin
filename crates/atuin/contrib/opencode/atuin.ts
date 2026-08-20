@@ -93,7 +93,14 @@ async function startHistory(
 	cwd: string,
 	proposal: Proposal,
 ): Promise<string | undefined> {
-	const args = ["history", "start", "--author", ATUIN_AUTHOR];
+	const args = [
+		"history",
+		"start",
+		"--author",
+		ATUIN_AUTHOR,
+		"--author-kind",
+		"agent",
+	];
 	if (proposal.intent) args.push("--intent", proposal.intent);
 	args.push("--", proposal.command);
 

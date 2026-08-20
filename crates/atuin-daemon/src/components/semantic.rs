@@ -597,6 +597,7 @@ mod tests {
             intent: None,
             deleted_at: None,
             shell: Some("bash".into()),
+            author_kind: None,
         }
     }
 
