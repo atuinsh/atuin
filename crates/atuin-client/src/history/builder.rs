@@ -72,6 +72,8 @@ pub struct HistoryCaptured {
     #[builder(default, setter(into))]
     author: Option<String>,
     #[builder(default, setter(into))]
+    cmd_origin: Option<CmdOrigin>,
+    #[builder(default, setter(into))]
     intent: Option<String>,
     #[builder(default, setter(into))]
     shell: Option<String>,
@@ -83,11 +85,18 @@ impl From<HistoryCaptured> for History {
     fn from(captured: HistoryCaptured) -> Self {
         // Only agent integrations state an author; humans never do. That makes a stated
         // known-agent name a far stronger signal that an agent ran this than anything we can
-        // infer after the fact. An explicit kind still wins.
+        // infer after the fact — unless it is also the current username, which says nothing
+        // (see [`History::is_agent`]). An explicit kind still wins.
         let author = normalize_optional_string(captured.author);
-        let author_kind = captured
-            .author_kind
-            .or_else(|| author.as_deref().is_some_and(is_known_agent).then_some(AuthorKind::Agent));
+        let cmd_origin = captured.cmd_origin.unwrap_or_else(CmdOrigin::probe_current);
+        let author_kind = captured.author_kind.or_else(|| {
+            author
+                .as_deref()
+                .is_some_and(|author| {
+                    is_known_agent(author) && author != cmd_origin.user().into_inner()
+                })
+                .then_some(AuthorKind::Agent)
+        });
 
         Self::new(
             captured.timestamp,
@@ -96,7 +105,7 @@ impl From<HistoryCaptured> for History {
             -1,
             -1,
             None,
-            None,
+            Some(cmd_origin),
             author,
             captured.intent,
             None,

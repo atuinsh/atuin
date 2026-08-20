@@ -6,7 +6,7 @@ use atuin_common::rmp::decode::{self, Bytes, DecodeError};
 use atuin_common::rmp::encode::{self, ByteBuf, EncodeError};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::{normalize_optional_string, uuid_v7};
-use atuin_domain::record::{CmdOrigin, DecryptedData};
+use atuin_domain::record::{CmdOrigin, DecryptedData, UNKNOWN_USER};
 use eyre::{Result, bail};
 use time::OffsetDateTime;
 
@@ -311,7 +311,7 @@ impl History {
                 // old writers defaulted the author to the whole hostname there — as does the SQL
                 // author filter's user expression — so compare against the host in that case.
                 let user = self.cmd_origin.user();
-                let defaulted = if user.as_ref() == "unknown-user" {
+                let defaulted = if user.as_ref() == UNKNOWN_USER {
                     self.cmd_origin.host().into_inner()
                 } else {
                     user.into_inner()
@@ -689,14 +689,22 @@ mod tests {
     }
 
     /// The capture path treats an explicitly stated author as an authorship claim: a known agent
-    /// name there marks the entry as an agent's even where the hostname fallback would have
-    /// produced the same string. An explicit kind still wins over the inference.
+    /// name there marks the entry as an agent's — unless it is also the current username, which
+    /// is what a human's author defaults to and so says nothing (the same exception
+    /// [`History::is_agent`] applies). An explicit kind still wins over the inference.
     #[rstest]
-    #[case::known_agent_name("pi", None, Some(AuthorKind::Agent))]
-    #[case::human_name("ellie", None, None)]
-    #[case::explicit_kind_wins("pi", Some(AuthorKind::User), Some(AuthorKind::User))]
+    #[case::known_agent_name("pi", "raspberry:ellie", None, Some(AuthorKind::Agent))]
+    #[case::agent_name_is_the_username("pi", "raspberry:pi", None, None)]
+    #[case::human_name("ellie", "raspberry:ellie", None, None)]
+    #[case::explicit_kind_wins(
+        "pi",
+        "raspberry:pi",
+        Some(AuthorKind::Agent),
+        Some(AuthorKind::Agent)
+    )]
     fn capture_infers_agent_kind_from_an_explicit_author(
         #[case] author: &str,
+        #[case] origin: &str,
         #[case] stated_kind: Option<AuthorKind>,
         #[case] expected: Option<AuthorKind>,
     ) {
@@ -705,6 +713,7 @@ mod tests {
             .command("git status")
             .cwd("/")
             .author(author)
+            .cmd_origin(CmdOrigin::try_from(origin.to_owned()).unwrap())
             .author_kind_opt(stated_kind)
             .build()
             .into();

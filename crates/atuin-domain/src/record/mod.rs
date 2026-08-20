@@ -11,7 +11,7 @@ pub use tag::RecordTag;
 mod version;
 pub use version::RecordVersion;
 mod cmd_origin;
-pub use cmd_origin::{CmdHost, CmdOrigin, CmdUser};
+pub use cmd_origin::{CmdHost, CmdOrigin, CmdUser, UNKNOWN_USER};
 
 #[derive(Clone, Debug, PartialEq, derive_more::Deref, derive_more::From)]
 pub struct DecryptedData(pub Vec<u8>);

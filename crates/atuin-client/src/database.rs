@@ -6,7 +6,7 @@ use std::time::Duration;
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils;
-use atuin_domain::record::CmdOrigin;
+use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};
 use fs_err as fs;
 use itertools::Itertools;
 use sql_builder::bind::Bind;
@@ -118,20 +118,22 @@ fn apply_author_filter(sql: &mut SqlBuilder, authors: OrFilter<&[AuthorPattern]>
         write!(f, "CASE WHEN author IS NULL OR trim(author) = '' THEN {user_expr} ELSE author END")
     });
 
-    let defaulted_expr = "CASE WHEN instr(hostname, ':') = 0 THEN hostname WHEN substr(hostname, \
-                          instr(hostname, ':') + 1) = 'unknown-user' THEN substr(hostname, 1, \
-                          instr(hostname, ':') - 1) ELSE substr(hostname, instr(hostname, ':') + \
-                          1) END";
+    let defaulted_expr = format!(
+        "CASE WHEN instr(hostname, ':') = 0 THEN hostname WHEN substr(hostname, instr(hostname, \
+         ':') + 1) = {unknown} THEN substr(hostname, 1, instr(hostname, ':') - 1) ELSE \
+         substr(hostname, instr(hostname, ':') + 1) END",
+        unknown = quote(&UNKNOWN_USER),
+    );
 
     // Mirrors [`History::is_agent`]: a recorded kind wins, and without one a known agent name means
-    // an agent, unless the author is only the name it defaulted to. A kind we don't recognise
-    // (written by a newer version) falls through to the name heuristic, exactly like
-    // [`AuthorKind::from_repr`] mapping it to `None` — and so does a NULL kind, because
-    // `NULL IN (...)` is not true.
+    // an agent, unless the author is only the name it defaulted to — a NULL/blank author *is* only
+    // that name, so it is never an agent. A kind we don't recognise (written by a newer version)
+    // falls through to the name heuristic, exactly like [`AuthorKind::from_repr`] mapping it to
+    // `None` — and so does a NULL kind, because `NULL IN (...)` is not true.
     let is_agent = || {
         format!(
-            "CASE WHEN author_kind IN ({kinds}) THEN author_kind = {agent} ELSE {author_expr} IN \
-             ({names}) AND {author_expr} <> {defaulted_expr} END",
+            "CASE WHEN author_kind IN ({kinds}) THEN author_kind = {agent} WHEN author IS NULL OR \
+             trim(author) = '' THEN 0 ELSE author IN ({names}) AND author <> {defaulted_expr} END",
             kinds = AuthorKind::VARIANTS.iter().map(|kind| kind.as_u8()).join(", "),
             agent = AuthorKind::Agent.as_u8(),
             names = KNOWN_AGENTS.iter().map(quote).join(", "),

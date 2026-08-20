@@ -416,9 +416,12 @@ fn make_starting_history(
     }
 
     // When the flags didn't state an identity, fall back to the one the invoking integration
-    // exported to the environment.
+    // exported to the environment. The env kind only qualifies a stated author: a stray
+    // ATUIN_HISTORY_AUTHOR_KIND inherited by a nested interactive shell must not stamp the
+    // human's own commands.
     let author = normalize_optional_string(author.map(String::from)).or_else(probe_author);
-    let author_kind = author_kind.or_else(AuthorKind::probe_current);
+    let author_kind =
+        author_kind.or_else(|| author.is_some().then(AuthorKind::probe_current).flatten());
 
     let h: History = History::capture()
         .timestamp(OffsetDateTime::now_utc())
