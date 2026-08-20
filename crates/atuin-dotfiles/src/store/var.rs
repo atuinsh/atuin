@@ -272,7 +272,7 @@ impl VarStore {
 
         let idx = self
             .store
-            .last(self.host_id, &RecordTag::DotfilesVar)
+            .last(&(self.host_id, RecordTag::DotfilesVar).into())
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
@@ -303,7 +303,7 @@ impl VarStore {
 
         let idx = self
             .store
-            .last(self.host_id, &RecordTag::DotfilesVar)
+            .last(&(self.host_id, RecordTag::DotfilesVar).into())
             .await?
             .map_or(0, |entry| entry.idx + 1);
 

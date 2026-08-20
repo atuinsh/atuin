@@ -225,7 +225,7 @@ impl AliasStore {
 
         let idx = self
             .store
-            .last(self.host_id, &RecordTag::ConfigShellAlias)
+            .last(&(self.host_id, RecordTag::ConfigShellAlias).into())
             .await?
             .map_or(0, |entry| entry.idx + 1);
 
@@ -259,7 +259,7 @@ impl AliasStore {
 
         let idx = self
             .store
-            .last(self.host_id, &RecordTag::ConfigShellAlias)
+            .last(&(self.host_id, RecordTag::ConfigShellAlias).into())
             .await?
             .map_or(0, |entry| entry.idx + 1);
 

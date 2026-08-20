@@ -63,13 +63,13 @@ impl Pull {
                 Operation::Noop { .. } | Operation::Upload { .. } => false,
 
                 // pull, so yes plz to downloads!
-                Operation::Download { tag, .. } => {
+                Operation::Download { series, .. } => {
                     if self.force {
                         return true;
                     }
 
                     if let Some(t) = self.tag.clone()
-                        && t != *tag
+                        && t != series.tag
                     {
                         return false;
                     }

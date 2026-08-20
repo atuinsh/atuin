@@ -143,7 +143,10 @@ impl HistoryStore {
     async fn push_record(&self, record: HistoryRecord) -> Result<(RecordId, RecordIdx)> {
         let bytes = record.serialize()?;
         let idx =
-            self.store.last(self.host_id, &RecordTag::History).await?.map_or(0, |p| p.idx + 1);
+            self.store
+                .last(&(self.host_id, RecordTag::History).into())
+                .await?
+                .map_or(0, |p| p.idx + 1);
 
         let record = Record::builder()
             .host(Host::new(self.host_id))
@@ -165,7 +168,10 @@ impl HistoryStore {
         let mut ret = Vec::new();
 
         let idx =
-            self.store.last(self.host_id, &RecordTag::History).await?.map_or(0, |p| p.idx + 1);
+            self.store
+                .last(&(self.host_id, RecordTag::History).into())
+                .await?
+                .map_or(0, |p| p.idx + 1);
 
         // Could probably _also_ do this as an iterator, but let's see how this is for now.
         // optimizing for minimal sqlite transactions, this code can be optimised later

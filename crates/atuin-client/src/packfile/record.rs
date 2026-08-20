@@ -290,7 +290,7 @@ impl<'a> PackManifestRecordView<'a> {
         let count = range.end - range.start;
 
         let run = store
-            .next(self.record.host.id, &RecordTag::History, range.start, count)
+            .next(&(self.record.host.id, RecordTag::History).into(), range.start, count)
             .await
             .map_err(RecordLoadingError::StoreError)?;
 

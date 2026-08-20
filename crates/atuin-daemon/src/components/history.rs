@@ -235,9 +235,8 @@ impl HistorySvc for HistoryGrpcService {
 
             if let Err(e) = packfile::try_pack(
                 &history_store.store,
-                history_store.host_id,
+                &(history_store.host_id, RecordTag::History).into(),
                 handle.caps().get_server::<PackfileCap>().await.ok().flatten(),
-                &RecordTag::History,
             )
             .await
             {

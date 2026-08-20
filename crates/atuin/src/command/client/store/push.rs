@@ -86,21 +86,21 @@ impl Push {
                 Operation::Noop { .. } | Operation::Download { .. } => false,
 
                 // push, so yes plz to uploads!
-                Operation::Upload { host, tag, .. } => {
+                Operation::Upload { series, .. } => {
                     if self.force {
                         return true;
                     }
 
                     if let Some(h) = self.host {
-                        if HostId(h) != *host {
+                        if HostId(h) != series.host {
                             return false;
                         }
-                    } else if *host != host_id {
+                    } else if series.host != host_id {
                         return false;
                     }
 
                     if let Some(t) = self.tag.clone()
-                        && t != *tag
+                        && t != series.tag
                     {
                         return false;
                     }

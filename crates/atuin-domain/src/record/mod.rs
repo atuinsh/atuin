@@ -18,8 +18,7 @@ pub struct DecryptedData(pub Vec<u8>);
 
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq)]
 pub struct Diff {
-    pub host: HostId,
-    pub tag: RecordTag,
+    pub series: RecordSeriesKey,
     pub local: Option<RecordIdx>,
     pub remote: Option<RecordIdx>,
 }
@@ -71,6 +70,31 @@ new_uuid!(HostId);
 
 pub type RecordIdx = u64;
 
+/// The composite key identifying a single append-only record stream.
+///
+/// Every [`Record`] belongs to exactly one stream, addressed by its owning [`HostId`] and its
+/// [`RecordTag`]; a record's [`RecordIdx`] is only unique *within* one such stream. This pair
+/// travels together through nearly every record-store and sync API, so we give it a name rather
+/// than threading `(HostId, RecordTag)` as two separate arguments everywhere.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RecordSeriesKey {
+    pub host: HostId,
+    pub tag: RecordTag,
+}
+
+impl RecordSeriesKey {
+    #[must_use]
+    pub fn new(host: HostId, tag: RecordTag) -> Self {
+        Self { host, tag }
+    }
+}
+
+impl From<(HostId, RecordTag)> for RecordSeriesKey {
+    fn from((host, tag): (HostId, RecordTag)) -> Self {
+        Self { host, tag }
+    }
+}
+
 /// A single record stored inside of our local database
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypedBuilder)]
 pub struct Record<Data> {
@@ -103,6 +127,15 @@ pub struct Record<Data> {
 }
 
 impl<Data> Record<Data> {
+    /// The [`RecordSeriesKey`] of the append-only stream this record belongs to.
+    #[must_use]
+    pub fn series_key(&self) -> RecordSeriesKey {
+        RecordSeriesKey {
+            host: self.host.id,
+            tag: self.tag.clone(),
+        }
+    }
+
     pub fn append(&self, data: Vec<u8>) -> Record<DecryptedData> {
         Record::builder()
             .host(self.host.clone())
@@ -187,10 +220,10 @@ impl Default for RecordStatus {
     }
 }
 
-impl Extend<(HostId, RecordTag, RecordIdx)> for RecordStatus {
-    fn extend<T: IntoIterator<Item = (HostId, RecordTag, RecordIdx)>>(&mut self, iter: T) {
-        for (host, tag, tail_idx) in iter {
-            self.set_raw(host, tag, tail_idx);
+impl Extend<(RecordSeriesKey, RecordIdx)> for RecordStatus {
+    fn extend<T: IntoIterator<Item = (RecordSeriesKey, RecordIdx)>>(&mut self, iter: T) {
+        for (series, tail_idx) in iter {
+            self.set_raw(series, tail_idx);
         }
     }
 }
@@ -204,15 +237,16 @@ impl RecordStatus {
 
     /// Insert a new tail record into the store
     pub fn set(&mut self, tail: Record<DecryptedData>) {
-        self.set_raw(tail.host.id, tail.tag, tail.idx)
+        self.set_raw((tail.host.id, tail.tag).into(), tail.idx)
     }
 
-    pub fn set_raw(&mut self, host: HostId, tag: RecordTag, tail_id: RecordIdx) {
-        self.hosts.entry(host).or_default().insert(tag, tail_id);
+    pub fn set_raw(&mut self, series: RecordSeriesKey, tail_id: RecordIdx) {
+        self.hosts.entry(series.host).or_default().insert(series.tag, tail_id);
     }
 
-    pub fn get(&self, host: HostId, tag: &RecordTag) -> Option<RecordIdx> {
-        self.hosts.get(&host).and_then(|v| v.get(tag)).copied()
+    #[must_use]
+    pub fn get(&self, series: &RecordSeriesKey) -> Option<RecordIdx> {
+        self.hosts.get(&series.host).and_then(|v| v.get(&series.tag)).copied()
     }
 
     /// Diff this index with another, likely remote index.
@@ -228,22 +262,20 @@ impl RecordStatus {
         // First, we check if other has everything that self has
         for (host, tag_map) in &self.hosts {
             for (tag, idx) in tag_map {
-                match other.get(*host, tag) {
+                match other.hosts.get(host).and_then(|m| m.get(tag)).copied() {
                     // The other store is all up to date! No diff.
                     Some(t) if t.eq(idx) => continue,
 
                     // The other store does exist, and it is either ahead or behind us. A diff regardless
                     Some(t) => ret.push(Diff {
-                        host: *host,
-                        tag: tag.clone(),
+                        series: (*host, tag.clone()).into(),
                         local: Some(*idx),
                         remote: Some(t),
                     }),
 
                     // The other store does not exist :O
                     None => ret.push(Diff {
-                        host: *host,
-                        tag: tag.clone(),
+                        series: (*host, tag.clone()).into(),
                         local: Some(*idx),
                         remote: None,
                     }),
@@ -257,17 +289,16 @@ impl RecordStatus {
         // account for that!
         for (host, tag_map) in &other.hosts {
             for (tag, idx) in tag_map {
-                match self.get(*host, tag) {
-                    // If we have this host/tag combo, the comparison and diff will have already happened above
-                    Some(_) => continue,
+                // If we have this host/tag combo, the comparison and diff will have already happened above
+                if self.hosts.get(host).is_some_and(|m| m.contains_key(tag)) {
+                    continue;
+                }
 
-                    None => ret.push(Diff {
-                        host: *host,
-                        tag: tag.clone(),
-                        remote: Some(*idx),
-                        local: None,
-                    }),
-                };
+                ret.push(Diff {
+                    series: (*host, tag.clone()).into(),
+                    remote: Some(*idx),
+                    local: None,
+                });
             }
         }
 
@@ -372,7 +403,7 @@ mod tests {
 
         index.set(record.clone());
 
-        let tail = index.get(record.host.id, &record.tag);
+        let tail = index.get(&record.series_key());
 
         assert_eq!(record.idx, tail.expect("tail not in store"), "tail in store did not match");
     }
@@ -385,7 +416,7 @@ mod tests {
         index.set(record.clone());
         index.set(child.clone());
 
-        let tail = index.get(record.host.id, &record.tag);
+        let tail = index.get(&record.series_key());
 
         assert_eq!(child.idx, tail.expect("tail not in store"), "tail in store did not match");
     }
@@ -421,8 +452,7 @@ mod tests {
 
         assert_eq!(1, diff.len(), "expected single diff");
         assert_eq!(diff[0], Diff {
-            host: record2.host.id,
-            tag: record2.tag,
+            series: record2.series_key(),
             remote: Some(1),
             local: Some(0)
         });
@@ -468,9 +498,9 @@ mod tests {
         // both diffs should be ALMOST the same. They will agree on which hosts and tags
         // require updating, but the "other" value will not be the same.
         let smol_diff_1: Vec<(HostId, RecordTag)> =
-            diff1.iter().map(|v| (v.host, v.tag.clone())).collect();
+            diff1.iter().map(|v| (v.series.host, v.series.tag.clone())).collect();
         let smol_diff_2: Vec<(HostId, RecordTag)> =
-            diff1.iter().map(|v| (v.host, v.tag.clone())).collect();
+            diff1.iter().map(|v| (v.series.host, v.series.tag.clone())).collect();
 
         assert_eq!(smol_diff_1, smol_diff_2);
 
@@ -687,8 +717,8 @@ mod tests {
     fn record_status_serializes_with_bare_string_tag_keys() {
         let host = HostId(Uuid::from_u128(0xabc));
         let mut status = RecordStatus::new();
-        status.set_raw(host, RecordTag::History, 6);
-        status.set_raw(host, RecordTag::Other("custom".to_owned()), 2);
+        status.set_raw((host, RecordTag::History).into(), 6);
+        status.set_raw((host, RecordTag::Other("custom".to_owned())).into(), 2);
 
         let json = serde_json::to_string(&status).unwrap();
         // Tag keys are bare strings, identical to the pre-refactor String-keyed shape.
@@ -696,8 +726,8 @@ mod tests {
         assert!(json.contains(r#""custom":2"#), "got {json}");
 
         let round: RecordStatus = serde_json::from_str(&json).unwrap();
-        assert_eq!(round.get(host, &RecordTag::History), Some(6));
-        assert_eq!(round.get(host, &RecordTag::Other("custom".to_owned())), Some(2));
+        assert_eq!(round.get(&(host, RecordTag::History).into()), Some(6));
+        assert_eq!(round.get(&(host, RecordTag::Other("custom".to_owned())).into()), Some(2));
     }
 
     /// Do *not* modify this test if it fails! It means the serialization of [`AdditionalData`]
