@@ -2,7 +2,7 @@ use atuin_common::utils::normalize_optional_string;
 use atuin_domain::record::CmdOrigin;
 use typed_builder::TypedBuilder;
 
-use super::{AuthorKind, HISTORY_AUTHOR_ENV, HISTORY_AUTHOR_KIND_ENV, History, is_known_agent};
+use super::{AuthorKind, History, is_known_agent};
 
 /// Builder for a history entry that is imported from shell history.
 ///
@@ -81,22 +81,12 @@ pub struct HistoryCaptured {
 
 impl From<HistoryCaptured> for History {
     fn from(captured: HistoryCaptured) -> Self {
-        // An author stated by the caller (`--author` or `ATUIN_HISTORY_AUTHOR`), unlike the
-        // hostname-derived default, is an authorship claim: a known agent name there identifies
-        // the agent even on a machine whose username matches it. This is what classifies entries
-        // from integrations that predate `--author-kind`. An explicit kind, from the builder or
-        // `ATUIN_HISTORY_AUTHOR_KIND` (`user`/`agent`), still wins.
-        let author = normalize_optional_string(captured.author)
-            .or_else(|| normalize_optional_string(std::env::var(HISTORY_AUTHOR_ENV).ok()));
+        // Only agent integrations state an author; humans never do. That makes a stated
+        // known-agent name a far stronger signal that an agent ran this than anything we can
+        // infer after the fact. An explicit kind still wins.
+        let author = normalize_optional_string(captured.author);
         let author_kind = captured
             .author_kind
-            .or_else(|| {
-                // Parsed like the `--author-kind` flag, so the two channels can't drift —
-                // case-insensitively, since a bad env value is silently ignored rather than
-                // rejected loudly the way a bad flag is.
-                let value = std::env::var(HISTORY_AUTHOR_KIND_ENV).ok()?;
-                clap::ValueEnum::from_str(&value, true).ok()
-            })
             .or_else(|| author.as_deref().is_some_and(is_known_agent).then_some(AuthorKind::Agent));
 
         Self::new(

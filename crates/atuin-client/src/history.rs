@@ -65,6 +65,12 @@ impl AuthorKind {
     pub const fn as_u8(self) -> u8 {
         self as u8
     }
+
+    /// The kind stated by the invoking integration's environment (`ATUIN_HISTORY_AUTHOR_KIND`).
+    pub fn probe_current() -> Option<Self> {
+        let value = env::var(HISTORY_AUTHOR_KIND_ENV).ok()?;
+        clap::ValueEnum::from_str(&value, true).ok()
+    }
 }
 
 /// An element of an author filter.
@@ -111,9 +117,14 @@ pub fn all_user_author_filter() -> OrFilter<&'static [AuthorPattern]> {
     FILTER.as_slice_filter()
 }
 
-pub(crate) const HISTORY_AUTHOR_ENV: &str = "ATUIN_HISTORY_AUTHOR";
-pub(crate) const HISTORY_AUTHOR_KIND_ENV: &str = "ATUIN_HISTORY_AUTHOR_KIND";
+const HISTORY_AUTHOR_ENV: &str = "ATUIN_HISTORY_AUTHOR";
+const HISTORY_AUTHOR_KIND_ENV: &str = "ATUIN_HISTORY_AUTHOR_KIND";
 const HISTORY_INTENT_ENV: &str = "ATUIN_HISTORY_INTENT";
+
+/// The author identity exported by the invoking integration (`ATUIN_HISTORY_AUTHOR`).
+pub fn probe_author() -> Option<String> {
+    normalize_optional_string(env::var(HISTORY_AUTHOR_ENV).ok())
+}
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, derive_more::Display)]
 #[display("{}", self.name())]

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use atuin_client::database::{Sqlite, current_context};
 use atuin_client::history::store::HistoryStore;
-use atuin_client::history::{AuthorKind, History};
+use atuin_client::history::{AuthorKind, History, probe_author};
 #[cfg(feature = "sync")]
 use atuin_client::record;
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -417,11 +417,16 @@ fn make_starting_history(
         return None;
     }
 
+    // When the flags didn't state an identity, fall back to the one the invoking integration
+    // exported to the environment.
+    let author = normalize_optional_string(author.map(String::from)).or_else(probe_author);
+    let author_kind = author_kind.or_else(AuthorKind::probe_current);
+
     let h: History = History::capture()
         .timestamp(OffsetDateTime::now_utc())
         .command(command)
         .cwd(cwd)
-        .author_opt(author.map(String::from))
+        .author_opt(author)
         .author_kind_opt(author_kind)
         .intent_opt(intent.map(String::from))
         .shell_opt(std::env::var("ATUIN_SHELL").ok())
