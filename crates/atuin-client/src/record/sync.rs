@@ -15,10 +15,11 @@ use thiserror::Error;
 
 use super::sqlite_store::SqliteStore;
 use crate::api_client::{Client, caps_client};
-use crate::packfile::{download_packed, upload_packed};
+use crate::packfile::{download_packed, pack};
 use crate::settings::Settings;
 
-/// How many packfile blobs to transfer (upload or download) concurrently within a single page.
+/// How many packfile blobs to download concurrently within a single page. (Uploads are batched by
+/// [`Client::upload_packfiles`](crate::api_client::Client::upload_packfiles).)
 const MAX_CONCURRENT_PACKFILE_TRANSFERS: usize = 16;
 
 /// A page size of 0 is a misconfiguration; fall back to one record per page rather than panicking.
@@ -217,8 +218,9 @@ async fn sync_upload(
 ) -> Result<u64, SyncError> {
     // The first record the remote *doesn't* have.
     let first_missing_remote = remote.map_or(0, |n| n + 1);
-    let expected = local + 1 - first_missing_remote;
-    let mut progress = 0;
+    let plan = (first_missing_remote..local + 1).tiled(page_size_or_min(page_size));
+    let expected = plan.index_len();
+    let mut progress = 0u64;
 
     let pb = ProgressBar::new(expected);
     pb.set_style(
@@ -235,11 +237,9 @@ async fn sync_upload(
 
     println!("Uploading {} records to {}/{}", expected, host.0.as_simple(), tag);
 
-    while progress < expected {
-        let page = store
-            .next(host, &tag, first_missing_remote + progress, page_size)
-            .await
-            .map_err(|e| {
+    for tile in plan {
+        let page =
+            store.next(host, &tag, tile.start, tile.end - tile.start).await.map_err(|e| {
                 error!("failed to read upload page: {e:?}");
 
                 SyncError::LocalStoreError { msg: e.to_string() }
@@ -250,16 +250,21 @@ async fn sync_upload(
         }
 
         if tag == RecordTag::Packfile {
-            let mut uploads = stream::iter(0..page.len())
-                .map(|i| upload_packed(&page[i], store, key, client))
-                .buffered(MAX_CONCURRENT_PACKFILE_TRANSFERS);
-
-            while let Some(result) = uploads.next().await {
-                result.map_err(|e| {
-                    error!("failed to upload packfile: {e}");
-                    SyncError::RemoteRequestError { msg: e.to_string() }
-                })?;
-            }
+            // Pack each manifest's blob (local, on demand) and hand the stream to the client, which
+            // batches the transfers; packing errors ride the same result as upload errors. The
+            // futures capture owned handles (cheap Arc/copy clones) rather than borrows so they stay
+            // `Send` when the whole sync runs on a spawned, multi-threaded task (e.g. the daemon).
+            let store = store.clone();
+            let key = key.clone();
+            let packed = stream::iter(page.clone()).then(move |manifest| {
+                let store = store.clone();
+                let key = key.clone();
+                async move { pack(&manifest, &store, &key).await.map_err(eyre::Report::from) }
+            });
+            client.upload_packfiles(packed).await.map_err(|e| {
+                error!("failed to upload packfile: {e}");
+                SyncError::RemoteRequestError { msg: e.to_string() }
+            })?;
         }
 
         client.post_records(&page).await.map_err(|e| {

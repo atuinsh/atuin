@@ -17,7 +17,7 @@ use atuin_domain::record::{
     EncryptedData, HostId, Record, RecordId, RecordIdx, RecordStatus, RecordTag,
 };
 use eyre::{Result, bail};
-use futures::{Stream, StreamExt, stream};
+use futures::{Stream, StreamExt, TryStreamExt, stream};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use reqwest::{Response, StatusCode, Url};
 use reqwest_middleware::ClientWithMiddleware;
@@ -29,6 +29,9 @@ static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 /// page(s) (network) while the caller writes the current one (local sqlite) overlaps the two
 /// disjoint resources instead of strictly alternating them.
 const DOWNLOAD_PREFETCH: usize = 8;
+
+/// How many packfile blobs [`Client::upload_packfiles`] transfers concurrently.
+const MAX_CONCURRENT_PACKFILE_UPLOADS: usize = 16;
 
 /// Authentication token for sync API requests.
 ///
@@ -345,8 +348,27 @@ impl Client {
         Ok(())
     }
 
-    /// Upload the given packfile.
-    pub async fn upload_packfile(
+    /// Upload a stream of prepared packfile blobs -- each `(manifest_id, covered_record_ids,
+    /// bytes)` the output of packing one manifest -- with bounded concurrency, so callers batch the
+    /// transfers without hand-rolling the fan-out. Packing errors (the input `Err`s) and upload
+    /// errors flow through the same result; returns on the first failure.
+    pub async fn upload_packfiles(
+        &self,
+        packfiles: impl Stream<Item = Result<(RecordId, Vec<RecordId>, Vec<u8>)>>,
+    ) -> Result<()> {
+        packfiles
+            .map(|packfile| async move {
+                let (manifest_id, record_ids, blob) = packfile?;
+                self.upload_packfile(manifest_id, &record_ids, blob).await
+            })
+            .buffered(MAX_CONCURRENT_PACKFILE_UPLOADS)
+            .try_for_each(|()| async { Ok(()) })
+            .await
+    }
+
+    /// Upload a single prepared packfile blob. Private: callers go through
+    /// [`Self::upload_packfiles`], which owns the batching.
+    async fn upload_packfile(
         &self,
         manifest_id: RecordId,
         record_ids: &[RecordId],

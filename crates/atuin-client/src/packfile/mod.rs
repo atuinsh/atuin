@@ -87,8 +87,8 @@
 //! ### Uploading
 //!
 //! During the uploading loop in [`crate::record::sync`], when we find the packed record, we invoke
-//! the [`sync::upload_packed`] procedure, which is responsible for performing the actual packing
-//! and uploading payload.
+//! the [`sync::pack`] procedure to build its blob, then hand the blobs to
+//! [`Client::upload_packfiles`](crate::api_client::Client::upload_packfiles) to ship in a batch.
 //!
 //! This operation will open up the manifest in the packfile, read the `"start"` and `"end"` values,
 //! and scan the record table for these entries. For each of these entries, it will decrypt them,
@@ -112,4 +112,4 @@ mod sync;
 pub use packer::{PackingError, try_pack};
 #[cfg(test)]
 pub(crate) use record::PackManifestRecordView;
-pub use sync::{DownloadError, UploadError, download_packed, upload_packed};
+pub use sync::{DownloadError, PackError, download_packed, pack};

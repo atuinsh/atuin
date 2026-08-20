@@ -3,10 +3,11 @@
 //!
 //! # Uploading
 //!
-//! [`upload_packed`] takes a `packfile` manifest record, reads the history run it covers,
-//! compresses + encrypts it with the pack codec (bound to the manifest's identity), and PUTs
-//! the blob to the presigned URL the server hands back. The manifest record itself is authored by
-//! the packer and synced separately; this only ships the bytes.
+//! [`pack`] takes a `packfile` manifest record, reads the history run it covers, and compresses +
+//! encrypts it with the pack codec (bound to the manifest's identity), yielding the blob to ship.
+//! Shipping the blob to the presigned URL is done separately by
+//! [`Client::upload_packfiles`](crate::api_client::Client::upload_packfiles), so a page's uploads
+//! can be batched. The manifest record itself is authored by the packer and synced separately.
 //!
 //! # Downloading
 //!
@@ -24,32 +25,26 @@ use crate::packfile::record::ParsingError;
 use crate::record::sqlite_store::SqliteStore;
 
 #[derive(Debug, Error)]
-pub enum UploadError {
+pub enum PackError {
     #[error("failed to load the packfile manifest: {0}")]
     PackManifest(#[from] ParsingError),
 
     #[error(transparent)]
     Pack(#[from] PackingError),
-
-    #[error("failed to load the packed history from the store: {0}")]
-    Load(eyre::Report),
-
-    #[error("packfile upload failed: {0}")]
-    Api(eyre::Report),
 }
 
-/// Build and upload the packfile blob for a single `packfile` manifest record.
-pub async fn upload_packed(
+/// Pack a single `packfile` manifest record into the blob to ship: its manifest id, the record ids
+/// it covers, and the compressed+encrypted bytes. The transfer itself is done by
+/// [`Client::upload_packfiles`](crate::api_client::Client::upload_packfiles), so the uploads across
+/// a page can be batched.
+pub async fn pack(
     manifest: &Record<EncryptedData>,
     store: &SqliteStore,
     key: &paseto_v4::Key,
-    client: &Client,
-) -> Result<(), UploadError> {
+) -> Result<(RecordId, Vec<RecordId>, Vec<u8>), PackError> {
     let view = PackManifestRecordView::new(manifest)?;
-
     let (blob, ids) = view.pack_records(store, key.clone()).await?;
-
-    client.upload_packfile(view.record.id, &ids, blob).await.map_err(UploadError::Api)
+    Ok((view.record.id, ids, blob))
 }
 
 #[derive(Debug, Error)]
@@ -121,7 +116,7 @@ mod tests {
     use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::caps::PackfileCap;
-    use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordVersion};
+    use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordId, RecordVersion};
     use rstest::*;
     use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -167,7 +162,7 @@ mod tests {
     }
 
     /// Building the view rejects an inverted plaintext range (`start_idx > end_idx`) regardless of
-    /// sync direction -- the precondition every `upload_packed`/`download_packed` caller relies on,
+    /// sync direction -- the precondition every `pack`/`download_packed` caller relies on,
     /// so the covered-record count never underflows and no upload or fetch runs.
     #[rstest]
     #[case::far_apart(100, 5)]
@@ -262,7 +257,73 @@ mod tests {
 
         // `.expect(1)` on all three mocks verifies create_packfile + put_packfile +
         // confirm_packfile each fired exactly once.
-        upload_packed(&manifest, &store, &key, &client).await.unwrap();
+        let packed = pack(&manifest, &store, &key).await.unwrap();
+        client
+            .upload_packfiles(futures::stream::iter([Ok::<_, eyre::Report>(packed)]))
+            .await
+            .unwrap();
+    }
+
+    /// A synthetic prepared-blob item; `upload_packfiles` never inspects the contents, only ships
+    /// them, so real packing isn't needed to exercise the batching.
+    fn packed_item() -> (RecordId, Vec<RecordId>, Vec<u8>) {
+        (RecordId(uuid_v7()), vec![RecordId(uuid_v7())], vec![1, 2, 3])
+    }
+
+    #[tokio::test]
+    async fn upload_packfiles_transfers_every_item() {
+        let server = MockServer::start().await;
+        // Each of the two items drives create -> put -> confirm exactly once (asserted via expect).
+        Mock::given(method("POST"))
+            .and(path("/api/v0/packfiles"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "upload_url": format!("{}/upload/abc", server.uri()),
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/abc"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/api/v0/packfiles/[^/]+/confirm$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "confirmed",
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        client
+            .upload_packfiles(futures::stream::iter([
+                Ok::<_, eyre::Report>(packed_item()),
+                Ok(packed_item()),
+            ]))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn upload_packfiles_surfaces_an_input_error() {
+        // An `Err` item (e.g. a packing failure) short-circuits without any upload attempt.
+        let server = MockServer::start().await;
+        let addr: url::Url = server.uri().parse().unwrap();
+        let client = mock_client(&addr);
+
+        let result = client
+            .upload_packfiles(futures::stream::iter([Err::<
+                (RecordId, Vec<RecordId>, Vec<u8>),
+                eyre::Report,
+            >(eyre::eyre!("pack failed"))]))
+            .await;
+
+        assert!(result.is_err(), "an input error must propagate");
     }
 
     #[rstest]
