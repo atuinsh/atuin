@@ -37,9 +37,14 @@ enum InstallKind {
 
 /// The directory an agent's [`InstallKind`] path is relative to.
 enum PathRoot {
-    Home,
     /// See [`xdg_config_home`].
     XdgConfig,
+    /// An agent-specific env var that overrides a home-relative default.
+    /// See [`env_or_home`].
+    EnvOrHome {
+        env_var: &'static str,
+        default_relative_to_home: &'static [&'static str],
+    },
 }
 
 /// Resolve `$XDG_CONFIG_HOME` the way agents' XDG libraries do, treating an
@@ -47,6 +52,19 @@ enum PathRoot {
 /// and install under the current directory, where the agent never looks.
 fn xdg_config_home(var: Option<OsString>) -> PathBuf {
     var.filter(|value| !value.is_empty()).map_or_else(|| home_dir().join(".config"), PathBuf::from)
+}
+
+/// Resolve an agent's own config-dir override env var, treating an empty
+/// value as unset, same as [`xdg_config_home`].
+fn env_or_home(var: Option<OsString>, default_relative_to_home: &[&str]) -> PathBuf {
+    var.filter(|value| !value.is_empty()).map_or_else(
+        || {
+            default_relative_to_home
+                .iter()
+                .fold(home_dir(), |path, segment| path.join(segment))
+        },
+        PathBuf::from,
+    )
 }
 
 struct AgentSpec {
@@ -59,9 +77,12 @@ struct AgentSpec {
 const CLAUDE_CODE: AgentSpec = AgentSpec {
     aliases: &["claude-code", "claude"],
     actor_name: "claude-code",
-    path_root: PathRoot::Home,
+    path_root: PathRoot::EnvOrHome {
+        env_var: "CLAUDE_CONFIG_DIR",
+        default_relative_to_home: &[".claude"],
+    },
     install_kind: InstallKind::JsonHooks {
-        config_path: &[".claude", "settings.json"],
+        config_path: &["settings.json"],
         hook_command: "atuin hook claude-code",
         matcher: "Bash",
     },
@@ -70,9 +91,12 @@ const CLAUDE_CODE: AgentSpec = AgentSpec {
 const CODEX: AgentSpec = AgentSpec {
     aliases: &["codex"],
     actor_name: "codex",
-    path_root: PathRoot::Home,
+    path_root: PathRoot::EnvOrHome {
+        env_var: "CODEX_HOME",
+        default_relative_to_home: &[".codex"],
+    },
     install_kind: InstallKind::JsonHooks {
-        config_path: &[".codex", "hooks.json"],
+        config_path: &["hooks.json"],
         hook_command: "atuin hook codex",
         matcher: "^Bash$",
     },
@@ -81,9 +105,12 @@ const CODEX: AgentSpec = AgentSpec {
 const PI: AgentSpec = AgentSpec {
     aliases: &["pi"],
     actor_name: "pi",
-    path_root: PathRoot::Home,
+    path_root: PathRoot::EnvOrHome {
+        env_var: "PI_CODING_AGENT_DIR",
+        default_relative_to_home: &[".pi", "agent"],
+    },
     install_kind: InstallKind::Extension {
-        extension_path: &[".pi", "agent", "extensions", "atuin.ts"],
+        extension_path: &["extensions", "atuin.ts"],
         source: PI_EXTENSION_SOURCE,
         reload_hint: "Reload pi with `/reload` or restart pi.",
     },
@@ -121,8 +148,11 @@ impl Agent {
 
     fn path(&self, path: &'static [&'static str]) -> PathBuf {
         let root = match self.0.path_root {
-            PathRoot::Home => home_dir(),
             PathRoot::XdgConfig => xdg_config_home(std::env::var_os("XDG_CONFIG_HOME")),
+            PathRoot::EnvOrHome {
+                env_var,
+                default_relative_to_home,
+            } => env_or_home(std::env::var_os(env_var), default_relative_to_home),
         };
 
         path.iter().fold(root, |path, segment| path.join(segment))
@@ -415,6 +445,72 @@ mod tests {
 
         assert!(installed.starts_with(&root), "{installed:?} is not under {root:?}");
         assert!(installed.ends_with("opencode/plugins/atuin.ts"));
+    }
+
+    /// An empty agent-specific env var taken literally would resolve to a
+    /// relative path, installing under the current directory instead of the
+    /// agent's config directory (same failure mode as `xdg_config_home`).
+    #[rstest]
+    #[case::set(Some("/tmp/cc"), PathBuf::from("/tmp/cc"))]
+    #[case::empty_is_unset(Some(""), home_dir().join(".claude"))]
+    #[case::unset(None, home_dir().join(".claude"))]
+    fn env_or_home_resolves(#[case] var: Option<&str>, #[case] expected: PathBuf) {
+        assert_eq!(env_or_home(var.map(OsString::from), &[".claude"]), expected);
+    }
+
+    /// claude-code reads its config dir from `$CLAUDE_CONFIG_DIR`, not just `$HOME`
+    /// (issue #3685: atuin was ignoring it and writing to `~/.claude/settings.json`).
+    #[test]
+    fn claude_code_settings_respects_config_dir_env_var() {
+        let agent = Agent::from_name("claude-code").unwrap();
+        let InstallKind::JsonHooks { config_path, .. } = agent.install_kind() else {
+            panic!("claude-code does not use JSON hooks");
+        };
+
+        let root = env_or_home(std::env::var_os("CLAUDE_CONFIG_DIR"), &[".claude"]);
+        let installed = agent.path(config_path);
+
+        assert!(
+            installed.starts_with(&root),
+            "{installed:?} is not under {root:?}"
+        );
+        assert!(installed.ends_with("settings.json"));
+    }
+
+    /// codex reads its home from `$CODEX_HOME`, not just `$HOME`.
+    #[test]
+    fn codex_hooks_respects_codex_home_env_var() {
+        let agent = Agent::from_name("codex").unwrap();
+        let InstallKind::JsonHooks { config_path, .. } = agent.install_kind() else {
+            panic!("codex does not use JSON hooks");
+        };
+
+        let root = env_or_home(std::env::var_os("CODEX_HOME"), &[".codex"]);
+        let installed = agent.path(config_path);
+
+        assert!(
+            installed.starts_with(&root),
+            "{installed:?} is not under {root:?}"
+        );
+        assert!(installed.ends_with("hooks.json"));
+    }
+
+    /// pi reads its agent dir from `$PI_CODING_AGENT_DIR`, not just `$HOME`.
+    #[test]
+    fn pi_extension_respects_coding_agent_dir_env_var() {
+        let agent = Agent::from_name("pi").unwrap();
+        let InstallKind::Extension { extension_path, .. } = agent.install_kind() else {
+            panic!("pi does not install an extension");
+        };
+
+        let root = env_or_home(std::env::var_os("PI_CODING_AGENT_DIR"), &[".pi", "agent"]);
+        let installed = agent.path(extension_path);
+
+        assert!(
+            installed.starts_with(&root),
+            "{installed:?} is not under {root:?}"
+        );
+        assert!(installed.ends_with("extensions/atuin.ts"));
     }
 
     #[test]
