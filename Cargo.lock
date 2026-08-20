@@ -394,6 +394,7 @@ dependencies = [
  "indicatif",
  "interim",
  "itertools 0.15.0",
+ "libsqlite3-sys",
  "memchr",
  "minspan",
  "notify",

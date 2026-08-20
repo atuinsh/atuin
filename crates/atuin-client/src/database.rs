@@ -242,6 +242,17 @@ impl SearchMode {
 #[derive(Debug, Clone)]
 pub struct Sqlite {
     pub pool: SqlitePool,
+
+    /// SQLite's `SQLITE_LIMIT_VARIABLE_NUMBER` for this database — the maximum number
+    /// of bound parameters in a single prepared statement — queried from the live
+    /// library at construction (see [`crate::sqlite_util::max_bind_params`]).
+    ///
+    /// Statements that bind a variable number of values chunk against this so a single
+    /// statement never exceeds it: [`Sqlite::load_active`] (one parameter per row) and
+    /// [`Sqlite::save_raw_many`] (one parameter per column, per row). We bundle SQLite
+    /// (via `sqlx`'s `sqlite` feature), so in practice this is the modern default of
+    /// 32766, but querying it honours any build-time override.
+    max_bind_params: usize,
 }
 
 impl Sqlite {
@@ -278,7 +289,12 @@ impl Sqlite {
             .await?;
 
         Self::setup_db(&pool).await?;
-        Ok(Self { pool })
+        let max_bind_params = crate::sqlite_util::max_bind_params(&pool).await?;
+
+        Ok(Self {
+            pool,
+            max_bind_params,
+        })
     }
 
     pub async fn sqlite_version(&self) -> Result<String> {
@@ -314,6 +330,51 @@ impl Sqlite {
         .bind(h.shell.as_deref())
         .execute(&mut **tx)
         .await?;
+
+        Ok(())
+    }
+
+    /// Columns bound per row by [`Self::save_raw_many`]'s multi-row INSERT.
+    const HISTORY_INSERT_COLUMNS: usize = 12;
+
+    async fn save_raw_many<'a>(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        h: impl IntoIterator<Item = &'a History>,
+        rows_per_insert: usize,
+    ) -> Result<()> {
+        let mut h = h.into_iter().peekable();
+
+        // Stream fixed-size chunks straight into a multi-row INSERT: `QueryBuilder`
+        // writes the `values (..),(..)` and binds each row in a single pass, so we
+        // never materialise the input. `take` bounds each statement under SQLite's
+        // parameter limit (`rows_per_insert` rows * HISTORY_INSERT_COLUMNS params);
+        // the outer `peek` guard guarantees every chunk is non-empty, which
+        // `push_values` requires.
+        while h.peek().is_some() {
+            let mut builder = sqlx::QueryBuilder::new(
+                "insert or ignore into history(
+                    id, timestamp, duration, exit, command, cwd, session, hostname, author, intent,
+                    deleted_at, shell
+                ) ",
+            );
+
+            builder.push_values(h.by_ref().take(rows_per_insert), |mut b, h| {
+                b.push_bind(h.id.0.as_str())
+                    .push_bind(h.timestamp.unix_timestamp_nanos() as i64)
+                    .push_bind(h.duration)
+                    .push_bind(h.exit)
+                    .push_bind(h.command.as_str())
+                    .push_bind(h.cwd.as_str())
+                    .push_bind(h.session.as_str())
+                    .push_bind(h.cmd_origin.as_str())
+                    .push_bind(h.author.as_str())
+                    .push_bind(h.intent.as_deref())
+                    .push_bind(h.deleted_at.map(|t| t.unix_timestamp_nanos() as i64))
+                    .push_bind(h.shell.as_deref());
+            });
+
+            builder.build().execute(&mut **tx).await?;
+        }
 
         Ok(())
     }
@@ -376,12 +437,12 @@ impl Sqlite {
 
         debug!("saving history to sqlite");
 
+        // One parameter per column, per row, must stay within the bind-parameter
+        // limit; `max(1)` keeps the chunk non-empty on any (implausible) tiny limit.
+        let rows_per_insert = (self.max_bind_params / Self::HISTORY_INSERT_COLUMNS).max(1);
+
         let mut tx = self.pool.begin().await?;
-
-        for i in h {
-            Self::save_raw(&mut tx, i).await?;
-        }
-
+        Self::save_raw_many(&mut tx, h, rows_per_insert).await?;
         tx.commit().await?;
 
         Ok(())
@@ -406,9 +467,9 @@ impl Sqlite {
         let mut iter_ids = ids.into_iter();
         let size_hint = iter_ids.size_hint();
 
-        // sqlite caps bound parameters per statement (SQLITE_MAX_VARIABLE_NUMBER, as low as 999).
-        // Chunk well under that.
-        const CHUNK: usize = 500;
+        // Each id binds a single parameter, so a chunk can be as large as SQLite
+        // allows in one statement.
+        let chunk_size = self.max_bind_params.max(1);
 
         if let Some(upper) = size_hint.1
             && size_hint.0 == upper
@@ -420,12 +481,13 @@ impl Sqlite {
 
         let mut out = Vec::with_capacity(size_hint.0);
 
-        // Buffer reused across multiple chunks to avoid reallocating.
-        let mut chunk: Vec<HistoryId> = Vec::with_capacity(CHUNK);
+        // Buffer reused across chunks to avoid reallocating; only reserve what we
+        // expect to load so small lookups don't allocate a full chunk up front.
+        let mut chunk: Vec<HistoryId> = Vec::with_capacity(size_hint.0.min(chunk_size));
 
         loop {
             chunk.clear();
-            chunk.extend(iter_ids.by_ref().take(CHUNK));
+            chunk.extend(iter_ids.by_ref().take(chunk_size));
             if chunk.is_empty() {
                 break;
             }
