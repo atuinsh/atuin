@@ -191,8 +191,6 @@ pub enum PackError {
     Decrypt(eyre::Report),
     #[error("failed to serialize the records: {0}")]
     Serialize(#[from] EncodeError),
-    #[error("the record run yielded a different number of records than it reported")]
-    BadLength,
     #[error("failed to compress the packfile: {0}")]
     Compress(#[from] std::io::Error),
     #[error("failed to encrypt the packfile: {0}")]

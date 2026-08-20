@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use atuin_client::api_client;
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::record::sync;
+use atuin_client::record::sync::{ClientSource, SyncEngine};
 use atuin_common::encryption::paseto_v4;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag};
@@ -154,10 +154,17 @@ async fn download(
         store.push_batch(records.iter().take(local_max as usize + 1)).await.unwrap();
     }
 
-    let (diff, _) = sync::diff(&client, &store).await.unwrap();
-    let operations = sync::operations(diff, &store).unwrap();
-    let (_, downloaded) =
-        sync::sync_remote(&client, operations, &store, page_size, &key()).await.unwrap();
+    let key = key();
+    let engine = SyncEngine::builder()
+        .store(store.clone())
+        .client_source(ClientSource::FromClient(client))
+        .build()
+        .connect()
+        .await
+        .unwrap();
+    let (diff, _) = engine.diff().await.unwrap();
+    let operations = SyncEngine::operations(diff).unwrap();
+    let (_, downloaded) = engine.keyed(&key).sync_remote(operations, page_size).await.unwrap();
 
     let status = store.status().await.unwrap();
     let local_idx = *status.hosts.get(&host).unwrap().get(&tag).unwrap();
@@ -213,12 +220,19 @@ async fn upload(
         client.post_records(&records[..=remote_max as usize]).await.unwrap();
     }
 
-    let (diff, _) = sync::diff(&client, &store).await.unwrap();
-    let operations = sync::operations(diff, &store).unwrap();
-    let (uploaded, _) =
-        sync::sync_remote(&client, operations, &store, page_size, &key()).await.unwrap();
+    let key = key();
+    let engine = SyncEngine::builder()
+        .store(store)
+        .client_source(ClientSource::FromClient(client))
+        .build()
+        .connect()
+        .await
+        .unwrap();
+    let (diff, _) = engine.diff().await.unwrap();
+    let operations = SyncEngine::operations(diff).unwrap();
+    let (uploaded, _) = engine.keyed(&key).sync_remote(operations, page_size).await.unwrap();
 
-    let status = client.record_status().await.unwrap();
+    let status = engine.record_status().await.unwrap();
     let remote_idx = *status.hosts.get(&host).unwrap().get(&tag).unwrap();
 
     // The PR that added these tests also changed the type of `uploaded` from `i64` to `u64`; the

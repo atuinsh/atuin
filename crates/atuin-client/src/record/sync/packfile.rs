@@ -1,61 +1,31 @@
 //! Syncs a packed history range in both directions: ship a manifest's blob to the remote, and
 //! expand a remote manifest back into the local store.
 //!
-//! # Uploading
-//!
-//! [`upload_packed`] takes a `packfile` manifest record, reads the history run it covers,
-//! compresses + encrypts it with the pack codec (bound to the manifest's identity), and PUTs
-//! the blob to the presigned URL the server hands back. The manifest record itself is authored by
-//! the packer and synced separately; this only ships the bytes.
-//!
-//! # Downloading
-//!
-//! [`download_packed`] takes a remote `packfile` manifest, fetches its packfile blob, unpacks it back
-//! into the individual history records for the manifest's `"start".."end"` range, re-encrypts each
-//! one with the local key, and pushes them into the local record store.
+//! These live on [`Keyed`] rather than [`SyncEngine`](super::SyncEngine) because they encrypt and
+//! decrypt with the session key. The lower-level packing machinery stays in [`crate::packfile`];
+//! this is only the sync integration (fetch/store/upload through the engine's client and store).
 
-use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::{EncryptedData, Record, RecordId, RecordSeriesKey, RecordTag};
 use thiserror::Error;
 use tracing::instrument;
 
-use super::record::{PackManifestRecordView, PackingError, UnpackError};
-use crate::api_client::Client;
-use crate::packfile::record::ParsingError;
-use crate::record::sqlite_store::SqliteStore;
+use super::Keyed;
+use crate::packfile::record::{PackManifestRecordView, PackingError, ParsingError, UnpackError};
 
 #[derive(Debug, Error)]
-pub enum UploadError {
+pub(super) enum UploadError {
     #[error("failed to load the packfile manifest: {0}")]
     PackManifest(#[from] ParsingError),
 
     #[error(transparent)]
     Pack(#[from] PackingError),
 
-    #[error("failed to load the packed history from the store: {0}")]
-    Load(eyre::Report),
-
     #[error("packfile upload failed: {0}")]
     Api(eyre::Report),
 }
 
-/// Build and upload the packfile blob for a single `packfile` manifest record.
-#[instrument(level = "trace", skip_all, fields(id = ?manifest.id), err)]
-pub async fn upload_packed(
-    manifest: &Record<EncryptedData>,
-    store: &SqliteStore,
-    key: &paseto_v4::Key,
-    client: &Client,
-) -> Result<(), UploadError> {
-    let view = PackManifestRecordView::new(manifest)?;
-
-    let (blob, ids) = view.pack_records(store, key.clone()).await?;
-
-    client.upload_packfile(view.record.id, &ids, blob).await.map_err(UploadError::Api)
-}
-
 #[derive(Debug, Error)]
-pub enum DownloadError {
+pub(super) enum DownloadError {
     #[error("failed to load the packfile manifest: {0}")]
     PackManifest(#[from] ParsingError),
 
@@ -71,7 +41,7 @@ pub enum DownloadError {
 
 impl DownloadError {
     /// Whether repeating the same download operation would definitively fail.
-    pub fn is_permanent(&self) -> bool {
+    pub(super) fn is_permanent(&self) -> bool {
         match self {
             Self::PackManifest(_) => true,
             Self::Unpack(_) => true,
@@ -80,43 +50,66 @@ impl DownloadError {
     }
 }
 
-/// Fetch, unpack, and locally store the history covered by a single `packfile` manifest.
-///
-/// Returns the ids of the history records the manifest's range covers, whether they were just
-/// inserted or were already present locally.
-#[instrument(level = "trace", skip_all, fields(id = ?manifest.id), err)]
-pub async fn download_packed(
-    manifest: &Record<EncryptedData>,
-    store: &SqliteStore,
-    key: &paseto_v4::Key,
-    client: &Client,
-) -> Result<Vec<RecordId>, DownloadError> {
-    let view = PackManifestRecordView::new(manifest)?;
+impl Keyed<'_> {
+    /// Build and upload the packfile blob for a single `packfile` manifest record.
+    #[instrument(level = "trace", skip_all, fields(id = ?manifest.id), err)]
+    pub(super) async fn upload_packed(
+        &self,
+        manifest: &Record<EncryptedData>,
+    ) -> Result<(), UploadError> {
+        let view = PackManifestRecordView::new(manifest)?;
 
-    // Skip if we already have the whole range (history is contiguous, packfiles are prefixes).
-    let head = store
-        .last(&RecordSeriesKey::new(view.record.host.id, RecordTag::History))
-        .await
-        .map_err(DownloadError::Store)?;
-    if let Some(head) = head
-        && head.idx >= view.range().end - 1
-    {
-        // Range already available locally. Return the IDs.
-        let existing = view
-            .load_encrypted_packed_records(store)
+        let (blob, ids) = view.pack_records(&self.engine.store, self.key.clone()).await?;
+
+        self.engine
+            .client
+            .upload_packfile(view.record.id, &ids, blob)
             .await
-            .map_err(|e| DownloadError::Store(e.into()))?;
-        return Ok(existing.iter().map(|r| r.id).collect());
+            .map_err(UploadError::Api)
     }
 
-    let blob = client.download_packfile(view.record.id).await.map_err(DownloadError::Api)?;
+    /// Fetch, unpack, and locally store the history covered by a single `packfile` manifest.
+    ///
+    /// Returns the ids of the history records the manifest's range covers, whether they were just
+    /// inserted or were already present locally.
+    #[instrument(level = "trace", skip_all, fields(id = ?manifest.id), err)]
+    pub(super) async fn download_packed(
+        &self,
+        manifest: &Record<EncryptedData>,
+    ) -> Result<Vec<RecordId>, DownloadError> {
+        let view = PackManifestRecordView::new(manifest)?;
+        let store = &self.engine.store;
 
-    let records = view.unpack_records(blob, key.clone()).await?;
-    let ids: Vec<RecordId> = records.iter().map(|record| record.id).collect();
+        // Skip if we already have the whole range (history is contiguous, packfiles are prefixes).
+        let head = store
+            .last(&RecordSeriesKey::new(view.record.host.id, RecordTag::History))
+            .await
+            .map_err(DownloadError::Store)?;
+        if let Some(head) = head
+            && head.idx >= view.range().end - 1
+        {
+            // Range already available locally. Return the IDs.
+            let existing = view
+                .load_encrypted_packed_records(store)
+                .await
+                .map_err(|e| DownloadError::Store(e.into()))?;
+            return Ok(existing.iter().map(|r| r.id).collect());
+        }
 
-    store.push_batch(records.iter()).await.map_err(DownloadError::Store)?;
+        let blob = self
+            .engine
+            .client
+            .download_packfile(view.record.id)
+            .await
+            .map_err(DownloadError::Api)?;
 
-    Ok(ids)
+        let records = view.unpack_records(blob, self.key.clone()).await?;
+        let ids: Vec<RecordId> = records.iter().map(|record| record.id).collect();
+
+        store.push_batch(records.iter()).await.map_err(DownloadError::Store)?;
+
+        Ok(ids)
+    }
 }
 
 #[cfg(test)]
@@ -133,8 +126,10 @@ mod tests {
 
     use super::*;
     use crate::api_client::{AuthToken, Client, caps_client};
+    use crate::packfile::record::{PackManifestDataV1, PackManifestRecordView};
     use crate::packfile::try_pack;
     use crate::record::sqlite_store::SqliteStore;
+    use crate::record::sync::{ClientSource, SyncEngine};
     use crate::settings::test_local_timeout;
 
     /// A single fixed encryption key. The specific bytes are arbitrary in these tests -- each one
@@ -154,6 +149,17 @@ mod tests {
     /// A fresh in-memory record store.
     async fn memory_store() -> SqliteStore {
         SqliteStore::new(":memory:", test_local_timeout()).await.unwrap()
+    }
+
+    /// A [`SyncEngine`] wrapping a prebuilt client and store, for calling the packfile methods.
+    async fn build_engine(client: Client, store: SqliteStore) -> SyncEngine {
+        SyncEngine::builder()
+            .store(store)
+            .client_source(ClientSource::FromClient(client))
+            .build()
+            .connect()
+            .await
+            .unwrap()
     }
 
     /// Push a contiguous run of `count` encrypted HISTORY records (idx `0..count`).
@@ -182,8 +188,6 @@ mod tests {
         #[case] start_idx: u64,
         #[case] end_idx: u64,
     ) {
-        use crate::packfile::record::PackManifestDataV1;
-
         let host = HostId(uuid_v7());
 
         // A corrupt/tampered manifest whose plaintext range is inverted (start_idx > end_idx). The
@@ -266,7 +270,7 @@ mod tests {
 
         // `.expect(1)` on all three mocks verifies create_packfile + put_packfile +
         // confirm_packfile each fired exactly once.
-        upload_packed(&manifest, &store, &key, &client).await.unwrap();
+        build_engine(client, store).await.keyed(&key).upload_packed(&manifest).await.unwrap();
     }
 
     #[rstest]
@@ -315,7 +319,12 @@ mod tests {
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
 
-        let ids = download_packed(&manifest, &down, &key, &client).await.unwrap();
+        let ids = build_engine(client, down.clone())
+            .await
+            .keyed(&key)
+            .download_packed(&manifest)
+            .await
+            .unwrap();
         assert_eq!(ids.len(), 5, "all five history records populated");
 
         // History is present locally and decrypts to the same commands.
@@ -369,7 +378,8 @@ mod tests {
         )
         .unwrap();
 
-        let ids = download_packed(&manifest, &down, &key, &client).await.unwrap();
+        let ids =
+            build_engine(client, down).await.keyed(&key).download_packed(&manifest).await.unwrap();
 
         // Range already present -> no fetch, but the covered ids are still returned so the
         // id-driven history.db rebuild can re-index them (see download_packed's doc comment).
@@ -392,7 +402,7 @@ mod tests {
         cek: String::new(),
     })]
     #[case::inverted_range(|host| {
-        crate::packfile::record::PackManifestDataV1 {
+        PackManifestDataV1 {
             tag: RecordTag::History,
             host,
             start_idx: 100,
@@ -457,8 +467,11 @@ mod tests {
         let down = memory_store().await;
         let addr: url::Url = server.uri().parse().unwrap();
         let client = mock_client(&addr);
+        let engine = build_engine(client, down.clone()).await;
 
-        let err = download_packed(&bad, &down, &key, &client)
+        let err = engine
+            .keyed(&key)
+            .download_packed(&bad)
             .await
             .expect_err("a malformed manifest must not expand");
         assert!(
@@ -466,7 +479,9 @@ mod tests {
             "the caller must be told to skip this manifest, not fail the tick: {err:?}"
         );
 
-        let ids = download_packed(&good, &down, &key, &client)
+        let ids = engine
+            .keyed(&key)
+            .download_packed(&good)
             .await
             .expect("the valid manifest still expands");
         assert_eq!(ids.len(), 3, "the valid manifest's three records expand");
@@ -489,7 +504,7 @@ mod tests {
             .tag(RecordTag::Packfile)
             .idx(0)
             .data(
-                crate::packfile::record::PackManifestDataV1 {
+                PackManifestDataV1 {
                     host,
                     tag: RecordTag::History,
                     start_idx: 0,
@@ -517,7 +532,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = download_packed(&manifest, &down, &key, &client).await;
+        let result = build_engine(client, down).await.keyed(&key).download_packed(&manifest).await;
         assert!(
             matches!(result, Err(DownloadError::Api(_))),
             "a transient transport fault must surface as Api: {result:?}"

@@ -48,6 +48,7 @@ impl AuthToken {
     }
 }
 
+#[derive(Clone)]
 pub struct Client {
     sync_addr: Arc<Url>,
     client: ClientWithMiddleware,
