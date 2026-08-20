@@ -283,8 +283,6 @@ async fn verify_key_against_remote(
         .connect()
         .await?;
     loop {
-        // Constructing `keyed` kicks off the remote key check in the background; awaiting
-        // `key_valid` collects its verdict.
         let check = engine.keyed(&key).key_valid().await;
         match check {
             // Only persist a key the server has confirmed can read the data, so
