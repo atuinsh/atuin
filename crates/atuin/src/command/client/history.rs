@@ -51,9 +51,7 @@ pub enum Cmd {
 
         /// Whether a human or an AI agent ran this command
         ///
-        /// When omitted, an explicitly passed author that is a known agent name counts as an
-        /// agent; anything else is left unstated and later classified by the author name, which
-        /// cannot tell an agent apart from a user who shares its name.
+        /// [`Option::None`] will cause us to perform a best-guess effort.
         #[arg(long, value_enum)]
         author_kind: Option<AuthorKind>,
 
