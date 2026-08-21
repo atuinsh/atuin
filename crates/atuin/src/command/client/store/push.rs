@@ -119,7 +119,7 @@ impl Push {
             })
             .collect();
 
-        let (uploaded, _) = keyed.sync_remote(operations, self.page).await?;
+        let (uploaded, _) = keyed.sync_remote(operations).await?;
 
         println!("Uploaded {uploaded} records");
 
