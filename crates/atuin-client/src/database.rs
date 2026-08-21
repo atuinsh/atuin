@@ -811,18 +811,8 @@ impl Sqlite {
         let res =
             sqlx::query_as::<_, History>(sqlx::AssertSqlSafe(query)).fetch_all(&self.pool).await?;
 
-        // Rank against the same characters SQL matched: drop spaces, operators and negated terms.
-        let reorder_query: String = QueryTokenizer::new(orig_query)
-            .filter(|token| !token.is_inverse())
-            .filter_map(|token| match token {
-                QueryToken::Match(term, _)
-                | QueryToken::MatchStart(term, _)
-                | QueryToken::MatchEnd(term, _)
-                | QueryToken::MatchFull(term, _) => Some(term),
-                QueryToken::Or | QueryToken::Regex(_) => None,
-            })
-            .collect();
-        Ok(ordering::reorder_fuzzy(search_mode, &reorder_query, res))
+        let reorder_terms = fuzzy_ranking_terms(orig_query);
+        Ok(ordering::reorder_fuzzy(search_mode, &reorder_terms, res))
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -1119,6 +1109,22 @@ impl SqlBuilderExt for SqlBuilder {
             self.and_where(cond)
         }
     }
+}
+
+/// The terms the span scorer ranks on. SQL matches on the tokenizer's plain terms, so ranking must
+/// drop everything SQL never matched literally: whitespace, the `| ^ $ ' r/../` operators, and
+/// negated terms, whose characters SQL excluded rather than required.
+fn fuzzy_ranking_terms(query: &str) -> Vec<&str> {
+    QueryTokenizer::new(query)
+        .filter(|token| !token.is_inverse())
+        .filter_map(|token| match token {
+            QueryToken::Match(term, _)
+            | QueryToken::MatchStart(term, _)
+            | QueryToken::MatchEnd(term, _)
+            | QueryToken::MatchFull(term, _) => Some(term),
+            QueryToken::Or | QueryToken::Regex(_) => None,
+        })
+        .collect()
 }
 
 pub struct QueryTokenizer<'a> {
@@ -1470,6 +1476,24 @@ mod test {
         assert_eq!(loaded.len(), 1200);
     }
 
+    // Inserts oldest-first with well-separated timestamps, so recency order is the reverse of the
+    // argument order rather than a product of clock resolution.
+    async fn db_with_ages(commands: &[&str]) -> Sqlite {
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        let now = OffsetDateTime::now_utc();
+        for (i, command) in commands.iter().enumerate() {
+            let age = time::Duration::hours((commands.len() - i) as i64);
+            new_history_item_at(&mut db, command, Some(now - age))
+                .await
+                .unwrap();
+        }
+
+        db
+    }
+
     async fn db_with(commands: &[&str]) -> Sqlite {
         let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
 
@@ -1787,6 +1811,88 @@ mod test {
             "use screen",
         ])
         .await;
+    }
+
+    // Which signal decides the order of two matched rows, given the tighter match is always the
+    // older of the two.
+    #[derive(Debug, Clone, Copy)]
+    enum RankedBy {
+        // The tighter match wins despite being older.
+        Span,
+        // Both rows score alike, so recency correctly breaks the tie.
+        TiedSpan,
+    }
+
+    // Every query shape the tokenizer can produce, and how it ranks. Each term is scored on its own
+    // against the command, mirroring the one condition per term SQL emits, so a shape ranks
+    // whenever any term discriminates between the rows and ties only when none does.
+    #[rstest]
+    // A lone term, and terms in the order they appear in the command, rank correctly.
+    #[case::plain_term("screen", &["screen"], ("screen", "search green"), RankedBy::Span)]
+    #[case::terms_in_command_order("foo bar", &["foo", "bar"], ("foo bar", "foo qux bar"), RankedBy::Span)]
+    #[case::exact_word_terms("'foo 'bar", &["foo", "bar"], ("foo bar", "foo qux bar"), RankedBy::Span)]
+    // Terms SQL matches independently rank independently, in whichever order the command has them.
+    #[case::terms_out_of_command_order("bar foo", &["bar", "foo"], ("foo bar", "foo qux bar"), RankedBy::Span)]
+    // Anchors rank from either side: a term is no longer required to follow the anchored one.
+    #[case::start_anchor_then_term("^foo bar", &["foo", "bar"], ("foo bar", "foo qux bar"), RankedBy::Span)]
+    #[case::term_before_start_anchor("bar ^foo", &["bar", "foo"], ("foo bar", "foo qux bar"), RankedBy::Span)]
+    #[case::term_then_end_anchor("foo screen$", &["foo", "screen"], ("foo screen", "foo x screen"), RankedBy::Span)]
+    #[case::term_after_end_anchor("screen$ foo", &["screen", "foo"], ("foo screen", "foo x screen"), RankedBy::Span)]
+    // A negated term is a filter, not a ranking signal, so it drops out and the rest still ranks.
+    #[case::negated_term("foo screen !zzz", &["foo", "screen"], ("foo screen", "foo x screen"), RankedBy::Span)]
+    #[case::negated_start_anchor("bar !^foo", &["bar"], ("bar", "b a r"), RankedBy::Span)]
+    // An uppercase term switches SQL to case-sensitive GLOB, which agrees with the span scorer.
+    #[case::uppercase_term("LS", &["LS"], ("LS", "L x S"), RankedBy::Span)]
+    #[case::mixed_case_uppercase_term("LS foo", &["LS", "foo"], ("LS foo", "LS x foo"), RankedBy::Span)]
+    // A regex is a filter too; the plain term alongside it still ranks.
+    #[case::regex_with_term("r/screen/ foo", &["foo"], ("foo screen", "f o o screen"), RankedBy::Span)]
+    // Only one alternation branch is present per row, so ranking runs on the branch that matched.
+    #[case::alternation_ranks_matched_branch("foo | bar", &["foo", "bar"], ("foo", "f o o"), RankedBy::Span)]
+    // Matching more of the query outranks matching less of it, however tight the lesser match is.
+    #[case::alternation_prefers_matching_both("foo | bar", &["foo", "bar"], ("foo bar", "foo"), RankedBy::Span)]
+    // Nothing left to rank on, or nothing to tell the rows apart. Recency is the right answer.
+    #[case::regex_only("r/screen/", &[], ("foo screen", "foo x screen"), RankedBy::TiedSpan)]
+    #[case::negated_term_only("!zzz", &[], ("foo screen", "foo x screen"), RankedBy::TiedSpan)]
+    #[case::start_anchor_only("^foo", &["foo"], ("foo bar", "foo qux bar"), RankedBy::TiedSpan)]
+    #[case::end_anchor_only("screen$", &["screen"], ("foo screen", "foo x screen"), RankedBy::TiedSpan)]
+    // Each row matches one branch equally tightly, so there is nothing to choose between them.
+    #[case::alternation("foo | bar", &["foo", "bar"], ("foo", "bar"), RankedBy::TiedSpan)]
+    #[case::alternation_three_way("foo | bar | qux", &["foo", "bar", "qux"], ("foo", "bar"), RankedBy::TiedSpan)]
+    // A lowercase term folds case for ranking exactly as LIKE did for matching. Each term decides
+    // that on its own, so an uppercase term elsewhere in the query does not disturb it.
+    #[case::lowercase_term_matching_uppercase("ls", &["ls"], ("LS", "L x S"), RankedBy::Span)]
+    #[case::mixed_case_lowercase_term("ls FOO", &["ls", "FOO"], ("LS FOO", "LS x FOO"), RankedBy::Span)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fuzzy_operator_ranking(
+        #[case] query: &str,
+        #[case] expected_terms: &[&str],
+        #[case] rows: (&str, &str),
+        #[case] ranked_by: RankedBy,
+    ) {
+        let (tighter, looser) = rows;
+        let db = db_with_ages(&[tighter, looser]).await;
+
+        assert_eq!(
+            fuzzy_ranking_terms(query),
+            expected_terms,
+            "ranking terms for {query:?}"
+        );
+
+        let results = assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, 2)
+            .await
+            .unwrap();
+
+        // Recency puts `looser` first, so only span scoring can surface `tighter`.
+        let expected_first = match ranked_by {
+            RankedBy::Span => tighter,
+            RankedBy::TiedSpan => looser,
+        };
+        assert_eq!(
+            results[0].command,
+            expected_first,
+            "{query:?} should rank by {ranked_by:?}, got: {:?}",
+            results.iter().map(|h| &h.command).collect::<Vec<_>>()
+        );
     }
 
     #[rstest]

@@ -15,5 +15,5 @@ fn reorder_fuzzy_bench(bencher: divan::Bencher, n: usize) {
             let mut ctx = BenchCtx::new();
             BenchHistory::count(&mut ctx, n)
         })
-        .bench_values(|histories| reorder_fuzzy(DbSearchMode::Fuzzy, "curl", histories));
+        .bench_values(|histories| reorder_fuzzy(DbSearchMode::Fuzzy, &["curl"], histories));
 }
