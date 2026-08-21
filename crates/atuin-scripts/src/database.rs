@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -6,6 +7,7 @@ use atuin_common::table;
 use futures::TryStreamExt;
 use sqlx::Result;
 use tracing::instrument;
+use uuid::Uuid;
 
 use crate::store::script::{Script, ScriptTag};
 
@@ -122,14 +124,24 @@ impl Database {
     }
 
     pub async fn list(&self) -> Result<Vec<Script>> {
-        let mut res: Vec<Script> = self.scripts.all().try_collect().await?;
+        let scripts: Vec<Script> = self.scripts.all().try_collect().await?;
 
-        for script in &mut res {
-            script.tags =
-                self.tags.filter(script.id.to_string()).map_ok(|t| t.tag).try_collect().await?;
-        }
+        let mut tags = self
+            .tags
+            .all_ordered()
+            .try_fold(HashMap::<Uuid, Vec<String>>::new(), |mut acc, row: ScriptTag| async move {
+                acc.entry(row.script_id).or_default().push(row.tag);
+                Ok(acc)
+            })
+            .await?;
 
-        Ok(res)
+        Ok(scripts
+            .into_iter()
+            .map(|mut script| {
+                script.tags = tags.remove(&script.id).unwrap_or_default();
+                script
+            })
+            .collect())
     }
 
     pub async fn clear(&self) -> Result<()> {

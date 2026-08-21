@@ -348,21 +348,15 @@ impl Sqlite {
         self.sqlite.info().await
     }
 
-    #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     pub async fn save(&self, h: &History) -> Result<()> {
-        debug!("saving history to sqlite");
         self.table.insert_one(h).await
     }
 
-    #[instrument(level = "trace", skip_all, err)]
     pub async fn save_bulk<'a>(&self, h: impl IntoIterator<Item = &'a History>) -> Result<()> {
-        debug!("saving history to sqlite");
         self.table.insert_bulk(h).await
     }
 
-    #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     pub async fn load(&self, id: &str) -> Result<Option<History>> {
-        debug!("loading history item {}", id);
         self.table.get(id).await
     }
 

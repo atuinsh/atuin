@@ -86,71 +86,40 @@ mod test {
         Database::in_memory(Duration::from_secs(1)).await.unwrap()
     }
 
-    #[fixture]
-    fn entry() -> KvEntry {
+    fn kv(namespace: &str, key: &str, value: &str) -> KvEntry {
         KvEntry {
-            namespace: "test".into(),
-            key: "test".into(),
-            value: "test".into(),
+            namespace: namespace.into(),
+            key: key.into(),
+            value: value.into(),
         }
     }
 
+    /// The only thing this layer adds over `TableView` (exhaustively tested in
+    /// `atuin-common`) is the wiring, which those tests can't reach: the real
+    /// migration DDL must match the `table!(KvEntry)` schema, `FromRow` must map
+    /// each column correctly, and the wrapper must pass the composite
+    /// `(namespace, key)` in the right order. Distinct per-column values catch a
+    /// column/`FromRow` drift; two entries sharing a namespace exercise the
+    /// composite key and `list` filtering.
     #[rstest]
     #[tokio::test]
-    async fn test_list(#[future] db: Database, entry: KvEntry) {
-        let db = db.await;
+    async fn kventry_roundtrips_through_real_schema(#[future(awt)] db: Database) {
+        db.save(&kv("ns", "a", "va")).await.unwrap();
+        db.save(&kv("ns", "b", "vb")).await.unwrap();
+        db.save(&kv("other", "a", "vo")).await.unwrap();
 
-        let scripts: Vec<KvEntry> = db.list_all().try_collect().await.unwrap();
-        assert_eq!(scripts.len(), 0);
+        // The full composite key disambiguates same-key/different-namespace rows.
+        assert_eq!(db.load("ns", "a").await.unwrap().unwrap(), kv("ns", "a", "va"));
 
-        db.save(&entry).await.unwrap();
+        // `list(namespace)` filters to one namespace, ordered by key.
+        let ns: Vec<KvEntry> = db.list("ns").try_collect().await.unwrap();
+        assert_eq!(ns.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), ["a", "b"]);
 
-        let entries: Vec<KvEntry> = db.list_all().try_collect().await.unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].namespace, "test");
-        assert_eq!(entries[0].key, "test");
-        assert_eq!(entries[0].value, "test");
-    }
+        // `list_all` streams every namespace.
+        assert_eq!(db.list_all().try_collect::<Vec<_>>().await.unwrap().len(), 3);
 
-    #[rstest]
-    #[tokio::test]
-    async fn test_save_load(#[future] db: Database, entry: KvEntry) {
-        let db = db.await;
-
-        db.save(&entry).await.unwrap();
-
-        let loaded = db.load(&entry.namespace, &entry.key).await.unwrap().unwrap();
-
-        assert_eq!(loaded, entry);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn test_delete(#[future] db: Database, entry: KvEntry) {
-        let db = db.await;
-
-        db.save(&entry).await.unwrap();
-
-        assert_eq!(db.list_all().try_collect::<Vec<_>>().await.unwrap().len(), 1);
-        db.delete(&entry.namespace, &entry.key).await.unwrap();
-
-        let loaded: Vec<KvEntry> = db.list_all().try_collect().await.unwrap();
-        assert_eq!(loaded.len(), 0);
-    }
-
-    #[tokio::test]
-    async fn tableview_roundtrip() {
-        let db = Database::in_memory(Duration::from_secs(1)).await.unwrap();
-
-        let entry = KvEntry {
-            namespace: "n".into(),
-            key: "k".into(),
-            value: "v".into(),
-        };
-
-        db.save(&entry).await.unwrap();
-        assert_eq!(db.load("n", "k").await.unwrap().unwrap().value, "v");
-        db.delete("n", "k").await.unwrap();
-        assert!(db.load("n", "k").await.unwrap().is_none());
+        db.delete("ns", "a").await.unwrap();
+        assert!(db.load("ns", "a").await.unwrap().is_none());
+        assert_eq!(db.list_all().try_collect::<Vec<_>>().await.unwrap().len(), 2);
     }
 }
