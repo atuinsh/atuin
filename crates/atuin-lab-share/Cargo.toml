@@ -26,7 +26,7 @@ url = { workspace = true }
 serde_json = { workspace = true }
 base64 = { workspace = true }
 atuin-common = { workspace = true, features = ["unicode"] }
-vt100 = { workspace = true }
+vt100 = "0.16"
 crossterm = { workspace = true }
 # `features = ["full"]` at the workspace level includes `signal` and `time`;
 # trimming to just what this crate needs would be a workspace change.

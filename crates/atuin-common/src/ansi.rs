@@ -6,50 +6,6 @@ use std::num::NonZeroU16;
 /// Arbitrary upper bound on the emulated screen height, in rows. Mitigates OOMs with long output.
 const MAX_ROWS: usize = 16_384;
 
-/// Extension trait for [`vt100::Parser`].
-pub trait Vt100ParserExt: Sized {
-    fn new_safe(rows: u16, cols: u16, scrollback_len: usize) -> Self;
-}
-
-/// Extension trait for [`vt100::Screen`].
-pub trait Vt100ScreenExt: Sized {
-    fn set_size_safe(&mut self, rows: u16, cols: u16);
-}
-
-impl Vt100ParserExt for vt100::Parser {
-    /// Create a new [`vt100::Parser`].
-    ///
-    /// Prefer this function over calling [`vt100::Parser::new`] directly. [`vt100`] has [a bug]
-    /// that can cause panics when `rows` or `cols` is less than 2. This function avoids that
-    /// case by clamping `rows` and `cols` to 2 if either is less than that.
-    ///
-    /// [a bug]: https://github.com/doy/vt100-rust/issues/37
-    fn new_safe(rows: u16, cols: u16, scrollback_len: usize) -> Self {
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "this is the one safe wrapper around the disallowed function"
-        )]
-        Self::new(rows.max(2), cols.max(2), scrollback_len)
-    }
-}
-
-impl Vt100ScreenExt for vt100::Screen {
-    /// Set the size of a [`vt100::Screen`].
-    ///
-    /// Prefer this function over calling [`vt100::Screen::set_size`] directly. [`vt100`] has
-    /// [a bug] that can cause panics when `rows` or `cols` is less than 2. This method avoids
-    /// that case by clamping `rows` and `cols` to 2 if either is less than that.
-    ///
-    /// [a bug]: https://github.com/doy/vt100-rust/issues/37
-    fn set_size_safe(&mut self, rows: u16, cols: u16) {
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "this is the one safe wrapper around the disallowed method"
-        )]
-        self.set_size(rows.max(2), cols.max(2))
-    }
-}
-
 /// Render ANSI-encoded terminal output to plain text, as it would appear on a `cols`-wide terminal.
 ///
 /// Uses [`vt100::Parser`] under the hood meaning that backspaces, ANSI codes, etc. are gracefully
@@ -82,8 +38,9 @@ pub fn to_plain_text(input: impl AsRef<[u8]>, cols: NonZeroU16) -> String {
         .saturating_add(wrapped_rows)
         .saturating_add(1)
         .clamp(1, MAX_ROWS.min(usize::from(u16::MAX))) as u16;
+    let rows = NonZeroU16::new(rows).expect("`rows` is always at least 1 due to `clamp`");
 
-    let mut parser = vt100::Parser::new_safe(rows, cols.get(), 0);
+    let mut parser = vt100::Parser::new(rows, cols, 0);
     parser.process(&normalized);
 
     // The emulator renders onto a fixed grid, so `contents()` comes back with each row right-padded
@@ -161,20 +118,20 @@ mod tests {
         assert_eq!(to_plain_text(b"", cols), "");
     }
 
-    #[test]
-    fn wide_characters_survive_a_one_column_screen() {
-        // A double-width character on a one-column screen used to panic
-        // inside vt100 ("attempt to subtract with overflow"); found by
-        // never_panics_and_strips_controls.
-        assert_eq!(to_plain_text("⺀".as_bytes(), nz(1)), "⺀");
+    #[rstest]
+    fn wide_character_on_a_one_column_screen() {
+        // A double-width character on a one-column screen used to panic inside vt100 ("attempt to
+        // subtract with overflow"); found by never_panics_and_strips_controls. A one-column screen
+        // cannot actually render a wide character, so we expect an empty snapshot.
+        assert_eq!(to_plain_text("⺀".as_bytes(), nz(1)), "");
     }
 
-    #[test]
+    #[rstest]
     fn trailing_blank_lines_are_trimmed() {
         assert_eq!(to_plain_text(b"hi\r\n\r\n\r\n", nz(80)), "hi");
     }
 
-    #[test]
+    #[rstest]
     fn long_lines_wrap_at_the_column_boundary() {
         let wrapped = to_plain_text(b"abcdefghij", nz(4));
         assert_eq!(wrapped, "abcdefghij");
