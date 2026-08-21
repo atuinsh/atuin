@@ -42,13 +42,15 @@ impl Push {
             println!("Forcing remote store overwrite!");
             println!("Clearing remote store");
 
+            let auth = settings.sync_auth_token().await?;
             let caps = atuin_client::api_client::caps_client(
                 &settings.sync_address,
+                Some(&auth),
                 &settings.extra_headers,
             )?;
             let client = Client::new(
                 settings.sync_address.clone(),
-                &settings.sync_auth_token().await?,
+                &auth,
                 settings.network_connect_timeout,
                 settings.network_timeout * 10, // we may be deleting a lot of data... so up the
                 // timeout

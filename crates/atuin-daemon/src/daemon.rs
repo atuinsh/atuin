@@ -444,8 +444,9 @@ impl DaemonBuilder {
 
     /// Build the daemon.
     ///
-    /// This loads the encryption key and creates the daemon state.
-    pub fn build(self) -> Result<Daemon> {
+    /// This loads the encryption key and creates the daemon state. Async so
+    /// the capability reader can pick up the sync auth token, if one exists.
+    pub async fn build(self) -> Result<Daemon> {
         let store = self.store.ok_or_else(|| eyre::eyre!("store is required"))?;
         let history_db = self.history_db.ok_or_else(|| eyre::eyre!("history_db is required"))?;
 
@@ -459,8 +460,10 @@ impl DaemonBuilder {
         // One capability reader for the whole daemon: shared by the history component's packing
         // path and injected into every sync tick's client, so the server is only polled by one
         // warmer.
-        let caps = caps_client(&self.settings.sync_address, &self.settings.extra_headers)
-            .context("failed to build the capability reader")?;
+        let auth = self.settings.sync_auth_token().await.ok();
+        let caps =
+            caps_client(&self.settings.sync_address, auth.as_ref(), &self.settings.extra_headers)
+                .context("failed to build the capability reader")?;
 
         // Create the shared state
         let state = Arc::new(DaemonState {
