@@ -67,7 +67,7 @@ impl<T: Default + Clone + Send + Sync + 'static> ResultCell for Mutex<Option<T>>
     }
 }
 
-#[doc(hidden)]
+/// Data stored under the [`EagerFuture`].
 #[derive(Debug)]
 struct Inner<C> {
     cell: C,
@@ -77,7 +77,7 @@ struct Inner<C> {
 /// A cell whose value is seeded with a task scheduled at [`EagerFutureCell::new`], in the
 /// background.
 ///
-/// Use [`EagerFutureCell`] or [`MutEagerFutureCell`].
+/// Use [`EagerFutureCell`] or [`MutEagerFutureCell`], directly.
 pub struct EagerFuture<C> {
     inner: Arc<Inner<C>>,
     abort: AbortHandle,
